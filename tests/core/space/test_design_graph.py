@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from support.refusals import refused
 
 from core.space._choices_support import committed, replay
 from core.space._results_support import codes
@@ -386,7 +387,7 @@ def test_candidates_are_ordinary_nodes_with_declaration_path_keys() -> None:
 
 
 def test_assigning_a_formal_twice_in_one_body_is_a_definition_error() -> None:
-    with pytest.raises(DefinitionError, match="already assigned") as caught:
+    with refused("formal-assigned-twice", error=DefinitionError) as caught:
 
         class Twice(Space):
             a = Source(width=3)
@@ -394,7 +395,7 @@ def test_assigning_a_formal_twice_in_one_body_is_a_definition_error() -> None:
             sink.width = a.out
 
     # Both sites are named: the assignment, and the call that supplied the formal.
-    message = str(caught.value)
+    message = str(caught.error)
     assert "assigned at test_design_graph.py:" in message
     assert "already assigned at test_design_graph.py:" in message
 
@@ -406,11 +407,11 @@ def test_a_required_formal_left_unsupplied_is_reported_when_prepared() -> None:
     class Dangling(Space):
         sink = Sink()
 
-    with pytest.raises(DefinitionError, match=r"sink\.width is not supplied") as caught:
+    with refused("formal-unsupplied", error=DefinitionError) as caught:
         design_space(Dangling())
-    message = str(caught.value)
+    message = str(caught.error)
     # The formal's declaration line and the node's call line.
     assert "Sink.width (declared at test_design_graph.py:" in message
     assert "for the node sink (declared at test_design_graph.py:" in message
-    with pytest.raises(DefinitionError, match=r"width is not supplied"):
+    with refused("formal-unsupplied", error=DefinitionError):
         design_space(Sink())

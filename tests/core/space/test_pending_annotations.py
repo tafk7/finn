@@ -21,6 +21,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+from support.refusals import refused
 
 from finn.core.space import Decision, DefinitionError, Space, design_space, inspection
 
@@ -68,48 +69,61 @@ def test_a_forward_into_a_pending_formal_links(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("variant", "message"),
+    ("variant", "code", "message"),
     [
         (
             {"extra": "    extra = Port(rate=3)"},
+            "literal-annotation-unresolved",
             "the annotation of rate does not resolve yet, so a literal cannot be recognized "
             "here; bind a member, or assign the value where the Space class is defined",
         ),
         (
             {"extra": "    extra = Port(rate=Port(rate=rate))"},
+            "node-not-value",
             "a node is not a value; bind one of its members",
         ),
         (
             {"extra": '    extra = Port(rate=Decision({"p": Port}))'},
+            "node-not-value",
             "a node is not a value; bind one of its members",
         ),
     ],
 )
 def test_a_pending_supplier_is_refused_at_the_call(
-    tmp_path: Path, variant: dict[str, str], message: str
+    tmp_path: Path, variant: dict[str, str], code: str, message: str
 ) -> None:
-    with pytest.raises(DefinitionError, match="") as caught:
+    with refused(code, error=DefinitionError) as caught:
         toy(tmp_path, f"toy_refused_{abs(hash(message)) % 10_000}", **variant)
-    assert message in str(caught.value)
+    assert message in str(caught.error)
 
 
 def test_a_pending_annotation_of_a_space_class_is_refused_when_it_resolves(
     tmp_path: Path,
 ) -> None:
     module = toy(tmp_path, "toy_space_class", annotation="Chan")
-    with pytest.raises(DefinitionError, match=r"a formal takes a value, not a Chan node"):
+    with refused(
+        "formal-takes-node",
+        error=DefinitionError,
+        message=r"a formal takes a value, not a Chan node",
+    ):
         design_space(module.Kernel(rate=None))
 
 
 def test_a_typo_in_a_pending_annotation_is_refused_when_linking(tmp_path: Path) -> None:
     module = toy(tmp_path, "toy_typo", annotation="Rat")
-    with pytest.raises(DefinitionError, match="cannot resolve the annotation 'Rat'"):
+    with refused(
+        "annotation-unresolved",
+        error=DefinitionError,
+        message="cannot resolve the annotation 'Rat'",
+    ):
         inspection.decisions(module.Kernel)  # compiles the Space class
 
 
 def test_only_an_unresolved_annotation_is_deferred() -> None:
     """Any other error of a formal or Decision is reported where its class is defined."""
-    with pytest.raises(DefinitionError, match="Bare.choice .*annotate the decision"):
+    with refused(
+        "annotation-missing", error=DefinitionError, message="Bare.choice .*annotate the decision"
+    ):
 
         class Bare(Space):
             choice = Decision(values=(1, 2))

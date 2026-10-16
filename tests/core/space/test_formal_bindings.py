@@ -12,6 +12,7 @@ values; structure belongs to a Space class. None of this is about hardware.
 from __future__ import annotations
 
 import pytest
+from support.refusals import refused
 
 from finn.core.space import (
     Decision,
@@ -70,17 +71,23 @@ def test_a_formal_is_supplied_at_the_call_or_by_assignment() -> None:
 
 
 def test_one_body_supplying_a_formal_twice_is_a_definition_error() -> None:
-    with pytest.raises(DefinitionError, match="area is already assigned at") as caught:
+    with refused(
+        "formal-assigned-twice", error=DefinitionError, message="area is already assigned at"
+    ) as caught:
 
         class AtTheCallAndAfter(Space):
             room = Room(area=3)
             room.area = 4
 
-    assert "assigned at test_formal_bindings.py:" in str(caught.value)
+    assert "assigned at test_formal_bindings.py:" in str(caught.error)
 
 
 def test_a_node_below_a_declaration_is_not_assigned_through_a_path() -> None:
-    with pytest.raises(DefinitionError, match="a node below it is supplied where it is declared"):
+    with refused(
+        "assignment-not-own-formal",
+        error=DefinitionError,
+        message="a node below it is supplied where it is declared",
+    ):
 
         class Through(Space):
             wing = Wing()
@@ -96,7 +103,11 @@ def test_a_node_below_a_declaration_is_not_assigned_through_a_path() -> None:
     ],
 )
 def test_a_decision_or_a_child_node_belongs_to_the_space_class(what: str, supply: object) -> None:
-    with pytest.raises(DefinitionError, match=f"is a {what}: it belongs to the Space class"):
+    with refused(
+        "member-belongs-to-class",
+        error=DefinitionError,
+        message=f"is a {what}: it belongs to the Space class",
+    ):
         supply()  # type: ignore[operator]
 
 
@@ -104,17 +115,17 @@ def test_a_decision_over_nodes_belongs_to_the_space_class() -> None:
     class Plant(Space):
         heating: Room | None = Decision({"room": Room}, optional=True)
 
-    with pytest.raises(DefinitionError, match="is a Decision over nodes: it belongs"):
+    with refused("member-belongs-to-class", error=DefinitionError):
         Plant(heating="room")  # type: ignore[arg-type]
     plant = Plant()
-    with pytest.raises(DefinitionError, match="is a Decision over nodes: it belongs"):
+    with refused("member-belongs-to-class", error=DefinitionError):
         plant.heating = "room"  # type: ignore[assignment]
 
 
 @pytest.mark.parametrize("member", ["fits", "cost", "costs"])
 def test_behaviour_is_not_assignable(member: str) -> None:
     target = Wing() if member == "costs" else Room()
-    with pytest.raises(DefinitionError, match="behaviour belongs to the Space class; subclass it"):
+    with refused("member-belongs-to-class", error=DefinitionError):
         setattr(target, member, 1)
 
     class Budget(Space):
@@ -125,7 +136,7 @@ def test_behaviour_is_not_assignable(member: str) -> None:
             return len(self.claims)
 
     for name in ("claims", "claimed"):
-        with pytest.raises(DefinitionError, match="behaviour belongs to the Space class"):
+        with refused("member-belongs-to-class", error=DefinitionError):
             setattr(Budget(), name, 1)
 
 
@@ -148,9 +159,13 @@ def test_a_root_that_supplies_structure_is_refused_with_a_pointer() -> None:
     class Sized(Space):
         size: int = Param()
 
-    with pytest.raises(DefinitionError, match="write a subclass, or build one with composite"):
+    with refused(
+        "root-structural-formal",
+        error=DefinitionError,
+        message="write a subclass, or build one with composite",
+    ):
         design_space(Sized(size=Decision(values=(1, 2))))
-    with pytest.raises(DefinitionError, match="size supplies structure"):
+    with refused("root-structural-formal", error=DefinitionError):
         design_space(Sized(size=Room.area))
     # The pointer's way: the structure in a Space class built from data.
     room = Room(area=3)

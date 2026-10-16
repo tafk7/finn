@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from support.refusals import refused
 
 import finn.core.space as space
 from finn.core.space import (
@@ -184,7 +185,11 @@ def test_only_views_and_constraints_are_obligations() -> None:
         kitchen = Room(area=12)
         checked = View(kitchen.area, requires=(kitchen.area,))
 
-    with pytest.raises(DefinitionError, match="a view may require only constraints"):
+    with refused(
+        "view-obligation-invalid",
+        error=DefinitionError,
+        message="a view may require only constraints",
+    ):
         design_space(Wrong())
 
 

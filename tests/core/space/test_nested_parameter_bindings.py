@@ -11,6 +11,7 @@ them. A fresh inline ``Decision`` at a node call owns its choice.
 from __future__ import annotations
 
 import pytest
+from support.refusals import refused
 
 from core.space._choices_support import committed
 from finn.core.space import (
@@ -129,9 +130,11 @@ def test_an_unnamed_decision_shared_by_two_nodes_is_a_definition_error() -> None
         first = Port(dtype="INT4", lanes=lanes)
         second = Port(dtype="INT8", lanes=lanes)
 
-    with pytest.raises(DefinitionError, match="a shared decision must be named") as caught:
+    with refused(
+        "shared-decision-unnamed", error=DefinitionError, message="a shared decision must be named"
+    ) as caught:
         design_space(Shared())
-    assert "Port.lanes" in str(caught.value) and 'name="..."' in str(caught.value)
+    assert "Port.lanes" in str(caught.error) and 'name="..."' in str(caught.error)
 
 
 def test_a_named_decision_shared_by_two_nodes_is_one_decision_of_their_common_scope() -> None:
@@ -160,7 +163,11 @@ def test_a_named_decision_shared_by_two_nodes_is_one_decision_of_their_common_sc
 
 def test_a_decision_name_is_checked_where_it_becomes_a_key() -> None:
     # A class attribute takes its attribute name; a different name= is refused.
-    with pytest.raises(DefinitionError, match="a class attribute takes its attribute name"):
+    with refused(
+        "decision-misnamed",
+        error=DefinitionError,
+        message="a class attribute takes its attribute name",
+    ):
         composite("Renamed", {"lanes": Decision(values=(1,), name="other")})
     # A named shared decision is a member of its owner: it may not shadow one.
     lanes: int = Decision(values=(1, 2), name="width")
@@ -170,7 +177,9 @@ def test_a_decision_name_is_checked_where_it_becomes_a_key() -> None:
         first = Port(dtype="INT4", lanes=lanes)
         second = Port(dtype="INT8", lanes=lanes)
 
-    with pytest.raises(DefinitionError, match="is named like a member"):
+    with refused(
+        "shared-decision-name-taken", error=DefinitionError, message="is named like a member"
+    ):
         design_space(Clash())
 
 
@@ -191,7 +200,7 @@ def test_a_childs_formal_nothing_supplies_is_reported_and_exposed_by_name() -> N
     class Middle(Space):
         kernel = Reusable(count=1)  # dtype and lanes left unsupplied
 
-    with pytest.raises(DefinitionError, match=r"kernel\.dtype is not supplied"):
+    with refused("formal-unsupplied", error=DefinitionError):
         design_space(Middle())
 
     # Exposing by name: the enclosing Space class declares the formal and binds it.
@@ -213,27 +222,29 @@ def test_assignment_targets_are_checked() -> None:
 
     assert design_space(Parent()).child.count == 2
 
-    with pytest.raises(DefinitionError, match="already assigned"):
+    with refused("formal-assigned-twice", error=DefinitionError):
 
         class DuplicateDirect(Space):
             child = Reusable(count=1)
             child.count = 2
 
-    with pytest.raises(DefinitionError, match="a node below it is supplied where it is declared"):
+    with refused("assignment-not-own-formal", error=DefinitionError):
 
         class Nested(Space):
             child = Reusable(count=1)
             child.port.dtype = "INT8"
 
-    with pytest.raises(DefinitionError, match="behaviour belongs to the Space class"):
+    with refused("member-belongs-to-class", error=DefinitionError):
 
         class NonParameter(Space):
             port = Port(dtype="INT8", lanes=2)
             port.description = ("x", 2)
 
-    with pytest.raises(DefinitionError, match="expected value of nominal type int"):
+    with refused(
+        "literal-unrecognized", error=DefinitionError, message="expected value of nominal type int"
+    ):
         Reusable().count = "two"  # type: ignore[assignment]
-    with pytest.raises(DefinitionError, match="unknown members"):
+    with refused("members-unknown", error=DefinitionError, message="unknown members"):
         Reusable(count=1, width=2)  # type: ignore[call-arg]
 
 
@@ -248,9 +259,11 @@ def test_assignment_after_freezing_is_refused() -> None:
     reference = Parent.kernel.port.dtype
     old = design_space(Parent(first="INT3", second="INT7"))
     # Preparing Parent froze its node declarations: the model cannot drift.
-    with pytest.raises(DefinitionError, match="is frozen .Parent was prepared") as caught:
+    with refused(
+        "declaration-frozen", error=DefinitionError, message="is frozen .Parent was prepared"
+    ) as caught:
         Parent.kernel.lanes = 2
-    assert "assigned at test_nested_parameter_bindings.py:" in str(caught.value)
+    assert "assigned at test_nested_parameter_bindings.py:" in str(caught.error)
     point = design_space(Parent(first="INT3", second="INT7"))
     assert old.query(reference) == point.query(reference) == Available("INT3")
 
@@ -261,7 +274,7 @@ def test_configure_freezes_its_root() -> None:
     root.dtype = "INT8"
     root.lanes = 2
     assert design_space(root).port.physical == ("INT8", 2)
-    with pytest.raises(DefinitionError, match="is frozen"):
+    with refused("declaration-frozen", error=DefinitionError):
         root.count = 4
 
 
@@ -275,7 +288,7 @@ def test_a_graph_built_as_data_binds_formals_and_keeps_their_types() -> None:
     placed = getattr(point, "child")
     assert isinstance(placed, Reusable)
     assert placed.port.physical == ("INT8", 2)
-    with pytest.raises(DefinitionError, match=r"child\.dtype is not supplied"):
+    with refused("formal-unsupplied", error=DefinitionError):
         design_space(composite("Unbound", {"child": Reusable(count=1)})())
 
 

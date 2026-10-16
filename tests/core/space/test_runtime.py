@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import pytest
+from support.refusals import refused
 
 from finn.core.space import (
     Const,
@@ -141,11 +142,11 @@ def test_binding_and_callback_values_are_snapshots_without_requiring_a_codec() -
 
 def test_missing_required_parameters_and_malformed_commitments_fail_at_boundary() -> None:
     # A missing formal is refused when the root is configured; type errors at the call.
-    with pytest.raises(DefinitionError, match="depth is not supplied"):
+    with refused("formal-unsupplied", error=DefinitionError, message="depth is not supplied"):
         design_space(Fifo(word_bits=13))
-    with pytest.raises(DefinitionError, match="int"):
+    with refused("literal-unrecognized", error=DefinitionError):
         Fifo(word_bits=True, depth=8)
-    with pytest.raises(DefinitionError, match="keyword"):
+    with refused("formals-by-keyword", error=DefinitionError):
         Fifo({Fifo.ram_style: "auto"}, word_bits=13, depth=8)  # type: ignore[arg-type, call-arg]
     # Commitments are made on a configuration and refused at that boundary.
     base = design_space(Fifo(word_bits=13, depth=8))

@@ -5,7 +5,7 @@ and nothing in the Space's evaluation reads."""
 
 from __future__ import annotations
 
-import pytest
+from support.refusals import refused
 
 from finn.core.space import (
     Decision,
@@ -87,5 +87,5 @@ def test_a_subclass_decision_states_its_own_requirement() -> None:
 
 
 def test_required_is_a_bool() -> None:
-    with pytest.raises(DefinitionError, match="required= is True or False"):
+    with refused("required-not-bool", error=DefinitionError, message="required= is True or False"):
         Decision(values=(1, 2), required=1)  # type: ignore[call-overload]

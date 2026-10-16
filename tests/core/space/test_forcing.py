@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from support.refusals import refused
 from support.space_cores import CORES, Packed, Stub, commit, forced
 
 from core.space._choices_support import committed
@@ -196,7 +197,7 @@ def test_a_value_case_whose_requirement_fails_is_refused_at_commit_and_not_viabl
 
 
 def test_a_requirement_is_written_code_colon_message() -> None:
-    with pytest.raises(DefinitionError, match="code: message"):
+    with refused("requirement-finding-malformed", error=DefinitionError, message="code: message"):
         requires(Memory.capabilities, "no code here")
 
 

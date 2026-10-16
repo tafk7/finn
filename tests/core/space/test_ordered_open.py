@@ -6,7 +6,7 @@ only (``inspection.open``), whose values a policy proposes."""
 
 from __future__ import annotations
 
-import pytest
+from support.refusals import refused
 
 from finn.core.space import (
     Decision,
@@ -47,7 +47,9 @@ def test_a_decision_names_the_space_class_that_declares_it() -> None:
 
 
 def test_ordered_applies_to_listed_values_only() -> None:
-    with pytest.raises(DefinitionError, match="ordered= is a bool, for listed values="):
+    with refused(
+        "ordered-invalid", error=DefinitionError, message="ordered= is a bool, for listed values="
+    ):
         Decision(domain=divisors_of(4), ordered=True)  # type: ignore[call-overload]
 
 

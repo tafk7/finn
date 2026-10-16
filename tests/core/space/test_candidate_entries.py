@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
+from support.refusals import refused
 
 from core.space._choices_support import committed
 from core.space._collapse_support import answers, open_space
@@ -199,7 +200,11 @@ def test_a_shared_binding_a_candidate_lacks_is_refused_naming_it() -> None:
     message = str(raised.value)
     assert "shared binding 'width' is not declared by candidates ['narrow (Narrow)']" in message
     assert "test_candidate_entries.py" in message
-    with pytest.raises(DefinitionError, match=r"'cycles' is not declared by candidates"):
+    with refused(
+        "shared-binding-invalid",
+        error=DefinitionError,
+        message=r"'cycles' is not declared by candidates",
+    ):
 
         class Behaviour(Space):
             width: int = Param()
@@ -209,7 +214,11 @@ def test_a_shared_binding_a_candidate_lacks_is_refused_naming_it() -> None:
 
 
 def test_a_shared_binding_also_written_on_an_entry_is_a_double_assignment() -> None:
-    with pytest.raises(DefinitionError, match="candidate 'packed' already binds width"):
+    with refused(
+        "shared-binding-repeated",
+        error=DefinitionError,
+        message="candidate 'packed' already binds width",
+    ):
 
         class Twice(Space):
             width: int = Param()
@@ -220,11 +229,21 @@ def test_a_shared_binding_also_written_on_an_entry_is_a_double_assignment() -> N
 
 def test_shared_bindings_named_like_the_decisions_own_arguments_are_refused() -> None:
     for name in ("values", "domain", "semantics", "name"):
-        with pytest.raises(DefinitionError, match=rf"shared bindings \['{name}'\]"):
+        with refused(
+            "shared-binding-reserved",
+            error=DefinitionError,
+            message=rf"shared bindings \['{name}'\]",
+        ):
             Decision({"packed": PackedCore}, **{name: 1})  # type: ignore[call-overload]
-    with pytest.raises(DefinitionError, match="must be a Space class or a call"):
+    with refused(
+        "candidate-not-space", error=DefinitionError, message="must be a Space class or a call"
+    ):
         Decision({"packed": 3})  # type: ignore[dict-item]
-    with pytest.raises(DefinitionError, match="apply to a Decision over candidate entries"):
+    with refused(
+        "entries-only-option",
+        error=DefinitionError,
+        message="apply to a Decision over candidate entries",
+    ):
         Decision(values=(1, 2), optional=True)  # type: ignore[call-overload]
 
 
@@ -244,9 +263,11 @@ def test_an_unsupplied_required_input_is_an_authoring_error_naming_the_candidate
 def test_an_unmet_required_member_cannot_be_placed_or_named_as_an_entry() -> None:
     assert unmet_required(Unfinished) == ("ProtoKernel.schedule",)
     assert unmet_required(PackedCore) == ()
-    with pytest.raises(DefinitionError, match=r"Unfinished .* ProtoKernel\.schedule"):
+    with refused(
+        "required-unmet", error=DefinitionError, message=r"Unfinished .* ProtoKernel\.schedule"
+    ):
         Unfinished(width=4)
-    with pytest.raises(DefinitionError, match=r"candidate 'unfinished' of a Decision"):
+    with refused("required-unmet", error=DefinitionError):
         Decision({"packed": PackedCore, "unfinished": Unfinished})
 
     class Defined(Unfinished):
@@ -258,7 +279,9 @@ def test_an_unmet_required_member_cannot_be_placed_or_named_as_an_entry() -> Non
         schedule: str = Param(default="given")  # a formal meets it too
 
     assert design_space(Formal(width=4)).schedule == "given"
-    with pytest.raises(DefinitionError, match="takes the member's value type"):
+    with refused(
+        "required-type-invalid", error=DefinitionError, message="takes the member's value type"
+    ):
         required("str")  # type: ignore[arg-type]
 
 
@@ -268,10 +291,16 @@ def test_an_unmet_required_member_cannot_be_placed_or_named_as_an_entry() -> Non
 def test_direct_reads_need_a_member_every_candidate_declares_with_one_type() -> None:
     point = commit(design_space(Unit(width=8)), {"compute": "stub", "compute.stub.rows": 2})
     assert point.cycles == 16 and point.doubled == 32
-    with pytest.raises(DefinitionError, match=r"candidates \['stub'\] do not declare 'pe'") as err:
+    with refused(
+        "direct-read-undeclared",
+        error=DefinitionError,
+        message=r"candidates \['stub'\] do not declare 'pe'",
+    ) as err:
         Unit.compute.pe  # type: ignore[union-attr]  # noqa: B018
-    assert 'compute["packed"].pe' in str(err.value)
-    with pytest.raises(DefinitionError, match="different value types"):
+    assert 'compute["packed"].pe' in str(err.error)
+    with refused(
+        "direct-read-types-differ", error=DefinitionError, message="different value types"
+    ):
 
         class Mixed(Space):
             width: int = Param()
@@ -292,7 +321,7 @@ def test_qualified_reads_are_inapplicable_when_another_candidate_is_selected() -
     stub = commit(base, {"compute": "stub", "compute.stub.rows": 1})
     assert isinstance(stub.query(Unit.narrow), Inapplicable)
     assert isinstance(stub.query(Unit.compute["packed"].narrow_weights), Inapplicable)  # type: ignore[index]
-    with pytest.raises(DefinitionError, match="no candidate 'bogus'"):
+    with refused("candidate-unknown", error=DefinitionError, message="no candidate 'bogus'"):
         Unit.compute["bogus"]  # type: ignore[index]  # noqa: B018
 
 
@@ -351,7 +380,11 @@ def test_optional_adds_a_none_candidate_that_places_nothing() -> None:
     (choice,) = inspection.choices(base)
     assert [case.name for case in choice.cases] == ["none", "packed", "stub"]
     assert commit(base, {"compute": "none"}).compute is None
-    with pytest.raises(DefinitionError, match="'none' is the key of the None candidate"):
+    with refused(
+        "candidate-key-reserved",
+        error=DefinitionError,
+        message="'none' is the key of the None candidate",
+    ):
         Decision({"none": PackedCore}, optional=True)
 
 

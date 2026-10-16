@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import cast
 
-import pytest
+from support.refusals import refused
 
 from finn.core.space import (
     Available,
@@ -194,7 +194,7 @@ def test_composite_is_pure_and_nodes_share_only_the_space_class() -> None:
     )
     assert calls == []
     # A declaration belongs to one Space class: the same members cannot be named twice.
-    with pytest.raises(DefinitionError, match="already belongs"):
+    with refused("declaration-reused", error=DefinitionError, message="already belongs"):
         composite("Again", members, base=Scaled)
 
     class Parent(Space):
@@ -227,42 +227,42 @@ def test_a_compiled_composite_rejects_structural_changes() -> None:
     space_type = composite("Sealed", {"value": value, "physical": View(value)})
     assert design_space(space_type()).query(value) == Available(1)
     # There is no builder to seal: the compiled Space class itself refuses changes.
-    with pytest.raises(DefinitionError, match="finalized"):
+    with refused("structure-finalized", error=DefinitionError):
         setattr(space_type, "too_late", Const(1, semantics=semantics))
-    with pytest.raises(DefinitionError, match="finalized"):
+    with refused("structure-finalized", error=DefinitionError):
         setattr(space_type, "too_late", Decision(values=(1,), semantics=semantics))
-    with pytest.raises(DefinitionError, match="finalized"):
+    with refused("structure-finalized", error=DefinitionError):
         delattr(space_type, "value")
-    with pytest.raises(DefinitionError, match="finalized"):
+    with refused("structure-finalized", error=DefinitionError):
         setattr(space_type, "exports", {})
-    with pytest.raises(DefinitionError, match="finalized"):
+    with refused("structure-finalized", error=DefinitionError):
         setattr(space_type, "too_late", Const(1))
     assert calls == [1, 1]
 
 
 def test_duplicate_names_owned_declarations_and_foreign_exports_are_definition_errors() -> None:
-    with pytest.raises(DefinitionError, match="override changes value semantics"):
+    with refused("override-changes-semantics", error=DefinitionError):
         composite("Shadow", {"dtype": Param(semantics=default_semantics(int))}, base=StreamShape)
-    with pytest.raises(DefinitionError, match="already belongs"):
+    with refused("declaration-reused", error=DefinitionError):
         composite("Renamed", {"renamed": StreamShape.dtype}, base=StreamShape)
     local = Const(3)
-    with pytest.raises(DefinitionError, match="already belongs"):
+    with refused("declaration-reused", error=DefinitionError):
         composite("Twice", {"constant": local, "other_name": local})
-    with pytest.raises(DefinitionError, match="not a member"):
+    with refused("export-not-member", error=DefinitionError, message="not a member"):
         composite("Foreign", {}, exports={ViewKey("foreign", int): View(StreamShape.bits)})
     view = View(Const(3))
-    with pytest.raises(DefinitionError, match="duplicate export"):
+    with refused("export-key-duplicate", error=DefinitionError, message="duplicate export"):
         composite(
             "Duplicate",
             {"complete": view},
             exports={ViewKey("local", int): view, ViewKey("local", int): view},
         )
     constant = Const(4)
-    with pytest.raises(DefinitionError, match="wrong kind"):  # exports are views only
+    with refused("export-kind-invalid", error=DefinitionError):  # exports are views only
         composite("Kind", {"constant": constant}, exports={ViewKey("constant", int): constant})
-    with pytest.raises(DefinitionError, match="name segment"):
+    with refused("name-invalid", error=DefinitionError):
         composite("Invalid", {"invalid.name": Const(1)})
-    with pytest.raises(DefinitionError, match="name segment"):
+    with refused("name-invalid", error=DefinitionError):
         composite("invalid.name", {})
 
 
@@ -270,15 +270,17 @@ def test_missing_bindings_and_incompatible_exports_fail_without_descriptor_runti
     # A formal left unsupplied is refused where it would have to be supplied: when
     # the Space class placing the node is prepared.
     holder = composite("Holder", {"shape": StreamShape(dtype=Encoding(3))})
-    with pytest.raises(DefinitionError, match=r"shape\.lanes is not supplied"):
+    with refused("formal-unsupplied", error=DefinitionError):
         design_space(holder())
     integer = Const(3)
     view = View(integer)
     members = {"value": integer, "complete": view}
-    with pytest.raises(DefinitionError, match="incompatible semantics"):
+    with refused(
+        "export-semantics-incompatible", error=DefinitionError, message="incompatible semantics"
+    ):
         composite("Wrong", members, exports={ViewKey("value", str): view})
     # The refused Space class still owns its declarations: they cannot be renamed silently.
-    with pytest.raises(DefinitionError, match="already belongs"):
+    with refused("declaration-reused", error=DefinitionError):
         composite("Retry", members, exports={ViewKey("value", int): view})
 
 
@@ -287,7 +289,7 @@ def test_external_references_must_be_explicit_formal_bindings() -> None:
         limit: int = Param()
 
     hidden = constraint(dtype=StreamShape.dtype, maximum_bits=Parent.limit)(_admitted)
-    with pytest.raises(DefinitionError, match="not declared in this effective scope"):
+    with refused("dependency-undeclared", error=DefinitionError):
         composite("Hidden", {"hidden_parent": hidden}, base=StreamShape)
 
 

@@ -6,6 +6,7 @@
 from typing import cast
 
 import pytest
+from support.refusals import refused
 
 from finn.core.space import (
     Const,
@@ -26,14 +27,14 @@ from finn.core.space.errors import DefinitionError
 def test_authored_names_are_unambiguous_segments(name: str) -> None:
     # Export keys (ViewKey) and the candidate keys of a Decision over nodes are
     # authored names, so each must be one segment.
-    with pytest.raises(DefinitionError, match="name segment"):
+    with refused("name-invalid", error=DefinitionError, message="name segment"):
         ViewKey(name, int)
-    with pytest.raises(DefinitionError, match="name segment"):
+    with refused("name-invalid", error=DefinitionError):
         Decision({name: Space()})
-    with pytest.raises(DefinitionError, match="name segment"):
+    with refused("name-invalid", error=DefinitionError):
         composite("Named", {name: Const(3)})
     space_type = type("BadIdentity", (Space,), {name: Const(3)})
-    with pytest.raises(DefinitionError, match="name segment"):
+    with refused("name-invalid", error=DefinitionError):
         compile_model(space_type)
 
 
@@ -43,18 +44,28 @@ def test_malformed_candidates_fail_as_definitions() -> None:
     class Holder(Space):
         held: int = Param()
 
-    with pytest.raises(DefinitionError, match="Space base class"):
+    with refused("composite-base-not-space", error=DefinitionError, message="Space base class"):
         composite("NotSpace", {}, base=cast(type[Space], int))
-    with pytest.raises(DefinitionError, match="must be a Space class or a call on one"):
+    with refused("candidate-not-space", error=DefinitionError):
         Decision({"case": cast(Space, 4)})
     # Candidates are entries, not a mapping of values.
-    with pytest.raises(DefinitionError, match="lists its candidates as entries"):
+    with refused(
+        "node-decision-not-entries",
+        error=DefinitionError,
+        message="lists its candidates as entries",
+    ):
         Decision(values={"case": Holder()})
-    with pytest.raises(DefinitionError, match="a node or a Decision over nodes is not a value"):
+    with refused(
+        "node-not-value",
+        error=DefinitionError,
+        message="a node or a Decision over nodes is not a value",
+    ):
         Holder(held=cast(int, Holder(held=1)))
-    with pytest.raises(DefinitionError, match="at least one candidate"):
+    with refused(
+        "node-decision-no-candidate", error=DefinitionError, message="at least one candidate"
+    ):
         Decision({})
-    with pytest.raises(DefinitionError, match="at least one candidate"):
+    with refused("node-decision-no-candidate", error=DefinitionError):
         Decision({}, optional=True)  # the None candidate alone places nothing
     # A duplicate export name is refused on the Space class.
     first = ViewKey("result", int)
@@ -65,7 +76,7 @@ def test_malformed_candidates_fail_as_definitions() -> None:
         result = View(value)
         exports = {first: result, second: result}
 
-    with pytest.raises(DefinitionError, match="duplicate export key result"):
+    with refused("export-key-duplicate", error=DefinitionError):
         compile_model(Duplicate)
 
 
