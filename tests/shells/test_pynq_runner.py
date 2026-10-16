@@ -35,6 +35,7 @@ from support.packaging import (
     verified,
     verified_parent,
 )
+from support.refusals import refused
 
 from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE,
@@ -561,12 +562,14 @@ def test_the_bitfile_build_refuses_a_shell_without_it(tmp_path: Path) -> None:
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     vivado = FakeVivado()
     building = BuildPynqBitfile(tmp_path / "output", toolchain=cast(Toolchain, vivado))
-    with pytest.raises(
-        PynqRefused,
-        match="configuration.target.shell: shell-integrates-nothing: the 'ip' shell does not",
-    ) as refused:
+    with refused(
+        "shell-integrates-nothing",
+        error=PynqRefused,
+        owner="configuration.target.shell",
+        message="the 'ip' shell does not integrate the partition",
+        output="bitfile",
+    ):
         parent.transform(building)
-    assert [dict(each.details) for each in refused.value.findings] == [{"output": "bitfile"}]
     assert not (tmp_path / "output").exists() and vivado.runs == []
 
 
@@ -820,7 +823,13 @@ def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> N
     parent.set(OUTPUT_BITFILE, str(output / BITFILE))
     parent.set(OUTPUT_BITFILE_MADE_FROM, design_digest(body))
     parent.set(OUTPUT_BITFILE_IP_KEY, PACKAGED_KEY)
-    with pytest.raises(PynqRefused, match="MakePynqDriver: clock-absent: no delivered clock"):
+    with refused(
+        "clock-absent",
+        error=PynqRefused,
+        owner="MakePynqDriver",
+        message="no delivered clock",
+        output="pynq_driver",
+    ):
         parent.transform(MakePynqDriver(output))
     assert not output.exists()
     (output / DELIVERED_CLOCK).parent.mkdir(parents=True)
@@ -854,9 +863,11 @@ def test_the_driver_is_a_transformation_of_the_parent_graph(tmp_path: Path) -> N
     write_target(model, resolve_target(part=ZYNQ.part, period_ns=5.0))
     configure_partition(model)
     on_ip = model.transform(CutKernelPartition(tmp_path / "ip"))
-    with pytest.raises(
-        PynqRefused,
-        match="configuration.target.shell: shell-integrates-nothing: the 'ip' shell does not",
+    with refused(
+        "shell-integrates-nothing",
+        error=PynqRefused,
+        owner="configuration.target.shell",
+        output="pynq_driver",
     ):
         on_ip.transform(MakePynqDriver(tmp_path / "ip_output"))
     assert not (tmp_path / "ip_output").exists()

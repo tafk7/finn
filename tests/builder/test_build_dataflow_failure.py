@@ -15,6 +15,7 @@ import warnings
 import onnx
 import onnx.helper as oh
 import pytest
+from support.refusals import refused
 
 import finn.builder.build_dataflow as build
 from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig
@@ -280,7 +281,12 @@ def test_a_refused_configuration_is_logged_each_finding_once_then_raises(capsys,
     )
     cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": output})
     refusal = "configuration.toolchain: board-vivado: AUP-ZU3_8GB requires Vivado 2024.1"
-    with pytest.raises(ConfigurationRefused, match=refusal):
+    with refused(
+        "board-vivado",
+        error=ConfigurationRefused,
+        owner="configuration.toolchain",
+        message="^AUP-ZU3_8GB requires Vivado 2024.1",
+    ):
         build.build_dataflow_cfg(model, cfg)
     err = capsys.readouterr().err
     with open(f"{output}/{build.LOG_FILE}") as f:

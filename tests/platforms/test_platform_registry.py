@@ -11,6 +11,7 @@ from dataclasses import replace
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.refusals import refused
 
 from finn.core.reporting.findings import FindingKind
 from finn.core.space import Rejected, design_space
@@ -130,10 +131,11 @@ def test_every_pynq_rows_board_has_a_branch_in_the_zynq_template() -> None:
     }
     unbuilt = sorted(set(BOARDS) - set(PYNQ_BOARDS))
     assert unbuilt == sorted(UNBUILT_BOARD_PARTS) and not set(unbuilt) & set(branches)
-    with pytest.raises(
-        TargetRefused,
-        match="no-shell-row: the 'pynq' shell has no row for board 'ZCU111': the Zynq "
-        "template has no branch for it",
+    with refused(
+        "no-shell-row",
+        error=TargetRefused,
+        message="the 'pynq' shell has no row for board 'ZCU111': "
+        "the Zynq template has no branch for it",
     ):
         resolve_target(board="ZCU111", period_ns=5.0, shell="pynq")
 
@@ -145,14 +147,13 @@ def test_a_board_no_shell_builds_resolves_on_ip_and_is_refused_on_pynq(board: st
     on_ip = resolve_target(board=board, period_ns=5.0)
     assert on_ip == resolve_target(part=UNBUILT_BOARD_PARTS[board], period_ns=5.0)
     assert (on_ip.part, on_ip.shell, on_ip.board) == (UNBUILT_BOARD_PARTS[board], "ip", None)
-    with pytest.raises(TargetRefused) as refused:
+    with refused(
+        "no-shell-row",
+        error=TargetRefused,
+        owner="configuration.target.board",
+        message=re.escape(f"has no row for board {board!r}"),
+    ):
         resolve_target(board=board, period_ns=5.0, shell="pynq")
-    (found,) = refused.value.findings
-    assert found.code == "no-shell-row"
-    assert str(refused.value) == (
-        f"configuration.target.board: no-shell-row: the 'pynq' shell has no row for board "
-        f"{board!r}: the Zynq template has no branch for it (no board preset)"
-    )
 
 
 def test_the_v80_resolves_to_its_versal_part() -> None:
@@ -243,23 +244,23 @@ def test_versal_s_ultraram_takes_initial_contents_so_initialised_ultra_memories_
 
     assert memstream(versal).try_with_choices(ram_style="ultra").accepted
     assert thresholding(versal).try_with_choices(ultra_stages=1).accepted
-    for refused in (
+    for attempt in (
         memstream(zynq).try_with_choices(ram_style="ultra"),
         thresholding(zynq).try_with_choices(ultra_stages=1),
     ):
-        assert not refused.accepted
-        result = refused.outcomes[0].result
+        assert not attempt.accepted
+        result = attempt.outcomes[0].result
         assert isinstance(result, Rejected)
         assert {finding.code for finding in result.findings} == {"uram-init"}
 
 
 def test_a_name_the_catalog_lacks_is_refused_with_close_names_none_chosen() -> None:
-    with pytest.raises(
-        TargetRefused, match="unknown-part: 'xcku040' is not in the part catalog"
-    ) as refused:
+    with refused(
+        "unknown-part", error=TargetRefused, message="^'xcku040' is not in the part catalog"
+    ) as caught:
         resolve_target(part="xcku040", period_ns=5.0)  # a device, not a part
-    assert "Vivado 2025.2" in str(refused.value)
-    with pytest.raises(TargetRefused, match="close names: .*xczu3eg-sbva484-1-e") as refused:
+    assert "Vivado 2025.2" in str(caught.error)
+    with refused("unknown-part", error=TargetRefused, message="close names: .*xczu3eg-sbva484-1-e"):
         resolve_target(part="xczu3eg-sbva484-1-x", period_ns=5.0)
 
 
@@ -316,24 +317,45 @@ def test_the_zynq_static_region_states_its_resources_by_masters_and_slaves() -> 
 
 
 @pytest.mark.parametrize(
-    "request_, refused",
+    "request_, code, message",
     [
-        (dict(part="xcu55c-fsvh2892-2L-e", shell="xrt"), "unsupported-shell: 'xrt'"),
-        (dict(part="xcv80-lsva4737-2MHP-e-S", shell="slash"), "unsupported-shell: 'slash'"),
-        (dict(part="xczu3eg-sbva484-1-e", shell="vivado_zynq"), "unknown-shell"),
-        (dict(part="xczu3eg-sbva484-1-e", shell="pynq"), "board-required"),
-        (dict(board="U250"), "unknown-board: 'U250'"),
-        (dict(board="Pynq-Z1"), "unknown-board: 'Pynq-Z1'"),
-        (dict(board="Ultra96", part="xczu3eg-sbva484-1-i"), "board-part-mismatch"),
-        (dict(), "target-unstated"),
-        (dict(part="xczu3eg-sbva484-1-e", period_ns=0.0), "period-invalid"),
+        (
+            dict(part="xcu55c-fsvh2892-2L-e", shell="xrt"),
+            "unsupported-shell",
+            r"^'xrt' \(the Vitis \(XRT\) shell\) is named but not built: "
+            r"FINN builds 'ip' and 'pynq'$",
+        ),
+        (dict(part="xcv80-lsva4737-2MHP-e-S", shell="slash"), "unsupported-shell", "^'slash' "),
+        (
+            dict(part="xczu3eg-sbva484-1-e", shell="vivado_zynq"),
+            "unknown-shell",
+            "^'vivado_zynq' is not a shell",
+        ),
+        (
+            dict(part="xczu3eg-sbva484-1-e", shell="pynq"),
+            "board-required",
+            "^the 'pynq' shell is built for a board: name one of",
+        ),
+        (dict(board="U250"), "unknown-board", "^'U250' is not a board"),
+        (dict(board="Pynq-Z1"), "unknown-board", "^'Pynq-Z1' "),
+        (
+            dict(board="Ultra96", part="xczu3eg-sbva484-1-i"),
+            "board-part-mismatch",
+            "^board 'Ultra96' carries 'xczu3eg-sbva484-1-e', not 'xczu3eg-sbva484-1-i'$",
+        ),
+        (dict(), "target-unstated", "^a target names a part or a board$"),
+        (
+            dict(part="xczu3eg-sbva484-1-e", period_ns=0.0),
+            "period-invalid",
+            r"^a clock period is > 0 ns, not 0\.0$",
+        ),
     ],
 )
 def test_a_target_that_cannot_be_resolved_is_refused_by_name(
-    request_: dict[str, object], refused: str
+    request_: dict[str, object], code: str, message: str
 ) -> None:
     stated: dict[str, object] = {"period_ns": 5.0, **request_}
-    with pytest.raises(TargetRefused, match=refused):
+    with refused(code, error=TargetRefused, message=message):
         resolve_target(**stated)  # type: ignore[arg-type]
 
 
@@ -350,7 +372,7 @@ def test_a_request_resolves_as_the_resolver_does() -> None:
     )
     pynq = TargetRequest(period_ns=5.0, board="Ultra96", shell="pynq")
     assert pynq.resolve() == resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
-    with pytest.raises(TargetRefused, match="board-required"):
+    with refused("board-required", error=TargetRefused):
         TargetRequest(period_ns=5.0, part="xczu3eg-sbva484-1-e", shell="pynq").resolve()
 
 
@@ -361,17 +383,17 @@ def test_a_build_whose_target_is_not_the_models_is_refused_each_field_named() ->
     stated = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
     refuse_drift(stated, resolve_target(board="Ultra96", period_ns=5.0, shell="pynq"), "build")
     other: Target = resolve_target(board="ZCU104", period_ns=4.0)
-    with pytest.raises(TargetRefused) as refused:
+    with pytest.raises(TargetRefused) as raised:
         refuse_drift(stated, other, "build")
     # The refusal carries its one finding, owned by the configuration's target; the
     # message is its line.
-    (found,) = refused.value.findings
+    (found,) = raised.value.findings
     assert (found.kind, found.code, found.owner) == (
         FindingKind.REJECTION,
         "target-drift",
         "configuration.target",
     )
-    message = str(refused.value)
+    message = str(raised.value)
     assert message == str(found)
     assert message.startswith(
         "configuration.target: target-drift: the model's target is not the build's: part: "
@@ -387,7 +409,7 @@ def test_two_spellings_of_one_part_are_one_target() -> None:
     shouted = resolve_target(part="XCZU3EG-SBVA484-2-E", period_ns=5.0)
     assert stated == shouted and shouted.part == "xczu3eg-sbva484-2-e"
     refuse_drift(stated, shouted, "build")
-    with pytest.raises(TargetRefused, match="target-drift: .*part: "):
+    with refused("target-drift", error=TargetRefused, message="part: the model states"):
         refuse_drift(stated, resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0), "build")
 
 

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from support.refusals import refused
 from support.xsim import requires_vivado
 
 from finn.platform.architectures import CAP_EVIDENCE, RULES, rules_digest
@@ -127,12 +128,22 @@ def test_devices_with_equal_facts_share_one_record_and_stay_distinct(data: Path)
 
 def test_a_name_never_matches_a_pattern_or_a_nearby_part(data: Path) -> None:
     loaded = load(data)
-    with pytest.raises(TargetRefused, match="unknown-part: 'xczu3eg' is not in the part") as no:
+    with refused(
+        "unknown-part", error=TargetRefused, message="^'xczu3eg' is not in the part catalog"
+    ) as no:
         loaded.part("xczu3eg")  # a device's name is not a part's
-    assert "Vivado 2025.2 (SW Build 1)" in str(no.value)
-    with pytest.raises(TargetRefused, match="close names: xczu3eg-sbva484-1-e, xczu3eg-sbva4"):
+    assert "Vivado 2025.2 (SW Build 1)" in str(no.error)
+    with refused(
+        "unknown-part",
+        error=TargetRefused,
+        message="close names: xczu3eg-sbva484-1-e, xczu3eg-sbva4",
+    ):
         loaded.part("xczu3eg-sbva484-2-e")
-    with pytest.raises(TargetRefused, match="unknown-device: 'xczu9eg'"):
+    with refused(
+        "unknown-device",
+        error=TargetRefused,
+        message="^'xczu9eg' is not a device of the part catalog",
+    ):
         loaded.device("xczu9eg")
 
 
@@ -226,14 +237,23 @@ def test_an_overlay_device_states_its_fabric_where_its_pair_has_no_rule(
         "resources": {"slrs": counts(ZU3)},
         "source": "an engineering sample",
     }
-    with pytest.raises(TargetRefused, match="no rule for newarch/newfamily: state its fabric"):
+    with refused(
+        "catalog-overlay-invalid",
+        error=TargetRefused,
+        owner="FINN_PLATFORM_CATALOG",
+        message="no rule for newarch/newfamily: state its fabric",
+    ):
         load(data, overlay(tmp_path, {"devices": [device]}))
     stated = dict(device, fabric="versal", dsp="DSP58", uram_init=False)
     loaded = load(data, overlay(tmp_path, {"devices": [stated]}))
     found = loaded.device("xcnew1")
     assert (found.fabric, found.dsp) == (Fabric.VERSAL, DspBlock.DSP58)
     assert found.shared_with == ("xczu3cg", "xczu3eg")  # equal facts, whatever the name
-    with pytest.raises(TargetRefused, match="states its fabric .* and its DSP block"):
+    with refused(
+        "catalog-overlay-invalid",
+        error=TargetRefused,
+        message="states its fabric .* and its DSP block",
+    ):
         load(data, overlay(tmp_path, {"devices": [dict(device, fabric="versal")]}))
 
 
@@ -241,9 +261,10 @@ def test_an_overlay_redefines_a_shipped_entry_only_where_it_says_so(
     data: Path, tmp_path: Path
 ) -> None:
     again = dict(CUSTOM["parts"][0], name="XCZU3EG-SBVA484-1-E", device="xczu7ev")
-    with pytest.raises(
-        TargetRefused,
-        match="part XCZU3EG-SBVA484-1-E redefines the catalog's xczu3eg-sbva484-1-e; an "
+    with refused(
+        "catalog-overlay-invalid",
+        error=TargetRefused,
+        message="part XCZU3EG-SBVA484-1-E redefines the catalog's xczu3eg-sbva484-1-e; an "
         'entry that replaces it says "overrides": true',
     ):
         load(data, overlay(tmp_path, {"source": "s", "parts": [again]}))
@@ -252,12 +273,16 @@ def test_an_overlay_redefines_a_shipped_entry_only_where_it_says_so(
     )
     assert replaced.part("xczu3eg-sbva484-1-e").device.name == "xczu7ev"
     stray = dict(CUSTOM["parts"][0], overrides=True)
-    with pytest.raises(TargetRefused, match="overrides nothing the catalog ships"):
+    with refused(
+        "catalog-overlay-invalid",
+        error=TargetRefused,
+        message="overrides nothing the catalog ships",
+    ):
         load(data, overlay(tmp_path, CUSTOM | {"parts": [stray]}))
 
 
 @pytest.mark.parametrize(
-    "stated, refused",
+    "stated, reason",
     [
         ({"parts": [{"name": "p"}]}, r"parts\[0\]: missing \['device', 'package'"),
         ({"devices": [], "colour": 1}, r"unknown \['colour'\]"),
@@ -284,9 +309,9 @@ def test_an_overlay_redefines_a_shipped_entry_only_where_it_says_so(
     ],
 )
 def test_an_invalid_overlay_is_refused_on_load(
-    data: Path, tmp_path: Path, stated: object, refused: str
+    data: Path, tmp_path: Path, stated: object, reason: str
 ) -> None:
-    with pytest.raises(TargetRefused, match=f"catalog-overlay-invalid: .*{refused}"):
+    with refused("catalog-overlay-invalid", error=TargetRefused, message=reason):
         load(data, overlay(tmp_path, stated))
 
 
@@ -363,7 +388,9 @@ def test_an_overlay_states_a_record_by_its_totals_and_slrs(data: Path, tmp_path:
     assert split.slr_count == 2 and split.resources == ZU3[0].times(2)
     assert (whole.slr_count, whole.slrs, whole.resources) == (2, None, ZU7[0])
     bad = dict(stated["devices"][1], resources={"slrs": counts(ZU3), "slr_count": 2})
-    with pytest.raises(TargetRefused, match="1 SLRs stated, not slr_count 2"):
+    with refused(
+        "catalog-overlay-invalid", error=TargetRefused, message="1 SLRs stated, not slr_count 2"
+    ):
         load(data, overlay(tmp_path, {"source": "s", "devices": [bad]}))
 
 
@@ -379,7 +406,7 @@ def test_an_overlay_states_a_capped_record_with_its_own_source(data: Path, tmp_p
     assert (found.resources, found.slrs) == (VU5P, (VU5P_SLR,) * 2)
     assert found.capped == RESOURCE_NAMES and found.cap_evidence is None
     uncapped = device | {"resources": dict(resources, capped=False)}
-    with pytest.raises(TargetRefused, match="not the totals"):
+    with refused("catalog-overlay-invalid", error=TargetRefused, message="not the totals"):
         load(data, overlay(tmp_path, {"source": "s", "devices": [uncapped]}))
 
 
@@ -397,10 +424,10 @@ def test_a_part_of_an_unsupported_pair_is_catalogued_and_refused(
     try:
         found = catalog().part("xczu3eg-sbva484-1-e")
         assert found.device.unsupported == why and found.device.resources.lut == 70_560
-        with pytest.raises(
-            TargetRefused,
-            match="unsupported-architecture: xczu3eg-sbva484-1-e \\(xczu3eg, "
-            f"zynquplus/zynquplus\\): {why}",
+        with refused(
+            "unsupported-architecture",
+            error=TargetRefused,
+            message=f"^xczu3eg-sbva484-1-e \\(xczu3eg, zynquplus/zynquplus\\): {why}",
         ):
             resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)
     finally:
