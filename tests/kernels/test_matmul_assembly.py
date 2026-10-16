@@ -5,6 +5,7 @@
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.emitted_netlist import read
 from support.helpers import (
     FULL_DSP48E2,
     WeightDelivery,
@@ -17,6 +18,7 @@ from support.helpers import (
     module_of,
     placed,
 )
+from support.netlist import Const, Drive, Pin
 from support.refusals import refused
 
 from finn.core.space import (
@@ -103,9 +105,10 @@ def test_stored_image_has_output_then_reduction_then_pe_simd_order():
     assert built.weight_beats == 12
 
 
-def netlist_text(module, directory):
+def netlist_read(module, directory):
+    """The emitted top of ``module`` as ports, instances and drives."""
     emitted = emit_module(module, directory, roots={"finnlib": finnlib_root()})
-    return (emitted.directory / (emitted.entry_point + ".sv")).read_text()
+    return read(module, (emitted.directory / (emitted.entry_point + ".sv")).read_text())
 
 
 def test_input_padding_is_ignored_and_child_padding_is_zero(tmp_path):
@@ -117,20 +120,29 @@ def test_input_padding_is_ignored_and_child_padding_is_zero(tmp_path):
         ("in0_V_tdata", 6, 6),
         ("in1_V_tdata", 6, 8),
     }
-    text = netlist_text(built.module, tmp_path / "a")
-    assert "assign n__u_matmul_compute_packed__s_axis_weights_tdata[7:6] = 2'h0;" in text
-    assert "assign n__u_matmul_compute_packed__s_axis_input_tdata[7:6] = 2'h0;" in text
-    assert "in0_V_tdata[7:6]" not in text and "in1_V_tdata[7:6]" not in text
+    wired = netlist_read(built.module, tmp_path / "a")
+    compute = "u_matmul_compute_packed"
+    assert {
+        Drive(Pin(compute, "s_axis_weights_tdata", (7, 6)), Const(2, 0)),
+        Drive(Pin(compute, "s_axis_input_tdata", (7, 6)), Const(2, 0)),
+    } <= set(wired.drives)
+    # ... and the padding in the top inputs is read by nothing.
+    assert {
+        drive.source.bits
+        for drive in wired.drives
+        if isinstance(drive.source, Pin)
+        and drive.source.instance is None
+        and drive.source.port in ("in0_V_tdata", "in1_V_tdata")
+    } == {(5, 0)}
     # Unpumped, no domain drives dotp's 2x clock input: it is held low.
     assert placed(built.module, "matmul.compute.packed").held.inputs == (("ap_clk2x", 0),)
-    assert "assign n__u_matmul_compute_packed__ap_clk2x = 1'h0;" in text
+    assert Drive(Pin(compute, "ap_clk2x"), Const(1, 0)) in set(wired.drives)
     # INT8 is exact for six INT3 products, so use width=2 to observe output padding.
     padded = assembly(k=2, n=3, pe=1)
     assert padded.result_dtype == DataType["INT7"]
-    assert (
-        "assign out0_V_tdata[7] = n__u_matmul_compute_packed__m_axis_output_tdata[7];"
-        in netlist_text(padded.module, tmp_path / "b")
-    )
+    assert Drive(
+        Pin(None, "out0_V_tdata", (7, 7)), Pin(compute, "m_axis_output_tdata", (7, 7))
+    ) in set(netlist_read(padded.module, tmp_path / "b").drives)
 
 
 @pytest.mark.parametrize(

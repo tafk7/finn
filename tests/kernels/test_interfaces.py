@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.emitted_netlist import read
 from support.helpers import (
     FULL_DSP48E2,
     built,
@@ -24,6 +25,7 @@ from support.helpers import (
     with_adapter_memories,
     with_direct_transports,
 )
+from support.netlist import Const, Drive, Pin
 from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import stream_through
@@ -120,12 +122,21 @@ def test_a_padded_child_result_feeds_a_child_and_its_padding_stays_unconnected()
     module = activated_module(activated(writable=False))
     (fed,) = [link for link in module.fragment.links if link.sink.instance == "activate"]
     assert (fed.source.instance, fed.source.data_bits, fed.payload_bits) == ("compute", 16, 9)
-    text = netlist(module, "top")
-    assert (
-        "assign n__u_activate__s_axis_tdata[8:0] = n__u_compute__m_axis_output_tdata[8:0];" in text
-    )
-    assert "assign n__u_activate__s_axis_tdata[15:9] = 7'h0;" in text
-    assert "n__u_compute__m_axis_output_tdata[15:9]" not in text
+    wired = read(module, netlist(module, "top"), "top")
+    assert wired.sources("u_activate", "s_axis_tdata") == {
+        Drive(
+            Pin("u_activate", "s_axis_tdata", (8, 0)),
+            Pin("u_compute", "m_axis_output_tdata", (8, 0)),
+        ),
+        Drive(Pin("u_activate", "s_axis_tdata", (15, 9)), Const(7, 0)),
+    }
+    # The result's padding bits are read by nothing.
+    assert {
+        drive.source.bits
+        for drive in wired.drives
+        if isinstance(drive.source, Pin)
+        and (drive.source.instance, drive.source.port) == ("u_compute", "m_axis_output_tdata")
+    } == {(8, 0)}
 
 
 def test_read_only_thresholds_tie_their_control_and_set_interfaces():
@@ -151,7 +162,9 @@ def test_writable_thresholds_present_their_bus_at_the_port_they_are_given():
     ]
     assert bus.protocol is StandardProtocol.AXILITE and bus.endpoint is Endpoint.TARGET
     assert (bus.associated_clock, bus.associated_reset) == ("ap_clk", "ap_rst_n")
-    assert "assign n__u_activate__s_axilite_AWVALID = s_axilite_AWVALID;" in netlist(module, "top")
+    assert Drive(Pin("u_activate", "s_axilite_AWVALID"), Pin(None, "s_axilite_AWVALID")) in read(
+        module, netlist(module, "top"), "top"
+    ).sources("u_activate", "s_axilite_AWVALID")
 
 
 def test_writable_thresholds_without_a_control_port_are_not_offered():

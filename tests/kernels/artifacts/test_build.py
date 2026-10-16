@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from support.emitted_netlist import read
 
 from finn.kernels.artifacts.abi import (
     Clock,
@@ -83,7 +84,8 @@ def test_a_composed_module_is_named_from_what_it_is_built_from(tmp_path: Path) -
     name = emitted.entry_point
     assert name.startswith("generated_top__")
     assert emitted.sources == ("helper.sv", "core.sv", name + ".sv")
-    assert f"module {name} (" in (emitted.directory / (name + ".sv")).read_text()
+    # The emitted file declares the module of that name, elaborating as the top.
+    assert read(_composed(), (emitted.directory / (name + ".sv")).read_text()).top == name
     # Equal modules, equal names; a changed data file, reset domain or alignment renames.
     assert emit_module(_composed(), tmp_path / "b", roots=roots).entry_point == name
     assert emit_module(_composed(data=b"02\n"), tmp_path / "c", roots=roots).entry_point != name

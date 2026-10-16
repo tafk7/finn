@@ -9,6 +9,15 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from support.emitted_netlist import read as read_netlist
+from support.netlist import (
+    Const,
+    Drive,
+    Inverted,
+    Netlist,
+    Pin,
+    Port,
+)
 
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import (
@@ -129,44 +138,65 @@ def _fixture_root(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def assigns(source: str) -> set[str]:
-    return {line.strip() for line in source.splitlines() if line.strip().startswith("assign ")}
+def netlist(module: Composed, root: Path, out: str = "out") -> Netlist:
+    """The emitted top of ``module``, read as ports, instances and drives."""
+    return read_netlist(module, text(module, root, out))
+
+
+def top(port: str, bits: tuple[int, int] | None = None) -> Pin:
+    return Pin(None, port, bits)
+
+
+def pin(instance: str, port: str, bits: tuple[int, int] | None = None) -> Pin:
+    return Pin(instance, port, bits)
 
 
 def test_one_link_wires_data_valid_and_ready_and_instances_are_named_by_label(
     fixture_root: Path,
 ) -> None:
     module = chain()
-    source = text(module, fixture_root)
-    name = module_name(module)
-    assert source.splitlines()[2] == f"module {name} ("
-    assert "    input logic [7:0] in0_V_tdata," in source
-    assert "    output logic out0_V_tvalid\n);" in source
+    wired = netlist(module, fixture_root)
+    assert wired.top == module_name(module)
+    # The declared ports, in the order they are emitted.
+    assert list(wired.ports.items()) == [
+        ("ap_clk", Port("in", 1)),
+        ("ap_rst_n", Port("in", 1)),
+        ("in0_V_tdata", Port("in", 8)),
+        ("in0_V_tready", Port("out", 1)),
+        ("in0_V_tvalid", Port("in", 1)),
+        ("out0_V_tdata", Port("out", 8)),
+        ("out0_V_tready", Port("in", 1)),
+        ("out0_V_tvalid", Port("out", 1)),
+    ]
     assert {
-        "assign n__u_a__idat = in0_V_tdata;",
-        "assign n__u_a__ivld = in0_V_tvalid;",
-        "assign in0_V_tready = n__u_a__irdy;",
-        "assign n__u_stage_b__idat = n__u_a__odat;",
-        "assign out0_V_tdata = n__u_stage_b__odat;",
-        "assign n__u_stage_b__ordy = out0_V_tready;",
-    } <= assigns(source)
-    assert "    fifo #(\n        .DATA_WIDTH(8),\n        .DEPTH(4)," in source
-    assert ") u_stage_b (" in source
+        Drive(pin("u_a", "idat"), top("in0_V_tdata")),
+        Drive(pin("u_a", "ivld"), top("in0_V_tvalid")),
+        Drive(top("in0_V_tready"), pin("u_a", "irdy")),
+        Drive(pin("u_stage_b", "idat"), pin("u_a", "odat")),
+        Drive(top("out0_V_tdata"), pin("u_stage_b", "odat")),
+        Drive(pin("u_stage_b", "ordy"), top("out0_V_tready")),
+    } <= set(wired.drives)
+    # Instances are named by their label, a dot made an underscore.
+    assert list(wired.instances) == ["u_a", "u_stage_b"]
+    for instance in wired.instances.values():
+        assert instance.module == "fifo"
+        assert instance.parameters == {"DATA_WIDTH": 8, "DEPTH": 4, "RAM_STYLE": "auto"}
+        assert not instance.open
 
 
 def test_a_lane_permutation_and_padding_both_ways(fixture_root: Path) -> None:
-    permuted = text(chain(width=16, lanes=(1, 0)), fixture_root, "a")
+    permuted = netlist(chain(width=16, lanes=(1, 0)), fixture_root, "a")
     assert {
-        "assign n__u_stage_b__idat[7:0] = n__u_a__odat[15:8];",
-        "assign n__u_stage_b__idat[15:8] = n__u_a__odat[7:0];",
-    } <= assigns(permuted)
+        Drive(pin("u_stage_b", "idat", (7, 0)), pin("u_a", "odat", (15, 8))),
+        Drive(pin("u_stage_b", "idat", (15, 8)), pin("u_a", "odat", (7, 0))),
+    } <= set(permuted.drives)
     # Two 3-bit lanes in 8-bit words: an instance's padding is zero, the root output
     # carries the source's own.
-    padded = text(chain(lanes=(0, 1), lane_bits=3), fixture_root, "b")
+    padded = netlist(chain(lanes=(0, 1), lane_bits=3), fixture_root, "b")
     assert {
-        "assign n__u_stage_b__idat[5:0] = n__u_a__odat[5:0];",
-        "assign n__u_stage_b__idat[7:6] = 2'h0;",
-    } <= assigns(padded)
+        Drive(pin("u_stage_b", "idat", (5, 0)), pin("u_a", "odat", (5, 0))),
+        Drive(pin("u_stage_b", "idat", (7, 6)), Const(2, 0)),
+    } <= set(padded.drives)
     module = chain()
     wide = replace(
         module.fragment.links[2], lanes=(0,), lane_bits=6
@@ -175,9 +205,9 @@ def test_a_lane_permutation_and_padding_both_ways(fixture_root: Path) -> None:
         module, fragment=replace(module.fragment, links=(*module.fragment.links[:2], wide))
     )
     assert {
-        "assign out0_V_tdata[5:0] = n__u_stage_b__odat[5:0];",
-        "assign out0_V_tdata[7:6] = n__u_stage_b__odat[7:6];",
-    } <= assigns(text(outward, fixture_root, "c"))
+        Drive(top("out0_V_tdata", (5, 0)), pin("u_stage_b", "odat", (5, 0))),
+        Drive(top("out0_V_tdata", (7, 6)), pin("u_stage_b", "odat", (7, 6))),
+    } <= set(netlist(outward, fixture_root, "c").drives)
 
 
 def test_a_marker_pair_a_held_input_and_open_outputs(fixture_root: Path) -> None:
@@ -210,14 +240,19 @@ def test_a_marker_pair_a_held_input_and_open_outputs(fixture_root: Path) -> None
         (("olst", 1, "out0_V_tlast", None),),
     )
     module = Composed("test.marked", "1", "marked", abi, Fragment((("m", marked),), (link,)))
-    source = text(module, fixture_root)
+    wired = netlist(module, fixture_root)
     assert {
-        "assign out0_V_tlast = n__u_m__olst[1];",
-        "assign n__u_m__mode = 2'h2;",
-        "assign n__u_m__rst = !ap_rst_n;",
-        "assign n__u_m__clk = ap_clk;",
-    } <= assigns(source)
-    assert "        .debug()" in source and "n__u_m__debug" not in source
+        Drive(top("out0_V_tlast"), pin("u_m", "olst", (1, 1))),
+        Drive(pin("u_m", "mode"), Const(2, 2)),
+        Drive(pin("u_m", "rst"), Inverted(top("ap_rst_n"))),
+        Drive(pin("u_m", "clk"), top("ap_clk")),
+    } <= set(wired.drives)
+    # The held output is left open: connected to nothing, and nothing drives or reads it.
+    assert wired.instances["u_m"].open == {"debug"}
+    assert wired.driving("u_m", "debug") == ()
+    assert all(
+        Pin("u_m", "debug") != drive.source and drive.sink.port != "debug" for drive in wired.drives
+    )
 
 
 def test_clocks_and_resets_are_driven_by_role_whatever_their_names(fixture_root: Path) -> None:
@@ -242,10 +277,10 @@ def test_clocks_and_resets_are_driven_by_role_whatever_their_names(fixture_root:
     abi = Abi((CLOCK, doubled, reset), (), (ClockAlignment("ap_clk", "ap_clk2x"),))
     module = Composed("test.pumped", "1", "pumped", abi, Fragment((("p", pumped),)))
     assert {
-        "assign n__u_p__tick = ap_clk;",
-        "assign n__u_p__tock = ap_clk2x;",
-        "assign n__u_p__wipe_n = ap_rst_n;",
-    } <= assigns(text(module, fixture_root, "a"))
+        Drive(pin("u_p", "tick"), top("ap_clk")),
+        Drive(pin("u_p", "tock"), top("ap_clk2x")),
+        Drive(pin("u_p", "wipe_n"), top("ap_rst_n")),
+    } <= set(netlist(module, fixture_root, "a").drives)
     # A root without the doubled clock cannot drive it.
     with pytest.raises(BuildError, match="no doubled clock"):
         text(replace(module, abi=Abi((CLOCK, RESET))), fixture_root, "b")
@@ -262,7 +297,7 @@ def test_a_presented_bus_is_wired_member_by_member(fixture_root: Path) -> None:
     # A FIFO on no channel: its data inputs are held.
     leaf = replace(fifo(8), held=Held((("idat", 0), ("ivld", 0), ("ordy", 0))))
     controlled = replace(leaf, abi=replace(leaf.abi, pins=(*leaf.abi.pins, config)))
-    top = Bus(
+    top_bus = Bus(
         "mm_s_axilite",
         StandardProtocol.AXILITE,
         (Member("awvalid", "mm_s_axilite_AWVALID"), Member("awready", "mm_s_axilite_AWREADY")),
@@ -273,11 +308,11 @@ def test_a_presented_bus_is_wired_member_by_member(fixture_root: Path) -> None:
         (("mm", controlled),),
         exports=(BusExport("mm", config, "mm_s_axilite"),),
     )
-    module = Composed("test.bus", "1", "bus", Abi((CLOCK, RESET, top)), fragment)
+    module = Composed("test.bus", "1", "bus", Abi((CLOCK, RESET, top_bus)), fragment)
     assert {
-        "assign n__u_mm__s_axilite_awvalid = mm_s_axilite_AWVALID;",
-        "assign mm_s_axilite_AWREADY = n__u_mm__s_axilite_awready;",
-    } <= assigns(text(module, fixture_root))
+        Drive(pin("u_mm", "s_axilite_awvalid"), top("mm_s_axilite_AWVALID")),
+        Drive(top("mm_s_axilite_AWREADY"), pin("u_mm", "s_axilite_awready")),
+    } <= set(netlist(module, fixture_root).drives)
     with pytest.raises(BuildError, match="the root has no pins"):
         replace(module, abi=Abi((CLOCK, RESET)))
 
