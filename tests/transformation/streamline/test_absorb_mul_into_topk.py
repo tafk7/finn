@@ -98,6 +98,20 @@ def test_absorb_mul_into_topk(mul_positive, scalar):
     # the indices stay the same, if the model is transformed or not
     assert (y_indices == y_tr_indices).all()
 
+    # what was absorbed: a scalar Add always, a scalar Mul only when positive (a negative
+    # one reverses the order TopK selects by); a non-scalar parameter declines, and the
+    # graph is as it was
+    assert [n.op_type for n in model.graph.node] == ["Mul", "Add", "TopK"]
+    if not scalar:
+        expected_ops = ["Mul", "Add", "TopK"]
+    elif mul_positive:
+        expected_ops = ["TopK"]
+    else:
+        expected_ops = ["Mul", "TopK"]
+    assert [n.op_type for n in model_transformed.graph.node] == expected_ops
+    if not scalar:
+        assert model_transformed.graph == model.graph
+
     if scalar is True and mul_positive is True:
         # the values change if the model was transformed
         assert (y_values != y_tr_values).all()

@@ -80,7 +80,7 @@ def test_every_boards_row_agrees_with_its_part_and_dsp(board: str) -> None:
     target = resolve_target(board=board, period_ns=5.0, shell="pynq")
     assert target.part == BOARDS[board].part == part_name
     assert target.platform.dsp is DspBlock(dsp)
-    assert target.platform.resources is not None  # every board's part is in the table
+    assert target.platform.resources == part(part_name).device.resources  # the table's totals
     (end,) = shell_row("pynq", board).ends
     assert end == iodma_hls(width)
 
@@ -90,7 +90,8 @@ def test_on_ip_a_board_names_its_part(board: str) -> None:
     # On ip the board names its part, and the target states none: the part's target.
     on_ip = resolve_target(board=board, period_ns=5.0)
     assert on_ip == resolve_target(part=BOARDS[board].part, period_ns=5.0)
-    assert on_ip.part == BOARDS[board].part and on_ip.platform.resources is not None
+    assert on_ip.part == BOARDS[board].part
+    assert on_ip.platform.resources == part(BOARDS[board].part).device.resources
     assert (on_ip.shell, on_ip.board) == ("ip", None)
 
 

@@ -86,8 +86,8 @@ def test_brevitas_debug(QONNX_FINN_conversion):
     names_brevitas = set(dbg_hook.values.keys())
     names_finn = set(output_dict.keys())
     names_common = names_brevitas.intersection(names_finn)
-    # The different exports return debug markers in different numbers and places
-    print(len(names_common))
+    # The tensor names both the Brevitas hooks and the FINN execution report: the different
+    # exports return debug markers in different numbers and places
     if not QONNX_FINN_conversion:
         assert len(names_common) == 12
     else:

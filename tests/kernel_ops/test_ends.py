@@ -271,8 +271,11 @@ def test_the_shell_s_resources_are_its_partition_s_its_ends_and_its_static_regio
 
 def test_a_network_waits_for_its_members_resources() -> None:
     waiting = shell_resources(chain_network())
-    assert isinstance(waiting, tuple) and waiting
-    assert {finding.code for finding in waiting} == {"decision-unassigned"}
+    assert isinstance(waiting, tuple)
+    # The one open choice it waits on: the input generator's memory, owned by its member.
+    assert {(finding.code, finding.owner) for finding in waiting} == {
+        ("decision-unassigned", "adapter.input_gen.input_gen.ram_style")
+    }
 
 
 def test_the_ip_shell_offers_no_end() -> None:

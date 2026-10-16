@@ -324,7 +324,8 @@ def test_the_versal_points_take_its_dsp58_core_and_ultraram() -> None:
         "x.adapter.input_gen.input_gen"
     ], styles
     model = thresholding(target=VERSAL)
-    assert choose(network(model, model.graph.node), {"activate.ultra_stages": 1})
+    chosen = choose(network(model, model.graph.node), {"activate.ultra_stages": 1})
+    assert chosen.member("activate").ultra_stages == 1
 
 
 @requires_xsim

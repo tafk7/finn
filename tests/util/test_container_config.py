@@ -300,7 +300,9 @@ def test_unknown_tier_is_rejected():
     proc = subprocess.run(
         [FINN_ENV, "inspect", "--tier", "nonsense"], capture_output=True, text=True
     )
-    assert proc.returncode != 0
+    # argparse's usage error, not a crash
+    assert proc.returncode == 2
+    assert "argument --tier: invalid choice: 'nonsense'" in proc.stderr
 
 
 # --------------------------------------------------------------------------
@@ -542,7 +544,7 @@ def test_hostpath_expands_tilde(monkeypatch):
 
 
 def test_hostpath_makes_relative_absolute():
-    assert finn_env.hostpath("x").startswith("/")
+    assert finn_env.hostpath("x") == os.path.join(os.getcwd(), "x")
 
 
 def test_hostpath_passes_through_empty():
@@ -608,7 +610,12 @@ def test_sh_output_carries_xelab_thread_override():
 
 
 def test_slashkit_has_a_transparent_tool_shim():
-    assert "slashkit" in (Path(REPO) / "docker/Dockerfile.finn").read_text()
+    # slashkit is one of the tools the shim loop links into the toolchain-bin directory
+    assert re.search(
+        r"for t in [^;\n]*\bslashkit\b[^;\n]*; do \\\n"
+        r'\s*ln -sf /usr/local/lib/finn/toolchain-shim /usr/local/lib/finn/toolchain-bin/"\$t"',
+        (Path(REPO) / "docker/Dockerfile.finn").read_text(),
+    )
 
 
 def test_sh_output_does_not_leak_xilinx_path_on_dev(tmp_path):
@@ -982,9 +989,11 @@ def test_python_dependency_pins_are_not_duplicated_in_installers():
         dockerfile = handle.read()
     with open(os.path.join(REPO, "setup-local.sh")) as handle:
         local_setup = handle.read()
-    for pin in ("torch==2.8.0", "jupyter==1.0.0", "matplotlib==3.7.0"):
-        assert pin not in dockerfile
-        assert pin not in local_setup
+    # The Python pins live in pyproject.toml and uv.lock, where the installers sync from;
+    # no ``name==version`` pin (extras included) is repeated in either installer.
+    pin = re.compile(r"[A-Za-z0-9_.\-]+(?:\[[A-Za-z0-9_,.\-]+\])?==[0-9]")
+    assert pin.findall(dockerfile) == []
+    assert pin.findall(local_setup) == []
 
 
 def test_compose_uses_complete_image_references():

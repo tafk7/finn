@@ -31,6 +31,7 @@ import pytest
 import numpy as np
 import onnx.helper as oh
 from onnx import TensorProto
+from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
@@ -59,3 +60,10 @@ def test_factor_out_mul_sign_magnitude():
     new_model = model.transform(FactorOutMulSignMagnitude())
     inp_dict = {"top_in": np.asarray([[-1.0, 1.0]], dtype=np.float32)}
     assert ox.compare_execution(model, new_model, inp_dict)
+    # one Mul by the signs (bipolar), then one by the magnitudes
+    sign_mul, magnitude_mul = new_model.graph.node
+    assert [sign_mul.op_type, magnitude_mul.op_type] == ["Mul", "Mul"]
+    assert new_model.get_tensor_datatype(sign_mul.input[1]) == DataType["BIPOLAR"]
+    assert (new_model.get_initializer(sign_mul.input[1]) == [[-1, 1]]).all()
+    assert magnitude_mul.input[1] == "mul_param"
+    assert (new_model.get_initializer("mul_param") == [[1, 4]]).all()

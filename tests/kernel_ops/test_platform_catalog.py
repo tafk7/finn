@@ -19,7 +19,6 @@ import pytest
 from kernels.xsim import requires_vivado
 
 from finn.platform.architectures import CAP_EVIDENCE, RULES, rules_digest
-from finn.platform.boards import BOARDS
 from finn.platform.capabilities import RESOURCE_NAMES, DspBlock, Fabric, Resources
 from finn.platform.catalog import (
     DATA,
@@ -600,11 +599,6 @@ def test_a_multi_slr_device_states_each_slr(committed: Catalog) -> None:
     u250 = committed.part("xcu250-figd2104-2L-e").device
     assert u250.slrs is not None and len(u250.slrs) == 4
     assert u250.resources.lut == 1_728_000
-
-
-def test_every_boards_part_resolves_with_its_totals() -> None:
-    for board in BOARDS.values():
-        assert resolve_target(part=board.part, period_ns=5.0).platform.resources is not None
 
 
 # -- the generator, with Vivado ----------------------------------------------------------

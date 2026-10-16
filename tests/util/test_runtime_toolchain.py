@@ -423,5 +423,5 @@ def test_checkpoint_reuse_requires_original_intermediate_path(tmp_path):
     intermediates = Path(cfg.output_dir) / "intermediate_models"
     assert (intermediates / "step_second.onnx").is_file()
     (intermediates / "step_first.onnx").unlink()
-    with pytest.raises((FileNotFoundError, AssertionError)):
+    with pytest.raises(AssertionError, match=r"File not found: .*step_first\.onnx"):
         build_dataflow_cfg(str(source), cfg)

@@ -73,7 +73,8 @@ def test_one_binding_per_node_serves_its_outputs_and_its_point() -> None:
     assert op.bound() is bound
     assert kernel_op(model, model.graph.node[0]).bound() is bound  # another op instance
     point: Any = op.point()
-    assert point.compute is not None  # its baselines, stored at conversion
+    # its baselines, stored at conversion: the packed core
+    assert type(point.compute).__name__ == "PackedDotpKernel"
 
 
 def test_a_held_initializer_is_given_as_contents_never_as_a_tensor() -> None:
