@@ -18,6 +18,7 @@ publishes records its guard's reads, as a recomputation does, and answers as one
 from __future__ import annotations
 
 import pytest
+from support.space_cores import Exclusive, Gated, Mutual
 from support.space_walk import check, fresh, walk
 
 from core.space._choices_support import replay
@@ -179,6 +180,16 @@ def test_a_chain_walked_from_a_configured_start() -> None:
         design_space(Pipeline(width=10)), {"u0.compute": "packed", "probe.enabled": True}
     )
     check(walk(start, seed=4, steps=250))
+
+
+def test_a_walk_over_decisions_that_exclude_each_other() -> None:
+    # Two forced Decisions that refuse together: the successor's seeded rounds refuse one
+    # and the plain rounds run instead, and every answer agrees with a recomputation.
+    for space in (Exclusive, Mutual, Gated):
+        for seed in (1, 2):
+            report = walk(design_space(space()), seed=seed, steps=100)
+            assert not report.differences, "\n".join(report.differences[:3])
+            assert report.tallies.accepted and report.tallies.forced_moved, report.tallies
 
 
 def test_the_house() -> None:

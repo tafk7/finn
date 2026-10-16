@@ -99,7 +99,9 @@ class Snapshot:
     An open Decision with one viable case reads as that case (``forcing``), false
     only on the copies forcing evaluates on. ``found`` holds the snapshot's forced
     Decisions once found; ``verdicts`` are the ones its base found, which forcing
-    reuses where the change did not reach (``finn.core.space._forcing``). A
+    reuses where the change did not reach, and ``carried`` the forced values its base
+    found, in the order it found them, which forcing starts its own from where their
+    verdicts still hold (``finn.core.space._forcing``). A
     successor's cache starts from what its base and its trial evaluated that the
     change does not reach (a change reaches what it adds, removes or replaces, and
     each open Decision whose forced value's verdict read one of those:
@@ -119,6 +121,7 @@ class Snapshot:
     lock: RLock = field(default_factory=RLock, repr=False)
     forcing: bool = True
     verdicts: Mapping[int, object] = field(default_factory=dict, repr=False)
+    carried: Mapping[int, object] = field(default_factory=dict, repr=False)
     admissions: Mapping[int, frozenset[int]] = field(default_factory=dict, repr=False)
     assumed: Mapping[int, Mapping[int, object]] = field(default_factory=dict, repr=False)
     cache: dict[int, Evaluation] = field(default_factory=dict, init=False, repr=False)
@@ -330,7 +333,7 @@ class _TrialSnapshot(Snapshot):
     def successor(self) -> Snapshot:
         """The configuration this trial would publish: every candidate committed."""
         if self._successor is None:
-            from ._forcing import inherited  # noqa: PLC0415 - runtime/forcing cycle
+            from ._forcing import carried, inherited  # noqa: PLC0415 - runtime/forcing cycle
 
             base = self._base
             successor = Snapshot(
@@ -339,6 +342,7 @@ class _TrialSnapshot(Snapshot):
                 self._candidates,
                 forcing=self.forcing,
                 verdicts=inherited(base),
+                carried=carried(base),
             )
             successor.cache.update(unaffected(base.cache, self._touches))
             object.__setattr__(self, "_successor", successor)

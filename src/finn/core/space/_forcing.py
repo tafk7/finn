@@ -22,8 +22,13 @@ for both kinds.
 A snapshot finds its forced Decisions once, on the first read of an open
 Decision: rounds over the open Decisions in rank order, each forced value
 visible to the next (an adapter after the core it feeds is found in the same
-round), evaluated on copies that do not force themselves. The first copy starts
-from the snapshot's evaluations that read no open Decision. Each copy (one per
+round), evaluated on copies that do not force themselves. A successor of a base
+whose forced values were found starts its rounds from them (``_find``): the base's
+forced values, replayed in the order the base found them, each held only while its
+verdict's reads hold, are assigned on the first copy, and the rounds then find only
+what the change reaches; the result is kept only where it is a derivation of the
+plain rounds' forcing, and otherwise the plain rounds run. The first copy starts
+from the snapshot's evaluations that read no open Decision (but a seed). Each copy (one per
 forced value, one per case of a Decision over nodes) extends the one before it by
 one Decision and starts from that one's evaluations that did not read it, so a
 case's trial re-derives only what the case reaches. The snapshot then keeps what
@@ -82,8 +87,8 @@ class Verdict:
 
 @dataclass(frozen=True)
 class Found:
-    """A snapshot's forced values and refused Decisions by node, and every verdict
-    found so far (a successor's to reuse)."""
+    """A snapshot's forced values (in the order they were found, which a successor replays)
+    and refused Decisions by node, and every verdict found so far (a successor's to reuse)."""
 
     values: Mapping[int, object] = field(default_factory=dict)
     refused: Mapping[int, Rejected] = field(default_factory=dict)
@@ -186,6 +191,13 @@ def inherited(base: Snapshot) -> Mapping[int, object]:
     the ones it inherited itself."""
     found = base.found
     return found.verdicts if isinstance(found, Found) else base.verdicts
+
+
+def carried(base: Snapshot) -> Mapping[int, object]:
+    """The forced values a successor of ``base`` replays as seeds, in the order ``base``
+    found them: none where ``base``'s were never found (nothing is cached to carry)."""
+    found = base.found
+    return found.values if isinstance(found, Found) else {}
 
 
 def admitted(snapshot: Snapshot, scope: int) -> tuple[QueryResult[object] | None, int | None]:
@@ -320,22 +332,94 @@ def _verdict(current: Snapshot, index: int) -> Verdict:
 
 
 def _find(snapshot: Snapshot) -> Found:
+    """The snapshot's forced values, refused Decisions and verdicts.
+
+    A configuration with no base runs the rank-order rounds (``_rounds``). A successor
+    of a base whose forced values were found first replays them as **seeds** and runs
+    the rounds from there, which keeps what it derived only when it is one derivation
+    of the forcing the plain rounds make:
+
+    - the seeds replay the base's derivation (``_replay``): in the order the base found
+      them, each still open, with exactly one case, and every Decision its verdict read
+      at the value it saw (a Decision seen open still open) at that point of the replay.
+      A seed is therefore a step the plain rounds could take, given the seeds before
+      it, and two seeds that hold only given each other are not both seeded;
+    - every forced verdict, seeded or found in the rounds, still holds under the final
+      values;
+    - no Decision is refused.
+
+    Adding a value only shrinks what is viable, so without a refusal two complete
+    derivations from the same commitments force the same Decisions to the same values,
+    whatever order either took, and the seeds make the seeded run one. Where a check
+    fails the seeds are dropped and the plain rounds run from the snapshot, so the
+    result is the plain rounds' (the order in which Decisions are visited can show in a
+    refusal, which the seeded run never reports). Verdicts that rested on a point of
+    either run are reused only by value (``_unchanged``), so they save work and never
+    change an answer.
+    """
     linked = snapshot.linked
     verdicts: dict[int, Verdict] = {
         index: verdict
         for index, verdict in snapshot.verdicts.items()
         if isinstance(verdict, Verdict)
     }
-    values: dict[int, object] = {}
-
     open_ = sorted(
         (index for index in linked.decisions if index not in snapshot.assignments),
         key=linked.ranks.__getitem__,
     )
-    # The copy starts from the snapshot's evaluations that read no open Decision: an
-    # open Decision reads as unassigned on the copy, and as forced on the snapshot.
-    current = Snapshot(snapshot.model, snapshot.parameters, snapshot.assignments, forcing=False)
-    current.cache.update(_runtime.unaffected(snapshot.cache, open_))
+    seeds = _replay(snapshot, verdicts)
+    if seeds:
+        values, refused, current = _rounds(snapshot, verdicts, open_, seeds)
+        final = {**snapshot.assignments, **values}
+        if not refused and all(_unchanged(linked, verdicts[index], final) for index in values):
+            return _publish(snapshot, verdicts, values, refused, current)
+    values, refused, current = _rounds(snapshot, verdicts, open_, {})
+    return _publish(snapshot, verdicts, values, refused, current)
+
+
+def _replay(snapshot: Snapshot, verdicts: Mapping[int, Verdict]) -> dict[int, object]:
+    """The forced values the snapshot's base found that this snapshot can start from:
+    walked in the order the base found them, each one still open here, its verdict
+    (inherited) with that one case, and every read of the verdict holding under the
+    commitments and the seeds accepted so far."""
+    linked = snapshot.linked
+    assigned = dict(snapshot.assignments)
+    seeds: dict[int, object] = {}
+    for index in snapshot.carried:
+        verdict = verdicts.get(index)
+        if (
+            index not in assigned
+            and index in linked.decisions
+            and verdict is not None
+            and verdict.cases is not None
+            and len(verdict.cases) == 1
+            and _unchanged(linked, verdict, assigned)
+        ):
+            seeds[index] = assigned[index] = verdict.cases[0]
+    return seeds
+
+
+def _rounds(
+    snapshot: Snapshot,
+    verdicts: dict[int, Verdict],
+    open_: list[int],
+    seeds: Mapping[int, object],
+) -> tuple[dict[int, object], dict[int, Rejected], Snapshot]:
+    """Rounds over the open Decisions in rank order from ``seeds`` (already forced, in
+    the order given), each forced value visible to the next, until a round forces
+    nothing more. It reuses ``verdicts`` by value and records the ones it finds. The
+    forced values, the refused Decisions, and the last copy."""
+    linked = snapshot.linked
+    values: dict[int, object] = dict(seeds)
+    # The copy starts from the snapshot's evaluations that read no open Decision but a
+    # seed: an open Decision reads as unassigned on the copy, and as forced on the
+    # snapshot, and a seed is assigned on the copy, forced to the same value on the snapshot.
+    current = Snapshot(
+        snapshot.model, snapshot.parameters, {**snapshot.assignments, **values}, forcing=False
+    )
+    current.cache.update(
+        _runtime.unaffected(snapshot.cache, [index for index in open_ if index not in values])
+    )
     refused: dict[int, Rejected] = {}
     progressed = True
     while progressed:
@@ -365,6 +449,17 @@ def _find(snapshot: Snapshot) -> Found:
                         ),
                     )
                 )
+    return values, refused, current
+
+
+def _publish(
+    snapshot: Snapshot,
+    verdicts: dict[int, Verdict],
+    values: dict[int, object],
+    refused: Mapping[int, Rejected],
+    current: Snapshot,
+) -> Found:
+    """The result of the rounds, and what their last copy evaluated, given to the snapshot."""
     # The last copy assigns every forced value as the snapshot reads it, and an open
     # Decision that is not forced reads as unassigned on both, unless it is refused:
     # what the copy evaluated that read no refused Decision answers the same here.
@@ -383,6 +478,7 @@ __all__ = [
     "Verdict",
     "Viable",
     "admitted",
+    "carried",
     "forced",
     "inherited",
 ]
