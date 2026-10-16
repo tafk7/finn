@@ -17,12 +17,16 @@ by the job's own code with the simulator replaced by a capture:
   staged (its top, its FinnLib headers by content, its script) under
   ``designs/hls/<top>/`` with the part it is built for, its product a placeholder;
 - a numeric sweep (``python -m kernels.sweeps.<module> ARGS``) runs its
-  ``main`` with ``rtl_transport._run_worker`` capturing the request it would
-  hand the simulation process: its sources by content (with every file of a
-  header's directory), stimulus, expected counts and observations. A run of
-  one design simulates it once per transport mode; the first request is
-  captured and the run ends there, so the other modes, which differ only in
-  the harness's flags, are covered by the harness's files.
+  ``main`` with its simulation captured, through either the transport or the
+  testbench it drives. Through the transport, ``rtl_transport._run_worker``
+  captures the request it would hand the simulation process: its sources by
+  content (with every file of a header's directory), stimulus, expected counts
+  and observations. Through the production testbench, ``rtlsim_bench.simulate``
+  captures the simulation directory as a conformance job's is (above). A run of
+  one design simulates it once per pacing or transport mode; the first
+  simulation is captured and the run ends there, so the other modes, which
+  differ only in the testbench's code or the harness's flags, are covered by
+  the files of the testbench and the harness.
 
 Commands (run from any FINN checkout; ``--root`` names the checkout whose text
 is emitted, by default this one):
@@ -629,6 +633,21 @@ def _copy_tree(source: Path, target: Path) -> None:
         shutil.copyfile(path, destination)
 
 
+def _copy_simulation(
+    sources: Sequence[str | Path], testbench: str, directory: Path, target: Path
+) -> None:
+    """What the testbench's ``simulate`` would simulate, into ``target``: the simulation
+    directory, the testbench as ``check.sv``, and each source outside the directory by
+    content (``outside/``)."""
+    _copy_tree(directory, target)
+    (target / "check.sv").write_text(testbench)
+    for source in map(Path, sources):  # a source outside the directory: by content
+        if not source.resolve().is_relative_to(directory.resolve()):
+            outside = target / "outside" / source.name
+            outside.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, outside)
+
+
 def _write_ipxact(module: Any, target: Path) -> None:
     """The module's IP-XACT interface Tcl and interface names, as packaging writes them.
 
@@ -676,14 +695,7 @@ def capture_test(dest: Path, root: Path, pytest_args: Sequence[str], ipxact: Pat
 
     def simulate(sources: Sequence[str | Path], testbench: str, directory: Path, **_: Any) -> None:
         directory = Path(directory)
-        target = designs / where(directory)
-        _copy_tree(directory, target)
-        (target / "check.sv").write_text(testbench)
-        for source in map(Path, sources):  # a source outside the directory: by content
-            if not source.resolve().is_relative_to(directory.resolve()):
-                outside = target / "outside" / source.name
-                outside.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source, outside)
+        _copy_simulation(sources, testbench, directory, designs / where(directory))
         state["simulations"] += 1
 
     def counted(function: Callable[..., Any]) -> Callable[..., Any]:
@@ -810,9 +822,24 @@ def capture_sweep(dest: Path, root: Path, module_name: str, args: Sequence[str])
         captured.append(top_module)
         raise _Captured
 
+    def simulate(sources: Sequence[str | Path], testbench: str, directory: Path, **_: Any) -> None:
+        """A simulation through the production testbench (``stream_out``): its directory,
+        the testbench and the sources outside it, as a conformance job's are captured."""
+        directory = Path(directory)
+        _copy_simulation(
+            sources, testbench, directory, designs / f"{len(captured):03d}-{directory.name}"
+        )
+        captured.append(directory.name)
+        raise _Captured
+
     # The sweeps' transport sits beside them (kernels.sweeps.rtl_transport).
     transport = importlib.import_module(module_name.rpartition(".")[0] + ".rtl_transport")
     transport._run_worker = run_worker
+    # The production testbench, which a sweep may drive in place of the transport (a
+    # checkout from before it has no sweep that does).
+    if (root / "src/finn/core/rtlsim_bench.py").is_file():
+        bench: Any = importlib.import_module("finn.core.rtlsim_bench")
+        bench.simulate = simulate
     module = importlib.import_module(module_name)
     calls: list[dict[str, Any]] = []
     _record_construction(module, calls)

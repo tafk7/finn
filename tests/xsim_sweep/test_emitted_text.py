@@ -52,6 +52,8 @@ MEMSTREAM = tool.conformance_job(
 ADAPTERS = tool.Job("sweep-adapters", "sweep", ("kernels.sweeps.adapter_numeric",))
 # A MatMul sweep: it reads its assembly's beat counts after the simulation.
 PACKED = tool.Job("sweep-packed", "sweep", ("kernels.sweeps.matmul_numeric", "--case", "packed"))
+# A sweep on the production testbench (finn.core.rtlsim_bench.stream_out), not the transport.
+PWPOLYF = tool.Job("sweep-pwpolyf", "sweep", ("kernels.sweeps.pwpolyf_numeric",))
 # A pytest group: the XSim tests of tests/kernels outside conformance.
 (KERNELS_REST,) = (
     tool.Job(name, "pytest", args) for name, args in tool.PYTEST_GROUPS if name == "kernels-rest"
@@ -274,6 +276,20 @@ def test_a_sweep_is_keyed_by_what_construction_hands_it_not_by_its_code(
     assert after["inputs"]["designs"] == before["inputs"]["designs"]
     assert (after["key"] != before["key"]) is changed
     assert not any(name.endswith("helpers.py") for name in after["inputs"])
+
+
+def test_a_sweep_on_the_production_testbench_is_captured_not_simulated(
+    sandbox: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """Its first simulation per case ends the case: one design each, nothing run."""
+    entry = _keys(*sandbox, tmp_path, (PWPOLYF,))[PWPOLYF.name]
+    captured = tmp_path / PWPOLYF.name
+    designs = sorted((captured / "designs").iterdir())
+    assert len(designs) == entry["simulations"] > 1
+    for design in designs:
+        assert (design / "check.sv").is_file()
+        assert any((design / "module").rglob("*.sv"))
+    assert "PASS" not in (captured / "capture.log").read_text()
 
 
 def _venv_inside(root: Path) -> Path:
