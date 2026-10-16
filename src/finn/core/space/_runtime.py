@@ -268,7 +268,8 @@ class _TrialSnapshot(Snapshot):
       candidates are the successor's assignments, each admitted before it was
       read. A candidate's own answer is
       taken as the successor gives it: with the reads of its guard, which its
-      frame makes first, and without the reads of its admission; what read it
+      frame makes first (at publication, for a choice whose admission was reused,
+      which did not), and without the reads of its admission; what read it
       counts those reads among its own, which only keeps less. The successor
       records each candidate's admission reads (``admissions``), and beside them
       the value it saw of each Decision it read that was neither a candidate nor
@@ -354,6 +355,15 @@ class _TrialSnapshot(Snapshot):
         admissions, assumed = self._admissions()
         object.__setattr__(successor, "admissions", MappingProxyType(admissions))
         object.__setattr__(successor, "assumed", MappingProxyType(assumed))
+        nodes = self.linked.nodes
+        for index in candidates:
+            # A choice whose admission the trial reused did not evaluate its guard, and the
+            # base's cache may not hold it (it read a Decision the base's own change
+            # reached). The admission read what the guard reads, so each reads as it did:
+            # the guard is evaluated now, as the decision frame would have.
+            guard = nodes[index].guard
+            if guard is not None and guard not in self.cache:
+                evaluate(self, guard)
         open_ = frozenset(
             index
             for index in self.linked.decisions

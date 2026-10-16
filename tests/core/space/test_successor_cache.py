@@ -345,3 +345,41 @@ def test_an_admission_that_assumed_a_forced_value_is_reused_only_while_that_valu
         for each in (report, want)
     ]
     assert refusals[0] == refusals[1] and list(refusals[0]) == ["depth"]
+
+
+def test_a_reused_admission_of_a_guarded_choice_evaluates_its_guard_for_the_successor() -> None:
+    calls: list[str] = []
+
+    def within(*, candidate: int, limit: int) -> bool:
+        calls.append("depth")
+        return candidate <= limit
+
+    class Guarded(Space):
+        lanes: int = Decision(values=(3, 5, 128))
+        finish: str = Decision(values=("matte", "gloss"))
+        # An odd width refuses the stub core, so packed is forced.
+        compute: Packed | Stub = Decision(CORES, width=lanes)
+
+        @derived
+        def packed(self) -> bool:
+            return isinstance(self.compute, Packed)
+
+        @derived
+        def rows(self) -> int:
+            return 2
+
+        depth: int = Decision(domain=domain(accepts=within, limit=rows), when=packed)
+
+    first = commit(design_space(Guarded()), {"lanes": 3})
+    assert forced(first) == {"compute": "packed"}
+    base = commit(first, {"depth": 1})
+    # The change reaches ``compute``'s verdict, which the successor forces to the same
+    # core, so ``depth``'s guard (which reads it) is not in the successor's cache.
+    same = commit(base, {"lanes": 5})
+    assert forced(same) == {"compute": "packed"}
+    calls.clear()
+    glossy = commit(same, {"finish": "gloss"})
+    assert calls == [] and glossy.depth == 1  # its admission is reused
+    assert inspection.explain(glossy, Guarded.depth) == inspection.explain(
+        recomputed(glossy), Guarded.depth
+    )
