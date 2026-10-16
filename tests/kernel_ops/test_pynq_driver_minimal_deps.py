@@ -22,62 +22,16 @@ from types import ModuleType
 import numpy as np
 import pytest
 import qonnx.core.datatype
-import qonnx.util.basic
 
-import finn.util.data_packing
-from finn.shells.pynq.driver import _generate_minimal_module
-
-BASIC_FUNCS = [
-    "roundup_to_integer_multiple",
-    "gen_finn_dt_tensor",
-]
-BASIC_IMPORTS = (
-    "import numpy as np\n"
-    "from typing import cast\n\n"
-    "from qonnx.core.datatype import BaseDataType, DataType, FixedPointType"
-)
-DATA_PACKING_FUNCS = [
-    "finnpy_to_packed_bytearray",
-    "_pack_whole_byte_container",
-    "_pack_bit_double_reverse",
-    "_pack_general",
-    "finnpy_to_int_array",
-    "int_array_to_packed_bytearray",
-    "packed_bytearray_to_finnpy",
-    "prepare_values",
-    "unsiged_array_to_signed",
-    "packed_bytearray_to_finnpy_fast",
-    "data_prepared_to_finnpy_bipolar",
-    "data_prepared_to_finnpy_ternary",
-    "data_prepared_to_finnpy_fixed",
-    "data_prepared_to_finnpy_int",
-    "packed_bytearray_to_finnpy_float",
-]
-DATA_PACKING_IMPORTS = (
-    "import numpy as np\n\n"
-    "from qonnx.core.datatype import DataType\n"
-    "from qonnx.util.basic import roundup_to_integer_multiple"
-)
+from finn.shells.pynq.driver import write_pynq_driver_support
 
 
 def _write_minimal_tree(root: Path) -> tuple[Path, Path]:
-    """Emit the trimmed modules the same way the driver generator does, plus a
-    verbatim (dependency-free) copy of datatype.py."""
-    basic_py = root / "basic.py"
-    data_packing_py = root / "data_packing.py"
-    _generate_minimal_module(
-        str(basic_py),
-        qonnx.util.basic,
-        [getattr(qonnx.util.basic, n) for n in BASIC_FUNCS],
-        BASIC_IMPORTS,
-    )
-    _generate_minimal_module(
-        str(data_packing_py),
-        finn.util.data_packing,
-        [getattr(finn.util.data_packing, n) for n in DATA_PACKING_FUNCS],
-        DATA_PACKING_IMPORTS,
-    )
-    return basic_py, data_packing_py
+    """Write the driver's support files, as every generated PYNQ driver gets them, and
+    return the two trimmed modules: qonnx's ``util/basic.py`` and finn's
+    ``util/data_packing.py``."""
+    write_pynq_driver_support(str(root))
+    return root / "qonnx" / "util" / "basic.py", root / "finn" / "util" / "data_packing.py"
 
 
 def _load_module(monkeypatch: pytest.MonkeyPatch, name: str, path: Path) -> ModuleType:

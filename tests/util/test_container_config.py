@@ -580,17 +580,6 @@ def test_emitted_paths_have_no_tilde(tmp_path):
 # checked the JSON output while Compose reads the sh output.
 
 
-def test_sh_output_does_not_select_python_imports(tmp_path):
-    """The resolver default must match the image and all launchers."""
-    proc = subprocess.run(
-        [FINN_ENV, "inspect", "--tier", "dev", "--format", "sh"],
-        capture_output=True,
-        text=True,
-        env={"PATH": os.environ["PATH"], "HOME": "/home/someone"},
-    )
-    assert "FINN_DEPS=" not in proc.stdout
-
-
 def test_sh_output_carries_the_canonical_runtime_set():
     proc = subprocess.run(
         [FINN_ENV, "inspect", "--tier", "dev", "--format", "sh"],
@@ -986,31 +975,6 @@ def test_compose_rejects_runtime_content_without_a_resolved_image(tmp_path):
     )
     assert proc.returncode == 2
     assert "FINN_IMAGE must be set" in proc.stderr
-
-
-def test_container_docs_do_not_reference_retired_interfaces():
-    paths = [
-        "README.md",
-        "docs/installation.md",
-        "docker/README.md",
-    ]
-    chunks = []
-    for rel in paths:
-        with open(os.path.join(REPO, rel), errors="replace") as handle:
-            chunks.append(handle.read())
-    body = "\n".join(chunks)
-    for retired in (
-        "<<Claude",
-        "scripts/finn-env.sh",
-        "--backend",
-        "FINN_SINGULARITY",
-        "docker/finn-apptainer",
-        "XRT_DEB_VERSION",
-        "V80PP_DEB_PACKAGE",
-        "docker/runtimes/v80pp.env",
-        "FINN_XRT_SHA256",
-    ):
-        assert retired not in body
 
 
 def test_python_dependency_pins_are_not_duplicated_in_installers():

@@ -1345,7 +1345,8 @@ def test_the_export_of_tfc_on_pynq_names_both_ends_iodmas_and_every_connection(
 #: The block design Z0's build wrote for TFC (its ip_config.tcl's custom section, its
 #: partition StreamingDataflowPartition_1 renamed), each build directory as normalized
 #: ($BUILD, a random suffix XXXXXXXX). The oracle's is the same but for the partition's
-#: IP and the quoting (``test_z0s_block_design_is_the_oracles_but_for_the_partitions_ip``).
+#: IP and the quoting
+#: (``test_the_z0_literal_is_the_oracles_block_design_but_for_the_partitions_ip``).
 Z0_BLOCK_DESIGN = """\
 set_property ip_repo_paths [concat [get_property ip_repo_paths [current_project]] [list "$BUILD/code_gen_ipgen_idma0_IODMA_hls_0_XXXXXXXX/project_idma0_IODMA_hls_0/sol1/impl/ip" "$BUILD/vivado_stitch_proj_XXXXXXXX/ip"]] [current_project]
 update_ip_catalog -rebuild -scan_changes
@@ -1382,9 +1383,10 @@ Z0_IODMA_CODE = {
 }
 
 
-def test_z0s_block_design_is_the_oracles_but_for_the_partitions_ip() -> None:
-    """The oracle's block design for TFC, its partitions renamed, is Z0's line for line,
-    the HWCustomOp flow's paths unquoted, except the partition's IP repositories: the
+def test_the_z0_literal_is_the_oracles_block_design_but_for_the_partitions_ip() -> None:
+    """This checks the test's own literal against the oracle's capture, not FINN: the
+    oracle's block design for TFC, its partitions renamed, is ``Z0_BLOCK_DESIGN`` line for
+    line, the HWCustomOp flow's paths unquoted, except the partition's IP repositories: the
     flow's partition is its layers' IPs stitched, so it lists each layer's IP and
     memstream beside the stitched one; the build's partition is one packaged IP."""
     z0 = Z0_BLOCK_DESIGN.replace('"', "").splitlines()
