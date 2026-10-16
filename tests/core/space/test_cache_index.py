@@ -24,8 +24,6 @@ def random_cache(rng: Random, size: int = 120, decisions: int = 25) -> Cache:
     cache = Cache()
     for index in range(size):
         cache[index] = entry({rng.randrange(decisions) for _ in range(rng.randrange(4))})
-    for _ in range(10):  # an index given again reads as the new entry does
-        cache[rng.randrange(size)] = entry({rng.randrange(decisions) for _ in range(3)})
     return cache
 
 
@@ -98,3 +96,19 @@ def test_evaluations_given_in_place_of_a_carried_one_are_fresh_and_read_as_given
     carried = kept.without({6}, keep_fresh=True)
     assert carried.fresh == {i: e for i, e in given.items() if i != 300 and 6 not in e.decisions}
     assert indexed(carried) == readers_of(carried)
+
+
+def test_an_evaluation_is_only_added_and_giving_an_index_again_is_refused() -> None:
+    cache = random_cache(Random(3))
+    held = dict(cache)
+    with pytest.raises(RuntimeError, match="index 7"):
+        cache[7] = entry({1})
+    with pytest.raises(RuntimeError, match="index 7"):
+        cache.update({8000: entry({2}), 7: entry({1})})
+    with pytest.raises(RuntimeError, match="index 7"):
+        cache |= {7: entry({1})}
+    assert dict(cache) == {**held, 8000: cache[8000]}  # what came before the refusal stays
+    assert cache.setdefault(7, entry({1})) is held[7]  # asking without replacing is allowed
+    cache.update({9000: entry({4})})
+    cache |= {9001: entry({4})}
+    assert indexed(cache) == readers_of(cache)

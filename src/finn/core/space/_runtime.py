@@ -98,8 +98,10 @@ def unaffected(
 class Cache(dict[int, Evaluation]):
     """A snapshot's evaluations, and who read which Decision.
 
-    A dict: evaluations are added as a dict's are, and only added (``without`` may give
-    another in place of one it carries). ``readers`` holds, for each Decision, the
+    A dict: evaluations are added as a dict's are, and only added: giving an index again
+    (``cache[i] = ...``, ``update``, ``|=``) is refused, since ``readers`` would go on
+    holding what the replaced evaluation read (``without`` may give another in place of
+    one it carries, through ``replacing``). ``readers`` holds, for each Decision, the
     evaluations that read it (``Evaluation.decisions``), brought up to date from what was
     added since, at the time a change asks (``without``), so what the change reaches is
     found from the Decisions it touches and not by looking at every evaluation. A set of
@@ -120,6 +122,22 @@ class Cache(dict[int, Evaluation]):
     @property
     def fresh(self) -> dict[int, Evaluation]:
         return dict(islice(self.items(), self._made, None))
+
+    def __setitem__(self, index: int, entry: Evaluation) -> None:
+        if index in self:
+            raise RuntimeError(
+                f"the cache already holds an evaluation at index {index}: one is only added, "
+                "or the readers would go on holding what the replaced one read"
+            )
+        super().__setitem__(index, entry)
+
+    def update(self, other: Mapping[int, Evaluation]) -> None:  # type: ignore[override]
+        for index, entry in other.items():
+            self[index] = entry
+
+    def __ior__(self, other: Mapping[int, Evaluation]) -> Cache:  # type: ignore[override,misc]
+        self.update(other)
+        return self
 
     def _read(self, index: int, entry: Evaluation) -> None:
         readers, owned = self._readers, self._owned

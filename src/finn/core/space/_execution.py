@@ -396,7 +396,9 @@ def run(snapshot: Snapshot, index: int, frame: Frame | None = None) -> Evaluatio
                 via,
                 _runtime.read_decisions(snapshot, dependencies, via),
             )
-            if isinstance(task.identity, int):
+            if isinstance(task.identity, int) and task.identity not in snapshot.cache:
+                # A query made from native code runs on the same snapshot and may have
+                # cached this node first, with the same answer: the cache is only added to.
                 snapshot.cache[task.identity] = outcome
         task.frame.close()
         tasks.pop()

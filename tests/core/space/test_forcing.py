@@ -246,35 +246,11 @@ def test_adding_a_choice_never_switches_a_forced_case() -> None:
             assert [finding.code for finding in answer.findings] == ["decision-no-viable-case"]
 
 
-def test_a_successor_reuses_the_verdicts_its_change_does_not_reach(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class Two(Space):
-        width: int = Param()
-        left: Packed | Stub = Decision(CORES, width=width)
-        right: Packed | Stub = Decision(CORES, width=width)
-
-    base = design_space(Two(width=128))
-    assert forced(base) == {"left": "stub", "right": "stub"}
-    found: list[str] = []
-    verdict = _forcing._verdict
-
-    def counted(current: Any, index: int) -> Any:
-        found.append(current.linked.nodes[index].key)
-        return verdict(current, index)
-
-    monkeypatch.setattr(_forcing, "_verdict", counted)
-    point = commit(base, {"left.stub.rows": 4})
-    assert forced(point) == {"left": "stub", "right": "stub"}
-    # Neither selector read ``left.stub.rows``; only the rest of left's own open choices is new.
-    assert not any(key.endswith(("left", "right")) for key in found)
-
-
 def test_a_successor_finds_again_the_verdict_its_change_reaches_and_no_other(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The positive control of the reuse above: a change that reaches one selector's
-    verdict finds that verdict again, and only that one."""
+    """A change that reaches no selector's verdict finds none again, and one that reaches
+    a selector's verdict finds that verdict again and no other."""
 
     class Limited(Space):
         width: int = Param()
