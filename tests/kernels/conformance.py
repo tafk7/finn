@@ -18,8 +18,9 @@ each sample it
    the children of a kernel with children) against its materialized sources
    under the declared parameter binding (``artifacts.rtl.extract``, then the
    comparison ``check_abi`` makes, on the one extraction): a refusal fails, and so
-   does a decline (the checker declines when a binding names a parameter the module
-   does not declare). A parameter whose value the checker
+   does a decline of an RTL leaf (the checker declines when a binding names a parameter
+   the module does not declare), while a decline of an HLS leaf's synthesized product
+   only warns, since the kernel binds no parameters on it. A parameter whose value the checker
    does not establish (an array, a real) does not decline: its name is still
    established. An HLS leaf's RTL is its synthesis's product, so it is checked
    so only with ``xsim`` (synthesized for the harness's part, or taken from the
@@ -83,6 +84,7 @@ from __future__ import annotations
 
 import re
 import tempfile
+import warnings
 import zlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -585,7 +587,9 @@ def _check_rtl(
     synthesize: bool,
 ) -> None:
     """Refuse a leaf its sources contradict, and a ``parameters()`` that does not name
-    exactly its module's parameters; a decline of the RTL checker fails too. An HLS leaf has RTL
+    exactly its module's parameters; a decline of the RTL checker fails too, for an RTL leaf (its
+    ``parameters()`` binds its sources' parameters), while for an HLS leaf's synthesized product,
+    which the kernel binds no parameters on, a decline only warns. An HLS leaf has RTL
     only once synthesized: offline, its request is staged (refused when a header it
     includes is undeclared) and nothing more."""
     where = f"{_where(space_type, sample)} {label}"
@@ -597,7 +601,11 @@ def _check_rtl(
     abi = leaf.abi
     extracted = extract([Path(source) for source in sources], top, abi.parameters)
     if isinstance(extracted, Declined):
-        raise AssertionError(f"{where}: the RTL checker declined {top}: {extracted}")
+        message = f"{where}: the RTL checker declined {top}: {extracted}"
+        if not requests:
+            raise AssertionError(message)
+        warnings.warn(message, UserWarning, stacklevel=3)
+        return
     # check_abi's comparison, on the one extraction: the ports, never a parameter value.
     issues = check_against_rtl(abi.pins, extracted.ports)
     assert not issues, f"{where}: {top} refuses its ABI: " + "; ".join(issues)
