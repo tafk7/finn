@@ -41,7 +41,7 @@ can run offline. After pulling a change to `uv.lock`, run `uv sync` again.
 
 ```bash
 ./docker/run                           # shell; /opt/venv is active
-./docker/run -- pytest -m util
+./docker/run -- pytest tests/util
 ./docker/run --fpga -- vivado -version # with the machine configured (below)
 ```
 

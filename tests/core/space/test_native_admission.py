@@ -436,6 +436,7 @@ def test_contexts_continuations_trials_and_cached_outputs_are_reclaimed(
     exercise()
     gc.collect()
     assert sum(item() is not None for item in snapshots) == 1
+    assert contexts
     assert all(item() is None for item in contexts)
     assert all(item() is None for item in continuations)
     assert all(item() is None for item in outputs)

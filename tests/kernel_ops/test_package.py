@@ -45,7 +45,6 @@ from finn.toolchain.launcher import (
 from finn.toolchain.vivado import hierarchical_utilization
 from finn.transformation.kernels import PackagePartition, kernel_choices_config
 from finn.transformation.kernels.cut import BaselineChoices
-from finn.transformation.kernels.hls import HlsAbiRefused
 from finn.transformation.kernels.package import (
     ElaboratePartition,
     ip_key,
@@ -337,7 +336,3 @@ def test_elaboration_that_fails_is_the_simulators_failure_naming_its_log(
     assert (failed.value.tool, failed.value.status) == (tool, 2)
     assert failed.value.transcript == directory.resolve() / log
     assert failed.value.errors == ("ERROR: [VRFC 10-2989] bad",)
-
-
-def test_a_refused_hls_product_is_a_refusal() -> None:
-    assert issubclass(HlsAbiRefused, ValueError)

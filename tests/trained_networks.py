@@ -37,7 +37,6 @@ def get_test_model_trained(netname: str, wbits: int, abits: int) -> torch.nn.Mod
     weight and ``abits`` activation bits, its pretrained weights loaded, in eval mode."""
     from brevitas_examples import (  # type: ignore[import-untyped]  # noqa: PLC0415
         bnn_pynq,
-        imagenet_classification,
     )
 
     example_map = {
@@ -52,7 +51,6 @@ def get_test_model_trained(netname: str, wbits: int, abits: int) -> torch.nn.Mod
         ("TFC", 1, 1): bnn_pynq.tfc_1w1a,
         ("TFC", 1, 2): bnn_pynq.tfc_1w2a,
         ("TFC", 2, 2): bnn_pynq.tfc_2w2a,
-        ("mobilenet", 4, 4): imagenet_classification.quant_mobilenet_v1_4b,
     }
     network: torch.nn.Module = example_map[(netname, wbits, abits)](True)
     return network.eval()

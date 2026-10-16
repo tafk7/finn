@@ -6,7 +6,6 @@ import pytest
 import numpy as np
 import onnx  # noqa
 import os
-import shutil
 import torch
 from brevitas.core.scaling import ScalingImplType
 from brevitas.export import export_qonnx
@@ -18,7 +17,6 @@ from qonnx.util.cleanup import cleanup as qonnx_cleanup
 
 import finn.core.onnx_exec as oxe
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
-from finn.util.basic import make_build_dir
 
 
 @pytest.mark.brevitas_export
@@ -26,8 +24,8 @@ from finn.util.basic import make_build_dir
 @pytest.mark.parametrize("ishape", [(1, 15), (1, 32, 1, 1)])
 @pytest.mark.parametrize("narrow", [True, False])
 @pytest.mark.parametrize("quant", [Int8ActPerTensorFloat, Uint8ActPerTensorFloat])
-def test_brevitas_quant_identity_export(abits, ishape, narrow, quant):
-    build_dir = make_build_dir("test_brevitas_quant_identity_export_")
+def test_brevitas_quant_identity_export(abits, ishape, narrow, quant, tmp_path):
+    build_dir = str(tmp_path)
     export_path = os.path.join(build_dir, "quant_identity.onnx")
     b_act = QuantIdentity(act_quant=quant, bit_width=abits, narrow_range=narrow)
 
@@ -49,10 +47,7 @@ def test_brevitas_quant_identity_export(abits, ishape, narrow, quant):
     b_act.eval()
     expected = b_act.forward(inp_tensor).detach().numpy()
 
-    # kept for diagnosis on failure: the rmtree below is skipped if the
-    # assert raises (see tests/README.md)
     assert np.isclose(produced, expected, atol=1e-3).all()
-    shutil.rmtree(build_dir)
 
 
 @pytest.mark.brevitas_export
@@ -76,9 +71,9 @@ def test_brevitas_quant_identity_export(abits, ishape, narrow, quant):
 @pytest.mark.parametrize("narrow", [True, False])
 @pytest.mark.parametrize("quant", [Int8ActPerTensorFloat, Uint8ActPerTensorFloat])
 def test_brevitas_quant_identity_export_per_channel(
-    abits, ishape, channel_shape, narrow, quant, squeeze_leading
+    abits, ishape, channel_shape, narrow, quant, squeeze_leading, tmp_path
 ):
-    build_dir = make_build_dir("test_brevitas_quant_identity_export_per_channel_")
+    build_dir = str(tmp_path)
     export_path = os.path.join(build_dir, "quant_identity.onnx")
     b_act = QuantIdentity(
         act_quant=quant,
@@ -126,7 +121,4 @@ def test_brevitas_quant_identity_export_per_channel(
     b_act.eval()
     expected = b_act.forward(inp_tensor).detach().numpy()
 
-    # kept for diagnosis on failure: the rmtree below is skipped if the
-    # assert raises (see tests/README.md)
     assert np.isclose(produced, expected, atol=1e-3).all()
-    shutil.rmtree(build_dir)

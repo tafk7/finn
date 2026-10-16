@@ -42,16 +42,15 @@ from trained_networks import get_test_model_trained
 
 import finn.core.onnx_exec as oxe
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
-from finn.util.basic import make_build_dir
 
 
 @pytest.mark.brevitas_export
 @pytest.mark.parametrize("abits", [1, 2])
 @pytest.mark.parametrize("wbits", [1, 2])
-def test_brevitas_cnv_export_exec(wbits, abits):
+def test_brevitas_cnv_export_exec(wbits, abits, tmp_path):
     if wbits > abits:
         pytest.skip("No wbits > abits cases at the moment")
-    build_dir = make_build_dir("test_brevitas_cnv_export_exec")
+    build_dir = str(tmp_path)
     export_onnx_path = os.path.join(build_dir, "test_brevitas_cnv.onnx")
     cnv = get_test_model_trained("CNV", wbits, abits)
     ishape = (1, 3, 32, 32)

@@ -28,7 +28,6 @@
 
 import pytest
 
-import shutil
 import torch
 from brevitas.export import export_qonnx
 from qonnx.core.datatype import DataType
@@ -41,33 +40,29 @@ from qonnx.util.cleanup import cleanup as qonnx_cleanup
 from trained_networks import get_test_model_trained
 
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
-from finn.util.basic import make_build_dir
 
 
 @pytest.mark.transform
-def test_infer_datatypes_lfc():
-    build_dir = make_build_dir(prefix="test_infer_datatypes_lfc_")
-    try:
-        export_onnx_path = f"{build_dir}/test_infer_datatypes.onnx"
-        lfc = get_test_model_trained("LFC", 1, 1)
-        export_qonnx(lfc, torch.randn(1, 1, 28, 28), export_onnx_path)
-        qonnx_cleanup(export_onnx_path, out_file=export_onnx_path)
-        model = ModelWrapper(export_onnx_path)
-        model = model.transform(ConvertQONNXtoFINN())
-        model = model.transform(InferShapes())
-        model = model.transform(FoldConstants())
-        model = model.transform(GiveUniqueNodeNames())
-        model = model.transform(GiveReadableTensorNames())
-        model = model.transform(InferDataTypes())
-        # Each MatMul's exact range (qonnx's interval rule, tafk7 b7bc357): BIPOLAR x BIPOLAR
-        # over 784 inputs spans [-784, 784], over 1024 inputs [-1024, 1024].
-        assert model.get_tensor_datatype("MatMul_0_out0") == DataType["INT11"]
-        assert model.get_tensor_datatype("MatMul_1_out0") == DataType["INT12"]
-        assert model.get_tensor_datatype("MatMul_2_out0") == DataType["INT12"]
-        assert model.get_tensor_datatype("MatMul_3_out0") == DataType["INT12"]
-        assert model.get_tensor_datatype("MultiThreshold_0_out0") == DataType["BIPOLAR"]
-        assert model.get_tensor_datatype("MultiThreshold_1_out0") == DataType["BIPOLAR"]
-        assert model.get_tensor_datatype("MultiThreshold_2_out0") == DataType["BIPOLAR"]
-        assert model.get_tensor_datatype("MultiThreshold_3_out0") == DataType["BIPOLAR"]
-    finally:
-        shutil.rmtree(build_dir)
+def test_infer_datatypes_lfc(tmp_path):
+    build_dir = str(tmp_path)
+    export_onnx_path = f"{build_dir}/test_infer_datatypes.onnx"
+    lfc = get_test_model_trained("LFC", 1, 1)
+    export_qonnx(lfc, torch.randn(1, 1, 28, 28), export_onnx_path)
+    qonnx_cleanup(export_onnx_path, out_file=export_onnx_path)
+    model = ModelWrapper(export_onnx_path)
+    model = model.transform(ConvertQONNXtoFINN())
+    model = model.transform(InferShapes())
+    model = model.transform(FoldConstants())
+    model = model.transform(GiveUniqueNodeNames())
+    model = model.transform(GiveReadableTensorNames())
+    model = model.transform(InferDataTypes())
+    # Each MatMul's exact range (qonnx's interval rule, tafk7 b7bc357): BIPOLAR x BIPOLAR
+    # over 784 inputs spans [-784, 784], over 1024 inputs [-1024, 1024].
+    assert model.get_tensor_datatype("MatMul_0_out0") == DataType["INT11"]
+    assert model.get_tensor_datatype("MatMul_1_out0") == DataType["INT12"]
+    assert model.get_tensor_datatype("MatMul_2_out0") == DataType["INT12"]
+    assert model.get_tensor_datatype("MatMul_3_out0") == DataType["INT12"]
+    assert model.get_tensor_datatype("MultiThreshold_0_out0") == DataType["BIPOLAR"]
+    assert model.get_tensor_datatype("MultiThreshold_1_out0") == DataType["BIPOLAR"]
+    assert model.get_tensor_datatype("MultiThreshold_2_out0") == DataType["BIPOLAR"]
+    assert model.get_tensor_datatype("MultiThreshold_3_out0") == DataType["BIPOLAR"]

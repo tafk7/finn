@@ -75,10 +75,6 @@ def get_brev_model_and_sample_inputs(model_name, wbits, abits):
             input_tensor = np.load(fn)["arr_0"].astype(np.float32)
         input_tensor = input_tensor / 255
         brev_model = get_test_model_trained(model_name, wbits, abits)
-    elif model_name == "mobilenet":
-        in_shape = (1, 3, 224, 224)
-        input_tensor = np.random.normal(size=in_shape).astype(dtype=np.float32)
-        brev_model = get_test_model_trained(model_name, 4, 4)
     else:
         raise RuntimeError(f"The model with the name {model_name} is not supported.")
 
@@ -98,19 +94,14 @@ def analysis_testing_for_no_quant_nodes(model):
 
 
 @pytest.mark.transform
-# This test currently takes about 4 min and 20 seconds
 @pytest.mark.parametrize("abits", [1, 2])
 @pytest.mark.parametrize("wbits", [1, 2])
-@pytest.mark.parametrize("model_name", ["TFC", "SFC", "LFC", "CNV", "mobilenet"])
+@pytest.mark.parametrize("model_name", ["TFC", "SFC", "LFC", "CNV"])
 def test_QONNX_to_FINN(model_name, wbits, abits):
-    if model_name == "mobilenet":
-        pytest.xfail("MobileNet test is temporarily excluded from QONNX testing.")
     if wbits > abits:
         pytest.skip("No wbits > abits cases at the moment")
     if model_name == "LFC" and wbits == 2 and abits == 2:
         pytest.skip("No LFC-w2a2 present at the moment")
-    if model_name == "mobilenet" and (wbits != 2 or abits != 2):
-        pytest.skip("Mobilenet only runs at W2A2, though it's technically W4A4.")
 
     # Get test config and model
     ATOL = 1e-6

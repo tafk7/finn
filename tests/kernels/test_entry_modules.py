@@ -72,6 +72,7 @@ def test_the_walk_finds_the_cycles_modules() -> None:
     assert {"finn.kernels.channels", "finn.kernels.memstream", "finn.kernels.port"} <= set(MODULES)
 
 
+@pytest.mark.slow  # one interpreter per module, a minute and a half
 @pytest.mark.parametrize("module", MODULES)
 def test_a_network_opens_after_any_module_is_imported_first(module: str) -> None:
     environment = dict(os.environ, PYTHONPATH=f"{ROOT / 'src'}{os.pathsep}{ROOT / 'tests'}")

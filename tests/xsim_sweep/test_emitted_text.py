@@ -292,6 +292,26 @@ def test_a_sweep_on_the_production_testbench_is_captured_not_simulated(
     assert "PASS" not in (captured / "capture.log").read_text()
 
 
+# Every sweep the driver runs, the smoke's too: a case the design space now refuses fails in
+# its construction, which the capture runs, not 25 minutes into the sweep.
+EVERY_SWEEP = {
+    name: tool.Job(name, "sweep", (module, *args))
+    for name, module, args in (*tool.SWEEPS, *tool.SMOKE_SWEEPS)
+}
+
+
+@pytest.mark.parametrize("name", EVERY_SWEEP)
+def test_every_sweep_builds_its_designs_offline(
+    sandbox: tuple[Path, Path], tmp_path: Path, name: str
+) -> None:
+    """The sweep's construction code runs to its first simulation of every run, which the
+    capture takes in place of the simulation: at least one design, nothing simulated."""
+    job = EVERY_SWEEP[name]
+    entry = _keys(*sandbox, tmp_path, (job,))[name]
+    assert entry["simulations"] >= 1
+    assert any((tmp_path / name / "designs").iterdir())
+
+
 def _venv_inside(root: Path) -> Path:
     """An environment inside the checkout, untracked, as a host checkout's ``.venv`` is:
     its interpreter, which the jobs run on, imports a module of its own at startup and

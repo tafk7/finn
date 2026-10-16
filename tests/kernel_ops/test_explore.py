@@ -99,7 +99,9 @@ def test_the_seam_reads_each_member_by_name() -> None:
     outcome = explorer.set(network, {("first", "compute.packed.pe"): 1})
     assert isinstance(outcome, Accepted)
     folded = explorer.cost(outcome.network, ("first",))
-    assert "first" in folded.cycles or "first" in folded.waiting
+    # pe=1 on the 48-cycle kernel: its cycles are known, nothing waits
+    assert folded.cycles == {"first": 48}
+    assert not folded.waiting
 
 
 def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:

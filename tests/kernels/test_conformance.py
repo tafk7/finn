@@ -69,7 +69,6 @@ from kernels.conformance import (
     NonConformance,
     Sample,
     _ends,
-    _settle_known,
     _stream,
     _values,
     conformance,
@@ -331,17 +330,6 @@ def test_a_wrong_order_fails_in_xsim(wrong: str, tmp_path: Path) -> None:
     assert failed == {(sample.label, mode) for sample in chosen for mode in MODES}
 
 
-def test_known_failures_are_strict() -> None:
-    a, b = Sample("a", {}), Sample("b", {})
-    _settle_known((a, b), [(a, "free", "word 1")], {("a", "free"): "a defect"})
-    with pytest.raises(NonConformance, match="b \\(free\\)"):
-        _settle_known((a, b), [(b, "free", "word 1")], {})
-    with pytest.raises(AssertionError, match="now pass: a \\(free\\): a defect"):
-        _settle_known((a, b), [], {("a", "free"): "a defect"})
-    with pytest.raises(ValueError, match="name no simulation"):
-        _settle_known((a,), [], {("c", "free"): "a defect"})
-
-
 # -- the checks refuse ----------------------------------------------------------------------
 
 
@@ -389,6 +377,23 @@ class Unpipelined(ThresholdingAxiKernel):
     parameters = without(ThresholdingAxiKernel, "DEEP_PIPELINE")
 
 
+def misspelled(kernel: type[LeafKernel], name: str, misspelling: str) -> Any:
+    """A ``parameters`` member: ``kernel``'s, with ``name`` spelled ``misspelling``."""
+    stated = cast(Any, vars(kernel)["parameters"]).function
+
+    def parameters(self: LeafKernel) -> dict[str, int | str]:
+        return {(misspelling if key == name else key): value for key, value in stated(self).items()}
+
+    return derived(parameters)
+
+
+class Misspelled(MemStreamKernel):
+    """memstream_axi naming RAM_STYLE as RAM_STLYE: a binding the module does not declare."""
+
+    id = "test.memstream_axi.misspelled"
+    parameters = misspelled(MemStreamKernel, "RAM_STYLE", "RAM_STLYE")
+
+
 class Unscaled(EltwiseKernel):
     """eltwise without B_SCALE: a real, named by the checker but not valued."""
 
@@ -415,3 +420,8 @@ def test_parameters_must_name_every_module_parameter(
 ) -> None:
     with pytest.raises(AssertionError, match=rf"omits \['{omitted}'\]"):
         conformance(**dict(case(), space_type=space_type))
+
+
+def test_a_parameter_the_module_does_not_declare_fails_the_checker() -> None:
+    with pytest.raises(AssertionError, match=r"the RTL checker declined .*RAM_STLYE"):
+        conformance(**dict(memstream(), space_type=Misspelled))

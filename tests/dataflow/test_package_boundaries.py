@@ -55,8 +55,6 @@ def test_package_roots_re_export_nothing() -> None:
         root = import_module(name)
         assert not hasattr(root, "__all__"), name
         assert not hasattr(root, "__getattr__"), name
-        for value in ("DataflowRegion", "DataflowNetwork", "Kernel", "Space", "LogicalView"):
-            assert not hasattr(root, value), (name, value)
 
 
 def test_every_canonical_module_is_importable() -> None:

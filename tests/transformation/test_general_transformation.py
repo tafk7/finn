@@ -11,7 +11,6 @@ import pytest
 
 import json
 import os
-import shutil
 from pkgutil import get_data
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
@@ -19,11 +18,10 @@ from qonnx.transformation.general import GiveUniqueNodeNames
 from qonnx.transformation.lower_convs_to_matmul import LowerConvsToMatMul
 
 from finn.transformation.general import ApplyConfig
-from finn.util.basic import make_build_dir
 
 
 @pytest.mark.transform
-def test_apply_config():
+def test_apply_config(tmp_path):
     raw_m = get_data("qonnx.data", "onnx/mnist-conv/model.onnx")
     model = ModelWrapper(raw_m)
     model = model.transform(GiveUniqueNodeNames())
@@ -33,7 +31,7 @@ def test_apply_config():
     config = {}
     config["Defaults"] = {"kernel_size": [[3, 3], ["Im2Col"]]}
     config["Im2Col_0"] = {"kernel_size": [7, 7]}
-    test_dir = make_build_dir("test_apply_config_")
+    test_dir = str(tmp_path)
     config_path = os.path.join(test_dir, "config.json")
     with open(config_path, "w") as f:
         json.dump(config, f, indent=4)
@@ -41,4 +39,3 @@ def test_apply_config():
     # check model
     assert getCustomOp(model.graph.node[2]).get_nodeattr("kernel_size") == [7, 7]
     assert getCustomOp(model.graph.node[9]).get_nodeattr("kernel_size") == [3, 3]
-    shutil.rmtree(test_dir)

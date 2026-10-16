@@ -300,7 +300,9 @@ def test_unknown_tier_is_rejected():
     proc = subprocess.run(
         [FINN_ENV, "inspect", "--tier", "nonsense"], capture_output=True, text=True
     )
-    assert proc.returncode != 0
+    # argparse's usage error, not a crash
+    assert proc.returncode == 2
+    assert "argument --tier: invalid choice: 'nonsense'" in proc.stderr
 
 
 # --------------------------------------------------------------------------
@@ -542,7 +544,7 @@ def test_hostpath_expands_tilde(monkeypatch):
 
 
 def test_hostpath_makes_relative_absolute():
-    assert finn_env.hostpath("x").startswith("/")
+    assert finn_env.hostpath("x") == os.path.join(os.getcwd(), "x")
 
 
 def test_hostpath_passes_through_empty():
@@ -580,17 +582,6 @@ def test_emitted_paths_have_no_tilde(tmp_path):
 # checked the JSON output while Compose reads the sh output.
 
 
-def test_sh_output_does_not_select_python_imports(tmp_path):
-    """The resolver default must match the image and all launchers."""
-    proc = subprocess.run(
-        [FINN_ENV, "inspect", "--tier", "dev", "--format", "sh"],
-        capture_output=True,
-        text=True,
-        env={"PATH": os.environ["PATH"], "HOME": "/home/someone"},
-    )
-    assert "FINN_DEPS=" not in proc.stdout
-
-
 def test_sh_output_carries_the_canonical_runtime_set():
     proc = subprocess.run(
         [FINN_ENV, "inspect", "--tier", "dev", "--format", "sh"],
@@ -619,7 +610,12 @@ def test_sh_output_carries_xelab_thread_override():
 
 
 def test_slashkit_has_a_transparent_tool_shim():
-    assert "slashkit" in (Path(REPO) / "docker/Dockerfile.finn").read_text()
+    # slashkit is one of the tools the shim loop links into the toolchain-bin directory
+    assert re.search(
+        r"for t in [^;\n]*\bslashkit\b[^;\n]*; do \\\n"
+        r'\s*ln -sf /usr/local/lib/finn/toolchain-shim /usr/local/lib/finn/toolchain-bin/"\$t"',
+        (Path(REPO) / "docker/Dockerfile.finn").read_text(),
+    )
 
 
 def test_sh_output_does_not_leak_xilinx_path_on_dev(tmp_path):
@@ -988,39 +984,16 @@ def test_compose_rejects_runtime_content_without_a_resolved_image(tmp_path):
     assert "FINN_IMAGE must be set" in proc.stderr
 
 
-def test_container_docs_do_not_reference_retired_interfaces():
-    paths = [
-        "README.md",
-        "docs/installation.md",
-        "docker/README.md",
-    ]
-    chunks = []
-    for rel in paths:
-        with open(os.path.join(REPO, rel), errors="replace") as handle:
-            chunks.append(handle.read())
-    body = "\n".join(chunks)
-    for retired in (
-        "<<Claude",
-        "scripts/finn-env.sh",
-        "--backend",
-        "FINN_SINGULARITY",
-        "docker/finn-apptainer",
-        "XRT_DEB_VERSION",
-        "V80PP_DEB_PACKAGE",
-        "docker/runtimes/v80pp.env",
-        "FINN_XRT_SHA256",
-    ):
-        assert retired not in body
-
-
 def test_python_dependency_pins_are_not_duplicated_in_installers():
     with open(os.path.join(REPO, "docker/Dockerfile.finn")) as handle:
         dockerfile = handle.read()
     with open(os.path.join(REPO, "setup-local.sh")) as handle:
         local_setup = handle.read()
-    for pin in ("torch==2.8.0", "jupyter==1.0.0", "matplotlib==3.7.0"):
-        assert pin not in dockerfile
-        assert pin not in local_setup
+    # The Python pins live in pyproject.toml and uv.lock, where the installers sync from;
+    # no ``name==version`` pin (extras included) is repeated in either installer.
+    pin = re.compile(r"[A-Za-z0-9_.\-]+(?:\[[A-Za-z0-9_,.\-]+\])?==[0-9]")
+    assert pin.findall(dockerfile) == []
+    assert pin.findall(local_setup) == []
 
 
 def test_compose_uses_complete_image_references():

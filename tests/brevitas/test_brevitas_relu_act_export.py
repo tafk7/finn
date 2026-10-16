@@ -41,7 +41,6 @@ from qonnx.util.cleanup import cleanup as qonnx_cleanup
 
 import finn.core.onnx_exec as oxe
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
-from finn.util.basic import make_build_dir
 
 
 @pytest.mark.brevitas_export
@@ -50,11 +49,12 @@ from finn.util.basic import make_build_dir
 def test_brevitas_act_export_relu(
     abits,
     ishape,
+    tmp_path,
 ):
     b_act = QuantReLU(
         bit_width=abits,
     )
-    build_dir = make_build_dir(prefix="test_brevitas_act_export_relu")
+    build_dir = str(tmp_path)
     m_path = os.path.join(build_dir, "test_brevitas_relu_act_export.onnx")
     export_qonnx(b_act, torch.randn(ishape), m_path)
     qonnx_cleanup(m_path, out_file=m_path)
@@ -95,6 +95,7 @@ def test_brevitas_act_export_relu_channel(
     ishape,
     channel_shape,
     squeeze_leading,
+    tmp_path,
 ):
     b_act = QuantReLU(
         bit_width=abits,
@@ -103,7 +104,7 @@ def test_brevitas_act_export_relu_channel(
         scaling_per_output_channel=True,
         per_channel_broadcastable_shape=channel_shape,
     )
-    build_dir = make_build_dir(prefix="test_brevitas_act_export_relu_channel")
+    build_dir = str(tmp_path)
     m_path = os.path.join(build_dir, "test_brevitas_relu_act_export.onnx")
     export_qonnx(b_act, torch.randn(ishape), m_path)
     qonnx_cleanup(m_path, out_file=m_path)

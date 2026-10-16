@@ -59,6 +59,7 @@ from kernels.xsim import requires_xsim
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 
+import finn.custom_op.kernels as domain
 from finn.core.graph.annotations.platform import write_target
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_pacing import FREE
@@ -112,6 +113,10 @@ MODELS: dict[str, tuple[Callable[..., ModelWrapper], str]] = {
     "matmul": (matmul, "first"),
     "thresholding": (thresholding, "activate"),
 }
+
+
+# The KernelOps whose parity is in another file: name -> the file, which runs ``check_parity``.
+PARITY_ELSEWHERE = {"Conv": "test_conv.py"}
 
 
 def points(build: Any, member: str) -> Covering:
@@ -202,6 +207,19 @@ def wide_inputs(model: ModelWrapper) -> dict[str, Integers]:
 
 
 # -- offline ---------------------------------------------------------------------------
+
+
+def test_every_kernel_op_has_parity() -> None:
+    """A KernelOp added to the domain without a model here, or a parity test in another
+    file, fails here: it would otherwise be checked against nothing."""
+    here = {
+        type(kernel_op(model, model.graph.node[0])).__name__
+        for model in (build() for build, _ in MODELS.values())
+    }
+    for name, file in PARITY_ELSEWHERE.items():
+        assert "check_parity(" in (Path(__file__).parent / file).read_text(), (name, file)
+    assert sorted(here | set(PARITY_ELSEWHERE)) == sorted(domain.__all__)
+    assert not here & set(PARITY_ELSEWHERE)
 
 
 @pytest.mark.parametrize("name", sorted(MODELS))
@@ -324,7 +342,8 @@ def test_the_versal_points_take_its_dsp58_core_and_ultraram() -> None:
         "x.adapter.input_gen.input_gen"
     ], styles
     model = thresholding(target=VERSAL)
-    assert choose(network(model, model.graph.node), {"activate.ultra_stages": 1})
+    chosen = choose(network(model, model.graph.node), {"activate.ultra_stages": 1})
+    assert chosen.member("activate").ultra_stages == 1
 
 
 @requires_xsim

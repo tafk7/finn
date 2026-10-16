@@ -43,7 +43,6 @@ from trained_networks import get_test_model_trained
 
 import finn.core.onnx_exec as oxe
 from finn.transformation.qonnx.convert_qonnx_to_finn import ConvertQONNXtoFINN
-from finn.util.basic import make_build_dir
 
 
 @pytest.mark.brevitas_export
@@ -53,13 +52,13 @@ from finn.util.basic import make_build_dir
 @pytest.mark.parametrize("wbits", [1, 2])
 # network topology / size
 @pytest.mark.parametrize("size", ["TFC", "SFC", "LFC"])
-def test_brevitas_fc_onnx_export_and_exec(size, wbits, abits):
+def test_brevitas_fc_onnx_export_and_exec(size, wbits, abits, tmp_path):
     if size == "LFC" and wbits == 2 and abits == 2:
         pytest.skip("No LFC-w2a2 present at the moment")
     if wbits > abits:
         pytest.skip("No wbits > abits cases at the moment")
     nname = "%s_%dW%dA" % (size, wbits, abits)
-    export_onnx_path = make_build_dir("test_brevitas_fc_")
+    export_onnx_path = str(tmp_path)
     finn_onnx = export_onnx_path + "/%s.onnx" % nname
     fc = get_test_model_trained(size, wbits, abits)
     ishape = (1, 1, 28, 28)

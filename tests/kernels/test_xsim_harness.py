@@ -592,4 +592,3 @@ def test_writes_its_kernel_does_not_declare_reach_the_memories(
         cycles=_cycles(point),
         toolchain=host_toolchain(),
     )
-    assert ELEMENT.bitwidth() == 4

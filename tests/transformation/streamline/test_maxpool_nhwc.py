@@ -93,6 +93,9 @@ def test_maxpool_nhwc(ifm_dim, ifm_ch, kernel_shape, pads, strides, ceil_mode, i
     output_dict = oxe.execute_onnx(maxpool_model, input_dict, return_full_exec_context=False)
     output = output_dict[output_node_name]
 
+    # the (MaxPool, Transpose) pair became (Transpose, MaxPoolNHWC)
+    assert [n.op_type for n in maxpool_model.graph.node] == ["Transpose", "MaxPoolNHWC"]
+
     # compare outputs
     assert (expected == output).all()
 

@@ -387,7 +387,8 @@ def test_persist_checks_every_value_before_it_writes_any(
 def test_the_shell_s_cycles_and_resources_are_its_members() -> None:
     bound = configure_partition(kernel_model())
     cycles = cycles_of(bound)
-    assert isinstance(cycles, Available) and cycles.value > 0
+    # the slowest member of the Chain at its baselines
+    assert cycles == Available(12)
     used = bound.own_resources()
     assert isinstance(used, Available)
     # The ip shell has no ends or static region: its resources are its members' sum.

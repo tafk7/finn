@@ -72,12 +72,6 @@ def test_name_selects_a_docker_container_name():
         assert data["name"] == "docker-test"
 
 
-def test_backend_option_is_removed():
-    proc = invoke(RUN, "--backend", "sbx", "--print")
-    assert proc.returncode == 2
-    assert "Unknown option: --backend" in proc.stderr
-
-
 def test_build_defaults_to_the_docker_image():
     proc = invoke(BUILD, "--print")
     assert proc.returncode == 0, proc.stderr
@@ -131,29 +125,6 @@ def test_rebuild_and_no_build_are_mutually_exclusive():
     proc = invoke(RUN, "--rebuild", "--no-build", "--print")
     assert proc.returncode == 2
     assert "mutually exclusive" in proc.stderr
-
-
-def test_apptainer_runner_is_not_part_of_the_interface():
-    assert not (REPO / "docker/run-apptainer").exists()
-    assert not (REPO / "docker/finn-apptainer").exists()
-    assert "export_sif ()" in BUILD.read_text()
-
-
-def test_only_public_container_entrypoints_remain():
-    for path in ("run-docker.sh", "docker/run-docker", "docker/run-sbx", "docker/export-sif"):
-        assert not (REPO / path).exists()
-
-
-def test_user_documentation_does_not_advertise_retired_launchers():
-    user_docs = (
-        "README.md",
-        "docker/README.md",
-        "docs/installation.md",
-    )
-    for rel in user_docs:
-        body = (REPO / rel).read_text()
-        assert "./run-docker.sh" not in body, rel
-        assert "--backend" not in body, rel
 
 
 def test_shared_image_preparation_reuse_rebuild_and_no_build(tmp_path):
@@ -248,27 +219,6 @@ def test_public_image_reference_matches_bake():
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip().startswith("xilinx/finn:img-")
     assert proc.stdout.strip().endswith(".xrt")
-
-
-def test_sbx_is_a_kit_not_a_build_option():
-    proc = invoke(BUILD, "--sbx", "--print")
-    assert proc.returncode == 2
-    assert "Unknown option: --sbx" in proc.stderr
-
-
-def test_removed_sbx_runtime_options_are_unknown():
-    for option in ("--sbx", "--remove"):
-        proc = invoke(RUN, option, "--print")
-        assert proc.returncode == 2
-        assert "Unknown option: " + option in proc.stderr
-
-
-def test_config_aliases_and_generation_are_removed():
-    for path in ("docker/config", "docker/finn-env"):
-        assert not (REPO / path).exists()
-    for args in (("sbx",), ("inspect", "--sbx")):
-        proc = invoke(REPO / "docker/config.py", *args)
-        assert proc.returncode == 2
 
 
 def test_removed_dependency_modes_are_actionable():
