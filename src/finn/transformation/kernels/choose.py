@@ -13,7 +13,7 @@ its shell (``finn.custom_op.kernels.shell.in_shell``: their kernels, the channel
 them and the channels on its boundary, members named as the graph, ``MatMul_0``; the nodes'
 and the channels' saved choices replayed, a stale one dropped with why), which its ``Seam``
 (``finn.kernels.explore``) explores, each choice keyed by its owner, a node or a
-tensor, and the key there; holds the pins the body records (``HELD``; a held key the
+tensor, and the key there; holds the keys the body records (``HELD``; a held key the
 bound network does not state is refused, ``held-not-taken``, ``held-owner-unknown``), gives every
 choice the body leaves open its baseline (``Seam.baseline``: what ``BaselineChoices``
 does, a no-op on a body the cut created; on a body made by hand, or for a choice replay
@@ -32,20 +32,20 @@ the choices it decides, explores and settles, and then:
   (``persist``): a kernel's on its node, a channel's on its tensor (``finn.channel``);
   a required choice no strategy set stays open, and emission refuses it by name
   (``configured_network``);
-- records the pins held, those the body recorded and those the strategy pinned, in the
+- records the keys held, those the body recorded and those a ``Hold`` fixed, in the
   body as keys (``HELD``, ``{graph name: [key, ...]}``; the values are the ones the nodes
-  and tensors state), so that every later exploration of the body holds them: a pin holds
+  and tensors state), so that every later exploration of the body holds them: a hold lasts
   for the build, and re-baselining keeps it; and a
   target throughput's frames a second (``OBJECTIVE_FPS``), which a later exploration
   whose strategy changes any kernel's choice removes;
 - keeps what it found (``explored``): the network, its cost and the report: the choices
   the body left open and the baseline took (``baselined``); the strategy with every
   value it changed (``changed``: before and after, by owner), how many it reopened and
-  settling kept, the ones settling re-baselined, a pin's held keys, attempts and time;
+  settling kept, the ones settling re-baselined, a ``Hold``'s held keys, attempts and time;
   every value by its owner (a node or a tensor, by graph name, and the key there, as
-  ``kernel_choices.json`` names it), with who set it (``saved``: the body, ``baseline``,
-  or the strategy); the keys held; the choices left open (a required one named so); each
-  FIFO's memory style beside the storage FinnLib's selection gives it and what it uses
+  the log ``report/kernel_choices.json`` names it), with who set it (``saved``: the body,
+  ``baseline``, or the strategy); the keys held; the choices left open (a required one named
+  so); each FIFO's memory style beside the storage FinnLib's selection gives it and what it uses
   (``fifo_storage``: its ``auto`` is FinnLib's, not Vivado's); whether FIFOs were
   sized; how they were judged (``fifos_judged``: ``model``, where the strategy sized them
   or checked them; ``not checked``; or what the strategy's report states); the dropped
@@ -59,7 +59,7 @@ the choices it decides, explores and settles, and then:
 
 ``exploration_summary`` gives an exploration's lines for a build's log.
 
-Pins go first, and FIFO sizing after the last strategy that changes the folding: a FIFO
+A ``Hold`` goes first, and FIFO sizing after the last strategy that changes the folding: a FIFO
 sized before a fold that leaves it too small for its stream is refused when the build
 verifies the partition (``fifo-stale``), unless a strategy dropped it to be sized again.
 
@@ -447,7 +447,7 @@ def _held_values(
 def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None) -> Explored:
     """The KernelOps of a partition's body, ``model``, explored by ``strategy`` (None: only
     the body's open choices given their baselines) and every value persisted, on its
-    network in the shell of the model's target, the body's pins held and recorded; see the
+    network in the shell of the model's target, the body's holds kept and recorded; see the
     module docstring."""
     if not model.graph.node:
         raise KernelOpError.refused(
@@ -469,7 +469,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     saved = seam.chosen(network)
     # The body's mark names the keys held; their values are the ones the network states.
     seam.held.update(_held_values(network, saved, held_keys(model)))
-    # A choice the body leaves open takes its baseline before the strategy runs; a pin
+    # A choice the body leaves open takes its baseline before the strategy runs; a hold
     # the body records must hold there.
     network = seam.baseline(network)
     values = seam.chosen(network)
@@ -578,7 +578,7 @@ def explore_partition(parent: ModelWrapper, strategy: Explorer) -> Explored:
     """The partition of the build's parent graph ``parent`` explored by ``strategy``:
     its body opened through the partition node (``partition_body``), explored
     (``explore_kernel_choices``) and saved in its file. The parent graph is unchanged;
-    a later exploration of the body holds the pins this one recorded."""
+    a later exploration of the body holds the keys this one recorded."""
     _, body, body_file = partition_body(parent)
     explored = explore_kernel_choices(body, strategy)
     body.save(body_file)
@@ -614,7 +614,7 @@ def shell_bottleneck(model: ModelWrapper) -> Bottleneck | None:
 
 class ExploreKernelChoices(Transformation):
     """A partition body's KernelOps explored by ``strategy`` and every value saved, on its
-    network in the shell of the model's target, the body's pins held and recorded;
+    network in the shell of the model's target, the body's holds kept and recorded;
     ``explored`` holds the result (``explore_kernel_choices``)."""
 
     def __init__(self, strategy: Explorer | None = None) -> None:

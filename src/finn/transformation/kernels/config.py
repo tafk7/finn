@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A partition body's choices, by graph name: the form ``Pinned`` reads back.
+"""A partition body's choices, by graph name: the form ``Hold`` reads back.
 
 FINN's ``extract_model_config_to_json`` reads every attribute through
 ``get_nodeattr``, which answers an absent choice with its default, so an open

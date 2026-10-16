@@ -16,9 +16,8 @@ does not fit there is reset to its baseline and reported (``dropped``). A requir
 FIFO's depth) stays open for a strategy.
 
 Channel choices may be stored only in a partition's body. A model with host nodes that
-stores some is refused (a build's choices come in through ``kernel_choices.json``
-instead); a model of KernelOps only keeps them, moved into the body, and the parent's
-copy is cleared.
+stores some is refused (a build fixes them in a step after the cut, with ``Hold``); a
+model of KernelOps only keeps them, moved into the body, and the parent's copy is cleared.
 """
 
 from __future__ import annotations

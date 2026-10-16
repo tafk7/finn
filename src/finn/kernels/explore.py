@@ -145,7 +145,7 @@ S = TypeVar("S", bound=Composition)
 class ExploreError(Refusal):
     """An exploration that cannot go on, and why: its one finding (``findings``), owned by
     who refused: a Decision none of whose cases is viable or accepted, by its key; a
-    pin the seam refuses, by the file that states it; a strategy's own setting or need,
+    hold the seam refuses, by the strategy that states it; a strategy's own setting or need,
     by the strategy. What the seam or the engine found against it are the finding's
     causes. Its message is the finding's line."""
 
@@ -1029,7 +1029,7 @@ def _first_case(
 
 class Rebaseline:
     """Every choice not held back at its baseline (``baseline``): written first, it
-    starts an exploration over from the kernels' baselines, the pins kept."""
+    starts an exploration over from the kernels' baselines, the holds kept."""
 
     strategy = "baseline"
 
@@ -1131,7 +1131,7 @@ def _held_run(seam: Seam, network: S, wanted: Mapping[Key, object], owner: str, 
     stored = seam.chosen(network)
     batch = {key: value for key, value in wanted.items() if stored.get(key, _ABSENT) != value}
 
-    def pin(opened: S, _: Mapping[Key, object]) -> S:
+    def hold(opened: S, _: Mapping[Key, object]) -> S:
         if not batch:
             return opened
         outcome = seam.set(opened, batch)
@@ -1141,7 +1141,7 @@ def _held_run(seam: Seam, network: S, wanted: Mapping[Key, object], owner: str, 
 
     seam.held.update(wanted)
     try:
-        return seam.run(network, (), pin, strategy)
+        return seam.run(network, (), hold, strategy)
     except Unsettled as error:
         raise ExploreError(
             "pin-refused", owner, f"refused choices: {error}", causes=error.findings
@@ -1153,7 +1153,7 @@ def _named(why: Mapping[Key, tuple[Finding, ...]]) -> str:
 
 
 def _pins_refused(path: str, why: Mapping[Key, tuple[Finding, ...]]) -> ExploreError:
-    """The refusal of the pins ``path`` states, the seam's reasons by key its causes."""
+    """The refusal of the holds ``path`` states, the seam's reasons by key its causes."""
     return ExploreError("pin-refused", path, "refused choices: " + _named(why), causes=_all(why))
 
 
@@ -2081,7 +2081,7 @@ class SizeFifos:
         """The style ``transport``'s FIFO is built in, which its depth is sized for: the
         one named, committed with the depth; else the one settling gives it
         (``Seam.settle``), its held value, else its earlier value, else its baseline,
-        ``auto``. A held value is not checked until settling (a pin or the graph's held
+        ``auto``. A held value is not checked until settling (a ``Hold`` or the graph's held
         choices may state ``None``, which settling refuses): ``None`` is sized as ``auto``."""
         if self.ram_style is not None:
             return self.ram_style

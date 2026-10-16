@@ -606,8 +606,8 @@ def test_a_strategy_reopens_its_scope_and_keeps_what_it_does_not_decide() -> Non
 
 
 def test_a_pin_holds_its_keys_and_a_later_strategy_folds_around_it() -> None:
-    """Pinned first and held (SR6): the target throughput folds the other MatMul and
-    keeps the pinned one; its relax step reaches the pin's bottleneck."""
+    """A ``Hold`` first (SR6): the target throughput folds the other MatMul and
+    keeps the held one; its relax step reaches the hold's bottleneck."""
     explorer, network = seam()
     base = explorer.baseline(network)
     explorer.held.update(keyed({"first.compute.packed.pe": 1, "first.compute.packed.simd": 1}))

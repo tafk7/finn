@@ -31,7 +31,7 @@ shell of the model's target (``in_shell``).
   kernels, output boundary channels (``Reshape_0_out0``, ..., ``MatMul_0``, ...), the
   module's instance order; each member's node in the module is its name with ``\\W`` as
   ``_``. A node and a tensor, or two nodes, of one name are refused: a member is named
-  once, as ``kernel_choices.json`` names it;
+  once, as the choices log ``kernel_choices.json`` names it;
 - **its stored choices**, replayed as each member is bound (``Network``'s ``stored``):
   every node's attributes and every channel's ``finn.channel`` on its tensor (in a
   partition's body only, ``refuse_outside_body``). A stored choice the current facts

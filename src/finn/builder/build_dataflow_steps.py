@@ -245,7 +245,7 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWr
 def _explore(
     model: ModelWrapper, cfg: DataflowBuildConfig, step: str, strategy: Explorer
 ) -> Explored:
-    """Explore the partition by ``strategy``, its pins held, and save it; write the
+    """Explore the partition by ``strategy``, the graph's holds kept, and save it; write the
     step's report, report/<step>.json, log its summary and note each limitation found as
     a warning."""
     explored = explore_partition(model, strategy)
@@ -265,7 +265,7 @@ def step_target_throughput(
     relax_target_fps: bool = True,
 ) -> ModelWrapper:
     """Fold the partition's kernels to the least parallelism that meets ``target_fps``
-    frames a second at the target's clock, the pins held. With ``relax_target_fps``, a
+    frames a second at the target's clock, the holds kept. With ``relax_target_fps``, a
     throughput the folding cannot reach is relaxed to the fastest it reaches. Writes
     report/step_target_throughput.json. The partition's body records ``target_fps``, the
     objective step_build_bitfile reports the delivered clock against, until a later step
@@ -280,7 +280,7 @@ def step_max_throughput(
 ) -> ModelWrapper:
     """Fold the partition's kernels to the most throughput whose shell's resources stay
     within ``max_throughput_within``, a fraction of the part's for each resource named
-    (``{"lut": 0.5}``), the pins held. A budget even the least parallelism exceeds is a
+    (``{"lut": 0.5}``), the holds kept. A budget even the least parallelism exceeds is a
     limitation, and that point is kept. Writes report/step_max_throughput.json."""
     explored = _explore(model, cfg, "step_max_throughput", MaxThroughput(max_throughput_within))
     each = explored.report["strategy"]
@@ -301,7 +301,7 @@ def step_size_fifos(
 ) -> ModelWrapper:
     """Size each channel of the partition from the beat patterns at both its ends, at the
     current folding: a direct connection, or a FIFO of the least depth that keeps its
-    producer within its idle time, plus ``fifo_margin`` words. A pinned channel is kept.
+    producer within its idle time, plus ``fifo_margin`` words. A held channel is kept.
     ``fifo_ram_style`` commits a memory style with each FIFO's depth; None leaves it to
     FinnLib (``auto``). Writes report/step_size_fifos.json."""
     strategy = SizeFifos(margin=fifo_margin, ram_style=fifo_ram_style)
@@ -310,7 +310,7 @@ def step_size_fifos(
 
 
 def step_baseline_choices(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Set every choice of the partition that is not pinned back to its baseline, so a
+    """Set every choice of the partition that is not held back to its baseline, so a
     resumed build starts over. Writes report/step_baseline_choices.json."""
     _explore(model, cfg, "step_baseline_choices", Rebaseline())
     return model
