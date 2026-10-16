@@ -98,6 +98,7 @@ What it holds:
 - `support/rng_seed.py`: the seed of a test's random state, from its node id (`tests/conftest.py`, §4).
 - `support/member_cache.py`: the autouse cache of `finn.kernels.members`, one per test, dropped at its end; the trees under their own `--confcutdir` import it in their conftests.
 - `support/layering.py`: FINN's layers, what each may import, and the import walker. Each layer names the tree whose `test_layering.py` checks it; `tests/layers` tests the table and the walker.
+- `support/refusals.py`: `refused(code, ...)`, which a test asserts a `Refusal` by: its finding's code (and its owner and details), the message of a code pinned once, in the test of the module that writes it; it imports `finn.core.reporting` and pytest only, so every tree may import it.
 - `support/value_classes.py`: the check that a frozen value class holds immutable values, used by the engine, dataflow and kernel trees.
 - `support/trained_networks.py`: the pretrained Brevitas example networks (`get_test_model_trained`), which the Brevitas, transformation and KernelOp tests export.
 - `support/conformance.py`, `support/helpers.py`, `support/xsim.py`, `support/chain.py`, `support/adapted.py`, `support/kernel_specs/`: the kernel tests' harness (the conformance case, the construction helpers, the XSim markers, the Chain, the adapted-channel cases) and each kernel's spec.

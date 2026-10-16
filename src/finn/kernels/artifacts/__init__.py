@@ -11,7 +11,8 @@ checks declared pins against the RTL; ``ipxact`` emits the Tcl that packages an
 emitted module as a Vivado IP, and ``interface`` describes its pins
 (``interface.json``); ``projection`` takes the canonical digest that keys a module.
 A one-way import rule, a row of the layer table in ``tests/support/layering.py``:
-``artifacts`` imports the standard library and its approved dependencies;
+``artifacts`` imports the standard library, the findings of ``finn.core.reporting`` and its
+approved dependencies;
 kernels import ``artifacts``, never the reverse. What crosses into it is a
 detached ``Module``.
 

@@ -9,7 +9,9 @@ from collections.abc import Sequence
 
 import pytest
 
+from finn.core.reporting.findings import FindingKind
 from finn.kernels.artifacts.abi import (
+    RTL_CHECK,
     AbiError,
     Bus,
     Clock,
@@ -85,18 +87,69 @@ def test_declared_pins_that_match_the_source_are_not_refused() -> None:
 
 def test_a_name_spelled_in_another_case_is_reported_as_such() -> None:
     shouting = (Signal("IN0", Direction.IN, 1),)
-    absent = (Signal("nowhere", Direction.IN, 1),)
     observed = (ObservedPort("in0", Direction.IN, 1),)
-    assert any("case sensitive" in issue for issue in check_against_rtl(shouting, observed))
-    assert any("does not have" in issue for issue in check_against_rtl(absent, observed))
+    spelled, other = check_against_rtl(shouting, observed)
+    assert (spelled.code, dict(spelled.details)) == (
+        "abi-pin-case-differs",
+        {"pin": "IN0", "source": "in0"},
+    )
+    assert spelled.message == (
+        "the ABI declares 'IN0' but the source spells it 'in0'; "
+        "SystemVerilog identifiers are case sensitive"
+    )
+    # The source's spelling is also a name the ABI does not declare.
+    assert (other.code, dict(other.details)) == ("abi-pin-undeclared", {"pin": "in0"})
 
 
-def test_a_direction_width_or_extra_pin_the_source_contradicts_is_refused() -> None:
+def test_a_pin_absent_from_the_source_is_refused() -> None:
+    (absent,) = check_against_rtl((Signal("nowhere", Direction.IN, 1),), ())
+    assert (absent.code, absent.kind, absent.owner) == (
+        "abi-pin-absent",
+        FindingKind.REJECTION,
+        RTL_CHECK,
+    )
+    assert absent.message == "the ABI declares 'nowhere', which the source does not have"
+    assert dict(absent.details) == {"pin": "nowhere"}
+
+
+def test_a_name_the_abi_does_not_declare_is_refused() -> None:
+    issues = check_against_rtl(CLOCKING, OBSERVED)
+    assert {issue.code for issue in issues} == {"abi-pin-undeclared"}
+    undeclared = next(issue for issue in issues if dict(issue.details)["pin"] == "in0_V_tdata")
+    assert undeclared.message == "the source has 'in0_V_tdata', which the ABI does not declare"
+    assert {dict(issue.details)["pin"] for issue in issues} == {
+        port.name for port in OBSERVED if port.name not in physical_names(CLOCKING)
+    }
+
+
+def test_a_direction_the_source_contradicts_is_refused() -> None:
     wrong_way = (_stream("in0_V", 16, initiator=True),)
-    assert any("output" in issue for issue in check_against_rtl(wrong_way, OBSERVED))
+    wrong = [
+        issue
+        for issue in check_against_rtl(wrong_way, OBSERVED)
+        if issue.code == "abi-direction-differs"
+    ]
+    assert {dict(issue.details)["pin"] for issue in wrong} == {
+        "in0_V_tdata",
+        "in0_V_tvalid",
+        "in0_V_tready",
+    }
+    tdata = next(issue for issue in wrong if dict(issue.details)["pin"] == "in0_V_tdata")
+    assert dict(tdata.details) == {"pin": "in0_V_tdata", "declared": "output", "source": "input"}
+    assert tdata.message == (
+        "the ABI declares 'in0_V_tdata' as output and the source declares it input"
+    )
+
+
+def test_a_width_the_source_contradicts_is_refused() -> None:
     narrow = (_stream("in0_V", 8),)
-    assert any("8 bits" in issue and "16" in issue for issue in check_against_rtl(narrow, OBSERVED))
-    assert any("does not declare" in issue for issue in check_against_rtl(CLOCKING, OBSERVED))
+    (width,) = [
+        issue for issue in check_against_rtl(narrow, OBSERVED) if issue.code == "abi-width-differs"
+    ]
+    assert dict(width.details) == {"pin": "in0_V_tdata", "declared": 8, "source": 16}
+    assert width.message == (
+        "the ABI declares 'in0_V_tdata' as 8 bits and the source resolves it to 16"
+    )
 
 
 # -- directions are declared once and flipped ----------------------------------

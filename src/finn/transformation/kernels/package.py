@@ -317,7 +317,7 @@ def check_elaborates(emitted: EmittedModule, abi: Abi, label: str) -> None:
             "top-contradicts-pins",
             "check_elaborates",
             f"{label}: the emitted top {emitted.entry_point} contradicts its pins:\n"
-            + "\n".join(found),
+            + "\n".join(each.message for each in found),
             node=label,
         )
     _LOG.info(

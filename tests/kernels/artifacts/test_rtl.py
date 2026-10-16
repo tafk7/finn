@@ -242,7 +242,11 @@ def test_the_case_mismatch_is_caught_against_the_actual_source(replay: Path) -> 
     )
     issues = check_abi(wrong, (replay,), "replay_buffer", REPLAY_PARAMETERS)
     assert not isinstance(issues, Declined)
-    assert any("CLK" in issue and "clk" in issue and "case sensitive" in issue for issue in issues)
+    assert [
+        (issue.code, dict(issue.details)["pin"], dict(issue.details)["source"])
+        for issue in issues
+        if issue.code == "abi-pin-case-differs"
+    ] == [("abi-pin-case-differs", "CLK", "clk")]
 
 
 def test_a_correct_declaration_is_not_refused(replay: Path) -> None:
@@ -276,7 +280,9 @@ def test_a_deliberately_wrong_width_is_refused_with_the_port_named(replay: Path)
     )
     issues = check_abi(wrong, (replay,), "replay_buffer", REPLAY_PARAMETERS)
     assert not isinstance(issues, Declined)
-    assert any("idat" in issue and "8 bits" in issue and "16" in issue for issue in issues)
+    assert [
+        (issue.code, dict(issue.details)) for issue in issues if issue.code == "abi-width-differs"
+    ] == [("abi-width-differs", {"pin": "idat", "declared": 8, "source": 16})]
 
 
 def test_a_declared_stream_is_checked_through_its_flipped_signature(
@@ -302,7 +308,7 @@ def test_a_declared_stream_is_checked_through_its_flipped_signature(
     issues = check_abi(abi, finnlib, "dotp_axi", DOTP_PARAMETERS)
     assert not isinstance(issues, Declined)
     # Only the ports this partial ABI omits, and none about the ones it declares.
-    assert all("s_axis_weights" not in issue for issue in issues)
+    assert all(not str(dict(issue.details)["pin"]).startswith("s_axis_weights") for issue in issues)
 
 
 # -- a name is established before its value ------------------------------------
@@ -452,7 +458,9 @@ def test_a_wrong_pin_is_refused_beside_an_unestablished_value(
         THRESHOLDING_PARAMETERS,
     )
     assert not isinstance(wide, Declined)
-    assert any("s_axis_tdata" in issue and "16 bits" in issue for issue in wide)
+    assert [
+        (issue.code, dict(issue.details)) for issue in wide if issue.code == "abi-width-differs"
+    ] == [("abi-width-differs", {"pin": "s_axis_tdata", "declared": 16, "source": 8})]
 
     misnamed = check_abi(
         _thresholding_abi("s_axis_TDATA", 8),
@@ -461,7 +469,11 @@ def test_a_wrong_pin_is_refused_beside_an_unestablished_value(
         THRESHOLDING_PARAMETERS,
     )
     assert not isinstance(misnamed, Declined)
-    assert any("s_axis_TDATA" in issue and "case sensitive" in issue for issue in misnamed)
+    assert [
+        (dict(issue.details)["pin"], dict(issue.details)["source"])
+        for issue in misnamed
+        if issue.code == "abi-pin-case-differs"
+    ] == [("s_axis_TDATA", "s_axis_tdata")]
 
     narrow = check_abi(
         (Signal("adat", Direction.IN, 4),),
@@ -470,7 +482,11 @@ def test_a_wrong_pin_is_refused_beside_an_unestablished_value(
         ELTWISE_PARAMETERS,
     )
     assert not isinstance(narrow, Declined)
-    assert any("adat" in issue and "4 bits" in issue for issue in narrow)
+    assert [
+        (issue.code, dict(issue.details)["pin"], dict(issue.details)["declared"])
+        for issue in narrow
+        if issue.code == "abi-width-differs"
+    ] == [("abi-width-differs", "adat", 4)]
 
 
 def test_a_binding_naming_an_undeclared_parameter_still_declines_beside_an_array(

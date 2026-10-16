@@ -24,6 +24,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Union
 
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.kernels.artifacts import ArtifactError
 
 
@@ -403,8 +404,25 @@ class ObservedPort:
     width: int
 
 
-def check_against_rtl(pins: Sequence[Pin], observed: Sequence[ObservedPort]) -> tuple[str, ...]:
-    """Every way the source contradicts the declared pins; empty when they agree.
+#: The owner of the RTL check's findings: the ABI check (``check_abi``).
+RTL_CHECK = "check_abi"
+
+
+def _contradiction(code: str, message: str, **details: object) -> Finding:
+    return Finding(FindingKind.REJECTION, code, RTL_CHECK, message, tuple(details.items()))
+
+
+def check_against_rtl(pins: Sequence[Pin], observed: Sequence[ObservedPort]) -> tuple[Finding, ...]:
+    """Every way the source contradicts the declared pins, one rejection each, in the order
+    found; empty when they agree. Each names the pin in its details (``pin``) and has a code
+    by the kind of contradiction:
+
+    - ``abi-pin-case-differs``: the source spells a declared name in another case
+      (``source`` is its spelling);
+    - ``abi-pin-absent``: a declared name the source does not have;
+    - ``abi-pin-undeclared``: a name the source has and the ABI does not declare;
+    - ``abi-direction-differs``: the directions differ (``declared`` and ``source``);
+    - ``abi-width-differs``: the widths differ (``declared`` and ``source``, in bits).
 
     Refusal only: the declaration stays authoritative and nothing is read back
     into it.  SystemVerilog identifiers are case sensitive, so a name the
@@ -416,7 +434,7 @@ def check_against_rtl(pins: Sequence[Pin], observed: Sequence[ObservedPort]) -> 
     for name in actual:
         folded.setdefault(name.casefold(), []).append(name)
 
-    issues: list[str] = []
+    issues: list[Finding] = []
     declared_names = physical_names(pins)
     for declared in declared_names:
         if declared in actual:
@@ -424,14 +442,31 @@ def check_against_rtl(pins: Sequence[Pin], observed: Sequence[ObservedPort]) -> 
         near = folded.get(declared.casefold())
         if near:
             issues.append(
-                f"the ABI declares {declared!r} but the source spells it {near[0]!r}; "
-                "SystemVerilog identifiers are case sensitive"
+                _contradiction(
+                    "abi-pin-case-differs",
+                    f"the ABI declares {declared!r} but the source spells it {near[0]!r}; "
+                    "SystemVerilog identifiers are case sensitive",
+                    pin=declared,
+                    source=near[0],
+                )
             )
         else:
-            issues.append(f"the ABI declares {declared!r}, which the source does not have")
+            issues.append(
+                _contradiction(
+                    "abi-pin-absent",
+                    f"the ABI declares {declared!r}, which the source does not have",
+                    pin=declared,
+                )
+            )
     for name in actual:
         if name not in declared_names:
-            issues.append(f"the source has {name!r}, which the ABI does not declare")
+            issues.append(
+                _contradiction(
+                    "abi-pin-undeclared",
+                    f"the source has {name!r}, which the ABI does not declare",
+                    pin=name,
+                )
+            )
 
     for pin in pins:
         if isinstance(pin, Signal):
@@ -443,21 +478,34 @@ def check_against_rtl(pins: Sequence[Pin], observed: Sequence[ObservedPort]) -> 
             found = actual.get(name)
             if found is not None and found.direction is not direction:
                 issues.append(
-                    f"the ABI declares {name!r} as {direction.value} and the source "
-                    f"declares it {found.direction.value}"
+                    _contradiction(
+                        "abi-direction-differs",
+                        f"the ABI declares {name!r} as {direction.value} and the source "
+                        f"declares it {found.direction.value}",
+                        pin=name,
+                        declared=direction.value,
+                        source=found.direction.value,
+                    )
                 )
         for name, width in widths:
             found = actual.get(name)
             if found is not None and found.width != width:
                 issues.append(
-                    f"the ABI declares {name!r} as {width} bits and the source "
-                    f"resolves it to {found.width}"
+                    _contradiction(
+                        "abi-width-differs",
+                        f"the ABI declares {name!r} as {width} bits and the source "
+                        f"resolves it to {found.width}",
+                        pin=name,
+                        declared=width,
+                        source=found.width,
+                    )
                 )
 
     return tuple(issues)
 
 
 __all__ = [
+    "RTL_CHECK",
     "SIGNATURES",
     "AbiError",
     "Bus",
