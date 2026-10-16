@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from support.space_cores import CORES, Packed, Stub, commit, forced
+
 from finn.core.space import (
     Decision,
     Param,
@@ -27,8 +29,6 @@ from finn.core.space import (
     inspection,
     requires,
 )
-
-from .test_forcing import CORES, Packed, Stub, commit, forced
 
 
 def test_a_successor_keeps_what_its_change_does_not_reach_and_derives_the_rest() -> None:

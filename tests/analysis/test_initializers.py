@@ -12,9 +12,9 @@ from typing import Any
 
 import numpy as np
 import pytest
-from builder.test_preparation import graph
 from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
+from support.models import graph
 
 from finn.analysis.initializers import annotated_initializers
 from finn.core.reporting.findings import FindingKind

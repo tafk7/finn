@@ -18,8 +18,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from kernels.artifacts.test_ipxact import AXILITE
 from qonnx.core.modelwrapper import ModelWrapper
+from support.ipxact_ports import AXILITE
 from support.models import (
     ROW_MAJOR_W2,
     choose_memories,

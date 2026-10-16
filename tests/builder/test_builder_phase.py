@@ -25,13 +25,13 @@ from typing import Any, cast
 
 import numpy as np
 import pytest
-from kernel_ops.test_choose import kernel_model as open_model
 from oracle import capture
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_shapes import InferShapes
+from support.explore_models import kernel_model as open_model
 from support.helpers import Lanes
 from support.models import (
     chain_source,
@@ -41,12 +41,14 @@ from support.models import (
 )
 from support.packaging import (
     PLACED_HIERARCHY,
+    TIMING_REPORT,
     FakeVivado,
     PackagedByStub,
     bitfile_default,
     io_shape_dict,
 )
 from support.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition, run_steps
+from support.tfc_built import SET_FOLDING, TFC_BUILT
 
 import finn.kernels.explore as explore_module
 from finn.builder import build_dataflow_steps
@@ -1005,78 +1007,6 @@ def test_a_step_the_build_does_not_know_is_refused(tmp_path: Path) -> None:
     ]
 
 
-def set_folding() -> dict[str, dict[str, int]]:
-    """FINN's SetFolding on TFC_W2A2 at 1,000,000 frames a second and 5 ns (200 cycles a
-    frame), as the finn-dev oracle captured it (``tfc_set_folding``): each layer's folding,
-    by the build's node (the oracle's i-th Thresholding is MultiThreshold_i, its i-th
-    MVAU MatMul_i; its label select is on the host here)."""
-    captured = capture("tfc_set_folding")
-    assert captured["target_cycles"] == 200
-    folding: dict[str, dict[str, int]] = {}
-    for layer in captured["layers"]:
-        family = layer["op_type"].partition("_")[0]
-        if family == "Thresholding":
-            index = sum(name.startswith("MultiThreshold") for name in folding)
-            folding[f"MultiThreshold_{index}"] = {"pe": layer["PE"]}
-        elif family == "MVAU":
-            index = sum(name.startswith("MatMul") for name in folding)
-            folding[f"MatMul_{index}"] = {
-                "compute.packed.pe": layer["PE"],
-                "compute.packed.simd": layer["SIMD"],
-            }
-    return folding
-
-
-#: Each layer's folding, which the target throughput strategy reaches by cost.
-SET_FOLDING = set_folding()
-
-
-def tfc_built() -> dict[str, dict[str, object]]:
-    """Every value TFC_W2A2 is built with at 1,000,000 frames a second, every one
-    persisted, 57 by graph name (on 8 nodes and 13 tensors): the Zynq landing's baseline
-    build's (Ultra96, 5 ns, [target_throughput, size_fifos]), whose choices were all
-    persisted then, and each MatMul's pumping, at its baseline, off: the doubled clock is the
-    shell's, which the kernels no longer read off the platform (SZ11 (e)), so the choice
-    is open on pynq too. Each layer's kernel on its node; each channel on its tensor: a
-    MultiThreshold's input, a MatMul's activations and weights, the graph's output. Every
-    memory takes its baseline, an explicit style (SZ18): the first three layers' weights
-    in block RAM (8 192 bits and more), the last layer's and every input buffer in LUTRAM,
-    and each threshold table's stages in LUTRAM, no block stage."""
-    built: dict[str, dict[str, object]] = {}
-    for node, folding in SET_FOLDING.items():
-        layer = int(node.rsplit("_", 1)[1])
-        if node.startswith("MatMul"):
-            built[node] = {
-                **folding,
-                "compute.packed.compute_pumping": False,
-                "compute.packed.reducer": "tree",
-            }
-            built[f"MultiThreshold_{layer}_out0"] = {
-                "adapter.input_gen.input_gen.ram_style": "distributed",
-                "transport": "direct",
-            }
-            built[f"MatMul_{layer}_param0"] = {
-                "source.memstream.pumped_memory": False,
-                "source.memstream.ram_style": "distributed" if node == "MatMul_3" else "block",
-                "transport": "direct",
-            }
-        else:
-            built[node] = {
-                **folding,
-                "block_stages": 0,
-                "deep_pipeline": False,
-                "ram_style": "distributed",
-            }
-            built[f"MatMul_{layer - 1}_out0" if layer else "Reshape_0_out0"] = {
-                "transport": "direct"
-            }
-    built["MatMul_3_out0"] = {"transport": "direct"}
-    return built
-
-
-TFC_BUILT = tfc_built()
-
-
 @pytest.mark.slow
 def test_a_target_throughput_folds_tfc_as_set_folding_does(
     source: ModelWrapper, tmp_path: Path
@@ -1172,24 +1102,6 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     # The partition's buffering: the input_gens' buffers as the RTL allocates them
     # (BUF_SIZE words), 4096 + 3 x 512 bits at SetFolding's folding.
     assert report["buffering"] == 5632
-
-
-#: The clock summary of a routed Zynq UltraScale+ design whose PS gives 187.512 MHz for
-#: 200 asked, as Vivado's timing summary report lays it out (the rest of the report cut).
-TIMING_REPORT = """\
-------------------------------------------------------------------------------------------------
-| Clock Summary
-| -------------
-------------------------------------------------------------------------------------------------
-
-Clock     Waveform(ns)         Period(ns)      Frequency(MHz)
------     ------------         ----------      --------------
-clk_pl_0  {0.000 2.667}        5.333           187.512
-
-
-------------------------------------------------------------------------------------------------
-| Intra Clock Table
-"""
 
 
 def test_the_delivered_clock_is_reported_beside_the_one_asked(tmp_path: Path) -> None:

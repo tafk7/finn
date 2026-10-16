@@ -22,13 +22,13 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from builder.test_builder_phase import TIMING_REPORT
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from support.models import choose_memories, configure_partition, streamed_w2_model
 from support.packaging import (
+    TIMING_REPORT,
     FakeVivado,
     bitfile_default,
     io_shape_dict,

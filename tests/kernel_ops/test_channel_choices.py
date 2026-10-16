@@ -22,6 +22,7 @@ import pytest
 from onnx import StringStringEntryProto, TensorProto, helper
 from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
+from support.explore_models import kernel_model as open_model
 from support.helpers import Lanes
 from support.models import EDGE, kernel_model
 from support.tfc import LANES
@@ -42,7 +43,6 @@ from finn.kernels.channels import Channel
 from finn.kernels.explore import ExploreError, Pinned, Ranked, Rebaseline
 from finn.transformation.kernels import explore_kernel_choices, kernel_choices_config
 from finn.transformation.kernels.cut import BaselineChoices, CutKernelPartition
-from kernel_ops.test_choose import kernel_model as open_model
 
 FIFO: dict[str, object] = {"transport": "fifo", "transport.fifo.buffer.depth": 8}
 

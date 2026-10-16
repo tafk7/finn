@@ -19,6 +19,7 @@ from support.helpers import (
     fifo_node,
     with_direct_transports,
 )
+from support.tiled_mvu import MH, MW, NF, PE_T, SF, SIMD_T, R, T
 from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import pack_lanes, stream_through
@@ -68,9 +69,6 @@ def mismatch_codes(mismatches):
 
 
 # -- the tiled MVU's weight chunks ---------------------------------------------------------
-
-R, MW, MH, PE_T, SIMD_T, T = 6, 8, 6, 3, 2, 3
-SF, NF = MW // SIMD_T, MH // PE_T
 
 
 def test_tiled_mvu_weight_chunks_are_a_width_conversion_a_delivery_can_avoid():

@@ -10,6 +10,7 @@ KernelOp's schema digest."""
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -28,6 +29,7 @@ from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 from support import chain
 from support.helpers import ADAPTER_RAM_STYLES, open_choices, with_adapter_memories
+from support.op_specs.base import GENERAL
 from support.packaging import verified
 
 DOMAIN = "finn.custom_op.kernels"
@@ -389,3 +391,41 @@ __all__ = [
     "matmul_model",
     "thresholding_model",
 ]
+
+
+def graph(
+    nodes: Sequence[Any],
+    inputs: Mapping[str, tuple[list[int], str | None]],
+    outputs: Sequence[str],
+    initializers: Mapping[str, Any] = {},
+    annotations: Mapping[str, str] = {},
+) -> ModelWrapper:
+    """``nodes`` over ``inputs`` (shape and annotation each) to ``outputs``, the
+    initializers and further annotations given, shapes inferred, every tensor float32."""
+    model = ModelWrapper(
+        qonnx_make_model(
+            helper.make_graph(
+                list(nodes),
+                "g",
+                [
+                    helper.make_tensor_value_info(n, TensorProto.FLOAT, s)
+                    for n, (s, _) in inputs.items()
+                ],
+                [helper.make_tensor_value_info(name, TensorProto.FLOAT, None) for name in outputs],
+            ),
+            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(GENERAL, 1)],
+        )
+    )
+    for name, values in initializers.items():
+        # An int64 array stays one (a shape, TopK's k); the rest are float32, as an
+        # export holds them.
+        if not (isinstance(values, np.ndarray) and values.dtype == np.int64):
+            values = np.asarray(values, dtype=np.float32)
+        model.set_initializer(name, values)
+    model = model.transform(InferShapes())
+    for name, (_, stated) in inputs.items():
+        if stated is not None:
+            model.set_tensor_datatype(name, DataType[stated])
+    for name, stated in annotations.items():
+        model.set_tensor_datatype(name, DataType[stated])
+    return model

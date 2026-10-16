@@ -175,6 +175,24 @@ PLACED_HIERARCHY = (
 )
 
 
+#: The clock summary of a routed Zynq UltraScale+ design whose PS gives 187.512 MHz for
+#: 200 asked, as Vivado's timing summary report lays it out (the rest of the report cut).
+TIMING_REPORT = """\
+------------------------------------------------------------------------------------------------
+| Clock Summary
+| -------------
+------------------------------------------------------------------------------------------------
+
+Clock     Waveform(ns)         Period(ns)      Frequency(MHz)
+-----     ------------         ----------      --------------
+clk_pl_0  {0.000 2.667}        5.333           187.512
+
+
+------------------------------------------------------------------------------------------------
+| Intra Clock Table
+"""
+
+
 class FakeVivado:
     """A toolchain double for the pynq shell's runner (``finn.shells.pynq.runner``): its
     Vivado run keeps the project's Tcl and makes what the template's project makes

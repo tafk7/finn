@@ -35,9 +35,8 @@ from qonnx.core.onnx_exec import EXACT_INTEGERS
 from qonnx.core.onnx_exec import execute_onnx as qonnx_execute
 from qonnx.core.ranges import TensorRange
 from qonnx.transformation.infer_datatypes import InferDataTypes
-from qonnx.transformation.infer_shapes import InferShapes
-from qonnx.util.basic import qonnx_make_model
-from support.models import TARGET
+from support.models import TARGET, graph
+from support.op_specs.base import GENERAL
 from support.tfc import EXPORT, io_settings, preparation_config, reference, run_steps
 
 from finn.analysis.comparison import Explanation, Run
@@ -60,7 +59,6 @@ from finn.transformation.streamline.extract_multithreshold_scale_bias import (
     ExtractMultiThresholdScaleBias,
 )
 
-GENERAL = "qonnx.custom_op.general"
 """qonnx's custom ops' domain."""
 MULTITHRESHOLD = (GENERAL, "MultiThreshold")
 
@@ -303,44 +301,6 @@ def test_tfc_prepared_again_is_unchanged_and_states_no_target(
 
 
 # -- hand-made graphs ----------------------------------------------------------------------
-
-
-def graph(
-    nodes: Sequence[Any],
-    inputs: Mapping[str, tuple[list[int], str | None]],
-    outputs: Sequence[str],
-    initializers: Mapping[str, Any] = {},
-    annotations: Mapping[str, str] = {},
-) -> ModelWrapper:
-    """``nodes`` over ``inputs`` (shape and annotation each) to ``outputs``, the
-    initializers and further annotations given, shapes inferred, every tensor float32."""
-    model = ModelWrapper(
-        qonnx_make_model(
-            helper.make_graph(
-                list(nodes),
-                "g",
-                [
-                    helper.make_tensor_value_info(n, TensorProto.FLOAT, s)
-                    for n, (s, _) in inputs.items()
-                ],
-                [helper.make_tensor_value_info(name, TensorProto.FLOAT, None) for name in outputs],
-            ),
-            opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(GENERAL, 1)],
-        )
-    )
-    for name, values in initializers.items():
-        # An int64 array stays one (a shape, TopK's k); the rest are float32, as an
-        # export holds them.
-        if not (isinstance(values, np.ndarray) and values.dtype == np.int64):
-            values = np.asarray(values, dtype=np.float32)
-        model.set_initializer(name, values)
-    model = model.transform(InferShapes())
-    for name, (_, stated) in inputs.items():
-        if stated is not None:
-            model.set_tensor_datatype(name, DataType[stated])
-    for name, stated in annotations.items():
-        model.set_tensor_datatype(name, DataType[stated])
-    return model
 
 
 def codes(findings: Sequence[Finding]) -> list[tuple[str, FindingKind]]:

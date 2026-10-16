@@ -16,14 +16,10 @@ from pathlib import Path
 
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.transformation.infer_shapes import InferShapes
+from support.explore_models import choices, kernel_model
 from support.helpers import FULL_DSP48E2, Lanes
-from support.models import TARGET, chain_source
 
-from finn.core.graph.annotations.channel import CHANNEL, channel_choices
-from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
-from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.explore import Choice, DebugPlaceholder, ExploreError, Ranked, RankPolicy
@@ -31,17 +27,9 @@ from finn.kernels.network import dotted
 from finn.platform.target import Target
 from finn.transformation.kernels import (
     ExploreKernelChoices,
-    InferKernelTensors,
-    ToKernelOps,
 )
 
 URAM = Target(part="a part with UltraRAM it initializes", platform=FULL_DSP48E2, shell="ip")
-
-
-def kernel_model(target: Target = TARGET) -> ModelWrapper:
-    model = chain_source().transform(InferShapes()).transform(ToKernelOps(TARGET))
-    write_target(model, target)
-    return model.transform(InferKernelTensors())
 
 
 def ranked(policy: RankPolicy) -> ExploreKernelChoices:
@@ -53,19 +41,6 @@ def offer(key: str, cases: tuple[object, ...], refused: dict[str, str]) -> Choic
     key there, joined)."""
     owner, _, below = key.partition(".")
     return Choice((owner, below), None, cases, False, refused)
-
-
-def choices(model: ModelWrapper) -> dict[str, dict[str, object]]:
-    """Every choice the model states, by graph name: each KernelOp node's (empty when it
-    holds none), then each tensor's channel choices."""
-    found = {
-        node.name: kernel_op(model, node).choices()
-        for node in model.graph.node
-        if node.domain == "finn.custom_op.kernels"
-    }
-    for tensor in model.tensors_stating(CHANNEL):
-        found[tensor] = channel_choices(model, tensor)
-    return found
 
 
 class Recording:

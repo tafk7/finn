@@ -16,6 +16,7 @@ from math import prod
 
 import numpy as np
 import pytest
+from support.tiled_mvu import MH, MW, NF, PE_T, SF, SIMD_T, R, T
 
 from finn.dataflow import traversal
 from finn.dataflow.traversal import (
@@ -212,9 +213,6 @@ def test_canonical_equality_is_equality_of_presented_sequences():
 
 
 # -- stress cases: tiled MVU and Shuffle ----------------------------------------
-
-R, MW, MH, PE_T, SIMD_T, T = 6, 8, 6, 3, 2, 3
-SF, NF = MW // SIMD_T, MH // PE_T
 
 
 def test_tiled_mvu_input_adapter_is_derived_from_the_two_orders():

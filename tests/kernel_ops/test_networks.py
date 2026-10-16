@@ -30,17 +30,16 @@ from pathlib import Path
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
+from support.kernel_path import config
 from support.models import TARGET
 from support.op_specs import conv, matmul, thresholding
 from support.tfc import run_steps
 from support.xsim import requires_xsim
 
-from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
 from finn.harness.ops import check_parity
 from finn.harness.reference import OpSpec
-from finn.platform.request import TargetRequest
 from finn.util.draws import boundary_inputs, graph_inputs
 
 NETWORKS = [
@@ -54,17 +53,6 @@ NETWORKS = [
         (conv.SPEC, "strided-dilated"),
     )
 ]
-
-
-def config(directory: Path) -> DataflowBuildConfig:
-    """The kernel path for ``TARGET`` (Ultra96's part at 5 ns on the ``ip`` shell), its
-    choices the default exploration's (the baselines, FIFOs sized: ``[size_fifos]``)."""
-    return DataflowBuildConfig(
-        output_dir=str(directory),
-        target=TargetRequest(part=TARGET.part, period_ns=TARGET.platform.period_ns),
-        steps=["phase_convert_to_hardware", "phase_create_accelerator", "phase_optimize_hardware"],
-        enable_build_pdb_debug=False,
-    )
 
 
 def network(spec: OpSpec, name: str, directory: Path) -> tuple[ModelWrapper, ModelWrapper]:

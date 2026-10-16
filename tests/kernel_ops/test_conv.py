@@ -35,6 +35,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import is_custom_op
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
+from support.kernel_path import config
 from support.models import convert
 from support.op_specs import conv
 from support.op_specs.base import GENERAL, source
@@ -51,7 +52,6 @@ from finn.transformation.kernels import ToKernelOps
 from finn.transformation.kernels.convert import between_kernel_ops, kernel_ops_by_anchor
 from finn.transformation.kernels.cut import BaselineChoices
 from finn.util.draws import boundary_inputs
-from kernel_ops.test_networks import config
 
 
 def test_the_kernel_op_conv_and_onnxs_conv_never_resolve_to_each_other() -> None:
