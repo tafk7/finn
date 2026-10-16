@@ -35,6 +35,7 @@ from .results import (
     owned_result,
     reject,
 )
+from .semantics import equal
 from .semantics import snapshot as snapshot_value
 
 if TYPE_CHECKING:
@@ -104,8 +105,12 @@ class Snapshot:
     each open Decision whose forced value's verdict read one of those:
     ``_touched``), and ``admissions`` holds the Decisions each assignment's admission
     read, which a later trial reuses where the change does not reach them
-    (``_TrialSnapshot``). ``answers`` holds what inspection answered of it, by
-    question and scope (``inspection``), where the answer shares its values.
+    (``_TrialSnapshot``). ``assumed`` holds, for the few assignments whose admission
+    read a Decision its trial's base forced and this snapshot leaves open, the value
+    the admission saw: a later trial reuses that admission only while this snapshot
+    forces the Decision to an equal value (``_reusable``). ``answers`` holds what
+    inspection answered of it, by question and scope (``inspection``), where the answer
+    shares its values.
     """
 
     model: Model[Space]
@@ -115,6 +120,7 @@ class Snapshot:
     forcing: bool = True
     verdicts: Mapping[int, object] = field(default_factory=dict, repr=False)
     admissions: Mapping[int, frozenset[int]] = field(default_factory=dict, repr=False)
+    assumed: Mapping[int, Mapping[int, object]] = field(default_factory=dict, repr=False)
     cache: dict[int, Evaluation] = field(default_factory=dict, init=False, repr=False)
     answers: dict[tuple[str, int], object] = field(default_factory=dict, init=False, repr=False)
     work: _execution.Work = field(default_factory=_execution.Work, init=False, repr=False)
@@ -183,12 +189,18 @@ def _reusable(
     retained choice through an evaluation of the base recorded that choice and not
     its admission's reads, so a choice is reusable only while every Decision its
     admission read is reusable too, or stable (it reads as the base forces it, as it
-    did in that admission); a touched Decision never is."""
+    did in that admission); a touched Decision never is.
+
+    An admission may also have read, for a Decision its own trial's base forced and
+    its successor left open, the value that base forced (``Snapshot.assumed``). A
+    stable Decision reads as ``base`` forces it, so such an admission is reusable
+    only where ``base`` forces each of those Decisions to an equal value; otherwise
+    it is admitted again."""
     excluded = frozenset(touched)
     reusable = {
         index: read
         for index, read in base.admissions.items()
-        if index in candidates and index not in excluded
+        if index in candidates and index not in excluded and _assumptions_hold(base, index)
     }
     while True:
         allowed = reusable.keys() | stable
@@ -197,6 +209,30 @@ def _reusable(
             return reusable
         for index in lost:
             del reusable[index]
+
+
+def _assumptions_hold(base: Snapshot, index: int) -> bool:
+    """Whether every value the admission of ``index`` assumed (``Snapshot.assumed``) is
+    the one ``base`` forces: found, and equal."""
+    assumed = base.assumed.get(index)
+    if not assumed:
+        return True
+    from ._forcing import Found  # noqa: PLC0415 - runtime/forcing cycle
+
+    found = base.found
+    if not isinstance(found, Found):
+        return False
+    nodes = base.linked.nodes
+    for other, seen in assumed.items():
+        if other not in found.values:
+            return False
+        semantics = nodes[other].semantics
+        assert semantics is not None
+        if not equal(
+            semantics, seen, found.values[other], owner=nodes[other].owner, role="forcing equality"
+        ):
+            return False
+    return True
 
 
 class _TrialSnapshot(Snapshot):
@@ -234,7 +270,12 @@ class _TrialSnapshot(Snapshot):
       taken as the successor gives it: with the reads of its guard, which its
       frame makes first, and without the reads of its admission; what read it
       counts those reads among its own, which only keeps less. The successor
-      records each candidate's admission reads (``admissions``).
+      records each candidate's admission reads (``admissions``), and beside them
+      the value it saw of each Decision it read that was neither a candidate nor
+      stable and that the base forces (``assumed``): the trial read that Decision as
+      the base forces it, which the successor, leaving it open, may not. A later trial
+      checks the assumption against the successor's own forcing when it reuses the
+      admission (``_reusable``).
     """
 
     __slots__ = (
@@ -310,7 +351,9 @@ class _TrialSnapshot(Snapshot):
         # Every candidate was admitted: the successor's assignments are the pending ones.
         successor = self.successor()
         candidates = self._candidates
-        object.__setattr__(successor, "admissions", MappingProxyType(self._admissions()))
+        admissions, assumed = self._admissions()
+        object.__setattr__(successor, "admissions", MappingProxyType(admissions))
+        object.__setattr__(successor, "assumed", MappingProxyType(assumed))
         open_ = frozenset(
             index
             for index in self.linked.decisions
@@ -322,29 +365,34 @@ class _TrialSnapshot(Snapshot):
             successor.cache.setdefault(index, entry)
         return successor
 
-    def _admissions(self) -> dict[int, frozenset[int]]:
-        """The Decisions each candidate's admission read, for the choices whose admission
-        the successor can vouch for. A candidate that read a Decision the change touched
-        and the successor leaves open, as its base forces it, was admitted under a value
-        the successor may not give it (a choice the change left waiting): its admission
-        is not recorded, so a later trial admits it again."""
+    def _admissions(
+        self,
+    ) -> tuple[dict[int, frozenset[int]], dict[int, Mapping[int, object]]]:
+        """The Decisions each candidate's admission read, and what it assumed. A candidate
+        that read a Decision the change touched and the successor leaves open, as its
+        base forces it, was admitted under that value, which the successor may not give
+        it (a choice the change left waiting): it assumed the value, and a later trial
+        reuses the admission only where the successor forces an equal one."""
         from ._forcing import forced  # noqa: PLC0415 - runtime/forcing cycle
 
         candidates, stable = self._candidates, self._stable
         recorded: dict[int, frozenset[int]] = {}
+        assumed: dict[int, Mapping[int, object]] = {}
         base_values: Mapping[int, object] | None = None
         for index in candidates:
             read = self.cache[index].decisions
+            recorded[index] = read
+            seen: dict[int, object] | None = None
             for other in read:
                 if other in candidates or other in stable:
                     continue
                 if base_values is None:
                     base_values = forced(self._base).values
                 if other in base_values:
-                    break
-            else:
-                recorded[index] = read
-        return recorded
+                    if seen is None:
+                        seen = assumed[index] = {}
+                    seen[other] = base_values[other]
+        return recorded, assumed
 
     def _record(self, index: int, entry: Evaluation) -> Evaluation:
         """A candidate's entry as the successor's decision frame records it: its answer

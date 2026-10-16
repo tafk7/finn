@@ -29,6 +29,7 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
+    _forcing,
     constraint,
     derived,
     design_space,
@@ -272,6 +273,45 @@ def test_a_retained_choice_whose_selector_the_neighbour_stops_forcing_is_unresol
     answer = inspection.explain(point, pe).result
     assert isinstance(answer, Unresolved), answer
     assert answer == inspection.explain(fresh(point), pe).result
+
+
+def test_an_admission_read_under_a_forced_value_the_successor_does_not_give_is_not_reused() -> None:
+    # The chain from nothing, seed 1, step 128 (reduced to the sequence below). Each
+    # successor answers every node, so the next trial starts from a warm cache. The
+    # last step admits the third unit's pe under the base's forced packed core, which
+    # the change leaves open (the successor does not force it): the admission assumed
+    # that core. The gearbox change must then admit it again, and refuse as a
+    # recomputation does.
+    point = design_space(Pipeline(width=10))
+    owned = {item.key: item.reference for item in inspection.decisions(point)}
+    steps: list[tuple[dict[str, object], tuple[str, ...]]] = [
+        ({"probe.enabled": True}, ()),
+        ({"u1.compute": "packed"}, ()),
+        ({"u0.compute": "packed"}, ()),
+        ({"u0.compute.packed.pe": 10}, ()),
+        ({"u1.compute.packed.pe": 5}, ()),
+        ({}, ("l1.burst",)),
+        ({"u2.compute.packed.pe": 1}, ()),
+        ({"u1.compute.packed.pe": 2}, ()),
+    ]
+    for values, clears in steps:
+        changes = [point.field(owned[key]).clear() for key in clears]
+        result = point.try_with_choices({owned[k]: v for k, v in values.items()}, *changes)
+        assert result.accepted, (values, clears)
+        point = result.instance
+        current = occurrence.state(point)
+        _forcing.forced(current)
+        for index in range(len(current.linked.nodes)):
+            runtime.evaluate(current, index)
+    got = point.try_with_choices({owned["l0.adapter"]: "gearbox"})
+    want = fresh(point).try_with_choices({owned["l0.adapter"]: "gearbox"})
+    assert not want.accepted
+    assert not got.accepted
+    refusals = [
+        {item.owner: item.result for item in each.outcomes if item.status == "refused"}
+        for each in (got, want)
+    ]
+    assert refusals[0] == refusals[1]
 
 
 @pytest.mark.xfail(strict=True, reason=WAITING)

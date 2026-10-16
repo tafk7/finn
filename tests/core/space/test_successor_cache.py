@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 from support.space_cores import CORES, Packed, Stub, commit, forced
+from support.space_walk import fresh as recomputed
 
 from finn.core.space import (
     Decision,
@@ -290,3 +291,57 @@ def test_an_admission_that_read_a_forced_decision_is_reused_unless_the_change_re
     fresh = commit(commit(design_space(Fit()), {"lanes": 3}), {"depth": 1})
     assert inspection.explain(narrow, Fit.depth) == inspection.explain(fresh, Fit.depth)
     assert forced(narrow) == forced(fresh)
+
+
+def test_an_admission_that_assumed_a_forced_value_is_reused_only_while_that_value_stands() -> None:
+    calls: list[str] = []
+
+    def within(*, candidate: int, limit: int) -> bool:
+        calls.append("depth")
+        return candidate <= limit
+
+    class Fit(Space):
+        lanes: int = Decision(values=(2, 3, 100, 128))
+        finish: str = Decision(values=("matte", "gloss"))
+        # Two lanes leave both cores viable, three force packed, 100 and 128 force stub.
+        compute: Packed | Stub = Decision(CORES, width=lanes)
+
+        @derived
+        def rows(self) -> int:
+            return 2 if isinstance(self.compute, Stub) else 1  # reads the forced selector
+
+        depth: int = Decision(domain=domain(accepts=within, limit=rows))
+
+    first = commit(design_space(Fit()), {"lanes": 128})
+    assert forced(first) == {"compute": "stub"}
+    base = commit(first, {"depth": 1})
+    assert forced(base) == {"compute": "stub"}
+
+    # The change reaches ``compute``'s verdict, and the successor forces the same core:
+    # the admission of ``depth``, taken under the base's forced stub, stands.
+    same = commit(base, {"lanes": 100})
+    assert forced(same) == {"compute": "stub"}
+    calls.clear()
+    glossy = commit(same, {"finish": "gloss"})
+    assert calls == [] and glossy.depth == 1  # reused, its callback not called again
+    built = recomputed(glossy)
+    assert inspection.explain(glossy, Fit.depth) == inspection.explain(built, Fit.depth)
+
+    # Here the successor forces the packed core: the stub the admission assumed is gone.
+    # ``depth`` of 2 was admitted under the base's stub (two rows) and stands, as a
+    # configuration built from nothing admits it. A change that does not reach ``compute``
+    # admits it again, under the packed core (one row), and refuses it, as that
+    # configuration built from nothing does.
+    two = commit(first, {"depth": 2})
+    packed = commit(two, {"lanes": 3})
+    assert forced(packed) == {"compute": "packed"} and packed.depth == 2
+    calls.clear()
+    report = packed.try_with_choices({Fit.finish: "gloss"})
+    assert calls == ["depth"]  # admitted again
+    want = recomputed(packed).try_with_choices({Fit.finish: "gloss"})
+    assert not report.accepted and not want.accepted
+    refusals = [
+        {item.owner: item.result for item in each.outcomes if item.status == "refused"}
+        for each in (report, want)
+    ]
+    assert refusals[0] == refusals[1] and list(refusals[0]) == ["depth"]
