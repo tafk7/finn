@@ -66,9 +66,9 @@ this sweep's for a job it ran, the baseline row's for one it skipped. A skip und
 run that passed the job; a skipped row that names no run vouches for nothing.
 
 The pytest groups (``kernels-rest``, ``kernel-ops-xsim``, ``kernel-ops-vivado``,
-``platforms-vivado``: the tests marked xsim or vivado) are not keyed by
-captured designs: their verdicts compare simulated cycles with FINN's models in
-Python (and a test stops at the first simulation a capture stubs), and the
+``platforms-vivado``, ``networks-xsim``, ``networks-vivado``: the tests marked xsim or
+vivado) are not keyed by captured designs: their verdicts compare simulated cycles with
+FINN's models in Python (and a test stops at the first simulation a capture stubs), and the
 packaging tests run Vivado through the toolchain, which no simulation stub
 reaches. Their key is the code they can run instead: the files of the tests the
 group selects and the conftest modules pytest loads for them (from a
@@ -169,6 +169,8 @@ PYTEST_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("kernel-ops-xsim", ("--confcutdir=tests/kernel_ops", "tests/kernel_ops", "-m", "xsim")),
     ("kernel-ops-vivado", ("--confcutdir=tests/kernel_ops", "tests/kernel_ops", "-m", "vivado")),
     ("platforms-vivado", ("--confcutdir=tests/platforms", "tests/platforms", "-m", "vivado")),
+    ("networks-xsim", ("--confcutdir=tests/networks", "tests/networks", "-m", "xsim")),
+    ("networks-vivado", ("--confcutdir=tests/networks", "tests/networks", "-m", "vivado")),
 )
 # What every job's run reads besides its own inputs: the sweep, the environment it
 # applies, the pytest configuration and the locked Python environment.

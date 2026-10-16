@@ -24,6 +24,10 @@ gate_pytest tests/kernel_ops xsim vivado
 gate_pytest tests/builder xsim vivado
 gate_pytest tests/platforms xsim vivado
 gate_pytest tests/analysis xsim vivado
+# The pynq shell's tests, and the whole networks' (TFC's build, its measured cycles and
+# FINN's captured ones), each its own conftest.
+gate_pytest tests/shells xsim vivado
+gate_pytest tests/networks xsim vivado
 # The XSim sweep's tooling: the emitted text and each job's key (no Vivado).
 gate_pytest tests/xsim_sweep
 # Graph preparation's front end (the preparation layer: finn.transformation.qonnx
@@ -45,7 +49,7 @@ gate_ruff src/finn/kernels tests/kernels tests/support src/finn/platform src/fin
     src/finn/custom_op/kernels src/finn/custom_op/partition src/finn/transformation/kernels \
     src/finn/analysis src/finn/util/draws.py src/finn/util/typed_json.py \
     src/finn/harness src/finn/shells/*.py src/finn/shells/pynq/*.py tests/kernel_ops \
-    tests/builder tests/platforms tests/analysis \
+    tests/builder tests/platforms tests/analysis tests/shells tests/networks \
     src/finn/builder/build_dataflow_testbench.py src/finn/builder/build_dataflow_resources.py \
     src/finn/builder/build_dataflow_checks.py \
     src/finn/builder/build_dataflow_config.py src/finn/builder/build_dataflow_plan.py \
@@ -75,4 +79,4 @@ gate_mypy -p finn.kernels -p finn.platform -p finn.core.graph -p finn.custom_op.
     -m finn.builder.build_dataflow_manifest
 # Whole directories; the files not yet strictly typed are listed in .mypy.ini.
 gate_mypy tests/support tests/kernels tests/kernel_ops tests/builder tests/platforms \
-    tests/analysis tests/xsim_sweep tests/oracle
+    tests/analysis tests/shells tests/networks tests/xsim_sweep tests/oracle
