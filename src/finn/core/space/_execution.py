@@ -348,6 +348,20 @@ def accept_read(context: Context, index: int, outcome: object) -> Evaluation:
     return entry
 
 
+def _same(snapshot: Snapshot, index: int, held: Evaluation, found: Evaluation) -> None:
+    """Refuse a node's second evaluation in one snapshot that differs from the first."""
+    differs = [
+        name
+        for name in ("result", "dependencies", "via", "decisions")
+        if getattr(held, name) != getattr(found, name)
+    ]
+    if differs:
+        raise RuntimeError(
+            f"{snapshot.linked.nodes[index].key} was evaluated twice in one snapshot and "
+            f"the evaluations differ in {', '.join(differs)}: a change's reach reads them"
+        )
+
+
 def run(snapshot: Snapshot, index: int, frame: Frame | None = None) -> Evaluation:
     """Drain a query's dependency stack, including native cleanup after failure.
 
@@ -396,10 +410,16 @@ def run(snapshot: Snapshot, index: int, frame: Frame | None = None) -> Evaluatio
                 via,
                 _runtime.read_decisions(snapshot, dependencies, via),
             )
-            if isinstance(task.identity, int) and task.identity not in snapshot.cache:
-                # A query made from native code runs on the same snapshot and may have
-                # cached this node first, with the same answer: the cache is only added to.
-                snapshot.cache[task.identity] = outcome
+            if isinstance(task.identity, int):
+                held = snapshot.cache.get(task.identity)
+                if held is None:
+                    snapshot.cache[task.identity] = outcome
+                else:
+                    # A query made from native code runs on the same snapshot and may have
+                    # cached this node first: the cache is only added to, and the first
+                    # entry stays. A change's reach reads ``dependencies``, ``via`` and
+                    # ``decisions``, so that is sound only if this run read the same.
+                    _same(snapshot, task.identity, held, outcome)
         task.frame.close()
         tasks.pop()
         active.pop(task.identity)

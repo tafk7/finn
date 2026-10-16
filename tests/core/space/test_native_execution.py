@@ -6,10 +6,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextvars import ContextVar
+from dataclasses import replace
+from typing import Any
 
 import pytest
 
 from finn.core.space import (
+    Available,
     Decision,
     EvaluationError,
     Inapplicable,
@@ -19,6 +22,7 @@ from finn.core.space import (
     Unresolved,
     ValueSemantics,
     ValueUnavailableError,
+    _execution,
     constraint,
     derived,
     design_space,
@@ -26,6 +30,7 @@ from finn.core.space import (
     inspection,
     view,
 )
+from finn.core.space._runtime import Evaluation, evaluate
 from finn.core.space.occurrence import state
 
 
@@ -310,3 +315,61 @@ def test_self_cycles_are_reached_through_scopes_admission_and_guards() -> None:
     for space_type in (Admission, Guard):
         with pytest.raises(EvaluationError, match="dependency cycle"):
             design_space(space_type()).with_choices(choice=1)
+
+
+def test_a_node_cached_twice_in_one_run_has_read_what_a_fresh_evaluation_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A guard a native query caches first is finished again by the enclosing run: the run
+    completes, and the entry it keeps has the reads a configuration built from nothing records."""
+
+    class Example(Space):
+        want: bool = Decision(values=(True, False))
+        choice: int = Decision(values=(1, 2), when=want)
+
+    twice: list[str] = []
+    checked = _execution._same
+
+    def counted(snapshot: Any, index: int, held: Evaluation, found: Evaluation) -> None:
+        twice.append(snapshot.linked.nodes[index].key)
+        checked(snapshot, index, held, found)
+
+    monkeypatch.setattr(_execution, "_same", counted)
+    point = design_space(Example())
+    assert isinstance(point.query(Example.choice), Unresolved)
+    assert "choice.$guard" in twice
+
+    fresh = state(design_space(Example()))
+    for key in twice:
+        index = fresh.linked.keys[key]
+        alone = evaluate(fresh, index)
+        held = state(point).cache[index]
+        assert (held.dependencies, held.via, held.decisions) == (
+            alone.dependencies,
+            alone.via,
+            alone.decisions,
+        )
+    assert state(point).cache[fresh.linked.keys["choice.$guard"]].decisions == {
+        fresh.linked.keys["want"]
+    }
+
+
+@pytest.mark.parametrize("field", ("result", "dependencies", "via", "decisions"))
+def test_a_node_evaluated_twice_with_different_reads_is_refused(field: str) -> None:
+    class Example(Space):
+        want: bool = Decision(values=(True, False))
+        choice: int = Decision(values=(1, 2), when=want)
+
+    snapshot = state(design_space(Example()))
+    index = snapshot.linked.keys["choice.$guard"]
+    held = evaluate(snapshot, index)
+    different: dict[str, Any] = {
+        "result": Available(object()),
+        "dependencies": (*held.dependencies, 99),
+        "via": ((0, 1),),
+        "decisions": held.decisions | {99},
+    }
+    found = replace(held, **{field: different[field]})
+    with pytest.raises(RuntimeError, match=rf"choice\.\$guard.*differ in {field}"):
+        _execution._same(snapshot, index, held, found)
+    _execution._same(snapshot, index, held, replace(held))
