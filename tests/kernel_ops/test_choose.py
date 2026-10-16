@@ -18,6 +18,7 @@ import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 from support.helpers import FULL_DSP48E2, Lanes
+from support.models import TARGET, chain_source
 
 from finn.core.graph.annotations.channel import CHANNEL, channel_choices
 from finn.core.graph.annotations.platform import write_target
@@ -33,7 +34,6 @@ from finn.transformation.kernels import (
     InferKernelTensors,
     ToKernelOps,
 )
-from kernel_ops.models import TARGET, chain_source
 
 URAM = Target(part="a part with UltraRAM it initializes", platform=FULL_DSP48E2, shell="ip")
 

@@ -20,6 +20,15 @@ from typing import Any
 import pytest
 from kernels.artifacts.test_ipxact import AXILITE
 from qonnx.core.modelwrapper import ModelWrapper
+from support.models import (
+    ROW_MAJOR_W2,
+    choose_memories,
+    configure_partition,
+    kernel_model,
+    streamed_w2_model,
+)
+from support.packaging import NO_VIVADO, verified, verified_parent
+from support.tfc import ULTRA96
 
 import finn.custom_op.kernels as kernel_ops_package
 from finn.core.graph.annotations.channel import CHANNEL
@@ -53,15 +62,6 @@ from finn.transformation.kernels.integration import (
     wire_one_bus_each,
 )
 from finn.transformation.kernels.package import boundary_facts, ip_key
-from kernel_ops.models import (
-    ROW_MAJOR_W2,
-    choose_memories,
-    configure_partition,
-    kernel_model,
-    streamed_w2_model,
-)
-from kernel_ops.packaging import NO_VIVADO, verified, verified_parent
-from kernel_ops.tfc import ULTRA96
 
 #: Ultra96 in the Zynq shell: its rows offer an IODMA_hls end at a 128-bit port.
 ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")

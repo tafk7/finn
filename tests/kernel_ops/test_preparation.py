@@ -5,7 +5,7 @@
 streamlined graph the build converts.
 
 TFC_W2A2 through the builder's phase from its export: the graph its fixture reads,
-equivalent to the export with its inputs and outputs stated (``kernel_ops.tfc.reference``,
+equivalent to the export with its inputs and outputs stated (``support.tfc.reference``,
 ``finn.analysis.equivalence``), its initializers held by their annotations
 (``finn.analysis.initializers``), and unchanged when prepared again; CNV_W2A2 equivalent
 and held alike (slow: preparing CNV takes about a minute). On hand-made graphs: a wide
@@ -37,6 +37,8 @@ from qonnx.core.ranges import TensorRange
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
+from support.models import TARGET
+from support.tfc import EXPORT, io_settings, preparation_config, reference, run_steps
 
 from finn.analysis.comparison import Explanation, Run
 from finn.analysis.equivalence import DEVIATIONS, equivalence_with
@@ -57,8 +59,6 @@ from finn.transformation.kernels.convert import ToKernelOps
 from finn.transformation.streamline.extract_multithreshold_scale_bias import (
     ExtractMultiThresholdScaleBias,
 )
-from kernel_ops.models import TARGET
-from kernel_ops.tfc import EXPORT, io_settings, preparation_config, reference, run_steps
 
 GENERAL = "qonnx.custom_op.general"
 """qonnx's custom ops' domain."""

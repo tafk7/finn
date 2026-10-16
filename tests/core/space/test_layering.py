@@ -139,10 +139,10 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         ("util", "finn.harness.toolchain"),
         ("harness", "finn.builder.build_dataflow"),
         ("harness", "support.xsim.requires_xsim"),
-        ("harness", "kernel_ops.models.matmul_model"),
+        ("harness", "support.models.matmul_model"),
         ("harness", "pytest"),
         ("harness", "onnx.helper"),
-        ("harness", "kernel_ops.specs.matmul.SPEC"),
+        ("harness", "support.op_specs.matmul.SPEC"),
         ("custom_op.kernels", "finn.harness.ops.check_parity"),
         # The analyses: generic passes, beside the harness and below the builder.
         ("analysis", "finn.harness.reference"),

@@ -16,7 +16,7 @@ handful of simulations an op, stalled, and the first point of each op free runni
 (conformance runs both; one point an op each way, not every point twice).
 
 **The platform as an axis** (P3): the points above are on the Ultra96 target that
-``kernel_ops.models`` builds for (DSP48E2, no UltraRAM). One point an op is on a Versal
+``support.models`` builds for (DSP48E2, no UltraRAM). One point an op is on a Versal
 row (``finn.harness.reference.platform_rows``: the Versal AI Core family on ``ip``):
 MatMul on the INT8 DSP58 core with its activations' replay buffer (``input_gen``) in
 UltraRAM; Thresholding there too, its tables out of UltraRAM, which on Versal takes no
@@ -57,6 +57,8 @@ import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from support.helpers import choose
+from support.models import TARGET, matmul_model, thresholding_model
+from support.op_specs.matmul import SPREAD
 from support.xsim import requires_xsim
 
 import finn.custom_op.kernels as domain
@@ -74,8 +76,6 @@ from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors
 from finn.transformation.kernels.cut import BaselineChoices
 from finn.util.draws import Integers, boundary_inputs, graph_inputs
-from kernel_ops.models import TARGET, matmul_model, thresholding_model
-from kernel_ops.specs.matmul import SPREAD
 
 # -- the models ------------------------------------------------------------------------
 

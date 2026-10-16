@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The HWCustomOp flow's cycle estimate (``get_exp_cycles``) of ``MVAU`` and
-``Thresholding`` at each folding ``tests/kernel_ops/measure_cycles.py`` measures: the
+``Thresholding`` at each folding ``tests/support/measure_cycles.py`` measures: the
 Chain's layers and TFC_W2A2's at 16 lanes. The nodes are made as ``measure_cycles``
 makes them: the attributes below, INT8 values, INT32 accumulators."""
 

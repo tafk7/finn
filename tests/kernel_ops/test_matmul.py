@@ -20,6 +20,7 @@ from onnx import helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import get_domain_opset_version, getCustomOp, op_identity
+from support.models import WEIGHTS, X, matmul_model, schema_digest
 
 import finn.custom_op.kernels as domain
 from finn.core.graph.annotations.channel import channel_choices
@@ -38,7 +39,6 @@ from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.general import ApplyConfig
 from finn.transformation.kernels import InferKernelTensors
-from kernel_ops.models import WEIGHTS, X, matmul_model, schema_digest
 
 FOLDING = {
     "compute": "packed",

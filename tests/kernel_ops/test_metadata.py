@@ -16,6 +16,7 @@ from onnx import StringStringEntryProto, helper
 from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
+from support.models import TARGET, chain_source, configure_partition, kernel_model
 
 from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE,
@@ -44,7 +45,6 @@ from finn.custom_op.kernels.shell import save_channels
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
 from finn.transformation.kernels import ToKernelOps
-from kernel_ops.models import TARGET, chain_source, configure_partition, kernel_model
 
 
 def entries(model: ModelWrapper) -> dict[str, str]:

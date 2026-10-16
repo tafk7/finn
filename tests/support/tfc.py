@@ -33,7 +33,6 @@ from typing import Any
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.infer_datatypes import InferDataTypes
-from support.helpers import Lanes
 
 from finn.builder.build_dataflow import build_plan
 from finn.builder.build_dataflow_config import DataflowBuildConfig
@@ -47,7 +46,8 @@ from finn.transformation.kernels import (
     ToKernelOps,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
-from kernel_ops.packaging import verified
+from support.helpers import Lanes
+from support.packaging import verified
 
 SHAPE = (1, 1, 28, 28)
 LANES = Lanes(16)
@@ -67,9 +67,9 @@ def exported(directory: Path) -> ModelWrapper:
     # Imported here: torch and brevitas are only for exporting it.
     import torch  # noqa: PLC0415
     from brevitas.export import export_qonnx  # noqa: PLC0415
-    from support.trained_networks import get_test_model_trained  # noqa: PLC0415
 
     from finn.util.pytorch import ToTensor  # noqa: PLC0415
+    from support.trained_networks import get_test_model_trained  # noqa: PLC0415
 
     network = directory / EXPORT
     directory.mkdir(parents=True, exist_ok=True)
@@ -113,7 +113,7 @@ def run_steps(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
 
 def prepared(export: ModelWrapper, directory: Path) -> ModelWrapper:
     """``export``, exported into ``directory`` with its preprocessing beside it (TFC by
-    ``exported``, or CNV by ``kernel_ops.cnv.exported``), through the builder's
+    ``exported``, or CNV by ``support.cnv.exported``), through the builder's
     graph-preparation phase (``phase_prepare_model``) as TFC's build states it: the
     streamlined graph."""
     return run_steps(export, preparation_config(directory, steps=["phase_prepare_model"]))
@@ -151,7 +151,7 @@ def partition(source: ModelWrapper, directory: Path) -> tuple[ModelWrapper, Mode
     """The streamlined ``source`` by hand through the kernel path, as the builder's
     kernel-path phases run it: the parent graph (Reshape, the partition, TopK) and the
     partition's body, cut first, then every choice committed at 16 lanes (``LANES``), the
-    body verified (``kernel_ops.packaging.verified``) and saved again in its file."""
+    body verified (``support.packaging.verified``) and saved again in its file."""
     parent, body, body_file = cut(source, directory)
     body = body.transform(ExploreKernelChoices(Ranked(LANES)))
     verified(body, parent.graph.node[1].name)

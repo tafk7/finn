@@ -12,7 +12,7 @@ graphs, and the kernel tests read no graph (``tests/support/layering.py``).
 from __future__ import annotations
 
 from finn.harness.reference import OpSpec
-from kernel_ops.specs import conv, matmul, thresholding
+from support.op_specs import conv, matmul, thresholding
 
 SPECS: tuple[OpSpec, ...] = (matmul.SPEC, thresholding.SPEC, conv.SPEC)
 

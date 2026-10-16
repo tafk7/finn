@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Conv beyond its spec (``kernel_ops.specs.conv``): the window
+"""Conv beyond its spec (``support.op_specs.conv``): the window
 reaches the hardware as its image channel's reorder, and CNV's convolutions convert.
 
 - A single convolution through the builder's kernel-path phases: the image enters once,
@@ -16,7 +16,7 @@ reaches the hardware as its image channel's reorder, and CNV's convolutions conv
   (SIMD channels a beat) is one edge whose plan is the window's reorder, after a width
   conversion where PE and SIMD differ; in XSim the two compute what their
   ``execute_node`` do.
-- CNV_W2A2 (``kernel_ops.cnv``, prepared once a run: ``conftest.py``'s
+- CNV_W2A2 (``support.cnv``, prepared once a run: ``conftest.py``'s
   ``cnv_streamlined``) through ``ToKernelOps``: each of
   its six ``Im2Col`` and ``MatMul`` pairs converts to one Conv, and the host
   nodes between KernelOps are the two max pools, the flatten's Transpose and its
@@ -35,6 +35,10 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import is_custom_op
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
+from support.models import convert
+from support.op_specs import conv
+from support.op_specs.base import GENERAL, source
+from support.tfc import ULTRA96, run_steps
 from support.xsim import requires_xsim
 
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
@@ -47,11 +51,7 @@ from finn.transformation.kernels import ToKernelOps
 from finn.transformation.kernels.convert import between_kernel_ops, kernel_ops_by_anchor
 from finn.transformation.kernels.cut import BaselineChoices
 from finn.util.draws import boundary_inputs
-from kernel_ops.models import convert
-from kernel_ops.specs import conv
-from kernel_ops.specs.base import GENERAL, source
 from kernel_ops.test_networks import config
-from kernel_ops.tfc import ULTRA96, run_steps
 
 
 def test_the_kernel_op_conv_and_onnxs_conv_never_resolve_to_each_other() -> None:

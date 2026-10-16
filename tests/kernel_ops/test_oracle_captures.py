@@ -16,11 +16,11 @@ from pathlib import Path
 import pytest
 from oracle import CAPTURES, capture_file, document
 from qonnx.core.modelwrapper import ModelWrapper
+from support.measure_cycles import finn_cycles, schedule_of
+from support.models import configure_partition, kernel_model
+from support.tfc import partition
 
 from finn.custom_op.kernels.network import network
-from kernel_ops.measure_cycles import finn_cycles, schedule_of
-from kernel_ops.models import configure_partition, kernel_model
-from kernel_ops.tfc import partition
 
 PROBES = ("fifo_cost", "exp_cycles", "tfc_streamlined", "tfc_set_folding", "tfc_zynq_build")
 

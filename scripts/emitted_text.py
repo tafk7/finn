@@ -964,7 +964,7 @@ def package_images(emitted: Any, top: str) -> str:
     return "".join(f"{digest}  {path}\n" for digest, path in sorted(found, key=order))
 
 
-def emit_package(out: Path, work: Path) -> int:
+def emit_package(out: Path, work: Path, root: Path) -> int:
     """What PackagePartition writes for the Chain and the TFC partition, Vivado stubbed.
 
     PackagePartition runs for real except for the Vivado call: the toolchain is a
@@ -977,8 +977,12 @@ def emit_package(out: Path, work: Path) -> int:
     to PackagePartition.
     """
     # The checkout's code, importable only in its environment (Target.run).
-    from kernel_ops.models import configure_partition, kernel_model  # noqa: PLC0415
-    from kernel_ops.tfc import partitioned  # noqa: PLC0415
+    # The test-side models and TFC moved from tests/kernel_ops to tests/support: the
+    # checkout's own files say which package it has (the new layout first).
+    library = "support" if (root / "tests/support/models.py").is_file() else "kernel_ops"
+    models: Any = importlib.import_module(f"{library}.models")
+    configure_partition, kernel_model = models.configure_partition, models.kernel_model
+    partitioned = importlib.import_module(f"{library}.tfc").partitioned
 
     import finn.transformation.kernels.package as packaging  # noqa: PLC0415
     from finn.transformation.kernels import PackagePartition  # noqa: PLC0415
@@ -1593,7 +1597,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif args.command == "_simulator-closure":
         args.out.write_text(json.dumps(simulator_closure(here)) + "\n")
     elif args.command == "_emit-package":
-        return emit_package(args.out, args.work)
+        return emit_package(args.out, args.work, here)
     elif args.command == "_finnlib":
         from finn import resources  # noqa: PLC0415 - the checkout's
 

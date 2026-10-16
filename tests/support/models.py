@@ -18,8 +18,6 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
-from support import chain
-from support.helpers import ADAPTER_RAM_STYLES, open_choices, with_adapter_memories
 
 from finn.core.graph.annotations.platform import write_target
 from finn.custom_op.kernels.base import KernelOp, kernel_op
@@ -28,7 +26,9 @@ from finn.custom_op.kernels.shell import InShell, in_shell, save_channels
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
-from kernel_ops.packaging import verified
+from support import chain
+from support.helpers import ADAPTER_RAM_STYLES, open_choices, with_adapter_memories
+from support.packaging import verified
 
 DOMAIN = "finn.custom_op.kernels"
 INT3 = DataType["INT3"]
@@ -361,7 +361,7 @@ def choose_memories(model: ModelWrapper) -> InShell:
 def configure_partition(model: ModelWrapper) -> InShell:
     """The partition's network in its shell, its open adapter memories chosen
     (``choose_memories``), and the partition verified as the build verifies it before
-    emission (``kernel_ops.packaging.verified``), so that it packages."""
+    emission (``support.packaging.verified``), so that it packages."""
     bound = choose_memories(model)
     verified(model, "chain")
     return bound

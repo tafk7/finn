@@ -18,6 +18,8 @@ from onnx import NodeProto, TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
+from support.models import convert
+from support.op_specs import conv
 
 import finn.custom_op.kernels as domain
 from finn.core.graph.errors import KernelOpError
@@ -25,8 +27,6 @@ from finn.core.space import Rejected
 from finn.custom_op.kernels.base import KernelOp, Match, kernel_op
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.transformation.kernels import Outcome, kernel_ops_by_anchor
-from kernel_ops.models import convert
-from kernel_ops.specs import conv
 
 GENERAL = "qonnx.custom_op.general"
 
@@ -246,7 +246,7 @@ class Twin(Thresholding):
 
 def positives() -> list[ModelWrapper]:
     """Each positive graph, and a lowered convolution (Conv's nested pattern,
-    its spec's graphs: ``kernel_ops.specs.conv``)."""
+    its spec's graphs: ``support.op_specs.conv``)."""
     return [*(build() for build, _, _ in POSITIVE.values()), conv.lowered()]
 
 

@@ -7,7 +7,7 @@
 network for Ultra96 in the Zynq shell, through graph preparation, stopping after the
 phases: no Vivado. Each step's
 output is recorded as it runs (a recorder after it in the list), and the partition is compared
-with the one ``kernel_ops.tfc`` makes by hand. The bitfile build that follows the phases
+with the one ``support.tfc`` makes by hand. The bitfile build that follows the phases
 (``phase_emit_hardware``, ``phase_generate_outputs``) is not a test.
 """
 
@@ -32,6 +32,20 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_shapes import InferShapes
 from support.helpers import Lanes
+from support.models import (
+    chain_source,
+    configure_partition,
+    host_between_source,
+    kernel_model,
+)
+from support.packaging import (
+    PLACED_HIERARCHY,
+    FakeVivado,
+    PackagedByStub,
+    bitfile_default,
+    io_shape_dict,
+)
+from support.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition, run_steps
 
 import finn.kernels.explore as explore_module
 from finn.builder import build_dataflow_steps
@@ -110,21 +124,7 @@ from finn.transformation.kernels import (
 from finn.transformation.kernels.cut import BaselineChoices, CutKernelPartition
 from finn.transformation.kernels.integration import Address, Connection, integration
 from finn.transformation.kernels.package import boundary_facts
-from kernel_ops.models import (
-    chain_source,
-    configure_partition,
-    host_between_source,
-    kernel_model,
-)
-from kernel_ops.packaging import (
-    PLACED_HIERARCHY,
-    FakeVivado,
-    PackagedByStub,
-    bitfile_default,
-    io_shape_dict,
-)
 from kernel_ops.test_choose import kernel_model as open_model
-from kernel_ops.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition, run_steps
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
 # test that runs the phases' steps on it takes about ten seconds more.
@@ -364,7 +364,7 @@ def test_the_debug_placeholder_sets_nothing_on_tfc(
     step_verify_partition(model, cfg)
 
 
-#: The Chain's target (``kernel_ops.models.TARGET``) as a configuration states it.
+#: The Chain's target (``support.models.TARGET``) as a configuration states it.
 CHAIN_TARGET = TargetRequest(part="xczu3eg-sbva484-1-e", period_ns=5.0)
 
 #: 6 cycles a frame at 5 ns: the activation's, which folds each of the Chain's MatMuls to

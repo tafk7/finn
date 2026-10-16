@@ -16,6 +16,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
+from support.models import chain_source, convert
 
 from finn.core.graph.errors import KernelOpError
 from finn.core.reporting.findings import FindingKind
@@ -26,7 +27,6 @@ from finn.transformation.kernels import (
     kernel_ops_summary,
     refuse_host_between,
 )
-from kernel_ops.models import chain_source, convert
 
 
 def codes(outcome: Outcome) -> list[tuple[str, str, str]]:

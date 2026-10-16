@@ -7,7 +7,7 @@ in the Zynq shell (``pynq``: its two ends and its static region join the partiti
 
 The budget is a fraction of the part's totals (xczu3eg: 70 560 LUT, 141 120 FF, 432
 RAMB18, 360 DSP), against the shell's total, the report's ``resources.used``. On
-each shell, the search's logic is on the Chain as KernelOps (``kernel_ops.models``),
+each shell, the search's logic is on the Chain as KernelOps (``support.models``),
 where a search takes seconds, and one search on TFC_W2A2 for Ultra96 at 5 ns is the
 end-to-end check (bisection over 17 or 18 folds by ``TargetCycles``, minutes each).
 The search on the Chain without the KernelOps is ``tests/kernels/test_explore.py``'s.
@@ -33,6 +33,8 @@ from typing import Any
 
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
+from support.models import TARGET, kernel_model
+from support.tfc import ULTRA96
 
 from finn.core.graph.annotations.platform import write_target
 from finn.core.reporting.findings import Finding, FindingKind
@@ -50,8 +52,6 @@ from finn.platform.capabilities import Resources
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
 from finn.transformation.kernels import explore_kernel_choices, kernel_choices_config
-from kernel_ops.models import TARGET, kernel_model
-from kernel_ops.tfc import ULTRA96
 
 ULTRA96_IP = resolve_target(part=ULTRA96.part, period_ns=ULTRA96.platform.period_ns)
 SHELLS = {"ip": ULTRA96_IP, "pynq": ULTRA96}

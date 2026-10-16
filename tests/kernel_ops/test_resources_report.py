@@ -4,7 +4,7 @@
 """``report/resources.json``: the resources per member of the shell, by the model, out of
 context and placed (``finn.builder.build_dataflow_resources``).
 
-The reports are Vivado's formats with invented numbers (``kernel_ops.packaging``'s
+The reports are Vivado's formats with invented numbers (``support.packaging``'s
 ``UTILIZATION_SYNTH`` and ``PLACED_HIERARCHY``)."""
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
+from support.models import configure_partition, kernel_model
+from support.packaging import PLACED_HIERARCHY, UTILIZATION_SYNTH
 
 from finn.builder.build_dataflow_resources import shell_resources_report
 from finn.core.graph.annotations.platform import write_target
@@ -26,8 +28,6 @@ from finn.toolchain.vivado import placed_hierarchy, utilization_synth
 from finn.transformation.kernels import explore_kernel_choices
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.package import resources_of
-from kernel_ops.models import configure_partition, kernel_model
-from kernel_ops.packaging import PLACED_HIERARCHY, UTILIZATION_SYNTH
 
 
 def test_an_ips_synthesis_report_is_read_from_its_site_types() -> None:

@@ -20,7 +20,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.custom_op.kernels import MatMul
 from finn.harness.reference import OpSpec
-from kernel_ops.specs.base import source
+from support.op_specs.base import source
 
 # Columns at the weights' extremes (all greatest, all least) and two mixed ones.
 WEIGHTS = np.array([[127, -128, (5 * k) % 17 - 8, 127 if k % 2 else -128] for k in range(8)])

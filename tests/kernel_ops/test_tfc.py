@@ -6,7 +6,7 @@ partition of KernelOps between the host's flatten and label select, its root in 
 against ``execute_onnx`` of the source, the parent graph run with the XSim executor
 against its default run, and its packaging.
 
-The choices are ranked by hand at 16 lanes (``kernel_ops.tfc``), for Ultra96 in
+The choices are ranked by hand at 16 lanes (``support.tfc``), for Ultra96 in
 the Zynq shell. Every test reads the run's one build (``tfc_streamlined``,
 ``conftest.py``), partitioning it in its own directory: the ones in XSim are marked
 ``xsim``, the packaging one ``vivado``, the rest ``slow``.
@@ -22,6 +22,9 @@ import numpy as np
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 from support.helpers import choose
+from support.models import DOMAIN
+from support.packaging import reaches_vivado, read_back
+from support.tfc import LANES, SHAPE, ULTRA96, cut, partition
 from support.xsim import requires_vivado, requires_xsim
 
 import finn.core.onnx_exec as onnx_exec
@@ -37,9 +40,6 @@ from finn.kernels.explore import Ranked
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import ExploreKernelChoices, PackagePartition
 from finn.transformation.kernels.package import ElaboratePartition, boundary_facts
-from kernel_ops.models import DOMAIN
-from kernel_ops.packaging import reaches_vivado, read_back
-from kernel_ops.tfc import LANES, SHAPE, ULTRA96, cut, partition
 
 LOGITS = "MatMul_3_out0"
 FRAMES = 2

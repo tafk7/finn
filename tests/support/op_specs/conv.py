@@ -23,7 +23,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.custom_op.kernels import Conv
 from finn.harness.reference import OpSpec
-from kernel_ops.specs.base import GENERAL, source
+from support.op_specs.base import GENERAL, source
 
 
 def weights(rows: int, columns: int, low: int, high: int, seed: int = 0) -> Any:

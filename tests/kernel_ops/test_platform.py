@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 from support.helpers import FULL_DSP58, choose
+from support.models import MATMUL, TARGET, matmul_model, thresholding_model
 
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
@@ -30,7 +31,6 @@ from finn.platform.capabilities import DspBlock, Platform
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors
-from kernel_ops.models import MATMUL, TARGET, matmul_model, thresholding_model
 
 ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")  # Ultra96 in its shell
 URAM = Target(part="a part with UltraRAM it initializes", platform=FULL_DSP58, shell="ip")

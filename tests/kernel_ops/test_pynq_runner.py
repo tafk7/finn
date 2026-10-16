@@ -26,6 +26,14 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
+from support.models import choose_memories, configure_partition, streamed_w2_model
+from support.packaging import (
+    FakeVivado,
+    bitfile_default,
+    io_shape_dict,
+    verified,
+    verified_parent,
+)
 
 from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE,
@@ -75,14 +83,6 @@ from finn.toolchain.launcher import Selection, Toolchain
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import Integration, integration
 from finn.transformation.kernels.package import ip_key
-from kernel_ops.models import choose_memories, configure_partition, streamed_w2_model
-from kernel_ops.packaging import (
-    FakeVivado,
-    bitfile_default,
-    io_shape_dict,
-    verified,
-    verified_parent,
-)
 from kernel_ops.test_builder_phase import TIMING_REPORT
 
 #: Ultra96 in the Zynq shell: the target a Zynq build of Ultra96 at 5 ns reads.

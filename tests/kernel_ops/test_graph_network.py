@@ -21,6 +21,19 @@ import pytest
 from qonnx.transformation.infer_shapes import InferShapes
 from support import chain
 from support.helpers import Lanes, built, choose, cycles_of, labels
+from support.models import (
+    INT3,
+    MATMUL,
+    TARGET,
+    chain_source,
+    configure_partition,
+    fan_out_source,
+    kernel_model,
+    lift,
+    matmul_model,
+    open_memories,
+    shared_weights_source,
+)
 from support.xsim import requires_xsim
 
 import finn.custom_op.kernels.network as graph_network
@@ -44,19 +57,6 @@ from finn.transformation.kernels import (
     kernel_choices_config,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
-from kernel_ops.models import (
-    INT3,
-    MATMUL,
-    TARGET,
-    chain_source,
-    configure_partition,
-    fan_out_source,
-    kernel_model,
-    lift,
-    matmul_model,
-    open_memories,
-    shared_weights_source,
-)
 
 
 def test_the_network_of_the_chains_nodes_is_the_chain() -> None:

@@ -3,11 +3,11 @@
 
 """Cycles measured in XSim against the schedules' prediction, on the Chain and TFC_W2A2.
 
-``python -m kernel_ops.measure_cycles OUT [--frames N] [--only chain|tfc] [--work DIR]``
+``python -m support.measure_cycles OUT [--frames N] [--only chain|tfc] [--work DIR]``
 (from ``tests``, FinnLib
 and Vivado selected) builds each partition as the kernel path builds it (the
-Chain's KernelOp nodes, ``kernel_ops.models``; TFC_W2A2 at 16 lanes,
-``kernel_ops.tfc``) and measures, with ``finn.core.rtlsim_bench.measure``,
+Chain's KernelOp nodes, ``support.models``; TFC_W2A2 at 16 lanes,
+``support.tfc``) and measures, with ``finn.core.rtlsim_bench.measure``,
 ``N`` frames streamed back to back, never stalled:
 
 - the **stitched** partition, its root's latency, interval and total, and each
@@ -292,8 +292,7 @@ def table(result: dict[str, Any]) -> str:
 
 def chain_case() -> tuple[ModelWrapper, dict[str, NDArray[Any]]]:
     from support import chain  # noqa: PLC0415
-
-    from kernel_ops.models import configure_partition, kernel_model  # noqa: PLC0415
+    from support.models import configure_partition, kernel_model  # noqa: PLC0415
 
     model = kernel_model()
     configure_partition(model)
@@ -301,7 +300,7 @@ def chain_case() -> tuple[ModelWrapper, dict[str, NDArray[Any]]]:
 
 
 def tfc_case(directory: Path) -> tuple[ModelWrapper, dict[str, NDArray[Any]]]:
-    from kernel_ops.tfc import SHAPE, partitioned  # noqa: PLC0415
+    from support.tfc import SHAPE, partitioned  # noqa: PLC0415
 
     directory.mkdir(parents=True, exist_ok=True)
     _, _, body = partitioned(directory)

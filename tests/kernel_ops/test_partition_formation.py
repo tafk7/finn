@@ -22,6 +22,7 @@ from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from support import chain
+from support.models import configure_partition, kernel_model
 
 import finn.custom_op.partition as partition_domain
 from finn.core.graph.annotations.channel import CHANNEL, channel_choices
@@ -31,7 +32,6 @@ from finn.core.space import Available
 from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network, save_channels
 from finn.transformation.kernels.cut import CutKernelPartition
-from kernel_ops.models import configure_partition, kernel_model
 
 
 def on_the_host(model: ModelWrapper, *, between: bool = False) -> ModelWrapper:

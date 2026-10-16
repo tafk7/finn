@@ -25,6 +25,8 @@ import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from support.helpers import built as module_built
+from support.models import TARGET, configure_partition, kernel_model
+from support.tfc import ULTRA96
 
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import read_target, write_target
@@ -69,8 +71,6 @@ from finn.transformation.kernels import (
     kernel_choices_config,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
-from kernel_ops.models import TARGET, configure_partition, kernel_model
-from kernel_ops.tfc import ULTRA96
 
 # -- an end's arithmetic -------------------------------------------------------------------
 

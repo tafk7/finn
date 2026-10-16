@@ -11,12 +11,12 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 import pytest
+from support.models import WEIGHTS, matmul_model
 
 from finn.core.graph.facts import integer_tensor
 from finn.custom_op.kernels.base import kernel_op
 from finn.kernels.members import key
 from finn.kernels.values.semantics import IntegerTensorValue
-from kernel_ops.models import WEIGHTS, matmul_model
 
 
 @pytest.mark.parametrize("dtype", (np.float32, np.int8, np.int64))

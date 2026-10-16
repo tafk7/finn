@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from support.models import configure_partition, kernel_model
+from support.packaging import NoVivado, reaches_vivado
 from support.xsim import requires_vivado
 
 from finn.core.graph.annotations.outputs import (
@@ -50,8 +52,6 @@ from finn.transformation.kernels.package import (
     ip_key,
     partition_utilization_report,
 )
-from kernel_ops.models import configure_partition, kernel_model
-from kernel_ops.packaging import NoVivado, reaches_vivado
 
 
 def test_the_partition_packages_its_nodes_choices() -> None:

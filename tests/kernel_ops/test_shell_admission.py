@@ -24,6 +24,8 @@ from typing import Any
 import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import built, choose, with_adapter_memories, with_direct_transports
+from support.models import MATMUL, configure_partition, kernel_model
+from support.tfc import ULTRA96
 
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import write_target
@@ -36,8 +38,6 @@ from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform.shells import IP_ROW, ShellRow, budgets, bus_counts, shell_row
 from finn.transformation.kernels import explore_kernel_choices
-from kernel_ops.models import MATMUL, configure_partition, kernel_model
-from kernel_ops.tfc import ULTRA96
 
 PYNQ_ROW = shell_row("pynq", "Ultra96")
 

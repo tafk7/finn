@@ -3,7 +3,7 @@
 
 """The ONNX entry's T2: a generated single-op network through the kernel path into XSim.
 
-A positive graph of an op's spec (``kernel_ops.specs``), which every platform row admits
+A positive graph of an op's spec (``support.op_specs``), which every platform row admits
 (``tests/kernel_ops/test_reference.py``), is a network of one op. It goes through the
 builder's kernel-path phases (``phase_convert_to_hardware`` to ``phase_optimize_hardware``:
 ``ToKernelOps``, inferring as it converts, the cut, the choices and its verification)
@@ -30,6 +30,9 @@ from pathlib import Path
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
+from support.models import TARGET
+from support.op_specs import conv, matmul, thresholding
+from support.tfc import run_steps
 from support.xsim import requires_xsim
 
 from finn.builder.build_dataflow_config import DataflowBuildConfig
@@ -39,9 +42,6 @@ from finn.harness.ops import check_parity
 from finn.harness.reference import OpSpec
 from finn.platform.request import TargetRequest
 from finn.util.draws import boundary_inputs, graph_inputs
-from kernel_ops.models import TARGET
-from kernel_ops.specs import conv, matmul, thresholding
-from kernel_ops.tfc import run_steps
 
 NETWORKS = [
     pytest.param(spec, name, id=f"{spec.op.op_type}-{name}")

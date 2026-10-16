@@ -20,6 +20,7 @@ import onnx
 import pytest
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
+from support.tfc import PREPROCESSING, ULTRA96, io_settings
 
 from finn.builder.build_dataflow import (
     build_dataflow_cfg,
@@ -50,7 +51,6 @@ from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
 from finn.toolchain.launcher import Selection, Toolchain
 from finn.transformation.kernels import kernel_choices_config
-from kernel_ops.tfc import PREPROCESSING, ULTRA96, io_settings
 
 STATED = {"output_dir": "out", "target": {"period_ns": 5.0, "board": "Ultra96"}}
 

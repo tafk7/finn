@@ -7,7 +7,7 @@ Frames streamed back to back, never stalled, leave one per bottleneck beat count
 the steady state's interval is the largest layer schedule's ``beat_count``, and each
 MatMul core takes its schedule's beats in as many cycles, with no bubble. Latency is
 not predicted by the schedules (pipeline depth, adapter buffering); it is measured by
-``kernel_ops.measure_cycles``, not checked here.
+``support.measure_cycles``, not checked here.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ from pathlib import Path
 
 import numpy as np
 from support import chain
+from support.measure_cycles import schedule_of
+from support.models import configure_partition, kernel_model
 from support.xsim import requires_xsim
 
 from finn.builder.build_dataflow_testbench import boundary_words
@@ -24,8 +26,6 @@ from finn.core.rtlsim_bench import measure
 from finn.custom_op.kernels.network import member, network
 from finn.custom_op.kernels.shell import configured_network
 from finn.toolchain.launcher import host_toolchain
-from kernel_ops.measure_cycles import schedule_of
-from kernel_ops.models import configure_partition, kernel_model
 
 
 @requires_xsim

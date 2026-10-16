@@ -21,7 +21,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.custom_op.kernels import Thresholding
 from finn.harness.reference import OpSpec
-from kernel_ops.specs.base import GENERAL, source
+from support.op_specs.base import GENERAL, source
 
 # A row a channel, sorted: fractional thresholds, one below INT8's range and one above it.
 ROWS = [[-200.5, -3.5, 2.0], [-9.0, 0.25, 300.0], [-4.0, -4.0, 7.5], [-1.0, 6.0, 14.0]]
