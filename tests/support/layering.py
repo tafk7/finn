@@ -448,9 +448,12 @@ LAYERS: tuple[Layer, ...] = (
             "support.adapted",
             "support.chain",
             "support.conformance",
+            "support.emitted_netlist",
             "support.helpers",
             "support.ipxact_ports",
+            "support.ipxact_script",
             "support.kernel_specs",
+            "support.netlist",
             "support.xsim",
         ),
         (
