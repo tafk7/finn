@@ -431,7 +431,15 @@ LAYERS: tuple[Layer, ...] = (
     # captures.
     Layer(
         "tests.kernels",
-        ("kernels",),
+        (
+            "kernels",
+            "support.adapted",
+            "support.chain",
+            "support.conformance",
+            "support.helpers",
+            "support.kernel_specs",
+            "support.xsim",
+        ),
         (
             *_KERNEL_STACK,
             "toolchain",

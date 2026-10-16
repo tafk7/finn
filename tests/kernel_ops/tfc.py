@@ -15,7 +15,7 @@ partition and the label select (TopK) after it, both on the host.
 Every kernel choice is created at its baseline, a KernelOp's own at conversion and a
 channel's at the cut; then every one (folding, memories, transports) is set again on the
 partition's body, as the build explores it, ranked by hand
-(``ExploreKernelChoices(Ranked(Lanes(16)))``, ``kernels.helpers.Lanes``): 16 lanes
+(``ExploreKernelChoices(Ranked(Lanes(16)))``, ``support.helpers.Lanes``): 16 lanes
 where they divide, the whole extent otherwise, every other choice its kernel's baseline.
 
 Building TFC takes about 17 s (torch, the export, streamlining). A test that only
@@ -30,10 +30,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from kernels.helpers import Lanes
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.infer_datatypes import InferDataTypes
+from support.helpers import Lanes
 
 from finn.builder.build_dataflow import build_plan
 from finn.builder.build_dataflow_config import DataflowBuildConfig

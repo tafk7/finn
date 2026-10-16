@@ -29,6 +29,7 @@ from typing import Any
 
 import numpy as np
 from qonnx.core.datatype import DataType
+from support.helpers import FULL_DSP48E2, built, choose, with_direct_transports
 
 from finn.core.rtlsim_bench import materialize
 from finn.core.rtlsim_pacing import FREE, STALLED
@@ -41,7 +42,6 @@ from finn.kernels.channels import Channel
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import FULL_DSP48E2, built, choose, with_direct_transports
 from kernels.sweeps.rtl_transport import drive_observed
 
 ELEMENT = DataType["INT4"]

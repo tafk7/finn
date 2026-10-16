@@ -41,8 +41,8 @@ memory: the mapping itself is synthesis's to show.
   cycles in all. Beside the extremes' rows, channel 0's greatest and least sums, each odd
   and past 2**24, where float32 would round them.
 
-The specs of the kernels these ops bind are ``kernels.specs.matmul`` and
-``kernels.specs.thresholding``.
+The specs of the kernels these ops bind are ``support.kernel_specs.matmul`` and
+``support.kernel_specs.thresholding``.
 """
 
 from __future__ import annotations
@@ -54,10 +54,10 @@ from typing import Any
 
 import numpy as np
 import pytest
-from kernels.helpers import choose
-from kernels.xsim import requires_xsim
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from support.helpers import choose
+from support.xsim import requires_xsim
 
 import finn.custom_op.kernels as domain
 from finn.core.graph.annotations.platform import write_target

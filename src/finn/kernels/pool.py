@@ -29,7 +29,7 @@ Its domain is what that hardware takes: ordinary integers (``max`` over
 ``ap_int``/``ap_uint``), any window and stride its channel can present, any PE
 dividing the channels. Its resources are not characterised: it states so
 (``kernel-resources``). Its computation's reference is test-side until a KernelOp
-reaches it: ``tests/kernels/specs/pool.py``.
+reaches it: ``tests/support/kernel_specs/pool.py``.
 """
 
 from __future__ import annotations

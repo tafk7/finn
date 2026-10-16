@@ -15,8 +15,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-from kernels import chain
-from kernels.xsim import requires_xsim
+from support import chain
+from support.xsim import requires_xsim
 
 from finn.builder.build_dataflow_testbench import boundary_words
 from finn.core.onnx_exec import execute_onnx

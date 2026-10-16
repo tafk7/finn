@@ -27,12 +27,12 @@ from typing import Any, ClassVar
 
 import numpy as np
 import pytest
-from kernels import chain
-from kernels.xsim import requires_xsim
 from onnx import NodeProto, TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import qonnx_make_model
+from support import chain
+from support.xsim import requires_xsim
 
 from finn.core.executor import Context, Python
 from finn.core.graph.partition import (

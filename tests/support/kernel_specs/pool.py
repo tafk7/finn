@@ -15,8 +15,8 @@ from qonnx.core.datatype import DataType
 
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.pool import PoolKernel
-from kernels.helpers import FULL_DSP48E2
-from kernels.specs.base import TEST_SIDE, KernelSpec, Probe, placed
+from support.helpers import FULL_DSP48E2
+from support.kernel_specs.base import TEST_SIDE, KernelSpec, Probe, placed
 
 #: CNV's pooling, 2x2 windows at stride 2, on a small map: six channels, so PE 1, 3 and 6.
 SHAPE, WINDOW = (4, 6, 6), (2, 2)

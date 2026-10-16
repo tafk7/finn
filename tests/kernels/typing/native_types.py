@@ -3,11 +3,12 @@
 
 from typing import assert_type
 
+from support.helpers import FULL_DSP48E2, in_order, stage_tensor
+
 from finn.core.space import BoundValue, ViewAssessment, design_space
 from finn.kernels.fifo import FifoKernel, FifoStorage
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.transport import ReadyValidStream
-from kernels.helpers import FULL_DSP48E2, in_order, stage_tensor
 
 
 def declare() -> None:

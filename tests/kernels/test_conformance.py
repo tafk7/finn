@@ -3,8 +3,8 @@
 
 """Every kernel on channels, checked against its RTL by the conformance harness.
 
-Each case, stated by its kernel's spec (``kernels.specs``), places one kernel
-between boundary channels over sampled folding factors (``kernels.conformance``):
+Each case, stated by its kernel's spec (``support.kernel_specs``), places one kernel
+between boundary channels over sampled folding factors (``support.conformance``):
 dotp on both cores (packed; INT8, dense and depthwise), thresholding, eltwise
 with a broadcast operand, transpose, memstream with an identity reference, the
 channel stages (fifo, vpc and input_gen) and MatMul, a kernel with children.
@@ -14,7 +14,7 @@ memstream's ``form``, a fact of its consumer, is given.
 
 A channel stage presents on its ports the beat sequences the channel's adapter
 gives it (``finn.kernels.adapters.realize``), and derives its generics from them.
-Its case places the stage on two channels (``kernels.specs.stages``'s
+Its case places the stage on two channels (``support.kernel_specs.stages``'s
 ``StagedFifo``, ``StagedVpc``, ``StagedInputGenerator``: the stage under the
 harness's id, its ports presenting what its realization gives them, its generics
 checked), so XSim checks that the RTL walks the realization: a FIFO in each storage
@@ -51,6 +51,24 @@ from typing import Any, ClassVar, cast
 
 import numpy as np
 import pytest
+from support.conformance import (
+    MODES,
+    NonConformance,
+    Sample,
+    _ends,
+    _stream,
+    _values,
+    conformance,
+    design_member,
+    place,
+    samples,
+)
+from support.kernel_specs import conformance_cases
+from support.kernel_specs.dotp import dotp
+from support.kernel_specs.eltwise import eltwise
+from support.kernel_specs.memstream import memstream
+from support.kernel_specs.thresholding import CHANNELS, PIXELS, THRESHOLDS, tensor, thresholding
+from support.xsim import requires_xsim
 
 from finn.core.space import Rejected, derived
 from finn.dataflow.schedule import Index, Schedule
@@ -64,24 +82,6 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform.capabilities import DspBlock
-from kernels.conformance import (
-    MODES,
-    NonConformance,
-    Sample,
-    _ends,
-    _stream,
-    _values,
-    conformance,
-    design_member,
-    place,
-    samples,
-)
-from kernels.specs import conformance_cases
-from kernels.specs.dotp import dotp
-from kernels.specs.eltwise import eltwise
-from kernels.specs.memstream import memstream
-from kernels.specs.thresholding import CHANNELS, PIXELS, THRESHOLDS, tensor, thresholding
-from kernels.xsim import requires_xsim
 
 # -- the loop-order proof: thresholding on a schedule ---------------------------------------
 
@@ -183,7 +183,7 @@ def split(space_type: type[LanesInOrder]) -> dict[str, Any]:
     )
 
 
-# The kernels' cases (``kernels.specs``), and the harness's own: thresholding
+# The kernels' cases (``support.kernel_specs``), and the harness's own: thresholding
 # declaring the RTL's orders, beside the wrong orders below.
 CASES = {
     **conformance_cases(),

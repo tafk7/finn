@@ -25,8 +25,8 @@ from qonnx.core.datatype import DataType
 
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.pwpolyf import PwPolyKernel
-from kernels.helpers import FULL_DSP48E2, FULL_DSP58
-from kernels.specs.base import TEST_SIDE, KernelSpec, Probe, SweepCases, placed
+from support.helpers import FULL_DSP48E2, FULL_DSP58
+from support.kernel_specs.base import TEST_SIDE, KernelSpec, Probe, SweepCases, placed
 
 #: Where the hardware gives the function's limit in place of its polynomial: |x| >= 8.
 CLAMP = 8.0

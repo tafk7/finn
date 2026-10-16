@@ -33,7 +33,7 @@ import importlib, sys
 importlib.import_module(sys.argv[1])
 from qonnx.core.datatype import DataType
 from finn.core.space import Available
-from kernels.helpers import (
+from support.helpers import (
     FULL_DSP48E2, choose, labels, matmul_point, module_of, with_adapter_memories,
     with_direct_transports,
 )

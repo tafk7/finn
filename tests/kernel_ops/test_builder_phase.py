@@ -25,13 +25,13 @@ from typing import Any, cast
 
 import numpy as np
 import pytest
-from kernels.helpers import Lanes
 from oracle import capture
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_shapes import InferShapes
+from support.helpers import Lanes
 
 import finn.kernels.explore as explore_module
 from finn.builder import build_dataflow_steps

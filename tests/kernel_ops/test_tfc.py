@@ -20,9 +20,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from kernels.helpers import choose
-from kernels.xsim import requires_vivado, requires_xsim
 from qonnx.core.modelwrapper import ModelWrapper
+from support.helpers import choose
+from support.xsim import requires_vivado, requires_xsim
 
 import finn.core.onnx_exec as onnx_exec
 from finn.core.graph.annotations.channel import CHANNEL, channel_choices

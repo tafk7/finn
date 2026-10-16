@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from kernels.xsim import requires_vivado
+from support.xsim import requires_vivado
 
 from finn.platform.architectures import CAP_EVIDENCE, RULES, rules_digest
 from finn.platform.capabilities import RESOURCE_NAMES, DspBlock, Fabric, Resources

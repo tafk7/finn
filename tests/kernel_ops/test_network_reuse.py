@@ -19,11 +19,11 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from kernels.helpers import choose
 from onnx import GraphProto
 from qonnx.core.datatype import DataType
 from qonnx.core.metadata import clear
 from qonnx.core.modelwrapper import ModelWrapper
+from support.helpers import choose
 
 import finn.custom_op.kernels.shell as shell
 import finn.kernels.members as members

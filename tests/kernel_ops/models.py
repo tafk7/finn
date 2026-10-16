@@ -3,7 +3,7 @@
 
 """Small ONNX models of KernelOps, and of the source graphs conversion reads.
 
-Also the Chain (``kernels.chain``) as KernelOps with its choices saved (each kernel's
+Also the Chain (``support.chain``) as KernelOps with its choices saved (each kernel's
 on its node, each channel's on its tensor), its partition's network bound again, and a
 KernelOp's schema digest."""
 
@@ -13,13 +13,13 @@ import hashlib
 from typing import Any
 
 import numpy as np
-from kernels import chain
-from kernels.helpers import ADAPTER_RAM_STYLES, open_choices, with_adapter_memories
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
+from support import chain
+from support.helpers import ADAPTER_RAM_STYLES, open_choices, with_adapter_memories
 
 from finn.core.graph.annotations.platform import write_target
 from finn.custom_op.kernels.base import KernelOp, kernel_op
@@ -286,9 +286,9 @@ WEIGHT_CHANNEL: dict[str, object] = {
     "source.memstream.pumped_memory": False,
     "transport": "direct",
 }
-"""A stored weight's channel, as ``kernels.chain`` configures it."""
+"""A stored weight's channel, as ``support.chain`` configures it."""
 EDGE: dict[str, object] = {"transport": "direct"}
-"""Every other channel of the Chain, as ``kernels.chain`` configures it."""
+"""Every other channel of the Chain, as ``support.chain`` configures it."""
 
 
 def convert(model: ModelWrapper) -> tuple[ModelWrapper, ToKernelOps]:
@@ -299,7 +299,7 @@ def convert(model: ModelWrapper) -> tuple[ModelWrapper, ToKernelOps]:
 
 def kernel_model(**options: Any) -> ModelWrapper:
     """The Chain as KernelOps, each node's choices saved on it and each channel's on its
-    tensor, as ``kernels.chain`` configures them."""
+    tensor, as ``support.chain`` configures them."""
     model = (
         chain_source(**options)
         .transform(InferShapes())

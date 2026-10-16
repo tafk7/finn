@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The Chain (``kernels.chain``): one flat netlist, its edges' adapters, its channels' tensors.
+"""The Chain (``support.chain``): one flat netlist, its edges' adapters, its channels' tensors.
 
 Each MatMul passes its tensors to the kernels that read them, and presents their
 ends on the network's channels: each channel is one real edge, so each adapter sits
@@ -18,15 +18,7 @@ from pathlib import Path
 
 from qonnx.core.datatype import DataType
 from qonnx.core.ranges import TensorRange
-
-from finn.core.rtlsim_bench import pack_lanes, stream_through
-from finn.core.space import Available, Rejected, design_space
-from finn.dataflow.plan import Step
-from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.channels import Channel
-from finn.kernels.matmul import MatMulKernel
-from finn.toolchain.launcher import host_toolchain
-from kernels.chain import (
+from support.chain import (
     ACTIVATE,
     HIDDEN,
     INPUTS,
@@ -48,8 +40,16 @@ from kernels.chain import (
     matmul,
     network,
 )
-from kernels.helpers import FULL_DSP48E2, built, cycles_of, labels
-from kernels.xsim import requires_xsim
+from support.helpers import FULL_DSP48E2, built, cycles_of, labels
+from support.xsim import requires_xsim
+
+from finn.core.rtlsim_bench import pack_lanes, stream_through
+from finn.core.space import Available, Rejected, design_space
+from finn.dataflow.plan import Step
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.kernels.channels import Channel
+from finn.kernels.matmul import MatMulKernel
+from finn.toolchain.launcher import host_toolchain
 
 
 def test_each_edge_carries_its_own_adapter_and_the_netlist_is_flat():

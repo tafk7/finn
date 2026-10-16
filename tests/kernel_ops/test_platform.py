@@ -15,8 +15,8 @@ from dataclasses import fields, replace
 from typing import Any
 
 import pytest
-from kernels.helpers import FULL_DSP58, choose
 from qonnx.core.modelwrapper import ModelWrapper
+from support.helpers import FULL_DSP58, choose
 
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError

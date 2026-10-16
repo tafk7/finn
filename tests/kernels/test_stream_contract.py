@@ -17,6 +17,16 @@ from math import prod
 import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
+from support.helpers import (
+    FULL_DSP48E2,
+    FULL_DSP58,
+    built,
+    choose,
+    cycles_of,
+    fifo_node,
+    with_direct_transports,
+)
+from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.space import Rejected, Unresolved, design_space
@@ -51,16 +61,6 @@ from finn.kernels.transport import (
     marker_pairs,
 )
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import (
-    FULL_DSP48E2,
-    FULL_DSP58,
-    built,
-    choose,
-    cycles_of,
-    fifo_node,
-    with_direct_transports,
-)
-from kernels.xsim import requires_xsim
 
 INT3 = ScalarEncoding(DataType["INT3"])
 INT4 = ScalarEncoding(DataType["INT4"])

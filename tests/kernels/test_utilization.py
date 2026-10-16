@@ -16,6 +16,18 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from support.adapted import ELEMENT, transposed
+from support.helpers import (
+    FULL_DSP48E2,
+    FULL_DSP58,
+    choose,
+    eltwise,
+    in_order,
+    placed_dotp,
+    stage_tensor,
+    threshold_base,
+    with_direct_transports,
+)
 
 from finn.core.space import Available, Rejected, design_space
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
@@ -51,18 +63,6 @@ from finn.kernels.utilization import (
     uram,
 )
 from finn.platform.capabilities import DspBlock, Fabric, Resources
-from kernels.adapted import ELEMENT, transposed
-from kernels.helpers import (
-    FULL_DSP48E2,
-    FULL_DSP58,
-    choose,
-    eltwise,
-    in_order,
-    placed_dotp,
-    stage_tensor,
-    threshold_base,
-    with_direct_transports,
-)
 
 INT2, INT4, INT8 = (resolve_qonnx_datatype_name(name) for name in ("INT2", "INT4", "INT8"))
 

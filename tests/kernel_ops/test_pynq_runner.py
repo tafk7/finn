@@ -5,7 +5,7 @@
 ends' IPs its runner generates, the block design it writes from the integration export,
 the project, what it collects, its options, and its driver.
 
-The Chain (``kernels.chain``), its second weights streamed (two inputs, ``idma0`` and
+The Chain (``support.chain``), its second weights streamed (two inputs, ``idma0`` and
 ``idma1``, and ``odma0``), its choices saved, stated for Ultra96 in the Zynq shell and cut
 once. No Vivado and no Vitis HLS runs: the tools are recorded, or faked where the test
 says so. TFC's runner (Z0's block design, IODMAs and driver) is in test_builder_phase.

@@ -5,7 +5,7 @@
 model's KernelOps, committed by a policy that only ranks what the engine says is viable,
 persisted on their owners: a kernel's on its node, a channel's on its tensor.
 
-On the Chain (``kernels.chain``) as a model (MatMul, Thresholding, MatMul) for Ultra96 without
+On the Chain (``support.chain``) as a model (MatMul, Thresholding, MatMul) for Ultra96 without
 a shell: no UltraRAM, a doubled clock (nothing states it away).
 """
 
@@ -15,9 +15,9 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-from kernels.helpers import FULL_DSP48E2, Lanes
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
+from support.helpers import FULL_DSP48E2, Lanes
 
 from finn.core.graph.annotations.channel import CHANNEL, channel_choices
 from finn.core.graph.annotations.platform import write_target

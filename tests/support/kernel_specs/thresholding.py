@@ -19,8 +19,8 @@ from qonnx.core.datatype import DataType
 from finn.core.space import Space, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import FULL_DSP48E2
-from kernels.specs.base import ORACLE, KernelSpec, Probe, SweepCases, refuses
+from support.helpers import FULL_DSP48E2
+from support.kernel_specs.base import ORACLE, KernelSpec, Probe, SweepCases, refuses
 
 
 def tensor(shape: tuple[int, ...], dtype: str) -> Tensor:

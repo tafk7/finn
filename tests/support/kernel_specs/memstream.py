@@ -15,8 +15,8 @@ from qonnx.core.datatype import DataType
 
 from finn.dataflow.traversal import tile, vector_major
 from finn.kernels.memstream import MemStreamKernel
-from kernels.helpers import FULL_DSP48E2
-from kernels.specs.base import TEST_SIDE, KernelSpec, Probe, SweepCases, placed
+from support.helpers import FULL_DSP48E2
+from support.kernel_specs.base import TEST_SIDE, KernelSpec, Probe, SweepCases, placed
 
 STORED = (4, 6)
 CONTENTS = tuple(tuple((7 * row + 5 * col) % 16 - 8 for col in range(6)) for row in range(4))

@@ -25,11 +25,11 @@ from typing import Any, cast
 
 import numpy as np
 import pytest
-from kernels.xsim import requires_xsim
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.ranges import TensorRange
+from support.xsim import requires_xsim
 
 import finn.kernels.explore as explore_module
 from finn.builder.build_dataflow import build_dataflow_cfg

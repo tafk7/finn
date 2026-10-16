@@ -29,10 +29,10 @@ from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import Generate, InputGeneratorKernel
 from finn.kernels.port import native_stream
 from finn.kernels.vpc import VpcKernel
-from kernels.adapted import columns_first
-from kernels.helpers import FULL_DSP48E2
-from kernels.specs.base import TEST_SIDE, KernelSpec, Probe, SweepCases, placed
-from kernels.specs.thresholding import tensor
+from support.adapted import columns_first
+from support.helpers import FULL_DSP48E2
+from support.kernel_specs.base import TEST_SIDE, KernelSpec, Probe, SweepCases, placed
+from support.kernel_specs.thresholding import tensor
 
 
 class StagedFifo(FifoKernel):

@@ -28,9 +28,9 @@ import zlib
 from pathlib import Path
 
 import pytest
-from kernels.xsim import requires_xsim
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
+from support.xsim import requires_xsim
 
 from finn.builder.build_dataflow_config import DataflowBuildConfig
 from finn.core.graph.annotations.platform import read_target

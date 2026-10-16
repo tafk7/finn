@@ -27,6 +27,10 @@ from typing import Any
 import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
+from support.chain import STEM, chain
+from support.conformance import Sample, design_module, place
+from support.helpers import FULL_DSP48E2, built, cycles_of, full_platform, point_for
+from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import (
     LATENCY_ALLOWANCE,
@@ -65,9 +69,6 @@ from finn.toolchain.launcher import (
     host_toolchain,
 )
 from finn.toolchain.xsim import TOOLS, available
-from kernels.chain import STEM, chain
-from kernels.conformance import Sample, design_module, place
-from kernels.helpers import FULL_DSP48E2, built, cycles_of, full_platform, point_for
 from kernels.sweeps.threshold_numeric import (
     CHANNELS,
     ELEMENT,
@@ -77,13 +78,12 @@ from kernels.sweeps.threshold_numeric import (
     placed,
     stem,
 )
-from kernels.xsim import requires_xsim
 
 CHAIN_IN: dict[str, Words] = {"s_axis_0": ([1, 2, 3], 6)}
 
 
 def chain_module() -> Any:
-    """The Chain's module (``kernels.chain``)."""
+    """The Chain's module (``support.chain``)."""
     return built(chain(), STEM)
 
 

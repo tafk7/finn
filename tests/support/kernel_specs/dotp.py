@@ -20,8 +20,8 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.matmul import datatype_range
 from finn.platform.capabilities import DspBlock
-from kernels.helpers import full_platform
-from kernels.specs.base import ORACLE, KernelSpec, Probe, SweepCases, placed
+from support.helpers import full_platform
+from support.kernel_specs.base import ORACLE, KernelSpec, Probe, SweepCases, placed
 
 ROWS, REDUCTION, OUTPUTS = 2, 6, 4
 Array = npt.NDArray[Any]

@@ -4,7 +4,7 @@
 """The DSE seam over a network: choices, changes, cost, the operations that keep a
 network complete (baseline, reopen, settle), and the strategies that search it.
 
-On the Chain (``kernels.chain``: MatMul ``first``, Thresholding ``activate`` at a
+On the Chain (``support.chain``: MatMul ``first``, Thresholding ``activate`` at a
 fixed PE, MatMul ``second``; three rows of four), nothing chosen, its platform at
 5 ns. No ONNX: the seam reads a network and its members, each key a member and the key
 in its space; owners are the KernelOps' (``tests/kernel_ops/test_explore.py``). A test
@@ -18,6 +18,8 @@ from dataclasses import asdict, replace
 from typing import Any
 
 import pytest
+from support import chain
+from support.helpers import FULL_DSP48E2, FULL_DSP58, Lanes, keyed
 
 import finn.kernels.explore as explore_module
 from finn.core.reporting.findings import Finding, FindingKind
@@ -45,8 +47,6 @@ from finn.kernels.network import Fact, Interface, Network, dotted, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.utilization import total
 from finn.platform.capabilities import RESOURCE_NAMES, Resources
-from kernels import chain
-from kernels.helpers import FULL_DSP48E2, FULL_DSP58, Lanes, keyed
 
 
 def held(explorer: Seam) -> Seam:

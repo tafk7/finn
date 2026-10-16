@@ -19,10 +19,10 @@ import json
 from pathlib import Path
 
 import pytest
-from kernels.helpers import Lanes
 from onnx import StringStringEntryProto, TensorProto, helper
 from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
+from support.helpers import Lanes
 
 from finn.core.graph.annotations.channel import (
     CHANNEL,

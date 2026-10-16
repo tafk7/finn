@@ -1,13 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The graph's network of KernelOp nodes: the Chain (``kernels.chain``) bound from them.
+"""The graph's network of KernelOp nodes: the Chain (``support.chain``) bound from them.
 
 Each node's choices are saved on it and each channel's on its tensor; the network's
 adapter memories, open (several viable), are the flow's to choose and are saved on
 their channels' tensors; each edge's adapter is forced. The network's members are its
 channels, the boundary's among them, and its kernels, named as the graph. Its module is
-the Chain's (``kernels.chain``), configured the same way: the same flat netlist and
+the Chain's (``support.chain``), configured the same way: the same flat netlist and
 pins, and in XSim what ``execute_onnx`` computes on the source.
 """
 
@@ -18,10 +18,10 @@ from typing import Any
 
 import numpy as np
 import pytest
-from kernels import chain
-from kernels.helpers import Lanes, built, choose, cycles_of, labels
-from kernels.xsim import requires_xsim
 from qonnx.transformation.infer_shapes import InferShapes
+from support import chain
+from support.helpers import Lanes, built, choose, cycles_of, labels
+from support.xsim import requires_xsim
 
 import finn.custom_op.kernels.network as graph_network
 from finn.core.graph.annotations.channel import CHANNEL_KEYS, channel_choices

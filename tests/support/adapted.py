@@ -17,7 +17,7 @@ from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.transpose import TransposeKernel
 from finn.platform.capabilities import Platform
-from kernels.helpers import FULL_DSP48E2, choose, with_adapter_memories, with_direct_transports
+from support.helpers import FULL_DSP48E2, choose, with_adapter_memories, with_direct_transports
 
 ELEMENT = ScalarEncoding(DataType["INT4"])
 ROWS, CHANNELS = 3, 12

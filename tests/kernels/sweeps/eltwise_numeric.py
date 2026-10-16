@@ -20,7 +20,7 @@ Each operand's first row along its leading axis is its type's least value and it
 second its greatest (a FLOAT32 operand: a bound the case states, so that no result
 overflows); ``rhs``'s first two columns are its least and greatest, so every pair of
 extremes meets. The rest is random, seeded by the case. The expected words come from
-the spec's test-side reference (``kernels.specs.eltwise.computed``; no KernelOp
+the spec's test-side reference (``support.kernel_specs.eltwise.computed``; no KernelOp
 reaches eltwise, decision KT12 A1), packed in each port's order; words that differ are
 decoded as an order (``finn.harness.orders``). A float is compared bit for bit. Run
 with Vivado selected (FinnLib is the ``finnlib`` resource); each simulation runs in a
@@ -40,6 +40,8 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 from qonnx.core.datatype import DataType
+from support.helpers import FULL_DSP58, built, choose, with_direct_transports
+from support.kernel_specs.eltwise import computed
 
 from finn.core.rtlsim_bench import materialize
 from finn.core.rtlsim_pacing import FREE, STALLED
@@ -53,8 +55,6 @@ from finn.kernels.channels import Channel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.network import Interface, Network, wire
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import FULL_DSP58, built, choose, with_direct_transports
-from kernels.specs.eltwise import computed
 from kernels.sweeps.rtl_transport import drive_observed
 
 PORTS = {"lhs": "s_axis_0", "rhs": "s_axis_1", "result": "m_axis_0"}

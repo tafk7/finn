@@ -79,7 +79,7 @@ The code gates (`scripts/check-*.sh`) run each tree with `--confcutdir` (`gate_p
 
 `tests/container` (container runtimes and host toolchains, marker `container`) runs under `tests/conftest.py`; no code gate runs it.
 
-The trees under their own `--confcutdir` get no `finn_test_seed`: a test seeds the generators it uses itself (for example `np.random.default_rng(<seed>)`). They mark Vivado work with `requires_xsim`, `requires_hls` and `requires_vivado` (`tests/kernels/xsim.py`), which mark and skip, and the markers of [3. Markers](#3-markers).
+The trees under their own `--confcutdir` get no `finn_test_seed`: a test seeds the generators it uses itself (for example `np.random.default_rng(<seed>)`). They mark Vivado work with `requires_xsim`, `requires_hls` and `requires_vivado` (`tests/support/xsim.py`), which mark and skip, and the markers of [3. Markers](#3-markers).
 
 The gates put `tests` on `PYTHONPATH`, so its helpers import by package name; these are in `tests/support`:
 
@@ -87,4 +87,5 @@ The gates put `tests` on `PYTHONPATH`, so its helpers import by package name; th
 - `support/layering.py`: FINN's layers, what each may import, and the import walker. Each layer names the tree whose `test_layering.py` checks it; `tests/core/space/test_layering.py` also tests the table and the walker.
 - `support/value_classes.py`: the check that a frozen value class holds immutable values, used by the engine, dataflow and kernel trees.
 - `support/trained_networks.py`: the pretrained Brevitas example networks (`get_test_model_trained`), which the Brevitas, transformation and KernelOp tests export.
+- `support/conformance.py`, `support/helpers.py`, `support/xsim.py`, `support/chain.py`, `support/adapted.py`, `support/kernel_specs/`: the kernel tests' harness (the conformance case, the construction helpers, the XSim markers, the Chain, the adapted-channel cases) and each kernel's spec. `check-kernels.sh` lints and types `tests/support` as a whole.
 - `oracle/`: the finn-dev oracle's captures, values only the HWCustomOp flow computed (it is deleted), which the kernel tests compare with; the gates never run the oracle.

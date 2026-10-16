@@ -25,7 +25,7 @@ from finn.kernels.matmul import MatMulKernel, column_range
 from finn.kernels.network import Fact, Interface, Network, Wire, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.domains import range_dtype
-from kernels.helpers import (
+from support.helpers import (
     FULL_DSP48E2,
     choose,
     with_adapter_memories,

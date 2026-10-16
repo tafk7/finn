@@ -80,7 +80,7 @@ are not Python (``package_data``); and the whole FinnLib tree. A module reached
 only through a name computed at run time is not an input.
 
 A construction module (one that declares ``XSIM_KEY = "construction"``, as
-tests/kernels/helpers.py does) builds kernels, configurations and samples. Its
+tests/support/helpers.py does) builds kernels, configurations and samples. Its
 code is not an input: what it builds reaches a simulation through the captured
 designs, and what a numeric sweep reads from it besides (a MatMul assembly's beat
 counts and result type, after its simulation) is recorded as the job's
@@ -671,9 +671,13 @@ def _write_ipxact(module: Any, target: Path) -> None:
 def capture_test(dest: Path, root: Path, pytest_args: Sequence[str], ipxact: Path | None) -> int:
     """Run one conformance test with every simulation captured into ``dest/designs``."""
     # The checkout's harness, importable only in its environment (Target.run).
-    import kernels.conformance as conformance  # noqa: PLC0415
-    import kernels.xsim as xsim  # noqa: PLC0415
     import pytest  # noqa: PLC0415
+
+    # The harness's test-side modules moved from tests/kernels to tests/support: the
+    # checkout's own files say which package it has (the new layout first).
+    library = "support" if (root / "tests/support/conformance.py").is_file() else "kernels"
+    conformance: Any = importlib.import_module(f"{library}.conformance")
+    xsim: Any = importlib.import_module(f"{library}.xsim")
 
     # finn is a namespace package: an older checkout's would also import the installed
     # checkout's testbench, so the checkout's own files say which testbench it runs.
@@ -683,7 +687,7 @@ def capture_test(dest: Path, root: Path, pytest_args: Sequence[str], ipxact: Pat
         rtl = importlib.import_module("finn.core.executors.xsim.rtl")
     elif (root / "src/finn/harness/rtl.py").is_file():  # before the executors
         rtl = importlib.import_module("finn.harness.rtl")
-    else:  # a checkout from before finn.harness: kernels.xsim simulated
+    else:  # a checkout from before finn.harness: the xsim module simulated
         rtl = xsim
 
     designs = dest / "designs"

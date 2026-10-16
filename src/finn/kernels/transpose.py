@@ -81,7 +81,7 @@ class TransposeKernel(LeafKernel):
     once all of it is written, its last beat included (FinnLib ``99d75e8`` and
     later; the pin includes it). Without that guard an output draining faster
     than the input arrives (stalled or bursty input, as behind a ``vpc``) reads
-    lanes not yet written. ``tests/kernels/specs/transpose.py``'s ``transpose``
+    lanes not yet written. ``tests/support/kernel_specs/transpose.py``'s ``transpose``
     case runs stalled (and a ``vpc`` feeds its adapter sample), so it checks the
     guard.
 

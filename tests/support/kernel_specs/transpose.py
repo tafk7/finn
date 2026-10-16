@@ -10,9 +10,9 @@ from dataclasses import replace
 from typing import Any
 
 from finn.kernels.transpose import TransposeKernel
-from kernels.helpers import FULL_DSP48E2
-from kernels.specs.base import TEST_SIDE, KernelSpec, Probe, SweepCases, placed
-from kernels.specs.thresholding import tensor
+from support.helpers import FULL_DSP48E2
+from support.kernel_specs.base import TEST_SIDE, KernelSpec, Probe, SweepCases, placed
+from support.kernel_specs.thresholding import tensor
 
 MATRICES = (2, 6, 4)
 

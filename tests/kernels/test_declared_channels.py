@@ -11,6 +11,7 @@ is declared.
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.helpers import FULL_DSP48E2, built, choose, module_of, with_direct_transports
 
 from finn.core.space import (
     Available,
@@ -28,7 +29,6 @@ from finn.kernels.channels import Channel, boundary_contract
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
 from finn.kernels.transport import AxisBeat, StreamContract
-from kernels.helpers import FULL_DSP48E2, built, choose, module_of, with_direct_transports
 
 INT4 = ScalarEncoding(DataType["INT4"])
 PRODUCED = vector_major((4,), 2)

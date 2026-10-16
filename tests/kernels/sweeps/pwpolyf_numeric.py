@@ -19,7 +19,7 @@ Each function is one case, its tensor the same values (``values``), lean, not a 
 - the rest random in [-10, 10];
 - PE 1, a divisor and the whole innermost axis.
 
-The expected values are the spec's test-side reference (``kernels.specs.pwpolyf``'s
+The expected values are the spec's test-side reference (``support.kernel_specs.pwpolyf``'s
 ``activation``, the function in float64; no KernelOp reaches the kernel), each result
 within ``TOLERANCE[function]`` absolute, provisional (an approximating kernel's oracle
 is not decided); each run prints the largest error it saw. At the clamps the results are
@@ -40,6 +40,8 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 from qonnx.core.datatype import DataType
+from support.helpers import FULL_DSP58, built, choose, cycles_of, with_direct_transports
+from support.kernel_specs.pwpolyf import CLAMP, TOLERANCE, activation, clamped
 
 from finn.core.rtlsim_bench import Receive, stream_out
 from finn.core.rtlsim_pacing import FREE, STALLED
@@ -51,8 +53,6 @@ from finn.kernels.channels import Channel
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.pwpolyf import PwPolyKernel
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import FULL_DSP58, built, choose, cycles_of, with_direct_transports
-from kernels.specs.pwpolyf import CLAMP, TOLERANCE, activation, clamped
 
 PORTS = {"input": "s_axis_0", "output": "m_axis_0"}
 SHAPE = (16, 16)

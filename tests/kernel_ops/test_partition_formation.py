@@ -5,7 +5,7 @@
 StreamingDataflowPartition of the partition domain, its body a model of KernelOps, the
 graph's other ops left on the host.
 
-The Chain (``kernels.chain``) as KernelOps, its kernels' choices saved on its nodes,
+The Chain (``support.chain``) as KernelOps, its kernels' choices saved on its nodes,
 between two host ops (an Identity in front, as TFC's flatten, and one behind, as its
 label select). Its channels' choices are the partition body's: a graph with nodes on the
 host states none, so they are stated on the body the cut makes.
@@ -18,10 +18,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from kernels import chain
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
+from support import chain
 
 import finn.custom_op.partition as partition_domain
 from finn.core.graph.annotations.channel import CHANNEL, channel_choices

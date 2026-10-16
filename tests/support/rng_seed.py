@@ -13,7 +13,7 @@ import re
 GROUP_SUFFIX_RE = re.compile(r"@([^\]\s]+)$")
 
 
-def seed_from_nodeid(nodeid):
+def seed_from_nodeid(nodeid: str) -> int:
     group_suffix = GROUP_SUFFIX_RE.search(nodeid)
     if group_suffix is not None:
         nodeid = nodeid[: group_suffix.start()]

@@ -197,10 +197,10 @@ EDITS = [
     ("finnlib-memstream", "finnlib/rtl/infra/memstream.sv", "\n// edited\n", BOTH),
     ("finnlib-thresholding", "finnlib/rtl/nonlin/thresholding.sv", "\n// e\n", {ADAPTERS.name}),
     # The harness: conformance's code, the adapters' stimulus module, the XSI runtime.
-    ("conformance-code", "tests/kernels/conformance.py", "\nLIMIT = 1\n", {MEMSTREAM.name}),
-    # test_conformance.py imports kernels.adapted (the channel-stage cases), so every
+    ("conformance-code", "tests/support/conformance.py", "\nLIMIT = 1\n", {MEMSTREAM.name}),
+    # test_conformance.py imports support.adapted (the channel-stage cases), so every
     # conformance job consumes it, as well as the adapters sweep.
-    ("adapter-stimulus", "tests/kernels/adapted.py", "\nLIMIT = 1\n", BOTH),
+    ("adapter-stimulus", "tests/support/adapted.py", "\nLIMIT = 1\n", BOTH),
     ("xsi-runtime", "src/finn/xsi/compile.py", "\nLIMIT = 1\n", {ADAPTERS.name}),
     # The testbench and the harness package: both jobs run the testbench writer's or its
     # toolchain's code.
@@ -216,9 +216,9 @@ EDITS = [
     ("unrelated-test", "tests/kernels/test_dotp.py", "\nLIMIT = 1\n", set()),
     # The XSim executor: beside the testbench, imported by no captured job.
     ("xsim-executor", "src/finn/core/rtlsim_exec.py", "\nLIMIT = 1\n", set()),
-    ("harness-comment", "tests/kernels/conformance.py", "\n# a comment\n", set()),
+    ("harness-comment", "tests/support/conformance.py", "\n# a comment\n", set()),
     # Construction code whose effect is unchanged: its designs are the same.
-    ("construction-code", "tests/kernels/helpers.py", "\nLIMIT = 1\n", set()),
+    ("construction-code", "tests/support/helpers.py", "\nLIMIT = 1\n", set()),
     ("builder", "src/finn/builder/build_dataflow.py", "\nLIMIT = 1\n", set()),
 ]
 
@@ -264,8 +264,8 @@ def matmul_assembly(**arguments):
 @pytest.mark.parametrize(
     ("edit", "changed"),
     [
-        pytest.param(_rename("tests/kernels/helpers.py", "_frozen", "_tupled"), False, id="rename"),
-        pytest.param(_append("tests/kernels/helpers.py", FEWER_BEATS), True, id="verdict-value"),
+        pytest.param(_rename("tests/support/helpers.py", "_frozen", "_tupled"), False, id="rename"),
+        pytest.param(_append("tests/support/helpers.py", FEWER_BEATS), True, id="verdict-value"),
     ],
 )
 def test_a_sweep_is_keyed_by_what_construction_hands_it_not_by_its_code(
@@ -399,7 +399,7 @@ GROUP_EDITS = [
     # a comment in the harness.
     ("deselected-test", "tests/kernels/test_dotp.py", "\nLIMIT = 1\n", False),
     ("builder", "src/finn/builder/build_dataflow.py", "\nLIMIT = 1\n", False),
-    ("harness-comment", "tests/kernels/xsim.py", "\n# a comment\n", False),
+    ("harness-comment", "tests/support/xsim.py", "\n# a comment\n", False),
 ]
 
 

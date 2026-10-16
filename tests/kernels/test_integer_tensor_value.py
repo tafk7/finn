@@ -22,6 +22,7 @@ import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.ranges import TensorRange
+from support.helpers import FULL_DSP48E2, choose, matmul_point
 
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.values.semantics import (
@@ -33,7 +34,6 @@ from finn.kernels.values.semantics import (
     integers,
     row_major,
 )
-from kernels.helpers import FULL_DSP48E2, choose, matmul_point
 
 WEIGHTS = ((1, -2, 3), (4, 5, -6))
 

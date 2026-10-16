@@ -5,7 +5,7 @@
 graphs and its negative graphs with their codes. ``tests/kernel_ops/test_reference.py``
 checks them offline, in the fast gate.
 
-They live here, not beside the kernels' specs (``tests/kernels/specs``): they are ONNX
+They live here, not beside the kernels' specs (``tests/support/kernel_specs``): they are ONNX
 graphs, and the kernel tests read no graph (``tests/support/layering.py``).
 """
 

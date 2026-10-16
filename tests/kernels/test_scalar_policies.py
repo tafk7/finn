@@ -4,13 +4,13 @@
 """Kernels refuse the encodings and widths their hardware does not take."""
 
 import pytest
+from support.helpers import eltwise, threshold_base
 
 from finn.core.space import Rejected, Unresolved, inspection
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from kernels.helpers import eltwise, threshold_base
 
 
 @pytest.mark.parametrize("name", ("INT0", "UINT0"))

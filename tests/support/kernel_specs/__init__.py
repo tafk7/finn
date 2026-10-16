@@ -10,7 +10,7 @@ simulates the cases, ``tests/kernel_ops/test_parity.py`` the KernelOps' parity).
 
 from __future__ import annotations
 
-from kernels.specs import (
+from support.kernel_specs import (
     dotp,
     eltwise,
     matmul,
@@ -21,7 +21,7 @@ from kernels.specs import (
     thresholding,
     transpose,
 )
-from kernels.specs.base import Case, KernelSpec
+from support.kernel_specs.base import Case, KernelSpec
 
 SPECS: tuple[KernelSpec, ...] = (
     dotp.PACKED,

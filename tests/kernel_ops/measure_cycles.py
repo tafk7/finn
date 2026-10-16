@@ -291,7 +291,7 @@ def table(result: dict[str, Any]) -> str:
 
 
 def chain_case() -> tuple[ModelWrapper, dict[str, NDArray[Any]]]:
-    from kernels import chain  # noqa: PLC0415
+    from support import chain  # noqa: PLC0415
 
     from kernel_ops.models import configure_partition, kernel_model  # noqa: PLC0415
 

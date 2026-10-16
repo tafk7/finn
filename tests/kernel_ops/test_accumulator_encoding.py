@@ -7,7 +7,7 @@ it, and the owner of known weights states them narrowed to their values.
 
 Each case is a small ONNX graph (standard ``MatMul`` and ``MultiThreshold``) through
 ``ToKernelOps``, ``InferKernelTensors`` and every choice ranked by hand, at two lanes
-(``kernels.helpers.Lanes``):
+(``support.helpers.Lanes``):
 
 - ``unsigned``: UINT2 activations meet non-negative INT4-typed weights, so the first
   MatMul's results are ``UINT``; a Thresholding reads them, and a second MatMul its
@@ -31,14 +31,14 @@ from typing import Any
 
 import numpy as np
 import pytest
-from kernels.helpers import Lanes
-from kernels.xsim import requires_xsim
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.ranges import TensorRange
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
+from support.helpers import Lanes
+from support.xsim import requires_xsim
 
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import pack_lanes, stream_through

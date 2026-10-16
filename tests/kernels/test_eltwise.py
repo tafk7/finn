@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from support.helpers import eltwise, module_of
+from support.kernel_specs.eltwise import computed
 
 from finn.core.space import Available, Param, Rejected, Space, Unresolved, design_space
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
@@ -16,8 +18,6 @@ from finn.kernels.artifacts.abi import Signal
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.eltwise import EltwiseKernel
 from finn.platform.capabilities import DspBlock, Platform
-from kernels.helpers import eltwise, module_of
-from kernels.specs.eltwise import computed
 from kernels.sweeps import eltwise_numeric
 
 

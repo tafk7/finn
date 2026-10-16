@@ -22,8 +22,8 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from kernels.helpers import built, choose, with_adapter_memories, with_direct_transports
 from qonnx.core.datatype import DataType
+from support.helpers import built, choose, with_adapter_memories, with_direct_transports
 
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import write_target

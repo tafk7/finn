@@ -12,10 +12,10 @@ from finn.core.space import design_space
 from finn.dataflow.gemm import Form, Window
 from finn.dataflow.tensor import Tensor
 from finn.kernels.matmul import MatMulKernel
-from kernels.helpers import FULL_DSP48E2
-from kernels.specs.base import ORACLE, KernelSpec, Probe, SweepCases, placed, refuses
-from kernels.specs.dotp import OUTPUTS, REDUCTION, ROWS
-from kernels.specs.thresholding import tensor
+from support.helpers import FULL_DSP48E2
+from support.kernel_specs.base import ORACLE, KernelSpec, Probe, SweepCases, placed, refuses
+from support.kernel_specs.dotp import OUTPUTS, REDUCTION, ROWS
+from support.kernel_specs.thresholding import tensor
 
 FACTS: dict[str, Any] = dict(platform=FULL_DSP48E2)
 """MatMul's facts beside its tensors: its extents and datatypes are its tensors'."""

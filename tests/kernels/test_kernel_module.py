@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.helpers import FULL_DSP48E2, codes
 
 from finn.core.space import (
     Available,
@@ -50,7 +51,6 @@ from finn.kernels.network import Interface, Network, wire
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.platform.capabilities import Resources
-from kernels.helpers import FULL_DSP48E2, codes
 
 INT4 = DataType["INT4"]
 TENSOR = Tensor((4,), ScalarEncoding(INT4))

@@ -13,10 +13,10 @@ from typing import Any
 from finn.core.space import Space
 from finn.harness.points import Refused
 from finn.kernels.base import Kernel
-from kernels.conformance import KERNEL, configured, design_member, unchosen
+from support.conformance import KERNEL, configured, design_member, unchosen
 
 Case = Callable[[], dict[str, Any]]
-"""A conformance case: the arguments of ``kernels.conformance.conformance``, its
+"""A conformance case: the arguments of ``support.conformance.conformance``, its
 test-side ``reference`` among them."""
 
 EMPTY: Mapping[str, object] = MappingProxyType({})

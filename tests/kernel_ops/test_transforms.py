@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Conversion to KernelOps and the ordered inference, on the Chain (``kernels.chain``) as a model.
+"""Conversion to KernelOps and the ordered inference, on the Chain (``support.chain``) as a model.
 
 qonnx's whole-graph passes ask every node at once, so they refuse a converted
 graph whose KernelOps' inputs are not inferred yet; ``InferKernelTensors``
@@ -14,14 +14,14 @@ from typing import Any
 
 import numpy as np
 import pytest
-from kernels import chain
-from kernels.helpers import exact_result_dtype
 from onnx import TensorProto, helper, numpy_helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
+from support import chain
+from support.helpers import exact_result_dtype
 
 from finn.core.graph.annotations.platform import PLATFORM_KEYS, read_target
 from finn.core.graph.errors import FactUnstated, KernelOpError

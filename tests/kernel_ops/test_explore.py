@@ -20,9 +20,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from kernels.helpers import Lanes
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from support.helpers import Lanes
 
 import finn.kernels.explore as explore_module
 from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS

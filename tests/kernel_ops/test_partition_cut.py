@@ -5,7 +5,7 @@
 configured network: ``boundary_facts``), what is built of it (``finn.outputs``) and the
 integration export read from its ends.
 
-The Chain (``kernels.chain``), its choices saved, as the partition; with its second
+The Chain (``support.chain``), its choices saved, as the partition; with its second
 weights streamed, so two inputs cross the boundary. No Vivado.
 """
 

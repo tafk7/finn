@@ -21,14 +21,14 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+from support.adapted import ELEMENT, adapted, columns_first, transposed, values
+from support.helpers import built
 
 from finn.core.rtlsim_bench import materialize, pack_lanes
 from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.dataflow.traversal import Traversal, vector_major
 from finn.harness.toolchain import print_identity
 from finn.toolchain.launcher import host_toolchain
-from kernels.adapted import ELEMENT, adapted, columns_first, transposed, values
-from kernels.helpers import built
 from kernels.sweeps.rtl_transport import drive
 
 BITS = ELEMENT.bits

@@ -34,7 +34,7 @@ OMP_NUM_THREADS=1 gate_pytest --conftest-root tests \
 # tens of seconds each) are deselected in either mode, so this step stays at a few
 # minutes.
 gate_pytest --conftest-root tests tests/util xsim vivado slow
-gate_ruff src/finn/kernels tests/kernels src/finn/platform src/finn/core/graph \
+gate_ruff src/finn/kernels tests/kernels tests/support src/finn/platform src/finn/core/graph \
     src/finn/core/executor.py src/finn/core/onnx_exec.py \
     src/finn/core/rtlsim_bench.py src/finn/core/rtlsim_exec.py src/finn/core/rtlsim_pacing.py \
     src/finn/custom_op/kernels src/finn/custom_op/partition src/finn/transformation/kernels \
@@ -68,4 +68,4 @@ gate_mypy -p finn.kernels -p finn.platform -p finn.core.graph -p finn.custom_op.
     -m finn.builder.build_dataflow_verification \
     -m finn.builder.build_dataflow_manifest
 # Whole directories; the files not yet strictly typed are listed in .mypy.ini.
-gate_mypy tests/kernels tests/kernel_ops tests/xsim_sweep tests/oracle
+gate_mypy tests/support tests/kernels tests/kernel_ops tests/xsim_sweep tests/oracle

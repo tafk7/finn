@@ -13,9 +13,9 @@ import numpy as np
 import numpy.typing as npt
 
 from finn.kernels.eltwise import EltwiseKernel
-from kernels.helpers import FULL_DSP48E2, FULL_DSP58
-from kernels.specs.base import TEST_SIDE, KernelSpec, Probe, SweepCases, placed
-from kernels.specs.thresholding import CHANNELS, PE_FACTORS, PIXELS, tensor
+from support.helpers import FULL_DSP48E2, FULL_DSP58
+from support.kernel_specs.base import TEST_SIDE, KernelSpec, Probe, SweepCases, placed
+from support.kernel_specs.thresholding import CHANNELS, PE_FACTORS, PIXELS, tensor
 
 
 def computed(

@@ -131,7 +131,7 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, dotted, wire
 from finn.kernels.transport import StreamContract
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import (
+from support.helpers import (
     FULL_DSP48E2,
     choose,
     cycles_of,

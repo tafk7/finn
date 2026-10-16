@@ -5,6 +5,18 @@
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.helpers import (
+    FULL_DSP48E2,
+    WeightDelivery,
+    built,
+    choose,
+    exact_result_dtype,
+    labels,
+    matmul_assembly,
+    matmul_point,
+    module_of,
+    placed,
+)
 
 from finn.core.space import (
     Available,
@@ -20,18 +32,6 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.dotp import DotpAxiKernel, PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
-from kernels.helpers import (
-    FULL_DSP48E2,
-    WeightDelivery,
-    built,
-    choose,
-    exact_result_dtype,
-    labels,
-    matmul_assembly,
-    matmul_point,
-    module_of,
-    placed,
-)
 
 FACTS = dict(
     m=2,
@@ -261,7 +261,7 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
         )
 
     # Substitute a fully authored Space class, without mutating declarations.
-    monkeypatch.setattr("kernels.helpers.MatMulKernel", RestrictedMatMul)
+    monkeypatch.setattr("support.helpers.MatMulKernel", RestrictedMatMul)
     point = choose(
         matmul_point(**FACTS),
         {

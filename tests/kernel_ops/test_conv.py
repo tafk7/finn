@@ -30,12 +30,12 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from kernels.xsim import requires_xsim
 from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import is_custom_op
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
+from support.xsim import requires_xsim
 
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
 from finn.custom_op.kernels import Conv

@@ -72,7 +72,7 @@ def test_every_row_is_checked_by_a_tree() -> None:
         ("finn.core.rtlsim_exec", "executors"),
         ("finn.core.executor", "executors"),
         ("finn.builder.build_dataflow", "flow"),
-        ("kernels.helpers", "tests.kernels"),
+        ("support.helpers", "tests.kernels"),
     ],
 )
 def test_a_module_belongs_to_its_longest_prefix(name: str, layer: str) -> None:
@@ -138,7 +138,7 @@ def test_a_name_outside_every_prefix_is_third_party(name: str) -> None:
         # pytest, never under them.
         ("util", "finn.harness.toolchain"),
         ("harness", "finn.builder.build_dataflow"),
-        ("harness", "kernels.xsim.requires_xsim"),
+        ("harness", "support.xsim.requires_xsim"),
         ("harness", "kernel_ops.models.matmul_model"),
         ("harness", "pytest"),
         ("harness", "onnx.helper"),

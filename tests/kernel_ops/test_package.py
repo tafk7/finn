@@ -8,7 +8,7 @@ The Tcl and the interface names come from the module's ABI
 ``tests/kernels/artifacts/test_ipxact.py``). Here: the partition's module from
 its nodes' and channels' saved choices, an open one refused; that the emitted top
 is elaborated before Vivado runs (a toolchain double stands for Vivado, so these run
-in the fast gate); and one test that packages the Chain (``kernels.chain``) and reads
+in the fast gate); and one test that packages the Chain (``support.chain``) and reads
 the IP back (marker ``vivado``: the fast gate deselects it, the XSim sweep's
 ``kernel-ops-vivado`` job runs it).
 """
@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from kernels.xsim import requires_vivado
+from support.xsim import requires_vivado
 
 from finn.core.graph.annotations.outputs import (
     OUTPUT_INTERFACES,

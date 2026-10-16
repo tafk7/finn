@@ -7,10 +7,10 @@ gate's ``--confcutdir`` stops at does so itself."""
 
 from __future__ import annotations
 
-import pytest
-
 import sys
 from collections.abc import Iterator
+
+import pytest
 
 
 @pytest.fixture(autouse=True)
