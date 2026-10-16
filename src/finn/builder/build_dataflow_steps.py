@@ -67,7 +67,6 @@ from finn.kernels.explore import (
     DebugPlaceholder,
     Explorer,
     MaxThroughput,
-    Pinned,
     Rebaseline,
     SizeFifos,
     TargetThroughput,
@@ -243,11 +242,6 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWr
     return model
 
 
-#: Where step_verify_partition writes the partition's choices by graph name, under the
-#: output directory, in the form step_pin_choices reads.
-KERNEL_CHOICES_FILE = "kernel_choices.json"
-
-
 def _explore(
     model: ModelWrapper, cfg: DataflowBuildConfig, step: str, strategy: Explorer
 ) -> Explored:
@@ -261,17 +255,6 @@ def _explore(
     for finding in explored.findings:
         note(finding)
     return explored
-
-
-def step_pin_choices(
-    model: ModelWrapper, cfg: DataflowBuildConfig, *, kernel_choices_file: Path
-) -> ModelWrapper:
-    """Pin the partition's choices ``kernel_choices_file`` states by node or tensor name,
-    in the form step_verify_partition writes. Every later strategy step holds the pins.
-    A choice the partition does not have, a value it does not take, or one an earlier
-    pin holds otherwise is refused. Writes report/step_pin_choices.json."""
-    _explore(model, cfg, "step_pin_choices", Pinned(kernel_choices_file))
-    return model
 
 
 def step_target_throughput(
@@ -358,18 +341,20 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
 
 
 def step_verify_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Write the partition's choices to kernel_choices.json by node or tensor name, then
-    verify the partition before a shell builds it (``verify_partition``): its choices are
-    complete and current, its ports match its graph's inputs and outputs, its target is
-    the configuration's, and its FIFOs keep their streams at its bottleneck period (the
-    build's one check of them, by sizing's model). A FIFO not held that does not is
-    refused (``fifo-stale``: run step_size_fifos); a held one (``fifo-held-stale``) and a
-    ``direct`` that throttles its producer (``direct-throttles``) are noted as warnings.
-    Writes report/step_verify_partition.json, what the check found. The body records the
-    design it verified: packaging, the shell's integration and the testbench refuse one
-    not verified, or changed since."""
+    """Write the partition's choices to report/kernel_choices.json by node or tensor name,
+    a log FINN never reads, then verify the partition before a shell builds it
+    (``verify_partition``): its choices are complete and current, its ports match its
+    graph's inputs and outputs, its target is the configuration's, and its FIFOs keep their
+    streams at its bottleneck period (the build's one check of them, by sizing's model). A
+    FIFO not held that does not is refused (``fifo-stale``: run step_size_fifos); a held one
+    (``fifo-held-stale``) and a ``direct`` that throttles its producer
+    (``direct-throttles``) are noted as warnings. Writes report/step_verify_partition.json,
+    what the check found. The body records the design it verified: packaging, the shell's
+    integration and the testbench refuse one not verified, or changed since."""
     node, body, body_file = partition_body(model)
-    write_report(Path(cfg.output_dir) / KERNEL_CHOICES_FILE, kernel_choices_config(body))
+    write_report(
+        Path(cfg.output_dir) / "report" / "kernel_choices.json", kernel_choices_config(body)
+    )
     _, check = verify_partition(body, node.name)
     stated = {"fifos_judged": FIFOS_BY_MODEL, "fifo_check": check.report()}
     write_report(Path(cfg.output_dir) / "report" / "step_verify_partition.json", stated)
@@ -554,7 +539,6 @@ build_dataflow_phases: dict[str, list[StepFunction]] = {
 
 #: The steps that choose the partition's parameters, one strategy each.
 KERNEL_STRATEGY_STEPS: list[StepFunction] = [
-    step_pin_choices,
     step_target_throughput,
     step_max_throughput,
     step_size_fifos,
@@ -588,7 +572,7 @@ _PARTITION: list[StepFunction] = [
 #: The premade lists, each from the export to the output it names, then the resources
 #: report. In a configuration's ``steps`` a list stands for its steps, as a phase does.
 build_dataflow_lists: dict[str, list[StepFunction]] = {
-    # The partition, its choices (kernel_choices.json) and its modelled resources.
+    # The partition, its choices (report/kernel_choices.json) and its modelled resources.
     "list_partition": [*_PARTITION, step_resources_report],
     # The packaged IP, its interface description and its testbench, on any shell.
     "list_ip": [*_PARTITION, step_package_partition, step_resources_report],

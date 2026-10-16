@@ -43,7 +43,6 @@ from finn.kernels.explore import (
     DebugPlaceholder,
     ExploreError,
     Hold,
-    Pinned,
     Ranked,
     Rebaseline,
     Seam,
@@ -339,19 +338,6 @@ def test_a_hold_is_committed_held_in_the_body_and_the_rest_explored() -> None:
         kernel_model().transform(ExploreKernelChoices(Hold({"first": {"compute.packed.pe": 3}})))
     with refused("member-unknown", error=ExploreError, owner="held", message=r"nobody\.pe"):
         kernel_model().transform(ExploreKernelChoices(Hold({"nobody": {"pe": 1}})))
-
-
-def test_a_pinned_file_that_is_not_read_is_refused_owned_by_the_file(tmp_path: Path) -> None:
-    """``Pinned`` reads its choices from a file: one that is not JSON, or not a
-    ``{graph name: {key: value}}`` dict, is refused at construction, owned by the file."""
-    pinned = tmp_path / "pinned.json"
-    pinned.write_text("{")
-    with pytest.raises(ExploreError) as unread:
-        Pinned(pinned)
-    assert [(f.code, f.owner) for f in unread.value.findings] == [("pins-invalid", str(pinned))]
-    pinned.write_text("[1]")
-    with refused("pins-invalid", error=ExploreError, owner=str(pinned)):
-        Pinned(pinned)
 
 
 #: A memory pinned ``auto``: the first MatMul's weights (on their tensor) and the

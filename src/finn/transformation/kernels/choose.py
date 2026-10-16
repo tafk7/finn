@@ -125,7 +125,6 @@ from finn.kernels.explore import (
     Explorer,
     FifoCheck,
     Hold,
-    Pinned,
     Seam,
     SizeFifos,
     TargetThroughput,
@@ -506,7 +505,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
             "attempts": seam.attempts - attempts,
             "seconds": round(time.perf_counter() - began, 3),
         }
-        if isinstance(strategy, (Pinned, Hold)):
+        if isinstance(strategy, Hold):
             entry["held"] = [dotted(key) for key in strategy.held]
     refused = seam.refusals(network)
     if refused:

@@ -132,11 +132,10 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
     directory = tmp_path / "build"
     directory.mkdir()
     steps = ["phase_prepare_model", "step_convert_to_hw", "step_create_dataflow_partition"]
-    steps += ["step_pin_choices", "step_size_fifos", f"{__name__}.step_reading"]
+    steps += ["step_size_fifos", f"{__name__}.step_reading"]
     settings = {
         "preprocessing": "preproc.onnx",
         "topk": 1,
-        "kernel_choices_file": "kernel_choices.json",
         "fifo_margin": 2,
         "input_datatype": "UINT8",
         "frames": "inputs/input.npy",
@@ -161,17 +160,14 @@ def test_a_build_directorys_relative_paths_name_its_files(tmp_path):
         name: setting.value for name, setting in build_dataflow.build_plan(read).settings.items()
     }
     assert decoded["preprocessing"] == directory / "preproc.onnx"
-    assert decoded["kernel_choices_file"] == directory / "kernel_choices.json"
     assert decoded["frames"] == directory / "inputs/input.npy"
     assert (decoded["topk"], decoded["input_datatype"]) == (1, "UINT8")
     # An absolute path stays as stated.
-    absolute = builder_config(
-        steps=steps, settings={"kernel_choices_file": "/elsewhere/kernel_choices.json"}
-    )
+    absolute = builder_config(steps=steps, settings={"frames": "/elsewhere/input.npy"})
     (directory / build_dataflow.CONFIG_FILE).write_text(absolute.to_json())
     read_again = build_dataflow.read_build_config(str(directory))
-    chosen = build_dataflow.build_plan(read_again).settings["kernel_choices_file"].value
-    assert chosen == Path("/elsewhere/kernel_choices.json")
+    chosen = build_dataflow.build_plan(read_again).settings["frames"].value
+    assert chosen == Path("/elsewhere/input.npy")
     # Absolute as stated, unset, or the empty command directory: unchanged.
     stated = builder_config(
         output_dir="/results",

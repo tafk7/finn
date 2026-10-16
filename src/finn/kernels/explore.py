@@ -17,8 +17,8 @@ A network is complete when every choice with cases that is not required holds a 
 its baseline until a strategy sets another; a required Decision (a FIFO's depth) stays
 open until a strategy sets it. ``baseline``, ``reopen`` and ``settle`` keep a network
 complete, in rank order: kernels first, then channels in the order the wiring reads them.
-``held`` maps the keys no strategy changes to their values: those a ``Hold`` (or a
-``Pinned``) strategy fixes, and those the build seeds from its partition's body (``HELD``,
+``held`` maps the keys no strategy changes to their values: those a ``Hold`` strategy
+fixes, and those the build seeds from its partition's body (``HELD``,
 ``finn.transformation.kernels.choose``).
 
 An ``Explorer`` (``explore(seam, network) -> network``) proposes batches, and may keep,
@@ -32,7 +32,6 @@ The strategies, each an objective and its constraints searched through the seam:
 
 - ``Hold(values)``: fixed choices, by owner and key (``{graph name: {key: value}}``:
   a kernel's under its node, a channel's under its tensor), set as one batch and held;
-  ``Pinned(path)`` reads the same from a file, until the builder's pin step goes;
 - ``TargetThroughput(fps)``: the least parallelism meeting ``fps`` frames a
   second at the target's clock (``TargetCycles``, a budget of cycles a frame),
   folding through an unordered choice its cycles wait on by trying each case (a
@@ -65,12 +64,10 @@ nothing of itself: the build checks once, before emission
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Collection, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product
 from math import floor
-from os import PathLike
 from typing import Any, Generic, Protocol, TypeVar
 
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
@@ -1085,50 +1082,15 @@ class DebugPlaceholder:
 # -- fixed choices -------------------------------------------------------------------------
 
 
-class Pinned:
-    """Fixed choices by owner and key (``{graph name: {key: value}}``: a kernel's under
-    its node, a channel's under its tensor, the form ``kernel_choices.json`` takes),
-    read from ``path``, set as one batch (``Seam.set``: replacing what is stored, the
-    choices the change makes stale dropped and settled) and held (``Seam.held``): no
-    strategy after it changes them. A choice already at the same value is not in the
-    batch, and held all the same; anything the seam refuses (an owner or key that is no
-    choice here, a value it does not take, a key another pin holds otherwise) is
-    refused, named. Pins go first, so that the strategies after them fold around them.
-    ``held`` keeps the keys it held, with their values."""
-
-    strategy = "pinned"
-
-    def __init__(self, path: str | PathLike[str]) -> None:
-        self.path = str(path)
-        try:
-            with open(path) as file:
-                loaded = json.load(file)
-        except (OSError, ValueError) as error:
-            raise ExploreError("pins-invalid", self.path, f"not read: {error}") from error
-        if not isinstance(loaded, dict) or not all(
-            isinstance(values, dict) for values in loaded.values()
-        ):
-            raise ExploreError("pins-invalid", self.path, "not a {graph name: {key: value}} file")
-        self.choices: dict[str, dict[str, object]] = loaded
-        self.held: dict[Key, object] = {}
-
-    def explore(self, seam: Seam, network: S) -> S:
-        self.held = _hold(seam, network, self.choices, self.path)
-        return _held_run(seam, network, self.held, self.path, self.strategy)
-
-    def report(self) -> dict[str, object]:
-        return {"strategy": self.strategy, "path": self.path}
-
-
 class Hold:
-    """``Pinned``, given the values instead of a file: fixed choices by owner and key
-    (``values``, ``{graph name: {key: value}}``: a kernel's under its node, a channel's
-    under its tensor), set as one batch and held (``Seam.held``): no strategy after it
-    changes them. A choice already at the same value is not in the batch, and held all
-    the same; anything the seam refuses (an owner or key that is no choice here, a value
-    it does not take, a key another hold keeps at another value: ``already held``) is
-    refused, named, its owner ``held``. ``held`` keeps the keys it held, with their
-    values."""
+    """Fixed choices by owner and key (``values``, ``{graph name: {key: value}}``: a
+    kernel's under its node, a channel's under its tensor), set as one batch and held
+    (``Seam.held``): no strategy after it changes them. Holds go first, so that the
+    strategies after them fold around them. A choice already at the same value is not in
+    the batch, and held all the same; anything the seam refuses (an owner or key that is
+    no choice here, a value it does not take, a key another hold keeps at another value:
+    ``already held``) is refused, named, its owner ``held``. ``held`` keeps the keys it
+    held, with their values."""
 
     strategy = "held"
 
@@ -2246,7 +2208,6 @@ __all__ = [
     "FifoCheck",
     "Hold",
     "MaxThroughput",
-    "Pinned",
     "RankPolicy",
     "Ranked",
     "Rebaseline",

@@ -470,8 +470,7 @@ builds ahead of time; `--check` only checks prerequisites.
 `build_dataflow project/` remains the ordinary public build command. It builds in
 process, starting no child, as `build_dataflow_directory` and `build_dataflow_cfg` do,
 and changes no working directory: the configuration's relative paths (`output_dir`,
-the preparation's `preprocessing`, the pinned choices' `kernel_choices_file`, the
-toolchain's settings scripts and command directory) name files in the project
+the preparation's `preprocessing`, the toolchain's settings scripts and command directory) name files in the project
 directory (`read_build_config` reads it with the directory as its `base_dir`: a field's
 path is joined to it when read, a path setting's, given or by default, when the build decodes it), and a relative `FINN_BUILD_DIR`
 is relative to the directory the command runs from. Every tool runs in the
@@ -630,7 +629,7 @@ export to an output, each the first four phases' steps, then:
 
 | List | Then | Makes |
 |---|---|---|
-| `list_partition` (the default) | `step_resources_report` | the partition, its choices (`kernel_choices.json`) and its modelled resources |
+| `list_partition` (the default) | `step_resources_report` | the partition, its choices (`report/kernel_choices.json`) and its modelled resources |
 | `list_ip` | `step_package_partition`, `step_resources_report` | and the packaged IP, its interface description and testbench |
 | `list_bitfile` | `step_build_bitfile`, `step_resources_report` | and the bitfile (`pynq`) |
 | `list_deployment` | `step_build_bitfile`, `step_make_driver`, `step_resources_report`, `step_deployment_package` | and the bitfile, its driver and the deployment package (`pynq`) |
@@ -661,7 +660,7 @@ the strategy steps theirs (below); `step_package_partition` `ooc_synth`;
 clock report's objective
 is the `target_fps` the partition's body records where `step_target_throughput` folded
 it (`finn.choices/objective_fps`), and none where a later step that may change the folding
-(a pin, a maximum throughput, going back to the baselines) explored it since. The build's manifest records the steps it runs, and
+(a hold, a maximum throughput, going back to the baselines) explored it since. The build's manifest records the steps it runs, and
 each setting with its value or default and its readers (`plan`). JSON is read strictly: a key a nested object does not declare, a null
 where a field is not optional, a wrong type and an unknown value are refused, naming
 their place (`configuration.target: ...`), as a `ConfigurationRefused`. A build
@@ -680,11 +679,10 @@ every value in the body.
 
 | Step | Settings | What it does |
 |---|---|---|
-| `step_pin_choices` | `kernel_choices_file` (a path, required) | sets the values a `kernel_choices.json` states and pins them for the build |
 | `step_target_throughput` | `target_fps` (required), `relax_target_fps` (default true) | folds the least parallelism that meets `target_fps` at the target's clock |
 | `step_max_throughput` | `max_throughput_within` (required: `{"lut": 0.5}`) | the fewest cycles a frame whose resources stay within the fractions of the part's |
 | `step_size_fifos` | `fifo_margin` (default 0), `fifo_ram_style` (default none: FinnLib's `auto`) | sizes each channel's FIFO at the folding before it |
-| `step_baseline_choices` | none | sets every value not pinned back to its baseline |
+| `step_baseline_choices` | none | sets every value not held back to its baseline |
 | `step_placeholder_choices` | none | for debugging, sets each open required choice to its first case |
 
 `step_target_throughput` tries each case of an unordered choice, such as a MatMul's
@@ -694,9 +692,29 @@ fastest it reaches. `step_max_throughput` keeps, of every point it tried, the fa
 whose resources (the shell's: its partition, ends and static region) stay within
 `max_throughput_within`; where a member states no resources (a memory pinned `auto`:
 placed by Vivado, not stated), it budgets what is stated, a lower bound, and warns,
-naming it. A pin is recorded in the partition's body (`finn.choices/held`), so every
-later strategy step of the build holds it, going back to the baselines included: pin
-first, so the strategies after it fold around the pins. `step_size_fifos` sizes each
+naming it. A hold is recorded in the partition's body (`finn.choices/held`, the held
+keys; the values are the ones the body states), so every later strategy step of the build
+keeps it, going back to the baselines included. The build has no step that fixes values: a user fixes them with
+`Hold` in a step of their own, listed before the strategies that should fold around them:
+
+```python
+from finn.kernels.explore import Hold
+from finn.transformation.kernels import explore_partition
+
+def step_my_choices(model, cfg):
+    explore_partition(model, Hold({"MatMul_0": {"compute.packed.simd": 8},
+                                   "MatMul_0_param0": {"source.memstream.ram_style": "block"}}))
+    return model
+```
+
+(`steps=[..., step_my_choices, "step_target_throughput", "step_size_fifos", ...]`; the
+values are `{graph name: {key: value}}`, a kernel's under its node, a channel's under its
+tensor.) A value the partition does not take, or a key an earlier hold keeps at another
+value, is refused, named. The trade-off: a build described by its JSON alone cannot fix a
+choice without Python, since the step is named there by its import path
+(`package.module.step_my_choices`).
+
+`step_size_fifos` sizes each
 channel from both ends' beat patterns at the bottleneck (`direct` where none is
 needed), `fifo_margin` words added to a FIFO it places. The default phase is
 `[step_size_fifos, step_verify_partition]`: the baseline folding, its FIFOs sized; a
@@ -707,7 +725,7 @@ streams once, by `step_verify_partition`, at the bottleneck the partition reache
 model `step_size_fifos` sizes by), and in a strategy step only where its strategy calls
 the check. A FIFO that no longer keeps its producer within its idle time (a fold anywhere
 may shorten the bottleneck, and a depth edited by hand may be too small) is refused
-there, named, unless you pinned it: a pinned one is kept with a warning, and so is a
+there, named, unless you held it: a held one is kept with a warning, and so is a
 `direct` that throttles its producer. Packaging, the shell's integration and the
 testbench take only the design `step_verify_partition` verified: a partition it never
 verified is refused (run `step_verify_partition`), and so is one changed since (verify
@@ -719,18 +737,18 @@ open (a FIFO's depth) is refused by name when the partition is built.
 Each strategy step writes its report, `report/<step>.json`, listed under it in the
 build's manifest: its strategy with the values it changed, reopened, kept and
 re-baselined, attempts and time; every value with who set it (the body, the baseline or
-the strategy); the pins; whether it sized FIFOs and how its FIFOs were judged
+the strategy); the holds; whether it sized FIFOs and how its FIFOs were judged
 (`fifos_judged`: `model` where it sized or checked them, else `not checked`; where it
 checked, what the check found, `fifo_check`); per-member cycles and buffering, the
 bottleneck, and the shell's resources against the part's. A point that uses more of a
 resource than the part has is a warning naming that resource, never a refusal.
 `step_verify_partition` writes its check's record, `report/step_verify_partition.json`
 (`fifos_judged`, and `fifo_check`: the bottleneck period, the channels checked, those
-the model does not read, and the warnings), and every value to `kernel_choices.json`,
+the model does not read, and the warnings), and every value to `report/kernel_choices.json`,
 by graph name (`{"MatMul_0_param0": {"transport": "direct"}, "MatMul_0": {"compute.packed.pe": 16}}`:
 a kernel's choices under its node, a channel's under the tensor it carries, in graph
-order: each node's input channels, the node, its output channels), the file
-`step_pin_choices` reads.
+order: each node's input channels, the node, its output channels), a log FINN never
+reads, which makes two builds easy to compare.
 
 A build makes the partition and its outputs; checking them is for tests and for
 utilities a user runs over a finished build's output directory, none of them a step.
