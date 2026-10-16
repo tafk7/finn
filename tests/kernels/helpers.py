@@ -43,7 +43,6 @@ from typing import Any, TypeVar, cast
 from qonnx.core.ranges import TensorRange
 
 from finn.core.space import (
-    Constraint,
     Decision,
     Rejected,
     Space,
@@ -129,10 +128,6 @@ def point_for(kernel: Callable[..., S], facts: Mapping[str, object], **choices: 
 def value(answer: QueryResult[T]) -> T:
     assert isinstance(answer, Available), answer
     return answer.value
-
-
-def assess(point: Space, condition: Constraint) -> QueryResult[bool]:
-    return point.inspect(condition).result
 
 
 PRODUCER = ProducerIdentity("test.root", "1")

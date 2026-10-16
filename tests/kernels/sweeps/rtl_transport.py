@@ -46,8 +46,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import IO, Any, cast
 
-import numpy as np
-
 from finn.core.rtlsim_pacing import Pace, Pacing
 from finn.kernels.artifacts.module import RegisterMap
 from finn.toolchain import vivado
@@ -57,25 +55,6 @@ from finn.xsi._artifacts import validate_record
 
 #: Watchdog budget, in cycles without an accepted output beat.
 LIVENESS = 4000
-
-
-def random_word(generator: np.random.RandomState, bits: int) -> int:
-    """A random integer of exactly ``bits`` bits.
-
-    Built from bytes rather than ``randint`` because a packed weight beat is
-    ``PE * SIMD * WEIGHT_WIDTH`` wide and reaches 64 bits at modest folding,
-    which ``randint`` cannot represent.
-
-    ``.astype(np.uint8).tobytes()`` and not ``bytes(...)``.  ``randint``
-    returns ``int64``, and ``bytes()`` on a numpy array reads its *buffer* --
-    eight bytes per value, seven of them zero.  A 32-bit word would then be one
-    random low byte and 24 zero bits, a four-lane weight beat would have three
-    lanes stuck at zero, and a comparison would run on a quarter of the stimulus
-    it appeared to use, without failing.
-    """
-
-    raw = generator.randint(0, 256, size=(bits + 7) // 8).astype(np.uint8).tobytes()
-    return int.from_bytes(raw, "little") & ((1 << bits) - 1)
 
 
 class _PacedInput:

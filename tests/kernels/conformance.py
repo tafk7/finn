@@ -17,8 +17,9 @@ each sample it
 2. checks each of the kernel's leaves in the module (the kernel, or
    the children of a kernel with children) against its materialized sources
    under the declared parameter binding (``artifacts.rtl.extract``, then the
-   comparison ``check_abi`` makes, on the one extraction): a refusal fails; a
-   decline is a warning (``RtlDeclined``). A parameter whose value the checker
+   comparison ``check_abi`` makes, on the one extraction): a refusal fails, and so
+   does a decline (the checker declines when a binding names a parameter the module
+   does not declare). A parameter whose value the checker
    does not establish (an array, a real) does not decline: its name is still
    established. An HLS leaf's RTL is its synthesis's product, so it is checked
    so only with ``xsim`` (synthesized for the harness's part, or taken from the
@@ -59,13 +60,12 @@ member of a leaf kernel (``input``) or a child's (``compute.packed.x``).
 Factors: ``SAMPLED`` takes the smallest, an interior and the largest
 configuration of the kernel's scalar Decisions that ``choices`` leaves open,
 each folding factor's candidates read from ``point.field(<factor>).candidates()`` with the
-factors before it committed, and deduplicates them; ``ALL`` takes every
-combination. Explicit configurations name the kernel's own members: a Decision
-is committed, a Param is given (a folding factor that is still a Param), and a
-derived member is checked: the kernel must derive that value (a channel stage's
-generics, from the sequences it is given). A Decision below a child is named by its
-key below the kernel (``compute.packed.pe``). The adapter sample reuses the middle
-configuration.
+factors before it committed, and deduplicates them. Explicit configurations name the
+kernel's own members: a Decision is committed, a Param is given (a folding factor that
+is still a Param), and a derived member is checked: the kernel must derive that value
+(a channel stage's generics, from the sequences it is given). A Decision below a child
+is named by its key below the kernel (``compute.packed.pe``). The adapter sample reuses
+the middle configuration.
 
 An output given as a shape takes its element from the kernel: the element of the
 tensor it states at that interface (``<interface>_tensor``), read before any output
@@ -77,17 +77,12 @@ channel's tensor, which the channel holds the kernel's output to.
 A kernel's control fact (``control``) names the port its control bus is presented
 at: the network presents the bus at the top, and in simulation it is written with what
 the kernel's configuration declares (its register map) before any stream starts.
-
-``known`` names the (sample label, mode) simulations a known defect makes fail,
-each with its reason. It is strict: one of them passing fails the check, as
-does any other failure.
 """
 
 from __future__ import annotations
 
 import re
 import tempfile
-import warnings
 import zlib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -150,15 +145,11 @@ FLOAT32 = "FLOAT32"
 FLOAT_BOUND = 8.0
 MODES = ("free", "stalled")
 PACING = {"free": FREE, "stalled": STALLED}
-SAMPLED, ALL = "sampled", "all"
+SAMPLED = "sampled"
 Factors = str | Sequence[Mapping[str, object]]
 Outputs = Mapping[str, tuple[int, ...] | Tensor]
 Reference = Callable[..., Mapping[str, Any]]
 EMPTY: Mapping[str, object] = MappingProxyType({})
-
-
-class RtlDeclined(UserWarning):
-    """The RTL checker could not establish the module's ports or parameters."""
 
 
 @dataclass(frozen=True)
@@ -190,7 +181,6 @@ def conformance(
     choices: Mapping[str, object] = EMPTY,
     facts: Mapping[str, object] = EMPTY,
     xsim: Path | None = None,
-    known: Mapping[tuple[str, str], str] | None = None,
     tolerance: float | None = None,
 ) -> tuple[Sample, ...]:
     """Check ``space_type`` over its samples, simulating each under ``xsim`` when given;
@@ -214,29 +204,9 @@ def conformance(
             failures += _simulate(
                 point, space_type, sample, values, reference, inputs, outputs, directory, tolerance
             )
-    if xsim is not None:
-        _settle_known(chosen, failures, known or {})
+    if failures:
+        raise NonConformance(failures)
     return chosen
-
-
-def _settle_known(
-    chosen: Sequence[Sample],
-    failures: Sequence[tuple[Sample, str, str]],
-    known: Mapping[tuple[str, str], str],
-) -> None:
-    """Every failure is a known one, and every known one fails."""
-    simulated = {(sample.label, mode) for sample in chosen for mode in MODES}
-    stray = sorted(set(known) - simulated)
-    if stray:
-        raise ValueError(f"known failures name no simulation: {stray}")
-    unknown = [failure for failure in failures if (failure[0].label, failure[1]) not in known]
-    if unknown:
-        raise NonConformance(unknown)
-    failed = {(sample.label, mode) for sample, mode, _ in failures}
-    fixed = sorted(set(known) - failed)
-    assert not fixed, "known failures now pass: " + "; ".join(
-        f"{label} ({mode}): {known[label, mode]}" for label, mode in fixed
-    )
 
 
 # -- sampling ------------------------------------------------------------------------------
@@ -253,10 +223,10 @@ def samples(
 ) -> tuple[Sample, ...]:
     """The plain samples, deduplicated, then the adapter sample."""
     if isinstance(factors, str):
-        if factors not in (SAMPLED, ALL):
-            raise ValueError(f"factors are SAMPLED, ALL or configurations, not {factors!r}")
+        if factors != SAMPLED:
+            raise ValueError(f"factors are SAMPLED or configurations, not {factors!r}")
         base = _committed(space_type, EMPTY, inputs, outputs, EMPTY, facts)
-        configurations = _enumerated(base, factors, choices)
+        configurations = _enumerated(base, choices)
     else:
         configurations = [(_label(config), dict(config)) for config in factors]
     plain: list[Sample] = []
@@ -299,9 +269,7 @@ def _keys(base: Any) -> tuple[set[str], list[str], list[str]]:
     return selectors, ranked, open_
 
 
-def _enumerated(
-    base: Any, factors: str, choices: Mapping[str, object]
-) -> list[tuple[str, dict[str, object]]]:
+def _enumerated(base: Any, choices: Mapping[str, object]) -> list[tuple[str, dict[str, object]]]:
     """Configurations of the kernel's open scalar Decisions, each committed in turn.
 
     They are committed in rank order, a pinned choice in its turn too (a Decision whose
@@ -325,27 +293,11 @@ def _enumerated(
                 config[key[local:]] = value
         return config
 
-    if factors == SAMPLED:
-        return [
-            ("smallest", pick(lambda found: found[0])),
-            ("interior", pick(lambda found: found[len(found) // 2])),
-            ("largest", pick(lambda found: found[-1])),
-        ]
-    every: list[dict[str, object]] = []
-
-    def walk(point: Any, config: dict[str, object], rest: list[str]) -> None:
-        if not rest:
-            every.append(config)
-            return
-        key = rest[0][local:]
-        if key in choices:
-            walk(_chosen(point, {rest[0]: choices[key]}), config, rest[1:])
-            return
-        for value in _candidates(point, rest[0]):
-            walk(_chosen(point, {rest[0]: value}), {**config, key: value}, rest[1:])
-
-    walk(base, {}, keys)
-    return [(_label(config), config) for config in every]
+    return [
+        ("smallest", pick(lambda found: found[0])),
+        ("interior", pick(lambda found: found[len(found) // 2])),
+        ("largest", pick(lambda found: found[-1])),
+    ]
 
 
 # -- placement -----------------------------------------------------------------------------
@@ -633,7 +585,7 @@ def _check_rtl(
     synthesize: bool,
 ) -> None:
     """Refuse a leaf its sources contradict, and a ``parameters()`` that does not name
-    exactly its module's parameters, unless the RTL checker declines. An HLS leaf has RTL
+    exactly its module's parameters; a decline of the RTL checker fails too. An HLS leaf has RTL
     only once synthesized: offline, its request is staged (refused when a header it
     includes is undeclared) and nothing more."""
     where = f"{_where(space_type, sample)} {label}"
@@ -645,9 +597,7 @@ def _check_rtl(
     abi = leaf.abi
     extracted = extract([Path(source) for source in sources], top, abi.parameters)
     if isinstance(extracted, Declined):
-        message = f"{where}: the RTL checker declined {top}: {extracted}"
-        warnings.warn(message, RtlDeclined, stacklevel=3)
-        return
+        raise AssertionError(f"{where}: the RTL checker declined {top}: {extracted}")
     # check_abi's comparison, on the one extraction: the ports, never a parameter value.
     issues = check_against_rtl(abi.pins, extracted.ports)
     assert not issues, f"{where}: {top} refuses its ABI: " + "; ".join(issues)
@@ -885,14 +835,12 @@ def _stream(point: Any, name: str, form: Traversal, end: StreamContract) -> Stre
 
 
 __all__ = [
-    "ALL",
     "configured",
     "kernel_space",
     "design_cycles",
     "design_member",
     "design_module",
     "NonConformance",
-    "RtlDeclined",
     "SAMPLED",
     "Sample",
     "conformance",
