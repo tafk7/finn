@@ -2,7 +2,7 @@
 
 Help keep FINN's testing suite fast, deterministic, and parallelisable when writing or modifying tests.
 
-The trees the code gates run (the Space engine, dataflow, kernel and KernelOp tests) differ from the rest in their conftest, seeding and markers: see [5. Trees and gates](#5-trees-and-gates).
+The trees the code gates run (the Space engine, dataflow, kernel and KernelOp tests) differ from the rest in their conftest, seeding and markers: see [5. Trees and gates](#5-trees-and-gates) and [6. `tests/support`](#6-testssupport-the-test-side-library).
 
 ### 1. Scratch paths
 
@@ -34,7 +34,7 @@ def test_sim_behaviour(monkeypatch):
 
 - `xsim` and `vivado`: deselected by every `check-kernels.sh` step but the Space, dataflow and XSim-sweep-tooling ones (`scripts/xsim-sweep.sh` runs them).
 - `vitis`: deselected in `tests/kernels` only; an HLS top's C simulation is a check to run by hand.
-- `slow`: deselected by a gate's `--fast`, and in `tests/util` in both modes, so no gate runs the `slow` tests there.
+- `slow`: deselected by a gate's `--fast`, and in `tests/util`, `tests/toolchain` and `tests/docker_scripts` in both modes, so no gate runs the `slow` tests there.
 - `container`: no gate acts on it; `tests/container` is run by hand.
 
 The upstream category markers (`util`, `transform`, `streamline`, `brevitas_export`, ...) are applied inconsistently, and no gate selects by them: select tests by tree (`pytest tests/util`), not by those markers.
@@ -66,26 +66,43 @@ def test_my_op(finn_test_seed):
 
 The code gates (`scripts/check-*.sh`) run each tree with `--confcutdir` (`gate_pytest` in `scripts/_gate-common.sh`): no conftest above it loads, and `tests/conftest.py` (the seed of §4, `tests/support/rng_seed.py`, and the autouse member cache of `tests/support/member_cache.py`: each test runs in one `finn.kernels.members` cache, dropped at its end) only where the root is `tests`. `check-kernels.sh` runs `check-space.sh` and `check-dataflow-design.sh` first.
 
-| Tree | Gate | `--confcutdir` |
-|---|---|---|
-| `tests/core/reporting` | `scripts/check-space.sh` | `tests/core/reporting` |
-| `tests/core/space` | `scripts/check-space.sh` | `tests/core/space` |
-| `tests/dataflow` | `scripts/check-dataflow-design.sh` | `tests/dataflow` |
-| `tests/kernels` | `scripts/check-kernels.sh` | `tests/kernels` |
-| `tests/kernel_ops` | `scripts/check-kernels.sh` | `tests/kernel_ops` |
-| `tests/xsim_sweep` | `scripts/check-kernels.sh` | `tests/xsim_sweep` |
-| `tests/transformation`, `tests/brevitas` | `scripts/check-kernels.sh` | `tests` |
-| `tests/util` | `scripts/check-kernels.sh` (its `slow` tests deselected in both modes) | `tests` |
+| Tree | Tests | Gate | `--confcutdir` |
+|---|---|---|---|
+| `tests/core/reporting` | `finn.core.reporting` | `check-space.sh` | `tests/core/reporting` |
+| `tests/core/space` | `finn.core.space`, the engine | `check-space.sh` | `tests/core/space` |
+| `tests/dataflow` | `finn.dataflow` | `check-dataflow-design.sh` | `tests/dataflow` |
+| `tests/kernels` | `finn.kernels`; `sweeps/` holds the XSim sweep's job modules (`python -m kernels.sweeps.<module>`) and their transport | `check-kernels.sh` | `tests/kernels` |
+| `tests/kernel_ops` | the KernelOps, conversion, the partition cut, `finn.transformation.kernels`, the graph annotations | `check-kernels.sh` | `tests/kernel_ops` |
+| `tests/builder` | `finn.builder`: the steps, the plan, the manifest, the resources report | `check-kernels.sh` | `tests/builder` |
+| `tests/platforms` | `finn.platform` | `check-kernels.sh` | `tests/platforms` |
+| `tests/analysis` | `finn.analysis` | `check-kernels.sh` | `tests/analysis` |
+| `tests/shells` | `finn.shells`: the pynq runner and driver | `check-kernels.sh` | `tests/shells` |
+| `tests/networks` | whole networks: TFC's build, its measured cycles, FINN's captured ones | `check-kernels.sh` | `tests/networks` |
+| `tests/layers` | FINN's layer table (`support/layering.py`) | `check-kernels.sh` | `tests/layers` |
+| `tests/xsim_sweep` | the sweep's tooling (`scripts/emitted_text.py`) | `check-kernels.sh` | `tests/xsim_sweep` |
+| `tests/transformation`, `tests/brevitas` | graph preparation and the Brevitas export | `check-kernels.sh` | `tests` |
+| `tests/util`, `tests/toolchain`, `tests/docker_scripts` | `finn.util`; `finn.toolchain`; the `docker/` scripts (the `slow` tests deselected in both modes) | `check-kernels.sh` | `tests` |
+
+A tree takes its name from the package it tests, so it mirrors `src`; each of the trees under its own `--confcutdir` has a `conftest.py` that imports the fixtures it wants from `tests/support` (`fixtures.py`, `tools.py`, `member_cache.py`). A tree's name must not shadow a module the gates import: `tests` is on `sys.path` ahead of the standard library, so `tests/platform` would replace `platform`, and `tests/docker` the repository's `docker/`; hence `tests/platforms` and `tests/docker_scripts`.
 
 `tests/container` (container runtimes and host toolchains, marker `container`) runs under `tests/conftest.py`; no code gate runs it.
 
 The trees under their own `--confcutdir` get no `finn_test_seed`: a test seeds the generators it uses itself (for example `np.random.default_rng(<seed>)`). They mark Vivado work with `requires_xsim`, `requires_hls` and `requires_vivado` (`tests/support/xsim.py`), which mark and skip, and the markers of [3. Markers](#3-markers).
 
-The gates put `tests` on `PYTHONPATH`, so its helpers import by package name; these are in `tests/support`:
+### 6. `tests/support`: the test-side library
+
+What two test modules share lives in `tests/support`, one package. The gates put `tests` on `PYTHONPATH`, so it imports by package name (`from support.models import ...`), and `check-kernels.sh` lints and types the package as a whole (ruff, strict mypy), as it does the typed trees: a helper is a module of the library, not a file one test imports from another. No test module imports another, in any tree: `tests/layers/test_test_modules.py` fails on an import of a module named `test_*`. A helper two modules need moves to `tests/support`, and a fixture several trees need goes to `support.fixtures` (or `support.tools`), which each tree's `conftest.py` imports from, so a tree registers the fixtures it wants and no more.
+
+What it holds:
 
 - `support/rng_seed.py`: the seed of a test's random state, from its node id (`tests/conftest.py`, §4).
-- `support/layering.py`: FINN's layers, what each may import, and the import walker. Each layer names the tree whose `test_layering.py` checks it; `tests/core/space/test_layering.py` also tests the table and the walker.
+- `support/member_cache.py`: the autouse cache of `finn.kernels.members`, one per test, dropped at its end; the trees under their own `--confcutdir` import it in their conftests.
+- `support/layering.py`: FINN's layers, what each may import, and the import walker. Each layer names the tree whose `test_layering.py` checks it; `tests/layers` tests the table and the walker.
 - `support/value_classes.py`: the check that a frozen value class holds immutable values, used by the engine, dataflow and kernel trees.
 - `support/trained_networks.py`: the pretrained Brevitas example networks (`get_test_model_trained`), which the Brevitas, transformation and KernelOp tests export.
-- `support/conformance.py`, `support/helpers.py`, `support/xsim.py`, `support/chain.py`, `support/adapted.py`, `support/kernel_specs/`: the kernel tests' harness (the conformance case, the construction helpers, the XSim markers, the Chain, the adapted-channel cases) and each kernel's spec. `check-kernels.sh` lints and types `tests/support` as a whole.
-- `oracle/`: the finn-dev oracle's captures, values only the HWCustomOp flow computed (it is deleted), which the kernel tests compare with; the gates never run the oracle.
+- `support/conformance.py`, `support/helpers.py`, `support/xsim.py`, `support/chain.py`, `support/adapted.py`, `support/kernel_specs/`: the kernel tests' harness (the conformance case, the construction helpers, the XSim markers, the Chain, the adapted-channel cases) and each kernel's spec.
+- `support/models.py`, `support/tfc.py`, `support/cnv.py`, `support/packaging.py`, `support/measure_cycles.py`, `support/op_specs/`: the KernelOps' side (small models, TFC_W2A2 and CNV_W2A2 from the trained network to a partition, packaging without Vivado, the cycles measured in XSim) and the specs of the KernelOps' graphs.
+- `support/fixtures.py`, `support/tools.py`: the session fixtures of TFC and CNV and the per-test `ip_store`; the fake Vivado installation and fake vendor tools.
+- `support/capture.py`: `SEAMS`, the functions on the tests' side that `scripts/emitted_text.py` replaces to capture what an XSim job simulates without Vivado (`conformance.conformance`, `conformance.stream_through`, `xsim.vivado_simulator`, and the sweeps' transport). Renaming one is a change here: `tests/xsim_sweep` resolves every seam, and the tool reaches them through `support.capture.replace`, never by naming them (a checkout from before `support.capture` is still read by its old names).
+
+`tests/oracle`, beside the library, holds the finn-dev oracle's captures: values only the HWCustomOp flow computed (it is deleted), which the kernel tests compare with; the gates never run the oracle.

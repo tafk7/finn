@@ -16,7 +16,9 @@ under the baseline's key passed, and a skip cites the commit where that run was.
 
 from __future__ import annotations
 
+import ast
 import dataclasses
+import importlib
 import importlib.util
 import json
 import re
@@ -30,6 +32,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from support.capture import SEAMS
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -705,3 +708,36 @@ def test_a_summary_reports_skipped_jobs_and_fails_on_a_baseline_that_did_not_pas
         assert rows["skipped"]["skipped"] == "unchanged since abc"
         assert rows["skipped"]["key"] == "k2" and rows["skipped"]["exit"] is None
         assert "skipped skipped (unchanged since abc) key=k2" in (out / "summary.log").read_text()
+
+
+def test_every_seam_the_tool_replaces_resolves_to_a_callable() -> None:
+    """``support.capture`` declares the functions of the tests' side that the tool replaces: a
+    rename of one breaks the sweep's keys, so it is a failure here."""
+    assert SEAMS
+    for seam, (module, attribute) in SEAMS.items():
+        function = getattr(importlib.import_module(module), attribute, None)
+        assert callable(function), f"seam {seam}: {module}.{attribute} is not a callable"
+
+
+def test_the_tool_names_the_tests_functions_only_in_its_branch_for_older_checkouts() -> None:
+    """Each attribute of ``SEAMS`` is assigned in ``scripts/emitted_text.py`` only in the
+    ``else`` of a test of ``support/capture.py`` (a checkout from before it: the tool
+    compares against those); the new layout goes through ``support.capture.replace``."""
+    tree = ast.parse((ROOT / "scripts/emitted_text.py").read_text())
+    attributes = {attribute for _, attribute in SEAMS.values()}
+    legacy = {
+        id(node)
+        for branch in ast.walk(tree)
+        if isinstance(branch, ast.If)
+        for statement in branch.orelse
+        for node in ast.walk(statement)
+    }
+    assigned = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Attribute) and target.attr in attributes
+    ]
+    assert assigned, "no legacy branch assigns a seam's attribute: this check has lost its subject"
+    assert [node.lineno for node in assigned if id(node) not in legacy] == []

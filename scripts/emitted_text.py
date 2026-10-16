@@ -679,6 +679,7 @@ def capture_test(dest: Path, root: Path, pytest_args: Sequence[str], ipxact: Pat
     # The harness's test-side modules moved from tests/kernels to tests/support: the
     # checkout's own files say which package it has (the new layout first).
     library = "support" if (root / "tests/support/conformance.py").is_file() else "kernels"
+    declared = (root / "tests/support/capture.py").is_file()
     conformance: Any = importlib.import_module(f"{library}.conformance")
     xsim: Any = importlib.import_module(f"{library}.xsim")
 
@@ -736,19 +737,28 @@ def capture_test(dest: Path, root: Path, pytest_args: Sequence[str], ipxact: Pat
             found[function] = product
         return found
 
-    xsim.vivado_simulator = lambda: True  # selected or not: nothing here simulates
-    rtl.simulate = simulate
-    if hasattr(rtl, "built_hls"):  # a checkout from before HLS leaves has none
-        rtl.built_hls = built_hls
-    conformance.conformance = counted(conformance.conformance)
-    if ipxact is not None:
-        streamed = conformance.stream_through
-
+    def streaming(streamed: Callable[..., Any]) -> Callable[..., Any]:
         def stream_through(module: Any, directory: Path, **kwargs: Any) -> None:
+            assert ipxact is not None
             _write_ipxact(module, ipxact / where(Path(directory)).parent)
             streamed(module, directory, **kwargs)
 
-        conformance.stream_through = stream_through
+        return stream_through
+
+    rtl.simulate = simulate
+    if hasattr(rtl, "built_hls"):  # a checkout from before HLS leaves has none
+        rtl.built_hls = built_hls
+    if declared:  # the tests' side declares the functions the tool replaces
+        capture: Any = importlib.import_module("support.capture")
+        capture.replace("xsim.selected", lambda _: lambda: True)  # nothing here simulates
+        capture.replace("conformance.check", counted)
+        if ipxact is not None:
+            capture.replace("conformance.stream", streaming)
+    else:  # a checkout from before support.capture: the tool names them
+        xsim.vivado_simulator = lambda: True  # selected or not: nothing here simulates
+        conformance.conformance = counted(conformance.conformance)
+        if ipxact is not None:
+            conformance.stream_through = streaming(conformance.stream_through)
 
     class Plugin:
         @pytest.hookimpl(hookwrapper=True)
@@ -840,8 +850,11 @@ def capture_sweep(dest: Path, root: Path, module_name: str, args: Sequence[str])
         raise _Captured
 
     # The sweeps' transport sits beside them (kernels.sweeps.rtl_transport).
-    transport = importlib.import_module(module_name.rpartition(".")[0] + ".rtl_transport")
-    transport._run_worker = run_worker
+    if (root / "tests/support/capture.py").is_file():  # declared by the tests' side
+        importlib.import_module("support.capture").replace("sweep.transport", lambda _: run_worker)
+    else:
+        transport = importlib.import_module(module_name.rpartition(".")[0] + ".rtl_transport")
+        transport._run_worker = run_worker
     # The production testbench, which a sweep may drive in place of the transport (a
     # checkout from before it has no sweep that does).
     if (root / "src/finn/core/rtlsim_bench.py").is_file():
