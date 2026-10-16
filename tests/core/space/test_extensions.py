@@ -270,7 +270,7 @@ def test_missing_bindings_and_incompatible_exports_fail_without_descriptor_runti
     # A formal left unsupplied is refused where it would have to be supplied: when
     # the Space class placing the node is prepared.
     holder = composite("Holder", {"shape": StreamShape(dtype=Encoding(3))})
-    with refused("formal-unsupplied", error=DefinitionError):
+    with refused("formal-unsupplied", error=DefinitionError, message=r"shape\.lanes"):
         design_space(holder())
     integer = Const(3)
     view = View(integer)

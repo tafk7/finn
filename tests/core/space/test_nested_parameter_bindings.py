@@ -200,7 +200,7 @@ def test_a_childs_formal_nothing_supplies_is_reported_and_exposed_by_name() -> N
     class Middle(Space):
         kernel = Reusable(count=1)  # dtype and lanes left unsupplied
 
-    with refused("formal-unsupplied", error=DefinitionError):
+    with refused("formal-unsupplied", error=DefinitionError, message=r"kernel\.dtype"):
         design_space(Middle())
 
     # Exposing by name: the enclosing Space class declares the formal and binds it.
@@ -288,7 +288,7 @@ def test_a_graph_built_as_data_binds_formals_and_keeps_their_types() -> None:
     placed = getattr(point, "child")
     assert isinstance(placed, Reusable)
     assert placed.port.physical == ("INT8", 2)
-    with refused("formal-unsupplied", error=DefinitionError):
+    with refused("formal-unsupplied", error=DefinitionError, message=r"child\.dtype"):
         design_space(composite("Unbound", {"child": Reusable(count=1)})())
 
 

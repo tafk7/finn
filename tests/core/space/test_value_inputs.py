@@ -92,7 +92,7 @@ def test_a_formal_takes_a_value_never_a_node() -> None:
     class Budget(Space):
         limit: int = Param()
 
-    with refused("formal-takes-node", error=DefinitionError):
+    with refused("formal-takes-node", error=DefinitionError, message=r"Budget node"):
 
         class Department(Space):
             budget: Budget = Param()

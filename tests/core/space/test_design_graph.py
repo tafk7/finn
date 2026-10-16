@@ -407,11 +407,11 @@ def test_a_required_formal_left_unsupplied_is_reported_when_prepared() -> None:
     class Dangling(Space):
         sink = Sink()
 
-    with refused("formal-unsupplied", error=DefinitionError) as caught:
+    with refused("formal-unsupplied", error=DefinitionError, message=r"sink\.width") as caught:
         design_space(Dangling())
     message = str(caught.error)
     # The formal's declaration line and the node's call line.
     assert "Sink.width (declared at test_design_graph.py:" in message
     assert "for the node sink (declared at test_design_graph.py:" in message
-    with refused("formal-unsupplied", error=DefinitionError):
+    with refused("formal-unsupplied", error=DefinitionError, message=r"^width\b"):
         design_space(Sink())

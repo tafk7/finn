@@ -121,7 +121,7 @@ def test_a_protocol_still_needs_semantics() -> None:
         def named(self) -> Named | Rejected:
             raise AssertionError("never run")
 
-    with refused("semantics-unstated", error=DefinitionError):
+    with refused("semantics-unstated", error=DefinitionError, message=r"Protocol outputs"):
         collect_space(Implicit)
 
 
@@ -137,7 +137,7 @@ def test_a_union_of_values_still_needs_semantics() -> None:
             return 1
 
     for space_type in (Optional, Either):
-        with refused("semantics-unstated", error=DefinitionError):
+        with refused("semantics-unstated", error=DefinitionError, message=r"output annotation"):
             collect_space(space_type)
 
 

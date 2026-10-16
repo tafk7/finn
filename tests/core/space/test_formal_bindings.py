@@ -115,10 +115,10 @@ def test_a_decision_over_nodes_belongs_to_the_space_class() -> None:
     class Plant(Space):
         heating: Room | None = Decision({"room": Room}, optional=True)
 
-    with refused("member-belongs-to-class", error=DefinitionError):
+    with refused("member-belongs-to-class", error=DefinitionError, message=r"Decision over nodes"):
         Plant(heating="room")  # type: ignore[arg-type]
     plant = Plant()
-    with refused("member-belongs-to-class", error=DefinitionError):
+    with refused("member-belongs-to-class", error=DefinitionError, message=r"Decision over nodes"):
         plant.heating = "room"  # type: ignore[assignment]
 
 
@@ -165,7 +165,7 @@ def test_a_root_that_supplies_structure_is_refused_with_a_pointer() -> None:
         message="write a subclass, or build one with composite",
     ):
         design_space(Sized(size=Decision(values=(1, 2))))
-    with refused("root-structural-formal", error=DefinitionError):
+    with refused("root-structural-formal", error=DefinitionError, message=r"\bsize\b"):
         design_space(Sized(size=Room.area))
     # The pointer's way: the structure in a Space class built from data.
     room = Room(area=3)

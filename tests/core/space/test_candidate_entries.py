@@ -267,7 +267,7 @@ def test_an_unmet_required_member_cannot_be_placed_or_named_as_an_entry() -> Non
         "required-unmet", error=DefinitionError, message=r"Unfinished .* ProtoKernel\.schedule"
     ):
         Unfinished(width=4)
-    with refused("required-unmet", error=DefinitionError):
+    with refused("required-unmet", error=DefinitionError, message=r"candidate 'unfinished'"):
         Decision({"packed": PackedCore, "unfinished": Unfinished})
 
     class Defined(Unfinished):

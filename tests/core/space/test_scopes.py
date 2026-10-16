@@ -130,7 +130,7 @@ def test_local_decision_domain_uses_parent_suppliers_and_exposure_is_explicit() 
     assert supplied.exposed.value == 7
 
     missing = composite("Missing", {"child": Child()})
-    with refused("formal-unsupplied", error=DefinitionError):
+    with refused("formal-unsupplied", error=DefinitionError, message=r"child\.value"):
         design_space(missing())
 
 
@@ -218,7 +218,9 @@ def test_choice_members_are_validated_over_all_cases_before_selection() -> None:
             )
             absent = View(implementation.absent)  # type: ignore[union-attr]
 
-    with refused("direct-read-undeclared", error=DefinitionError):
+    with refused(
+        "direct-read-undeclared", error=DefinitionError, message=r"candidates \['missing'\]"
+    ):
 
         class Unqualified(Space):
             implementation: Complete | Missing = Decision(

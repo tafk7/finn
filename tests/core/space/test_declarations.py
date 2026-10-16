@@ -506,7 +506,7 @@ def test_child_omissions_and_incompatible_bindings_are_not_implicit_exposure() -
     class Parent(Space):
         child = Child(optional_width=3)
 
-    with refused("formal-unsupplied", error=DefinitionError):
+    with refused("formal-unsupplied", error=DefinitionError, message=r"child\.width"):
         design_space(Parent())
     with refused("members-unknown", error=DefinitionError):
         Child(width=8, optional_width=9, typo=1)  # type: ignore[call-arg]
@@ -659,7 +659,7 @@ def test_linked_child_types_are_inferred_without_mutating_declarations() -> None
         def value(*, flag: str) -> int:
             raise AssertionError("must not execute")
 
-    with refused("argument-annotation-incompatible", error=DefinitionError):
+    with refused("argument-annotation-incompatible", error=DefinitionError, message=r"\bbool$"):
         compile_model(Wrong)
 
 
@@ -675,7 +675,7 @@ def test_linker_argument_validation_checks_required_input_types() -> None:
     source = cast(ValueRef[object], Param(default=0))
     integer = cast(ValueSemantics[object], ValueSemantics.immutable_nominal(int))
     validate_argument(BoundArgument("item", source, int), integer, owner="reader.item")
-    with refused("argument-annotation-incompatible", error=DefinitionError):
+    with refused("argument-annotation-incompatible", error=DefinitionError, message=r"\bint$"):
         validate_argument(BoundArgument("item", source, str), integer, owner="reader.item")
 
 

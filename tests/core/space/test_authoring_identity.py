@@ -76,7 +76,7 @@ def test_malformed_candidates_fail_as_definitions() -> None:
         result = View(value)
         exports = {first: result, second: result}
 
-    with refused("export-key-duplicate", error=DefinitionError):
+    with refused("export-key-duplicate", error=DefinitionError, message=r"\bresult$"):
         compile_model(Duplicate)
 
 

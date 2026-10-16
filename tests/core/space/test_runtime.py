@@ -144,7 +144,7 @@ def test_missing_required_parameters_and_malformed_commitments_fail_at_boundary(
     # A missing formal is refused when the root is configured; type errors at the call.
     with refused("formal-unsupplied", error=DefinitionError, message="depth is not supplied"):
         design_space(Fifo(word_bits=13))
-    with refused("literal-unrecognized", error=DefinitionError):
+    with refused("literal-unrecognized", error=DefinitionError, message=r"\bint$"):
         Fifo(word_bits=True, depth=8)
     with refused("formals-by-keyword", error=DefinitionError):
         Fifo({Fifo.ram_style: "auto"}, word_bits=13, depth=8)  # type: ignore[arg-type, call-arg]
