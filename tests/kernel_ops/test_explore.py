@@ -466,7 +466,7 @@ def test_a_pin_holds_for_every_later_exploration_of_the_body(tmp_path: Path) -> 
         "pin-refused",
         error=ExploreError,
         owner=str(pinned),
-        message=r"first\.compute\.packed\.simd",
+        message=r"first\.compute\.packed\.simd: already held to 1\b",
     ):
         explore_kernel_choices(model, Pinned(pinned))
 
@@ -537,7 +537,13 @@ def test_an_exploration_checks_its_fifos_only_where_its_strategy_does(
     assert f"{LEVELS_DEPTH} (required)" in dropped["open"]
     levels = choices(model)["levels"]
     assert levels["transport"] == "fifo" and "transport.fifo.buffer.depth" not in levels
-    with refused("choices-open", error=KernelOpError, node="the chain", keys=(LEVELS_DEPTH,)):
+    with refused(
+        "choices-open",
+        error=KernelOpError,
+        node="the chain",
+        keys=(LEVELS_DEPTH,),
+        message=r"\(required: run step_size_fifos",
+    ):
         configured_network(model, "the chain")
     # Pinned, it is kept and built as held.
     pins = tmp_path / "pins.json"

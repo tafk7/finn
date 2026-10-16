@@ -105,7 +105,12 @@ def test_an_output_whose_range_is_not_its_producers_is_stale() -> None:
     model = ranged_model()
     model.set_tensor_datatype("y", DataType["INT3"])
     with refused(
-        "tensor-stale", error=KernelOpError, owner="stale_outputs", node="project", tensor="y"
+        "tensor-stale",
+        error=KernelOpError,
+        owner="stale_outputs",
+        node="project",
+        tensor="y",
+        message=r"the graph states y \[3, 4\] INT3, its",
     ):
         network(model, model.graph.node)
 

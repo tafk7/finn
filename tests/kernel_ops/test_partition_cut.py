@@ -311,6 +311,7 @@ def test_an_iodma_end_refuses_w2_repeated_or_tiled_by_name() -> None:
             owner="configured_network",
             node="partition",
             keys=("w2.end",),
+            message="no case is viable",
         ) as left:
             configured_network(model, "partition")
         for refusal in refusals:

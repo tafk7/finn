@@ -112,13 +112,13 @@ def test_the_writer_is_checked_by_replaying_the_network() -> None:
         (
             "choices-refused",
             {"tensor": "levels", "keys": ("transport.fifo.buffer.depth",)},
-            None,
+            "domain-membership",
             {"levels": {**FIFO, "transport.fifo.buffer.depth": 1}},
         ),
         (
             "choices-refused",
             {"tensor": "x", "keys": ("adapter.input_gen_vpc.input_gen.ram_style",)},
-            None,
+            "inapplicable",
             {"x": {"adapter.input_gen_vpc.input_gen.ram_style": "auto"}},
         ),
         (
@@ -349,7 +349,13 @@ def test_a_body_stated_under_the_nodes_channel_attributes_is_refused_by_name() -
     choice; either way the body is explored again."""
     model = kernel_model()
     model.graph.node[2].attribute.append(helper.make_attribute("x.transport", "direct"))
-    with refused("choice-unknown", error=KernelOpError, node="second", keys=("x.transport",)):
+    with refused(
+        "choice-unknown",
+        error=KernelOpError,
+        node="second",
+        keys=("x.transport",),
+        message="is not a choice of MatMul; a channel's choices are its tensor's",
+    ):
         network(model, model.graph.node)
     model = kernel_model()
     (annotation,) = [

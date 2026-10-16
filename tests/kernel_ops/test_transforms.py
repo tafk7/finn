@@ -117,11 +117,23 @@ def test_the_ordered_pass_states_the_chains_types_and_qonnx_agrees() -> None:
 def test_an_input_that_conflicts_is_refused_an_output_is_stated_again() -> None:
     unstated = converted()
     unstated.set_tensor_datatype("x", None)
-    with refused("fact-unstated", error=FactUnstated, node="first", tensor="x"):
+    with refused(
+        "fact-unstated",
+        error=FactUnstated,
+        node="first",
+        tensor="x",
+        message="has no datatype annotation",
+    ):
         unstated.transform(InferKernelTensors())
     conflicting = converted()
     conflicting.set_tensor_datatype("w1", DataType["INT2"])
-    with refused("initializer-out-of-datatype", error=KernelOpError, node="first", tensor="w1"):
+    with refused(
+        "initializer-out-of-datatype",
+        error=KernelOpError,
+        node="first",
+        tensor="w1",
+        message="is annotated INT2 and holds values over",
+    ):
         conflicting.transform(InferKernelTensors())
     # An output's annotation is its producer's statement: replaced, narrower or wider.
     for stated in (chain.T, DataType["INT16"]):

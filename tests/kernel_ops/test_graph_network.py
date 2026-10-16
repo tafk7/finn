@@ -326,9 +326,11 @@ def test_a_build_stops_at_its_first_network_naming_the_tensor(case: str, tmp_pat
     """The cut partitions the KernelOps (their partition's body keeps hidden read more than
     once), and the build's first network, the cut's, where the channels' choices are
     created, refuses it by name."""
-    output, _ = FAN_OUT[case]
+    output, named = FAN_OUT[case]
     model = fan_out_source(output=output).transform(ToKernelOps(TARGET))
-    with refused("tensor-fan-out", error=KernelOpError, owner="fan_out", tensor="hidden"):
+    with refused(
+        "tensor-fan-out", error=KernelOpError, owner="fan_out", tensor="hidden", message=named
+    ):
         model.transform(CutKernelPartition(tmp_path))
 
 
