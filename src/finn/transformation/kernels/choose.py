@@ -13,7 +13,8 @@ its shell (``finn.custom_op.kernels.shell.in_shell``: their kernels, the channel
 them and the channels on its boundary, members named as the graph, ``MatMul_0``; the nodes'
 and the channels' saved choices replayed, a stale one dropped with why), which its ``Seam``
 (``finn.kernels.explore``) explores, each choice keyed by its owner, a node or a
-tensor, and the key there; holds the pins the body records (``HELD``), gives every
+tensor, and the key there; holds the pins the body records (``HELD``; a held key the
+bound network does not state is refused, ``held-not-taken``, ``held-owner-unknown``), gives every
 choice the body leaves open its baseline (``Seam.baseline``: what ``BaselineChoices``
 does, a no-op on a body the cut created; on a body made by hand, or for a choice replay
 dropped as stale, the report names what it baselined), runs the strategy, which reopens
@@ -398,6 +399,50 @@ def _end_rows(network: Partition, ends: Sequence[str]) -> dict[str, dict[str, ob
     return rows
 
 
+def _held_values(
+    network: Partition, saved: Mapping[Key, object], held: Mapping[str, Sequence[str]]
+) -> dict[Key, object]:
+    """The values of the keys the body's mark holds (``held``, by owner), the ones
+    ``network`` states (``saved``). A held key is the user's exact value, so one the network
+    does not take is refused, by name, never dropped and given its baseline: an owner that
+    is no member of the network (``held-owner-unknown``), or a key the bound network states
+    no value for, because replay refused the stored one or it is gone (``held-not-taken``;
+    replay's findings are its causes)."""
+    members = set(network.members)
+    kernels = set(network.kernels)
+    values: dict[Key, object] = {}
+    lost: list[Finding] = []
+    for owner, keys in held.items():
+        for key in keys:
+            if owner not in members:
+                code, reason = "held-owner-unknown", "no member of the network owns it"
+                subject: tuple[tuple[str, str], ...] = ()
+            elif (owner, key) not in saved:
+                code, reason = "held-not-taken", "the bound network states no value for it"
+                subject = (("node" if owner in kernels else "tensor", owner),)
+            else:
+                values[(owner, key)] = saved[(owner, key)]
+                continue
+            lost.append(
+                Finding(
+                    FindingKind.REJECTION,
+                    code,
+                    "explore_kernel_choices",
+                    f"{dotted((owner, key))}: held by the body, but {reason}; the held value "
+                    "was not taken, and no baseline takes its place",
+                    (("keys", (key,)), *subject),
+                    causes=network.dropped.get((owner, key), ()),
+                )
+            )
+    if lost:
+        raise KernelOpError(
+            "a held choice is refused: " + "; ".join(each.message for each in lost),
+            tuple(f"{owner}.{key}" for owner, keys in held.items() for key in keys),
+            findings=lost,
+        )
+    return values
+
+
 def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None) -> Explored:
     """The KernelOps of a partition's body, ``model``, explored by ``strategy`` (None: only
     the body's open choices given their baselines) and every value persisted, on its
@@ -422,16 +467,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     network = bound
     saved = seam.chosen(network)
     # The body's mark names the keys held; their values are the ones the network states.
-    # piece 3: a marked key the network does not state (replay dropped it, or its owner is
-    # no member) is left out of the seed here; it is refused by name there.
-    seam.held.update(
-        {
-            (owner, key): saved[(owner, key)]
-            for owner, keys in held_keys(model).items()
-            for key in keys
-            if (owner, key) in saved
-        }
-    )
+    seam.held.update(_held_values(network, saved, held_keys(model)))
     # A choice the body leaves open takes its baseline before the strategy runs; a pin
     # the body records must hold there.
     network = seam.baseline(network)

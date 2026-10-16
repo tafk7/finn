@@ -484,6 +484,45 @@ def test_a_second_hold_at_another_value_is_refused() -> None:
     assert choices(model)["first"]["compute.packed.simd"] == 1
 
 
+def test_a_held_key_the_bound_network_does_not_state_is_refused_by_name() -> None:
+    """The mark holds ``first``'s PE, but the node's attribute states a value its facts
+    refuse (written past the writer, standing for a graph FINN did not write): replay
+    drops it at bind, and the exploration is refused, naming the node and the key, the
+    replay's finding its cause. The held value is not dropped and re-baselined."""
+    model = explored_at_baseline()
+    first = kernel_op(model, model.graph.node[0])
+    first.set_nodeattr("compute.packed.simd", 2)
+    first.set_nodeattr("compute.packed.pe", 3)
+    model.set(HELD, {"first": ["compute.packed.pe"]})
+    with refused(
+        "held-not-taken",
+        error=KernelOpError,
+        owner="explore_kernel_choices",
+        message=r"first\.compute\.packed\.pe: .*held",
+        node="first",
+        keys=("compute.packed.pe",),
+    ) as caught:
+        explore_kernel_choices(model)
+    (cause,) = caught.finding.causes
+    assert cause.code == "domain-membership"
+    assert model.get(HELD) == {"first": ["compute.packed.pe"]}
+
+
+def test_a_held_key_whose_owner_is_no_member_of_the_bound_network_is_refused() -> None:
+    """The mark names an owner the body does not have: refused by name, as ``Hold`` of
+    one is (``member-unknown``), not left out of the seed."""
+    model = kernel_model()
+    model.set(HELD, {"nobody": ["pe"]})
+    with refused(
+        "held-owner-unknown",
+        error=KernelOpError,
+        owner="explore_kernel_choices",
+        message=r"nobody\.pe: .*held",
+        keys=("pe",),
+    ):
+        explore_kernel_choices(model)
+
+
 def _levels_short(channel: Any, period: int, words: int) -> bool:
     """A double of the seam's check (the Chain needs no FIFO at any folding): ``levels``
     (activate's output) needs more words than its transport holds; every other channel's
