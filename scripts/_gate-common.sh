@@ -6,9 +6,10 @@
 # means the same thing for every caller, with one exception a caller states:
 #
 #   --fast   also deselect the tests marked slow (tens of seconds each), which
-#            the default mode runs (but for tests/util's, which check-kernels.sh
-#            deselects in both modes). A gate prints its mode, and a gate that runs
-#            another passes its mode on.
+#            the default mode runs (but for the trees from tests/util: tests/util,
+#            tests/toolchain and tests/docker_scripts, which check-kernels.sh deselects
+#            in both modes). A gate prints its mode, and a gate that runs another
+#            passes its mode on.
 #
 #   PYTHON_BIN, RUFF_BIN, MYPY_BIN   the tools (default python3, ruff, mypy)
 #

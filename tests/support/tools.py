@@ -1,10 +1,18 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-import pytest
+"""Vendor tools as far as FINN reads them without running them: a Vivado installation
+(``fake_vivado``, the fixture ``vivado_installation``) and command directories of fake
+tools that record their calls (``fake_tools``). A tree's conftest imports the fixtures
+its tests use."""
+
+from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
+
+import pytest
 
 #: Vivado, xelab, Vitis HLS and vitis-run in one script: each notes its name in
 #: the calls.log beside it and leaves what its caller checks for. Vivado answers
@@ -43,7 +51,7 @@ def fake_vivado(directory: Path, release: str = "2024.2") -> Path:
 
 
 @pytest.fixture
-def vivado_installation():
+def vivado_installation() -> Callable[..., Path]:
     """Makes a Vivado installation in a directory (``fake_vivado``)."""
     return fake_vivado
 
@@ -69,7 +77,7 @@ class FakeTools:
 
 
 @pytest.fixture
-def fake_tools(tmp_path, monkeypatch):
+def fake_tools(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., FakeTools]:
     """Makes command directories of fake tools, by name; ``machine=True`` names
     the machine's (FINN_TOOL_DIR_OVERRIDE). Builds go under tmp_path, one worker
     each, and the toolchain's installations are directories under it: HLS (headers

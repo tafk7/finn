@@ -8,16 +8,16 @@ status, seconds, reports, tool runs and their transcripts, and noted findings; w
 checking the configuration found; the outcome, by the failure's kind.
 The steps and the tool are fakes; no Vivado."""
 
-import pytest
-
 import json
 import logging
-import onnx
-import onnx.helper as oh
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import onnx
+import onnx.helper as oh
+import pytest
 
 import finn.builder.build_dataflow as build
 from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig

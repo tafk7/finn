@@ -37,12 +37,14 @@ gate_pytest tests/xsim_sweep
 # torch over every CPU. About 1 140 tests (collected without xsim and vivado).
 OMP_NUM_THREADS=1 gate_pytest --conftest-root tests \
     tests/transformation tests/brevitas xsim vivado
-# finn.util and the rest of FINN's support code (toolchain, resources,
-# installation, containers, the build entry). Its tests use tests/conftest.py (the
-# seeded RNG). The slow tests (wheel and editable-environment builds, a build child;
-# tens of seconds each) are deselected in either mode, so this step stays at a few
-# minutes.
+# finn.util and the rest of FINN's support code (resources, installation, packing), the
+# toolchain's tests (tests/toolchain) and the docker scripts' (tests/docker_scripts). Their
+# tests use tests/conftest.py (the seeded RNG). The slow tests (wheel and editable-environment
+# builds, a build child; tens of seconds each) are deselected in either mode, so this step
+# stays at a few minutes.
 gate_pytest --conftest-root tests tests/util xsim vivado slow
+gate_pytest --conftest-root tests tests/toolchain xsim vivado slow
+gate_pytest --conftest-root tests tests/docker_scripts xsim vivado slow
 gate_ruff src/finn/kernels tests/kernels tests/support src/finn/platform src/finn/core/graph \
     src/finn/core/executor.py src/finn/core/onnx_exec.py \
     src/finn/core/rtlsim_bench.py src/finn/core/rtlsim_exec.py src/finn/core/rtlsim_pacing.py \

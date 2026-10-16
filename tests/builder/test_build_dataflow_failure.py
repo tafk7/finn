@@ -6,15 +6,15 @@ debugger starts only where stdin is a terminal, so a build under pytest or a bat
 reports its own error and fails, rather than pdb's failed read. Each kind of error is
 logged in its own form, and the build's log has every record with its step."""
 
-import pytest
-
 import io
 import logging
-import onnx
-import onnx.helper as oh
 import os
 import sys
 import warnings
+
+import onnx
+import onnx.helper as oh
+import pytest
 
 import finn.builder.build_dataflow as build
 from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig

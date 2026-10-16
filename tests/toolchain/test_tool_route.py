@@ -6,9 +6,9 @@ toolchain (``host_toolchain``) runs each tool under the command directory
 FINN_TOOL_DIR_OVERRIDE names. And the rule for a missing toolchain
 (``finn.toolchain.launcher``): a function that runs a tool requires one, and only the
 entry points a user calls prepare the machine's, once, when they are made or run.
-The tools are fakes that record their calls (tests/util/conftest.py); no
+The tools are fakes that record their calls (support/tools.py); no
 Vivado, no HLS. That a stated selection wins over the machine's is
-tests/util/test_build_toolchain.py's."""
+tests/toolchain/test_build_toolchain.py's."""
 
 from __future__ import annotations
 
