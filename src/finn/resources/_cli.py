@@ -153,9 +153,14 @@ def _fetch(args):
     declared = api.declarations()
     unknown = [name for name in args.names if name not in declared]
     if unknown:
-        raise ResourceError(f"No resource named {', '.join(map(repr, unknown))} is declared")
+        raise ResourceError(
+            "resource-undeclared",
+            f"No resource named {', '.join(map(repr, unknown))} is declared",
+        )
     if not (args.names or args.kind or args.all):
-        raise ResourceError("Name resources to fetch, or use --kind or --all")
+        raise ResourceError(
+            "fetch-nothing-named", "Name resources to fetch, or use --kind or --all"
+        )
     names = [
         r.name
         for r in declared.values()
@@ -172,7 +177,7 @@ def _verify(args):
     for name in names:
         resource = api.declarations().get(name)
         if resource is None:
-            raise ResourceError(f"No resource named {name!r} is declared")
+            raise ResourceError("resource-undeclared", f"No resource named {name!r} is declared")
         if resource.local:
             continue
         copies = [r / resource.entry for r, _ in _store.roots()]
@@ -190,11 +195,15 @@ def _verify(args):
 def _update(args):
     resource = api.declarations().get(args.name)
     if resource is None:
-        raise ResourceError(f"No resource named {args.name!r} is declared")
+        raise ResourceError(
+            "resource-undeclared",
+            f"No resource named {args.name!r} is declared",
+        )
     if not resource.git:
         raise ResourceError(
+            "update-not-git",
             f"update moves git resources; for {args.name}, change url and sha256 by hand "
-            "and set digest to the output of `finn-resources digest DIR`"
+            "and set digest to the output of `finn-resources digest DIR`",
         )
     commit = _resolve(_store.urls(resource)[0], args.ref)
     candidate = replace(resource, commit=commit, digest="sha256:" + "0" * 64)
@@ -232,13 +241,16 @@ def _resolve(url, ref):
         text=True,
     )
     if result.returncode:
-        raise ResourceError(f"git ls-remote failed for {url}: {result.stderr.strip()}")
+        raise ResourceError(
+            "git-failed",
+            f"git ls-remote failed for {url}: {result.stderr.strip()}",
+        )
     refs = {name: sha for sha, name in (line.split("\t") for line in result.stdout.splitlines())}
     # A peeled tag (^{}) names the commit, not the tag object.
     for name in (ref, f"refs/heads/{ref}", f"refs/tags/{ref}^{{}}", f"refs/tags/{ref}"):
         if name in refs:
             return refs[name]
-    raise ResourceError(f"{url} has no branch or tag {ref!r}")
+    raise ResourceError("ref-not-found", f"{url} has no branch or tag {ref!r}")
 
 
 def _packaged(file):

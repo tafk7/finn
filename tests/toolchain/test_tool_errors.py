@@ -54,6 +54,7 @@ def test_the_two_kinds_and_what_they_carry():
     assert (missing.tool, missing.reason) == ("vivado", "no installation")
     assert str(missing).startswith("vivado: no installation; the host file selects")
     assert "build configuration's toolchain" in str(missing)
+    assert missing.code == "tool-unavailable"
     failed = ToolFailed("xelab", 2, "/x/xelab.log", ("ERROR: one",), what="top")
     assert (
         str(failed) == "xelab failed with exit status 2: top; transcript /x/xelab.log\n  ERROR: one"

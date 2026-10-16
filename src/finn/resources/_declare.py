@@ -49,7 +49,12 @@ _FIELDS = {
 
 
 class ResourceError(RuntimeError):
-    """A resource cannot be declared, found or fetched."""
+    """A resource cannot be declared, found or fetched. ``code`` names the reason (kebab-case);
+    the message is the error's own."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class DeclarationError(ResourceError):
@@ -107,61 +112,84 @@ class Resource:
 def parse(table, origin):
     """Validate a table of declarations, returning resources in declaration order."""
     if not isinstance(table, dict):
-        raise DeclarationError(f"{origin}: resource declarations must be a table")
+        raise DeclarationError(
+            "declarations-not-table", f"{origin}: resource declarations must be a table"
+        )
     return [_resource(name, fields, origin) for name, fields in table.items()]
 
 
 def _resource(name, fields, origin):
-    def fail(message):
-        raise DeclarationError(f"{origin}: resource {name!r}: {message}")
+    def fail(code, message):
+        raise DeclarationError(code, f"{origin}: resource {name!r}: {message}")
 
     if not _NAME.fullmatch(name):
-        fail("names use lower-case letters, digits and '-'")
+        fail("name-invalid", "names use lower-case letters, digits and '-'")
     if name in _RESERVED or name.endswith("-url"):
-        fail(f"the name is reserved (its variable {PREFIX}{name.upper()} is a setting)")
+        fail(
+            "name-reserved",
+            f"the name is reserved (its variable {PREFIX}{name.upper()} is a setting)",
+        )
     if not isinstance(fields, dict):
-        fail("must be a table")
+        fail("resource-not-table", "must be a table")
     unknown = set(fields) - _FIELDS
     if unknown:
-        fail(f"unknown field(s) {', '.join(sorted(unknown))}")
+        fail("field-unknown", f"unknown field(s) {', '.join(sorted(unknown))}")
     sources = [key for key in _SOURCES if key in fields]
     if len(sources) != 1:
-        fail("give exactly one source: git and commit, url and sha256, package, or path")
+        fail(
+            "source-not-one",
+            "give exactly one source: git and commit, url and sha256, package, or path",
+        )
     source = sources[0]
     for key in ("commit", "sha256"):
         if (key in fields) != (key in _SOURCES[source]):
+            required = key in _SOURCES[source]
             fail(
-                f"{key} {'is required with' if key in _SOURCES[source] else 'does not apply to'} "
-                f"a {source} source"
+                "field-required" if required else "field-inapplicable",
+                f"{key} {'is required with' if required else 'does not apply to'} "
+                f"a {source} source",
             )
     for key, value in fields.items():
         expected = bool if key == "redistributable" else list if key in _LISTS else str
         if not isinstance(value, expected):
-            fail(f"{key} must be a {expected.__name__}")
+            fail("field-type-invalid", f"{key} must be a {expected.__name__}")
     for key in _LISTS:
         if not all(isinstance(item, str) and item for item in fields.get(key, [])):
-            fail(f"{key} must be a list of non-empty strings")
+            fail("list-invalid", f"{key} must be a list of non-empty strings")
     if source == "git" and not _COMMIT.fullmatch(fields["commit"]):
-        fail("commit must be a full 40-character commit id; use `finn-resources update` for refs")
+        fail(
+            "commit-invalid",
+            "commit must be a full 40-character commit id; use `finn-resources update` for refs",
+        )
     if source == "url" and not _SHA256.fullmatch(fields["sha256"]):
-        fail("sha256 must be 64 lower-case hex digits")
+        fail("sha256-invalid", "sha256 must be 64 lower-case hex digits")
     if source == "package":
         if not re.fullmatch(r"[A-Za-z_][\w]*(\.[A-Za-z_][\w]*)*", fields["package"]):
-            fail("package is an importable module name; put a directory inside it in subdir")
+            fail(
+                "package-invalid",
+                "package is an importable module name; put a directory inside it in subdir",
+            )
         if any(key in fields for key in ("into", "digest", "mirrors")):
-            fail("a package source takes only subdir: no into, digest or mirrors")
+            fail(
+                "package-fields-invalid",
+                "a package source takes only subdir: no into, digest or mirrors",
+            )
         if "subdir" in fields:
             _relative(fields["subdir"], "subdir", fail)
     elif source == "path":
         if not fields["path"] or any(
             key in fields for key in ("subdir", "into", "digest", "mirrors")
         ):
-            fail("a path source is a directory, with no subdir, into, digest or mirrors")
+            fail(
+                "path-fields-invalid",
+                "a path source is a directory, with no subdir, into, digest or mirrors",
+            )
     else:
         if not _DIGEST.fullmatch(fields.get("digest", "")):
             fail(
+                "digest-invalid",
                 "digest must be 'sha256:' and 64 hex digits; compute it with "
-                "`finn-resources digest DIR`"
+                "`finn-resources digest DIR`",
             )
         for key in ("subdir", "into"):
             if key in fields:
@@ -176,7 +204,7 @@ def _resource(name, fields, origin):
 def _relative(value, key, fail):
     path = PurePosixPath(value)
     if not value or path.is_absolute() or ".." in path.parts or "\\" in value:
-        fail(f"{key} must be a relative path inside the source")
+        fail("path-not-relative", f"{key} must be a relative path inside the source")
 
 
 def load(path, keys):
@@ -185,11 +213,16 @@ def load(path, keys):
         with open(path, "rb") as file:
             data = tomllib.load(file)
     except (OSError, tomllib.TOMLDecodeError) as error:
-        raise DeclarationError(f"Cannot read resource declarations from {path}: {error}") from None
+        raise DeclarationError(
+            "declarations-unreadable",
+            f"Cannot read resource declarations from {path}: {error}",
+        ) from None
     for key in keys:
         data = data.get(key, {})
         if not isinstance(data, dict):
-            raise DeclarationError(f"{path}: {'.'.join(keys)} must be a table")
+            raise DeclarationError(
+                "declarations-not-table", f"{path}: {'.'.join(keys)} must be a table"
+            )
     return parse(data, path)
 
 
@@ -207,9 +240,13 @@ def package_files():
         try:
             file = files(point.value).joinpath("resources.toml")
         except (ImportError, TypeError) as error:
-            raise DeclarationError(f"{where}: cannot import {point.value}: {error}") from None
+            raise DeclarationError(
+                "entry-point-unimportable", f"{where}: cannot import {point.value}: {error}"
+            ) from None
         if not file.is_file() or not isinstance(file, Path):
-            raise DeclarationError(f"{where}: {point.value} contains no resources.toml")
+            raise DeclarationError(
+                "entry-point-no-declarations", f"{where}: {point.value} contains no resources.toml"
+            )
         found.append(file)
     return found
 
@@ -240,8 +277,9 @@ def merge(finn, packages, project):
     for resource in packages:
         if resource.name in merged:
             raise DeclarationError(
+                "resource-redeclared",
                 f"Resource {resource.name!r} from {resource.origin} is already declared by "
-                f"{merged[resource.name].origin}; only a project may redefine a resource"
+                f"{merged[resource.name].origin}; only a project may redefine a resource",
             )
         merged[resource.name] = resource
     for resource in project:
@@ -286,8 +324,9 @@ def rewrite(path, keys, name, values):
     if changed != set(values):
         missing = ", ".join(sorted(set(values) - changed))
         raise DeclarationError(
+            "rewrite-value-missing",
             f"{path}: cannot find {missing} as a quoted value in [{'.'.join(wanted)}]; "
-            "edit it by hand"
+            "edit it by hand",
         )
     new_text = "".join(lines)
     expected = tomllib.loads(text)
@@ -296,7 +335,9 @@ def rewrite(path, keys, name, values):
         table = table[key]
     table.update(values)
     if tomllib.loads(new_text) != expected:
-        raise DeclarationError(f"{path}: the edit would change more than {sorted(values)}")
+        raise DeclarationError(
+            "rewrite-changes-more", f"{path}: the edit would change more than {sorted(values)}"
+        )
     temporary = path.with_name(f".{path.name}.update")
     temporary.write_text(new_text)
     shutil.copymode(path, temporary)

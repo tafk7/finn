@@ -735,3 +735,13 @@ def test_the_build_directory_is_a_machine_setting_beside_home(tmp_path, monkeypa
     assert resources.scratch() == tmp_path / "from-environment"
     names = {"build", "scratch", "relative", "from-environment"}
     assert not any(path.name in names for path in tmp_path.rglob("*"))
+
+
+def test_a_resource_fault_names_its_reason_by_a_code_and_keeps_its_message():
+    with pytest.raises(resources.ResourceError, match="No resource named") as error:
+        resources.path("no-such-resource")
+    assert error.value.code == "resource-undeclared"
+    assert str(error.value) == "No resource named 'no-such-resource' is declared"
+    declaration = resources.DeclarationError("name-invalid", "bad name")
+    assert isinstance(declaration, resources.ResourceError)
+    assert (declaration.code, str(declaration)) == ("name-invalid", "bad name")

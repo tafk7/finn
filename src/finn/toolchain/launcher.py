@@ -382,7 +382,9 @@ SELECTED_BY = (
 class ToolUnavailable(LookupError):
     """No installation of a tool, or no such tool on the toolchain's route: ``tool``
     names it, ``reason`` what is missing; the message also says what selects it
-    (``SELECTED_BY``)."""
+    (``SELECTED_BY``); ``code`` is ``tool-unavailable``."""
+
+    code = "tool-unavailable"
 
     def __init__(self, tool: str, reason: str) -> None:
         super().__init__(f"{tool}: {reason}; {SELECTED_BY}")
