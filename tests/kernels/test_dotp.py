@@ -17,6 +17,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.ranges import TensorRange
 from support import helpers
 from support.helpers import FULL_DSP48E2, FULL_DSP58, codes, full_platform
+from support.refusals import refused
 
 from finn.core.space import (
     Available,
@@ -312,7 +313,7 @@ def test_the_platform_is_a_required_fact():
     facts = parameters()
     facts.pop("platform")
     # A bare call is legal; the missing formal is refused when design_space() prepares it.
-    with pytest.raises(DefinitionError, match="platform is not supplied"):
+    with refused("formal-unsupplied", error=DefinitionError, message=r"^platform\b"):
         helpers.placed_dotp(PackedDotpKernel, **facts)
 
 
@@ -464,7 +465,7 @@ def test_each_core_kernel_names_its_core_and_the_shared_base_places_none():
         assert requirements.implementation_id == space_type.id
         assert dict(requirements.parameters)["CORE"] == f'"{core}"'
     # The shared base states none of what each core states: it is not placed.
-    with pytest.raises(DefinitionError, match="leaves required members unmet: DotpAxiKernel"):
+    with refused("required-unmet", error=DefinitionError, declaration="DotpAxiKernel"):
         kernel(DotpAxiKernel)
 
 

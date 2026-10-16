@@ -16,9 +16,9 @@ presents, each a view ``<name>_end``, and merges its members' netlists into one
 
 from __future__ import annotations
 
-import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2, codes
+from support.refusals import refused
 
 from finn.core.space import (
     Available,
@@ -154,7 +154,11 @@ def test_a_leaf_that_leaves_a_required_member_unmet_is_not_placed() -> None:
         def parameters(self) -> dict[str, int | str]:
             return {}
 
-    with pytest.raises(DefinitionError, match=r"LeafKernel\.sources, LeafKernel\.resource_use"):
+    with refused(
+        "required-unmet",
+        error=DefinitionError,
+        message=r"LeafKernel\.sources, LeafKernel\.resource_use",
+    ):
         Unsourced()
 
 
@@ -188,16 +192,26 @@ def port() -> AxiStreamPort:
 
 def test_a_leaf_states_its_admission_and_its_ports_and_places_no_kernel() -> None:
     stated("Complete", admission=ConstraintGroup(), x=port())
-    with pytest.raises(DefinitionError, match="Unadmitted states no admission"):
+    with refused(
+        "leaf-admission-unstated", error=DefinitionError, message="Unadmitted states no admission"
+    ):
         stated("Unadmitted", x=port())
-    with pytest.raises(DefinitionError, match="Portless places no port"):
+    with refused("leaf-ports-unplaced", error=DefinitionError, message="Portless places no port"):
         stated("Portless", admission=ConstraintGroup())
-    with pytest.raises(DefinitionError, match=r"Nesting places the kernels \['inner'\]"):
+    with refused(
+        "leaf-places-kernels",
+        error=DefinitionError,
+        message=r"Nesting places the kernels \['inner'\]",
+    ):
         stated("Nesting", admission=ConstraintGroup(), x=port(), inner=Probe(tensor=TENSOR))
 
 
 def test_a_kernel_with_children_names_the_end_of_each_interface() -> None:
-    with pytest.raises(DefinitionError, match=r"the interfaces \['y'\] without their ends"):
+    with refused(
+        "composed-end-absent",
+        error=DefinitionError,
+        message=r"the interfaces \['y'\] without their ends",
+    ):
 
         class Unended(ComposedKernel):
             id = "test.unended"
@@ -211,7 +225,7 @@ def test_a_kernel_with_children_names_the_end_of_each_interface() -> None:
 
 
 def test_a_kernel_is_a_leaf_or_a_kernel_with_children() -> None:
-    with pytest.raises(DefinitionError, match="a kernel is a LeafKernel"):
+    with refused("kernel-kind-invalid", error=DefinitionError, message="a kernel is a LeafKernel"):
 
         class Neither(Kernel):
             id = "test.neither"

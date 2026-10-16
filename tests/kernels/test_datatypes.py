@@ -23,6 +23,7 @@ from typing import Any, cast
 
 import pytest
 from qonnx.core.datatype import BaseDataType, DataType
+from support.refusals import refused
 
 from finn.core.space import ValueSemantics
 from finn.dataflow.datatypes import (
@@ -138,7 +139,7 @@ def test_an_unregistered_subclass_is_refused_at_recognition() -> None:
     assert isinstance(rogue, BaseDataType)
     assert is_qonnx_datatype(rogue) is False
     assert QONNX_DATATYPE_SEMANTICS.accepts(rogue) is False
-    with pytest.raises(DatatypeError, match="not a QONNX datatype value"):
+    with refused("datatype-not-qonnx", error=DatatypeError):
         canonical_qonnx_datatype(rogue)
 
 
@@ -192,7 +193,7 @@ def test_recognition_is_total_over_arbitrary_failures() -> None:
 
     assert is_qonnx_datatype(rogue) is False
     assert QONNX_DATATYPE_SEMANTICS.accepts(rogue) is False
-    with pytest.raises(DatatypeError, match="not a QONNX datatype value"):
+    with refused("datatype-not-qonnx", error=DatatypeError):
         canonical_qonnx_datatype(rogue)
 
 

@@ -17,10 +17,12 @@ from support.helpers import (
     module_of,
     placed,
 )
+from support.refusals import refused
 
 from finn.core.space import (
     Available,
     Decision,
+    DefinitionError,
     Rejected,
     Unresolved,
     View,
@@ -161,12 +163,16 @@ def test_precision_covers_full_ranges_and_is_minimal(activation, weight, length,
         # Weights of another shape: the MatMul's extents disagree with them.
         ({"weight_delivery": WeightDelivery.MEMSTREAM, "weights": [[0]]}, "kernel-extents"),
         ({"weight_delivery": WeightDelivery.MEMSTREAM, "weights": [[4] * 4] * 4}, "admitted"),
-        ({"weight_delivery": WeightDelivery.MEMSTREAM, "weights": [[0.5] * 4] * 4}, "integer"),
     ],
 )
 def test_invalid_configuration_fails_during_construction(changes, match):
     with pytest.raises(ValueError, match=match):
         assembly(**changes)
+
+
+def test_weights_that_are_not_integers_are_unrecognized_as_the_weights_value() -> None:
+    with refused("literal-unrecognized", error=DefinitionError, message="integer tensor"):
+        assembly(weight_delivery=WeightDelivery.MEMSTREAM, weights=[[0.5] * 4] * 4)
 
 
 def test_the_core_is_forced_and_owns_its_folding_factors():

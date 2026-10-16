@@ -10,6 +10,7 @@ from typing import cast
 import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2, THRESHOLDS, controlled, threshold_base
+from support.refusals import refused
 
 from finn.core.space import Available, DefinitionError, Rejected, Unresolved
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
@@ -138,7 +139,7 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
     )
     # The table is an integer tensor: nothing else is one.
     for malformed in ((), (((0,), (0, 1)),), (([-2, 0, 3],),)):
-        with pytest.raises(DefinitionError, match="integer tensor"):
+        with refused("literal-unrecognized", error=DefinitionError, message="integer tensor"):
             threshold(table=cast(IntegerTensor, malformed), pe=None)
     # PE divides the input's channels, the table's two rows; another is refused where it
     # is committed.

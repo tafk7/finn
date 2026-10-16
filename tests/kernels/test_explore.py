@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 from support import chain
 from support.helpers import FULL_DSP48E2, FULL_DSP58, Lanes, keyed
+from support.refusals import refused
 
 import finn.kernels.explore as explore_module
 from finn.core.reporting.findings import Finding, FindingKind
@@ -451,7 +452,7 @@ def test_a_target_throughput_is_a_cycles_budget_at_the_platform_s_clock() -> Non
     assert strategy.cycles == 12
     assert explorer.chosen(folded) == explorer.chosen(TargetCycles(12).explore(explorer, network))
     assert strategy.report()["fps"] == 16_666_666
-    with pytest.raises(ExploreError, match="needs the seam's platform"):
+    with refused("platform-unstated", error=ExploreError, message="needs the seam's platform"):
         TargetThroughput(1000).explore(Seam(), network)
 
 
@@ -555,9 +556,9 @@ def test_a_held_choice_a_change_would_drop_refuses_the_change() -> None:
     assert isinstance(pumped, Accepted)
     pumping = ("first", "compute.packed.compute_pumping")
     explorer.held[pumping] = True
-    refused = explorer.set(pumped.network, keyed({"first.compute.packed.simd": 1}))
-    assert isinstance(refused, Refused)
-    ((key, (found,)),) = refused.why.items()
+    dropped = explorer.set(pumped.network, keyed({"first.compute.packed.simd": 1}))
+    assert isinstance(dropped, Refused)
+    ((key, (found,)),) = dropped.why.items()
     assert (key, found.code, found.owner) == (
         pumping,
         "held",
@@ -570,12 +571,14 @@ def test_a_held_choice_a_change_would_drop_refuses_the_change() -> None:
     assert isinstance(kept, Accepted)
     assert explorer.chosen(kept.network)[pumping] is True
     opened = explorer.reopen(pumped.network, [("first", "compute.packed.simd")])[0]
-    with pytest.raises(
-        Unsettled, match="compute_pumping: pin-unsettled: held to True"
+    with refused(
+        "pin-unsettled",
+        error=Unsettled,
+        owner="first.compute.packed.compute_pumping",
+        message="held to True",
     ) as unsettled:
         explorer.settle(opened, {})
-    (finding,) = unsettled.value.findings
-    assert finding.owner == "first.compute.packed.compute_pumping"
+    assert unsettled.error.findings == (unsettled.finding,)
 
 
 def test_a_strategy_reopens_its_scope_and_keeps_what_it_does_not_decide() -> None:
@@ -645,7 +648,11 @@ def test_the_debug_placeholder_takes_a_required_choice_s_first_case_or_refuses_i
     assert placeholder.label == "DEBUG: set by placeholder"
     fifo = explorer.set(base, keyed({"levels.transport": "fifo"}))
     assert isinstance(fifo, Accepted)
-    with pytest.raises(ExploreError, match="known by membership only: .*levels.transport.fifo"):
+    with refused(
+        "placeholder-no-case",
+        error=ExploreError,
+        message="known by membership only: .*levels.transport.fifo",
+    ):
         DebugPlaceholder().explore(explorer, fifo.network)
 
 
@@ -840,14 +847,14 @@ def test_max_throughput_budgets_what_is_stated_where_a_member_states_no_resource
 
 
 def test_max_throughput_needs_a_budget_of_named_resources_and_the_part_s_totals() -> None:
-    with pytest.raises(ExploreError, match="needs a budget"):
+    with refused("budget-invalid", error=ExploreError, message="needs a budget"):
         MaxThroughput({})
-    with pytest.raises(ExploreError, match=r"no resource is named \['luts'\]"):
+    with refused("budget-invalid", error=ExploreError, message=r"\['luts'\]"):
         MaxThroughput({"luts": 0.5})
-    with pytest.raises(ExploreError, match="is no budget"):
+    with refused("budget-invalid", error=ExploreError, message=r"within lut: a fraction of 0"):
         MaxThroughput({"lut": 0})
-    with pytest.raises(ExploreError, match="is no fraction"):
+    with refused("budget-invalid", error=ExploreError, message=r"'half'"):
         MaxThroughput({"lut": "half"})  # type: ignore[dict-item]
     explorer, network = seam()
-    with pytest.raises(ExploreError, match="platform's resources"):
+    with refused("platform-unstated", error=ExploreError, owner="max_throughput"):
         MaxThroughput({"lut": 0.5}).explore(explorer, network)
