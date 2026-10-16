@@ -17,8 +17,8 @@ A network is complete when every choice with cases that is not required holds a 
 its baseline until a strategy sets another; a required Decision (a FIFO's depth) stays
 open until a strategy sets it. ``baseline``, ``reopen`` and ``settle`` keep a network
 complete, in rank order: kernels first, then channels in the order the wiring reads them.
-``held`` maps the keys no strategy changes to their values: those a ``Pinned`` strategy
-fixes, and those the build seeds from its partition's body (``HELD``,
+``held`` maps the keys no strategy changes to their values: those a ``Hold`` (or a
+``Pinned``) strategy fixes, and those the build seeds from its partition's body (``HELD``,
 ``finn.transformation.kernels.choose``).
 
 An ``Explorer`` (``explore(seam, network) -> network``) proposes batches, and may keep,
@@ -30,9 +30,9 @@ settles, so a value it does not decide keeps what an earlier strategy set.
 
 The strategies, each an objective and its constraints searched through the seam:
 
-- ``Pinned(path)``: fixed choices, by owner and key (``{graph name: {key: value}}``:
-  a kernel's under its node, a channel's under its tensor, the form the build's
-  ``kernel_choices.json`` takes), set as one batch and held;
+- ``Hold(values)``: fixed choices, by owner and key (``{graph name: {key: value}}``:
+  a kernel's under its node, a channel's under its tensor), set as one batch and held;
+  ``Pinned(path)`` reads the same from a file, until the builder's pin step goes;
 - ``TargetThroughput(fps)``: the least parallelism meeting ``fps`` frames a
   second at the target's clock (``TargetCycles``, a budget of cycles a frame),
   folding through an unordered choice its cycles wait on by trying each case (a
@@ -1113,36 +1113,77 @@ class Pinned:
         self.held: dict[Key, object] = {}
 
     def explore(self, seam: Seam, network: S) -> S:
-        stored = seam.chosen(network)
-        wanted = seam.keyed(network, self.choices, self.path)
-        refused = {
-            key: _refusal(key, "held", f"already held to {seam.held[key]!r}")
-            for key, value in wanted.items()
-            if key in seam.held and seam.held[key] != value
-        }
-        if refused:
-            raise _pins_refused(self.path, refused)
-        batch = {key: value for key, value in wanted.items() if stored.get(key, _ABSENT) != value}
-
-        def pin(opened: S, _: Mapping[Key, object]) -> S:
-            if not batch:
-                return opened
-            outcome = seam.set(opened, batch)
-            if isinstance(outcome, Refused):
-                raise _pins_refused(self.path, outcome.why)
-            return outcome.network
-
-        self.held = wanted
-        seam.held.update(wanted)
-        try:
-            return seam.run(network, (), pin, self.strategy)
-        except Unsettled as error:
-            raise ExploreError(
-                "pin-refused", self.path, f"refused choices: {error}", causes=error.findings
-            ) from error
+        self.held = _hold(seam, network, self.choices, self.path)
+        return _held_run(seam, network, self.held, self.path, self.strategy)
 
     def report(self) -> dict[str, object]:
         return {"strategy": self.strategy, "path": self.path}
+
+
+class Hold:
+    """``Pinned``, given the values instead of a file: fixed choices by owner and key
+    (``values``, ``{graph name: {key: value}}``: a kernel's under its node, a channel's
+    under its tensor), set as one batch and held (``Seam.held``): no strategy after it
+    changes them. A choice already at the same value is not in the batch, and held all
+    the same; anything the seam refuses (an owner or key that is no choice here, a value
+    it does not take, a key another hold keeps at another value: ``already held``) is
+    refused, named, its owner ``held``. ``held`` keeps the keys it held, with their
+    values."""
+
+    strategy = "held"
+
+    def __init__(self, values: Mapping[str, Mapping[str, object]]) -> None:
+        self.values = {owner: dict(keys) for owner, keys in values.items()}
+        self.held: dict[Key, object] = {}
+
+    def explore(self, seam: Seam, network: S) -> S:
+        self.held = _hold(seam, network, self.values, self.strategy)
+        return _held_run(seam, network, self.held, self.strategy, self.strategy)
+
+    def report(self) -> dict[str, object]:
+        return {"strategy": self.strategy}
+
+
+def _hold(
+    seam: Seam,
+    network: S,
+    values: Mapping[str, Mapping[str, object]],
+    owner: str,
+) -> dict[Key, object]:
+    """The keys ``values`` fixes, with their values, none of them held to another value
+    already (refused, owned by ``owner``)."""
+    wanted = seam.keyed(network, values, owner)
+    refused = {
+        key: _refusal(key, "held", f"already held to {seam.held[key]!r}")
+        for key, value in wanted.items()
+        if key in seam.held and seam.held[key] != value
+    }
+    if refused:
+        raise _pins_refused(owner, refused)
+    return wanted
+
+
+def _held_run(seam: Seam, network: S, wanted: Mapping[Key, object], owner: str, strategy: str) -> S:
+    """``network`` with ``wanted`` set as one batch, a choice already there left out, and
+    held; a refusal is owned by ``owner``."""
+    stored = seam.chosen(network)
+    batch = {key: value for key, value in wanted.items() if stored.get(key, _ABSENT) != value}
+
+    def pin(opened: S, _: Mapping[Key, object]) -> S:
+        if not batch:
+            return opened
+        outcome = seam.set(opened, batch)
+        if isinstance(outcome, Refused):
+            raise _pins_refused(owner, outcome.why)
+        return outcome.network
+
+    seam.held.update(wanted)
+    try:
+        return seam.run(network, (), pin, strategy)
+    except Unsettled as error:
+        raise ExploreError(
+            "pin-refused", owner, f"refused choices: {error}", causes=error.findings
+        ) from error
 
 
 def _named(why: Mapping[Key, tuple[Finding, ...]]) -> str:
@@ -2203,6 +2244,7 @@ __all__ = [
     "FIFOS_BY_MODEL",
     "FIFOS_NOT_CHECKED",
     "FifoCheck",
+    "Hold",
     "MaxThroughput",
     "Pinned",
     "RankPolicy",

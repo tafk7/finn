@@ -42,7 +42,7 @@ from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
 from finn.custom_op.kernels.shell import save_channels
 from finn.kernels.channels import Channel
-from finn.kernels.explore import ExploreError, Pinned, Ranked, Rebaseline
+from finn.kernels.explore import ExploreError, Hold, Ranked, Rebaseline
 from finn.transformation.kernels import explore_kernel_choices, kernel_choices_config
 from finn.transformation.kernels.cut import BaselineChoices, CutKernelPartition
 
@@ -151,7 +151,7 @@ def test_the_writer_is_checked_by_replaying_the_network() -> None:
 def test_a_graph_with_nodes_on_the_host_states_no_channel_choice(tmp_path: Path) -> None:
     """Case 1: channel choices stated on a graph with a node on the host (the whole graph,
     before the cut) are refused by name, by every reader and writer and by the cut; the
-    build's come in through kernel_choices.json (Pinned), applied to the body."""
+    build's come in as holds (``Hold``), applied to the body."""
     model = hosted(kernel_model())
     nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
     outside = r"channel choices \(finn.channel\) are stated in a partition's body only, not"
@@ -259,9 +259,9 @@ def test_the_baseline_strategy_resets_the_bodys_channel_choices_too() -> None:
     assert kernel_choices_config(model) == kernel_choices_config(cleared)
 
 
-def test_the_export_names_nodes_and_tensors_and_pinned_reads_it(tmp_path: Path) -> None:
-    """kernel_choices.json keeps its shape, {graph name: {key: value}}: the nodes' and
-    the tensors' channel choices, in graph order. Pinned commits it on another body, and
+def test_the_export_names_nodes_and_tensors_and_hold_takes_it() -> None:
+    """The choices export keeps its shape, {graph name: {key: value}}: the nodes' and
+    the tensors' channel choices, in graph order. ``Hold`` commits it on another body, and
     the report names each choice's owner the same way."""
     model = open_model()
     explore_kernel_choices(model, Ranked(Lanes(2)))
@@ -269,23 +269,20 @@ def test_the_export_names_nodes_and_tensors_and_pinned_reads_it(tmp_path: Path) 
     assert list(config) == ["x", "w1", "first", "hidden", "activate", "levels", "w2", "second", "y"]
     assert config["first"]["compute.packed.pe"] == 2
     assert config["w1"]["source.memstream.pumped_memory"] is False
-    path = tmp_path / "kernel_choices.json"
-    path.write_text(json.dumps(config))
     blank = open_model()
-    report = explore_kernel_choices(blank, Pinned(path)).report
+    report = explore_kernel_choices(blank, Hold(config)).report
     assert kernel_choices_config(blank) == config
-    # Every value is held, by its owner as the file names it; what it changed is logged
-    # as the pin's.
+    # Every value is held, by its owner as the export names it; what it changed is logged
+    # as the hold's.
     assert report["held"] == config
-    assert report["choices"]["first"]["compute.packed.pe"] == {"value": 2, "by": "pinned"}
+    assert report["choices"]["first"]["compute.packed.pe"] == {"value": 2, "by": "held"}
     assert report["choices"]["levels"]["transport"]["value"] == config["levels"]["transport"]
-    # A channel's key under its consumer is no Decision of the root: D8's file is
+    # A channel's key under its consumer is no Decision of the root: D8's form is
     # refused, named.
-    path.write_text(json.dumps({"second": {"x.transport": "direct"}}))
     with refused(
         "pin-refused", error=ExploreError, message=r"second\.x\.transport: not a Decision"
     ):
-        explore_kernel_choices(open_model(), Pinned(path))
+        explore_kernel_choices(open_model(), Hold({"second": {"x.transport": "direct"}}))
 
 
 def test_the_export_is_in_graph_order_on_tfcs_body(tfc: ModelWrapper) -> None:

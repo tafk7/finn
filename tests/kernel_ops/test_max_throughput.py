@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -41,8 +40,8 @@ from finn.core.reporting.findings import Finding, FindingKind
 from finn.custom_op.kernels.shell import verify_partition
 from finn.kernels.explore import (
     Explorer,
+    Hold,
     MaxThroughput,
-    Pinned,
     Rebaseline,
     SizeFifos,
     TargetThroughput,
@@ -257,16 +256,15 @@ def test_a_point_over_the_part_is_a_finding_naming_the_binding_resource() -> Non
     assert "most of lut: lut 669 of 500" in over["message"]
 
 
-def test_a_member_that_states_no_resources_is_budgeted_as_a_lower_bound(tmp_path: Path) -> None:
+def test_a_member_that_states_no_resources_is_budgeted_as_a_lower_bound() -> None:
     """A compressor reducer pinned on ``first`` states no resources (RC5: rank and state
     it): the search budgets what is stated and says so (a ``resources-unstated``
     limitation, its member's findings the causes), naming it, and the report's total is
     a lower bound, naming it too, with its findings."""
-    pinned = tmp_path / "compressor.json"
-    pinned.write_text('{"first": {"compute.packed.reducer": "compressor"}}')
+    held = {"first": {"compute.packed.reducer": "compressor"}}
     model = ModelWrapper(kernel_model().model.__deepcopy__())
     write_target(model, TARGET)
-    report, findings = explore_each(model, [Rebaseline(), Pinned(pinned), *within(0.005)])
+    report, findings = explore_each(model, [Rebaseline(), Hold(held), *within(0.005)])
     searched = report["strategies"][2]
     assert searched["lower_bound"] is True and list(searched["unstated"]) == ["first"]
     assert all(record["code"] for record in searched["unstated"]["first"])

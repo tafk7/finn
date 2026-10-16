@@ -42,6 +42,7 @@ from finn.kernels.explore import (
     Accepted,
     DebugPlaceholder,
     ExploreError,
+    Hold,
     Pinned,
     Ranked,
     Rebaseline,
@@ -300,27 +301,16 @@ def test_the_report_logs_what_each_strategy_changed_kept_and_re_baselined() -> N
     assert sized["fifos"] == "sized by size_fifos: 6 channels, 0 FIFOs placed"
 
 
-def test_a_pinned_file_is_committed_held_in_the_body_and_the_rest_explored(
-    tmp_path: Path,
-) -> None:
-    """A pin is committed in one batch and recorded in the body (``HELD``), so a later
+def test_a_hold_is_committed_held_in_the_body_and_the_rest_explored() -> None:
+    """A hold is committed in one batch and recorded in the body (``HELD``), so a later
     exploration of the body holds it: the ranked policy, which reopens everything else,
     keeps it."""
-    pinned = tmp_path / "pinned.json"
-    pinned.write_text(
-        json.dumps(
-            {
-                "first": {"compute.packed.pe": 1},
-                "levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8},
-            }
-        )
-    )
-    pinning = ExploreKernelChoices(Pinned(pinned))
-    model = kernel_model().transform(pinning)
-    held = {
+    held: dict[str, dict[str, object]] = {
         "first": {"compute.packed.pe": 1},
         "levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8},
     }
+    pinning = ExploreKernelChoices(Hold(held))
+    model = kernel_model().transform(pinning)
     assert model.get(HELD) == keys_of(held)
     assert pinning.explored is not None
     assert pinning.explored.report["strategy"]["held"] == [
@@ -335,29 +325,33 @@ def test_a_pinned_file_is_committed_held_in_the_body_and_the_rest_explored(
     assert saved["levels"]["transport.fifo.buffer.depth"] == 8
     assert explorer.explored is not None
     assert explorer.explored.report["held"] == held and model.get(HELD) == keys_of(held)
-    # A whole kernel_choices.json pins another model to the same choices, in one batch:
+    # A whole kernel_choices export holds another model to the same choices, in one batch:
     # the FIFO and its depth, nested under it, together.
-    exported = tmp_path / "kernel_choices.json"
-    exported.write_text(json.dumps(kernel_choices_config(model)))
-    again = kernel_model().transform(ExploreKernelChoices(Pinned(exported)))
+    again = kernel_model().transform(ExploreKernelChoices(Hold(kernel_choices_config(model))))
     assert choices(again) == saved
-    # What the network does not take is refused, named.
-    pinned.write_text(json.dumps({"first": {"compute.packed.pe": 3}}))
+    # What the network does not take is refused, named, the hold owning it.
     with refused(
         "pin-refused",
         error=ExploreError,
-        owner=str(pinned),
+        owner="held",
         message=r"first\.compute\.packed\.pe: .*domain-membership",
     ):
-        kernel_model().transform(ExploreKernelChoices(Pinned(pinned)))
-    pinned.write_text(json.dumps({"nobody": {"pe": 1}}))
-    with refused("member-unknown", error=ExploreError, owner=str(pinned), message=r"nobody\.pe"):
-        kernel_model().transform(ExploreKernelChoices(Pinned(pinned)))
-    # A file that is not JSON is refused, owned by the file.
+        kernel_model().transform(ExploreKernelChoices(Hold({"first": {"compute.packed.pe": 3}})))
+    with refused("member-unknown", error=ExploreError, owner="held", message=r"nobody\.pe"):
+        kernel_model().transform(ExploreKernelChoices(Hold({"nobody": {"pe": 1}})))
+
+
+def test_a_pinned_file_that_is_not_read_is_refused_owned_by_the_file(tmp_path: Path) -> None:
+    """``Pinned`` reads its choices from a file: one that is not JSON, or not a
+    ``{graph name: {key: value}}`` dict, is refused at construction, owned by the file."""
+    pinned = tmp_path / "pinned.json"
     pinned.write_text("{")
     with pytest.raises(ExploreError) as unread:
         Pinned(pinned)
     assert [(f.code, f.owner) for f in unread.value.findings] == [("pins-invalid", str(pinned))]
+    pinned.write_text("[1]")
+    with refused("pins-invalid", error=ExploreError, owner=str(pinned)):
+        Pinned(pinned)
 
 
 #: A memory pinned ``auto``: the first MatMul's weights (on their tensor) and the
@@ -386,7 +380,7 @@ def stated_auto(report: Mapping[str, Any]) -> None:
 
 def test_a_memory_saved_or_pinned_auto_is_kept_and_stated_as_vivado_s(tmp_path: Path) -> None:
     """``auto`` stays a value of every memory, last (SZ18): a model saved with it replays
-    it, nothing dropped, and a kernel_choices.json pinning it commits it (the thresholds'
+    it, nothing dropped, and a hold of it commits it (the thresholds'
     ``ram_style`` attribute too); either way the report names the memory unstated."""
     model = kernel_model()
     for node in model.graph.node:
@@ -401,10 +395,8 @@ def test_a_memory_saved_or_pinned_auto_is_kept_and_stated_as_vivado_s(tmp_path: 
     report = explore_kernel_choices(saved).report
     assert report["dropped"] == {} and auto(saved) == AUTO
     stated_auto(report)
-    pinned = tmp_path / "kernel_choices.json"
-    pinned.write_text(json.dumps(AUTO))
     fresh = kernel_model()
-    report = explore_kernel_choices(fresh, Pinned(pinned)).report
+    report = explore_kernel_choices(fresh, Hold(AUTO)).report
     assert auto(fresh) == AUTO
     assert report["strategy"]["committed"] == 2
     stated_auto(report)
@@ -443,19 +435,17 @@ def explored_at_baseline() -> ModelWrapper:
     return model
 
 
-def test_a_pin_holds_for_every_later_exploration_of_the_body(tmp_path: Path) -> None:
-    """A pin recorded in the body holds for every later exploration of it, as one run of
+def test_a_hold_holds_for_every_later_exploration_of_the_body() -> None:
+    """A hold recorded in the body holds for every later exploration of it, as one run of
     several strategies held it: a fold, FIFO sizing and going back to the baselines keep
-    a pinned FIFO and a pinned folding, and pinning a held key to another value is
+    a held FIFO and a held folding, and holding a held key at another value is
     refused, naming the value it is held to."""
-    pinned = tmp_path / "pins.json"
-    pins = {
+    pins: dict[str, dict[str, object]] = {
         "first": {"compute.packed.simd": 1},
         "levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8},
     }
-    pinned.write_text(json.dumps(pins))
     model = kernel_model()
-    explore_kernel_choices(model, Pinned(pinned))
+    explore_kernel_choices(model, Hold(pins))
     # 6 cycles a frame folds each MatMul to PE 2, SIMD 4 unpinned (the report test above).
     folded = explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 6))).report
     assert folded["held"] == pins
@@ -467,14 +457,31 @@ def test_a_pin_holds_for_every_later_exploration_of_the_body(tmp_path: Path) -> 
         assert choices(model)["levels"]["transport.fifo.buffer.depth"] == 8
     assert choices(model)["second"]["compute.packed.simd"] == 1  # back at its baseline
     assert model.get(HELD) == keys_of(pins)
-    pinned.write_text(json.dumps({"first": {"compute.packed.simd": 2}}))
     with refused(
         "pin-refused",
         error=ExploreError,
-        owner=str(pinned),
+        owner="held",
         message=r"first\.compute\.packed\.simd: already held to 1\b",
     ):
-        explore_kernel_choices(model, Pinned(pinned))
+        explore_kernel_choices(model, Hold({"first": {"compute.packed.simd": 2}}))
+
+
+def test_a_second_hold_at_another_value_is_refused() -> None:
+    """``Hold`` fixes values given as a dict, with no file: a key held at one value stays
+    held, and a later ``Hold`` of it at another value is refused, naming the key and the
+    value it is held to; at the same value it is accepted."""
+    model = kernel_model()
+    explore_kernel_choices(model, Hold({"first": {"compute.packed.simd": 1}}))
+    assert model.get(HELD) == keys_of({"first": {"compute.packed.simd": 1}})
+    explore_kernel_choices(model, Hold({"first": {"compute.packed.simd": 1}}))
+    with refused(
+        "pin-refused",
+        error=ExploreError,
+        owner="held",
+        message=r"first\.compute\.packed\.simd: already held to 1\b",
+    ):
+        explore_kernel_choices(model, Hold({"first": {"compute.packed.simd": 2}}))
+    assert choices(model)["first"]["compute.packed.simd"] == 1
 
 
 def _levels_short(channel: Any, period: int, words: int) -> bool:
@@ -503,14 +510,14 @@ class Checking:
 
 
 def test_an_exploration_checks_its_fifos_only_where_its_strategy_does(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Nothing marks a body, and an exploration checks nothing of itself: a fold that
     leaves a FIFO too small for its stream keeps it, its report saying its FIFOs were not
     checked, and the build's verification refuses it (``fifo-stale``), while binding alone
     builds it. A strategy that checks (``Seam.checked``) drops its depth, names it in the
     report's ``dropped`` and leaves it open, which emission refuses, its report saying the
-    model judged them; sizing says so too. A pinned depth is the user's, kept and built,
+    model judged them; sizing says so too. A held depth is the user's, kept and built,
     and the verification names it, a limitation."""
     model = kernel_model()
     explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 6)))
@@ -551,10 +558,8 @@ def test_an_exploration_checks_its_fifos_only_where_its_strategy_does(
         message=r"\(required: run step_size_fifos",
     ):
         configured_network(model, "the chain")
-    # Pinned, it is kept and built as held.
-    pins = tmp_path / "pins.json"
-    pins.write_text(json.dumps({"levels": {"transport.fifo.buffer.depth": 8}}))
-    pinned = explore_kernel_choices(model, Pinned(pins))
+    # Held, it is kept and built as held.
+    pinned = explore_kernel_choices(model, Hold({"levels": {"transport.fifo.buffer.depth": 8}}))
     assert choices(model)["levels"]["transport.fifo.buffer.depth"] == 8
     assert pinned.findings == () and pinned.report["fifos_judged"] == "not checked"
     _, check = verify_partition(model, "the chain")
@@ -568,19 +573,15 @@ def test_an_exploration_checks_its_fifos_only_where_its_strategy_does(
     assert "fifo_check" not in sized
 
 
-def test_the_target_s_frames_a_second_go_when_an_exploration_changes_a_kernel_s_choice(
-    tmp_path: Path,
-) -> None:
+def test_the_target_s_frames_a_second_go_when_an_exploration_changes_a_kernel_s_choice() -> None:
     """A target throughput records its frames a second (``OBJECTIVE_FPS``); an exploration
-    that changes no kernel's choice (FIFO sizing, a pin of a channel's) keeps it, and one
+    that changes no kernel's choice (FIFO sizing, a hold of a channel's) keeps it, and one
     that changes any (whatever its strategy) removes it."""
     model = kernel_model()
     explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 6)))
     assert model.get(OBJECTIVE_FPS) == 1_000_000_000 // (5 * 6)
     explore_kernel_choices(model, SizeFifos())
-    pins = tmp_path / "pins.json"
-    pins.write_text(json.dumps({"levels": {"transport": "direct"}}))
-    explore_kernel_choices(model, Pinned(pins))
+    explore_kernel_choices(model, Hold({"levels": {"transport": "direct"}}))
     explore_kernel_choices(model, DebugPlaceholder())
     explore_kernel_choices(model)
     assert model.get(OBJECTIVE_FPS) == 1_000_000_000 // (5 * 6)
