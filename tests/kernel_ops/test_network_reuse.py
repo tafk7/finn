@@ -32,6 +32,7 @@ from support.models import (
     matmul_model,
     open_memories,
 )
+from support.refusals import refused
 from support.tfc import ULTRA96
 
 import finn.custom_op.kernels.shell as shell
@@ -145,7 +146,13 @@ def test_a_tensor_read_more_than_once_is_refused_before_any_binding() -> None:
     model.graph.value_info.remove(hidden)
     model.graph.output.append(hidden)
     misses = cache().misses
-    with pytest.raises(KernelOpError, match="fan_out: tensor-fan-out: hidden is read by activate"):
+    with refused(
+        "tensor-fan-out",
+        error=KernelOpError,
+        owner="fan_out",
+        tensor="hidden",
+        message="hidden is read by activate",
+    ):
         network(model, model.graph.node, name="chain")
     assert cache().misses == misses
 
@@ -182,7 +189,7 @@ def test_a_refused_network_is_not_kept() -> None:
     model.graph.output.append(hidden)
     counted, entries = networks(cache()), len(cache().entries)
     for _ in range(2):
-        with pytest.raises(KernelOpError, match="tensor-fan-out"):
+        with refused("tensor-fan-out", error=KernelOpError):
             network(model, model.graph.node, name="chain")
     assert networks(cache()) == counted and len(cache().entries) == entries
 

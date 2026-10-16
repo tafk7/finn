@@ -34,6 +34,7 @@ from support.models import (
     open_memories,
     shared_weights_source,
 )
+from support.refusals import refused
 from support.xsim import requires_xsim
 
 import finn.custom_op.kernels.network as graph_network
@@ -72,7 +73,13 @@ def test_the_network_of_the_chains_nodes_is_the_chain() -> None:
 
 def test_a_network_refuses_a_node_that_is_not_a_kernel_op() -> None:
     model = chain_source()
-    with pytest.raises(KernelOpError, match="activate: MultiThreshold is not a KernelOp"):
+    with refused(
+        "not-a-kernel-op",
+        error=KernelOpError,
+        owner="kernel_op",
+        node="activate",
+        message="MultiThreshold is not a KernelOp",
+    ):
         network(model, model.graph.node[1:2])
 
 
@@ -108,7 +115,7 @@ def test_a_stale_edge_choice_is_dropped_and_the_forced_adapter_applies() -> None
     # A memory of a chain the levels edge does not take: the writer refuses it, so it is
     # written past it.
     other = {"adapter.input_gen_vpc.input_gen.ram_style": "auto"}
-    with pytest.raises(KernelOpError, match="levels: refused choices: adapter.input_gen_vpc"):
+    with refused("choices-refused", error=KernelOpError, tensor="levels", keys=tuple(other)):
         save_channels(model, {"levels": other})
     model.set(CHANNEL_KEYS["adapter.input_gen_vpc.input_gen.ram_style"], "auto", tensor="levels")
     bound = network(model, model.graph.node, name="chain")
@@ -138,9 +145,13 @@ def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> No
     # choices stand; the graph's y is stale, and the network refuses it by name until
     # inference, run again, states it.
     assert streamed.verify_node() == []
-    with pytest.raises(
-        KernelOpError,
-        match="stale_outputs: tensor-stale: the graph states y .*run InferKernelTensors",
+    with refused(
+        "tensor-stale",
+        error=KernelOpError,
+        owner="stale_outputs",
+        node="first",
+        tensor="y",
+        message="the graph states y .*run InferKernelTensors",
     ):
         network(model, model.graph.node)
     model = model.transform(InferKernelTensors())
@@ -158,11 +169,10 @@ def test_a_stale_output_is_refused_before_its_channel_reads_it() -> None:
     refusal of the producer's end."""
     model = matmul_model()
     model.set_tensor_datatype("y", INT3)
-    with pytest.raises(
-        KernelOpError, match="stale_outputs: tensor-stale: the graph states y .* its producer first"
-    ) as error:
+    with refused(
+        "tensor-stale", error=KernelOpError, owner="stale_outputs", node="first", tensor="y"
+    ):
         network(model, model.graph.node)
-    assert [finding.code for finding in error.value.findings] == ["tensor-stale"]
     # Another shape of the same elements and last axis is what the kernel requires.
     model = matmul_model().transform(InferKernelTensors())
     assert not network(model, model.graph.node).stale
@@ -267,27 +277,33 @@ def test_an_explored_network_persists_and_replays_as_itself() -> None:
 def test_a_node_named_like_a_tensor_is_refused() -> None:
     model = kernel_model()
     model.graph.node[1].name = "hidden"
-    with pytest.raises(KernelOpError, match="a node and a tensor are both named hidden"):
+    with refused(
+        "name-shared",
+        error=KernelOpError,
+        owner="unique_names",
+        node="hidden",
+        message="a node and a tensor are both named hidden",
+    ):
         network(model, model.graph.node)
 
 
 def test_two_nodes_of_one_name_are_refused() -> None:
     model = kernel_model()
     model.graph.node[2].name = "first"
-    with pytest.raises(KernelOpError, match="a node and another node are both named first"):
+    with refused(
+        "name-shared",
+        error=KernelOpError,
+        owner="unique_names",
+        node="first",
+        message="a node and another node are both named",
+    ):
         network(model, model.graph.node)
 
 
 FAN_OUT = {
-    "two KernelOps": (None, "fan_out: tensor-fan-out: hidden is read by a, b"),
-    "a graph output listed last": (
-        "last",
-        "fan_out: tensor-fan-out: hidden is read by a and leaves",
-    ),
-    "a graph output listed first": (
-        "first",
-        "fan_out: tensor-fan-out: hidden is read by a and leaves",
-    ),
+    "two KernelOps": (None, "hidden is read by a, b"),
+    "a graph output listed last": ("last", "hidden is read by a and leaves"),
+    "a graph output listed first": ("first", "hidden is read by a and leaves"),
 }
 
 
@@ -299,7 +315,9 @@ def test_a_tensor_read_more_than_once_is_refused_by_name(case: str) -> None:
     output, named = FAN_OUT[case]
     model = fan_out_source(output=output).transform(ToKernelOps(TARGET))
     assert all(node.domain == "finn.custom_op.kernels" for node in model.graph.node)
-    with pytest.raises(KernelOpError, match=f"fan: .*{named}"):
+    with refused(
+        "tensor-fan-out", error=KernelOpError, owner="fan_out", tensor="hidden", message=named
+    ):
         network(model, model.graph.node, name="fan")
 
 
@@ -308,9 +326,9 @@ def test_a_build_stops_at_its_first_network_naming_the_tensor(case: str, tmp_pat
     """The cut partitions the KernelOps (their partition's body keeps hidden read more than
     once), and the build's first network, the cut's, where the channels' choices are
     created, refuses it by name."""
-    output, named = FAN_OUT[case]
+    output, _ = FAN_OUT[case]
     model = fan_out_source(output=output).transform(ToKernelOps(TARGET))
-    with pytest.raises(KernelOpError, match=f"partition: .*{named}"):
+    with refused("tensor-fan-out", error=KernelOpError, owner="fan_out", tensor="hidden"):
         model.transform(CutKernelPartition(tmp_path))
 
 
@@ -321,10 +339,16 @@ def test_a_parameter_two_nodes_own_is_refused_by_name() -> None:
     a, b = model.graph.node
     assert b.input[1] != "w"
     b.input[1] = a.input[1]
-    with pytest.raises(KernelOpError, match="fan_out: tensor-fan-out: w is read by a, b") as fan:
+    with refused(
+        "tensor-fan-out",
+        error=KernelOpError,
+        owner="fan_out",
+        tensor="w",
+        message="w is read by a, b",
+    ) as fan:
         network(model, model.graph.node)
     # Fan-out refuses the network: a rejection.
-    assert [each.kind for each in fan.value.findings] == [FindingKind.REJECTION]
+    assert [each.kind for each in fan.error.findings] == [FindingKind.REJECTION]
 
 
 def test_a_kernel_choice_the_network_refuses_is_dropped_named_and_cleared_by_persist() -> None:
@@ -379,7 +403,7 @@ def test_persist_checks_every_value_before_it_writes_any(
         checked(tensor, values)
 
     monkeypatch.setattr(graph_network, "_encoded", refuse_y)
-    with pytest.raises(KernelOpError, match="y: refused"):
+    with refused("channel-choice-invalid", error=KernelOpError, owner="finn.channel", tensor="y"):
         persist(model, changed)
     assert kernel_choices_config(model) == held
 

@@ -24,6 +24,7 @@ from typing import cast
 import pytest
 from support.models import configure_partition, kernel_model
 from support.packaging import NoVivado, reaches_vivado
+from support.refusals import refused
 from support.xsim import requires_vivado
 
 from finn.core.graph.annotations.outputs import (
@@ -73,9 +74,15 @@ def test_a_choice_never_created_refuses_packaging_and_is_named() -> None:
     # nothing and refuses each, named; once BaselineChoices has created them (as the cut
     # does), the body packages as configure_partition commits them.
     model = kernel_model()
-    with pytest.raises(KernelOpError, match=r"not created: BaselineChoices") as refused:
+    with refused(
+        "choices-open",
+        error=KernelOpError,
+        owner="configured_network",
+        node="sdp_1",
+        message=r"open choices, refused at emission: .*not created: BaselineChoices",
+    ) as left:
         configured_network(model, "sdp_1")
-    assert refused.value.keys and all(key.endswith(".ram_style") for key in refused.value.keys)
+    assert left.error.keys and all(key.endswith(".ram_style") for key in left.error.keys)
     assert kernel_choices_config(model) == kernel_choices_config(kernel_model())
     configure_partition(configured := kernel_model())
     reference = configured_network(configured, "partition")[0].module
@@ -89,13 +96,14 @@ def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:
     configure_partition(model := kernel_model())
     save_channels(model, {"levels": {"transport": "fifo"}})
     model = model.transform(BaselineChoices())
-    with pytest.raises(
-        KernelOpError,
-        match=r"open choices, refused at emission: levels.transport.fifo.buffer.depth "
-        r"\(required: run step_size_fifos or step_placeholder_choices\)",
-    ) as refused:
+    with refused(
+        "choices-open",
+        error=KernelOpError,
+        node="sdp_1",
+        keys=("levels.transport.fifo.buffer.depth",),
+        message=r"\(required: run step_size_fifos or step_placeholder_choices\)",
+    ):
         configured_network(model, "sdp_1")
-    assert refused.value.keys == ("levels.transport.fifo.buffer.depth",)
 
 
 def test_the_graphs_input_order_is_the_port_order() -> None:
@@ -104,7 +112,13 @@ def test_the_graphs_input_order_is_the_port_order() -> None:
     pins = configured_network(model, "sdp_1")[0].module.abi.pins
     assert {port.name for port in pins} >= {"s_axis_0", "s_axis_1"}
     model.graph.input.reverse()  # w2 first: the shells would feed it to s_axis_0
-    with pytest.raises(KernelOpError, match="not its graph's inputs and outputs in order"):
+    with refused(
+        "ports-out-of-order",
+        error=KernelOpError,
+        owner="configured_network",
+        node="sdp_1",
+        message="not its graph's inputs and outputs in order",
+    ):
         configured_network(model, "sdp_1")
 
 
@@ -136,13 +150,19 @@ def test_a_top_that_does_not_elaborate_is_refused_before_vivado(
 
     monkeypatch.setattr(build, "netlist", broken)
     toolchain = NoVivado()
-    with pytest.raises(KernelOpError, match="refused before packaging") as refused:
+    with refused(
+        "top-unelaborated",
+        error=KernelOpError,
+        owner="check_elaborates",
+        node="sdp_1",
+        message="refused before packaging",
+    ) as unelaborated:
         model.transform(
             PackagePartition(
                 "sdp_1", directory=tmp_path / "project", toolchain=cast(Toolchain, toolchain)
             )
         )
-    assert "use of undeclared identifier 'no_such_net'" in str(refused.value)
+    assert "use of undeclared identifier 'no_such_net'" in str(unelaborated.error)
     assert toolchain.ran == []
 
 

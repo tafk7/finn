@@ -20,6 +20,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 from support.models import convert
 from support.op_specs import conv
+from support.refusals import refused
 
 import finn.custom_op.kernels as domain
 from finn.core.graph.errors import KernelOpError
@@ -267,7 +268,13 @@ def test_two_kernel_ops_matching_one_node_refuse_the_conversion(
 ) -> None:
     monkeypatch.setattr(domain, "Twin", Twin, raising=False)
     monkeypatch.setattr(domain, "__all__", [*domain.__all__, "Twin"])
-    with pytest.raises(KernelOpError, match=r"\['Thresholding', 'Twin'\] each match it"):
+    with refused(
+        "match-ambiguous",
+        error=KernelOpError,
+        owner="ToKernelOps",
+        node="mt",
+        message=r"\['Thresholding', 'Twin'\] each match it",
+    ):
         convert(multithreshold())
 
 

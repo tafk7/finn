@@ -17,7 +17,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 from support.ipxact_ports import AXILITE
 from support.models import (
@@ -28,6 +27,7 @@ from support.models import (
     streamed_w2_model,
 )
 from support.packaging import NO_VIVADO, verified, verified_parent
+from support.refusals import refused
 from support.tfc import ULTRA96
 
 import finn.custom_op.kernels as kernel_ops_package
@@ -149,9 +149,15 @@ def test_packaging_reads_the_part_and_period_from_the_target() -> None:
     configure_partition(model)
     for key in PLATFORM_KEYS.values():
         model.delete(key)
-    with pytest.raises(KernelOpError, match="states no target"):
+    with refused("target-unrecorded", error=KernelOpError, owner="read_target"):
         verified(model, "sdp_1")
-    with pytest.raises(KernelOpError, match="design-changed|the design changed since"):
+    with refused(
+        "design-changed",
+        error=KernelOpError,
+        owner="refuse_unverified",
+        node="sdp_1",
+        message="the design changed since",
+    ):
         model.transform(PackagePartition("sdp_1"))
 
 
@@ -178,9 +184,16 @@ def test_the_cut_keeps_the_parent_graph_with_one_partition_of_one_name(tmp_path:
 
 def test_the_kernel_path_cuts_once(tmp_path: Path) -> None:
     parent = chain().transform(CutKernelPartition(tmp_path / "once"))
-    with pytest.raises(KernelOpError, match="holds a partition already: a build cuts once"):
+    with refused(
+        "partition-present",
+        error=KernelOpError,
+        owner="CutKernelPartition",
+        message="holds a partition already: a build cuts once",
+    ):
         parent.transform(CutKernelPartition(tmp_path / "twice"))
-    with pytest.raises(ValueError, match="holds 0 partitions of KernelOps"):
+    with refused(
+        "partition-count", owner="partition_body", message="holds 0 partitions of KernelOps"
+    ):
         partition_body(chain())
 
 
@@ -263,7 +276,11 @@ def test_the_export_names_each_end_its_iodma_and_every_connection(tmp_path: Path
 
 def test_a_shell_without_an_integration_has_no_export(tmp_path: Path) -> None:
     parent = verified_parent(chain().transform(CutKernelPartition(tmp_path)))
-    with pytest.raises(IntegrationError, match="the 'ip' shell's integration is None: no export"):
+    with refused(
+        "integration-unexported",
+        error=IntegrationError,
+        message="the 'ip' shell's integration is None: no export",
+    ):
         integration(parent)
 
 
@@ -288,11 +305,17 @@ def test_an_iodma_end_refuses_w2_repeated_or_tiled_by_name() -> None:
             (second,) = [node for node in model.graph.node if node.name == "second"]
             kernel_op(model, second).save(folding)
         choose_memories(model)
-        with pytest.raises(KernelOpError, match=r"w2\.end: no case is viable") as refused:
+        with refused(
+            "choices-open",
+            error=KernelOpError,
+            owner="configured_network",
+            node="partition",
+            keys=("w2.end",),
+        ) as left:
             configured_network(model, "partition")
         for refusal in refusals:
-            assert re.search(refusal, str(refused.value))
-        assert ("end-order" in str(refused.value)) == (tiled in refusals)
+            assert re.search(refusal, str(left.error))
+        assert ("end-order" in str(left.error)) == (tiled in refusals)
 
 
 def test_an_end_or_bus_the_block_design_cannot_wire_is_refused_by_name(tmp_path: Path) -> None:
@@ -302,11 +325,21 @@ def test_an_end_or_bus_the_block_design_cannot_wire_is_refused_by_name(tmp_path:
     end = integration(parent).ends[0]
     wire_one_bus_each(end.contract, "x")
     for counts in ({"control_buses": 2}, {"memory_ports": 2}, {"memory_ports": 0}):
-        with pytest.raises(IntegrationError, match="x: its iodma_hls end states .* AXI-Lite"):
+        with refused(
+            "end-buses-unwired",
+            error=IntegrationError,
+            owner="vivado-block-design",
+            message="x: its iodma_hls end states .* AXI-Lite",
+        ):
             wire_one_bus_each(replace(end.contract, **counts), "x")
     assert _aperture(AXILITE, 4096) == 4096 and _aperture(AXILITE, 16) == 32
     bare = replace(AXILITE, signals=tuple(s for s in AXILITE.signals if s.logical != "awaddr"))
-    with pytest.raises(IntegrationError, match="s_axilite: an AXI-Lite bus with no awaddr"):
+    with refused(
+        "bus-aperture-unknown",
+        error=IntegrationError,
+        owner="vivado-block-design",
+        message="s_axilite: an AXI-Lite bus with no awaddr",
+    ):
         _aperture(bare, 4096)
 
 

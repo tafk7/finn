@@ -21,6 +21,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import get_domain_opset_version, getCustomOp, op_identity
 from support.models import WEIGHTS, X, matmul_model, schema_digest
+from support.refusals import refused
 
 import finn.custom_op.kernels as domain
 from finn.core.graph.annotations.channel import channel_choices
@@ -147,17 +148,36 @@ def test_save_writes_choices_and_replay_reads_them() -> None:
     # None clears a choice; the check replays what is written, so a clear that leaves a
     # stored choice reading it (pumping reads SIMD) is refused, named, and nothing is
     # written.
-    with pytest.raises(KernelOpError, match="compute.packed.compute_pumping: .*simd"):
+    with refused(
+        "choices-refused",
+        error=KernelOpError,
+        owner="MatMul",
+        node="first",
+        keys=("compute.packed.compute_pumping",),
+        message=r"compute\.packed\.compute_pumping: .*simd",
+    ):
         op(model).save({"compute.packed.simd": None})
     assert "compute.packed.simd" in attributes(model)
     op(model).save({"compute.packed.simd": None, "compute.packed.compute_pumping": None})
     assert "compute.packed.simd" not in attributes(model)
-    with pytest.raises(KernelOpError, match="not an 's' value"):
+    with refused(
+        "choice-value-invalid",
+        error=KernelOpError,
+        node="first",
+        keys=("compute",),
+        message="not an 's' value",
+    ):
         op(model).save({"compute": 1})
-    with pytest.raises(KernelOpError, match="among"):
+    with refused("choice-value-invalid", error=KernelOpError, node="first", keys=("compute",)):
         op(model).save({"compute": "dense"})
     # A channel's choice is no node's: refused, naming where it is stated.
-    with pytest.raises(KernelOpError, match="are not choices of MatMul; a channel's choices"):
+    with refused(
+        "choice-unknown",
+        error=KernelOpError,
+        node="first",
+        keys=("w.transport",),
+        message="are not choices of MatMul; a channel's choices",
+    ):
         op(model).save({"w.transport": "direct"})
 
 
@@ -168,9 +188,9 @@ def test_a_refused_save_names_its_rule_owned_by_the_op_about_the_node() -> None:
     label = op(model).label
     found = []
     for choices in ({"compute.packed.typo": 1}, {"compute": 1}, {"compute.packed.pe": 3}):
-        with pytest.raises(KernelOpError) as refused:
+        with pytest.raises(KernelOpError) as rejection:
             op(model).save(choices)
-        (finding,) = refused.value.findings
+        (finding,) = rejection.value.findings
         assert finding.owner == "MatMul" and dict(finding.details)["node"] == label
         found.append(finding)
     assert [finding.code for finding in found] == [
@@ -188,10 +208,10 @@ def test_a_kernel_op_error_carries_at_least_one_finding() -> None:
         KernelOpError("unnamed")  # type: ignore[call-arg]
     with pytest.raises(TypeError):
         KernelOpError("unnamed", findings=())
-    refused = KernelOpError.refused("a-rule", "MatMul", "m: refused", ("pe",), node="m")
-    (finding,) = refused.findings
-    assert str(finding) == "MatMul: a-rule: m: refused" and str(refused) == "m: refused"
-    assert dict(finding.details) == {"keys": ("pe",), "node": "m"} and refused.keys == ("pe",)
+    rejection = KernelOpError.refused("a-rule", "MatMul", "m: refused", ("pe",), node="m")
+    (finding,) = rejection.findings
+    assert str(finding) == "MatMul: a-rule: m: refused" and str(rejection) == "m: refused"
+    assert dict(finding.details) == {"keys": ("pe",), "node": "m"} and rejection.keys == ("pe",)
 
 
 def test_the_weight_sources_choices_persist_on_the_weights_and_the_network_replays_them() -> None:
@@ -267,7 +287,7 @@ def test_an_unknown_attribute_is_refused() -> None:
     # Nor is ``memory``: the weight channel's source owns the memory. Nothing is pinned.
     for name, value in (("PE", 2), ("memory", "memstream")):
         node.attribute.append(helper.make_attribute(name, value))
-        with pytest.raises(KernelOpError, match=f"{name} is not a choice of MatMul"):
+        with refused("choice-unknown", error=KernelOpError, node="first", keys=(name,)):
             op(model).choices()
         node.attribute.pop()
 
@@ -281,8 +301,8 @@ def test_apply_config_writes_choices_replay_checks() -> None:
     # A folding config naming only the nested key replays under the forced selector.
     alone = matmul_model().transform(ApplyConfig({"first": {"compute.packed.pe": 2}}))
     assert op(alone).point().compute.pe == 2
-    refused = matmul_model().transform(ApplyConfig({"first": {"compute.packed.pe": 3}}))
-    assert "compute.packed.pe" in op(refused).verify_node()[0]
+    misfolded = matmul_model().transform(ApplyConfig({"first": {"compute.packed.pe": 3}}))
+    assert "compute.packed.pe" in op(misfolded).verify_node()[0]
 
 
 def test_choices_survive_save_and_load(tmp_path: Path) -> None:

@@ -11,12 +11,12 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-import pytest
 from onnx import NodeProto, TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 from support.models import DOMAIN, TARGET, convert
+from support.refusals import refused
 
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
@@ -79,7 +79,7 @@ def multithreshold(x: str = "INT4", t: str = "FLOAT32", table: Any = SORTED) -> 
     return model_of([multithreshold_node("x", "t", "y")], {"x": ([3, 4], x)}, {"t": (table, t)})
 
 
-def refused(model: ModelWrapper) -> list[tuple[str, str]]:
+def rejected(model: ModelWrapper) -> list[tuple[str, str]]:
     """The (owner, code) of each finding of the one node, which stays on the host as it
     was."""
     (source,) = model.graph.node
@@ -99,14 +99,14 @@ def test_a_float_matmul_stays_on_the_host_with_the_kernels_codes() -> None:
     # Each core refuses with the same finding, reported once; float weights that are
     # not integers are no contradiction of FLOAT32.
     for weights in (np.eye(4), np.full((4, 4), 0.5)):
-        found = refused(matmul("FLOAT32", "FLOAT32", weights))
+        found = rejected(matmul("FLOAT32", "FLOAT32", weights))
         assert found == [("result_range", "matmul-arithmetic")]
 
 
 def test_an_int20_matmul_stays_on_the_host_with_each_cores_code() -> None:
     """INT20 activations on a DSP48E2: the packed core's DSP input is too narrow, and
     the INT8 core needs a DSP58. Each case of the ``compute`` Decision says why."""
-    assert sorted(refused(matmul("INT20", "INT20"))) == [
+    assert sorted(rejected(matmul("INT20", "INT20"))) == [
         ("compute.int8_dsp58.core_supported", "dotp-target"),
         ("compute.packed.core_supported", "dotp-activation-width"),
     ]
@@ -116,14 +116,14 @@ def test_an_int32_matmul_stays_on_the_host_with_each_cores_code() -> None:
     """INT32 activations on a DSP48E2: the kernels refuse the node, each case of the
     ``compute`` Decision by its code. Its sums pass 2**24, which no longer matters:
     FINN executes the ONNX it covers with exact integers."""
-    assert sorted(refused(matmul("INT32", "INT32"))) == [
+    assert sorted(rejected(matmul("INT32", "INT32"))) == [
         ("compute.int8_dsp58.core_supported", "dotp-target"),
         ("compute.packed.core_supported", "dotp-activation-width"),
     ]
 
 
 def test_a_float_multithreshold_stays_on_the_host_with_the_kernels_codes() -> None:
-    assert refused(multithreshold("FLOAT32", "FLOAT32")) == [
+    assert rejected(multithreshold("FLOAT32", "FLOAT32")) == [
         ("table_supported", "threshold-type"),
         ("types_supported", "dtype-family"),
     ]
@@ -141,7 +141,14 @@ def test_an_unannotated_input_is_an_unstated_fact() -> None:
 
 
 def test_a_contradiction_still_stops_the_conversion() -> None:
-    with pytest.raises(KernelOpError, match="mm: w is annotated INT2 and holds values over"):
+    with refused(
+        "initializer-out-of-datatype",
+        error=KernelOpError,
+        owner="admitted",
+        node="mm",
+        tensor="w",
+        message="is annotated INT2 and holds values over",
+    ):
         convert(matmul(w="INT2", weights=np.full((4, 4), 3.0)))
 
 
@@ -173,7 +180,7 @@ def test_admission_reads_the_types_the_nodes_before_state() -> None:
     """``h`` carries a stale INT20 annotation, which the second MatMul's cores refuse.
     Conversion states ``h`` from the first MatMul's kernel (its weights' columns) before
     it asks the kernels about the second, so both convert."""
-    assert ("compute.packed.core_supported", "dotp-activation-width") in refused(
+    assert ("compute.packed.core_supported", "dotp-activation-width") in rejected(
         matmul("INT20", "INT4")
     )
     nodes = [

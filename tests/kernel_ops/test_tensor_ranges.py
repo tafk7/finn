@@ -14,19 +14,20 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-import pytest
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.ranges import TensorRange
 from qonnx.util.basic import qonnx_make_model
 from support.models import DOMAIN, TARGET
+from support.refusals import refused
 
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import edge_tensor, initializer, reading
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network
+from finn.dataflow.datatypes import DatatypeError
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.matmul import column_range, operand_range
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -103,7 +104,9 @@ def test_an_output_whose_range_is_not_its_producers_is_stale() -> None:
     the datatype alone, stated without its range, is stale, named by the network."""
     model = ranged_model()
     model.set_tensor_datatype("y", DataType["INT3"])
-    with pytest.raises(KernelOpError, match=r"tensor-stale: the graph states y \[3, 4\] INT3, its"):
+    with refused(
+        "tensor-stale", error=KernelOpError, owner="stale_outputs", node="project", tensor="y"
+    ):
         network(model, model.graph.node)
 
 
@@ -114,8 +117,13 @@ def test_a_stored_range_its_datatype_does_not_hold_is_refused() -> None:
     for entry in annotation.quant_parameter_tensor_names:
         if entry.key == "finn_datatype":
             entry.value = "UINT2"
-    with pytest.raises(
-        KernelOpError, match=r"activate: levels: \[-1, 1\] is not a range of UINT2 values"
+    with refused(
+        "range-invalid",
+        error=KernelOpError,
+        owner="element",
+        node="activate",
+        tensor="levels",
+        message=r"\[-1, 1\] is not a range of UINT2 values",
     ):
         edge_tensor(model, "levels", "activate")
 
@@ -126,9 +134,9 @@ def test_an_operand_range_holds_zero_and_is_an_ordinary_integers() -> None:
     assert operand_range(ScalarEncoding(DataType["INT4"], TensorRange(1, 3))) == (0, 3)
     assert operand_range(ScalarEncoding(DataType["INT4"], TensorRange(-3, -1))) == (-3, 0)
     assert operand_range(ScalarEncoding(INT2)) == (-2, 1)
-    with pytest.raises(ValueError, match="not an ordinary INT/UINT encoding"):
+    with refused("integer-not-ordinary", error=DatatypeError, message="^BIPOLAR "):
         operand_range(ScalarEncoding(DataType["BIPOLAR"]))
-    with pytest.raises(ValueError, match="not an ordinary INT/UINT encoding"):
+    with refused("integer-not-ordinary", error=DatatypeError, message="^FLOAT32 "):
         operand_range(ScalarEncoding(DataType["FLOAT32"]))
 
 

@@ -25,6 +25,7 @@ import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import built, choose, with_adapter_memories, with_direct_transports
 from support.models import MATMUL, configure_partition, kernel_model
+from support.refusals import refused
 from support.tfc import ULTRA96
 
 import finn.custom_op.kernels.shell as shell
@@ -137,15 +138,23 @@ def test_a_partition_of_kernel_ops_counts_its_ends() -> None:
         patched.setattr(shell, "shell_row", lambda *_: narrow)
         bound = in_shell(model, model.graph.node, name="chain")
         assert bound.row == narrow
-        with pytest.raises(KernelOpError, match="refused by the 'pynq' shell") as explored:
+        with refused(
+            "interface-budget-exceeded",
+            error=KernelOpError,
+            owner="budgets",
+            message="the 'pynq' shell",
+        ) as explored:
             explore_kernel_choices(model)
-        with pytest.raises(
-            KernelOpError, match="takes 1 AXI-Lite buses; the partition presents 0"
+        with refused(
+            "interface-budget-exceeded",
+            error=KernelOpError,
+            owner="budgets",
+            message="takes 1 AXI-Lite buses; the partition presents 0",
         ) as packaged:
             configured_network(model, "chain")
-    # Each refusal carries the shell's findings, by code.
-    for refused in (explored, packaged):
-        assert [f.code for f in refused.value.findings] == ["interface-budget-exceeded"]
+    # Each refusal carries the shell's findings alone, by code.
+    for caught in (explored, packaged):
+        assert [f.code for f in caught.error.findings] == ["interface-budget-exceeded"]
 
 
 def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
@@ -162,10 +171,12 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     assert point.module.abi.clock_alignments
     write_target(model, ULTRA96)
     assert not in_shell(model, model.graph.node, name="chain").row.clk2x
-    with pytest.raises(
-        KernelOpError,
-        match="clock-unavailable: the partition takes an aligned doubled clock "
-        r"\(ap_clk2x\), which the 'pynq' shell does not supply",
+    with refused(
+        "clock-unavailable",
+        error=KernelOpError,
+        owner="budgets",
+        message=r"the partition takes an aligned doubled clock \(ap_clk2x\), which the 'pynq' "
+        "shell does not supply",
     ):
         configured_network(model, "chain")
 

@@ -21,11 +21,12 @@ import numpy as np
 import pytest
 from qonnx.core.ranges import TensorRange
 from support.models import TARGET, WEIGHTS, matmul_model, thresholding_model
+from support.refusals import refused
 
 import finn.kernels.members as members
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import integer_tensor
-from finn.core.space import Rejected, design_space, inspection
+from finn.core.space import DefinitionError, Rejected, design_space, inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.thresholding import Thresholding
@@ -131,9 +132,9 @@ def test_a_graph_tensor_that_disagrees_with_the_facts_is_refused() -> None:
             weights_dtype=INT3,
         )
     )
-    refused = wrong.query(MatMulKernel.carried)
-    assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"matmul-tensor"}
+    rejection = wrong.query(MatMulKernel.carried)
+    assert isinstance(rejection, Rejected)
+    assert {finding.code for finding in rejection.findings} == {"matmul-tensor"}
 
 
 def test_a_node_alone_is_a_network_of_its_kernel_and_its_boundaries() -> None:
@@ -169,7 +170,13 @@ def test_a_node_without_a_baseline_is_refused_by_the_decision_naming_the_node(
         raise ExploreError("decision-no-viable-case", "compute", "no case is viable: none")
 
     monkeypatch.setattr(Seam, "baseline", refuse)
-    with pytest.raises(KernelOpError, match="first: no baseline: compute: decision-no-viable"):
+    with refused(
+        "decision-no-viable-case",
+        error=KernelOpError,
+        owner="compute",
+        node="first",
+        message="no case is viable",
+    ):
         op.baselined()
     ((code, owner, details),) = [(f.code, f.owner, dict(f.details)) for f in op.admission()]
     assert (code, owner, details) == ("decision-no-viable-case", "compute", {"node": "first"})
@@ -216,7 +223,7 @@ def test_a_key_tells_values_apart_by_their_exact_type() -> None:
 def test_a_refused_binding_caches_nothing() -> None:
     broken = Facts(MatMulKernel, {"x_tensor": X})  # no platform
     with member_cache() as cache:
-        with pytest.raises(Exception, match="platform"):
+        with refused("formal-unsupplied", error=DefinitionError, message=r"^platform\b"):
             configured(broken)
         assert not cache.entries
 

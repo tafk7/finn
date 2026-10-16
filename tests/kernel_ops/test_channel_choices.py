@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from onnx import StringStringEntryProto, TensorProto, helper
@@ -25,6 +26,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from support.explore_models import kernel_model as open_model
 from support.helpers import Lanes
 from support.models import EDGE, kernel_model
+from support.refusals import refused
 from support.tfc import LANES
 
 from finn.core.graph.annotations.channel import (
@@ -106,23 +108,40 @@ def test_the_writer_is_checked_by_replaying_the_network() -> None:
     refused, by name, and nothing is written; ``None`` clears a choice."""
     model = kernel_model()
     before = kernel_choices_config(model)
-    refused: dict[str, dict[str, dict[str, object]]] = {
-        r"levels: refused choices: transport.fifo.buffer.depth: .*domain-membership": {
-            "levels": {**FIFO, "transport.fifo.buffer.depth": 1}
-        },
-        r"x: refused choices: adapter.input_gen_vpc.input_gen.ram_style: inapplicable": {
-            "x": {"adapter.input_gen_vpc.input_gen.ram_style": "auto"}
-        },
-        r"levels: \['memory'\] are not a channel's choices \(finn.channel\)": {
-            "levels": {"memory": "auto"}
-        },
-        r"levels: finn.channel/transport.fifo.buffer.depth: cannot store '8'": {
-            "levels": {"transport.fifo.buffer.depth": "8"}
-        },
-        r"thresholds: no channel of the partition": {"thresholds": EDGE},
-    }
-    for match, choices in refused.items():
-        with pytest.raises(KernelOpError, match=match):
+    rejections: list[tuple[str, dict[str, Any], str | None, dict[str, dict[str, object]]]] = [
+        (
+            "choices-refused",
+            {"tensor": "levels", "keys": ("transport.fifo.buffer.depth",)},
+            None,
+            {"levels": {**FIFO, "transport.fifo.buffer.depth": 1}},
+        ),
+        (
+            "choices-refused",
+            {"tensor": "x", "keys": ("adapter.input_gen_vpc.input_gen.ram_style",)},
+            None,
+            {"x": {"adapter.input_gen_vpc.input_gen.ram_style": "auto"}},
+        ),
+        (
+            "channel-choice-unknown",
+            {"tensor": "levels", "keys": ("memory",)},
+            r"are not a channel's choices \(finn.channel\)",
+            {"levels": {"memory": "auto"}},
+        ),
+        (
+            "channel-choice-invalid",
+            {"tensor": "levels", "keys": ("transport.fifo.buffer.depth",)},
+            r"cannot store '8'",
+            {"levels": {"transport.fifo.buffer.depth": "8"}},
+        ),
+        (
+            "channel-unknown",
+            {"tensor": "thresholds", "keys": ("thresholds",)},
+            r"no channel of the partition",
+            {"thresholds": EDGE},
+        ),
+    ]
+    for code, details, message, choices in rejections:
+        with refused(code, error=KernelOpError, message=message, **details):
             save_channels(model, {"hidden": FIFO, **choices})
         assert kernel_choices_config(model) == before
     save_channels(model, {"levels": {"transport": None}})
@@ -137,15 +156,21 @@ def test_a_graph_with_nodes_on_the_host_states_no_channel_choice(tmp_path: Path)
     nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
     outside = r"channel choices \(finn.channel\) are stated in a partition's body only, not"
     hosts = r"on a graph with nodes on the host \(host\)"
-    with pytest.raises(KernelOpError, match=rf"x, .*: {outside} {hosts}"):
+    every = ("x", "w1", "w2", "hidden", "levels", "y")
+    with refused(
+        "channel-choices-outside-body",
+        error=KernelOpError,
+        message=rf"{outside} {hosts}",
+        keys=every,
+    ):
         network(model, nodes)
-    with pytest.raises(KernelOpError, match=f"^x: {outside}"):
+    with refused("channel-choices-outside-body", error=KernelOpError, keys=("x",)):
         save_channels(model, {"x": EDGE})
     # A node replays its kernel's choices only: its weight channel's are the network's.
     assert kernel_op(model, nodes[0]).verify_node() == []
-    with pytest.raises(KernelOpError, match=outside):
+    with refused("channel-choices-outside-body", error=KernelOpError):
         kernel_choices_config(model)
-    with pytest.raises(KernelOpError, match=outside):
+    with refused("channel-choices-outside-body", error=KernelOpError):
         model.transform(CutKernelPartition(tmp_path))
     # Stated nowhere, the graph's network replays the nodes' choices as before.
     for tensor in model.tensors_stating(CHANNEL):
@@ -257,7 +282,9 @@ def test_the_export_names_nodes_and_tensors_and_pinned_reads_it(tmp_path: Path) 
     # A channel's key under its consumer is no Decision of the root: D8's file is
     # refused, named.
     path.write_text(json.dumps({"second": {"x.transport": "direct"}}))
-    with pytest.raises(ExploreError, match="second.x.transport: not a Decision of this network"):
+    with refused(
+        "pin-refused", error=ExploreError, message=r"second\.x\.transport: not a Decision"
+    ):
         explore_kernel_choices(open_model(), Pinned(path))
 
 
@@ -305,7 +332,14 @@ def test_the_export_refuses_a_node_named_like_a_stating_tensor() -> None:
     op.save(dict.fromkeys(op.choices()))
     assert not op.choices()
     activate.name = "hidden"
-    with pytest.raises(KernelOpError, match="hidden: a node and a tensor are both named hidden"):
+    with refused(
+        "name-shared",
+        error=KernelOpError,
+        owner="kernel_choices_config",
+        message="a node and a tensor are both named hidden",
+        node="hidden",
+        tensor="hidden",
+    ):
         kernel_choices_config(model)
 
 
@@ -315,10 +349,7 @@ def test_a_body_stated_under_the_nodes_channel_attributes_is_refused_by_name() -
     choice; either way the body is explored again."""
     model = kernel_model()
     model.graph.node[2].attribute.append(helper.make_attribute("x.transport", "direct"))
-    with pytest.raises(
-        KernelOpError,
-        match="second: x.transport is not a choice of MatMul; a channel's choices are its tensor's",
-    ):
+    with refused("choice-unknown", error=KernelOpError, node="second", keys=("x.transport",)):
         network(model, model.graph.node)
     model = kernel_model()
     (annotation,) = [
@@ -327,7 +358,12 @@ def test_a_body_stated_under_the_nodes_channel_attributes_is_refused_by_name() -
     annotation.quant_parameter_tensor_names.append(
         StringStringEntryProto(key="finn.channel/x.transport", value="direct")
     )
-    with pytest.raises(KernelOpError, match=r"levels: .*\['x.transport'\] are not declared.*again"):
+    with refused(
+        "channel-choices-unreadable",
+        error=KernelOpError,
+        message=r"\['x.transport'\] are not declared.*again",
+        tensor="levels",
+    ):
         network(model, model.graph.node)
 
 

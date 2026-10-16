@@ -14,10 +14,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 from support.explore_models import choices, kernel_model
 from support.helpers import FULL_DSP48E2, Lanes
+from support.refusals import refused
 
 from finn.core.graph.errors import KernelOpError
 from finn.custom_op.kernels.network import network
@@ -36,11 +36,11 @@ def ranked(policy: RankPolicy) -> ExploreKernelChoices:
     return ExploreKernelChoices(Ranked(policy))
 
 
-def offer(key: str, cases: tuple[object, ...], refused: dict[str, str]) -> Choice:
+def offer(key: str, cases: tuple[object, ...], why: dict[str, str]) -> Choice:
     """An open Decision with ``cases``, as the seam offers it (``key``: its owner and the
     key there, joined)."""
     owner, _, below = key.partition(".")
-    return Choice((owner, below), None, cases, False, refused)
+    return Choice((owner, below), None, cases, False, why)
 
 
 class Recording:
@@ -140,14 +140,17 @@ def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> N
     assert explore.explored is not None
     left = explore.explored.report["open"]
     assert left and all(name.endswith("transport.fifo.buffer.depth (required)") for name in left)
-    with pytest.raises(KernelOpError, match=r"refused at emission: ") as refused:
+    with refused("choices-open", error=KernelOpError, node="the chain") as open_choices:
         configured_network(model, "the chain")
-    assert all(key.endswith("transport.fifo.buffer.depth") for key in refused.value.keys)
+    assert isinstance(open_choices.error, KernelOpError)
+    assert all(key.endswith("transport.fifo.buffer.depth") for key in open_choices.error.keys)
     required = "(required: run step_size_fifos or step_placeholder_choices)"
-    assert str(refused.value).count(required) == len(left)
+    assert str(open_choices.error).count(required) == len(left)
     # The debug placeholder strategy takes the first case of a required choice, and
     # refuses one known by membership only, named.
-    with pytest.raises(ExploreError, match=r"no case to take .*transport.fifo.buffer.depth"):
+    with refused(
+        "placeholder-no-case", error=ExploreError, message=r"transport\.fifo\.buffer\.depth"
+    ):
         model.transform(ExploreKernelChoices(DebugPlaceholder()))
 
 
@@ -158,7 +161,11 @@ def test_a_policy_ranking_a_case_that_is_not_viable_is_refused() -> None:
                 return ("ultra",)
             return choice.cases or ()
 
-    with pytest.raises(ExploreError, match="ram_style: the policy ranked \\['ultra'\\]"):
+    with refused(
+        "policy-case-not-viable",
+        error=ExploreError,
+        message=r"ram_style: the policy ranked \['ultra'\]",
+    ):
         kernel_model().transform(ranked(Ultra()))
 
 
