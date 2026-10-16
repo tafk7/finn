@@ -10,13 +10,10 @@ step compares the successor with its oracle, and the step's report with the repo
 the same change on the oracle of its base. Every difference is reported with the step,
 the change and the first keys that differ; the tallies say what the walk exercised.
 
-Three differences of the engine as it stands are kept apart (``Report.known``), each
-found by these walks: a choice a successor publishes records none of its guard's
-reads (and what read it records none of them either); it answers without reading its
-guard, so a successor's cached answer can be a value where a recomputation's is
-unresolved; and a retained choice, admitted under the base's forced values, can wait
-on a selector the change opened. ``check`` fails on the rest, and on these only when
-asked (``known=True``).
+One difference of the engine as it stands is kept apart (``Report.known``), found by
+these walks: a retained choice, admitted under the base's forced values, can wait on a
+selector the change opened. ``check`` fails on every other, and on this only when asked
+(``known=True``).
 
 Engine-only: this module imports ``finn.core.space`` and nothing of FINN. The engine's
 own walks (``core.space.test_bounded_change``) and the kernel chain's
@@ -77,7 +74,7 @@ class Tallies:
     pairs: int = 0
     forced_moved: int = 0  # steps that moved the forced value of a Decision they did not name
     nodes_compared: int = 0
-    gaps: int = 0  # entries of the three known gaps below, counted
+    gaps: int = 0  # entries of the known gap below, counted
     assignments_rechecked: int = 0
     idle: int = 0  # steps with nothing to draw
 
@@ -86,9 +83,9 @@ class Tallies:
 class Report:
     tallies: Tallies = field(default_factory=Tallies)
     differences: list[str] = field(default_factory=list)
-    # What today's engine answers differently from a recomputation, in the three ways the
-    # walks found (each a finding for the engine, none a pass): by name, the steps and
-    # the first nodes. ``check(known=True)`` fails on these too.
+    # What today's engine answers differently from a recomputation, in the way the walks
+    # found (a finding for the engine, not a pass): by name, the steps and the first
+    # nodes. ``check(known=True)`` fails on it too.
     known: dict[str, list[str]] = field(default_factory=dict)
 
 
@@ -213,34 +210,24 @@ class _Walk:
         entries = dict(got.cache)
         others: dict[int, _runtime.Evaluation] = {}
         wrong: list[str] = []
-        unread: list[str] = []
         for i, entry in entries.items():
             tallies.nodes_compared += 1
             try:
                 others[i] = _runtime.evaluate(want, i)
             except Exception as error:  # noqa: BLE001 - the recomputation failed where the successor held an answer
                 wrong.append(f"{nodes[i].key} (recomputation raised {error!r})")
-        stale = {i for i, other in others.items() if not same(entries[i].result, other.result)}
-        # A published choice answers from its assignment without reading its guard, and a
-        # node that read it carries the answer on.
-        published = {i for i in stale if nodes[i].kind == "decision" and i in got.assignments}
-        carried = {i for i in stale if i in published or self.reads(entries, i, published)}
-        wrong += [nodes[i].key for i in stale - carried]
-        if carried:
-            self.gap(
-                "a published choice answers without its guard", (nodes[i].key for i in carried)
-            )
-        guarded: list[str] = []
-        for i, other in others.items():
-            missing = other.decisions - entries[i].decisions
-            if missing:
-                (guarded if missing <= self.guard_reads(want, i) else unread).append(nodes[i].key)
+        wrong += [
+            nodes[i].key for i, other in others.items() if not same(entries[i].result, other.result)
+        ]
+        unread = [
+            nodes[i].key
+            for i, other in others.items()
+            if not other.decisions <= entries[i].decisions
+        ]
         if wrong:
             self.differ("cached results", wrong)
         if unread:
             self.differ("cached evidence", unread)
-        if guarded:
-            self.gap("a published choice records none of its guard's reads", guarded)
 
         unadmitted: list[str] = []
         waiting: list[str] = []
@@ -260,40 +247,6 @@ class _Walk:
         self.report.known.setdefault(kind, []).append(
             f"step {self.step}: {self.change} ({', '.join(shown[:SHOWN])})"
         )
-
-    @staticmethod
-    def reads(entries: Mapping[int, _runtime.Evaluation], index: int, targets: set[int]) -> bool:
-        """Whether ``index``'s evaluation read, directly or through others, one of ``targets``."""
-        seen, pending = set[int](), [index]
-        while pending:
-            current = pending.pop()
-            if current in targets:
-                return True
-            if current not in seen and current in entries:
-                seen.add(current)
-                pending.extend(entries[current].dependencies)
-        return False
-
-    @staticmethod
-    def guard_reads(want: _runtime.Snapshot, index: int) -> frozenset[int]:
-        """The Decisions the guards of the Decisions ``index`` reads (itself included) read,
-        in the recomputation: what a successor's published choice leaves out of its
-        evidence, because it answers from the assignment without reading its guard."""
-        nodes, seen, pending = want.linked.nodes, set[int](), [index]
-        found: frozenset[int] = frozenset()
-        while pending:
-            current = pending.pop()
-            if current in seen:
-                continue
-            seen.add(current)
-            entry = want.cache[current]
-            pending.extend(entry.dependencies)
-            guard = nodes[current].guard
-            if nodes[current].kind == "decision" and guard is not None:
-                found |= _runtime.evaluate(want, guard).decisions
-                if nodes[guard].kind == "decision":
-                    found |= {guard}
-        return found
 
     # -- the walk -----------------------------------------------------------------------
 

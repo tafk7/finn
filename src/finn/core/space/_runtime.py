@@ -188,9 +188,10 @@ class _TrialSnapshot(Snapshot):
       change touched (``_touched``), and on publication gains the trial's that read
       no Decision open in the successor: the trial's candidates are the successor's
       assignments, each admitted before it was read. A candidate's own answer is
-      taken as the successor gives it, without the reads of its admission; what
-      read it counts those reads among its own, which only keeps less. The
-      successor records each candidate's admission reads (``admissions``).
+      taken as the successor gives it: with the reads of its guard, which its
+      frame makes first, and without the reads of its admission; what read it
+      counts those reads among its own, which only keeps less. The successor
+      records each candidate's admission reads (``admissions``).
     """
 
     __slots__ = ("_pending", "_published", "_candidates", "_base", "_successor", "_touches")
@@ -261,10 +262,20 @@ class _TrialSnapshot(Snapshot):
         open_ = frozenset(index for index in self.linked.decisions if index not in candidates)
         for index, entry in unaffected(self.cache, open_).items():
             if index in candidates:
-                # As the successor's decision frame answers: without its admission's reads.
-                entry = Evaluation(entry.result)
+                entry = self._record(index, entry)
             successor.cache.setdefault(index, entry)
         return successor
+
+    def _record(self, index: int, entry: Evaluation) -> Evaluation:
+        """A candidate's entry as the successor's decision frame records it: its answer
+        and what the frame reads, its guard (and so the Decisions the guard reads),
+        and nothing of its admission."""
+        guard = self.linked.nodes[index].guard
+        if guard is None:
+            return Evaluation(entry.result)
+        if guard not in self.cache:
+            raise RuntimeError("a published choice's guard was never evaluated in its trial")
+        return Evaluation(entry.result, (guard,), decisions=read_decisions(self, (guard,), ()))
 
 
 def _forced(snapshot: Snapshot, index: int) -> QueryResult[object] | None:

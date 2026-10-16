@@ -9,16 +9,16 @@ it cached, and the evidence each cached evaluation carries. The Spaces here are 
 that matters: verdicts and evaluations that read **forced** Decisions, which move when
 a neighbour's choice moves.
 
-A walk fails on any difference but three, which today's engine has and the walks tally
-apart: a choice a change publishes records none of its guard's reads, can answer
-without its guard, and may leave a retained choice waiting on a selector the change
-opened. Strict xfails state each, so they flip when the engine stops having it.
+A walk fails on any difference but one, which today's engine has and the walks tally
+apart: a change may leave a retained choice waiting on a selector it opened. A strict
+xfail states it, so it flips when the engine stops having it. A choice a change
+publishes records its guard's reads, as a recomputation does, and answers as one.
 """
 
 from __future__ import annotations
 
 import pytest
-from support.space_walk import check, walk
+from support.space_walk import check, fresh, walk
 
 from core.space._choices_support import replay
 from core.space._toys_support import House
@@ -28,10 +28,12 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
+    Unresolved,
     constraint,
     derived,
     design_space,
     divisors_of,
+    inspection,
     occurrence,
     reject,
     requires,
@@ -189,11 +191,9 @@ def test_a_house_whose_budget_refuses() -> None:
 # -- a published choice's evidence --------------------------------------------------------
 
 
-# The three ways today's engine answers differently from a recomputation, which the
-# walks tally apart (``Report.known``). Each strict xfail below states one, and passes
-# once the engine does not have it: remove its mark then.
-GAP = "a published choice records none of its guard's reads"
-STALE = "a published choice answers without its guard"
+# The way today's engine answers differently from a recomputation, which the walks tally
+# apart (``Report.known``). The strict xfail below states it, and passes once the engine
+# does not have it: remove its mark then.
 WAITING = "an assignment waits on a choice the change opened"
 
 
@@ -224,15 +224,11 @@ def decisions_read(point: Space, reference: object) -> set[str]:
 
 
 def test_a_walk_over_a_guarded_decision_answers_as_a_recomputation() -> None:
-    # Every answer, forced value and verdict agrees; the gaps below are the only
-    # differences, and ``check`` leaves them to the tests that state them.
+    # Every answer, forced value, verdict and recorded read agrees.
     for seed in (1, 2, 3):
-        report = walk(design_space(Host()), seed=seed, steps=150)
-        check(report, forced=False)
-        assert "a published choice records none of its guard's reads" in report.known
+        check(walk(design_space(Host()), seed=seed, steps=150), forced=False, known=True)
 
 
-@pytest.mark.xfail(strict=True, reason=GAP)
 def test_a_published_choice_records_its_guards_decisions() -> None:
     point = design_space(Host()).with_choices({Host.want: True})
     point = point.with_choices({Host.extra.size: 2})
@@ -240,18 +236,39 @@ def test_a_published_choice_records_its_guards_decisions() -> None:
     assert decisions_read(point, Host.extra_size) >= {"extra.size", "want"}
 
 
-@pytest.mark.xfail(strict=True, reason=GAP)
-def test_a_walk_over_a_guarded_decision_carries_complete_evidence() -> None:
-    check(walk(design_space(Host()), seed=1, steps=150), forced=False, known=True)
-
-
-@pytest.mark.xfail(strict=True, reason=STALE)
 def test_a_retained_choice_under_a_selector_the_change_opened_answers_as_a_recomputation() -> None:
-    # The chain from nothing, seed 2, step 195: ten lanes in the first unit leave the
-    # second unit's selector open, and the successor still answers its retained pe.
+    # The chain from nothing, seed 2, step 195 (reduced to the sequence below).
     report = walk(design_space(Pipeline(width=10)), seed=2, steps=250)
     check(report)
-    assert STALE not in report.known, report.known[STALE]
+
+
+def test_a_retained_choice_whose_selector_the_neighbour_stops_forcing_is_unresolved() -> None:
+    # The second unit's pe is committed under its committed core. Clearing the core
+    # leaves it forced (the first unit's odd width refuses the stub), so the pe is still
+    # answered; a neighbour's change that makes the stub viable again un-forces the core,
+    # and the pe is unresolved, as a configuration of the same assignments built from
+    # nothing answers it. The pe's entry, published under the forced core, recorded no
+    # read of it, so the change did not reach it.
+    point = design_space(Pipeline(width=10))
+    owned = {item.key: item.reference for item in inspection.decisions(point)}
+    steps: list[tuple[dict[str, object], tuple[str, ...]]] = [
+        ({"u0.compute": "packed"}, ()),
+        ({"u1.compute": "packed"}, ()),
+        ({"u0.compute.packed.pe": 10}, ()),
+        ({"u1.compute.packed.pe": 1}, ()),
+        ({"u0.compute.packed.pe": 5}, ()),
+        ({}, ("u1.compute",)),
+        ({"u0.compute.packed.pe": 10}, ()),
+    ]
+    for values, clears in steps:
+        changes = [point.field(owned[key]).clear() for key in clears]
+        result = point.try_with_choices({owned[k]: v for k, v in values.items()}, *changes)
+        assert result.accepted, (values, clears)
+        point = result.instance
+    pe = owned["u1.compute.packed.pe"]
+    answer = inspection.explain(point, pe).result
+    assert isinstance(answer, Unresolved), answer
+    assert answer == inspection.explain(fresh(point), pe).result
 
 
 @pytest.mark.xfail(strict=True, reason=WAITING)
