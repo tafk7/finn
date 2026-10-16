@@ -19,6 +19,7 @@ from qonnx.util.basic import qonnx_make_model
 from support.models import TARGET, chain_source, configure_partition, kernel_model
 from support.refusals import refused
 
+from finn.core.graph.annotations.choices import HELD
 from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE,
     OUTPUT_BITFILE_IP_KEY,
@@ -297,6 +298,17 @@ def test_the_design_digest_ignores_what_a_build_made_and_changes_nothing() -> No
     stated = entries(model)
     assert design_digest(model) == digest
     assert entries(model) == stated
+
+
+def test_the_design_digest_ignores_a_hold() -> None:
+    """The held mark names the keys strategies leave alone: it changes no hardware, so
+    marking a key held at its own value leaves the digest as it was (the IP cache and the
+    member cache both key on it)."""
+    model = chain()
+    digest = design_digest(model)
+    model.set(HELD, {"activate": ["pe"]})
+    assert model.get(HELD) == {"activate": ["pe"]}
+    assert design_digest(model) == digest
 
 
 def test_the_design_digest_ignores_orders_that_carry_no_meaning() -> None:

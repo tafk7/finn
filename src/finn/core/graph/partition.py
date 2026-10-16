@@ -21,10 +21,11 @@ from collections.abc import Callable, MutableSequence
 from typing import Any
 
 from onnx import ModelProto, NodeProto
-from qonnx.core.metadata import clear
+from qonnx.core.metadata import clear, delete
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 
+from finn.core.graph.annotations.choices import HELD
 from finn.core.graph.annotations.outputs import OUTPUTS
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 
@@ -47,14 +48,15 @@ def _sort(field: MutableSequence[Any], key: Callable[[Any], Any]) -> None:
 
 
 def design_digest(model: ModelWrapper) -> str:
-    """``model``'s design, as ``sha256:<hex>``: the model with ``finn.outputs`` removed
-    and every order that carries no meaning made canonical, serialized
-    deterministically. It covers the choices, the facts, the weights and the target, and
-    survives a save and a reload. ``model`` is not changed."""
+    """``model``'s design, as ``sha256:<hex>``: the model with ``finn.outputs`` and the held
+    mark removed (a hold changes no hardware) and every order that carries no meaning
+    made canonical, serialized deterministically. It covers the choices, the facts, the
+    weights and the target, and survives a save and a reload. ``model`` is not changed."""
     proto = ModelProto()
     proto.CopyFrom(model.model)
     graph = proto.graph
     clear(graph.metadata_props, OUTPUTS)
+    delete(graph.metadata_props, HELD)
     _sort(graph.metadata_props, lambda prop: prop.key)
     _sort(proto.metadata_props, lambda prop: prop.key)
     for node in graph.node:

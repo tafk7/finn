@@ -409,7 +409,7 @@ def test_a_pin_holds_across_a_later_folding_step(tmp_path: Path) -> None:
     held = kernel_choices_config(body)
     assert held["first"]["compute.packed.simd"] == 1
     assert held["second"]["compute.packed.simd"] == 4
-    assert body.get(HELD) == CHAIN_PINS
+    assert body.get(HELD) == {"first": ["compute.packed.simd"]}
     written = json.loads((Path(pinned.output_dir) / "kernel_choices.json").read_text())
     assert written == held
     for step in folding:

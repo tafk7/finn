@@ -63,6 +63,12 @@ from finn.transformation.kernels.cut import CutKernelPartition
 VCK190 = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=5.0)
 
 
+def keys_of(held: Mapping[str, Any]) -> dict[str, list[str]]:
+    """The held mark's form of ``{graph name: {key: value}}``: the keys, sorted, by owner
+    (``HELD`` names keys; the values are the nodes' and tensors')."""
+    return {owner: sorted(held[owner]) for owner in sorted(held)}
+
+
 def seam_of(model: ModelWrapper) -> tuple[Seam, Partition]:
     return Seam(read_target(model).platform), network(model, model.graph.node)
 
@@ -315,7 +321,7 @@ def test_a_pinned_file_is_committed_held_in_the_body_and_the_rest_explored(
         "first": {"compute.packed.pe": 1},
         "levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8},
     }
-    assert model.get(HELD) == held
+    assert model.get(HELD) == keys_of(held)
     assert pinning.explored is not None
     assert pinning.explored.report["strategy"]["held"] == [
         "first.compute.packed.pe",
@@ -328,7 +334,7 @@ def test_a_pinned_file_is_committed_held_in_the_body_and_the_rest_explored(
     assert saved["first"]["compute.packed.pe"] == 1 and saved["first"]["compute.packed.simd"] == 2
     assert saved["levels"]["transport.fifo.buffer.depth"] == 8
     assert explorer.explored is not None
-    assert explorer.explored.report["held"] == held and model.get(HELD) == held
+    assert explorer.explored.report["held"] == held and model.get(HELD) == keys_of(held)
     # A whole kernel_choices.json pins another model to the same choices, in one batch:
     # the FIFO and its depth, nested under it, together.
     exported = tmp_path / "kernel_choices.json"
@@ -460,7 +466,7 @@ def test_a_pin_holds_for_every_later_exploration_of_the_body(tmp_path: Path) -> 
         assert choices(model)["first"]["compute.packed.simd"] == 1
         assert choices(model)["levels"]["transport.fifo.buffer.depth"] == 8
     assert choices(model)["second"]["compute.packed.simd"] == 1  # back at its baseline
-    assert model.get(HELD) == pins
+    assert model.get(HELD) == keys_of(pins)
     pinned.write_text(json.dumps({"first": {"compute.packed.simd": 2}}))
     with refused(
         "pin-refused",

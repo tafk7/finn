@@ -32,8 +32,9 @@ the choices it decides, explores and settles, and then:
   a required choice no strategy set stays open, and emission refuses it by name
   (``configured_network``);
 - records the pins held, those the body recorded and those the strategy pinned, in the
-  body (``HELD``, ``{graph name: {key: value}}``), so that every later exploration of
-  the body holds them: a pin holds for the build, and re-baselining keeps it; and a
+  body as keys (``HELD``, ``{graph name: [key, ...]}``; the values are the ones the nodes
+  and tensors state), so that every later exploration of the body holds them: a pin holds
+  for the build, and re-baselining keeps it; and a
   target throughput's frames a second (``OBJECTIVE_FPS``), which a later exploration
   whose strategy changes any kernel's choice removes;
 - keeps what it found (``explored``): the network, its cost and the report: the choices
@@ -98,7 +99,7 @@ from typing import TYPE_CHECKING, Any
 
 from qonnx.transformation.base import Transformation
 
-from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS, held_choices
+from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS, held_keys
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
@@ -418,8 +419,18 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     bound = in_shell(model, nodes)
     seam = Seam(read_target(model).platform)
     network = bound
-    seam.held.update(seam.keyed(network, held_choices(model), HELD.entry))
     saved = seam.chosen(network)
+    # The body's mark names the keys held; their values are the ones the network states.
+    # piece 3: a marked key the network does not state (replay dropped it, or its owner is
+    # no member) is left out of the seed here; it is refused by name there.
+    seam.held.update(
+        {
+            (owner, key): saved[(owner, key)]
+            for owner, keys in held_keys(model).items()
+            for key in keys
+            if (owner, key) in saved
+        }
+    )
     # A choice the body leaves open takes its baseline before the strategy runs; a pin
     # the body records must hold there.
     network = seam.baseline(network)
@@ -476,7 +487,8 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         )
     persist(model, network)
     if seam.held:
-        model.set(HELD, _by_owner(seam.held))
+        held = _by_owner(seam.held)
+        model.set(HELD, {owner: sorted(held[owner]) for owner in sorted(held)})
     if isinstance(strategy, TargetThroughput):
         model.set(OBJECTIVE_FPS, strategy.fps)
     elif any(owner in network.kernels for owner, _ in changed):
