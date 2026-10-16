@@ -266,6 +266,9 @@ def test_a_retained_choice_whose_selector_the_neighbour_stops_forcing_is_unresol
         assert result.accepted, (values, clears)
         point = result.instance
     pe = owned["u1.compute.packed.pe"]
+    queried = point.query(pe)
+    assert isinstance(queried, Unresolved), queried
+    assert queried == fresh(point).query(pe)
     answer = inspection.explain(point, pe).result
     assert isinstance(answer, Unresolved), answer
     assert answer == inspection.explain(fresh(point), pe).result
