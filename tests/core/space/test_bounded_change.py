@@ -10,14 +10,13 @@ that matters: verdicts and evaluations that read **forced** Decisions, which mov
 a neighbour's choice moves.
 
 A walk fails on any difference but one, which today's engine has and the walks tally
-apart: a change may leave a retained choice waiting on a selector it opened. A strict
-xfail states it, so it flips when the engine stops having it. A choice a change
+apart: a change may leave a retained choice waiting on a selector it opened. That is the
+engine's rule (DESIGN section 7), and a plain test below states it. A choice a change
 publishes records its guard's reads, as a recomputation does, and answers as one.
 """
 
 from __future__ import annotations
 
-import pytest
 from support.space_cores import Exclusive, Gated, Mutual
 from support.space_walk import check, fresh, walk
 
@@ -203,12 +202,6 @@ def test_a_house_whose_budget_refuses() -> None:
 # -- a published choice's evidence --------------------------------------------------------
 
 
-# The way today's engine answers differently from a recomputation, which the walks tally
-# apart (``Report.known``). The strict xfail below states it, and passes once the engine
-# does not have it: remove its mark then.
-WAITING = "an assignment waits on a choice the change opened"
-
-
 class Option(Space):
     size: int = Decision(values=(1, 2, 3))
 
@@ -325,13 +318,52 @@ def test_an_admission_read_under_a_forced_value_the_successor_does_not_give_is_n
     assert refusals[0] == refusals[1]
 
 
-@pytest.mark.xfail(strict=True, reason=WAITING)
-def test_a_retained_choice_is_admitted_on_the_successor_of_a_change_that_opens_a_selector() -> None:
-    # The trial reads its base's forced value of a selector the change un-forces, so a
-    # retained choice that reads it is admitted there, and waits on the successor.
-    report = walk(design_space(Pipeline(width=10)), seed=6, steps=100)
-    check(report)
-    assert WAITING not in report.known, report.known[WAITING]
+def test_a_retained_choice_waits_on_a_selector_the_change_opened() -> None:
+    """DESIGN section 7's rule as it stands: a trial reads an open Decision it does not
+    change as its base forces it, so a retained choice that reads it is admitted there.
+
+    The chain from nothing, Pipeline seed 6, step 23 (reduced to the sequence below).
+    The second link's burst is committed while the second unit's core is forced (the
+    first unit's pe leaves its width odd, which refuses the stub), and clearing that
+    core is accepted. The last change moves the first unit's pe to an even width, which
+    un-forces the core: the burst stays published, and its admission now waits on the
+    core, ``Unresolved`` (decision unassigned), not refused. A configuration of the same
+    assignments built from nothing answers the same.
+
+    The inconsistency is that a new commit whose admission waits is refused (the last
+    lines), while a retained one is published. The gate for the human in
+    ``records/space-composition-2026-10-15/E2-BRIEF.md`` decides between the rules, and
+    a decision for one changes this assertion.
+    """
+    point = design_space(Pipeline(width=10))
+    owned = {item.key: item.reference for item in inspection.decisions(point)}
+    steps: list[tuple[dict[str, object], tuple[str, ...]]] = [
+        ({"u0.compute": "packed"}, ()),
+        ({"u0.compute.packed.pe": 5}, ()),
+        ({}, ("u1.compute",)),
+        ({"l1.burst": 1}, ()),
+        ({"u0.compute.packed.pe": 10}, ()),
+    ]
+    for values, clears in steps:
+        changes = [point.field(owned[key]).clear() for key in clears]
+        result = point.try_with_choices({owned[k]: v for k, v in values.items()}, *changes)
+        assert result.accepted, (values, clears)
+        point = result.instance
+    burst = owned["l1.burst"]
+    current = occurrence.state(point)
+    index = next(i for i, node in enumerate(current.linked.nodes) if node.key == "l1.burst")
+    assert current.assignments[index] == 1
+    answer = runtime.membership(current, index, 1).result
+    assert isinstance(answer, Unresolved), answer
+    assert not isinstance(answer, Rejected)
+    assert {finding.code for finding in answer.findings} == {"decision-unassigned"}
+    assert answer == runtime.membership(occurrence.state(fresh(point)), index, 1).result
+    # A new commit of the same value, with the choice cleared first, is refused as waiting.
+    cleared = point.try_with_choices({}, point.field(burst).clear())
+    assert cleared.accepted
+    again = cleared.instance.try_with_choices({burst: 1})
+    assert not again.accepted
+    assert [item.result for item in again.outcomes if item.status == "refused"] == [answer]
 
 
 # -- presence reads the Decisions of the guards it reads ------------------------------------
