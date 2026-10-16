@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Generator, Mapping
 from dataclasses import dataclass, field
+from itertools import islice
 from threading import RLock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, TypeAlias, cast
@@ -83,13 +84,99 @@ def unaffected(
     """The evaluations of ``cache`` that are none of ``decisions`` and read none of them,
     directly or through another. Where only those Decisions' answers differ, these
     answer the same: an evaluation is a function of what it read. What a kept
-    evaluation read is kept with it, so its evidence stays complete."""
+    evaluation read is kept with it, so its evidence stays complete. (A ``Cache``
+    makes the same cache without looking at each evaluation, ``Cache.without``; this
+    one looks at each, for the few the successor and forcing give back.)"""
     seeds = decisions if isinstance(decisions, (set, frozenset)) else frozenset(decisions)
     return {
         index: entry
         for index, entry in cache.items()
         if index not in seeds and seeds.isdisjoint(entry.decisions)
     }
+
+
+class Cache(dict[int, Evaluation]):
+    """A snapshot's evaluations, and who read which Decision.
+
+    A dict: evaluations are added as a dict's are, and only added (``without`` may give
+    another in place of one it carries). ``readers`` holds, for each Decision, the
+    evaluations that read it (``Evaluation.decisions``), brought up to date from what was
+    added since, at the time a change asks (``without``), so what the change reaches is
+    found from the Decisions it touches and not by looking at every evaluation. A set of
+    readers is shared with the cache it was taken from until this one changes it.
+    ``fresh`` holds what was added since the cache was made, in order (``without`` may
+    carry its base's along): all a successor or a forcing run gives back to the snapshot
+    it started from."""
+
+    __slots__ = ("_readers", "_owned", "_synced", "_made")
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._readers: dict[int, set[int]] = {}
+        self._owned: set[int] = set()
+        self._synced = 0  # the leading evaluations ``readers`` accounts for
+        self._made = 0  # the leading evaluations that are not fresh
+
+    @property
+    def fresh(self) -> dict[int, Evaluation]:
+        return dict(islice(self.items(), self._made, None))
+
+    def _read(self, index: int, entry: Evaluation) -> None:
+        readers, owned = self._readers, self._owned
+        for read in entry.decisions:
+            if read in owned:
+                readers[read].add(index)
+            else:
+                readers[read] = {*readers.get(read, ()), index}
+                owned.add(read)
+
+    def _unread(self, index: int, entry: Evaluation) -> None:
+        readers, owned = self._readers, self._owned
+        for read in entry.decisions:
+            if read not in owned:
+                readers[read] = set(readers.get(read, ()))
+                owned.add(read)
+            readers[read].discard(index)
+
+    def _sync(self) -> None:
+        for index, entry in islice(self.items(), self._synced, None):
+            self._read(index, entry)
+        self._synced = len(self)
+
+    def without(
+        self,
+        seeds: Collection[int],
+        *,
+        keep_fresh: bool = False,
+        replacing: Mapping[int, Evaluation] | None = None,
+    ) -> Cache:
+        """A cache of the evaluations of this one that are none of ``seeds`` and read none
+        of them, directly or through another (``unaffected``): where only those Decisions'
+        answers differ, these answer the same. It is made from the readers of the seeds and
+        a copy of the dict, not by looking at each evaluation. ``replacing`` gives
+        evaluations in place of those of the same index, which are fresh in it."""
+        self._sync()
+        given = replacing or {}
+        excluded = set(seeds)
+        for seed in seeds:
+            excluded.update(self._readers.get(seed, ()))
+        fresh = self.fresh if keep_fresh else {}
+        kept = Cache()
+        dict.update(kept, self)
+        # What is shared is no longer this cache's alone.
+        kept._readers = dict(self._readers)
+        self._owned = set()
+        removed = excluded | given.keys()
+        for index in removed:
+            old = kept.pop(index, None)
+            if old is not None:
+                kept._unread(index, old)
+        kept._made = len(kept) - sum(1 for index in fresh if index not in removed)
+        for index, entry in given.items():
+            dict.__setitem__(kept, index, entry)
+            kept._read(index, entry)
+        kept._synced = len(kept)
+        return kept
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -112,7 +199,10 @@ class Snapshot:
     the admission saw: a later trial reuses that admission only while this snapshot
     forces the Decision to an equal value (``_reusable``). ``answers`` holds what
     inspection answered of it, by question and scope (``inspection``), where the answer
-    shares its values.
+    shares its values. The cache is a ``Cache``: a dict that also knows who read each
+    Decision, so a successor, a trial or a forcing copy starts from its base's by
+    leaving out what a set of Decisions reaches (``Cache.without``), found from their
+    readers, and each is its own: it holds nothing of the base's it leaves out.
     """
 
     model: Model[Space]
@@ -124,7 +214,7 @@ class Snapshot:
     carried: Mapping[int, object] = field(default_factory=dict, repr=False)
     admissions: Mapping[int, frozenset[int]] = field(default_factory=dict, repr=False)
     assumed: Mapping[int, Mapping[int, object]] = field(default_factory=dict, repr=False)
-    cache: dict[int, Evaluation] = field(default_factory=dict, init=False, repr=False)
+    cache: Cache = field(default_factory=Cache, init=False, repr=False)
     answers: dict[tuple[str, int], object] = field(default_factory=dict, init=False, repr=False)
     work: _execution.Work = field(default_factory=_execution.Work, init=False, repr=False)
     found: object = field(default=None, init=False, repr=False)
@@ -229,6 +319,8 @@ def _assumptions_hold(base: Snapshot, index: int) -> bool:
     for other, seen in assumed.items():
         if other not in found.values:
             return False
+        if seen is found.values[other]:
+            continue
         semantics = nodes[other].semantics
         assert semantics is not None
         if not equal(
@@ -261,12 +353,15 @@ class _TrialSnapshot(Snapshot):
       identically: the trial takes its admission as the base recorded it. Every
       other candidate is admitted on its first read in the trial.
     - The trial starts from its base's evaluations that read no Decision but those
-      reused choices and the stable Decisions. So nothing that read another
+      reused choices and the stable Decisions (found from the readers of the others,
+      ``Cache.without``), with the reused choices' admissions as they were recorded.
+      So nothing that read another
       candidate is inherited, and ``admit`` still refuses a candidate already
       resolved; a retained choice whose admission now fails refuses what reads it.
     - The successor starts from its base's evaluations that read no Decision the
-      change touched, and on publication gains the trial's that read no Decision
-      open in the successor but a stable one (a stable Decision reads in the trial
+      change touched, and on publication gains the trial's own (what it evaluated or
+      was given: the rest is its base's, which the successor already has) that read no
+      Decision open in the successor but a stable one (a stable Decision reads in the trial
       as the base forces it, which is how the successor reads it): the trial's
       candidates are the successor's assignments, each admitted before it was
       read. A candidate's own answer is
@@ -312,10 +407,12 @@ class _TrialSnapshot(Snapshot):
         held = [
             index for index in base.linked.decisions if index not in reused and index not in stable
         ]
-        self.cache.update(unaffected(base.cache, held))
-        for index, read in reused.items():
-            # As the decision frame admits it, with its admission's reads.
-            self.cache[index] = Evaluation(Available(candidates[index]), decisions=read)
+        # As the decision frame admits it, with its admission's reads.
+        admitted = {
+            index: Evaluation(Available(candidates[index]), decisions=read)
+            for index, read in reused.items()
+        }
+        object.__setattr__(self, "cache", base.cache.without(held, replacing=admitted))
         object.__setattr__(self, "_base", base)
         object.__setattr__(self, "_successor", None)
         object.__setattr__(self, "_touches", touched)
@@ -346,7 +443,7 @@ class _TrialSnapshot(Snapshot):
                 verdicts=inherited(base),
                 carried=carried(base),
             )
-            successor.cache.update(unaffected(base.cache, self._touches))
+            object.__setattr__(successor, "cache", base.cache.without(self._touches))
             object.__setattr__(self, "_successor", successor)
         assert self._successor is not None
         return self._successor
@@ -376,7 +473,7 @@ class _TrialSnapshot(Snapshot):
             for index in self.linked.decisions
             if index not in candidates and index not in self._stable
         )
-        for index, entry in unaffected(self.cache, open_ | unrecorded).items():
+        for index, entry in unaffected(self.cache.fresh, open_ | unrecorded).items():
             if index in candidates:
                 entry = self._record(index, entry)
             successor.cache.setdefault(index, entry)
@@ -887,6 +984,7 @@ def copy_assessment(snapshot: Snapshot, node_index: int, assessment: Assessment)
 
 
 __all__ = [
+    "Cache",
     "Evaluation",
     "Snapshot",
     "candidate_values",

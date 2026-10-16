@@ -132,7 +132,10 @@ def try_with_choices(
 
         semantically_same = len(merged) == len(current.assignments) and all(
             index in current.assignments
-            and _values_equal(current.linked.nodes[index], value, current.assignments[index])
+            and (
+                value is current.assignments[index]
+                or _values_equal(current.linked.nodes[index], value, current.assignments[index])
+            )
             for index, value in merged.items()
         )
         if semantically_same:
