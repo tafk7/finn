@@ -7,9 +7,9 @@ against ``execute_onnx`` of the source, the parent graph run with the XSim execu
 against its default run, and its packaging.
 
 The choices are ranked by hand at 16 lanes (``kernel_ops.tfc``), for Ultra96 in
-the Zynq shell. The slow tests read the run's one build (``tfc_streamlined``,
-``conftest.py``); the others build the network from the trained weights (half a
-minute): the one in XSim is marked ``xsim``, the packaging one ``vivado``.
+the Zynq shell. Every test reads the run's one build (``tfc_streamlined``,
+``conftest.py``), partitioning it in its own directory: the ones in XSim are marked
+``xsim``, the packaging one ``vivado``, the rest ``slow``.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from finn.transformation.kernels import ExploreKernelChoices, PackagePartition
 from finn.transformation.kernels.package import ElaboratePartition, boundary_facts
 from kernel_ops.models import DOMAIN
 from kernel_ops.packaging import reaches_vivado, read_back
-from kernel_ops.tfc import LANES, SHAPE, ULTRA96, cut, partition, partitioned, streamlined
+from kernel_ops.tfc import LANES, SHAPE, ULTRA96, cut, partition
 
 LOGITS = "MatMul_3_out0"
 FRAMES = 2
@@ -94,10 +94,13 @@ FACTS = (
 )
 
 
-def test_tfc_w2a2s_kernel_ops_verify_open_and_explored(tmp_path: Path) -> None:
+@pytest.mark.slow
+def test_tfc_w2a2s_kernel_ops_verify_open_and_explored(
+    tfc_streamlined: Path, tmp_path: Path
+) -> None:
     """Every KernelOp TFC converts to verifies with its choices open, as the cut
     leaves its partition's body, and with them committed, as exploration leaves it."""
-    _, body, _ = cut(streamlined(tmp_path), tmp_path)
+    _, body, _ = cut(ModelWrapper(str(tfc_streamlined)), tmp_path)
     for stage in (body, body.transform(ExploreKernelChoices(Ranked(LANES)))):
         kernel_ops = [kernel_op(stage, node) for node in stage.graph.node if node.domain == DOMAIN]
         assert len(kernel_ops) == 8
@@ -107,10 +110,11 @@ def test_tfc_w2a2s_kernel_ops_verify_open_and_explored(tmp_path: Path) -> None:
 
 
 @requires_xsim
-def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
+def test_tfc_w2a2_computes_its_logits_in_xsim(tfc_streamlined: Path, tmp_path: Path) -> None:
     """Two images back to back, with no reset between them, each against the source's
     logits; free running and stalled."""
-    source, parent, body = partitioned(tmp_path)
+    source = ModelWrapper(str(tfc_streamlined))
+    parent, body = partition(source, tmp_path)
     assert [node.op_type for node in parent.graph.node] == [
         "Reshape",
         "StreamingDataflowPartition",
@@ -167,11 +171,11 @@ def test_tfc_w2a2_computes_its_logits_in_xsim(tmp_path: Path) -> None:
 
 
 @requires_xsim
-def test_tfc_w2a2_runs_in_xsim_as_in_python(tmp_path: Path) -> None:
+def test_tfc_w2a2_runs_in_xsim_as_in_python(tfc_streamlined: Path, tmp_path: Path) -> None:
     """The parent graph run with the XSim executor alone, the run requiring hardware: the
     host's flatten and label select in qonnx, the partition of eight KernelOps in XSim
     (stalled), its logits and the label equal to the default (Python) run's."""
-    _, parent, _ = partitioned(tmp_path)
+    parent, _ = partition(ModelWrapper(str(tfc_streamlined)), tmp_path)
     image = np.random.default_rng(4).integers(0, 256, size=SHAPE).astype(np.float32)
     feed = {parent.graph.input[0].name: image}
     simulator = XSim(directory=tmp_path / "xsim")
@@ -187,8 +191,8 @@ def test_tfc_w2a2_runs_in_xsim_as_in_python(tmp_path: Path) -> None:
 
 
 @requires_vivado
-def test_tfc_w2a2_packages_as_the_shells_ip(tmp_path: Path) -> None:
-    _, parent, body = partitioned(tmp_path)
+def test_tfc_w2a2_packages_as_the_shells_ip(tfc_streamlined: Path, tmp_path: Path) -> None:
+    parent, body = partition(ModelWrapper(str(tfc_streamlined)), tmp_path)
     sdp = parent.graph.node[1]
     project = tmp_path / "vivado_stitch_proj"
     body = body.transform(PackagePartition(sdp.name, directory=project))
