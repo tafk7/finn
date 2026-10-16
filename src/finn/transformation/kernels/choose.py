@@ -412,6 +412,7 @@ def _held_values(
     kernels = set(network.kernels)
     values: dict[Key, object] = {}
     lost: list[Finding] = []
+    refused_keys: list[str] = []
     for owner, keys in held.items():
         for key in keys:
             if owner not in members:
@@ -423,6 +424,7 @@ def _held_values(
             else:
                 values[(owner, key)] = saved[(owner, key)]
                 continue
+            refused_keys.append(dotted((owner, key)))
             lost.append(
                 Finding(
                     FindingKind.REJECTION,
@@ -437,7 +439,7 @@ def _held_values(
     if lost:
         raise KernelOpError(
             "a held choice is refused: " + "; ".join(each.message for each in lost),
-            tuple(f"{owner}.{key}" for owner, keys in held.items() for key in keys),
+            tuple(refused_keys),
             findings=lost,
         )
     return values

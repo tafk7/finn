@@ -493,7 +493,8 @@ def test_a_held_key_the_bound_network_does_not_state_is_refused_by_name() -> Non
     first = kernel_op(model, model.graph.node[0])
     first.set_nodeattr("compute.packed.simd", 2)
     first.set_nodeattr("compute.packed.pe", 3)
-    model.set(HELD, {"first": ["compute.packed.pe"]})
+    # SIMD is held too, and stated: only the refused key is the error's.
+    model.set(HELD, {"first": ["compute.packed.pe", "compute.packed.simd"]})
     with refused(
         "held-not-taken",
         error=KernelOpError,
@@ -505,7 +506,9 @@ def test_a_held_key_the_bound_network_does_not_state_is_refused_by_name() -> Non
         explore_kernel_choices(model)
     (cause,) = caught.finding.causes
     assert cause.code == "domain-membership"
-    assert model.get(HELD) == {"first": ["compute.packed.pe"]}
+    assert isinstance(caught.error, KernelOpError)
+    assert caught.error.keys == ("first.compute.packed.pe",)
+    assert model.get(HELD) == {"first": ["compute.packed.pe", "compute.packed.simd"]}
 
 
 def test_a_held_key_whose_owner_is_no_member_of_the_bound_network_is_refused() -> None:
