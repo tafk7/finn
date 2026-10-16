@@ -59,9 +59,10 @@ def test_artifacts_are_keyed_by_vivado_installation(tmp_path, monkeypatch, vivad
 def test_missing_toolchain_is_reported_not_skipped(monkeypatch):
     monkeypatch.delenv("XILINX_VIVADO", raising=False)
     assert not xsi.is_available(host_toolchain())
-    with pytest.raises(ToolUnavailable, match="XILINX_VIVADO") as missing:
+    with pytest.raises(ToolUnavailable) as missing:
         xsi_setup.ensure_built(host_toolchain())
-    assert missing.value.tool == "vivado"
+    assert (missing.value.code, missing.value.tool) == ("tool-unavailable", "vivado")
+    assert "XILINX_VIVADO" in missing.value.reason
 
 
 def test_first_use_builds_once_and_reuses(toolchain):

@@ -5,12 +5,14 @@ import concurrent.futures
 import dataclasses
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+from support.refusals import refused
 
 from finn.toolchain import hls
 from finn.toolchain.launcher import (
@@ -235,8 +237,10 @@ def test_failure_logs_status_and_settings_errors(tmp_path, caplog):
     script.write_text("sleep 30\n")
     with pytest.raises(RuntimeError, match="capture vendor settings"):
         Selection(settings=(script,)).prepare(timeout=0.1)
-    with pytest.raises(ToolUnavailable, match="missing: not on this toolchain's route"):
+    with pytest.raises(ToolUnavailable) as unavailable:
         tc.probe("missing")
+    assert (unavailable.value.code, unavailable.value.tool) == ("tool-unavailable", "missing")
+    assert "not on this toolchain's route" in unavailable.value.reason
 
 
 @pytest.mark.parametrize("cancelled", [False, True])
@@ -325,8 +329,10 @@ def test_the_hls_installation_is_the_one_the_environment_names(tmp_path):
     assert hls.installation(Selection().prepare(named)) == installed
     del named["XILINX_HLS"]
     assert hls.installation(Selection().prepare(named)) == vitis
-    with pytest.raises(ToolUnavailable, match="XILINX_HLS or XILINX_VITIS"):
+    with pytest.raises(ToolUnavailable) as unavailable:
         hls.installation(Selection().prepare({"PATH": os.defpath}))
+    assert (unavailable.value.code, unavailable.value.tool) == ("tool-unavailable", "HLS")
+    assert "XILINX_HLS or XILINX_VITIS" in unavailable.value.reason
 
 
 @pytest.mark.slow
@@ -368,16 +374,22 @@ def test_public_build_entry_point_builds_in_process_and_exits_with_its_result(tm
     assert os.getcwd() == cwd and dict(os.environ) == env
     # A step that fails on an empty model: no partition to explore.
     assert build_dataflow_directory(str(state("step_size_fifos"))) == -1
-    with pytest.raises(ConfigurationRefused, match="'not_a_step' is no step or named list"):
+    with refused(
+        "step-unknown",
+        error=ConfigurationRefused,
+        owner="configuration.steps[0]",
+        message="'not_a_step'",
+    ):
         build_dataflow_directory(str(state("not_a_step")))
     assert os.getcwd() == cwd
     assert command().returncode == 0
     assert command("step_size_fifos").returncode == 255
-    refused = command("not_a_step")
-    assert refused.returncode == 1
-    stated = (
-        b"ConfigurationRefused: configuration.steps[0]: step-unknown: 'not_a_step' is no step "
-        b"or named list"
+    unknown = command("not_a_step")
+    assert unknown.returncode == 1
+    # The console's finding line is the finding's owner, code and message.
+    assert re.search(
+        rb"^ERROR: +configuration\.steps\[0\]: step-unknown: 'not_a_step'",
+        unknown.stderr,
+        re.MULTILINE,
     )
-    assert stated in refused.stderr
     assert os.getcwd() == cwd and dict(os.environ) == env

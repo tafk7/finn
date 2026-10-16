@@ -14,6 +14,8 @@ import sys
 import tarfile
 import textwrap
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
 
@@ -21,6 +23,17 @@ from finn import resources
 from finn.resources import _declare, _store
 
 SRC = str(Path(__file__).resolve().parents[2] / "src")
+
+
+@contextmanager
+def fault(
+    code: str, error: type[resources.ResourceError] = resources.ResourceError, message=None
+) -> Iterator[pytest.ExceptionInfo[resources.ResourceError]]:
+    """Expect ``error`` carrying ``code`` (and its message matching ``message``, if given):
+    a resource fault is asserted by its code, each message's text in one test."""
+    with pytest.raises(error, match=message) as caught:
+        yield caught
+    assert caught.value.code == code, f"raised {caught.value.code!r}: {caught.value}"
 
 
 def git(cwd, *args):
@@ -144,7 +157,7 @@ def test_digest_mismatch_publishes_nothing(boards):
     declared = resources.declarations()["kv260-boards"]
     wrong = _declare.Resource(**{**declared.__dict__, "digest": "sha256:" + "0" * 64})
     root = _store.fetch_root()
-    with pytest.raises(resources.ResourceError, match="has digest"):
+    with fault("fetch-failed", message="has digest"):
         _store.fetch(wrong, root)
     assert [p.name for p in root.iterdir()] == [f".{wrong.entry}.lock"]
 
@@ -183,7 +196,7 @@ def test_archives_are_checked_and_extracted_safely(tmp_path, project):
 
     # A changed archive is refused before extraction.
     zip_path.write_bytes(zip_path.read_bytes() + b"\0")
-    with pytest.raises(resources.ResourceError, match="sha256"):
+    with fault("archive-sha256-mismatch", message="sha256"):
         _store.archive(zip_path.as_uri(), "0" * 64, tmp_path / "changed")
 
     evil_tar = tmp_path / "evil.tar"
@@ -195,7 +208,7 @@ def test_archives_are_checked_and_extracted_safely(tmp_path, project):
     with zipfile.ZipFile(evil_zip, "w") as zip_file:
         zip_file.writestr("../escape", "x")
     for number, evil in enumerate((evil_tar, evil_zip)):
-        with pytest.raises(resources.ResourceError, match="Unsafe"):
+        with fault("archive-unsafe", message="Unsafe"):
             checksum = sha256(evil.read_bytes()).hexdigest()
             _store.archive(evil.as_uri(), checksum, tmp_path / f"evil{number}")
     assert not (tmp_path / "escape").exists()
@@ -230,13 +243,13 @@ def test_cache_order_and_read_only_system_cache(boards, tmp_path, monkeypatch):
 
 def test_offline_and_no_fetch_report_the_fetch_command(boards, monkeypatch):
     monkeypatch.setenv("FINN_RESOURCES_OFFLINE", "1")
-    with pytest.raises(resources.ResourceError, match="finn-resources fetch kv260-boards") as error:
+    with fault("resource-not-cached", message="finn-resources fetch kv260-boards") as error:
         resources.path("kv260-boards")
     # The message names settings that exist.
     assert "set FINN_RESOURCES_DIR=DIR" in str(error.value)
     assert "FINN_RESOURCES_SYSTEM_CACHE=DIR" in str(error.value)
     monkeypatch.delenv("FINN_RESOURCES_OFFLINE")
-    with pytest.raises(resources.ResourceError, match="not in any cache"):
+    with fault("resource-not-cached"):
         resources.paths("test-boards", fetch=False)
     assert resources.status("kv260-boards").state == "missing"
 
@@ -250,7 +263,7 @@ def test_overrides(boards, tmp_path, monkeypatch):
         "kv260-boards", "override", str(local), "FINN_RESOURCES_KV260_BOARDS"
     )
     monkeypatch.setenv("FINN_RESOURCES_KV260_BOARDS", str(tmp_path / "missing"))
-    with pytest.raises(resources.ResourceError, match="FINN_RESOURCES_KV260_BOARDS"):
+    with fault("override-not-directory", message="FINN_RESOURCES_KV260_BOARDS"):
         resources.path("kv260-boards")
 
     # The retired names select nothing: only the resource's own variable is read.
@@ -312,43 +325,60 @@ def test_project_redefinition_is_logged_and_packages_cannot_redefine(
 
     finn = _declare.load(_declare.FINN_FILE, ("resources",))
     package = _declare.parse({"hlslib": {"package": "acme", "subdir": "hls"}}, "package acme")
-    with pytest.raises(resources.DeclarationError, match="already declared by .*resources.toml"):
+    with fault(
+        "resource-redeclared", resources.DeclarationError, "already declared by .*resources.toml"
+    ):
         _declare.merge(finn, package, [])
     first = _declare.parse({"acme": {"package": "acme", "subdir": "a"}}, "package acme")
     second = _declare.parse({"acme": {"package": "other", "subdir": "a"}}, "package other")
-    with pytest.raises(resources.DeclarationError, match="package other.*package acme"):
+    with fault("resource-redeclared", resources.DeclarationError, "package other.*package acme"):
         _declare.merge([], first + second, [])
 
 
 @pytest.mark.parametrize(
-    "fields, message",
+    "fields, code, message",
     [
-        ({"git": "u", "commit": "c" * 40}, "digest must be"),
-        ({"git": "u"}, "commit is required"),
-        ({"git": "u", "url": "u"}, "exactly one source"),
-        ({"git": "u", "commit": "main", "digest": "sha256:" + "0" * 64}, "full 40-character"),
+        ({"git": "u", "commit": "c" * 40}, "digest-invalid", "digest must be"),
+        ({"git": "u"}, "field-required", "commit is required"),
+        ({"git": "u", "url": "u"}, "source-not-one", "exactly one source"),
+        (
+            {"git": "u", "commit": "main", "digest": "sha256:" + "0" * 64},
+            "commit-invalid",
+            "full 40-character",
+        ),
         (
             {"url": "u", "sha256": "0" * 64, "digest": "sha256:" + "0" * 64, "subdir": "../x"},
+            "path-not-relative",
             "relative",
         ),
-        ({"package": "m", "into": "x"}, "package source"),
-        ({"package": "m", "kind": "rtl"}, "kind must be a list"),
-        ({"package": "m", "extra": 1}, "unknown field"),
-        ({"package": "m", "mirrors": ["u"]}, "package source"),
+        ({"package": "m", "into": "x"}, "package-fields-invalid", "package source"),
+        ({"package": "m", "kind": "rtl"}, "field-type-invalid", "kind must be a list"),
+        ({"package": "m", "extra": 1}, "field-unknown", "unknown field"),
+        ({"package": "m", "mirrors": ["u"]}, "package-fields-invalid", None),
         (
             {"url": "u", "sha256": "0" * 64, "digest": "sha256:" + "0" * 64, "mirrors": "u"},
-            "mirrors must be a list",
+            "field-type-invalid",
+            "mirrors",
         ),
     ],
 )
-def test_invalid_declarations_are_rejected(fields, message):
-    with pytest.raises(resources.DeclarationError, match=message):
+def test_invalid_declarations_are_rejected(fields, code, message):
+    with fault(code, resources.DeclarationError, message):
         _declare.parse({"acme": fields}, "test")
 
 
-@pytest.mark.parametrize("name", ["Acme", "dir", "offline", "acme-url", "acme_rtl"])
-def test_names_are_restricted(name):
-    with pytest.raises(resources.DeclarationError, match="resource"):
+@pytest.mark.parametrize(
+    "name, code",
+    [
+        ("Acme", "name-invalid"),
+        ("dir", "name-reserved"),
+        ("offline", "name-reserved"),
+        ("acme-url", "name-reserved"),
+        ("acme_rtl", "name-invalid"),
+    ],
+)
+def test_names_are_restricted(name, code):
+    with fault(code, resources.DeclarationError):
         _declare.parse({name: {"package": "m"}}, "test")
 
 
@@ -364,9 +394,9 @@ def test_package_source_resolves_installed_data(project, tmp_path, monkeypatch):
 
 
 def test_package_source_names_a_module_not_a_path(tmp_path):
-    with pytest.raises(resources.DeclarationError, match="put a directory inside it in subdir"):
+    with fault("package-invalid", resources.DeclarationError):
         _declare.parse({"acme": {"package": "acme_data:rtl"}}, "test")
-    with pytest.raises(resources.DeclarationError, match="no into, digest or mirrors"):
+    with fault("package-fields-invalid", resources.DeclarationError):
         _declare.parse({"acme": {"package": "acme_data", "into": "x"}}, "test")
 
 
@@ -379,9 +409,9 @@ def test_path_source_is_used_in_place(project, tmp_path):
     # An override still wins, and a missing directory is an error, not a fetch.
     declare(project, '[tool.finn.resources.acme]\npath = "/nonexistent/acme"\n')
     resources._cache.clear()
-    with pytest.raises(resources.ResourceError, match="is not a directory"):
+    with fault("path-not-directory"):
         resources.path("acme")
-    with pytest.raises(resources.DeclarationError, match="a path source is a directory"):
+    with fault("path-fields-invalid", resources.DeclarationError, "a path source is a directory"):
         _declare.parse({"acme": {"path": "x", "digest": "sha256:" + "0" * 64}}, "test")
 
 
@@ -503,12 +533,12 @@ def test_update_refuses_edits_it_cannot_confine(tmp_path):
     file = tmp_path / "resources.toml"
     inline = '[resources]\nacme = { git = "u", commit = "%s", digest = "d" }\n' % ("a" * 40)
     file.write_text(inline)
-    with pytest.raises(resources.DeclarationError, match="edit it by hand"):
+    with fault("rewrite-value-missing", resources.DeclarationError, "edit it by hand"):
         _declare.rewrite(file, ("resources",), "acme", {"commit": "b" * 40})
     # A multi-line string that looks like a field would change another value.
     tricky = '[resources.acme]\nnote = """\ncommit = "x"\n"""\ncommit = "%s"\n' % ("a" * 40)
     file.write_text(tricky)
-    with pytest.raises(resources.DeclarationError, match="change more than"):
+    with fault("rewrite-changes-more", resources.DeclarationError, "change more than"):
         _declare.rewrite(file, ("resources",), "acme", {"commit": "b" * 40})
     assert file.read_text() == tricky
 
@@ -591,17 +621,21 @@ def test_packages_add_resources_but_only_the_project_redefines(
     # A package may not redefine FINN's resources or another package's.
     installed(site, "zeta", "zeta_finn", '[resources.hlslib]\npackage = "zeta_finn"\n')
     resources._cache.clear()
-    with pytest.raises(resources.DeclarationError, match="zeta_finn.*already declared by"):
+    with fault("resource-redeclared", resources.DeclarationError, "zeta_finn"):
         resources.declarations()
     installed(site, "zeta", "zeta_finn", '[resources.acme-rtl]\npackage = "zeta_finn"\n')
     resources._cache.clear()
-    with pytest.raises(resources.DeclarationError, match="zeta_finn.*acme_finn"):
+    with fault("resource-redeclared", resources.DeclarationError, "zeta_finn.*acme_finn"):
         resources.declarations()
 
     # A broken entry point is an error, not silently skipped.
     (site / "zeta_finn/resources.toml").unlink()
     resources._cache.clear()
-    with pytest.raises(resources.DeclarationError, match="zeta_finn contains no resources.toml"):
+    with fault(
+        "entry-point-no-declarations",
+        resources.DeclarationError,
+        "zeta_finn contains no resources.toml",
+    ):
         resources.declarations()
 
 
