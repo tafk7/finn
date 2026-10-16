@@ -422,7 +422,7 @@ LAYERS: tuple[Layer, ...] = (
         "tests.dataflow",
         ("dataflow",),
         ("dataflow", "tests.layering", "tests.value_classes"),
-        ("pytest", "qonnx.core.datatype", "qonnx.core.ranges"),
+        ("pytest", "numpy", "qonnx.core.datatype", "qonnx.core.ranges"),
         "tests/dataflow",
     ),
     # The kernel tests need no graph either: the kernel stack, the harness and the
