@@ -23,7 +23,7 @@ Its domain is what that hardware takes: a FLOAT32 input, on a platform whose DSP
 is DSP58 (DSPFP32 is Versal's), and one of the four functions. Its results approximate
 the function, so their range is FLOAT32's own. Its resources are not characterised: it
 states so (``kernel-resources``). Its computation's reference is test-side until a
-KernelOp reaches it: ``tests/kernels/specs/pwpolyf.py``.
+KernelOp reaches it: ``tests/support/kernel_specs/pwpolyf.py``.
 """
 
 from __future__ import annotations

@@ -3,7 +3,7 @@
 
 """The network: kernels and channels by name, each its own space, and the wiring.
 
-On the Chain (``kernels.chain``): its members ranked kernels first, then each channel
+On the Chain (``support.chain``): its members ranked kernels first, then each channel
 after the members it reads; a channel bound once its ends are known, and once per set
 of facts; a change reaching one kernel and the channels that read it; what replay drops
 named, what the change names refused; its module, one composed netlist, each member under
@@ -15,12 +15,12 @@ from __future__ import annotations
 
 import pytest
 from qonnx.core.datatype import DataType
+from support import chain
+from support.helpers import FULL_DSP48E2, built, choose, keyed, labels, matmul_point
 
 from finn.core.space import Space, Unresolved, design_space
 from finn.kernels.base import CYCLES
 from finn.kernels.network import Interface, Network, NetworkError, Wire, wire
-from kernels import chain
-from kernels.helpers import FULL_DSP48E2, built, choose, keyed, labels, matmul_point
 
 FOLDING = {
     f"{layer}.compute.packed.{key}": value

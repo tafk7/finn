@@ -10,6 +10,7 @@ the root's own pins (``None``).
 """
 
 from qonnx.core.datatype import DataType
+from support.helpers import FULL_DSP48E2, choose, with_adapter_memories, with_direct_transports
 
 from finn.core.space import Rejected, Space, view
 from finn.dataflow.datatypes import ordinary_integer_bounds
@@ -22,7 +23,6 @@ from finn.kernels.channels import Channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.transport import AxisBeat, StreamContract
-from kernels.helpers import FULL_DSP48E2, choose, with_adapter_memories, with_direct_transports
 
 INT3, INT8 = DataType["INT3"], DataType["INT8"]
 X = Tensor((3, 4), ScalarEncoding(INT3))

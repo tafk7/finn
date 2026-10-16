@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 from qonnx.core.datatype import DataType
+from support.helpers import WeightDelivery, full_platform, matmul_assembly
 
 from finn.core.rtlsim_bench import materialize
 from finn.core.rtlsim_pacing import FREE, STALLED, Pacing
@@ -26,7 +27,6 @@ from finn.harness.toolchain import print_identity
 from finn.kernels.artifacts.abi import abi_pins
 from finn.platform.capabilities import DspBlock
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import WeightDelivery, full_platform, matmul_assembly
 from kernels.sweeps.rtl_transport import drive_observed
 
 # Stalled, the outputs alone: the inputs stream continuously.

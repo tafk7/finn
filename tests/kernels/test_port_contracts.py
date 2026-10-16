@@ -21,6 +21,15 @@ from typing import Any
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.helpers import (
+    FULL_DSP48E2,
+    FULL_DSP58,
+    choose,
+    codes,
+    matmul_point,
+    with_adapter_memories,
+    with_direct_transports,
+)
 
 from finn.core.space import Available, Rejected
 from finn.dataflow.datatypes import ordinary_integer_bounds
@@ -42,15 +51,6 @@ from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.port import AxiStreamPort
-from kernels.helpers import (
-    FULL_DSP48E2,
-    FULL_DSP58,
-    choose,
-    codes,
-    matmul_point,
-    with_adapter_memories,
-    with_direct_transports,
-)
 
 A, W, R = DataType["INT3"], DataType["INT3"], DataType["INT8"]
 ROWS, REDUCTION, OUTPUTS, PE, SIMD = 2, 4, 4, 2, 2

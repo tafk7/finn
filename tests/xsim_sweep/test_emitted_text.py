@@ -16,7 +16,9 @@ under the baseline's key passed, and a skip cites the commit where that run was.
 
 from __future__ import annotations
 
+import ast
 import dataclasses
+import importlib
 import importlib.util
 import json
 import re
@@ -30,6 +32,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from support.capture import SEAMS
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -197,10 +200,10 @@ EDITS = [
     ("finnlib-memstream", "finnlib/rtl/infra/memstream.sv", "\n// edited\n", BOTH),
     ("finnlib-thresholding", "finnlib/rtl/nonlin/thresholding.sv", "\n// e\n", {ADAPTERS.name}),
     # The harness: conformance's code, the adapters' stimulus module, the XSI runtime.
-    ("conformance-code", "tests/kernels/conformance.py", "\nLIMIT = 1\n", {MEMSTREAM.name}),
-    # test_conformance.py imports kernels.adapted (the channel-stage cases), so every
+    ("conformance-code", "tests/support/conformance.py", "\nLIMIT = 1\n", {MEMSTREAM.name}),
+    # test_conformance.py imports support.adapted (the channel-stage cases), so every
     # conformance job consumes it, as well as the adapters sweep.
-    ("adapter-stimulus", "tests/kernels/adapted.py", "\nLIMIT = 1\n", BOTH),
+    ("adapter-stimulus", "tests/support/adapted.py", "\nLIMIT = 1\n", BOTH),
     ("xsi-runtime", "src/finn/xsi/compile.py", "\nLIMIT = 1\n", {ADAPTERS.name}),
     # The testbench and the harness package: both jobs run the testbench writer's or its
     # toolchain's code.
@@ -216,9 +219,9 @@ EDITS = [
     ("unrelated-test", "tests/kernels/test_dotp.py", "\nLIMIT = 1\n", set()),
     # The XSim executor: beside the testbench, imported by no captured job.
     ("xsim-executor", "src/finn/core/rtlsim_exec.py", "\nLIMIT = 1\n", set()),
-    ("harness-comment", "tests/kernels/conformance.py", "\n# a comment\n", set()),
+    ("harness-comment", "tests/support/conformance.py", "\n# a comment\n", set()),
     # Construction code whose effect is unchanged: its designs are the same.
-    ("construction-code", "tests/kernels/helpers.py", "\nLIMIT = 1\n", set()),
+    ("construction-code", "tests/support/helpers.py", "\nLIMIT = 1\n", set()),
     ("builder", "src/finn/builder/build_dataflow.py", "\nLIMIT = 1\n", set()),
 ]
 
@@ -264,8 +267,8 @@ def matmul_assembly(**arguments):
 @pytest.mark.parametrize(
     ("edit", "changed"),
     [
-        pytest.param(_rename("tests/kernels/helpers.py", "_frozen", "_tupled"), False, id="rename"),
-        pytest.param(_append("tests/kernels/helpers.py", FEWER_BEATS), True, id="verdict-value"),
+        pytest.param(_rename("tests/support/helpers.py", "_frozen", "_tupled"), False, id="rename"),
+        pytest.param(_append("tests/support/helpers.py", FEWER_BEATS), True, id="verdict-value"),
     ],
 )
 def test_a_sweep_is_keyed_by_what_construction_hands_it_not_by_its_code(
@@ -399,7 +402,7 @@ GROUP_EDITS = [
     # a comment in the harness.
     ("deselected-test", "tests/kernels/test_dotp.py", "\nLIMIT = 1\n", False),
     ("builder", "src/finn/builder/build_dataflow.py", "\nLIMIT = 1\n", False),
-    ("harness-comment", "tests/kernels/xsim.py", "\n# a comment\n", False),
+    ("harness-comment", "tests/support/xsim.py", "\n# a comment\n", False),
 ]
 
 
@@ -586,6 +589,21 @@ def test_an_older_checkout_has_only_the_sweeps_whose_modules_it_has(tmp_path: Pa
     assert tool._has_module(tmp_path, sweep)
 
 
+def test_an_older_checkout_has_only_the_pytest_groups_whose_tests_it_has(tmp_path: Path) -> None:
+    """compare emits an older commit's text: a group added since, for a tree that commit
+    lacks, is no job of it."""
+    group = tool.Job(
+        "new-vivado", "pytest", ("--confcutdir=tests/new", "tests/new", "-m", "vivado")
+    )
+    assert not tool._has_tests(tmp_path, group)
+    (tmp_path / "tests/new").mkdir(parents=True)
+    assert tool._has_tests(tmp_path, group)
+    ignoring = tool.Job(
+        "rest", "pytest", ("--confcutdir=tests/new", "tests/new", "--ignore=tests/new/x.py")
+    )
+    assert tool._has_tests(tmp_path, ignoring)
+
+
 @dataclasses.dataclass
 class _Emitted:
     """What ``emit_module`` returns, as far as ``package_images`` reads it."""
@@ -690,3 +708,36 @@ def test_a_summary_reports_skipped_jobs_and_fails_on_a_baseline_that_did_not_pas
         assert rows["skipped"]["skipped"] == "unchanged since abc"
         assert rows["skipped"]["key"] == "k2" and rows["skipped"]["exit"] is None
         assert "skipped skipped (unchanged since abc) key=k2" in (out / "summary.log").read_text()
+
+
+def test_every_seam_the_tool_replaces_resolves_to_a_callable() -> None:
+    """``support.capture`` declares the functions of the tests' side that the tool replaces: a
+    rename of one breaks the sweep's keys, so it is a failure here."""
+    assert SEAMS
+    for seam, (module, attribute) in SEAMS.items():
+        function = getattr(importlib.import_module(module), attribute, None)
+        assert callable(function), f"seam {seam}: {module}.{attribute} is not a callable"
+
+
+def test_the_tool_names_the_tests_functions_only_in_its_branch_for_older_checkouts() -> None:
+    """Each attribute of ``SEAMS`` is assigned in ``scripts/emitted_text.py`` only in the
+    ``else`` of a test of ``support/capture.py`` (a checkout from before it: the tool
+    compares against those); the new layout goes through ``support.capture.replace``."""
+    tree = ast.parse((ROOT / "scripts/emitted_text.py").read_text())
+    attributes = {attribute for _, attribute in SEAMS.values()}
+    legacy = {
+        id(node)
+        for branch in ast.walk(tree)
+        if isinstance(branch, ast.If)
+        for statement in branch.orelse
+        for node in ast.walk(statement)
+    }
+    assigned = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Attribute) and target.attr in attributes
+    ]
+    assert assigned, "no legacy branch assigns a seam's attribute: this check has lost its subject"
+    assert [node.lineno for node in assigned if id(node) not in legacy] == []

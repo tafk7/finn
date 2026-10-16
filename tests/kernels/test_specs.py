@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Each kernel's spec (``kernels.specs``), checked offline against its design space.
+"""Each kernel's spec (``support.kernel_specs``), checked offline against its design space.
 
 - its lean covering points (``finn.harness.points.covering``, decision KT10) reach
   every case of each of its Decisions and each ordered domain's extremes, and each
@@ -24,13 +24,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
-from layering import ROOT
-
-from finn.core.space import Available, Space
-from finn.harness.points import Covering, covering, refusal, refused_cases, rejected
-from finn.kernels.configure import undecided
-from finn.kernels.network import Network
-from kernels.conformance import (
+from support.conformance import (
     KERNEL,
     configured,
     design_member,
@@ -38,8 +32,14 @@ from kernels.conformance import (
     kernel_space,
     unchosen,
 )
-from kernels.specs import SPECS, conformance_cases
-from kernels.specs.base import ORACLE, TEST_SIDE, KernelSpec, Probe
+from support.kernel_specs import SPECS, conformance_cases
+from support.kernel_specs.base import ORACLE, TEST_SIDE, KernelSpec, Probe
+from support.layering import ROOT
+
+from finn.core.space import Available, Space
+from finn.harness.points import Covering, covering, refusal, refused_cases, rejected
+from finn.kernels.configure import undecided
+from finn.kernels.network import Network
 
 BY_NAME = {spec.name: spec for spec in SPECS}
 

@@ -5,7 +5,7 @@
 the throttle, the least depth, the strategy proposing it through the seam, and the
 seam's check of a stored transport against its stream.
 
-The strategy's tests run on the Chain (``kernels.chain``), as the seam's do
+The strategy's tests run on the Chain (``support.chain``), as the seam's do
 (``test_explore``); the Chain needs no FIFO at any folding, so a FIFO it places and a
 FIFO the seam refuses are made controllable by a double of the per-channel sizing.
 """
@@ -18,6 +18,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from support import chain
+from support.helpers import FULL_DSP48E2, keyed
+from support.xsim import requires_xsim
 
 import finn.kernels.explore as explore_module
 import finn.kernels.fifo_sizing as fifo_sizing
@@ -55,9 +58,6 @@ from finn.kernels.fifo_sizing import (
 from finn.kernels.input_generator import NestBuffer, nest_buffer, nest_geometry
 from finn.kernels.network import Network, dotted
 from finn.toolchain.launcher import host_toolchain
-from kernels import chain
-from kernels.helpers import FULL_DSP48E2, keyed
-from kernels.xsim import requires_xsim
 
 MEMBERS = chain.MEMBERS
 

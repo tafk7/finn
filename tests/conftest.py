@@ -27,14 +27,14 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-# Each test runs with its random state seeded from its node id (rng_seed, beside
-# this file).
+# Each test runs with its random state seeded from its node id (support.rng_seed, in
+# tests/support).
 import pytest
 
 import numpy as np
 import random
-from member_cache import _member_cache, pytest_sessionfinish  # noqa: F401
-from rng_seed import seed_from_nodeid
+from support.member_cache import _member_cache, pytest_sessionfinish  # noqa: F401
+from support.rng_seed import seed_from_nodeid
 
 try:
     import torch

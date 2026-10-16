@@ -27,12 +27,13 @@ from typing import Any, ClassVar
 
 import numpy as np
 import pytest
-from kernels import chain
-from kernels.xsim import requires_xsim
 from onnx import NodeProto, TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import qonnx_make_model
+from support import chain
+from support.models import configure_partition, kernel_model, thresholding_model
+from support.xsim import requires_xsim
 
 from finn.core.executor import Context, Python
 from finn.core.graph.partition import (
@@ -54,7 +55,6 @@ from finn.custom_op.kernels.network import PARTITION
 from finn.dataflow.traversal import pack, vector_major
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.util.draws import boundary_inputs
-from kernel_ops.models import configure_partition, kernel_model, thresholding_model
 
 X = np.array([[-2.0, -1.0, 1.0, 2.0]], dtype=np.float32)
 

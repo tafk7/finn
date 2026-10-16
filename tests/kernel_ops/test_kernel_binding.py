@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 import pytest
 from qonnx.core.ranges import TensorRange
+from support.models import TARGET, WEIGHTS, matmul_model, thresholding_model
 
 import finn.kernels.members as members
 from finn.core.graph.errors import KernelOpError
@@ -45,7 +46,6 @@ from finn.kernels.members import (
 )
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
-from kernel_ops.models import TARGET, WEIGHTS, matmul_model, thresholding_model
 
 INT3 = dtype("INT3")
 X = Tensor((3, 4), ScalarEncoding(INT3))

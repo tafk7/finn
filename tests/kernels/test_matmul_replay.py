@@ -15,6 +15,16 @@ hardware; FinnLib's ``replay_buffer`` is not wrapped.
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.helpers import (
+    FULL_DSP48E2,
+    FULL_DSP58,
+    choose,
+    matmul_assembly,
+    matmul_point,
+    placed,
+    with_adapter_memories,
+    with_direct_transports,
+)
 
 from finn.dataflow.gemm import Form
 from finn.dataflow.plan import Step
@@ -26,16 +36,6 @@ from finn.kernels.artifacts.build import emit_module
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.network import dotted
 from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamContract, StreamMarker
-from kernels.helpers import (
-    FULL_DSP48E2,
-    FULL_DSP58,
-    choose,
-    matmul_assembly,
-    matmul_point,
-    placed,
-    with_adapter_memories,
-    with_direct_transports,
-)
 
 FACTS = dict(
     m=3,

@@ -16,12 +16,12 @@ from dataclasses import replace
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.helpers import FULL_DSP48E2
 
 from finn.core.space import Inapplicable, Rejected, design_space, inspection
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform.capabilities import Platform
-from kernels.helpers import FULL_DSP48E2
 
 INT8 = DataType["INT8"]
 # One row of the tables' four channels.

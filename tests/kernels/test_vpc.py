@@ -6,7 +6,7 @@ its stream contract.
 
 On a channel it is a stage of the channel's adapter (``test_adapters.py`` plans it);
 here it is the kernel alone, and placed on two channels by its spec's case
-(``kernels.specs.stages.vpc``: the realization of four conversions of a 4 x 6 tensor)."""
+(``support.kernel_specs.stages.vpc``: the realization of four conversions of a 4 x 6 tensor)."""
 
 from __future__ import annotations
 
@@ -14,6 +14,8 @@ from math import lcm
 from typing import Any
 
 import pytest
+from support.conformance import KERNEL, unchosen
+from support.kernel_specs.stages import STAGED, vpc
 
 from finn.core.space import design_space
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
@@ -24,8 +26,6 @@ from finn.kernels.artifacts.abi import Signal
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Leaf
 from finn.kernels.vpc import VpcKernel
-from kernels.conformance import KERNEL, unchosen
-from kernels.specs.stages import STAGED, vpc
 
 CONVERSIONS = vpc()["factors"]
 

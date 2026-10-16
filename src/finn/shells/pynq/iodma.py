@@ -11,7 +11,7 @@ This is a frozen extraction of the HWCustomOp flow's ``IODMA_hls``
 it from ``HWCustomOp`` and ``HLSBackend``: its widths, its HLS code and Vitis HLS script
 (``code_generation_ipgen``), its synthesis (``ipgen_singlenode_code``), its block-design
 cell and its interface names. It generates the code that op generates, byte for byte
-(``tests/kernel_ops/test_builder_phase.py``'s Z0 captures), and changes only when the
+(``tests/builder/test_builder_phase.py``'s Z0 captures), and changes only when the
 IODMA becomes an HLS kernel. Each end's IP is generated from a scratch model of one node
 of this op (``runner.iodma_model``, ``ipgen``).
 

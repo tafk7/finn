@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The transpose kernel (FinnLib ``inner_shuffle``): its domain, its refusals and its stream
-contract, on its spec's case (``kernels.specs.transpose``: a sequence of two 6 x 4
+contract, on its spec's case (``support.kernel_specs.transpose``: a sequence of two 6 x 4
 matrices, SIMD 2, 3 and 6)."""
 
 from __future__ import annotations
@@ -12,6 +12,11 @@ from typing import Any
 
 import numpy as np
 import pytest
+from support.conformance import KERNEL, unchosen
+from support.helpers import FULL_DSP48E2, choose
+from support.kernel_specs.base import placed
+from support.kernel_specs.thresholding import tensor
+from support.kernel_specs.transpose import MATRICES, transpose
 
 from finn.core.space import Rejected, Space
 from finn.dataflow.plan import Step, plan
@@ -20,11 +25,6 @@ from finn.harness.points import rejected
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.channels import Channel
 from finn.kernels.network import dotted
-from kernels.conformance import KERNEL, unchosen
-from kernels.helpers import FULL_DSP48E2, choose
-from kernels.specs.base import placed
-from kernels.specs.thresholding import tensor
-from kernels.specs.transpose import MATRICES, transpose
 
 SIMDS = [factors["simd"] for factors in transpose()["factors"]]
 BATCHES, ROWS, COLS = MATRICES

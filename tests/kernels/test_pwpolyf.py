@@ -5,7 +5,7 @@
 ends, its cycles, the module it binds and its refusals; its reference, its tolerances and
 what its numeric sweep covers. Its cycles in XSim, measured against its statement.
 
-The conformance case (``kernels.specs.pwpolyf``) is simulated in XSim by
+The conformance case (``support.kernel_specs.pwpolyf``) is simulated in XSim by
 ``test_conformance.py``, and its numeric sweep (``kernels.sweeps.pwpolyf_numeric``) by
 the XSim sweep.
 """
@@ -19,18 +19,7 @@ from typing import Any
 import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
-
-from finn.core.rtlsim_bench import Receive, measure, stream_out
-from finn.core.space import Available
-from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import unreplayed
-from finn.harness.points import rejected
-from finn.kernels.artifacts.abi import Signal
-from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.artifacts.module import Leaf
-from finn.kernels.pwpolyf import FUNCTIONS, PwPolyKernel
-from finn.toolchain.launcher import host_toolchain
-from kernels.conformance import (
+from support.conformance import (
     KERNEL,
     Sample,
     _candidates,
@@ -44,10 +33,21 @@ from kernels.conformance import (
     samples,
     unchosen,
 )
-from kernels.specs.base import placed as placed_case
-from kernels.specs.pwpolyf import CLAMP, TOLERANCE, activation, case, clamped, pwpolyf_gelu
+from support.kernel_specs.base import placed as placed_case
+from support.kernel_specs.pwpolyf import CLAMP, TOLERANCE, activation, case, clamped, pwpolyf_gelu
+from support.xsim import requires_xsim
+
+from finn.core.rtlsim_bench import Receive, measure, stream_out
+from finn.core.space import Available
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import unreplayed
+from finn.harness.points import rejected
+from finn.kernels.artifacts.abi import Signal
+from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.artifacts.module import Leaf
+from finn.kernels.pwpolyf import FUNCTIONS, PwPolyKernel
+from finn.toolchain.launcher import host_toolchain
 from kernels.sweeps import pwpolyf_numeric
-from kernels.xsim import requires_xsim
 
 CHANNELS = ["input_channel", "output_channel"]
 

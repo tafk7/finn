@@ -10,13 +10,13 @@ from typing import TypeVar
 
 import pytest
 from oracle import capture
+from support.helpers import FULL_DSP48E2, fifo_node
 
 from finn.core.space import Available, QueryResult, Rejected, Unresolved, design_space
 from finn.core.space.errors import ValueUnavailableError
 from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.fifo import FifoKernel, FifoStorage, fifo_resources
 from finn.platform.capabilities import Fabric
-from kernels.helpers import FULL_DSP48E2, fifo_node
 
 T = TypeVar("T")
 

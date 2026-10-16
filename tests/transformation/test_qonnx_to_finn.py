@@ -45,8 +45,8 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.cleanup import cleanup
+from support.trained_networks import get_test_model_trained
 from tempfile import TemporaryDirectory
-from trained_networks import get_test_model_trained
 
 import finn.core.onnx_exec as oxe
 from finn.core.reporting.findings import Refusal

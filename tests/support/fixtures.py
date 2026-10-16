@@ -1,0 +1,90 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""The session fixtures of TFC_W2A2 (``support.tfc``) and CNV_W2A2 (``support.cnv``), and
+``ip_store``, for the tests that only read them: built once a run and saved, a test loads
+its own copy (``ModelWrapper(str(path))``), a module its own (``tfc``). Each test
+packages into a store of its own (``ip_store``). A tree's conftest imports them, so each
+tree that wants them registers them itself."""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+from qonnx.core.modelwrapper import ModelWrapper
+
+from finn.toolchain import ip
+from support import cnv
+from support.tfc import EXPORT, built, exported, kernel_ops, prepared
+
+
+@pytest.fixture(autouse=True)
+def ip_store(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
+    """A packaged-IP store of the test's own (``finn.toolchain.ip.ip_store``), empty, not
+    ``$FINN_HOME/ip``: a toolchain double's IP is no build's, and a test that packages
+    runs its toolchain."""
+    store = tmp_path_factory.mktemp("ip_store")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(ip, "ip_store", lambda: store)
+        yield store
+
+
+@pytest.fixture(scope="session")
+def tfc_cache(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Where the run's TFC builds are kept: the parent of every pytest-xdist worker's base
+    temporary directory, the run's own under a single process."""
+    base = tmp_path_factory.getbasetemp()
+    return (base.parent if "PYTEST_XDIST_WORKER" in os.environ else base) / "tfc"
+
+
+@pytest.fixture(scope="session")
+def tfc_export(tfc_cache: Path) -> Path:
+    """TFC_W2A2 as Brevitas exports it, its preprocessing model beside it (``exported``)."""
+    return built(tfc_cache / "export" / EXPORT, exported)
+
+
+@pytest.fixture(scope="session")
+def tfc_streamlined(tfc_cache: Path, tfc_export: Path) -> Path:
+    """TFC_W2A2 through the builder's graph-preparation phase (``prepared``)."""
+    return built(
+        tfc_cache / "streamlined.onnx",
+        lambda _: prepared(ModelWrapper(str(tfc_export)), tfc_export.parent),
+    )
+
+
+@pytest.fixture(scope="session")
+def cnv_export(tfc_cache: Path) -> Path:
+    """CNV_W2A2 as Brevitas exports it, its preprocessing model beside it
+    (``support.cnv.exported``), kept beside TFC's builds."""
+    return built(tfc_cache.parent / "cnv" / "export" / cnv.EXPORT, cnv.exported)
+
+
+@pytest.fixture(scope="session")
+def cnv_streamlined(cnv_export: Path) -> Path:
+    """CNV_W2A2 through the builder's graph-preparation phase, its inputs and outputs as
+    TFC's (``support.tfc.prepared``)."""
+    return built(
+        cnv_export.parent.parent / "streamlined.onnx",
+        lambda _: prepared(ModelWrapper(str(cnv_export)), cnv_export.parent),
+    )
+
+
+@pytest.fixture(scope="session")
+def tfc_kernel_ops(tfc_cache: Path, tfc_streamlined: Path) -> Path:
+    """TFC_W2A2's partition of KernelOps for Ultra96 at 5 ns in the Zynq shell, cut
+    once: its body, every choice at its baseline (``kernel_ops``)."""
+    return built(
+        tfc_cache / "kernel_ops.onnx",
+        lambda directory: kernel_ops(
+            ModelWrapper(str(tfc_streamlined)), directory / "kernel_ops_cut"
+        ),
+    )
+
+
+@pytest.fixture(scope="module")
+def tfc(tfc_kernel_ops: Path) -> ModelWrapper:
+    """TFC_W2A2's partition body: its KernelOps for Ultra96 at 5 ns in the Zynq shell."""
+    return ModelWrapper(str(tfc_kernel_ops))

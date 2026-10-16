@@ -16,7 +16,7 @@ handful of simulations an op, stalled, and the first point of each op free runni
 (conformance runs both; one point an op each way, not every point twice).
 
 **The platform as an axis** (P3): the points above are on the Ultra96 target that
-``kernel_ops.models`` builds for (DSP48E2, no UltraRAM). One point an op is on a Versal
+``support.models`` builds for (DSP48E2, no UltraRAM). One point an op is on a Versal
 row (``finn.harness.reference.platform_rows``: the Versal AI Core family on ``ip``):
 MatMul on the INT8 DSP58 core with its activations' replay buffer (``input_gen``) in
 UltraRAM; Thresholding there too, its tables out of UltraRAM, which on Versal takes no
@@ -41,8 +41,8 @@ memory: the mapping itself is synthesis's to show.
   cycles in all. Beside the extremes' rows, channel 0's greatest and least sums, each odd
   and past 2**24, where float32 would round them.
 
-The specs of the kernels these ops bind are ``kernels.specs.matmul`` and
-``kernels.specs.thresholding``.
+The specs of the kernels these ops bind are ``support.kernel_specs.matmul`` and
+``support.kernel_specs.thresholding``.
 """
 
 from __future__ import annotations
@@ -54,10 +54,12 @@ from typing import Any
 
 import numpy as np
 import pytest
-from kernels.helpers import choose
-from kernels.xsim import requires_xsim
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from support.helpers import choose
+from support.models import TARGET, matmul_model, thresholding_model
+from support.op_specs.matmul import SPREAD
+from support.xsim import requires_xsim
 
 import finn.custom_op.kernels as domain
 from finn.core.graph.annotations.platform import write_target
@@ -74,8 +76,6 @@ from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors
 from finn.transformation.kernels.cut import BaselineChoices
 from finn.util.draws import Integers, boundary_inputs, graph_inputs
-from kernel_ops.models import TARGET, matmul_model, thresholding_model
-from kernel_ops.specs.matmul import SPREAD
 
 # -- the models ------------------------------------------------------------------------
 

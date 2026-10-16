@@ -16,7 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from layering import ROOT
+from support.layering import ROOT
 
 SCRIPT = ROOT / "scripts" / "benchmark-space.py"
 # Two of everything: the least that gives each comparison the script makes two

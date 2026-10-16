@@ -20,6 +20,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.ranges import TensorRange
 from qonnx.util.basic import qonnx_make_model
+from support.models import DOMAIN, TARGET
 
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
@@ -31,7 +32,6 @@ from finn.kernels.matmul import column_range, operand_range
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.kernels import InferKernelTensors
 from finn.util.draws import drawn_inputs
-from kernel_ops.models import DOMAIN, TARGET
 
 INT2, INT8 = DataType["INT2"], DataType["INT8"]
 THRESHOLDS = np.array([[-3 + c, 2 + c] for c in range(4)], dtype=np.float32)

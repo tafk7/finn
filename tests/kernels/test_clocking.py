@@ -12,6 +12,7 @@ on hand-built values are tested in ``artifacts/test_netlist.py``.
 """
 
 from qonnx.core.datatype import DataType
+from support.helpers import FULL_DSP58, matmul_assembly, placed
 
 from finn.kernels.artifacts.abi import (
     Clock,
@@ -23,7 +24,6 @@ from finn.kernels.artifacts.abi import (
     Signal,
 )
 from finn.kernels.artifacts.build import netlist
-from kernels.helpers import FULL_DSP58, matmul_assembly, placed
 
 MATMUL_FACTS = dict(
     m=2,

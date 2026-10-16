@@ -12,6 +12,9 @@ The last is not a style point.  ``DataType["INT8"] == "INT8"`` is true and their
 hashes agree, so if a string were admitted to this value domain a name and the
 live value would be interchangeable, and the two would collide as mapping keys
 without raising.
+
+The names' resolution and the identity of equal-width types are tested with the values,
+in ``tests/dataflow/test_datatypes.py``.
 """
 
 from __future__ import annotations
@@ -27,7 +30,6 @@ from finn.dataflow.datatypes import (
     QONNXDataType,
     canonical_qonnx_datatype,
     is_qonnx_datatype,
-    resolve_qonnx_datatype_name,
 )
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 
@@ -54,47 +56,7 @@ REPRESENTATIVE = (
     "FLOAT<5,10,7>",
 )
 
-#: Pairs of one width and different meanings, which a (type, bit width) pair
-#: would merge and must not. ``TERNARY``/``INT2`` is the one that matters most:
-#: merged, a ternary MatMul would be admitted and its artifact declare ``INT2``.
-FORMERLY_COLLIDING = (
-    ("TERNARY", "INT2"),
-    ("FLOAT16", "FLOAT<5,10,7>"),
-    ("FLOAT16", "FLOAT<5,10,15>"),
-    ("FIXED<8,4>", "FIXED<8,3>"),
-    ("BINARY", "BIPOLAR"),
-    ("BIPOLAR", "INT1"),
-)
-
-
-# -- identity ----------------------------------------------------------------
-
-
-@pytest.mark.parametrize(("left", "right"), FORMERLY_COLLIDING)
-def test_equal_width_types_with_different_meanings_stay_different(left: str, right: str) -> None:
-    assert DataType[left] != DataType[right]
-
-
-def test_uint1_and_binary_are_deliberately_the_same_value() -> None:
-    """The one merge QONNX's canonicalization makes, pinned as accepted.
-
-    QONNX canonicalizes ``UINT1`` to ``BINARY``, so they are one value, not two
-    that happen to compare equal.  FINN takes QONNX's canonicalization as it is;
-    a FINN-local exception here would be a second authority for a datatype's
-    identity.  Pinned so the merge reads as a decision, not a bug.
-    """
-
-    assert DataType["UINT1"] == DataType["BINARY"]
-    assert resolve_qonnx_datatype_name("UINT1").name == "BINARY"
-
-
 # -- the string hazard -------------------------------------------------------
-
-
-def test_a_canonical_name_is_not_a_datatype_value() -> None:
-    assert is_qonnx_datatype("INT8") is False
-    with pytest.raises(DatatypeError, match="resolve"):
-        canonical_qonnx_datatype("INT8")
 
 
 def test_value_semantics_do_not_admit_a_string_into_the_datatype_domain() -> None:
@@ -180,24 +142,6 @@ def test_an_unregistered_subclass_is_refused_at_recognition() -> None:
         canonical_qonnx_datatype(rogue)
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "NOTATYPE",  # no prefix QONNX dispatches on -- raises KeyError
-        "INT8 but wrong",  # dispatches on "INT", then fails parsing -- ValueError
-        "UINT",  # prefix with nothing after it
-        "FIXED<8>",  # right family, wrong arity
-        "",
-    ],
-)
-def test_a_malformed_canonical_name_is_refused(name: str) -> None:
-    """One failure type out: qonnx raises ``KeyError`` for every name that denotes
-    no datatype, however far its parse got, and the boundary refuses it."""
-
-    with pytest.raises(DatatypeError, match="no QONNX datatype is named"):
-        resolve_qonnx_datatype_name(name)
-
-
 class _ExplodingName(BaseDataType):
     """A well-formed subclass that raises from ``get_canonical_name()``.
 
@@ -252,28 +196,6 @@ def test_recognition_is_total_over_arbitrary_failures() -> None:
         canonical_qonnx_datatype(rogue)
 
 
-def test_a_jointly_invalid_fixed_point_name_is_refused_not_raised() -> None:
-    """``FIXED<8,9>``: parts individually well formed, jointly invalid; a name
-    qonnx cannot resolve, refused like any other."""
-
-    with pytest.raises(DatatypeError, match="no QONNX datatype is named"):
-        resolve_qonnx_datatype_name("FIXED<8,9>")
-
-
-def test_source_facing_names_stay_permissive() -> None:
-    """A source-facing name resolves as QONNX itself would read it.
-
-    A legacy node attribute like ``accDataType`` is whatever a human or an older
-    FINN wrote. Adopting QONNX means adopting its reading of those spellings,
-    including the ones it normalizes into another name.
-    """
-
-    assert resolve_qonnx_datatype_name("UINT1") == DataType["BINARY"]
-    assert resolve_qonnx_datatype_name("FLOAT<5,10>") == DataType["FLOAT<5,10,15>"]
-    # An explicit zero exponent bias is a datatype of its own, not "unset".
-    assert resolve_qonnx_datatype_name("FLOAT<5,10,0>").name == "FLOAT<5,10,0>"
-
-
 # -- immutability ------------------------------------------------------------
 
 
@@ -290,17 +212,6 @@ def test_freezing_keeps_the_one_immutable_value() -> None:
     with pytest.raises(AttributeError, match="immutable datatype value"):
         setattr(supplied, "_bitwidth", 9)
     assert frozen.name == "INT8"
-
-
-def test_a_datatype_keeps_its_key_in_a_mapping() -> None:
-    """A key mutated in place would be orphaned in a dict; the mutation is refused,
-    so the entry stays reachable under its key."""
-
-    held = DataType["INT8"]
-    holder = {held: "eight"}
-    with pytest.raises(AttributeError, match="immutable datatype value"):
-        setattr(held, "_bitwidth", 9)
-    assert holder[DataType["INT8"]] == "eight"
 
 
 # -- one value domain --------------------------------------------------------

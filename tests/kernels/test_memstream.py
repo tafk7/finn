@@ -13,6 +13,14 @@ through in2_V.
 import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.ranges import TensorRange
+from support.helpers import (
+    FULL_DSP48E2,
+    WeightDelivery,
+    labels,
+    matmul_assembly,
+    pin_names,
+    placed,
+)
 
 from finn.core.space import Rejected, design_space
 from finn.dataflow.tensor import ScalarEncoding
@@ -22,14 +30,6 @@ from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import ContributionError, GeneratedData
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import dotted
-from kernels.helpers import (
-    FULL_DSP48E2,
-    WeightDelivery,
-    labels,
-    matmul_assembly,
-    pin_names,
-    placed,
-)
 
 WEIGHTS = ((-4, -3, -2, -1), (0, 1, 2, 3), (3, 2, 1, 0), (-1, -2, -3, -4))
 # MatMul stores its weights (k, n): WEIGHTS read by output.

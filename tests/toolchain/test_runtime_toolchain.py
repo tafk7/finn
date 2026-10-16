@@ -1,0 +1,383 @@
+"""Synthetic execution tests; these do not claim licensed AMD operation coverage."""
+import pytest
+
+import concurrent.futures
+import dataclasses
+import json
+import os
+import shlex
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+from finn.toolchain import hls
+from finn.toolchain.launcher import (
+    Selection,
+    Toolchain,
+    ToolFailed,
+    ToolUnavailable,
+    run_process,
+)
+
+
+def executable(path, body):
+    path.write_text("#!" + sys.executable + "\n" + body)
+    path.chmod(0o755)
+    return path
+
+
+def test_xelab_compiles_without_native_import(tmp_path, vivado_installation):
+    from finn.xsi.compile import compile_sim_obj  # noqa: PLC0415
+
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    executable(tools / "vivado", "print('AMD Vivado v2024.2')\n")
+    executable(
+        tools / "xelab",
+        "from pathlib import Path\n"
+        "p=Path('xsim.dir/top/xsimk.so'); p.parent.mkdir(parents=True); p.write_bytes(b'design')\n",
+    )
+    source = tmp_path / "input.sv"
+    source.write_text("module top(); endmodule\n")
+    modules = set(sys.modules)
+    vivado = vivado_installation(tmp_path / "Vivado")
+    directory, relative = compile_sim_obj(
+        "top",
+        [str(source)],
+        str(tmp_path),
+        toolchain=Selection(command_dir=str(tools)).prepare(
+            {"PATH": os.defpath, "XILINX_VIVADO": str(vivado)}
+        ),
+    )
+    assert Path(directory, relative).is_file()
+    assert Path(directory, relative + ".finn.json").is_file()
+    assert "xsi" not in set(sys.modules) - modules
+
+
+def test_settings_are_scoped_and_disable_bash_startup(tmp_path, monkeypatch):
+    bad = tmp_path / "bashenv"
+    bad.write_text("echo startup-ran > " + shlex.quote(str(tmp_path / "bad")) + "\nexit 51\n")
+    monkeypatch.setenv("BASH_ENV", str(bad))
+    original = dict(os.environ)
+    scripts = []
+    for name in ("one with spaces", "two $ [brackets]"):
+        script = tmp_path / name
+        script.write_text(
+            "export CHOICE="
+            + shlex.quote(name)
+            + '\nexport MULTILINE="one\ntwo"\necho noisy settings\n'
+        )
+        scripts.append(script)
+
+    def run(script):
+        tc = Selection(settings=(script,)).prepare()
+        result = run_process(
+            [sys.executable, "-c", 'import os; print(os.environ["CHOICE"])'], env=tc.environment
+        )
+        assert tc.environment["MULTILINE"] == "one\ntwo"
+        return result.stdout.decode().strip()
+
+    with concurrent.futures.ThreadPoolExecutor(2) as pool:
+        assert list(pool.map(run, scripts)) == [s.name for s in scripts]
+    assert dict(os.environ) == original
+    assert not (tmp_path / "bad").exists()
+
+
+def test_the_clean_base_keeps_the_hosts_preload(tmp_path, monkeypatch):
+    # The image's libudev.so.1 preload keeps Vivado's licence library alive; a
+    # settings-scripts selection must not drop it with the other toolchain's state.
+    settings = tmp_path / "settings64.sh"
+    settings.write_text("export SELECTED=1\n")
+    monkeypatch.setenv("LD_PRELOAD", "/lib/x86_64-linux-gnu/libudev.so.1")
+    monkeypatch.setenv("XILINX_VIVADO", "/another/Vivado")
+    environment = Selection(settings=(settings,)).prepare().environment
+    assert environment["LD_PRELOAD"] == "/lib/x86_64-linux-gnu/libudev.so.1"
+    assert environment["SELECTED"] == "1"
+    assert "XILINX_VIVADO" not in environment
+
+
+def test_environment_and_selection_are_defensive_snapshots(tmp_path):
+    source = {"PATH": os.defpath, "CHOICE": "before"}
+    launch = ["site"]
+    selection = Selection(launcher=launch)
+    launch.append("mutated")
+    assert dataclasses.asdict(selection)["launcher"] == ("site",)
+    tc = Toolchain(Selection(), source)
+    source["CHOICE"] = "after"
+    assert tc.environment["CHOICE"] == "before"
+    with pytest.raises(TypeError):
+        tc.environment["CHOICE"] = "changed"
+    executable(tmp_path / "vivado", 'import os; print(os.environ["CHOICE"])\n')
+    tc = Toolchain(Selection(command_dir=str(tmp_path)), dict(tc.environment))
+    assert tc.run("vivado", env={"CHOICE": "child"}).stdout == b"child\n"
+    assert tc.environment["CHOICE"] == "before"
+
+
+LICENCE = "2100@licsrv.example"
+
+
+def host_file_with(tmp_path, monkeypatch, licensed):
+    """This process reads a synthetic host file and names no licence itself."""
+    lines = ["FINN_XILINX_VERSION=2025.2"]
+    if licensed:
+        lines += ["FINN_LICENSE_HOST=licsrv.example", "FINN_LICENSE_PORT=2100"]
+    path = tmp_path / "xilinx.env"
+    path.write_text("\n".join(lines) + "\n")
+    monkeypatch.setenv("FINN_XILINX_ENV", str(path))
+    for name in (
+        "XILINXD_LICENSE_FILE",
+        "LM_LICENSE_FILE",
+        "FINN_LICENSE_HOST",
+        "FINN_LICENSE_PORT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.parametrize("licensed", (True, False))
+def test_the_host_files_licence_reaches_every_launch(tmp_path, monkeypatch, capfd, licensed):
+    """A process that never sourced activate.sh: every prepared environment carries
+    the host file's licence server, and so does a process launched in it; without
+    licence lines the variable stays unset and nothing is said."""
+    host_file_with(tmp_path, monkeypatch, licensed)
+    settings = tmp_path / "settings64.sh"
+    settings.write_text("export CHOICE=selected\n")
+    expected = LICENCE if licensed else None
+    for toolchain in (
+        Selection().prepare(),
+        Selection(settings=(settings,)).prepare(),
+        Selection().prepare({"PATH": os.defpath}),
+    ):
+        assert toolchain.environment.get("XILINXD_LICENSE_FILE") == expected
+    launched = run_process(
+        [sys.executable, "-c", 'import os; print(os.environ.get("XILINXD_LICENSE_FILE"))'],
+        env=Selection().prepare().environment,
+    )
+    assert launched.stdout.decode().strip() == str(expected)
+    assert "XILINXD_LICENSE_FILE" not in os.environ
+    # A site route owns its activation, licence included.
+    route = Selection(launcher=("site",)).prepare({})
+    assert "XILINXD_LICENSE_FILE" not in route.environment
+    assert "licen" not in capfd.readouterr().err.lower()
+
+
+@pytest.mark.parametrize("variable", ("XILINXD_LICENSE_FILE", "LM_LICENSE_FILE"))
+def test_a_licence_in_the_environment_wins_over_the_host_file(tmp_path, monkeypatch, variable):
+    host_file_with(tmp_path, monkeypatch, licensed=True)
+    monkeypatch.setenv(variable, "27000@lic.example")
+    settings = tmp_path / "settings64.sh"
+    settings.write_text(":\n")
+    for toolchain in (
+        Selection().prepare(),
+        Selection(settings=(settings,)).prepare(),
+        Selection().prepare({variable: "27000@lic.example"}),
+    ):
+        assert toolchain.environment[variable] == "27000@lic.example"
+        assert variable == "XILINXD_LICENSE_FILE" or "XILINXD_LICENSE_FILE" not in (
+            toolchain.environment
+        )
+
+
+def test_site_probe_preserves_override_remote_name_and_argv(tmp_path):
+    log = tmp_path / "calls.jsonl"
+    wrapper = executable(
+        tmp_path / "site wrapper",
+        "import json,sys\n"
+        f'with open({str(log)!r}, "a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\n'
+        'print("AMD Vivado v2024.2")\n',
+    )
+    tc = Selection(command_dir="/remote/site tools", launcher=(str(wrapper),)).prepare({})
+    assert tc.probe("vivado") == (2024, 2)
+    tc.run("vivado", ["a b", "$literal", ";not-shell"])
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert calls == [
+        ["/remote/site tools/vivado", "-version"],
+        ["/remote/site tools/vivado", "a b", "$literal", ";not-shell"],
+    ]
+    assert Selection(launcher=(str(wrapper),)).prepare({}).command("vivado")[-1] == "vivado"
+    with pytest.raises(ValueError, match="Site routes"):
+        Selection(settings=("settings64.sh",), launcher=("site",))
+
+
+def test_probes_run_once_per_selection(tmp_path):
+    log = tmp_path / "calls"
+    executable(
+        tmp_path / "vitis-run",
+        f"import sys\nopen({str(log)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+        "print('vitis-run v2025.2 (hls)')\n",
+    )
+    tc = Selection(command_dir=str(tmp_path), hls_frontend="vitis-run").prepare({})
+    for _ in range(3):
+        frontend, args = hls.command(tc, "script.tcl")
+        assert (frontend, args) == ("vitis-run", ["--mode", "hls", "--tcl", "script.tcl"])
+    assert log.read_text().splitlines() == ["--version", "--help"]
+
+
+def test_failure_logs_status_and_settings_errors(tmp_path, caplog):
+    executable(
+        tmp_path / "vivado",
+        'import sys; print("useful log"); sys.stderr.write("failure"); sys.exit(7)\n',
+    )
+    tc = Selection(command_dir=str(tmp_path)).prepare({"SECRET": "do-not-log"})
+    with caplog.at_level("INFO"), pytest.raises(ToolFailed) as exc:
+        tc.run("vivado", replay=tmp_path / "run.sh")
+    assert (exc.value.tool, exc.value.status, exc.value.code) == ("vivado", 7, "tool-error")
+    assert exc.value.errors == ("useful log", "failure")
+    assert exc.value.transcript == tmp_path / "run.sh.stdout.log"
+    assert exc.value.transcript.read_bytes() == b"useful log\n"
+    assert "do-not-log" not in caplog.text
+    assert "result=7" in caplog.text
+    script = tmp_path / "bad-settings"
+    script.write_text("return 13\n")
+    with pytest.raises(RuntimeError, match="capture vendor settings"):
+        Selection(settings=(script,)).prepare()
+    script.write_text("sleep 30\n")
+    with pytest.raises(RuntimeError, match="capture vendor settings"):
+        Selection(settings=(script,)).prepare(timeout=0.1)
+    with pytest.raises(ToolUnavailable, match="missing: not on this toolchain's route"):
+        tc.probe("missing")
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_timeout_and_cancellation_kill_descendants(tmp_path, cancelled):
+    pidfile = tmp_path / "pid"
+    code = (
+        'import subprocess,time; p=subprocess.Popen(["sleep", "60"]); '
+        f'open({str(pidfile)!r}, "w").write(str(p.pid)); time.sleep(60)'
+    )
+    cancel = threading.Event()
+
+    def trigger():
+        # Wait for the descendant to exist before cancelling.
+        for _ in range(100):
+            if pidfile.exists():
+                cancel.set()
+                return
+            time.sleep(0.01)
+
+    thread = threading.Thread(target=trigger) if cancelled else None
+    if thread:
+        thread.start()
+    with pytest.raises(InterruptedError if cancelled else subprocess.TimeoutExpired):
+        run_process([sys.executable, "-c", code], timeout=1, cancel=cancel if cancelled else None)
+    if thread:
+        thread.join()
+    pid = pidfile.read_text()
+    status = Path("/proc") / pid / "stat"
+    for _ in range(100):
+        # The descendant may exit between opening and reading its status: gone.
+        try:
+            if status.read_text().split()[2] == "Z":
+                break
+        except (FileNotFoundError, ProcessLookupError):
+            break
+        time.sleep(0.01)
+    else:
+        pytest.fail("descendant survived cancellation")
+
+
+@pytest.mark.parametrize(
+    "frontend,version", [("vivado_hls", "2019.2"), ("vitis_hls", "2024.2"), ("vitis-run", "2025.1")]
+)
+def test_hls_build_uses_selected_frontend(tmp_path, frontend, version):
+    executable(
+        tmp_path / frontend,
+        "import json,os,sys\n"
+        f'if "-version" in sys.argv or "--version" in sys.argv: print("AMD {version}")\n'
+        'elif "--help" in sys.argv: print("--mode hls")\n'
+        "else:\n"
+        '    open("operation.json", "w").write(json.dumps(sys.argv[1:]))\n'
+        '    os.makedirs("project/sol1/syn/verilog")\n'
+        '    os.makedirs("project/sol1/syn/report")\n',
+    )
+    (tmp_path / "hls").mkdir()
+    tc = Selection(command_dir=str(tmp_path), hls_frontend=frontend).prepare(
+        {"XILINX_HLS": str(tmp_path / "hls")}
+    )
+    request = tmp_path / "request"
+    request.mkdir()
+    (request / "script.tcl").write_text("exit\n")
+    cwd = os.getcwd()
+    product = hls.synthesize(
+        request, "xc7z020clg400-1", name="top", toolchain=tc, cache=tmp_path / "with spaces"
+    )
+    assert os.getcwd() == cwd
+    args = json.loads((product.directory / "request" / "operation.json").read_text())
+    assert args == (
+        ["--mode", "hls", "--tcl", "synthesize.tcl"]
+        if frontend == "vitis-run"
+        else ["-f", "synthesize.tcl"]
+    )
+    assert "$FINN_ROOT" not in (product.directory / "synthesize.sh").read_text()
+
+
+def test_frontend_availability_does_not_override_compatibility(tmp_path):
+    executable(tmp_path / "vitis_hls", 'print("AMD 2025.1")\n')
+    tc = Selection(command_dir=str(tmp_path), hls_frontend="vitis_hls").prepare({})
+    with pytest.raises(ValueError, match="incompatible"):
+        hls.command(tc, "build.tcl")
+
+
+def test_the_hls_installation_is_the_one_the_environment_names(tmp_path):
+    installed, vitis = tmp_path / "hls", tmp_path / "vitis"
+    named = {"PATH": os.defpath, "XILINX_HLS": str(installed), "XILINX_VITIS": str(vitis)}
+    assert hls.installation(Selection().prepare(named)) == installed
+    del named["XILINX_HLS"]
+    assert hls.installation(Selection().prepare(named)) == vitis
+    with pytest.raises(ToolUnavailable, match="XILINX_HLS or XILINX_VITIS"):
+        hls.installation(Selection().prepare({"PATH": os.defpath}))
+
+
+@pytest.mark.slow
+def test_public_build_entry_point_builds_in_process_and_exits_with_its_result(tmp_path):
+    """build_dataflow_directory builds in this process, its working directory and
+    environment unchanged, the configuration's relative output directory in the build
+    directory; 0 on success, -1 for a failed step, a raise for a refused configuration.
+    The build_dataflow command exits 0, 255 (the -1) and 1 (the traceback)."""
+    import onnx  # noqa: PLC0415
+    import onnx.helper as oh  # noqa: PLC0415
+
+    from finn.builder.build_dataflow import build_dataflow_directory  # noqa: PLC0415
+    from finn.builder.build_dataflow_config import ConfigurationRefused  # noqa: PLC0415
+
+    project = tmp_path / "project with spaces"
+    project.mkdir()
+    onnx.save(oh.make_model(oh.make_graph([], "empty", [], [])), project / "model.onnx")
+    config = {
+        "output_dir": "output",
+        "target": {"period_ns": 10.0, "part": "xczu3eg-sbva484-1-e"},
+        "steps": [],
+        "enable_build_pdb_debug": False,
+    }
+
+    def state(*steps):
+        (project / "dataflow_build_config.json").write_text(json.dumps({**config, "steps": steps}))
+        return project
+
+    def command(*steps):
+        return subprocess.run(
+            [str(Path(sys.executable).parent / "build_dataflow"), str(state(*steps))],
+            cwd=tmp_path,
+            capture_output=True,
+        )
+
+    cwd, env = os.getcwd(), dict(os.environ)
+    assert build_dataflow_directory(str(state())) == 0
+    assert (project / "output/report/build.json").is_file()
+    assert os.getcwd() == cwd and dict(os.environ) == env
+    # A step that fails on an empty model: no partition to explore.
+    assert build_dataflow_directory(str(state("step_size_fifos"))) == -1
+    with pytest.raises(ConfigurationRefused, match="'not_a_step' is no step or named list"):
+        build_dataflow_directory(str(state("not_a_step")))
+    assert os.getcwd() == cwd
+    assert command().returncode == 0
+    assert command("step_size_fifos").returncode == 255
+    refused = command("not_a_step")
+    assert refused.returncode == 1
+    stated = (
+        b"ConfigurationRefused: configuration.steps[0]: step-unknown: 'not_a_step' is no step "
+        b"or named list"
+    )
+    assert stated in refused.stderr
+    assert os.getcwd() == cwd and dict(os.environ) == env

@@ -1,0 +1,344 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+
+"""Cycles measured in XSim against the schedules' prediction, on the Chain and TFC_W2A2.
+
+``python -m support.measure_cycles OUT [--frames N] [--only chain|tfc] [--work DIR]``
+(from ``tests``, FinnLib
+and Vivado selected) builds each partition as the kernel path builds it (the
+Chain's KernelOp nodes, ``support.models``; TFC_W2A2 at 16 lanes,
+``support.tfc``) and measures, with ``finn.core.rtlsim_bench.measure``,
+``N`` frames streamed back to back, never stalled:
+
+- the **stitched** partition, its root's latency, interval and total, and each
+  layer between the hop into it and the hop out of it;
+- each layer **alone**, the node as a one-node partition's body (``alone_body``: its own
+  adapter and memories, its output ``direct`` unless the node holds its transport),
+  so that its interval is its own and not its slowest neighbour's.
+
+Each layer's prediction is its schedule's ``beat_count`` (decision K10), beside
+FINN's ``get_exp_cycles`` for the same folding (``MVAU``, ``Thresholding``), as the
+finn-dev oracle captured it (``tests/oracle``). The
+tables are printed, and written to ``OUT/cycles.json`` and ``OUT/cycles.md``.
+Every frame's outputs are checked against ``execute_onnx`` of the partition's
+nodes, as the XSim tests check them.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import logging
+import sys
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+from numpy.typing import NDArray
+from onnx import NodeProto
+from oracle import capture
+from qonnx.core.modelwrapper import ModelWrapper
+
+from finn.builder.build_dataflow_testbench import boundary_words
+from finn.core.graph.annotations.channel import channel_choices
+from finn.core.onnx_exec import execute_onnx
+from finn.core.rtlsim_bench import link_stream, measure
+from finn.custom_op.kernels.network import Partition, member, network
+from finn.custom_op.kernels.shell import configured_network, save_channels
+from finn.harness.toolchain import print_identity
+from finn.toolchain.launcher import host_toolchain
+
+
+@dataclass(frozen=True)
+class Layer:
+    """One node's prediction and measurements (cycles, both ends counted)."""
+
+    name: str
+    op: str
+    folding: str
+    beats: int
+    """The schedule's beat count: the prediction."""
+    finn: int
+    """FINN's ``get_exp_cycles`` for the same folding."""
+    stitched_span: int
+    """In the stitched partition, the steady frame's first beat into the layer to its last
+    beat out."""
+    stitched_busy: int
+    """In the stitched partition, the steady frame's first to last beat out of the layer."""
+    alone_interval: int
+    """Alone, the steady state's interval."""
+    alone_latency: int
+    """Alone, the steady frame's latency."""
+    alone_first: int
+    """Alone, the first frame's latency."""
+
+
+def schedule_of(bound: Partition, node: NodeProto) -> Any:
+    kernel = bound.member(node.name)
+    return kernel.compute.schedule if node.op_type == "MatMul" else kernel.schedule
+
+
+def alone_body(model: ModelWrapper, node: NodeProto) -> ModelWrapper:
+    """``node`` as the body of a partition of its own: a copy of ``model`` (its target,
+    initializers and annotations) holding the node alone, its inputs other than
+    initializers the graph's inputs and its outputs the graph's outputs, its channels'
+    choices as their tensors state them. An output that ``model`` does not output, or
+    whose tensor states no transport, is pinned ``direct``: in ``model`` its FIFO, if any,
+    sits before its consumer."""
+    single = ModelWrapper(copy.deepcopy(model.model))
+    graph = single.graph
+    infos = {info.name: info for info in (*graph.input, *graph.value_info, *graph.output)}
+    initializers = {tensor.name for tensor in graph.initializer}
+    kept = [each for each in graph.node if each.name == node.name]
+    del graph.node[:]
+    graph.node.extend(kept)
+    tensors = [tensor for tensor in node.input if tensor not in initializers]
+    for field, names in ((graph.input, tensors), (graph.output, list(node.output))):
+        del field[:]
+        field.extend(copy.deepcopy(infos[name]) for name in names)
+    del graph.value_info[:]
+    outputs = {each.name for each in model.graph.output}
+    direct = {
+        "transport": "direct",
+        "transport.fifo.buffer.depth": None,
+        "transport.fifo.buffer.ram_style": None,
+    }
+    save_channels(
+        single,
+        {
+            tensor: direct
+            for tensor in node.output
+            if tensor not in outputs or "transport" not in channel_choices(single, tensor)
+        },
+    )
+    return single
+
+
+#: FINN's ``get_exp_cycles`` of ``MVAU`` and ``Thresholding`` at each folding measured
+#: here, at the oracle (its ``exp_cycles`` probe), by op and attributes.
+FINN_CYCLES = {
+    (row["op"], json.dumps(row["attributes"], sort_keys=True)): row["cycles"]
+    for row in capture("exp_cycles")
+}
+
+
+def finn_cycles(node: NodeProto, schedule: Any) -> int:
+    """FINN's ``get_exp_cycles`` of its own op at this folding, as the oracle captured it."""
+    if node.op_type == "MatMul":
+        m, n, k = schedule.order
+        op = "MVAU"
+        attributes = {
+            "MW": schedule.extent(k),
+            "MH": schedule.extent(n),
+            "SIMD": schedule.factor(k),
+            "PE": schedule.factor(n),
+            "numInputVectors": [schedule.extent(m)],
+        }
+    else:
+        *rows, c = schedule.order
+        op = "Thresholding"
+        attributes = {
+            "NumChannels": schedule.extent(c),
+            "PE": schedule.factor(c),
+            "numInputVectors": [schedule.extent(row) for row in rows],
+        }
+    key = (op, json.dumps(attributes, sort_keys=True))
+    if key not in FINN_CYCLES:
+        raise KeyError(
+            f"{node.name}: no oracle capture of {op} {attributes}; add it to"
+            " scripts/oracle/probes/exp_cycles.py and generate its capture again"
+        )
+    return int(FINN_CYCLES[key])
+
+
+def folding(node: NodeProto, schedule: Any) -> str:
+    if node.op_type == "MatMul":
+        _, n, k = schedule.order
+        return f"pe {schedule.factor(n)}, simd {schedule.factor(k)}"
+    return f"pe {schedule.factor(schedule.order[-1])}"
+
+
+def measure_partition(
+    model: ModelWrapper,
+    feed: dict[str, NDArray[Any]],
+    directory: Path,
+    *,
+    frames: int,
+    label: str,
+) -> dict[str, Any]:
+    """The stitched partition of ``model``'s nodes and each node alone, measured."""
+    context = execute_onnx(model, feed, return_full_exec_context=True)
+    nodes = list(model.graph.node)
+    point, boundary = configured_network(model, label)
+    bound = network(model, nodes, name=label)
+    inputs, outputs = boundary_words(model, point, boundary, context, label)
+    print(f"== {label}: stitched", flush=True)
+    stitched = measure(
+        point.module,
+        directory / "stitched",
+        inputs=inputs,
+        outputs=outputs,
+        frames=frames,
+        cycles=point.cycles,
+        toolchain=host_toolchain(),
+    )
+    # The hop out of each layer, by the layer's leaves: its member and what lies under it.
+    links = point.module.fragment.links
+    hops: list[str] = []
+    for node in nodes:
+        name = member(node.name)
+        out = [
+            link
+            for link in links
+            if link.source.instance is not None
+            and (link.source.instance == name or link.source.instance.startswith(name + "."))
+            and not (link.sink.instance or "").startswith(name + ".")
+            and link.sink.instance != name
+        ]
+        if len(out) != 1:
+            raise ValueError(f"{label}: {node.name} has {len(out)} hops out")
+        hops.append(link_stream(out[0]) or next(iter(outputs)))
+    into = [next(iter(inputs)), *hops[:-1]]
+    layers = []
+    recorded = {"stitched": dict(stitched.beats)}
+    for index, node in enumerate(nodes):
+        schedule = schedule_of(bound, node)
+        body = alone_body(model, node)
+        alone_point, alone_boundary = configured_network(body, node.name)
+        alone_in, alone_out = boundary_words(body, alone_point, alone_boundary, context, node.name)
+        print(f"== {label}: {node.name} alone", flush=True)
+        alone = measure(
+            alone_point.module,
+            directory / node.name,
+            inputs=alone_in,
+            outputs=alone_out,
+            frames=frames,
+            cycles=alone_point.cycles,
+            toolchain=host_toolchain(),
+        )
+        recorded[node.name] = dict(alone.beats)
+        layers.append(
+            Layer(
+                name=node.name,
+                op=node.op_type,
+                folding=folding(node, schedule),
+                beats=schedule.beat_count,
+                finn=finn_cycles(node, schedule),
+                stitched_span=stitched.span(into[index], hops[index])[-1],
+                stitched_busy=stitched.busy(hops[index])[-1],
+                alone_interval=alone.interval(),
+                alone_latency=alone.latencies[-1],
+                alone_first=alone.latencies[0],
+            )
+        )
+    return {
+        "label": label,
+        "frames": frames,
+        "latencies": list(stitched.latencies),
+        "intervals": list(stitched.intervals()),
+        "total": stitched.total,
+        "bottleneck": max(layer.beats for layer in layers),
+        "beats_sum": sum(layer.beats for layer in layers),
+        "finn_sum": sum(layer.finn for layer in layers),
+        "layers": [asdict(layer) for layer in layers],
+        "streams": {
+            name: {
+                "beats": stitched.per_frame(name),
+                "busy": stitched.busy(name)[-1],
+                "interval": stitched.interval(name),
+                "first": stitched.of(name)[0][0] - stitched.of(next(iter(inputs)))[0][0],
+            }
+            for name in stitched.beats
+        },
+        # Every handshake's cycle, by simulation and stream.
+        "recorded": recorded,
+    }
+
+
+def table(result: dict[str, Any]) -> str:
+    """One partition's result as Markdown."""
+    lines = [
+        f"### {result['label']} ({result['frames']} frames back to back, never stalled)",
+        "",
+        f"Stitched: latency per frame {result['latencies']}; intervals {result['intervals']};"
+        f" total {result['total']}. Predicted: bottleneck {result['bottleneck']}, sum of the"
+        f" layers' beats {result['beats_sum']} (FINN {result['finn_sum']}).",
+        "",
+        "| layer | op | folding | beats | FINN | stitched span | stitched busy out"
+        " | alone II | alone latency | alone first frame |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for layer in result["layers"]:
+        lines.append(
+            f"| {layer['name']} | {layer['op']} | {layer['folding']} | {layer['beats']}"
+            f" | {layer['finn']} | {layer['stitched_span']} | {layer['stitched_busy']}"
+            f" | {layer['alone_interval']} | {layer['alone_latency']} | {layer['alone_first']} |"
+        )
+    lines += [
+        "",
+        "| stitched stream | beats/frame | busy | II | first beat |",
+        "|---|---:|---:|---:|---:|",
+    ]
+    for name, stream in result["streams"].items():
+        lines.append(
+            f"| {name} | {stream['beats']} | {stream['busy']} | {stream['interval']}"
+            f" | {stream['first']} |"
+        )
+    return "\n".join(lines)
+
+
+def chain_case() -> tuple[ModelWrapper, dict[str, NDArray[Any]]]:
+    from support import chain  # noqa: PLC0415
+    from support.models import configure_partition, kernel_model  # noqa: PLC0415
+
+    model = kernel_model()
+    configure_partition(model)
+    return model, {"x": np.array(chain.X, dtype=np.float32)}
+
+
+def tfc_case(directory: Path) -> tuple[ModelWrapper, dict[str, NDArray[Any]]]:
+    from support.tfc import SHAPE, partitioned  # noqa: PLC0415
+
+    directory.mkdir(parents=True, exist_ok=True)
+    _, _, body = partitioned(directory)
+    image = np.random.default_rng(3).integers(0, 256, size=SHAPE).astype(np.float32)
+    return body, {body.graph.input[0].name: image.reshape(1, -1)}
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("out", type=Path)
+    parser.add_argument("--frames", type=int, default=4)
+    parser.add_argument("--only", choices=("chain", "tfc"))
+    parser.add_argument("--work", type=Path, help="the simulations' directory (OUT/work)")
+    args = parser.parse_args(argv)
+    # measure's tables are its log's (finn.core.rtlsim_bench), printed as they come.
+    tables = logging.getLogger("finn.core.rtlsim_bench")
+    tables.setLevel(logging.INFO)
+    tables.addHandler(logging.StreamHandler(sys.stdout))
+    print_identity()
+    out: Path = args.out.resolve()
+    work: Path = (args.work or out / "work").resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    results = []
+    if args.only in (None, "chain"):
+        model, feed = chain_case()
+        results.append(
+            measure_partition(model, feed, work / "chain", frames=args.frames, label="chain")
+        )
+    if args.only in (None, "tfc"):
+        model, feed = tfc_case(work / "tfc-model")
+        results.append(
+            measure_partition(model, feed, work / "tfc", frames=args.frames, label="tfc_w2a2")
+        )
+    (out / "cycles.json").write_text(json.dumps(results, indent=2) + "\n")
+    text = "\n\n".join(table(result) for result in results) + "\n"
+    (out / "cycles.md").write_text(text)
+    print(text, flush=True)
+
+
+if __name__ == "__main__":
+    main()

@@ -4,7 +4,7 @@
 """The value layer at runtime: what importing it loads, and its package root.
 
 ``finn.dataflow`` holds canonical logical values. Its import statements are
-checked against the layer table (``tests/layering.py``): QONNX's datatype and
+checked against the layer table (``tests/support/layering.py``): QONNX's datatype and
 range modules (values, which load no ONNX), numpy, the standard library and the
 findings its refusals carry (``finn.core.reporting``), no engine.
 """

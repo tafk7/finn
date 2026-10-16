@@ -10,7 +10,7 @@ persisted; binding no RTL, so the module is the ``ip`` shell's; its cycles a fra
 the channel's, so an exploration's bottleneck can name it, and FIFO sizing reads
 both boundaries through it; its resources by its widths are the shell's, which
 the shell sums with its partition's and its static region's. On the Chain
-(``kernels.chain`` as KernelOps), and on TFC_W2A2 for Ultra96 in the Zynq shell
+(``support.chain`` as KernelOps), and on TFC_W2A2 for Ultra96 in the Zynq shell
 (``pynq``), whose memory port is 128 bits wide.
 """
 
@@ -22,9 +22,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from kernels.helpers import built as module_built
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from support.helpers import built as module_built
+from support.models import TARGET, configure_partition, kernel_model
+from support.tfc import ULTRA96
 
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import read_target, write_target
@@ -69,8 +71,6 @@ from finn.transformation.kernels import (
     kernel_choices_config,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
-from kernel_ops.models import TARGET, configure_partition, kernel_model
-from kernel_ops.tfc import ULTRA96
 
 # -- an end's arithmetic -------------------------------------------------------------------
 

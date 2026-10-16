@@ -20,6 +20,18 @@ from typing import Any
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.helpers import (
+    FULL_DSP48E2,
+    built,
+    choose,
+    cycles_of,
+    exact_result_dtype,
+    labels,
+    module_of,
+    with_adapter_memories,
+    with_direct_transports,
+)
+from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.rtlsim_pacing import FREE, STALLED
@@ -35,18 +47,6 @@ from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, wire
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import (
-    FULL_DSP48E2,
-    built,
-    choose,
-    cycles_of,
-    exact_result_dtype,
-    labels,
-    module_of,
-    with_adapter_memories,
-    with_direct_transports,
-)
-from kernels.xsim import requires_xsim
 
 ROWS, INPUTS, HIDDEN, OUTPUTS = 3, 4, 4, 4
 PE1, SIMD1, PE2, SIMD2 = 4, 2, 2, 2

@@ -7,13 +7,13 @@ replay and its end-of-loop markers."""
 from __future__ import annotations
 
 import pytest
+from support.helpers import FULL_DSP48E2, generator, nested, stage_tensor
 
 from finn.core.space import Rejected, design_space
 from finn.dataflow.plan import Unrealizable
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.input_generator import Generate, InputGeneratorKernel, generated
-from kernels.helpers import FULL_DSP48E2, generator, nested, stage_tensor
 
 
 def test_generator_states_zero_stride_replay_and_multibit_markers() -> None:

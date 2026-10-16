@@ -4,7 +4,7 @@
 """Planning packages do not run tools.
 
 ``artifacts``' own import rule (the standard library and pyslang, nothing else
-of FINN) is a row of the layer table, ``tests/layering.py``. What lives here is
+of FINN) is a row of the layer table, ``tests/support/layering.py``. What lives here is
 the rule about tool execution: no module of ``finn.kernels`` or ``finn.dataflow``
 starts a process or spells a tool's command line. It is stated over the whole of
 both packages, so that moving a module within them cannot take it out of the
@@ -16,7 +16,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from layering import imported_modules, module_name, within
+from support.layering import imported_modules, module_name, within
 
 #: Modules that start a process.  ``shutil`` is not here -- it is stdlib we
 #: use for ordinary file work -- so ``shutil.which`` is caught below as an

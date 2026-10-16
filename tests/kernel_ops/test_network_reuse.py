@@ -19,11 +19,20 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from kernels.helpers import choose
 from onnx import GraphProto
 from qonnx.core.datatype import DataType
 from qonnx.core.metadata import clear
 from qonnx.core.modelwrapper import ModelWrapper
+from support.helpers import choose
+from support.models import (
+    TARGET,
+    WEIGHTS,
+    configure_partition,
+    kernel_model,
+    matmul_model,
+    open_memories,
+)
+from support.tfc import ULTRA96
 
 import finn.custom_op.kernels.shell as shell
 import finn.kernels.members as members
@@ -46,15 +55,6 @@ from finn.kernels.members import (
 from finn.platform.resolve import resolve_target
 from finn.platform.shells import shell_row
 from finn.transformation.kernels import InferKernelTensors
-from kernel_ops.models import (
-    TARGET,
-    WEIGHTS,
-    configure_partition,
-    kernel_model,
-    matmul_model,
-    open_memories,
-)
-from kernel_ops.tfc import ULTRA96
 
 
 def cache() -> MemberCache:

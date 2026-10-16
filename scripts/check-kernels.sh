@@ -19,27 +19,42 @@ bash scripts/check-dataflow-design.sh "${GATE_ARGS[@]}"
 gate_pytest tests/kernels xsim vivado vitis
 # The KernelOps and their transformations, the layer above finn.kernels.
 gate_pytest tests/kernel_ops xsim vivado
+# The builder's, the platform's and the analysis' tests, split from the KernelOps' by
+# the packages they test (each its own conftest).
+gate_pytest tests/builder xsim vivado
+gate_pytest tests/platforms xsim vivado
+gate_pytest tests/analysis xsim vivado
+# The pynq shell's tests, and the whole networks' (TFC's build, its measured cycles and
+# FINN's captured ones), each its own conftest.
+gate_pytest tests/shells xsim vivado
+gate_pytest tests/networks xsim vivado
+# The layer table's own tests (every layer of FINN is a row; the engine's and the values'
+# rows are checked in their own trees).
+gate_pytest tests/layers
 # The XSim sweep's tooling: the emitted text and each job's key (no Vivado).
 gate_pytest tests/xsim_sweep
 # Graph preparation's front end (the preparation layer: finn.transformation.qonnx
-# and .streamline, which the builder's graph-preparation steps run; tests/kernel_ops
+# and .streamline, which the builder's graph-preparation steps run; tests/builder
 # tests the steps themselves) and the Brevitas export it reads, under
 # tests/conftest.py. One thread per worker: each of the workers would otherwise run
 # torch over every CPU. About 1 140 tests (collected without xsim and vivado).
 OMP_NUM_THREADS=1 gate_pytest --conftest-root tests \
     tests/transformation tests/brevitas xsim vivado
-# finn.util and the rest of FINN's support code (toolchain, resources,
-# installation, containers, the build entry). Its tests use tests/conftest.py (the
-# seeded RNG). The slow tests (wheel and editable-environment builds, a build child;
-# tens of seconds each) are deselected in either mode, so this step stays at a few
-# minutes.
+# finn.util and the rest of FINN's support code (resources, installation, packing), the
+# toolchain's tests (tests/toolchain) and the docker scripts' (tests/docker_scripts). Their
+# tests use tests/conftest.py (the seeded RNG). The slow tests (wheel and editable-environment
+# builds, a build child; tens of seconds each) are deselected in either mode, so this step
+# stays at a few minutes.
 gate_pytest --conftest-root tests tests/util xsim vivado slow
-gate_ruff src/finn/kernels tests/kernels src/finn/platform src/finn/core/graph \
+gate_pytest --conftest-root tests tests/toolchain xsim vivado slow
+gate_pytest --conftest-root tests tests/docker_scripts xsim vivado slow
+gate_ruff src/finn/kernels tests/kernels tests/support src/finn/platform src/finn/core/graph \
     src/finn/core/executor.py src/finn/core/onnx_exec.py \
     src/finn/core/rtlsim_bench.py src/finn/core/rtlsim_exec.py src/finn/core/rtlsim_pacing.py \
     src/finn/custom_op/kernels src/finn/custom_op/partition src/finn/transformation/kernels \
     src/finn/analysis src/finn/util/draws.py src/finn/util/typed_json.py \
     src/finn/harness src/finn/shells/*.py src/finn/shells/pynq/*.py tests/kernel_ops \
+    tests/builder tests/platforms tests/analysis tests/shells tests/networks tests/layers \
     src/finn/builder/build_dataflow_testbench.py src/finn/builder/build_dataflow_resources.py \
     src/finn/builder/build_dataflow_checks.py \
     src/finn/builder/build_dataflow_config.py src/finn/builder/build_dataflow_plan.py \
@@ -68,4 +83,5 @@ gate_mypy -p finn.kernels -p finn.platform -p finn.core.graph -p finn.custom_op.
     -m finn.builder.build_dataflow_verification \
     -m finn.builder.build_dataflow_manifest
 # Whole directories; the files not yet strictly typed are listed in .mypy.ini.
-gate_mypy tests/kernels tests/kernel_ops tests/xsim_sweep tests/oracle
+gate_mypy tests/support tests/kernels tests/kernel_ops tests/builder tests/platforms \
+    tests/analysis tests/shells tests/networks tests/layers tests/xsim_sweep tests/oracle

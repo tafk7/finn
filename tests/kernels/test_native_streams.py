@@ -3,6 +3,8 @@
 
 
 import pytest
+from support.helpers import FULL_DSP48E2, eltwise, fifo_node, in_order, nested, stage_tensor
+from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import simulate
 from finn.core.space import Available, Rejected, design_space
@@ -13,8 +15,6 @@ from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamMarker
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import FULL_DSP48E2, eltwise, fifo_node, in_order, nested, stage_tensor
-from kernels.xsim import requires_xsim
 
 
 def test_native_streams_are_inspectable_without_storage_choices():

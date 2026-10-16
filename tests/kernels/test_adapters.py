@@ -18,6 +18,20 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+from support.adapted import (
+    CHANNELS,
+    ELEMENT,
+    ROWS,
+    adapted,
+    columns_first,
+    transposed,
+)
+from support.helpers import (
+    FULL_DSP48E2,
+    built,
+    choose,
+    labels,
+)
 
 from finn.core.space import Rejected, design_space, inspection
 from finn.dataflow.plan import Step, plan
@@ -27,20 +41,6 @@ from finn.kernels.adapters import Convert, realize
 from finn.kernels.channels import Channel, ChannelFifo
 from finn.kernels.configure import commit
 from finn.kernels.vpc import VpcKernel
-from kernels.adapted import (
-    CHANNELS,
-    ELEMENT,
-    ROWS,
-    adapted,
-    columns_first,
-    transposed,
-)
-from kernels.helpers import (
-    FULL_DSP48E2,
-    built,
-    choose,
-    labels,
-)
 
 
 def stage_parameters(point):

@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.helpers import FULL_DSP58, choose, with_direct_transports
 
 from finn.core.space import (
     ConstraintGroup,
@@ -46,7 +47,6 @@ from finn.kernels.network import Interface, Network, wire
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.platform.capabilities import Resources
-from kernels.helpers import FULL_DSP58, choose, with_direct_transports
 
 b, s, c = Index("b"), Index("s"), Index("c")
 

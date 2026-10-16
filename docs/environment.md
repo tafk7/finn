@@ -178,7 +178,7 @@ configuration names none runs by that toolchain. A build configuration
 that states its own `toolchain` is laid over the machine's: a `command_dir` it states
 (`{"command_dir": ...}`) wins over the setting, and one it does not state is the
 setting's. A site wrapper owns remote activation, path visibility and the
-cancellation of its remote jobs (`tests/util/test_tool_route.py` checks the route
+cancellation of its remote jobs (`tests/toolchain/test_tool_route.py` checks the route
 with fake tools).
 
 ## Guards

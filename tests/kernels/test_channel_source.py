@@ -3,7 +3,7 @@
 
 """A channel with a known value carries a ``source``: MatMul's weights on its weight channel.
 
-The MatMul sits in a network (``kernels.helpers.matmul_point``) that gives it its
+The MatMul sits in a network (``support.helpers.matmul_point``) that gives it its
 weights: the weight channel carries what MatMul states for it, its ``contents`` and
 its tensor over their range. Known weights give the channel a value, so its
 ``source`` applies (``memstream``, its one candidate, forced) and stores them;
@@ -20,6 +20,21 @@ from dataclasses import replace
 import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.ranges import TensorRange
+from support.helpers import (
+    FULL_DSP48E2,
+    WeightDelivery,
+    built,
+    choose,
+    codes,
+    keyed,
+    labels,
+    matmul_assembly,
+    matmul_point,
+    module_of,
+    placed,
+    with_adapter_memories,
+    with_direct_transports,
+)
 
 from finn.core.space import (
     Available,
@@ -40,21 +55,6 @@ from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
 from finn.platform.capabilities import Platform
-from kernels.helpers import (
-    FULL_DSP48E2,
-    WeightDelivery,
-    built,
-    choose,
-    codes,
-    keyed,
-    labels,
-    matmul_assembly,
-    matmul_point,
-    module_of,
-    placed,
-    with_adapter_memories,
-    with_direct_transports,
-)
 
 STORED_INSTANCE = "w.source.memstream"
 ADAPTER_INSTANCE = "x.adapter.input_gen.input_gen"

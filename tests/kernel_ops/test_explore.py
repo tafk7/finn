@@ -20,9 +20,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from kernels.helpers import Lanes
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from support.explore_models import choices, kernel_model
+from support.helpers import Lanes
+from support.models import TARGET, matmul_model
+from support.tfc_built import TFC_BUILT
 
 import finn.kernels.explore as explore_module
 from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS
@@ -55,9 +58,6 @@ from finn.transformation.kernels import (
     kernel_choices_config,
 )
 from finn.transformation.kernels.cut import CutKernelPartition
-from kernel_ops.models import TARGET, matmul_model
-from kernel_ops.test_builder_phase import TFC_BUILT
-from kernel_ops.test_choose import choices, kernel_model
 
 VCK190 = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=5.0)
 

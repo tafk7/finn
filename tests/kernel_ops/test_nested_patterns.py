@@ -6,7 +6,7 @@ in graph order. ``ToKernelOps`` converts the covered set to one node on its boun
 tensors, refuses a set that is not convex or whose interior is read outside it, by
 code, moves the nodes the set depends on before its anchor, and keeps one outcome
 naming every covered node. The domain's Conv covers an Im2Col and its MatMul
-(``kernel_ops.specs.conv``); these test-only ones exercise the rules on
+(``support.op_specs.conv``); these test-only ones exercise the rules on
 other shapes: an ONNX Identity and the MatMul reading it, as MatMul."""
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
+from support.models import convert
 
 import finn.custom_op.kernels as domain
 from finn.core.graph.errors import KernelOpError
@@ -29,7 +30,6 @@ from finn.core.space import Rejected
 from finn.custom_op.kernels.base import Match, refused
 from finn.custom_op.kernels.matmul import MatMul
 from finn.transformation.kernels import Outcome
-from kernel_ops.models import convert
 
 KERNELS = "finn.custom_op.kernels"
 

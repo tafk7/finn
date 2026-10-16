@@ -3,7 +3,7 @@
 
 """The interface description: a module's pins with what its streams carry, as JSON.
 
-Pins with a derived clock and an AXI-Lite bus (``test_ipxact``'s ``PORTS``), so that
+Pins with a derived clock and an AXI-Lite bus (``support.ipxact_ports.PORTS``), so that
 every section is stated. ``tests/kernel_ops/test_ip_outputs.py`` reads a packaged
 partition's description back against its module's ABI.
 """
@@ -14,12 +14,11 @@ import json
 from typing import Any
 
 import pytest
+from support.ipxact_ports import PORTS
 
 from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.artifacts.interface import InterfaceError, describe_interface
 from finn.kernels.artifacts.module import RegisterMap
-
-from .test_ipxact import PORTS
 
 #: x's order, row-major: six beats of three lanes.
 ROW_MAJOR = {

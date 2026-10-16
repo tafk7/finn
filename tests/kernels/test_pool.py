@@ -6,7 +6,7 @@ HLS request it writes from its point; its top's C simulation (tier T1½), marked
 ``vitis``: a check to run, which no gate decides on; and its cycles in XSim, measured
 against its schedule's.
 
-The conformance case (``kernels.specs.pool``) is simulated in XSim by
+The conformance case (``support.kernel_specs.pool``) is simulated in XSim by
 ``test_conformance.py``; the C simulation here runs the same case's interior sample,
 fed the words and TLASTs the kernel's input port declares (what its channel's adapter
 presents), and compares the output with the same reference.
@@ -20,6 +20,19 @@ from typing import Any
 import numpy as np
 import pytest
 from qonnx.core.datatype import DataType
+from support.conformance import (
+    KERNEL,
+    Sample,
+    _ends,
+    _values,
+    _words,
+    design_cycles,
+    design_member,
+    design_module,
+    place,
+)
+from support.kernel_specs.pool import INT4, max_pool, pool
+from support.xsim import requires_hls
 
 from finn.core.rtlsim_bench import measure
 from finn.core.space import Available, Rejected, design_space
@@ -32,19 +45,6 @@ from finn.kernels.channels import Channel
 from finn.kernels.pool import PoolKernel, element_type
 from finn.toolchain import hls
 from finn.toolchain.launcher import ToolUnavailable, host_toolchain
-from kernels.conformance import (
-    KERNEL,
-    Sample,
-    _ends,
-    _values,
-    _words,
-    design_cycles,
-    design_member,
-    design_module,
-    place,
-)
-from kernels.specs.pool import INT4, max_pool, pool
-from kernels.xsim import requires_hls
 
 
 def placed(case: dict[str, Any], pe: int) -> Any:

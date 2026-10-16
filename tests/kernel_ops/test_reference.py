@@ -4,7 +4,7 @@
 """The ONNX entry, offline: each KernelOp's reference against the ONNX it covers, every
 value equal; its pattern pure; its negative graphs refused by their codes; its inference
 sound; which platform rows' kernels admit each positive graph, and a gap record where
-none does (``finn.harness.reference``, the specs in ``kernel_ops.specs``). And the
+none does (``finn.harness.reference``, the specs in ``support.op_specs``). And the
 harness's own failures: a difference from ONNX, an unsound annotation, a match that
 writes the model, a graph converted otherwise than its spec states."""
 
@@ -23,6 +23,8 @@ from qonnx.core.onnx_exec import EXACT_INTEGERS
 from qonnx.core.onnx_exec import execute_onnx as qonnx_execute
 from qonnx.core.ranges import TensorRange
 from qonnx.transformation.infer_shapes import InferShapes
+from support.models import TARGET
+from support.op_specs import SPECS, matmul, thresholding
 
 import finn.custom_op.kernels as domain
 from finn.core.graph.annotations.platform import write_target
@@ -51,8 +53,6 @@ from finn.platform.architectures import RULES
 from finn.platform.capabilities import DspBlock
 from finn.platform.shells import IP, PYNQ, shell_row
 from finn.util.draws import drawn_inputs
-from kernel_ops.models import TARGET
-from kernel_ops.specs import SPECS, matmul, thresholding
 
 POSITIVE = [
     pytest.param(spec, name, id=f"{spec.op.op_type}-{name}")

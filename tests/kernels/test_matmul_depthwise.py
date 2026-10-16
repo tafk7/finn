@@ -13,12 +13,7 @@ stored (k, n): window by channel.
 
 import pytest
 from qonnx.core.datatype import DataType
-
-from finn.core.space import Available, Rejected, Unresolved, inspection
-from finn.dataflow.gemm import Form
-from finn.dataflow.plan import Step
-from finn.dataflow.traversal import Traversal
-from kernels.helpers import (
+from support.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
     WeightDelivery,
@@ -32,6 +27,11 @@ from kernels.helpers import (
     with_adapter_memories,
     with_direct_transports,
 )
+
+from finn.core.space import Available, Rejected, Unresolved, inspection
+from finn.dataflow.gemm import Form
+from finn.dataflow.plan import Step
+from finn.dataflow.traversal import Traversal
 
 FACTS = dict(
     m=2,

@@ -18,13 +18,13 @@ from pathlib import Path
 
 import numpy as np
 from qonnx.core.datatype import DataType
+from support.helpers import full_platform, placed_dotp
 
 from finn.core.rtlsim_pacing import FREE, STALLED, Pace, Pacing
 from finn.harness.toolchain import finnlib_root, print_identity
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.platform.capabilities import DspBlock
-from kernels.helpers import full_platform, placed_dotp
 from kernels.sweeps.dotp_support import (
     Case,
     _activation_beats,

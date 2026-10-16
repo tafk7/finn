@@ -13,6 +13,16 @@ import pyslang
 import pytest
 from pyslang import ast, syntax
 from qonnx.core.datatype import DataType
+from support.helpers import (
+    FULL_DSP48E2,
+    FULL_DSP58,
+    controlled,
+    in_order,
+    nested,
+    point_for,
+    stage_tensor,
+)
+from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import simulate
 from finn.core.space import (
@@ -31,16 +41,6 @@ from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import integer_shape
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import (
-    FULL_DSP48E2,
-    FULL_DSP58,
-    controlled,
-    in_order,
-    nested,
-    point_for,
-    stage_tensor,
-)
-from kernels.xsim import requires_xsim
 
 FINNLIB = finnlib_root()
 SOURCE_ROOTS = {"finnlib": FINNLIB}

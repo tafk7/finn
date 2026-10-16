@@ -15,6 +15,8 @@ from pathlib import Path
 import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.ranges import TensorRange
+from support import helpers
+from support.helpers import FULL_DSP48E2, FULL_DSP58, codes, full_platform
 
 from finn.core.space import (
     Available,
@@ -33,8 +35,6 @@ from finn.kernels.base import LeafKernel
 from finn.kernels.dotp import REDUCERS, DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.port import AxiStreamPort
 from finn.platform.capabilities import DspBlock
-from kernels import helpers
-from kernels.helpers import FULL_DSP48E2, FULL_DSP58, codes, full_platform
 
 
 def parameters(**updates):

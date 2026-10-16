@@ -28,7 +28,7 @@ holds is the caller's own instance and nothing can rename it in place. A
 refused.
 
 This module imports of FINN only its findings (``finn.core.reporting``), and
-``finn.dataflow`` imports no engine (the layer table, ``tests/layering.py``, holds the
+``finn.dataflow`` imports no engine (the layer table, ``tests/support/layering.py``, holds the
 package directions).
 The engine-side ``ValueSemantics`` declaration lives in
 ``finn.kernels.values.semantics``, built from the helpers here.

@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.helpers import FULL_DSP48E2, generator_node
+from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import simulate
 from finn.core.space import design_space
@@ -34,8 +36,6 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Leaf
 from finn.kernels.configure import commit
 from finn.toolchain.launcher import host_toolchain
-from kernels.helpers import FULL_DSP48E2, generator_node
-from kernels.xsim import requires_xsim
 
 ELEMENT = ScalarEncoding(DataType["INT8"])
 oh, ow, kh, kw, c = (Index(name) for name in ("oh", "ow", "kh", "kw", "c"))

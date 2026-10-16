@@ -12,7 +12,7 @@ runs: none of it is written here. Each is a leaf whose ABI is declared, as a
 kernel declares one: HLS's AXIS pins (``src_TDATA``, upper case), ``ap_clk`` and
 ``ap_rst_n``. Synthesized by ``built_hls`` (cached under ``$FINN_HOME/hls``, its
 exported top checked against those pins), simulated free and stalled against a max
-pool (``kernels.specs.pool.max_pool``): alone, and the two configurations chained in
+pool (``support.kernel_specs.pool.max_pool``): alone, and the two configurations chained in
 one netlist, whose submodules HLS names apart by their tops (``config_rtl
 -module_auto_prefix``).
 """
@@ -25,6 +25,8 @@ import numpy as np
 import numpy.typing as npt
 import pytest
 from qonnx.core.datatype import DataType
+from support.kernel_specs.pool import max_pool
+from support.xsim import requires_hls
 
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.rtlsim_pacing import FREE, STALLED, Pacing
@@ -34,8 +36,6 @@ from finn.kernels.artifacts.contributions import CopiedSource, HlsSource
 from finn.kernels.artifacts.module import Abi, Composed, Fragment, Leaf, Link, LinkEnd
 from finn.kernels.transport import AxisBeat, AxisSpelling
 from finn.toolchain.launcher import host_toolchain
-from kernels.specs.pool import max_pool
-from kernels.xsim import requires_hls
 
 Array = npt.NDArray[np.int64]
 

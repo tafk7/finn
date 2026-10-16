@@ -16,6 +16,7 @@ from onnx import NodeProto, TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
+from support.models import DOMAIN, TARGET, convert
 
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
@@ -26,7 +27,6 @@ from finn.transformation.kernels import (
     kernel_ops_report,
     kernel_ops_summary,
 )
-from kernel_ops.models import DOMAIN, TARGET, convert
 
 GENERAL = "qonnx.custom_op.general"
 

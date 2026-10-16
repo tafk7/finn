@@ -9,6 +9,7 @@ from typing import cast
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.helpers import FULL_DSP48E2, THRESHOLDS, controlled, threshold_base
 
 from finn.core.space import Available, DefinitionError, Rejected, Unresolved
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
@@ -17,7 +18,6 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensor, IntegerTensorValue, integer_shape
-from kernels.helpers import FULL_DSP48E2, THRESHOLDS, controlled, threshold_base
 
 AUTO_MEMORY: dict[str, object] = {"ram_style": "auto", "ultra_stages": 0}
 

@@ -2,7 +2,7 @@
 
 These tests intentionally exercise real Docker, sbx and SIF behavior.
 Unavailable runtimes or host resources are reported as pytest skips. Static
-resolver behavior belongs in ``tests/util/test_container_config.py``.
+resolver behavior belongs in ``tests/docker_scripts/test_container_config.py``.
 """
 
 import pytest

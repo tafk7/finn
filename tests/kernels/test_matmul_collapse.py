@@ -14,12 +14,12 @@ from typing import Any
 
 from core.space._collapse_support import answers, counts, open_space
 from qonnx.core.datatype import DataType
+from support.helpers import FULL_DSP48E2, choose, keyed, matmul_point
 
 from finn.core.space import Space, inspection
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
-from kernels.helpers import FULL_DSP48E2, choose, keyed, matmul_point
 
 FACTS = dict(
     m=3,

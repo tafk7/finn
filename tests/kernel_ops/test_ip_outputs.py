@@ -5,8 +5,8 @@
 """The ``ip`` shell's outputs: the packaged IP's interface description, its resources
 per member out of context, and its XSim testbench.
 
-The Chain (``kernel_ops.models``) is packaged against a toolchain double that stands
-for Vivado (``kernel_ops.packaging.PackagedByStub``), so its description and its
+The Chain (``support.models``) is packaged against a toolchain double that stands
+for Vivado (``support.packaging.PackagedByStub``), so its description and its
 resources from a report are read in the fast gate, and so are the step that writes the
 testbench and the utility that runs it. TFC_W2A2 is built through the builder on the
 ``ip`` shell to its packaged IP and testbench, which ``run_testbench`` runs and which
@@ -25,11 +25,18 @@ from typing import Any, cast
 
 import numpy as np
 import pytest
-from kernels.xsim import requires_xsim
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.ranges import TensorRange
+from support.models import (
+    choose_memories,
+    configure_partition,
+    kernel_model,
+    streamed_w2_model,
+)
+from support.packaging import PackagedByStub, read_back, verified, verified_parent
+from support.xsim import requires_xsim
 
 import finn.kernels.explore as explore_module
 from finn.builder.build_dataflow import build_dataflow_cfg
@@ -78,13 +85,6 @@ from finn.transformation.kernels.package import (
     resources_of,
     stream_order,
 )
-from kernel_ops.models import (
-    choose_memories,
-    configure_partition,
-    kernel_model,
-    streamed_w2_model,
-)
-from kernel_ops.packaging import PackagedByStub, read_back, verified, verified_parent
 
 
 def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(

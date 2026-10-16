@@ -15,6 +15,7 @@ from qonnx.transformation.infer_data_layouts import InferDataLayouts
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
+from support.models import THRESHOLDS, convert, schema_digest, thresholding_model
 
 from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
@@ -22,7 +23,6 @@ from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.kernels import InferKernelTensors
-from kernel_ops.models import THRESHOLDS, convert, schema_digest, thresholding_model
 
 MEMORY = {"ram_style": "distributed", "block_stages": 1, "ultra_stages": 0}
 
