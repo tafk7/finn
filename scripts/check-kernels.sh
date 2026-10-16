@@ -12,8 +12,9 @@ bash scripts/check-space.sh "${GATE_ARGS[@]}"
 bash scripts/check-dataflow-design.sh "${GATE_ARGS[@]}"
 # XSim and other Vivado tests (markers xsim, vivado) are deselected even when
 # Vivado is selected (a FINN checkout's .envrc selects it): they take minutes
-# each, and scripts/xsim-sweep.sh runs them. --fast deselects the slow tests too:
-# the TFC platform binding and the wheel build. An HLS top's C simulation (marker
+# each, and scripts/xsim-sweep.sh runs them. --fast deselects the slow tests too
+# (marker slow: whole-network and builder-phase tests, the wheel build, the entry
+# modules' interpreters, the XSim sweep tooling's text comparisons). An HLS top's C simulation (marker
 # vitis) is a check to run by hand, which no gate decides on.
 gate_pytest tests/kernels xsim vivado vitis
 # The KernelOps and their transformations, the layer above finn.kernels.
@@ -24,7 +25,7 @@ gate_pytest tests/xsim_sweep
 # and .streamline, which the builder's graph-preparation steps run; tests/kernel_ops
 # tests the steps themselves) and the Brevitas export it reads, under
 # tests/conftest.py. One thread per worker: each of the workers would otherwise run
-# torch over every CPU. About 1 700 tests, 7 minutes alone.
+# torch over every CPU. About 1 140 tests (collected without xsim and vivado).
 OMP_NUM_THREADS=1 gate_pytest --conftest-root tests \
     tests/transformation tests/brevitas xsim vivado
 # finn.util and the rest of FINN's support code (toolchain, resources,
