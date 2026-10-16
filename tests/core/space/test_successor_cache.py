@@ -3,13 +3,16 @@
 """What a successor and a trial keep of their base's evaluations, and what forcing
 keeps of its own.
 
-A published successor starts from its base's evaluations that read no Decision the
-change touched and no open Decision, and from its trial's that read no Decision open
-in it; forcing's copies hand back what reads no refused Decision. A trial takes a
-retained choice's admission as its base recorded it while that admission read no
-Decision the change touched, and starts from what reads only such choices. Each
+A change touches the Decisions it adds, removes or replaces, and each open Decision
+whose forced value's verdict read one of those. A published successor starts from
+its base's evaluations that read no touched Decision, and from its trial's that read
+no Decision open in it but one the change does not touch; forcing's copies hand back
+what reads no refused Decision. A trial takes a retained choice's admission as its
+base recorded it while that admission read no touched Decision, and starts from what
+reads only such choices and the open Decisions the change does not touch. Each
 answers as a configuration built from nothing with the same choices does, evidence
-included.
+included. What lies outside the change's reach is not evaluated again, and what lies
+inside it is: the tests that count calls assert both.
 """
 
 from __future__ import annotations
@@ -220,3 +223,70 @@ def test_a_successor_answers_as_a_configuration_built_from_nothing() -> None:
     fresh = commit(fresh, {"left.packed.pe": 4})
     assert answers(point) == answers(fresh)
     assert isinstance(point.left, Packed) and point.left.pe == 4
+
+
+def test_what_read_a_forced_decision_is_kept_unless_the_change_reaches_its_verdict() -> None:
+    calls: list[str] = []
+
+    class Odd(Space):
+        lanes: int = Decision(values=(3, 128))
+        finish: str = Decision(values=("matte", "gloss"))
+        # Three lanes refuse the stub core (odd), 128 the packed core (over 64): its
+        # verdict reads ``lanes`` and nothing of ``finish``.
+        compute: Packed | Stub = Decision(CORES, width=lanes)
+
+        @derived
+        def kind(self) -> str:
+            calls.append("kind")
+            return type(self.compute).__name__  # reads the forced selector
+
+    base = commit(design_space(Odd()), {"lanes": 128})
+    assert forced(base) == {"compute": "stub"} and base.kind == "Stub"
+    calls.clear()
+    glossy = commit(base, {"finish": "gloss"})
+    assert glossy.kind == "Stub" and calls == []  # outside the reach: kept
+    narrow = commit(base, {"lanes": 3})
+    assert narrow.kind == "Packed" and calls == ["kind"]  # inside it: derived again
+    fresh = commit(design_space(Odd()), {"lanes": 3})
+    assert forced(narrow) == forced(fresh) == {"compute": "packed"}
+    assert inspection.explain(narrow, Odd.kind) == inspection.explain(fresh, Odd.kind)
+
+
+def test_an_admission_that_read_a_forced_decision_is_reused_unless_the_change_reaches_it() -> None:
+    calls: list[str] = []
+
+    def within(owner: str) -> Any:
+        def accepts(*, candidate: int, limit: int) -> bool:
+            calls.append(owner)
+            return candidate <= limit
+
+        return accepts
+
+    class Fit(Space):
+        lanes: int = Decision(values=(3, 128))
+        finish: str = Decision(values=("matte", "gloss"))
+        compute: Packed | Stub = Decision(CORES, width=lanes)
+
+        @derived
+        def rows(self) -> int:
+            calls.append("rows")
+            return 2 if isinstance(self.compute, Stub) else 1  # reads the forced selector
+
+        # Its admission reads ``rows``, which reads the forced ``compute``.
+        depth: int = Decision(domain=domain(accepts=within("depth"), limit=rows))
+
+    first = commit(design_space(Fit()), {"lanes": 128})
+    assert forced(first) == {"compute": "stub"}  # found, so the next change is bounded by it
+    base = commit(first, {"depth": 1})
+    assert forced(base) == {"compute": "stub"} and base.depth == 1
+    calls.clear()
+    glossy = commit(base, {"finish": "gloss"})
+    # The change does not reach ``compute``'s verdict: ``depth``'s admission is kept.
+    assert glossy.depth == 1 and calls == []
+    narrow = commit(base, {"lanes": 3})
+    # It does: ``depth`` is admitted again, and ``rows`` derived again under it.
+    assert narrow.depth == 1 and forced(narrow) == {"compute": "packed"}
+    assert calls and set(calls) == {"depth", "rows"}
+    fresh = commit(commit(design_space(Fit()), {"lanes": 3}), {"depth": 1})
+    assert inspection.explain(narrow, Fit.depth) == inspection.explain(fresh, Fit.depth)
+    assert forced(narrow) == forced(fresh)

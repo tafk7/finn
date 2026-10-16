@@ -100,8 +100,10 @@ class Snapshot:
     Decisions once found; ``verdicts`` are the ones its base found, which forcing
     reuses where the change did not reach (``finn.core.space._forcing``). A
     successor's cache starts from what its base and its trial evaluated that the
-    change does not reach, and ``admissions`` holds the Decisions each assignment's
-    admission read, which a later trial reuses where the change does not reach them
+    change does not reach (a change reaches what it adds, removes or replaces, and
+    each open Decision whose forced value's verdict read one of those:
+    ``_touched``), and ``admissions`` holds the Decisions each assignment's admission
+    read, which a later trial reuses where the change does not reach them
     (``_TrialSnapshot``). ``answers`` holds what inspection answered of it, by
     question and scope (``inspection``), where the answer shares its values.
     """
@@ -129,27 +131,59 @@ class Snapshot:
 
 
 def _touched(base: Snapshot, candidates: Mapping[int, object]) -> list[int]:
-    """The Decisions a change from ``base`` to ``candidates`` touches: added, removed
-    or replaced (not the identical value), and every one open in the base, where a
-    forced value may differ."""
+    """The Decisions a change from ``base`` to ``candidates`` touches: those it adds,
+    removes or replaces (not the identical value), and the open ones its reach
+    includes: every Decision open in both whose forced value's verdict, in what
+    ``base`` found, read a touched one (to a fixed point), or has no verdict, or one
+    that does not hold under the base's final values (``Found.reach``). A Decision
+    open in both and not touched is **stable**: its verdict read nothing the change
+    touched, so it reads the same, forced to the same value, refused alike or open
+    alike, in the trial, in the successor and in the base. Where ``base``'s forced
+    Decisions were never found there is nothing to bound with, and every Decision open
+    in the base is touched, as a value it forces may differ."""
+    from ._forcing import Found  # noqa: PLC0415 - runtime/forcing cycle
+
     assignments = base.assignments
-    return [
+    changed = {
         index
         for index in base.linked.decisions
-        if index not in assignments
-        or index not in candidates
-        or assignments[index] is not candidates[index]
-    ]
+        if (index in assignments) != (index in candidates)
+        or (index in candidates and assignments[index] is not candidates[index])
+    }
+    found = base.found
+    if not isinstance(found, Found):
+        return [
+            index for index in base.linked.decisions if index not in assignments or index in changed
+        ]
+    reached = found.reach(base, changed)
+    return [index for index in base.linked.decisions if index in changed or index in reached]
+
+
+def _stable(
+    base: Snapshot, candidates: Mapping[int, object], touched: Collection[int]
+) -> frozenset[int]:
+    """The Decisions open in both ``base`` and the candidates that the change does not
+    touch (``_touched``)."""
+    excluded = frozenset(touched)
+    return frozenset(
+        index
+        for index in base.linked.decisions
+        if index not in base.assignments and index not in candidates and index not in excluded
+    )
 
 
 def _reusable(
-    base: Snapshot, candidates: Mapping[int, object], touched: Collection[int]
+    base: Snapshot,
+    candidates: Mapping[int, object],
+    touched: Collection[int],
+    stable: Collection[int],
 ) -> dict[int, frozenset[int]]:
     """The retained choices whose admission read nothing the change touched, with the
     Decisions it read: each would be admitted identically. An admission that read a
     retained choice through an evaluation of the base recorded that choice and not
     its admission's reads, so a choice is reusable only while every Decision its
-    admission read is reusable too; a touched Decision never is."""
+    admission read is reusable too, or stable (it reads as the base forces it, as it
+    did in that admission); a touched Decision never is."""
     excluded = frozenset(touched)
     reusable = {
         index: read
@@ -157,7 +191,8 @@ def _reusable(
         if index in candidates and index not in excluded
     }
     while True:
-        lost = [index for index, read in reusable.items() if not read <= reusable.keys()]
+        allowed = reusable.keys() | stable
+        lost = [index for index, read in reusable.items() if not read <= allowed]
         if not lost:
             return reusable
         for index in lost:
@@ -168,33 +203,49 @@ class _TrialSnapshot(Snapshot):
     """Private complete candidates, admitted on demand before value publication.
 
     Every candidate, including retained assignments, must pass admission before
-    publication. The base contributes its model, frozen facts and lock, its
-    verdicts, and the values it forces, which the trial reads for the Decisions it
-    does not change. A Decision the base does not force reads as the configuration
-    the trial would publish forces it (``successor``): found once, and that
-    configuration is the one published.
+    publication, except a retained choice whose admission the change cannot reach
+    (the first bullet), which keeps the admission the base recorded. The base
+    contributes its model, frozen facts and lock, its verdicts, and the values it
+    forces, which the trial reads for the Decisions it does not change. A Decision
+    the base does not force reads as the configuration the trial would publish
+    forces it (``successor``): found once, and that configuration is the one
+    published.
 
-    What was evaluated is kept where the change cannot reach it:
+    What was evaluated is kept where the change cannot reach it. A change touches
+    what it adds, removes or replaces and the open Decisions whose forced values it
+    reaches (``_touched``); the other Decisions open in both are **stable**: each
+    reads the same in the trial, in the successor and in the base, because its
+    verdict read nothing the change touched.
 
     - A retained choice whose admission read no Decision the change touched, and
-      only retained choices so admitted (``_reusable``), is admitted identically:
-      the trial takes its admission as the base recorded it. Every other candidate
-      is admitted on its first read in the trial.
+      only reused choices and stable Decisions (``_reusable``), is admitted
+      identically: the trial takes its admission as the base recorded it. Every
+      other candidate is admitted on its first read in the trial.
     - The trial starts from its base's evaluations that read no Decision but those
-      reused choices. So nothing that read another candidate is inherited, and
-      ``admit`` still refuses a candidate already resolved; a retained choice whose
-      admission now fails refuses what reads it.
+      reused choices and the stable Decisions. So nothing that read another
+      candidate is inherited, and ``admit`` still refuses a candidate already
+      resolved; a retained choice whose admission now fails refuses what reads it.
     - The successor starts from its base's evaluations that read no Decision the
-      change touched (``_touched``), and on publication gains the trial's that read
-      no Decision open in the successor: the trial's candidates are the successor's
-      assignments, each admitted before it was read. A candidate's own answer is
+      change touched, and on publication gains the trial's that read no Decision
+      open in the successor but a stable one (a stable Decision reads in the trial
+      as the base forces it, which is how the successor reads it): the trial's
+      candidates are the successor's assignments, each admitted before it was
+      read. A candidate's own answer is
       taken as the successor gives it: with the reads of its guard, which its
       frame makes first, and without the reads of its admission; what read it
       counts those reads among its own, which only keeps less. The successor
       records each candidate's admission reads (``admissions``).
     """
 
-    __slots__ = ("_pending", "_published", "_candidates", "_base", "_successor", "_touches")
+    __slots__ = (
+        "_pending",
+        "_published",
+        "_candidates",
+        "_base",
+        "_successor",
+        "_touches",
+        "_stable",
+    )
 
     _pending: dict[int, object]
     _published: bool
@@ -202,14 +253,18 @@ class _TrialSnapshot(Snapshot):
     _base: Snapshot
     _successor: Snapshot | None
     _touches: list[int]
+    _stable: frozenset[int]
 
     def __init__(self, base: Snapshot, candidates: Mapping[int, object]) -> None:
         super().__init__(base.model, base.parameters, {}, base.lock, base.forcing)
         candidates = MappingProxyType(dict(candidates))
         touched = _touched(base, candidates)
-        reused = _reusable(base, candidates, touched)
+        stable = _stable(base, candidates, touched)
+        reused = _reusable(base, candidates, touched, stable)
         pending = {index: candidates[index] for index in reused}
-        held = [index for index in base.linked.decisions if index not in reused]
+        held = [
+            index for index in base.linked.decisions if index not in reused and index not in stable
+        ]
         self.cache.update(unaffected(base.cache, held))
         for index, read in reused.items():
             # As the decision frame admits it, with its admission's reads.
@@ -217,6 +272,7 @@ class _TrialSnapshot(Snapshot):
         object.__setattr__(self, "_base", base)
         object.__setattr__(self, "_successor", None)
         object.__setattr__(self, "_touches", touched)
+        object.__setattr__(self, "_stable", stable)
         object.__setattr__(self, "assignments", MappingProxyType(pending))
         object.__setattr__(self, "_pending", pending)
         object.__setattr__(self, "_candidates", candidates)
@@ -254,17 +310,41 @@ class _TrialSnapshot(Snapshot):
         # Every candidate was admitted: the successor's assignments are the pending ones.
         successor = self.successor()
         candidates = self._candidates
-        object.__setattr__(
-            successor,
-            "admissions",
-            MappingProxyType({index: self.cache[index].decisions for index in candidates}),
+        object.__setattr__(successor, "admissions", MappingProxyType(self._admissions()))
+        open_ = frozenset(
+            index
+            for index in self.linked.decisions
+            if index not in candidates and index not in self._stable
         )
-        open_ = frozenset(index for index in self.linked.decisions if index not in candidates)
         for index, entry in unaffected(self.cache, open_).items():
             if index in candidates:
                 entry = self._record(index, entry)
             successor.cache.setdefault(index, entry)
         return successor
+
+    def _admissions(self) -> dict[int, frozenset[int]]:
+        """The Decisions each candidate's admission read, for the choices whose admission
+        the successor can vouch for. A candidate that read a Decision the change touched
+        and the successor leaves open, as its base forces it, was admitted under a value
+        the successor may not give it (a choice the change left waiting): its admission
+        is not recorded, so a later trial admits it again."""
+        from ._forcing import forced  # noqa: PLC0415 - runtime/forcing cycle
+
+        candidates, stable = self._candidates, self._stable
+        recorded: dict[int, frozenset[int]] = {}
+        base_values: Mapping[int, object] | None = None
+        for index in candidates:
+            read = self.cache[index].decisions
+            for other in read:
+                if other in candidates or other in stable:
+                    continue
+                if base_values is None:
+                    base_values = forced(self._base).values
+                if other in base_values:
+                    break
+            else:
+                recorded[index] = read
+        return recorded
 
     def _record(self, index: int, entry: Evaluation) -> Evaluation:
         """A candidate's entry as the successor's decision frame records it: its answer

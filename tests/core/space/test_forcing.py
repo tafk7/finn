@@ -258,6 +258,50 @@ def test_a_successor_reuses_the_verdicts_its_change_does_not_reach(
     assert not any(key.endswith(("left", "right")) for key in found)
 
 
+def test_a_successor_finds_again_the_verdict_its_change_reaches_and_no_other(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The positive control of the reuse above: a change that reaches one selector's
+    verdict finds that verdict again, and only that one."""
+
+    class Limited(Space):
+        width: int = Param()
+        limit: int = Decision(values=(1, 8))
+        pe: int = Decision(domain=divisors_of(width))
+
+        @constraint
+        def within(self) -> bool | Rejected:
+            if self.limit < 2:
+                return reject("limited", "the limit leaves no lane")
+            return True
+
+        admission = ConstraintGroup(within)
+
+    class Two(Space):
+        width: int = Param()
+        entries: dict[str, type[Space] | Space] = {"limited": Limited, "stub": Stub}
+        left: Limited | Stub = Decision(entries, width=width)
+        right: Packed | Stub = Decision(CORES, width=width)
+
+    # An odd width refuses the stub core, so both are forced; left's verdict reads its limit.
+    base = design_space(Two(width=7))
+    assert forced(base) == {"left": "limited", "right": "packed"}
+    found: list[str] = []
+    verdict = _forcing._verdict
+
+    def counted(current: Any, index: int) -> Any:
+        found.append(current.linked.nodes[index].key)
+        return verdict(current, index)
+
+    monkeypatch.setattr(_forcing, "_verdict", counted)
+    unreached = commit(base, {"right.packed.pe": 7})
+    assert forced(unreached) == {"left": "limited", "right": "packed"}
+    assert "left" not in found and "right" not in found
+    reached = commit(base, {"left.limited.limit": 8})
+    assert forced(reached) == {"left": "limited", "right": "packed"}
+    assert "left" in found and "right" not in found
+
+
 def test_a_cases_trial_keeps_what_the_case_does_not_reach() -> None:
     """Forcing's copies extend the configuration they are made from by one Decision and
     start from its evaluations that did not read that Decision: a value the cases share

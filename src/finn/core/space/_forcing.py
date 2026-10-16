@@ -42,7 +42,7 @@ successor from its base, so a change re-checks only the verdicts it reaches.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import cast
@@ -88,6 +88,47 @@ class Found:
     values: Mapping[int, object] = field(default_factory=dict)
     refused: Mapping[int, Rejected] = field(default_factory=dict)
     verdicts: Mapping[int, Verdict] = field(default_factory=dict)
+    # Who reads whom among the snapshot's open Decisions, built on the first ``reach``.
+    _graph: list[tuple[Mapping[int, frozenset[int]], frozenset[int]]] = field(
+        default_factory=list, init=False, repr=False, compare=False
+    )
+
+    def reach(self, base: Snapshot, seeds: Collection[int]) -> set[int]:
+        """The Decisions open in ``base`` (the snapshot these were found on) that a change
+        to ``seeds`` reaches: those whose verdict read a seed, or read one of these, to a
+        fixed point; and those with no verdict, or whose verdict does not hold under
+        ``base``'s own final values. Such a verdict records a point in the rounds (a
+        Decision it read was still open and forced later), not the answer that stands,
+        so what it decided is not known to be stable."""
+        if not self._graph:
+            self._graph.append(self._reads_by(base))
+        readers, unsettled = self._graph[0]
+        reached = set(unsettled)
+        pending = [*seeds, *unsettled]
+        while pending:
+            for reader in readers.get(pending.pop(), ()):
+                if reader not in reached:
+                    reached.add(reader)
+                    pending.append(reader)
+        return reached
+
+    def _reads_by(self, base: Snapshot) -> tuple[Mapping[int, frozenset[int]], frozenset[int]]:
+        """The open Decisions whose verdicts read each Decision, and the open Decisions
+        whose verdicts are not known to hold (``reach``)."""
+        linked = base.linked
+        final = {**base.assignments, **self.values}
+        readers: dict[int, set[int]] = {}
+        unsettled: set[int] = set()
+        for index in linked.decisions:
+            if index in base.assignments:
+                continue
+            verdict = self.verdicts.get(index)
+            if verdict is None or not _unchanged(linked, verdict, final):
+                unsettled.add(index)
+                continue
+            for read in verdict.reads:
+                readers.setdefault(read, set()).add(index)
+        return {read: frozenset(each) for read, each in readers.items()}, frozenset(unsettled)
 
 
 NOTHING = Found()
