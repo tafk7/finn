@@ -12,7 +12,9 @@ on hand-built values are tested in ``artifacts/test_netlist.py``.
 """
 
 from qonnx.core.datatype import DataType
+from support.emitted_netlist import read
 from support.helpers import FULL_DSP58, matmul_assembly, placed
+from support.netlist import Const, Drive, Inverted, Netlist, Pin
 
 from finn.kernels.artifacts.abi import (
     Clock,
@@ -38,9 +40,8 @@ MATMUL_FACTS = dict(
 )
 
 
-def assigns(module) -> set[str]:
-    text = netlist(module, "top")
-    return {line.strip() for line in text.splitlines() if line.strip().startswith("assign ")}
+def wired(module) -> Netlist:
+    return read(module, netlist(module, "top"), "top")
 
 
 def test_an_unpumped_matmul_has_one_clock_and_holds_the_2x_input():
@@ -50,16 +51,15 @@ def test_an_unpumped_matmul_has_one_clock_and_holds_the_2x_input():
     assert top["ap_clk"] == Signal("ap_clk", Direction.IN, 1, Clock(Free()))
     assert top["ap_rst_n"].role == Reset(True, True, ("ap_clk",))
     assert placed(built.module, "matmul.compute.packed").held.inputs == (("ap_clk2x", 0),)
-    driven = assigns(built.module)
-    compute, replay = "n__u_matmul_compute_packed", "n__u_x_adapter_input_gen_input_gen"
+    compute, replay = "u_matmul_compute_packed", "u_x_adapter_input_gen_input_gen"
     assert {
-        f"assign {compute}__ap_clk = ap_clk;",
-        f"assign {compute}__ap_rst_n = ap_rst_n;",
-        f"assign {compute}__ap_clk2x = 1'h0;",
-        f"assign {replay}__clk = ap_clk;",
+        Drive(Pin(compute, "ap_clk"), Pin(None, "ap_clk")),
+        Drive(Pin(compute, "ap_rst_n"), Pin(None, "ap_rst_n")),
+        Drive(Pin(compute, "ap_clk2x"), Const(1, 0)),
+        Drive(Pin(replay, "clk"), Pin(None, "ap_clk")),
         # The active-high adapter reset is driven inverted from the active-low top reset.
-        f"assign {replay}__rst = !ap_rst_n;",
-    } <= driven
+        Drive(Pin(replay, "rst"), Inverted(Pin(None, "ap_rst_n"))),
+    } <= set(wired(built.module).drives)
 
 
 def test_a_pumped_matmul_adds_the_2x_clock_and_its_alignment():
@@ -70,4 +70,6 @@ def test_a_pumped_matmul_adds_the_2x_clock_and_its_alignment():
     assert ports["ap_clk2x"].role == Clock(Derived("ap_clk", 2))
     assert ports["ap_rst_n"].role == Reset(True, True, ("ap_clk", "ap_clk2x"))
     assert abi.clock_alignments == (ClockAlignment("ap_clk", "ap_clk2x"),)
-    assert "assign n__u_matmul_compute_packed__ap_clk2x = ap_clk2x;" in assigns(built.module)
+    assert Drive(Pin("u_matmul_compute_packed", "ap_clk2x"), Pin(None, "ap_clk2x")) in set(
+        wired(built.module).drives
+    )

@@ -72,7 +72,8 @@ def _verified(leaf: Leaf, product: HlsProduct) -> Path:
         raise HlsAbiRefused(
             "hls-abi-contradicted",
             leaf.name,
-            f"{leaf.name} refuses its declared pins: " + "; ".join(checked),
+            f"{leaf.name} refuses its declared pins: "
+            + "; ".join(each.message for each in checked),
         )
     return product.verilog
 

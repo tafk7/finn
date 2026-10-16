@@ -8,7 +8,6 @@ them, and built through the one ``build_dataflow`` entry."""
 from __future__ import annotations
 
 import json
-import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +19,7 @@ import onnx
 import pytest
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
+from support.refusals import refused
 from support.tfc import PREPROCESSING, ULTRA96, io_settings
 
 from finn.builder.build_dataflow import (
@@ -215,9 +215,11 @@ def test_json_without_a_required_field_or_not_an_object_is_refused(
 
 
 def test_a_setting_named_as_a_field_is_refused() -> None:
-    with pytest.raises(
-        ConfigurationRefused,
-        match=r"configuration.settings: configuration-invalid: \['verbose'\] are fields",
+    with refused(
+        "configuration-invalid",
+        error=ConfigurationRefused,
+        owner="configuration.settings",
+        message=r"^\['verbose'\] are fields",
     ):
         DataflowBuildConfig(
             output_dir="out", target=TargetRequest(period_ns=5.0), settings={"verbose": True}
@@ -687,8 +689,7 @@ def test_a_build_directorys_bad_list_is_refused_inside_its_build(tmp_path: Path)
     stated = {**STATED, "steps": ["phase_prepare_model", "step_streamlin"]}
     (tmp_path / "dataflow_build_config.json").write_text(json.dumps(stated))
     assert read_build_config(str(tmp_path)).steps == stated["steps"]
-    match = re.escape("configuration.steps[1]: step-unknown: ")
-    with pytest.raises(ConfigurationRefused, match=match):
+    with refused("step-unknown", error=ConfigurationRefused, owner="configuration.steps[1]"):
         build_dataflow_directory(str(tmp_path))
     manifest = json.loads((tmp_path / "out" / MANIFEST_FILE).read_text())
     assert manifest["outcome"]["status"] == "refused"
@@ -732,7 +733,12 @@ def test_a_configuration_without_an_output_directory_is_refused_on_the_console_o
     onnx.save(helper.make_model(helper.make_graph([], "empty", [], [])), tmp_path / "model.onnx")
     (tmp_path / "dataflow_build_config.json").write_text(json.dumps({**STATED, "output_dir": 3}))
     line = "configuration.output_dir: configuration-invalid: a str, not 3"
-    with pytest.raises(ConfigurationRefused, match=line):
+    with refused(
+        "configuration-invalid",
+        error=ConfigurationRefused,
+        owner="configuration.output_dir",
+        message="^a str, not 3$",
+    ):
         build_dataflow_directory(str(tmp_path))
     assert capsys.readouterr().err.splitlines() == [
         "ERROR: Configuration refused: 1 findings",
@@ -803,8 +809,12 @@ def test_the_module_run_as_a_script_keeps_the_runners_log(tmp_path: Path) -> Non
 def test_reading_a_configuration_that_does_not_decode_writes_nothing(tmp_path: Path) -> None:
     stated = {**STATED, "target": {"period_ns": 5.0, "boards": "Ultra96"}}
     (tmp_path / "dataflow_build_config.json").write_text(json.dumps(stated))
-    match = r"configuration.target: configuration-invalid: keys TargetRequest"
-    with pytest.raises(ConfigurationRefused, match=match):
+    with refused(
+        "configuration-invalid",
+        error=ConfigurationRefused,
+        owner="configuration.target",
+        message="^keys TargetRequest",
+    ):
         read_build_config(str(tmp_path))
     assert [path.name for path in tmp_path.iterdir()] == ["dataflow_build_config.json"]
 

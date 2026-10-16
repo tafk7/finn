@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from support.refusals import refused
 
 from finn.core.space import (
     Available,
@@ -129,7 +130,7 @@ def test_local_decision_domain_uses_parent_suppliers_and_exposure_is_explicit() 
     assert supplied.exposed.value == 7
 
     missing = composite("Missing", {"child": Child()})
-    with pytest.raises(DefinitionError, match=r"child\.value is not supplied"):
+    with refused("formal-unsupplied", error=DefinitionError, message=r"child\.value"):
         design_space(missing())
 
 
@@ -154,7 +155,7 @@ def test_nested_handles_and_named_aliases_keep_frozen_interpretations() -> None:
 
     replacement = Leaf()
     replacement.__set_name__(Middle, "inner")
-    with pytest.raises(DefinitionError, match="finalized"):
+    with refused("structure-finalized", error=DefinitionError):
         Middle.inner = replacement
     assert Middle.inner is original_placement
     assert base.query(Root.outer.inner.value) == Available(5)
@@ -191,8 +192,10 @@ def test_recursive_structure_is_rejected_before_occurrence_allocation() -> None:
     repeated = Recursive()
     repeated.__set_name__(Recursive, "again")
     setattr(Recursive, "again", repeated)
-    with pytest.raises(DefinitionError, match="recursive Space placement"):
+    with refused("cyclic-dependency", error=DefinitionError) as caught:
         design_space(Recursive())
+    # The error's own detail, over the finding it rewraps.
+    assert "recursive Space placement" in str(caught.error)
 
 
 def test_choice_members_are_validated_over_all_cases_before_selection() -> None:
@@ -215,7 +218,9 @@ def test_choice_members_are_validated_over_all_cases_before_selection() -> None:
             )
             absent = View(implementation.absent)  # type: ignore[union-attr]
 
-    with pytest.raises(DefinitionError, match=r"candidates \['missing'\] do not declare"):
+    with refused(
+        "direct-read-undeclared", error=DefinitionError, message=r"candidates \['missing'\]"
+    ):
 
         class Unqualified(Space):
             implementation: Complete | Missing = Decision(
@@ -255,7 +260,7 @@ def test_inferred_nested_output_must_match_consumer_annotation() -> None:
         def wrong(*, value: str) -> str:
             return value
 
-    with pytest.raises(DefinitionError, match="cannot consume"):
+    with refused("argument-annotation-incompatible", error=DefinitionError):
         design_space(Root())
 
 

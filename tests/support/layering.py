@@ -128,7 +128,14 @@ LAYERS: tuple[Layer, ...] = (
     ),
     # Module build values and their emission, below every Space; pyslang checks
     # declared pins against the RTL.
-    Layer("kernels.artifacts", ("finn.kernels.artifacts",), (), ("pyslang",), "tests/kernels"),
+    # Its checks state their findings (finn.core.reporting).
+    Layer(
+        "kernels.artifacts",
+        ("finn.kernels.artifacts",),
+        ("reporting",),
+        ("pyslang",),
+        "tests/kernels",
+    ),
     # What a target gives kernels: its clock, DSP block, fabric and resource units. Plain
     # data, the standard library only.
     Layer("platform.capabilities", ("finn.platform.capabilities",), (), (), "tests/kernels"),
@@ -391,6 +398,11 @@ LAYERS: tuple[Layer, ...] = (
     ),
     # This table: the standard library only. Every tree's tests import it.
     Layer("tests.layering", ("support.layering",), (), (), "tests/core/space"),
+    # A refusal asserted by its code (finn.core.reporting's findings) and pytest. Every
+    # tree's tests import it.
+    Layer(
+        "tests.refusals", ("support.refusals",), ("reporting",), ("pytest",), "tests/core/reporting"
+    ),
     # The default snapshot's contract on value classes: the standard library only.
     # The engine, dataflow and kernel trees check their own classes with it.
     Layer("tests.value_classes", ("support.value_classes",), (), (), "tests/core/space"),
@@ -407,21 +419,21 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "tests.core.reporting",
         ("core.reporting",),
-        ("reporting", "tests.layering"),
+        ("reporting", "tests.layering", "tests.refusals"),
         ("pytest",),
         "tests/core/reporting",
     ),
     Layer(
         "tests.core.space",
         ("core.space", "support.space_cores"),
-        ("reporting", "space", "tests.layering", "tests.value_classes"),
+        ("reporting", "space", "tests.layering", "tests.refusals", "tests.value_classes"),
         ("pytest", "_typeshed"),
         "tests/core/space",
     ),
     Layer(
         "tests.dataflow",
         ("dataflow", "support.tiled_mvu"),
-        ("dataflow", "tests.layering", "tests.value_classes"),
+        ("dataflow", "tests.layering", "tests.refusals", "tests.value_classes"),
         ("pytest", "numpy", "qonnx.core.datatype", "qonnx.core.ranges"),
         "tests/dataflow",
     ),
@@ -436,9 +448,12 @@ LAYERS: tuple[Layer, ...] = (
             "support.adapted",
             "support.chain",
             "support.conformance",
+            "support.emitted_netlist",
             "support.helpers",
             "support.ipxact_ports",
+            "support.ipxact_script",
             "support.kernel_specs",
+            "support.netlist",
             "support.xsim",
         ),
         (
@@ -449,6 +464,7 @@ LAYERS: tuple[Layer, ...] = (
             "harness",
             "xsim",
             "tests.layering",
+            "tests.refusals",
             "tests.value_classes",
             "tests.core.space",
             "tests.dataflow",

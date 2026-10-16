@@ -26,6 +26,7 @@ def test_the_values_import_only_the_findings() -> None:
     assert BY_NAME["tests.dataflow"].imports == (
         "dataflow",
         "tests.layering",
+        "tests.refusals",
         "tests.value_classes",
     )
 

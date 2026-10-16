@@ -608,7 +608,9 @@ def _check_rtl(
         return
     # check_abi's comparison, on the one extraction: the ports, never a parameter value.
     issues = check_against_rtl(abi.pins, extracted.ports)
-    assert not issues, f"{where}: {top} refuses its ABI: " + "; ".join(issues)
+    assert not issues, f"{where}: {top} refuses its ABI: " + "; ".join(
+        issue.message for issue in issues
+    )
     # Every declared name, whether or not its value was established.
     names = {name for name, _ in extracted.parameters}
     declared = set(dict(leaf.parameters))

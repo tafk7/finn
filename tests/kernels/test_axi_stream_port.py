@@ -16,9 +16,9 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP58, choose, with_direct_transports
+from support.refusals import refused
 
 from finn.core.space import (
     ConstraintGroup,
@@ -176,7 +176,7 @@ def test_extent_of_is_a_named_member() -> None:
         id = "test.accpool.inline"
         pe: int = Decision(domain=divisors_of(extent_of(c)))
 
-    with pytest.raises(DefinitionError, match="is not a member of this scope"):
+    with refused("reference-not-in-scope", error=DefinitionError, declaration="pe"):
         placing(Inline(x_tensor=X))
 
 

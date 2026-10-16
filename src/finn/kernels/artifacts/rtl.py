@@ -62,6 +62,7 @@ from typing import Union
 import pyslang
 from pyslang import ast, syntax
 
+from finn.core.reporting.findings import Finding
 from finn.kernels.artifacts.abi import Direction, ObservedPort, Pin, check_against_rtl
 from finn.kernels.artifacts.sources import include_directories, is_header
 
@@ -422,12 +423,12 @@ def check_abi(
     files: Sequence[Path],
     top: str,
     parameters: Sequence[tuple[str, str]] = (),
-) -> tuple[str, ...] | Declined:
+) -> tuple[Finding, ...] | Declined:
     """Refuse declared pins the source contradicts, or decline.
 
     Returns the empty tuple when the declaration and the source agree, a
-    non-empty tuple of refusals when they do not, and ``Declined`` when the
-    checker could not establish either.  Three outcomes, because collapsing
+    non-empty tuple of findings (``check_against_rtl``'s) when they do not, and
+    ``Declined`` when the checker could not establish either.  Three outcomes, because collapsing
     "agrees" and "could not tell" is how a guarantee becomes a claim.
 
     The comparison reads the ports alone -- names, directions and the widths

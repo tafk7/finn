@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 import pytest
+from support.refusals import refused
 
 from finn.core.space.domains import Domain, divisors_of, domain, finite
 from finn.core.space.errors import DefinitionError, EvaluationError
@@ -116,12 +117,12 @@ def test_enumeration_generator_errors_are_contextualized() -> None:
 
 
 def test_domain_rejects_conflicting_dependency_names_and_semantics() -> None:
-    with pytest.raises(DefinitionError, match="unique"):
+    with refused("domain-dependencies-duplicate", error=DefinitionError, message="unique"):
         Domain((("extent", object()), ("extent", object())), lambda: True)
-    with pytest.raises(DefinitionError, match="candidate"):
+    with refused("domain-dependency-name-invalid", error=DefinitionError, message="candidate"):
         Domain((("candidate", object()),), lambda: True)
     strings: ValueSemantics[object] = ValueSemantics.immutable_nominal(str)
     allowed: Domain[object] = finite(("auto",), strings)
     integers: ValueSemantics[object] = ValueSemantics.immutable_nominal(int)
-    with pytest.raises(DefinitionError, match="incompatible"):
+    with refused("domain-semantics-incompatible", error=DefinitionError, message="incompatible"):
         allowed.with_semantics(integers)

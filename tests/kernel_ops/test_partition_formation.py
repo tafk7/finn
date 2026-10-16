@@ -17,12 +17,12 @@ import warnings
 from pathlib import Path
 
 import numpy as np
-import pytest
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from support import chain
 from support.models import configure_partition, kernel_model
+from support.refusals import refused
 
 import finn.custom_op.partition as partition_domain
 from finn.core.graph.annotations.channel import CHANNEL, channel_choices
@@ -154,9 +154,14 @@ def test_a_host_op_between_kernel_ops_refuses(tmp_path: Path) -> None:
     configure_partition(source)
     moved_out(source)
     source = on_the_host(source, between=True)
-    with pytest.raises(KernelOpError, match="1 host nodes sit between KernelOps") as refused:
+    with refused(
+        "host-between",
+        error=KernelOpError,
+        owner="CutKernelPartition",
+        message="1 host nodes sit between KernelOps",
+    ) as between:
         source.transform(CutKernelPartition(tmp_path))
-    assert str(refused.value).endswith(": copy")
+    assert str(between.error).endswith(": copy")
 
 
 def test_a_graph_without_kernel_ops_refuses(tmp_path: Path) -> None:
@@ -164,6 +169,11 @@ def test_a_graph_without_kernel_ops_refuses(tmp_path: Path) -> None:
     y = helper.make_tensor_value_info("y", TensorProto.FLOAT, [1, 4])
     graph = helper.make_graph([helper.make_node("Identity", ["x"], ["y"])], "host", [x], [y])
     model = ModelWrapper(helper.make_model(graph))
-    with pytest.raises(KernelOpError, match="holds no KernelOps: there is nothing to cut"):
+    with refused(
+        "kernel-ops-absent",
+        error=KernelOpError,
+        owner="CutKernelPartition",
+        message="holds no KernelOps: there is nothing to cut",
+    ):
         model.transform(CutKernelPartition(tmp_path / "cut"))
     assert not (tmp_path / "cut").exists()

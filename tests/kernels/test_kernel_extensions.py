@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import cast
 
 import pytest
+from support.refusals import refused
 
 from finn.core.space import (
     Available,
@@ -44,11 +45,21 @@ class Pins:
 
 
 def test_kernel_identity_is_validated_at_class_creation() -> None:
-    with pytest.raises(DefinitionError, match="id"):
+    with refused(
+        "kernel-id-invalid",
+        error=DefinitionError,
+        message="nonempty string id",
+        declaration="Unnamed",
+    ):
         type("Unnamed", (Kernel,), {})
     # The version is a positive int (an op's opset version); artifacts carry str(version).
     for wrong in ("1", 0, True):
-        with pytest.raises(DefinitionError, match="version"):
+        with refused(
+            "kernel-version-invalid",
+            error=DefinitionError,
+            message="positive int version",
+            declaration="WrongVersion",
+        ):
             type("WrongVersion", (Kernel,), {"id": "test.wrong", "version": wrong})
 
     class Empty(ComposedKernel):
@@ -59,9 +70,9 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
     # The protocol's views; a kernel with children that places none has no netlist.
     empty = design_space(Empty())
     assert views(empty) == ["buffering", "cycles", "netlist", "resources"]
-    refused = empty.query(Empty.netlist)
-    assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"kernel-module"}
+    rejection = empty.query(Empty.netlist)
+    assert isinstance(rejection, Rejected)
+    assert {finding.code for finding in rejection.findings} == {"kernel-module"}
 
 
 @pytest.mark.parametrize(

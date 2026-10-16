@@ -14,6 +14,7 @@ from collections.abc import Callable
 from itertools import permutations, product
 
 import pytest
+from support.refusals import refused
 
 from finn.dataflow.gemm import Form, k, m, n
 from finn.dataflow.schedule import Affine, Index, Pace, Refused, Schedule
@@ -129,7 +130,7 @@ def test_dense_activations_are_broadcast_to_the_output_lanes() -> None:
     # X does not read n, so n's lanes need not be carried.
     schedule.present((2, 4), Form.DENSE.x, lanes=(k,))
     # W reads n, so they must be.
-    with pytest.raises(Refused, match="carry them as lanes"):
+    with refused("lanes-move-position", error=Refused, message="carry them as lanes"):
         schedule.present((4, 4), Form.DENSE.w, lanes=(k,))
 
 
@@ -180,7 +181,11 @@ def test_a_dense_realization_reads_the_depthwise_operand_as_a_view() -> None:
         lambda e: (e["m"], *divmod(e["k"] * SIMD + e["s"], N)),
     )
     assert list(activation.positions()) == want
-    with pytest.raises(Refused, match="viewed"):
+    with refused(
+        "view-size-mismatch",
+        error=Refused,
+        message=r"a \(2, 3, 5\) tensor cannot be viewed as \(2, 12\)",
+    ):
         schedule.present((M, K, N + 1), Form.DENSE.x, lanes=(k,), view=(M, K * N))
 
 
@@ -205,7 +210,9 @@ def test_tiled_mvu_forms_and_finn_s_input_gen_parameters() -> None:
     )
     assert classify(core_out, vector_major((M, N), PE)).reorder == Reorder(NF * T, (T, NF), (1, T))
     # t sits inside the reduction: not a dotp_axi frame.
-    with pytest.raises(Refused, match="innermost"):
+    with refused(
+        "reduction-not-innermost", error=Refused, message="the reduced .* are not the innermost"
+    ):
         schedule.closing((k,))
 
 
@@ -232,7 +239,7 @@ def test_thresholding_and_a_broadcast_operand() -> None:
     assert schedule.present((C,), (c,), lanes=(c,)) == vector_major((C,), PE).repeated(M)
     assert schedule.present((M,), (m,)) == Traversal((M,), (Loop(M, 1), Loop(C // PE, 0)), ())
     # An index with lanes that moves the position must be carried as lanes.
-    with pytest.raises(Refused, match="carry them as lanes"):
+    with refused("lanes-move-position", error=Refused):
         schedule.present((M, C), (m, c))
 
 
@@ -270,27 +277,31 @@ def test_a_held_operand_is_presented_once_per_outer_beat() -> None:
     held = schedule.present((K, N), Form.DENSE.w, lanes=(k, n), holds=(m,))
     assert held.beats == (N // COLS) * (K // ROWS)
     assert all(loop.stride for loop in held.beat_loops)
-    with pytest.raises(Refused, match="held"):
+    with refused(
+        "dropped-index-moves",
+        error=Refused,
+        message="m moves the position, so it cannot be held away",
+    ):
         schedule.present((M, K), Form.DENSE.x, lanes=(k,), holds=(m,))
 
 
 def test_a_reduction_presented_before_it_closes_is_refused() -> None:
     schedule = gemm(2, 2, 4, 1, 2)
-    with pytest.raises(Refused, match="reduced"):
+    with refused("dropped-index-moves", error=Refused, message="cannot be reduced away"):
         schedule.present((2, 2), Form.DENSE.y, lanes=(n,), reduces=(m,))
     reordered = Schedule({m: 2, n: 2, k: 4}, factors={n: 1, k: 2}, order=(n, k, m))
-    with pytest.raises(Refused, match="innermost"):
+    with refused("reduction-not-innermost", error=Refused):
         reordered.closing((k,))
-    with pytest.raises(Refused, match="not an index"):
+    with refused("index-unknown", error=Refused, message="^q is not an index of the schedule$"):
         schedule.present((2, 2), (m, Index("q")))
 
 
 def test_an_index_outside_the_schedule_has_no_extent_or_factor() -> None:
     schedule = gemm(2, 2, 4, 1, 2)
     q = Index("q")
-    with pytest.raises(Refused, match=r"^q is not an index of the schedule$"):
+    with refused("index-unknown", error=Refused, message=r"^q is "):
         schedule.extent(q)
-    with pytest.raises(Refused, match=r"^q is not an index of the schedule$"):
+    with refused("index-unknown", error=Refused, message=r"^q is "):
         schedule.factor(q)
 
 
@@ -331,9 +342,9 @@ def test_beat_times_count_the_beats_the_port_presents() -> None:
 
 def test_beat_times_name_indices_of_the_schedule() -> None:
     schedule = gemm(2, 8, 12, pe=2, simd=3)
-    with pytest.raises(Refused, match="not an index"):
+    with refused("index-unknown", error=Refused):
         schedule.beat_times(reduces=(Index("q"),))
-    with pytest.raises(Refused, match="not both"):
+    with refused("reduced-and-held", error=Refused, message="reduced or held, not both"):
         schedule.beat_times(reduces=(k,), holds=(k,))
 
 

@@ -17,6 +17,7 @@ from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 from support.models import TARGET, chain_source, configure_partition, kernel_model
+from support.refusals import refused
 
 from finn.core.graph.annotations.outputs import (
     OUTPUT_BITFILE,
@@ -115,11 +116,14 @@ def test_a_partial_target_is_refused_naming_what_it_misses(missing: str) -> None
     model = holder()
     write_target(model, TARGET)
     model.delete(PLATFORM_KEYS[missing])
-    with pytest.raises(
-        KernelOpError, match=f"states no target \\(finn.platform: {missing} missing"
+    with refused(
+        "target-unrecorded",
+        error=KernelOpError,
+        owner="read_target",
+        message=rf"states no target \(finn.platform: {missing} missing",
     ):
         read_target(model)
-    with pytest.raises(KernelOpError, match="states no target"):
+    with refused("target-unrecorded", error=KernelOpError, owner="read_target"):
         read_target(holder())
 
 
@@ -144,23 +148,26 @@ def test_the_old_shape_is_refused_naming_the_keys_it_states() -> None:
     model = holder()
     for name, text in OLD_SHAPE.items():
         model.set_metadata_prop(f"finn.platform/{name}", text)
-    with pytest.raises(KernelOpError) as refused:
+    with pytest.raises(KernelOpError) as unreadable:
         read_target(model)
     assert "stored keys ['aie', 'clk2x', 'control_ports', 'memory_ports'] are not declared" in (
-        str(refused.value)
+        str(unreadable.value)
     )
-    assert "run ToKernelOps to state it again" in str(refused.value)
+    assert "run ToKernelOps to state it again" in str(unreadable.value)
     # Without those keys, it is a partial one: the new keys are named.
     for name in ("aie", "clk2x", "control_ports", "memory_ports"):
         model.graph.metadata_props.remove(
             next(item for item in model.graph.metadata_props if item.key == f"finn.platform/{name}")
         )
-    with pytest.raises(
-        KernelOpError, match="finn.platform: shell, board, fabric, resources missing"
+    with refused(
+        "target-unrecorded",
+        error=KernelOpError,
+        owner="read_target",
+        message="finn.platform: shell, board, fabric, resources missing",
     ) as unstated:
         read_target(model)
     # Two refusals of the reader, each its own code: by_code tells them apart.
-    found = (*refused.value.findings, *unstated.value.findings)
+    found = (*unreadable.value.findings, *unstated.error.findings)
     assert [(each.owner, each.code) for each in found] == [
         ("read_target", "target-unreadable"),
         ("read_target", "target-unrecorded"),
@@ -181,18 +188,33 @@ def test_a_malformed_key_is_refused(key: str, text: str, expected: str) -> None:
     model = holder()
     write_target(model, TARGET)
     model.set_metadata_prop(f"finn.platform/{key}", text)
-    with pytest.raises(KernelOpError) as refused:
+    with pytest.raises(KernelOpError) as malformed:
         read_target(model)
-    assert expected in str(refused.value)
+    assert expected in str(malformed.value)
 
 
 def test_a_target_that_is_not_one_writes_nothing() -> None:
     model = holder()
-    with pytest.raises(KernelOpError, match="states its DSP block"):
+    with refused(
+        "target-dsp-unstated",
+        error=KernelOpError,
+        owner="write_target",
+        message="states its DSP block",
+    ):
         write_target(model, replace(TARGET, platform=replace(TARGET.platform, dsp=None)))
-    with pytest.raises(KernelOpError, match="period_ns: cannot store 0.0"):
+    with refused(
+        "target-invalid",
+        error=KernelOpError,
+        owner="write_target",
+        message="period_ns: cannot store 0.0",
+    ):
         write_target(model, replace(TARGET, platform=replace(TARGET.platform, period_ns=0.0)))
-    with pytest.raises(KernelOpError, match="shell: cannot store ''"):
+    with refused(
+        "target-invalid",
+        error=KernelOpError,
+        owner="write_target",
+        message="shell: cannot store ''",
+    ):
         write_target(model, replace(TARGET, shell=""))
     assert entries(model) == {}
 

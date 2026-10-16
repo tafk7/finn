@@ -89,7 +89,9 @@ def _get(name):
     try:
         return declarations()[name]
     except KeyError:
-        raise ResourceError(f"No resource named {name!r} is declared") from None
+        raise ResourceError(
+            "resource-undeclared", f"No resource named {name!r} is declared"
+        ) from None
 
 
 def _override(resource):
@@ -97,7 +99,10 @@ def _override(resource):
     if not value:
         return None
     if not os.path.isdir(value):
-        raise ResourceError(f"{resource.env}={value} is not a directory")
+        raise ResourceError(
+            "override-not-directory",
+            f"{resource.env}={value} is not a directory",
+        )
     return resource.env, os.path.realpath(value)
 
 
@@ -108,18 +113,25 @@ def _package_path(resource):
     try:
         location = files(module).joinpath(subdir) if subdir else files(module)
     except ModuleNotFoundError:
-        raise ResourceError(f"Resource {resource.name}: module {module} is not installed") from None
+        raise ResourceError(
+            "package-not-installed",
+            f"Resource {resource.name}: module {module} is not installed",
+        ) from None
     if not os.path.isdir(str(location)):
         raise ResourceError(
+            "package-not-directory",
             f"Resource {resource.name}: {resource.source} is not a directory in an "
-            "unpacked installation"
+            "unpacked installation",
         )
     return os.path.realpath(str(location))
 
 
 def _local_path(resource):
     if not os.path.isdir(resource.location):
-        raise ResourceError(f"Resource {resource.name}: {resource.location} is not a directory")
+        raise ResourceError(
+            "path-not-directory",
+            f"Resource {resource.name}: {resource.location} is not a directory",
+        )
     return os.path.realpath(resource.location)
 
 
@@ -148,9 +160,10 @@ def path(name: str, fetch: bool = True) -> str:
     if not fetch or os.environ.get(PREFIX + "OFFLINE", "") not in ("", "0"):
         searched = ", ".join(str(root) for root, _ in _store.roots())
         raise ResourceError(
+            "resource-not-cached",
             f"Resource {name} is not in any cache ({searched}) and fetching is disabled. "
             f"Where the network is available, run `finn-resources fetch {name} --dest DIR`, "
-            f"then set {PREFIX}DIR=DIR (or {PREFIX}SYSTEM_CACHE=DIR to use it read-only)."
+            f"then set {PREFIX}DIR=DIR (or {PREFIX}SYSTEM_CACHE=DIR to use it read-only).",
         )
     return str(_store.fetch(resource, _store.fetch_root()))
 

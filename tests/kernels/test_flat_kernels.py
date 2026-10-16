@@ -22,6 +22,7 @@ from support.helpers import (
     point_for,
     stage_tensor,
 )
+from support.refusals import refused
 from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import simulate
@@ -304,7 +305,7 @@ def test_required_root_bindings_and_explicit_optional_inputs_preserve_partial_qu
         ThresholdingAxiKernel,
     ):
         # A missing required formal is refused when design_space() prepares the root.
-        with pytest.raises(DefinitionError, match="is not supplied"):
+        with refused("formal-unsupplied", error=DefinitionError):
             point_for(kernel, {})
 
     assert all(not isinstance(port, Bus) for port in fifo().module.abi.pins)

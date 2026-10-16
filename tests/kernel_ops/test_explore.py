@@ -25,6 +25,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from support.explore_models import choices, kernel_model
 from support.helpers import Lanes
 from support.models import TARGET, matmul_model
+from support.refusals import refused
 from support.tfc_built import TFC_BUILT
 
 import finn.kernels.explore as explore_module
@@ -336,12 +337,16 @@ def test_a_pinned_file_is_committed_held_in_the_body_and_the_rest_explored(
     assert choices(again) == saved
     # What the network does not take is refused, named.
     pinned.write_text(json.dumps({"first": {"compute.packed.pe": 3}}))
-    with pytest.raises(ExploreError, match="first.compute.packed.pe: .*domain-membership"):
+    with refused(
+        "pin-refused",
+        error=ExploreError,
+        owner=str(pinned),
+        message=r"first\.compute\.packed\.pe: .*domain-membership",
+    ):
         kernel_model().transform(ExploreKernelChoices(Pinned(pinned)))
     pinned.write_text(json.dumps({"nobody": {"pe": 1}}))
-    with pytest.raises(ExploreError, match="nobody.pe") as unknown:
+    with refused("member-unknown", error=ExploreError, owner=str(pinned), message=r"nobody\.pe"):
         kernel_model().transform(ExploreKernelChoices(Pinned(pinned)))
-    assert [(f.code, f.owner) for f in unknown.value.findings] == [("member-unknown", str(pinned))]
     # A file that is not JSON is refused, owned by the file.
     pinned.write_text("{")
     with pytest.raises(ExploreError) as unread:
@@ -457,7 +462,12 @@ def test_a_pin_holds_for_every_later_exploration_of_the_body(tmp_path: Path) -> 
     assert choices(model)["second"]["compute.packed.simd"] == 1  # back at its baseline
     assert model.get(HELD) == pins
     pinned.write_text(json.dumps({"first": {"compute.packed.simd": 2}}))
-    with pytest.raises(ExploreError, match="already held to 1"):
+    with refused(
+        "pin-refused",
+        error=ExploreError,
+        owner=str(pinned),
+        message=r"first\.compute\.packed\.simd: already held to 1\b",
+    ):
         explore_kernel_choices(model, Pinned(pinned))
 
 
@@ -511,9 +521,9 @@ def test_an_exploration_checks_its_fifos_only_where_its_strategy_does(
     assert kept["dropped"] == {} and kept["fifos_judged"] == "not checked"
     assert choices(model)["levels"]["transport.fifo.buffer.depth"] == 8
     configured_network(model, "the chain")
-    with pytest.raises(KernelOpError) as refused:
+    with pytest.raises(KernelOpError) as stale:
         verify_partition(model, "the chain")
-    assert [(f.code, f.owner) for f in refused.value.findings] == [("fifo-stale", LEVELS_DEPTH)]
+    assert [(f.code, f.owner) for f in stale.value.findings] == [("fifo-stale", LEVELS_DEPTH)]
     assert model.get(OUTPUT_VERIFIED) is None
     # A strategy that checks drops it.
     dropped = explore_kernel_choices(model, Checking()).report
@@ -527,7 +537,13 @@ def test_an_exploration_checks_its_fifos_only_where_its_strategy_does(
     assert f"{LEVELS_DEPTH} (required)" in dropped["open"]
     levels = choices(model)["levels"]
     assert levels["transport"] == "fifo" and "transport.fifo.buffer.depth" not in levels
-    with pytest.raises(KernelOpError, match=f"{LEVELS_DEPTH} \\(required: run step_size_fifos"):
+    with refused(
+        "choices-open",
+        error=KernelOpError,
+        node="the chain",
+        keys=(LEVELS_DEPTH,),
+        message=r"\(required: run step_size_fifos",
+    ):
         configured_network(model, "the chain")
     # Pinned, it is kept and built as held.
     pins = tmp_path / "pins.json"
@@ -657,5 +673,10 @@ def test_exploration_reads_a_partitions_body_and_refuses_any_other_node() -> Non
     KernelOp (the uncut model's host nodes) is refused, naming it."""
     model = kernel_model()
     model.graph.node[2].domain = ""  # a plain ONNX MatMul: not a KernelOp
-    with pytest.raises(KernelOpError, match="second: not KernelOps; exploration reads"):
+    with refused(
+        "body-not-kernel-ops",
+        error=KernelOpError,
+        owner="explore_kernel_choices",
+        message="second: not KernelOps; exploration reads",
+    ):
         explore_kernel_choices(model)

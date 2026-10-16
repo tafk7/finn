@@ -54,6 +54,7 @@ def test_the_two_kinds_and_what_they_carry():
     assert (missing.tool, missing.reason) == ("vivado", "no installation")
     assert str(missing).startswith("vivado: no installation; the host file selects")
     assert "build configuration's toolchain" in str(missing)
+    assert missing.code == "tool-unavailable"
     failed = ToolFailed("xelab", 2, "/x/xelab.log", ("ERROR: one",), what="top")
     assert (
         str(failed) == "xelab failed with exit status 2: top; transcript /x/xelab.log\n  ERROR: one"
@@ -83,14 +84,18 @@ def test_a_failure_quotes_its_first_error_lines_and_tells_a_missing_licence(tmp_
 
 
 def test_a_tool_not_on_the_route_is_unavailable(tmp_path):
-    with pytest.raises(ToolUnavailable, match="on the PATH of its environment") as missing:
+    with pytest.raises(ToolUnavailable) as missing:
         toolchain().command("xelab")
-    assert missing.value.tool == "xelab"
-    with pytest.raises(ToolUnavailable, match=f"in the command directory {tmp_path}"):
+    assert (missing.value.code, missing.value.tool) == ("tool-unavailable", "xelab")
+    assert "on the PATH of its environment" in missing.value.reason
+    with pytest.raises(ToolUnavailable) as missing:
         toolchain(tmp_path).run("vivado")
-    with pytest.raises(ToolUnavailable, match="XILINX_HLS or XILINX_VITIS") as missing:
+    assert missing.value.code == "tool-unavailable"
+    assert f"in the command directory {tmp_path}" in missing.value.reason
+    with pytest.raises(ToolUnavailable) as missing:
         hls.installation(toolchain())
-    assert missing.value.tool == "HLS"
+    assert (missing.value.code, missing.value.tool) == ("tool-unavailable", "HLS")
+    assert "XILINX_HLS or XILINX_VITIS" in missing.value.reason
 
 
 def test_a_tool_that_exits_non_zero_is_failed_naming_its_transcript(tmp_path):
@@ -115,13 +120,18 @@ def test_a_tool_that_exits_non_zero_is_failed_naming_its_transcript(tmp_path):
 
 
 def test_the_installation_and_its_glbl_or_unavailable(tmp_path, vivado_installation):
-    with pytest.raises(ToolUnavailable, match=r"names no Vivado installation \(XILINX_VIVADO\)"):
+    with pytest.raises(ToolUnavailable) as missing:
         vivado.installation(toolchain())
-    with pytest.raises(ToolUnavailable, match="is no directory"):
+    assert (missing.value.code, missing.value.tool) == ("tool-unavailable", "vivado")
+    assert "names no Vivado installation (XILINX_VIVADO)" in missing.value.reason
+    with pytest.raises(ToolUnavailable) as missing:
         vivado.installation(toolchain(XILINX_VIVADO=str(tmp_path / "absent")))
-    with pytest.raises(ToolUnavailable, match="glbl.v") as missing:
+    assert (missing.value.code, missing.value.tool) == ("tool-unavailable", "vivado")
+    assert "is no directory" in missing.value.reason
+    with pytest.raises(ToolUnavailable) as missing:
         vivado.glbl(toolchain(XILINX_VIVADO=str(tmp_path)))
-    assert missing.value.tool == "vivado"
+    assert (missing.value.code, missing.value.tool) == ("tool-unavailable", "vivado")
+    assert "glbl.v" in missing.value.reason
     installed = vivado_installation(tmp_path / "Vivado")
     selected = toolchain(XILINX_VIVADO=str(installed))
     assert vivado.installation(selected) == installed
@@ -131,15 +141,20 @@ def test_the_installation_and_its_glbl_or_unavailable(tmp_path, vivado_installat
 def test_the_release_is_the_probes_or_unavailable(tmp_path):
     tool(tmp_path / "tools", "vivado", "print('vivado v2025.2 (64-bit)')\n")
     assert vivado.release(toolchain(tmp_path / "tools")) == (2025, 2)
-    with pytest.raises(ToolUnavailable, match="not on this toolchain's route") as missing:
+    with pytest.raises(ToolUnavailable) as missing:
         vivado.release(toolchain(tmp_path / "none"))
-    assert missing.value.tool == "vivado"
+    assert (missing.value.code, missing.value.tool) == ("tool-unavailable", "vivado")
+    assert "not on this toolchain's route" in missing.value.reason
     tool(tmp_path / "broken", "vivado", "raise SystemExit(139)\n")
-    with pytest.raises(ToolUnavailable, match="could not probe it through the local route"):
+    with pytest.raises(ToolUnavailable) as missing:
         vivado.release(toolchain(tmp_path / "broken"))
+    assert missing.value.code == "tool-unavailable"
+    assert "could not probe it through the local route" in missing.value.reason
     tool(tmp_path / "mute", "vivado", "print('no release here')\n")
-    with pytest.raises(ToolUnavailable, match="no recognizable AMD release"):
+    with pytest.raises(ToolUnavailable) as missing:
         vivado.release(toolchain(tmp_path / "mute"))
+    assert missing.value.code == "tool-unavailable"
+    assert "no recognizable AMD release" in missing.value.reason
 
 
 @pytest.mark.parametrize(
@@ -164,9 +179,10 @@ def test_xsi_reads_vivado_through_the_toolchain(tmp_path, monkeypatch):
         lambda: paths.xsi_artifact_dir(bare),
         lambda: identity(bare, "xsim"),
     ):
-        with pytest.raises(ToolUnavailable, match="XILINX_VIVADO") as missing:
+        with pytest.raises(ToolUnavailable) as missing:
             reads()
-        assert missing.value.tool == "vivado"
+        assert (missing.value.code, missing.value.tool) == ("tool-unavailable", "vivado")
+        assert "XILINX_VIVADO" in missing.value.reason
 
 
 def test_an_installation_is_identified_by_what_it_is(tmp_path, vivado_installation):

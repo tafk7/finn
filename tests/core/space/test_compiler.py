@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from support.refusals import refused
 
 from finn.core.space import Space, default_semantics, design_space, inspection
 from finn.core.space._nodes import node_record
@@ -247,7 +248,7 @@ def test_compiled_handles_do_not_follow_later_class_rebinding() -> None:
     old = compile_model(Example)
     replacement = cast(Param[int], Param(semantics=default_semantics(int)))
     replacement.__set_name__(Example, "value")
-    with pytest.raises(DefinitionError, match="finalized"):
+    with refused("structure-finalized", error=DefinitionError):
         Example.value = replacement  # type: ignore[assignment]
     new = compile_model(Example)
 
@@ -360,19 +361,23 @@ def test_domain_binding_is_validated_without_invocation() -> None:
         maximum: int = Param()
         choice: int = Decision(domain=domain(accepts=membership, misspelled=maximum))
 
-    with pytest.raises(DefinitionError, match="domain membership signature"):
+    with refused(
+        "domain-signature-incompatible",
+        error=DefinitionError,
+        message="domain membership signature",
+    ):
         compile_model(WrongSignature)
 
     class ForeignDomain(Space):
         choice: int = Decision(domain=domain(accepts=membership, maximum=Example.maximum))
 
-    with pytest.raises(DefinitionError, match="not a member"):
+    with refused("reference-not-in-scope", error=DefinitionError, message="not a member"):
         compile_model(ForeignDomain)
 
 
 @pytest.mark.parametrize("name", ["query", "field", "with_choices", "root", "_state"])
 def test_reserved_names_are_not_declarations(name: str) -> None:
-    with pytest.raises(DefinitionError, match="reserved"):
+    with refused("name-reserved", error=DefinitionError, message="reserved"):
         compile_model(type("Reserved", (Space,), {name: Const(1)}))
 
 
@@ -387,7 +392,7 @@ def test_incompatible_inferred_derived_override_is_rejected() -> None:
 
     changed = cast(type[Space], type("Changed", (Base,), {"output": Derived(output)}))
 
-    with pytest.raises(DefinitionError, match="semantics"):
+    with refused("override-changes-semantics", error=DefinitionError):
         compile_model(changed)
 
 
@@ -398,7 +403,7 @@ def test_missing_binding_names_fail_before_any_callback() -> None:
     class Example(Space):
         result = Derived(invalid)
 
-    with pytest.raises(DefinitionError, match="no declaration"):
+    with refused("declaration-unknown", error=DefinitionError):
         compile_model(Example)
 
 

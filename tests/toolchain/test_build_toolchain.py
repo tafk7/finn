@@ -16,6 +16,7 @@ from onnx import TensorProto, helper
 from pathlib import Path
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
+from support.refusals import refused
 
 from finn import resources
 from finn.builder import build_dataflow
@@ -243,18 +244,21 @@ def test_vivados_jobs_are_a_machine_setting_of_the_selection(monkeypatch):
     (FINN_VIVADO_JOBS), read into the machine's selection, a positive number or None (the
     machine's cores); one check refuses anything else, stated or set."""
     assert Selection(vivado_jobs=3).vivado_jobs == 3 and Selection().vivado_jobs is None
-    for refused in (0, -1, 2.0, True):
+    for bad_jobs in (0, -1, 2.0, True):
         with pytest.raises(ValueError, match="positive number"):
-            Selection(vivado_jobs=refused)
+            Selection(vivado_jobs=bad_jobs)
         with pytest.raises(ValueError, match="positive number"):
-            vivado_jobs(refused)
+            vivado_jobs(bad_jobs)
     no_file = {"FINN_XILINX_ENV": ""}
     assert host_selection(no_file).vivado_jobs is None
     assert host_selection({**no_file, "FINN_VIVADO_JOBS": "12"}).vivado_jobs == 12
-    jobs = "FINN_VIVADO_JOBS: host-setting-invalid"
-    with pytest.raises(Refusal, match=f"{jobs}: Vivado's jobs must be a positive"):
+    with refused(
+        "host-setting-invalid",
+        owner="FINN_VIVADO_JOBS",
+        message="Vivado's jobs must be a positive",
+    ):
         host_selection({**no_file, "FINN_VIVADO_JOBS": "0"})
-    with pytest.raises(Refusal, match=f"{jobs}: four is not a number of runs"):
+    with refused("host-setting-invalid", owner="FINN_VIVADO_JOBS", message="four"):
         host_selection({**no_file, "FINN_VIVADO_JOBS": "four"})
 
 
@@ -263,8 +267,8 @@ def test_a_host_file_that_does_not_read_is_refused_by_the_setting_naming_it(tmp_
     names the file."""
     unread = tmp_path / "xilinx.env"
     unread.write_text("NOT A SETTING\n")
-    with pytest.raises(Refusal) as refused:
+    with pytest.raises(Refusal) as unread_refusal:
         host_selection({"FINN_XILINX_ENV": str(unread)})
-    (finding,) = refused.value.findings
+    (finding,) = unread_refusal.value.findings
     assert (finding.code, finding.owner) == ("host-setting-invalid", "FINN_XILINX_ENV")
     assert finding.message == f"{unread}:1: expected NAME=value"

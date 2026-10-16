@@ -23,6 +23,7 @@ from qonnx.util.basic import qonnx_make_model
 from support import chain
 from support.helpers import exact_result_dtype
 from support.models import DOMAIN, TARGET, chain_source, lift
+from support.refusals import refused
 
 from finn.core.graph.annotations.platform import PLATFORM_KEYS, read_target
 from finn.core.graph.errors import FactUnstated, KernelOpError
@@ -88,8 +89,13 @@ def test_conversion_infers_as_it_goes() -> None:
 def test_qonnx_inference_refuses_before_the_ordered_pass() -> None:
     model = converted()
     model.set_tensor_datatype("hidden", None)  # a KernelOp's input not stated yet
-    with pytest.raises(
-        KernelOpError, match="hidden has no datatype annotation.*InferKernelTensors"
+    with refused(
+        "fact-unstated",
+        error=KernelOpError,
+        owner="datatype",
+        node="activate",
+        tensor="hidden",
+        message="hidden has no datatype annotation.*InferKernelTensors",
     ):
         model.transform(InferShapes())
     assert tensors(model.transform(InferKernelTensors())) == tensors(inferred())
@@ -111,11 +117,23 @@ def test_the_ordered_pass_states_the_chains_types_and_qonnx_agrees() -> None:
 def test_an_input_that_conflicts_is_refused_an_output_is_stated_again() -> None:
     unstated = converted()
     unstated.set_tensor_datatype("x", None)
-    with pytest.raises(FactUnstated, match="first: x has no datatype annotation"):
+    with refused(
+        "fact-unstated",
+        error=FactUnstated,
+        node="first",
+        tensor="x",
+        message="has no datatype annotation",
+    ):
         unstated.transform(InferKernelTensors())
     conflicting = converted()
     conflicting.set_tensor_datatype("w1", DataType["INT2"])
-    with pytest.raises(KernelOpError, match="w1 is annotated INT2 and holds values over"):
+    with refused(
+        "initializer-out-of-datatype",
+        error=KernelOpError,
+        node="first",
+        tensor="w1",
+        message="is annotated INT2 and holds values over",
+    ):
         conflicting.transform(InferKernelTensors())
     # An output's annotation is its producer's statement: replaced, narrower or wider.
     for stated in (chain.T, DataType["INT16"]):

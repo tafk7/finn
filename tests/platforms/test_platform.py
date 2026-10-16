@@ -18,6 +18,7 @@ import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 from support.helpers import FULL_DSP58, choose
 from support.models import MATMUL, TARGET, matmul_model, thresholding_model
+from support.refusals import refused
 
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
@@ -65,10 +66,21 @@ def test_a_memory_case_the_device_cannot_build_is_refused_by_name() -> None:
     ultra = {"w": {"source.memstream.ram_style": "ultra"}}
     ultra96 = matmul_model()  # TARGET: Ultra96, no UltraRAM
     # Its weight channel's ends wait on the MatMul's folding: nothing to check yet.
-    with pytest.raises(KernelOpError, match="w: its channel's ends wait on first's open"):
+    with refused(
+        "channel-unbound",
+        error=KernelOpError,
+        message="w: its channel's ends wait on first's open",
+    ):
         save_channels(ultra96, ultra)
     op(ultra96).save(MATMUL)
-    with pytest.raises(KernelOpError, match="w: .*source.memstream.ram_style.*uram-absent"):
+    with refused(
+        "choices-refused",
+        error=KernelOpError,
+        owner="save_channels",
+        tensor="w",
+        keys=("source.memstream.ram_style",),
+        message="^w: refused choices: .*uram-absent",
+    ):
         save_channels(ultra96, ultra)
     uram = targeted(matmul_model(), URAM)
     op(uram).save(MATMUL)
@@ -90,7 +102,9 @@ def test_a_doubled_clock_is_the_shells_not_the_platforms() -> None:
 
 def test_runtime_writable_thresholds_need_a_control_bus() -> None:
     # A KernelOp places no control bus to present its AXI-Lite interface through.
-    with pytest.raises(KernelOpError, match="use_axilite.*threshold-control"):
+    with refused(
+        "choices-refused", error=KernelOpError, keys=("use_axilite",), message="threshold-control"
+    ):
         op(thresholding_model()).save({"use_axilite": True})
 
 
@@ -111,7 +125,7 @@ def test_a_bare_kernel_states_its_platform() -> None:
     tensors = {
         f"{port}_tensor": tensor for port, tensor in op(matmul_model()).input_edges().items()
     }
-    with pytest.raises(DefinitionError, match="platform is not supplied"):
+    with refused("formal-unsupplied", error=DefinitionError, message="^platform is not supplied"):
         design_space(MatMulKernel(**tensors))
 
 

@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 from support import chain
 from support.helpers import FULL_DSP48E2, keyed
+from support.refusals import refused
 from support.xsim import requires_xsim
 
 import finn.kernels.explore as explore_module
@@ -287,8 +288,10 @@ def test_it_sizes_at_the_stored_folding_and_refuses_a_point_whose_cycles_are_unk
     assert {k: v for k, v in chosen(explorer, sized).items() if not k.endswith(".transport")} == {
         k: v for k, v in chosen(explorer, base).items() if not k.endswith(".transport")
     }
-    with pytest.raises(
-        ExploreError, match="needs every member's cycles: .*first.compute.packed.pe"
+    with refused(
+        "cycles-unknown",
+        error=ExploreError,
+        message="needs every member's cycles: .*first.compute.packed.pe",
     ):
         SizeFifos().explore(explorer, point)
 
@@ -425,8 +428,11 @@ def test_a_style_held_as_none_is_sized_as_auto_and_settling_refuses_it(
     )
     assert isinstance(placed, Accepted)
     explorer.held[("hidden", "transport.fifo.buffer.ram_style")] = None
-    with pytest.raises(
-        ExploreError, match="hidden.transport.fifo.buffer.ram_style: pin-unsettled: held to None"
+    with refused(
+        "pin-unsettled",
+        error=ExploreError,
+        owner="hidden.transport.fifo.buffer.ram_style",
+        message="held to None",
     ):
         SizeFifos().explore(explorer, placed.network)
     assert sized["first.compute.packed.y"] == "auto"
@@ -611,9 +617,9 @@ def test_an_open_depth_and_unknown_cycles_are_not_checked() -> None:
 
 
 def test_only_the_analytical_method_exists() -> None:
-    with pytest.raises(ExploreError, match="analytical"):
+    with refused("sizing-invalid", error=ExploreError, message="analytical"):
         SizeFifos(method="simulated")
-    with pytest.raises(ExploreError, match="margin"):
+    with refused("sizing-invalid", error=ExploreError, message=r"\bmargin\b"):
         SizeFifos(margin=-1)
 
 

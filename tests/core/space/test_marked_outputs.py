@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import pytest
+from support.refusals import refused
 
 from finn.core.space import (
     Inapplicable,
@@ -106,7 +107,11 @@ def test_explicit_semantics_on_a_marked_union_are_checked_against_the_value_type
         def point(self) -> Point | Rejected:
             return Point(1)
 
-    with pytest.raises(DefinitionError, match="Point is incompatible with Other"):
+    with refused(
+        "annotation-semantics-incompatible",
+        error=DefinitionError,
+        message="Point is incompatible with Other",
+    ):
         collect_space(Mismatched)
 
 
@@ -116,7 +121,7 @@ def test_a_protocol_still_needs_semantics() -> None:
         def named(self) -> Named | Rejected:
             raise AssertionError("never run")
 
-    with pytest.raises(DefinitionError, match="Protocol outputs require explicit semantics="):
+    with refused("semantics-unstated", error=DefinitionError, message=r"Protocol outputs"):
         collect_space(Implicit)
 
 
@@ -132,7 +137,7 @@ def test_a_union_of_values_still_needs_semantics() -> None:
             return 1
 
     for space_type in (Optional, Either):
-        with pytest.raises(DefinitionError, match="needs explicit semantics="):
+        with refused("semantics-unstated", error=DefinitionError, message=r"output annotation"):
             collect_space(space_type)
 
 

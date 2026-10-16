@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Self, cast
 
 import pytest
+from support.refusals import refused
 
 from finn.core.reporting.findings import by_code
 from finn.core.space import (
@@ -148,7 +149,9 @@ def test_node_member_alias_and_typed_view_exports() -> None:
         extent: int = Param()
         exports = {width: extent}  # type: ignore[dict-item]
 
-    with pytest.raises(DefinitionError, match="export width has the wrong kind"):
+    with refused(
+        "export-kind-invalid", error=DefinitionError, message="export width has the wrong kind"
+    ):
         collect_space(ValueExport)
 
     # The parent declares the formal and binds it to the child.
@@ -174,7 +177,9 @@ def test_node_member_alias_and_typed_view_exports() -> None:
     class Exposing(Space):
         child = Child(extent=Param())
 
-    with pytest.raises(DefinitionError, match="inline Param cannot supply"):
+    with refused(
+        "inline-param-supplies-member", error=DefinitionError, message="inline Param cannot supply"
+    ):
         design_space(Exposing())
 
 
@@ -192,21 +197,51 @@ def test_explicit_answer_semantics_preserve_the_value_type() -> None:
 
 
 @pytest.mark.parametrize(
-    ("function_source", "message"),
+    ("function_source", "code", "message"),
     [
-        ("def result(value: int = 1) -> int: return value", "cannot have defaults"),
-        ("def result(value: int, /) -> int: return value", "positional-only"),
-        ("def result(*value: int) -> int: return 1", "variadic"),
-        ("def result(**value: int) -> int: return 1", "variadic"),
-        ("def result(self: int) -> int: return self", "receiver annotation"),
-        ("def result(cls: int) -> int: return cls", "cls"),
-        ("def result(unknown: int) -> int: return unknown", "no declaration"),
-        ("def result(value) -> int: return value", "annotation is required"),
-        ("def result(value: int): return value", "return annotation"),
-        ("def result(value: str) -> str: return value", "cannot consume"),
+        (
+            "def result(value: int = 1) -> int: return value",
+            "dependency-default",
+            "cannot have defaults",
+        ),
+        (
+            "def result(value: int, /) -> int: return value",
+            "parameter-kind-unsupported",
+            "positional-only",
+        ),
+        ("def result(*value: int) -> int: return 1", "parameter-kind-unsupported", None),
+        ("def result(**value: int) -> int: return 1", "parameter-kind-unsupported", None),
+        (
+            "def result(self: int) -> int: return self",
+            "receiver-annotation-incompatible",
+            "receiver annotation",
+        ),
+        ("def result(cls: int) -> int: return cls", "implicit-self", "cls"),
+        (
+            "def result(unknown: int) -> int: return unknown",
+            "declaration-unknown",
+            "no declaration",
+        ),
+        (
+            "def result(value) -> int: return value",
+            "dependency-annotation-missing",
+            "annotation is required",
+        ),
+        (
+            "def result(value: int): return value",
+            "return-annotation-missing",
+            "return annotation",
+        ),
+        (
+            "def result(value: str) -> str: return value",
+            "argument-annotation-incompatible",
+            "cannot consume",
+        ),
     ],
 )
-def test_bad_signatures_fail_without_invocation(function_source: str, message: str) -> None:
+def test_bad_signatures_fail_without_invocation(
+    function_source: str, code: str, message: str | None
+) -> None:
     namespace: dict[str, object] = {}
     exec(function_source, namespace)
     function = cast(Callable[..., object], namespace["result"])
@@ -215,7 +250,7 @@ def test_bad_signatures_fail_without_invocation(function_source: str, message: s
         (Space,),
         {"__annotations__": {"value": int}, "value": Param(), "result": derived(function)},
     )
-    with pytest.raises(DefinitionError, match=message):
+    with refused(code, error=DefinitionError, message=message):
         collect_space(example)
 
 
@@ -258,7 +293,9 @@ def test_self_receiver_and_explicit_argument_aliases_are_ambiguous() -> None:
         def result(self) -> int:
             raise AssertionError("ambiguous declarations must not be evaluated")
 
-    with pytest.raises(DefinitionError, match="self.*alias|alias.*self"):
+    with refused(
+        "self-method-dependencies", error=DefinitionError, message="self.*alias|alias.*self"
+    ):
         collect_space(Ambiguous)
 
 
@@ -270,7 +307,7 @@ def test_extra_alias_and_answer_without_semantics_are_rejected() -> None:
         def result(*, value: int) -> int:
             return value
 
-    with pytest.raises(DefinitionError, match="unknown arguments.*typo"):
+    with refused("alias-unknown", error=DefinitionError, message="unknown arguments.*typo"):
         collect_space(Extra)
 
     class NoSemantics(Space):
@@ -278,26 +315,36 @@ def test_extra_alias_and_answer_without_semantics_are_rejected() -> None:
         def result() -> QueryResult[int]:
             raise AssertionError("must not run")
 
-    with pytest.raises(DefinitionError, match="QueryResult.*explicit semantics"):
+    with refused(
+        "semantics-unstated", error=DefinitionError, message="QueryResult.*explicit semantics"
+    ):
         collect_space(NoSemantics)
 
 
 def test_incompatible_override_collision_and_reserved_names() -> None:
     different = type("Different", (Base,), {"__annotations__": {"extent": str}, "extent": Param()})
-    with pytest.raises(DefinitionError, match="Different.extent.*semantics"):
+    with refused(
+        "override-changes-semantics", error=DefinitionError, message="Different.extent.*semantics"
+    ):
         collect_space(different)
     changed_kind = type("ChangedKind", (Base,), {"extent": Const(2)})
-    with pytest.raises(DefinitionError, match="declaration kind"):
+    with refused("override-changes-kind", error=DefinitionError, message="declaration kind"):
         collect_space(changed_kind)
     hidden = type("Hidden", (Base,), {"extent": 3})
-    with pytest.raises(DefinitionError, match="hides an inherited declaration"):
+    with refused(
+        "attribute-hides-declaration",
+        error=DefinitionError,
+        message="hides an inherited declaration",
+    ):
         collect_space(hidden)
 
     class Other(Space):
         extent: int = Param()
 
     collision = type("Collision", (Base, Other), {})
-    with pytest.raises(DefinitionError, match="conflicting inherited"):
+    with refused(
+        "inherited-declarations-conflict", error=DefinitionError, message="conflicting inherited"
+    ):
         collect_space(collision)
 
 
@@ -353,7 +400,9 @@ def test_unbound_late_declarations_and_bad_exports_are_rejected() -> None:
         pass
 
     setattr(Example, "late", Param())
-    with pytest.raises(DefinitionError, match="not bound at class creation"):
+    with refused(
+        "declaration-unbound", error=DefinitionError, message="not bound at class creation"
+    ):
         collect_space(Example)
     wrong = type(
         "WrongExport",
@@ -362,7 +411,7 @@ def test_unbound_late_declarations_and_bad_exports_are_rejected() -> None:
     )
     wrong_member = cast(Declaration, vars(wrong)["value"])
     setattr(wrong, "exports", {ViewKey("physical", int): wrong_member})
-    with pytest.raises(DefinitionError, match="wrong kind"):
+    with refused("export-kind-invalid", error=DefinitionError):
         collect_space(wrong)
 
 
@@ -371,7 +420,7 @@ def test_definition_constants_snapshot_and_decision_domain_contract() -> None:
     constant = Const(source)
     source.append(3)
     assert constant.value == [1, 2]
-    with pytest.raises(DefinitionError, match="exactly one"):
+    with refused("decision-domain-ambiguous", error=DefinitionError, message="exactly one"):
         Decision()  # type: ignore[call-overload]
     with pytest.raises(TypeError, match="truth value"):
         bool(Param(default=1))
@@ -383,7 +432,7 @@ def test_inferred_derived_override_cannot_change_value_type() -> None:
         return str(extent)
 
     changed = type("Changed", (Base,), {"doubled": text})
-    with pytest.raises(DefinitionError, match="override changes value semantics"):
+    with refused("override-changes-semantics", error=DefinitionError):
         collect_space(changed)
 
 
@@ -457,11 +506,15 @@ def test_child_omissions_and_incompatible_bindings_are_not_implicit_exposure() -
     class Parent(Space):
         child = Child(optional_width=3)
 
-    with pytest.raises(DefinitionError, match=r"child\.width is not supplied"):
+    with refused("formal-unsupplied", error=DefinitionError, message=r"child\.width"):
         design_space(Parent())
-    with pytest.raises(DefinitionError, match="unknown members"):
+    with refused("members-unknown", error=DefinitionError):
         Child(width=8, optional_width=9, typo=1)  # type: ignore[call-arg]
-    with pytest.raises(DefinitionError, match="incompatible value semantics"):
+    with refused(
+        "binding-semantics-incompatible",
+        error=DefinitionError,
+        message="incompatible value semantics",
+    ):
 
         class Wrong(Space):
             label: str = Param()
@@ -537,7 +590,7 @@ def test_nonboolean_and_foreign_guards_fail_during_collection() -> None:
         count: int = Param()
         choice: int = Decision(values=(1,), when=cast(ValueRef[bool], count))
 
-    with pytest.raises(DefinitionError, match="Wrong.choice guard.*Boolean"):
+    with refused("guard-not-boolean", error=DefinitionError, message="Wrong.choice guard.*Boolean"):
         collect_space(Wrong)
 
     class Foreign(Space):
@@ -546,7 +599,11 @@ def test_nonboolean_and_foreign_guards_fail_during_collection() -> None:
     class Unrelated(Space):
         choice: int = Decision(values=(1,), when=Foreign.enabled)
 
-    with pytest.raises(DefinitionError, match="Unrelated.choice guard.*effective scope"):
+    with refused(
+        "dependency-undeclared",
+        error=DefinitionError,
+        message="Unrelated.choice guard.*effective scope",
+    ):
         collect_space(Unrelated)
 
 
@@ -558,7 +615,9 @@ def test_when_is_an_authoring_control_argument() -> None:
         def value(*, when: bool) -> int:
             return 1
 
-    with pytest.raises(DefinitionError, match="reserved authoring control argument"):
+    with refused(
+        "when-reserved", error=DefinitionError, message="reserved authoring control argument"
+    ):
         collect_space(Wrong)
 
 
@@ -600,7 +659,7 @@ def test_linked_child_types_are_inferred_without_mutating_declarations() -> None
         def value(*, flag: str) -> int:
             raise AssertionError("must not execute")
 
-    with pytest.raises(DefinitionError, match="cannot consume bool"):
+    with refused("argument-annotation-incompatible", error=DefinitionError, message=r"\bbool$"):
         compile_model(Wrong)
 
 
@@ -616,7 +675,7 @@ def test_linker_argument_validation_checks_required_input_types() -> None:
     source = cast(ValueRef[object], Param(default=0))
     integer = cast(ValueSemantics[object], ValueSemantics.immutable_nominal(int))
     validate_argument(BoundArgument("item", source, int), integer, owner="reader.item")
-    with pytest.raises(DefinitionError, match="cannot consume int"):
+    with refused("argument-annotation-incompatible", error=DefinitionError, message=r"\bint$"):
         validate_argument(BoundArgument("item", source, str), integer, owner="reader.item")
 
 

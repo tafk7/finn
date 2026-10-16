@@ -9,6 +9,7 @@ from typing import cast
 from weakref import ReferenceType, ref
 
 import pytest
+from support.refusals import refused
 
 from finn.core.space import (
     Available,
@@ -54,7 +55,7 @@ def test_failed_preparation_does_not_poison_cache_and_subclasses_do_not_borrow_i
         def doubled(*, value: int) -> int:
             return value * 2
 
-    with pytest.raises(DefinitionError, match="no declaration"):
+    with refused("declaration-unknown", error=DefinitionError):
         compile_model(Broken)
     value = cast(Param[int], Param(semantics=default_semantics(int)))
     value.__set_name__(Broken, "value")
@@ -78,16 +79,16 @@ def test_prepared_structure_and_configuration_fields_are_immutable() -> None:
 
     node = Example(value=3)
     instance = design_space(node)
-    with pytest.raises(DefinitionError, match="finalized"):
+    with refused("structure-finalized", error=DefinitionError, message="finalized"):
         Example.choice = Decision(values=(3, 4))
-    with pytest.raises(DefinitionError, match="finalized"):
+    with refused("structure-finalized", error=DefinitionError):
         del Example.value
     with pytest.raises(AttributeError, match="immutable configuration field"):
         instance.value = 4
     with pytest.raises(AttributeError, match="immutable configuration field"):
         del instance.value
     # design_space() froze the root declaration: its formals can no longer be assigned.
-    with pytest.raises(DefinitionError, match="is frozen"):
+    with refused("declaration-frozen", error=DefinitionError):
         node.value = 4
     setattr(instance, "note", "ordinary metadata")
     assert getattr(instance, "note") == "ordinary metadata"
@@ -104,9 +105,9 @@ def test_prepared_inherited_declarations_and_their_owners_are_immutable() -> Non
 
     instance = design_space(Example(value=1))
     reference = Example.value
-    with pytest.raises(DefinitionError, match="finalized"):
+    with refused("structure-finalized", error=DefinitionError):
         Example.value = 99
-    with pytest.raises(DefinitionError, match="finalized"):
+    with refused("structure-finalized", error=DefinitionError):
         Base.value = 99
     assert instance.value == 1
     assert instance.query(reference) == Available(1)
@@ -124,7 +125,9 @@ def test_custom_instance_initialization_is_rejected_at_preparation() -> None:
         def __init__(self, value: int) -> None:
             self.saved = value
 
-    with pytest.raises(DefinitionError, match="custom instance __init__"):
+    with refused(
+        "instance-constructor-custom", error=DefinitionError, message="custom instance __init__"
+    ):
         compile_model(Stateful)
 
 
@@ -138,13 +141,13 @@ def test_nested_custom_instance_initialization_is_rejected() -> None:
     class Parent(Space):
         child = Child(value=1)
 
-    with pytest.raises(DefinitionError, match="custom instance __init__"):
+    with refused("instance-constructor-custom", error=DefinitionError):
         compile_model(Parent)
 
     class ChoiceParent(Space):
         child: Child = Decision({"only": Child(value=1)})
 
-    with pytest.raises(DefinitionError, match="custom instance __init__"):
+    with refused("instance-constructor-custom", error=DefinitionError):
         compile_model(ChoiceParent)
 
 
@@ -197,7 +200,7 @@ def test_call_keywords_do_not_steal_formal_names_and_request_errors_precede_snap
     snapshots.clear()
     # A call on a Space class binds formals by keyword only; a positional mapping is
     # refused before any value is snapshotted.
-    with pytest.raises(DefinitionError, match="by keyword"):
+    with refused("formals-by-keyword", error=DefinitionError, message="by keyword"):
         Example({Example.parameters: 3}, parameters=4)  # type: ignore[arg-type, call-arg]
     assert snapshots == []
     # A choice requested twice is refused before any value is snapshotted.

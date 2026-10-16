@@ -56,7 +56,7 @@ def tree_digest(path):
     """
     root = Path(path)
     if not root.is_dir():
-        raise ResourceError(f"{root} is not a directory")
+        raise ResourceError("tree-not-directory", f"{root} is not a directory")
     items = []
     for directory, dirs, files in os.walk(root):
         # os.walk lists symbolic links to directories in dirs without entering them.
@@ -123,7 +123,10 @@ def locked(root, entry):
         root.mkdir(parents=True, exist_ok=True)
         lock = open(root / f".{entry}.lock", "w")
     except OSError as error:
-        raise ResourceError(f"Cannot write to the resource cache {root}: {error}") from None
+        raise ResourceError(
+            "cache-not-writable",
+            f"Cannot write to the resource cache {root}: {error}",
+        ) from None
     with lock:
         # Parallel first uses wait for a single fetch instead of racing.
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -170,9 +173,10 @@ def _verified_tree(resource, work):
         failures.append(f"{where} has digest {actual}")
     message = "\n  ".join(failures)
     raise ResourceError(
+        "fetch-failed",
         f"Cannot fetch resource {resource.name} with the digest {resource.origin} declares "
         f"({resource.digest}):\n  {message}\nIf the source changed on purpose, update the "
-        "pin with `finn-resources update`."
+        "pin with `finn-resources update`.",
     )
 
 
@@ -196,7 +200,10 @@ def assemble(resource, work, url=None):
     if resource.subdir:
         source = source / resource.subdir
         if not source.is_dir():
-            raise ResourceError(f"{resource.subdir} is not a directory in {url}")
+            raise ResourceError(
+                "subdir-missing",
+                f"{resource.subdir} is not a directory in {url}",
+            )
     tree = work / "tree"
     shutil.copytree(
         source,
@@ -214,7 +221,7 @@ def git_source(url, commit, subdir, dest):
         return git_checkout(url, commit, subdir, dest)
     tarball = github_archive(url, commit)
     if tarball is None:
-        raise ResourceError(f"git is required to fetch {url}")
+        raise ResourceError("git-unavailable", f"git is required to fetch {url}")
     print(f"finn: git is not installed; using {tarball}", file=sys.stderr)
     # GitHub archives are not byte-stable, so there is no archive checksum; the
     # tree digest verifies the content.
@@ -236,7 +243,10 @@ def git_checkout(url, commit, subdir, dest):
             ["git", "-C", str(dest), *args], env=env, capture_output=True, text=True
         )
         if result.returncode:
-            raise ResourceError(f"git {args[0]} failed for {url}: {result.stderr.strip()}")
+            raise ResourceError(
+                "git-failed",
+                f"git {args[0]} failed for {url}: {result.stderr.strip()}",
+            )
 
     dest.mkdir(parents=True)
     git("init", "--quiet")
@@ -262,29 +272,34 @@ def archive(url, sha256, dest):
         with urllib.request.urlopen(url, timeout=60) as response, open(download, "wb") as out:
             shutil.copyfileobj(response, out)
     except OSError as error:
-        raise ResourceError(f"Cannot download {url}: {error}") from None
+        raise ResourceError("download-failed", f"Cannot download {url}: {error}") from None
     actual = _file_sha256(download).hexdigest()
     if sha256 is not None and actual != sha256:
-        raise ResourceError(f"{url} has sha256 {actual}, expected {sha256}")
+        raise ResourceError(
+            "archive-sha256-mismatch", f"{url} has sha256 {actual}, expected {sha256}"
+        )
     tree = dest / "tree"
     tree.mkdir()
     if tarfile.is_tarfile(download):
         if not hasattr(tarfile, "data_filter"):
-            raise ResourceError("Extracting archives safely needs Python 3.11.4 or later")
+            raise ResourceError(
+                "archive-extraction-unsupported",
+                "Extracting archives safely needs Python 3.11.4 or later",
+            )
         with tarfile.open(download) as tar:
             try:
                 tar.extractall(tree, filter="data")
             except tarfile.FilterError as error:
-                raise ResourceError(f"Unsafe archive {url}: {error}") from None
+                raise ResourceError("archive-unsafe", f"Unsafe archive {url}: {error}") from None
     elif zipfile.is_zipfile(download):
         with zipfile.ZipFile(download) as zip_file:
             for name in zip_file.namelist():
                 path = PurePosixPath(name)
                 if path.is_absolute() or ".." in path.parts or "\\" in name:
-                    raise ResourceError(f"Unsafe archive {url}: member {name}")
+                    raise ResourceError("archive-unsafe", f"Unsafe archive {url}: member {name}")
             zip_file.extractall(tree)
     else:
-        raise ResourceError(f"{url} is not a tar or zip archive")
+        raise ResourceError("archive-format-unknown", f"{url} is not a tar or zip archive")
     download.unlink()
     children = list(tree.iterdir())
     if len(children) == 1 and children[0].is_dir() and not children[0].is_symlink():

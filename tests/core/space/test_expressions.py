@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from support.refusals import refused
 
 from core.space._results_support import dependency_nodes
 from finn.core.space import (
@@ -164,9 +165,13 @@ def test_expression_truthiness_and_non_integer_operands_are_rejected() -> None:
     expression = value + 1
     with pytest.raises(TypeError, match="truth value"):
         bool(expression)
-    for bad in (True, 1.5, "1", Const(True), Const("1")):
-        with pytest.raises(DefinitionError, match="int"):
+    literals = (True, 1.5, "1")
+    for bad in literals:
+        with refused("expression-literal-not-int", error=DefinitionError, message="int"):
             Expr("add", value, cast(int, bad))
+    for operand in (Const(True), Const("1")):
+        with refused("expression-operand-not-int", error=DefinitionError, message="int"):
+            Expr("add", value, cast(int, operand))
 
 
 def test_inferred_non_integer_operands_fail_before_their_callbacks_run() -> None:
@@ -180,7 +185,7 @@ def test_inferred_non_integer_operands_fail_before_their_callbacks_run() -> None
 
         invalid = cast(ValueRef[int], text) + 1
 
-    with pytest.raises(DefinitionError, match="int value semantics"):
+    with refused("expression-operand-not-int", error=DefinitionError):
         design_space(Example())
     assert calls == []
 
@@ -190,7 +195,7 @@ def test_a_reference_to_a_non_integer_member_is_refused_as_an_operand() -> None:
         label: str = Param()
 
     child = Child(label="x")
-    with pytest.raises(DefinitionError, match="int value semantics"):
+    with refused("expression-operand-not-int", error=DefinitionError):
         child.label + 1  # type: ignore[operator]
 
 

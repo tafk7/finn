@@ -7,12 +7,14 @@ Datatype Space semantics are covered in tests/kernels.
 """
 
 import math
+import re
 from fractions import Fraction
 from typing import Any, cast
 
 import pytest
 from qonnx.core.datatype import BaseDataType, DataType
 from qonnx.core.ranges import TensorRange
+from support.refusals import refused
 
 from finn.dataflow.datatypes import (
     DatatypeError,
@@ -72,9 +74,11 @@ def test_a_subclass_naming_itself_int8_is_not_int8() -> None:
     of these raises from ``bitwidth``, the other reports zero)."""
 
     for rogue in (_LyingWidth(), _ZeroWidth()):
-        with pytest.raises(DatatypeError, match="not a QONNX datatype value"):
+        with refused(
+            "datatype-not-qonnx", error=DatatypeError, message="not a QONNX datatype value"
+        ):
             qonnx_datatype_width(rogue)
-        with pytest.raises(DatatypeError):
+        with refused("datatype-not-qonnx", error=DatatypeError):
             ScalarEncoding(cast(QONNXDataType, rogue))
 
 
@@ -99,7 +103,11 @@ def test_an_ordinary_integer_is_an_int_or_uint_encoding(name: str, ordinary: boo
     dtype = DataType[name]
     assert is_ordinary_integer(dtype) is ordinary
     if not ordinary:
-        with pytest.raises(DatatypeError, match="not an ordinary INT/UINT encoding"):
+        with refused(
+            "integer-not-ordinary",
+            error=DatatypeError,
+            message=re.escape(f"{name} is not an ordinary INT/UINT encoding"),
+        ):
             ordinary_integer_bounds(dtype)
 
 
@@ -115,11 +123,15 @@ def test_a_degenerate_width_is_still_refused() -> None:
 def test_a_width_cannot_be_asked_of_a_non_datatype() -> None:
     """``qonnx_datatype_width`` canonicalizes first, so it refuses like the rest."""
 
-    with pytest.raises(DatatypeError, match="not a QONNX datatype"):
+    with refused("datatype-not-qonnx", error=DatatypeError):
         qonnx_datatype_width(8)
-    with pytest.raises(DatatypeError, match="is not a datatype value"):
+    with refused(
+        "datatype-name-not-value",
+        error=DatatypeError,
+        message="is not a datatype value; resolve 'INT8' first",
+    ):
         qonnx_datatype_width("INT8")
-    with pytest.raises(DatatypeError):
+    with refused("datatype-name-not-value", error=DatatypeError):
         ScalarEncoding(cast(QONNXDataType, "INT8"))
 
 
@@ -266,7 +278,7 @@ def test_uint1_and_binary_are_deliberately_the_same_value() -> None:
 
 def test_a_canonical_name_is_not_a_datatype_value() -> None:
     assert is_qonnx_datatype("INT8") is False
-    with pytest.raises(DatatypeError, match="resolve"):
+    with refused("datatype-name-not-value", error=DatatypeError):
         canonical_qonnx_datatype("INT8")
 
 
@@ -284,7 +296,11 @@ def test_a_malformed_canonical_name_is_refused(name: str) -> None:
     """One failure type out: qonnx raises ``KeyError`` for every name that denotes
     no datatype, however far its parse got, and the boundary refuses it."""
 
-    with pytest.raises(DatatypeError, match="no QONNX datatype is named"):
+    with refused(
+        "datatype-name-unknown",
+        error=DatatypeError,
+        message=re.escape(f"no QONNX datatype is named {name!r}"),
+    ):
         resolve_qonnx_datatype_name(name)
 
 
@@ -292,7 +308,7 @@ def test_a_jointly_invalid_fixed_point_name_is_refused_not_raised() -> None:
     """``FIXED<8,9>``: parts individually well formed, jointly invalid; a name
     qonnx cannot resolve, refused like any other."""
 
-    with pytest.raises(DatatypeError, match="no QONNX datatype is named"):
+    with refused("datatype-name-unknown", error=DatatypeError):
         resolve_qonnx_datatype_name("FIXED<8,9>")
 
 

@@ -16,6 +16,7 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 from support.models import THRESHOLDS, convert, schema_digest, thresholding_model
+from support.refusals import refused
 
 from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
@@ -50,9 +51,23 @@ def test_facts_and_the_output() -> None:
 
 
 def test_the_thresholds_must_be_an_initializer_with_one_row_or_a_row_per_channel() -> None:
-    with pytest.raises(KernelOpError, match="are not an initializer: not a Thresholding"):
+    with refused(
+        "initializer-absent",
+        error=KernelOpError,
+        owner="Thresholding",
+        node="activate",
+        tensor="t",
+        message="are not an initializer: not a Thresholding",
+    ):
         op(thresholding_model(stored=False, infer=False)).facts()
-    with pytest.raises(KernelOpError, match=r"\(2, 3\), neither one row .* its 4 channels"):
+    with refused(
+        "thresholds-shape-invalid",
+        error=KernelOpError,
+        owner="Thresholding",
+        node="activate",
+        tensor="t",
+        message=r"\(2, 3\), neither one row .* its 4 channels",
+    ):
         op(thresholding_model(thresholds=THRESHOLDS[:2], infer=False)).facts()
 
 
@@ -116,7 +131,14 @@ def test_the_table_is_derived_from_the_stored_thresholds_and_the_input_type() ->
 
 def test_a_nan_threshold_is_refused_by_name() -> None:
     table = np.where(THRESHOLDS == 1, np.nan, THRESHOLDS)
-    with pytest.raises(KernelOpError, match="activate: t holds NaN"):
+    with refused(
+        "thresholds-nan",
+        error=KernelOpError,
+        owner="Thresholding",
+        node="activate",
+        tensor="t",
+        message="holds NaN",
+    ):
         op(thresholding_model(thresholds=table, infer=False)).facts()
 
 
@@ -137,7 +159,14 @@ def test_an_empty_threshold_table_is_refused_by_name() -> None:
     # A row per channel, none of them holding a threshold: the empty initializer is
     # vacuously integral and has no range to check against its annotation.
     empty = np.zeros((len(THRESHOLDS), 0), dtype=np.float32)
-    with pytest.raises(KernelOpError, match="activate: t is empty"):
+    with refused(
+        "initializer-empty",
+        error=KernelOpError,
+        owner="Thresholding",
+        node="activate",
+        tensor="t",
+        message="is empty",
+    ):
         op(thresholding_model(thresholds=empty, infer=False)).facts()
 
 

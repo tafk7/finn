@@ -18,6 +18,7 @@ from pathlib import Path
 import onnx
 import onnx.helper as oh
 import pytest
+from support.refusals import refused
 
 import finn.builder.build_dataflow as build
 from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig
@@ -196,7 +197,7 @@ def test_a_failed_step_is_the_outcome_by_its_kind(tmp_path, error, kind):
 
 def test_a_refused_configuration_is_the_outcome_with_its_findings(tmp_path):
     # A board that requires a Vivado release; the fake toolchain has no Vivado.
-    with pytest.raises(ConfigurationRefused, match="board-vivado: ") as refused:
+    with refused("board-vivado", error=ConfigurationRefused) as caught:
         build_of(
             tmp_path,
             [step_reports, "step_size_fifos"],
@@ -207,7 +208,7 @@ def test_a_refused_configuration_is_the_outcome_with_its_findings(tmp_path):
     manifest = manifest_of(str(tmp_path / "output"))
     assert manifest["outcome"] == {
         "status": "refused",
-        "error": {"type": "ConfigurationRefused", "message": str(refused.value)},
+        "error": {"type": "ConfigurationRefused", "message": str(caught.error)},
     }
     assert manifest["steps"] == []
     found = [(each["code"], each["kind"]) for each in manifest["configuration_findings"]]
@@ -215,9 +216,11 @@ def test_a_refused_configuration_is_the_outcome_with_its_findings(tmp_path):
 
 
 def test_an_unknown_step_is_refused_before_the_first(tmp_path):
-    with pytest.raises(
-        ConfigurationRefused,
-        match="configuration.steps\\[0\\]: step-unknown: 'step_none' is no step or named list",
+    with refused(
+        "step-unknown",
+        error=ConfigurationRefused,
+        owner="configuration.steps[0]",
+        message="^'step_none' ",
     ):
         build_of(tmp_path, ["step_none"])
     manifest = manifest_of(str(tmp_path / "output"))

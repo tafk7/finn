@@ -15,6 +15,7 @@ hardware; FinnLib's ``replay_buffer`` is not wrapped.
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.emitted_netlist import read
 from support.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
@@ -25,6 +26,7 @@ from support.helpers import (
     with_adapter_memories,
     with_direct_transports,
 )
+from support.netlist import Const, Drive, Pin
 
 from finn.dataflow.gemm import Form
 from finn.dataflow.plan import Step
@@ -124,8 +126,10 @@ def test_one_output_fold_and_one_beat_frames_tie_the_frame_marker_high(tmp_path)
         ((None, None, "s_axis_input_tlast", None),),
     )
     emitted = emit_module(built.module, tmp_path, roots={"finnlib": finnlib_root()})
-    netlist = (emitted.directory / f"{emitted.entry_point}.sv").read_text()
-    assert "assign n__u_matmul_compute_packed__s_axis_input_tlast = 1'h1;" in netlist
+    wired = read(built.module, (emitted.directory / f"{emitted.entry_point}.sv").read_text())
+    assert Drive(Pin("u_matmul_compute_packed", "s_axis_input_tlast"), Const(1, 1)) in set(
+        wired.drives
+    )
 
 
 def test_a_replay_with_one_beat_frames_ties_the_frame_marker_high():

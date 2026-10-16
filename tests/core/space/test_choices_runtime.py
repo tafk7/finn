@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from support.refusals import refused
 
 from core.space._results_support import dependency_nodes
 from finn.core.space import (
@@ -225,7 +226,7 @@ def test_choice_metadata_and_handles_retain_the_compiled_definition() -> None:
     # The compiled choice cannot be retargeted: neither the Decision nor the Space class.
     with pytest.raises(AttributeError, match="immutable"):
         setattr(Root.implementation, "candidates", {"renamed": A()})
-    with pytest.raises(DefinitionError, match="finalized"):
+    with refused("structure-finalized", error=DefinitionError):
         Root.implementation = Decision({"renamed": A()})
     assert [case.name for case in saved.cases] == ["a", "b"]
     chosen = base.with_choices({saved.selector: "b"})

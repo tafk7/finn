@@ -22,12 +22,14 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 from support.models import convert
+from support.refusals import refused
 
 import finn.custom_op.kernels as domain
 from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Rejected
-from finn.custom_op.kernels.base import Match, refused
+from finn.custom_op.kernels.base import Match
+from finn.custom_op.kernels.base import refused as rejection
 from finn.custom_op.kernels.matmul import MatMul
 from finn.transformation.kernels import Outcome
 
@@ -47,7 +49,9 @@ class CopyMatMul(MatMul):
         for reader in model.find_consumers(node.output[0]):
             if (reader.domain, reader.op_type) == ("", "MatMul") and reader.input[0] in node.output:
                 return Match((node, reader), {})
-        return Rejected((refused(cls.op_type, "copy-unread", f"no MatMul reads {node.output[0]}"),))
+        return Rejected(
+            (rejection(cls.op_type, "copy-unread", f"no MatMul reads {node.output[0]}"),)
+        )
 
 
 class SplitMatMul(CopyMatMul):
@@ -244,5 +248,11 @@ def test_a_match_covering_a_node_before_its_anchor_is_an_authoring_error(
         {"x": [3, 4]},
         ["y"],
     )
-    with pytest.raises(KernelOpError, match="relu: Backward's match covers .* negate is not a"):
+    with refused(
+        "match-not-forward",
+        error=KernelOpError,
+        owner="ToKernelOps",
+        node="relu",
+        message="Backward's match covers .* negate is not a",
+    ):
         convert(source)

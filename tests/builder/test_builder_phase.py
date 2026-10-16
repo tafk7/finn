@@ -47,6 +47,7 @@ from support.packaging import (
     bitfile_default,
     io_shape_dict,
 )
+from support.refusals import refused
 from support.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition, run_steps
 from support.tfc_built import SET_FOLDING, TFC_BUILT
 
@@ -608,8 +609,10 @@ def test_the_verification_refuses_a_partition_for_another_target(
     cfg = config(tmp_path)
     parent = explore(source, cfg)
     cfg.target = replace(ULTRA96_PYNQ, period_ns=4.0)
-    with pytest.raises(
-        TargetRefused, match="target-drift: .*period_ns: the model states 5.0, the build 4.0"
+    with refused(
+        "target-drift",
+        error=TargetRefused,
+        message="period_ns: the model states 5.0, the build 4.0",
     ):
         step_verify_partition(parent, cfg)
 
@@ -626,10 +629,10 @@ def test_the_builds_target_is_the_one_its_configuration_states(tmp_path: Path) -
     assert on_ip.resolved_target == resolve_target(part=ULTRA96.part, period_ns=5.0)
     assert (on_ip.resolved_target.shell, on_ip.resolved_target.board) == ("ip", None)
     asserted = TargetRequest(board="Ultra96", part="xczu3eg-sbva484-1-i", period_ns=5.0)
-    with pytest.raises(TargetRefused, match="board-part-mismatch"):
+    with refused("board-part-mismatch", error=TargetRefused):
         step_convert_to_hw(chain_source(), config(tmp_path, target=asserted))
     xrt = TargetRequest(part="xcu250-figd2104-2L-e", period_ns=5.0, shell="xrt")
-    with pytest.raises(TargetRefused, match="unsupported-shell: 'xrt'"):
+    with refused("unsupported-shell", error=TargetRefused, message="^'xrt' "):
         step_convert_to_hw(chain_source(), config(tmp_path, target=xrt))
 
 
@@ -647,15 +650,12 @@ def failed_checks(cfg: Any) -> dict[str, list[str]]:
     return failed
 
 
-def refusal(cfg: DataflowBuildConfig) -> dict[str, list[str]]:
-    """The rejections a build of ``cfg`` is refused with before its first step, their
-    messages by code."""
-    with pytest.raises(ConfigurationRefused) as refused:
+def build_refused_by(cfg: DataflowBuildConfig, code: str, **asked: Any) -> list[str]:
+    """Build ``cfg`` and expect the refusal before its first step to carry ``code`` (its
+    owner, message and details as asked); the codes of all its findings."""
+    with refused(code, error=ConfigurationRefused, **asked) as caught:
         build_dataflow_cfg(str(Path(cfg.output_dir) / "absent.onnx"), cfg)
-    found: dict[str, list[str]] = {}
-    for finding in refused.value.findings:
-        found.setdefault(finding.code, []).append(finding.message)
-    return found
+    return [finding.code for finding in caught.error.findings]
 
 
 def test_a_shells_outputs_are_refused_at_their_steps_on_a_shell_without_one(
@@ -684,10 +684,8 @@ def test_a_shells_outputs_are_refused_at_their_steps_on_a_shell_without_one(
         "kind": "refusal",
         "findings": {"shell-without-bitfile": 1},
     }
-    assert outcome["error"]["message"] == (
-        "configuration.target.shell: shell-without-bitfile: the 'ip' shell has no bitfile "
-        "build, which step_build_bitfile needs; state a shell that has one (pynq, for a "
-        "board), or leave step_build_bitfile out of the steps"
+    assert outcome["error"]["message"].startswith(
+        "configuration.target.shell: shell-without-bitfile: "
     )
 
 
@@ -735,20 +733,26 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     (output / "driver").mkdir(parents=True)
     (output / "driver" / "driver.py").write_text("an earlier build's driver")
     found = []
-    with pytest.raises(PynqRefused, match="the model states no bitfile") as refused:
+    with refused(
+        "bitfile-absent", error=PynqRefused, message="the model states no bitfile"
+    ) as caught:
         step_deployment_package(parent, cfg)
-    found.append(refused.value.findings)
+    found.append(caught.error.findings)
     elsewhere = tmp_path / "elsewhere" / "bitfile" / "finn-accel.bit"
     parent.set(OUTPUT_BITFILE, str(elsewhere))
-    with pytest.raises(
-        PynqRefused, match="the model's bitfile is .*elsewhere.*, not this "
-    ) as refused:
+    with refused(
+        "bitfile-foreign",
+        error=PynqRefused,
+        message="the model's bitfile is .*elsewhere.*, not this ",
+    ) as caught:
         step_deployment_package(parent, cfg)
-    found.append(refused.value.findings)
+    found.append(caught.error.findings)
     parent.set(OUTPUT_BITFILE, str(output / "bitfile" / "finn-accel.bit"))
-    with pytest.raises(PynqRefused, match="no driver in this output directory") as refused:
+    with refused(
+        "driver-absent", error=PynqRefused, message="no driver in this output directory"
+    ) as caught:
         step_deployment_package(parent, cfg)
-    found.append(refused.value.findings)
+    found.append(caught.error.findings)
     _, body, body_file = partition_body(parent)
     body.set(OUTPUT_IP_KEY, IP_KEY)
     body.save(body_file)
@@ -758,25 +762,25 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     (output / "report").mkdir()
     described = {"made_from": earlier, "ip_key": IP_KEY}
     (output / "report" / "driver.json").write_text(json.dumps(described))
-    with pytest.raises(PynqRefused) as refused:
+    with pytest.raises(PynqRefused) as raised:
         step_deployment_package(parent, cfg)
-    assert str(refused.value) == (
+    assert str(raised.value) == (
         f"MakePynqDeployment: driver-stale: the driver in this output directory "
         f"({output / 'driver'}) was "
         f"made from the design {earlier}, and the partition's design is now "
         f"{design_digest(body)}; make the driver again (step_make_driver)"
     )
-    found.append(refused.value.findings)
+    found.append(raised.value.findings)
     described = {"made_from": design_digest(body), "ip_key": OTHER_IP_KEY}
     (output / "report" / "driver.json").write_text(json.dumps(described))
-    with pytest.raises(PynqRefused) as refused:
+    with pytest.raises(PynqRefused) as raised:
         step_deployment_package(parent, cfg)
-    assert str(refused.value) == (
+    assert str(raised.value) == (
         f"MakePynqDeployment: driver-ip-stale: the driver in this output directory "
         f"({output / 'driver'}) was made for the IP of the key {OTHER_IP_KEY}, and the "
         f"partition's IP is now {IP_KEY}; make the driver again (step_make_driver)"
     )
-    found.append(refused.value.findings)
+    found.append(raised.value.findings)
     codes = ("bitfile-absent", "bitfile-foreign", "driver-absent", "driver-stale")
     assert [(each.code, each.owner, each.kind, dict(each.details)) for (each,) in found] == [
         (code, "MakePynqDeployment", FindingKind.REJECTION, {"output": "deployment_package"})
@@ -937,20 +941,20 @@ def test_a_step_that_moves_the_target_s_folding_leaves_the_bitfile_no_objective(
 
 def test_a_target_the_registry_refuses_is_refused_before_the_build(tmp_path: Path) -> None:
     unknown = TargetRequest(board="U250", period_ns=5.0)
-    assert refusal(config(tmp_path, target=unknown)) == {
-        "unknown-board": [
-            "'U250' is not a board (one of ['AUP-ZU3_8GB', 'KV260_SOM', "
-            "'RFSoC2x2', 'RFSoC4x2', 'Ultra96', 'Ultra96-V2', 'V80', 'ZCU102', 'ZCU104', 'ZCU111'])"
-        ]
-    }
+    assert build_refused_by(
+        config(tmp_path, target=unknown),
+        "unknown-board",
+        owner="configuration.target.board",
+        message="^'U250' is not a board",
+    ) == ["unknown-board"]
     # A board the Zynq template cannot build: refused before any step runs.
     zcu111 = TargetRequest(board="ZCU111", period_ns=5.0, shell="pynq")
-    assert refusal(config(tmp_path, target=zcu111)) == {
-        "no-shell-row": [
-            "the 'pynq' shell has no row for board 'ZCU111': the Zynq "
-            "template has no branch for it (no board preset)"
-        ]
-    }
+    assert build_refused_by(
+        config(tmp_path, target=zcu111),
+        "no-shell-row",
+        owner="configuration.target.board",
+        message="has no row for board 'ZCU111'",
+    ) == ["no-shell-row"]
     # The ip shell takes the part.
     on_part = TargetRequest(part="xcu250-figd2104-2L-e", period_ns=5.0)
     assert failed_checks(config(tmp_path, target=on_part)) == {}
@@ -965,13 +969,9 @@ def test_host_nodes_between_kernel_ops_refuse_the_build_at_conversion(
     with (
         caplog.at_level(logging.INFO, logger=STEPS_LOG),
         caplog.at_level(logging.INFO, logger=REPORTS_LOG),
-        pytest.raises(KernelOpError) as refused,
+        refused("host-between", error=KernelOpError, owner="ToKernelOps", node="flip"),
     ):
         step_convert_to_hw(host_between_source(), config(tmp_path))
-    assert str(refused.value) == (
-        "1 host nodes sit between KernelOps, so a partition of the KernelOps would depend "
-        "on itself: flip (ToKernelOps: no-kernel-op: no KernelOp binds onnx.Transpose)"
-    )
     report = json.loads((tmp_path / "output" / "report" / "kernel_ops.json").read_text())
     assert report["between_kernel_ops"] == ["flip"]
     logged = [
@@ -988,10 +988,15 @@ def test_a_step_the_build_does_not_know_is_refused(tmp_path: Path) -> None:
     """A build's steps are its own: another name is refused, naming its steps
     (the strategy steps no phase runs by default among them) and named lists, and the
     default steps are the partition's premade list, in order."""
-    with pytest.raises(ValueError, match="'step_hw_codegen' is no step or named list") as refused:
+    with refused(
+        "step-unknown",
+        error=ConfigurationRefused,
+        owner="configuration.steps[0]",
+        message="^'step_hw_codegen' ",
+    ) as caught:
         build_plan(config(tmp_path, steps=["step_hw_codegen"]))
-    assert "step_target_throughput" in str(refused.value)
-    assert "phase_optimize_hardware" in str(refused.value)
+    assert "step_target_throughput" in str(caught.error)
+    assert "phase_optimize_hardware" in str(caught.error)
     assert [step.name for step in build_plan(config(tmp_path)).steps] == [
         "step_cleanup",
         "step_add_pre_post_processing",
@@ -1645,23 +1650,28 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
     report = Path(cfg.output_dir) / DELIVERED_CLOCK
-    absent = f"MakePynqDriver: clock-absent: no delivered clock \\({report}\\)"
-    with pytest.raises(PynqRefused, match=absent):
+    with refused(
+        "clock-absent",
+        error=PynqRefused,
+        owner="MakePynqDriver",
+        message=re.escape(f"no delivered clock ({report})"),
+    ):
         step_make_driver(parent, cfg)
     report.parent.mkdir(parents=True)
     unknown = Finding(
         FindingKind.LIMITATION, "clock-unknown", "delivered_clock", "no PL clock in it"
     ).record()
     report.write_text(json.dumps({"target_period_ns": 5.0, "clocks": [], "findings": [unknown]}))
-    unknown_clock = (
-        "MakePynqDriver: clock-unknown: the bitfile's clock is not known: no PL clock in it"
-    )
-    with pytest.raises(PynqRefused, match=unknown_clock):
+    with refused(
+        "clock-unknown",
+        error=PynqRefused,
+        owner="MakePynqDriver",
+        message="the bitfile's clock is not known: no PL clock in it",
+    ):
         step_make_driver(parent, cfg)
     report.write_text(json.dumps({"target_period_ns": 5.0, "delivered_mhz": 187.512}))
-    with pytest.raises(PynqRefused, match="the model states no bitfile") as refused:
+    with refused("bitfile-absent", error=PynqRefused, owner="MakePynqDriver"):
         step_make_driver(parent, cfg)
-    assert [each.code for each in refused.value.findings] == ["bitfile-absent"]
     assert not (Path(cfg.output_dir) / "driver").exists()
 
 
@@ -1695,13 +1705,14 @@ def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     bitfile = output_dir / "bitfile" / "finn-accel.bit"
     parent.set(OUTPUT_BITFILE, str(bitfile))
     (output_dir / "report" / "driver.json").write_text(json.dumps({"made_from": None}))
-    with pytest.raises(
-        PynqRefused, match=rf"{maker}: bitfile-unmade: the model's bitfile \(.*\) states no design"
-    ) as refused:
+    with refused(
+        "bitfile-unmade",
+        error=PynqRefused,
+        owner=maker,
+        output=output,
+        message=r"the model's bitfile \(.*\) states no design",
+    ):
         step(parent, cfg)
-    assert [(each.code, each.owner, dict(each.details)) for each in refused.value.findings] == [
-        ("bitfile-unmade", maker, {"output": output})
-    ]
     node, body, body_file = partition_body(parent)
     built_from = design_digest(body)
     parent.set(OUTPUT_BITFILE_MADE_FROM, built_from)
@@ -1710,10 +1721,10 @@ def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     body.save(body_file)
     now = design_digest(body)
     assert now != built_from
-    with pytest.raises(PynqRefused) as refused:
+    with pytest.raises(PynqRefused) as raised:
         step(parent, cfg)
-    assert [each.code for each in refused.value.findings] == ["bitfile-stale"]
-    assert str(refused.value) == (
+    assert [each.code for each in raised.value.findings] == ["bitfile-stale"]
+    assert str(raised.value) == (
         f"{maker}: bitfile-stale: the model's bitfile ({bitfile}) is stale: it was built from "
         f"the design "
         f"{built_from}, and the partition {node.name}'s design is now {now}; build the "
@@ -1723,10 +1734,10 @@ def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     parent.set(OUTPUT_BITFILE_IP_KEY, OTHER_IP_KEY)
     body.set(OUTPUT_IP_KEY, IP_KEY)
     body.save(body_file)
-    with pytest.raises(PynqRefused) as refused:
+    with pytest.raises(PynqRefused) as raised:
         step(parent, cfg)
-    assert [each.code for each in refused.value.findings] == ["bitfile-ip-stale"]
-    assert str(refused.value) == (
+    assert [each.code for each in raised.value.findings] == ["bitfile-ip-stale"]
+    assert str(raised.value) == (
         f"{maker}: bitfile-ip-stale: the model's bitfile ({bitfile}) was built from the IP "
         f"of the key {OTHER_IP_KEY}, and the partition {node.name}'s IP is now {IP_KEY}; "
         "build the bitfile again (step_build_bitfile)"

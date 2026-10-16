@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from itertools import product
 
 import pytest
+from support.refusals import refused
 
 from finn.dataflow.gemm import Form, k, m, n
 from finn.dataflow.schedule import (
@@ -60,34 +61,42 @@ def test_a_plain_index_takes_the_extent_of_the_axis_it_addresses() -> None:
 
 def test_an_index_on_two_axes_must_agree_on_one_port_or_two() -> None:
     assert bind_extents([Access("x", (4, 4), (i, i))]) == {i: 4}
-    with pytest.raises(Refused, match=r"^i is 4 \(x axis 0\) and 5 \(x axis 1\)$"):
+    with refused(
+        "extent-conflict",
+        error=Refused,
+        message=r"^i is 4 \(x axis 0\) and 5 \(x axis 1\)$",
+    ):
         bind_extents([Access("x", (4, 5), (i, i))])
-    with pytest.raises(Refused, match=r"^n is 6 \(w axis 1\) and 5 \(y axis 1\)$"):
+    with refused("extent-conflict", error=Refused, message=r"^n is 6 .*\(y axis 1\)$"):
         bind_extents([*dense(3, 8, 6)[:2], Access("y", (3, 5), Form.DENSE.y)])
 
 
 def test_a_rank_mismatch_is_refused() -> None:
-    with pytest.raises(Refused, match=r"^x: 3 indices for a rank-2 tensor$"):
+    with refused("rank-mismatch", error=Refused, message=r"^x: 3 indices for a rank-2 tensor$"):
         bind_extents([Access("x", (4, 8), (b, r, c))])
 
 
 def test_an_index_no_axis_binds_is_refused() -> None:
-    with pytest.raises(Refused, match=r"^x axis 0: kh has no extent"):
+    with refused("extent-unbound", error=Refused, message=r"^x axis 0: kh has no extent"):
         bind_extents([Access("x", (7, 4), (oh * 2 + kh, c))], {oh: 3})
 
 
 def test_an_affine_axis_binds_nothing_and_stays_inside_its_axis() -> None:
     window = Access("x", (7, 4), (oh * 2 + kh, c))
     # Alone, the window gives neither oh nor kh an extent (kh is named first).
-    with pytest.raises(Refused, match=r"^x axis 0: kh has no extent"):
+    with refused("extent-unbound", error=Refused, message=r"^x axis 0: kh "):
         bind_extents([window])
     # Given them, it binds only c, and is checked: reach 2 * 2 + 2 = 6 < 7.
     assert bind_extents([window], {oh: 3, kh: 3}) == {oh: 3, kh: 3, c: 4}
-    with pytest.raises(Refused, match=r"^x axis 0: kh \+ oh\*2 reaches 6, beyond extent 6$"):
+    with refused(
+        "window-out-of-extent",
+        error=Refused,
+        message=r"^x axis 0: kh \+ oh\*2 reaches 6, beyond extent 6$",
+    ):
         bind_extents([Access("x", (6, 4), (oh * 2 + kh, c))], {oh: 3, kh: 3})
     # One index times a stride is not plain either: a subsampling read binds nothing.
     assert bind_extents([Access("x", (5,), (oh * 2,)), Access("y", (3,), (oh,))]) == {oh: 3}
-    with pytest.raises(Refused, match=r"^x axis 0: oh\*2 reaches 4, beyond extent 4$"):
+    with refused("window-out-of-extent", error=Refused, message=r"^x axis 0: oh\*2 reaches 4"):
         bind_extents([Access("x", (4,), (oh * 2,)), Access("y", (3,), (oh,))])
     # The empty expression reads position zero of an axis of extent one (a broadcast).
     assert bind_extents([Access("x", (1, 4), (ZERO, c))]) == {c: 4}
@@ -95,9 +104,9 @@ def test_an_affine_axis_binds_nothing_and_stays_inside_its_axis() -> None:
 
 def test_given_extents_bind_and_must_agree_with_the_axes() -> None:
     assert bind_extents(dense(3, 8, 6), {k: 8, t: 2}) == {m: 3, k: 8, n: 6, t: 2}
-    with pytest.raises(Refused, match=r"^k is 4 \(given\) and 8 \(x axis 1\)$"):
+    with refused("extent-conflict", error=Refused, message=r"^k is 4 \(given\) "):
         bind_extents(dense(3, 8, 6), {k: 4})
-    with pytest.raises(Refused, match="given to k must be a positive integer"):
+    with refused("extent-invalid", error=Refused, message="given to k must be a positive integer"):
         bind_extents(dense(3, 8, 6), {k: 0})
 
 
@@ -108,17 +117,25 @@ def test_a_view_binds_nothing_and_is_checked_against_the_bound_extents() -> None
     w, y = Access("w", (K * N, N), Form.DENSE.w), Access("y", (M, N), Form.DENSE.y)
     assert bind_extents([x, w, y]) == {k: K * N, n: N, m: M}
     # Without the ports that bind its indices, a view cannot bind itself.
-    with pytest.raises(Refused, match=r"^x axis 0: m has no extent"):
+    with refused("extent-unbound", error=Refused, message=r"^x axis 0: m "):
         bind_extents([x, w])
-    with pytest.raises(Refused, match=r"^x axis 1: k has no extent"):
+    with refused("extent-unbound", error=Refused, message=r"^x axis 1: k "):
         bind_extents([x, y])
     # Its indices given, it binds from them.
     assert bind_extents([x], {m: M, k: K * N}) == {m: M, k: K * N}
     # A view is the tensor's size, or it is refused.
     wider = Access("x", (M, K, N + 1), Form.DENSE.x, reshaped=True)
-    with pytest.raises(Refused, match=r"^x: a \(2, 3, 5\) tensor cannot be viewed as \(2, 12\)$"):
+    with refused(
+        "view-size-mismatch",
+        error=Refused,
+        message=r"^x: a \(2, 3, 5\) tensor cannot be viewed as \(2, 12\)$",
+    ):
         bind_extents([wider, w, y])
-    with pytest.raises(Refused, match="^x: a reshaped port reads plain indices$"):
+    with refused(
+        "reshape-not-plain",
+        error=Refused,
+        message="^x: a reshaped port reads plain indices$",
+    ):
         bind_extents([Access("x", (M, K, N), (m, k * 1 + n), reshaped=True), w, y])
 
 
@@ -179,7 +196,7 @@ def test_a_tensor_too_wide_for_the_other_ports_is_refused() -> None:
     # x (M, K + 2) against w (K, N) and y (M, N): the ports disagree on k.
     M, K, N = 2, 4, 2
     x, w, y = Access("x", (M, K + 2), Form.DENSE.x), *dense(M, K, N)[1:]
-    with pytest.raises(Refused, match=r"^k is 6 \(x axis 1\) and 4 \(w axis 0\)$"):
+    with refused("extent-conflict", error=Refused, message=r"^k is 6 \(x axis 1\) "):
         bind_extents([x, w, y])
     # Without the binding, a schedule taking k from w presents x silently: two
     # columns of every row are never read.
@@ -366,14 +383,16 @@ def test_the_roster_s_windows_are_checked_not_covered() -> None:
     read = {position for beat in swg.present(x).positions() for position in beat}
     assert {row for row, _, _ in read} == {0, 2, 4, 6}
     shorter = Access("x", (H - 1, W, C), WINDOW)
-    with pytest.raises(Refused, match=r"^x axis 0: kh\*2 \+ oh\*2 reaches 6, beyond extent 6$"):
+    with refused(
+        "window-out-of-extent", error=Refused, message=r"^x axis 0: kh\*2 \+ oh\*2 reaches 6"
+    ):
         bind_extents([shorter, swg.ports[1].access])
 
 
 def test_the_tiled_mvu_binds_only_with_its_tiles_given() -> None:
     tiled = ROSTER["tiled mvu"]
     accesses = [port.access for port in tiled.ports]
-    with pytest.raises(Refused, match=r"^x axis 0: mt has no extent"):
+    with refused("extent-unbound", error=Refused, message=r"^x axis 0: mt "):
         bind_extents(accesses, {t: T})
     # A known limit: its rows are a window's axis, checked and not bound, so
     # tiles given too few pass the check and leave rows unread.

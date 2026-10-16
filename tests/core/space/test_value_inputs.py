@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Annotated
 
 import pytest
+from support.refusals import refused
 
 from core.space._results_support import codes
 from finn.core.space import (
@@ -91,7 +92,7 @@ def test_a_formal_takes_a_value_never_a_node() -> None:
     class Budget(Space):
         limit: int = Param()
 
-    with pytest.raises(DefinitionError, match=r"a formal takes a value, not a .*Budget node"):
+    with refused("formal-takes-node", error=DefinitionError, message=r"Budget node"):
 
         class Department(Space):
             budget: Budget = Param()

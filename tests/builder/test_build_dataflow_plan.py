@@ -11,7 +11,6 @@ import ast
 import enum
 import functools
 import json
-import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -21,6 +20,7 @@ import pytest
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.transformation.general import GiveReadableTensorNames, GiveUniqueNodeNames
+from support.refusals import refused as refused_by_code
 
 from finn.builder import build_dataflow_plan
 from finn.builder.build_dataflow import (
@@ -500,8 +500,8 @@ def test_a_refused_plan_is_the_builds_outcome_before_its_first_step(tmp_path: Pa
     cfg = config(
         output_dir=str(tmp_path / "output"), settings={"scael": 1}, enable_build_pdb_debug=False
     )
-    with pytest.raises(
-        ConfigurationRefused, match=re.escape("configuration.scael: setting-unknown: ")
+    with refused_by_code(
+        "setting-unknown", error=ConfigurationRefused, owner="configuration.scael"
     ):
         build_dataflow_cfg(str(model), cfg)
     manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
