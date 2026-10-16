@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from builder.test_builder_phase import TIMING_REPORT
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
@@ -83,7 +84,6 @@ from finn.toolchain.launcher import Selection, Toolchain
 from finn.transformation.kernels.cut import CutKernelPartition
 from finn.transformation.kernels.integration import Integration, integration
 from finn.transformation.kernels.package import ip_key
-from kernel_ops.test_builder_phase import TIMING_REPORT
 
 #: Ultra96 in the Zynq shell: the target a Zynq build of Ultra96 at 5 ns reads.
 ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")

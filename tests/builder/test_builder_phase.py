@@ -25,6 +25,7 @@ from typing import Any, cast
 
 import numpy as np
 import pytest
+from kernel_ops.test_choose import kernel_model as open_model
 from oracle import capture
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
@@ -124,7 +125,6 @@ from finn.transformation.kernels import (
 from finn.transformation.kernels.cut import BaselineChoices, CutKernelPartition
 from finn.transformation.kernels.integration import Address, Connection, integration
 from finn.transformation.kernels.package import boundary_facts
-from kernel_ops.test_choose import kernel_model as open_model
 
 # TFC is built from the trained network once for the module (about ten seconds), and each
 # test that runs the phases' steps on it takes about ten seconds more.

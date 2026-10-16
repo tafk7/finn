@@ -12,12 +12,12 @@ from typing import Any
 
 import numpy as np
 import pytest
+from builder.test_preparation import graph
 from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.analysis.initializers import annotated_initializers
 from finn.core.reporting.findings import FindingKind
-from kernel_ops.test_preparation import graph
 
 
 def weighted(weights: Any, annotation: str) -> ModelWrapper:

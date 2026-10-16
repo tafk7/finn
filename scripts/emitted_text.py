@@ -65,8 +65,8 @@ this sweep's for a job it ran, the baseline row's for one it skipped. A skip und
 ``--changed-since`` cites that commit, so a chain of skipped sweeps still names the
 run that passed the job; a skipped row that names no run vouches for nothing.
 
-The pytest groups (``kernels-rest``, ``kernel-ops-xsim``, ``kernel-ops-vivado``: the
-tests marked xsim or vivado) are not keyed by
+The pytest groups (``kernels-rest``, ``kernel-ops-xsim``, ``kernel-ops-vivado``,
+``platforms-vivado``: the tests marked xsim or vivado) are not keyed by
 captured designs: their verdicts compare simulated cycles with FINN's models in
 Python (and a test stops at the first simulation a capture stubs), and the
 packaging tests run Vivado through the toolchain, which no simulation stub
@@ -168,6 +168,7 @@ PYTEST_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     ("kernel-ops-xsim", ("--confcutdir=tests/kernel_ops", "tests/kernel_ops", "-m", "xsim")),
     ("kernel-ops-vivado", ("--confcutdir=tests/kernel_ops", "tests/kernel_ops", "-m", "vivado")),
+    ("platforms-vivado", ("--confcutdir=tests/platforms", "tests/platforms", "-m", "vivado")),
 )
 # What every job's run reads besides its own inputs: the sweep, the environment it
 # applies, the pytest configuration and the locked Python environment.
@@ -1363,12 +1364,20 @@ def _has_module(root: Path, job: Job) -> bool:
     return (root / "tests" / (job.args[0].replace(".", "/") + ".py")).is_file()
 
 
+def _has_tests(root: Path, job: Job) -> bool:
+    """Whether the checkout at ``root`` has the test directories a pytest group runs."""
+    return all(
+        (root / arg).exists() for arg in job.args if arg.startswith("tests/") and "=" not in arg
+    )
+
+
 def emit(target: Target, out: Path, work: Path, blank: bool, strict: bool = True) -> dict[str, Any]:
     """The emitted text into ``out`` (designs, ipxact, package); the keys of its jobs.
 
     Unless ``strict``, an evidence section (IP-XACT, package) the checkout cannot
     emit says why in its ``unavailable.txt``, and a numeric sweep whose module the
-    checkout does not have is not one of its jobs (an older checkout: compare);
+    checkout does not have, or a pytest group whose tests it does not have, is not one of
+    its jobs (an older checkout: compare);
     the designs, which the keys digest, are always required.
     """
     if out.exists():
@@ -1377,7 +1386,12 @@ def emit(target: Target, out: Path, work: Path, blank: bool, strict: bool = True
     work.mkdir(parents=True, exist_ok=True)
     listed = jobs(target.root, finnlib=target.finnlib)
     if not strict:
-        listed = [job for job in listed if job.kind != "sweep" or _has_module(target.root, job)]
+        listed = [
+            job
+            for job in listed
+            if (job.kind != "sweep" or _has_module(target.root, job))
+            and (job.kind != "pytest" or _has_tests(target.root, job))
+        ]
     keys = compute_keys(target, listed, work / "keys", ipxact=work / "ipxact")
     failed = {name: entry["error"] for name, entry in keys["jobs"].items() if entry.get("error")}
     if failed:

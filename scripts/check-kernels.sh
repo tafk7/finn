@@ -19,10 +19,15 @@ bash scripts/check-dataflow-design.sh "${GATE_ARGS[@]}"
 gate_pytest tests/kernels xsim vivado vitis
 # The KernelOps and their transformations, the layer above finn.kernels.
 gate_pytest tests/kernel_ops xsim vivado
+# The builder's, the platform's and the analysis' tests, split from the KernelOps' by
+# the packages they test (each its own conftest).
+gate_pytest tests/builder xsim vivado
+gate_pytest tests/platforms xsim vivado
+gate_pytest tests/analysis xsim vivado
 # The XSim sweep's tooling: the emitted text and each job's key (no Vivado).
 gate_pytest tests/xsim_sweep
 # Graph preparation's front end (the preparation layer: finn.transformation.qonnx
-# and .streamline, which the builder's graph-preparation steps run; tests/kernel_ops
+# and .streamline, which the builder's graph-preparation steps run; tests/builder
 # tests the steps themselves) and the Brevitas export it reads, under
 # tests/conftest.py. One thread per worker: each of the workers would otherwise run
 # torch over every CPU. About 1 140 tests (collected without xsim and vivado).
@@ -40,6 +45,7 @@ gate_ruff src/finn/kernels tests/kernels tests/support src/finn/platform src/fin
     src/finn/custom_op/kernels src/finn/custom_op/partition src/finn/transformation/kernels \
     src/finn/analysis src/finn/util/draws.py src/finn/util/typed_json.py \
     src/finn/harness src/finn/shells/*.py src/finn/shells/pynq/*.py tests/kernel_ops \
+    tests/builder tests/platforms tests/analysis \
     src/finn/builder/build_dataflow_testbench.py src/finn/builder/build_dataflow_resources.py \
     src/finn/builder/build_dataflow_checks.py \
     src/finn/builder/build_dataflow_config.py src/finn/builder/build_dataflow_plan.py \
@@ -68,4 +74,5 @@ gate_mypy -p finn.kernels -p finn.platform -p finn.core.graph -p finn.custom_op.
     -m finn.builder.build_dataflow_verification \
     -m finn.builder.build_dataflow_manifest
 # Whole directories; the files not yet strictly typed are listed in .mypy.ini.
-gate_mypy tests/support tests/kernels tests/kernel_ops tests/xsim_sweep tests/oracle
+gate_mypy tests/support tests/kernels tests/kernel_ops tests/builder tests/platforms \
+    tests/analysis tests/xsim_sweep tests/oracle

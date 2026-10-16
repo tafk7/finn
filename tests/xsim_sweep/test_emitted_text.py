@@ -586,6 +586,21 @@ def test_an_older_checkout_has_only_the_sweeps_whose_modules_it_has(tmp_path: Pa
     assert tool._has_module(tmp_path, sweep)
 
 
+def test_an_older_checkout_has_only_the_pytest_groups_whose_tests_it_has(tmp_path: Path) -> None:
+    """compare emits an older commit's text: a group added since, for a tree that commit
+    lacks, is no job of it."""
+    group = tool.Job(
+        "new-vivado", "pytest", ("--confcutdir=tests/new", "tests/new", "-m", "vivado")
+    )
+    assert not tool._has_tests(tmp_path, group)
+    (tmp_path / "tests/new").mkdir(parents=True)
+    assert tool._has_tests(tmp_path, group)
+    ignoring = tool.Job(
+        "rest", "pytest", ("--confcutdir=tests/new", "tests/new", "--ignore=tests/new/x.py")
+    )
+    assert tool._has_tests(tmp_path, ignoring)
+
+
 @dataclasses.dataclass
 class _Emitted:
     """What ``emit_module`` returns, as far as ``package_images`` reads it."""
