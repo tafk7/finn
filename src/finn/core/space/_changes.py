@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Atomic choice replacement through private admission trials.
 
-Every retained and supplied choice is revalidated before publication. Requests
-are checked as a batch; only a fully admitted trial becomes a configuration.
+Every supplied choice, and every retained choice the change can reach, is admitted
+again before publication; a retained choice whose admission read nothing the change
+reaches keeps the admission its base recorded (``_runtime._TrialSnapshot``).
+Requests are checked as a batch; only a fully admitted trial becomes a configuration.
 """
 
 from __future__ import annotations
@@ -130,7 +132,10 @@ def try_with_choices(
 
         semantically_same = len(merged) == len(current.assignments) and all(
             index in current.assignments
-            and _values_equal(current.linked.nodes[index], value, current.assignments[index])
+            and (
+                value is current.assignments[index]
+                or _values_equal(current.linked.nodes[index], value, current.assignments[index])
+            )
             for index, value in merged.items()
         )
         if semantically_same:

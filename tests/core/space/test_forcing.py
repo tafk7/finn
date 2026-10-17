@@ -15,7 +15,17 @@ from typing import Any
 
 import pytest
 from support.refusals import refused
-from support.space_cores import CORES, Packed, Stub, commit, forced
+from support.space_cores import (
+    CORES,
+    Exclusive,
+    Gated,
+    Mutual,
+    Packed,
+    Stub,
+    commit,
+    forced,
+)
+from support.space_walk import fresh
 
 from core.space._choices_support import committed
 from finn.core.space import (
@@ -28,15 +38,20 @@ from finn.core.space import (
     Space,
     Unresolved,
     _forcing,
+    _runtime,
     constraint,
     derived,
     design_space,
     divisors_of,
     inspection,
+    occurrence,
     reject,
     requires,
     requiring,
 )
+
+# Each test runs with the readers index used for every cache, then for none: the same answers.
+pytestmark = pytest.mark.usefixtures("index_path")
 
 
 class Unit(Space):
@@ -234,16 +249,34 @@ def test_adding_a_choice_never_switches_a_forced_case() -> None:
             assert [finding.code for finding in answer.findings] == ["decision-no-viable-case"]
 
 
-def test_a_successor_reuses_the_verdicts_its_change_does_not_reach(
+def test_a_successor_finds_again_the_verdict_its_change_reaches_and_no_other(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A change that reaches no selector's verdict finds none again, and one that reaches
+    a selector's verdict finds that verdict again and no other."""
+
+    class Limited(Space):
+        width: int = Param()
+        limit: int = Decision(values=(1, 8))
+        pe: int = Decision(domain=divisors_of(width))
+
+        @constraint
+        def within(self) -> bool | Rejected:
+            if self.limit < 2:
+                return reject("limited", "the limit leaves no lane")
+            return True
+
+        admission = ConstraintGroup(within)
+
     class Two(Space):
         width: int = Param()
-        left: Packed | Stub = Decision(CORES, width=width)
+        entries: dict[str, type[Space] | Space] = {"limited": Limited, "stub": Stub}
+        left: Limited | Stub = Decision(entries, width=width)
         right: Packed | Stub = Decision(CORES, width=width)
 
-    base = design_space(Two(width=128))
-    assert forced(base) == {"left": "stub", "right": "stub"}
+    # An odd width refuses the stub core, so both are forced; left's verdict reads its limit.
+    base = design_space(Two(width=7))
+    assert forced(base) == {"left": "limited", "right": "packed"}
     found: list[str] = []
     verdict = _forcing._verdict
 
@@ -252,10 +285,170 @@ def test_a_successor_reuses_the_verdicts_its_change_does_not_reach(
         return verdict(current, index)
 
     monkeypatch.setattr(_forcing, "_verdict", counted)
-    point = commit(base, {"left.stub.rows": 4})
-    assert forced(point) == {"left": "stub", "right": "stub"}
-    # Neither selector read ``left.stub.rows``; only the rest of left's own open choices is new.
-    assert not any(key.endswith(("left", "right")) for key in found)
+    unreached = commit(base, {"right.packed.pe": 7})
+    assert forced(unreached) == {"left": "limited", "right": "packed"}
+    assert "left" not in found and "right" not in found
+    reached = commit(base, {"left.limited.limit": 8})
+    assert forced(reached) == {"left": "limited", "right": "packed"}
+    assert "left" in found and "right" not in found
+
+
+class Limited(Space):
+    width: int = Param()
+    limit: int = Decision(values=(1, 8))
+    pe: int = Decision(domain=divisors_of(width))
+
+    @constraint
+    def within(self) -> bool | Rejected:
+        if self.limit < 2:
+            return reject("limited", "the limit leaves no lane")
+        return True
+
+    admission = ConstraintGroup(within)
+
+
+class Hop(Space):
+    """An odd width forces the limited core; ``burst`` then reads that forced selector,
+    and ranks before it, so the plain rounds read it open first and find it again."""
+
+    width: int = Param()
+    entries: dict[str, type[Space] | Space] = {"limited": Limited, "stub": Stub}
+
+    @derived
+    def stubbed(self) -> bool:
+        return isinstance(self.compute, Stub)
+
+    burst: int = Decision(
+        values=(1, 2),
+        requires=(requires(stubbed, "burst-source: bursts need the stub core", cases=(2,)),),
+    )
+    compute: Limited | Stub = Decision(entries, width=width)
+
+
+class Other(Space):
+    size: int = Decision(values=(1, 2, 3))
+
+
+class HopsFirst(Space):
+    width: int = Param()
+    a = Hop(width=width)
+    b = Hop(width=width)
+    other = Other()
+
+
+class HopsLast(Space):
+    width: int = Param()
+    other = Other()
+    a = Hop(width=width)
+    b = Hop(width=width)
+
+
+def verdicts_found(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The keys of the Decisions whose verdict is computed from now on, in order."""
+    found: list[str] = []
+    verdict = _forcing._verdict
+
+    def counted(current: Any, index: int) -> Any:
+        found.append(current.linked.nodes[index].key)
+        return verdict(current, index)
+
+    monkeypatch.setattr(_forcing, "_verdict", counted)
+    return found
+
+
+def rounds_run(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """Whether each run of forcing's rounds from now on started from seeds."""
+    runs: list[bool] = []
+    rounds = _forcing._rounds
+
+    def counted(snapshot: Any, verdicts: Any, open_: Any, seeds: Any) -> Any:
+        runs.append(bool(seeds))
+        return rounds(snapshot, verdicts, open_, seeds)
+
+    monkeypatch.setattr(_forcing, "_rounds", counted)
+    return runs
+
+
+@pytest.mark.parametrize("space", [HopsFirst, HopsLast])
+def test_a_successor_finds_the_same_forced_values_whichever_order_the_members_are_declared(
+    monkeypatch: pytest.MonkeyPatch, space: Any
+) -> None:
+    base = design_space(space(width=7))
+    want = {"a.compute": "limited", "b.compute": "limited", "a.burst": 1, "b.burst": 1}
+    assert forced(base) == want
+    found = verdicts_found(monkeypatch)
+    runs = rounds_run(monkeypatch)
+    # Outside the reach nothing is found again: the forced values come from the base, and
+    # each burst, which reads the forced selector it ranks before, is not found twice over.
+    unreached = commit(base, {"other.size": 2})
+    assert forced(unreached) == want
+    assert found == [] and runs == [True]
+    assert forced(fresh(unreached)) == want
+    # Inside it: a's core is admitted under its limit, so a's selector and burst are found
+    # again, and nothing of b's.
+    found.clear()
+    reached = commit(base, {"a.compute.limited.limit": 8})
+    assert forced(reached) == want
+    assert {"a.compute", "a.burst"} <= set(found)
+    assert not any(key.startswith("b.") for key in found)
+    assert forced(fresh(reached)) == want
+    # A positive control: without seeds the unreached change finds them again.
+    monkeypatch.setattr(_forcing, "_replay", lambda *_: {})
+    found.clear()
+    assert forced(commit(base, {"other.size": 3})) == want
+    assert {"a.burst", "b.burst"} <= set(found)
+
+
+def test_two_forced_decisions_that_exclude_each_other_are_found_as_a_recomputation_finds_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = design_space(Exclusive())
+    assert forced(base) == {"x": "a"}
+    assert isinstance(base.query(Exclusive.y), Rejected)
+    runs = rounds_run(monkeypatch)
+    point = commit(base, {"other": 2})
+    assert forced(point) == {"x": "a"}
+    # The seeded rounds refused y, so the plain rounds ran after them.
+    assert runs == [True, False]
+    want = fresh(point)
+    assert isinstance(point.query(Exclusive.y), Rejected)
+    assert point.query(Exclusive.y) == want.query(Exclusive.y)
+    assert point.query(Exclusive.x) == want.query(Exclusive.x)
+    assert inspection.viable(point) == inspection.viable(want)
+
+
+def test_seeds_that_hold_only_given_each_other_are_not_seeded() -> None:
+    open_ = design_space(Mutual())
+    assert forced(open_) == {}
+    state = occurrence.state(open_)
+    x, y = state.linked.keys["x"], state.linked.keys["y"]
+    # x's verdict as found beside a committed y, and y's beside a committed x.
+    verdict_x = _forcing.forced(occurrence.state(commit(open_, {"y": "b"}))).verdicts[x]
+    verdict_y = _forcing.forced(occurrence.state(commit(open_, {"x": "a"}))).verdicts[y]
+    assert isinstance(verdict_x, _forcing.Verdict) and verdict_x.cases == ("a",)
+    assert isinstance(verdict_y, _forcing.Verdict) and verdict_y.cases == ("b",)
+    verdicts = {x: verdict_x, y: verdict_y}
+    for carried in ({x: "a", y: "b"}, {y: "b", x: "a"}):
+        successor = _runtime.Snapshot(
+            state.model, state.parameters, {}, verdicts=verdicts, carried=carried
+        )
+        assert _forcing._replay(successor, verdicts) == {}
+        assert _forcing.forced(successor).values == {}
+
+
+def test_a_seeded_value_whose_verdict_stops_holding_under_a_value_found_later_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = design_space(Gated())
+    assert forced(base) == {"x": "a"}
+    runs = rounds_run(monkeypatch)
+    point = commit(base, {"gate": 2})
+    assert forced(point) == {"x": "a", "y": "b"}
+    # x was seeded, y found in the rounds, and x's verdict read y open: the seeds were dropped.
+    assert runs == [True, False]
+    want = fresh(point)
+    assert forced(want) == {"x": "a", "y": "b"}
+    assert inspection.viable(point) == inspection.viable(want)
 
 
 def test_a_cases_trial_keeps_what_the_case_does_not_reach() -> None:

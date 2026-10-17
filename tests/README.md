@@ -83,7 +83,7 @@ The code gates (`scripts/check-*.sh`) run each tree with `--confcutdir` (`gate_p
 | `tests/transformation`, `tests/brevitas` | graph preparation and the Brevitas export | `check-kernels.sh` | `tests` |
 | `tests/util`, `tests/toolchain`, `tests/docker_scripts` | `finn.util`; `finn.toolchain`; the `docker/` scripts (the `slow` tests deselected in both modes) | `check-kernels.sh` | `tests` |
 
-A tree takes its name from the package it tests, so it mirrors `src`; each of the trees under its own `--confcutdir` has a `conftest.py` that imports the fixtures it wants from `tests/support` (`fixtures.py`, `tools.py`, `member_cache.py`). A tree's name must not shadow a module the gates import: `tests` is on `sys.path` ahead of the standard library, so `tests/platform` would replace `platform`, and `tests/docker` the repository's `docker/`; hence `tests/platforms` and `tests/docker_scripts`.
+A tree takes its name from the package it tests, so it mirrors `src`; each of the trees under its own `--confcutdir` has a `conftest.py` that imports the fixtures it wants from `tests/support` (`fixtures.py`, `tools.py`, `member_cache.py`, `space_checks.py`). A tree's name must not shadow a module the gates import: `tests` is on `sys.path` ahead of the standard library, so `tests/platform` would replace `platform`, and `tests/docker` the repository's `docker/`; hence `tests/platforms` and `tests/docker_scripts`.
 
 `tests/container` (container runtimes and host toolchains, marker `container`) runs under `tests/conftest.py`; no code gate runs it.
 
@@ -97,6 +97,7 @@ What it holds:
 
 - `support/rng_seed.py`: the seed of a test's random state, from its node id (`tests/conftest.py`, §4).
 - `support/member_cache.py`: the autouse cache of `finn.kernels.members`, one per test, dropped at its end; the trees under their own `--confcutdir` import it in their conftests.
+- `support/space_checks.py`: the checked cache every Space snapshot gets in the tests (`support/checked_cache.py`; importing the module installs it), the `index_path` fixture and the summary of reads that differ; the trees that run the engine import the fixture and the hook in their conftests, so each gate's `--confcutdir` loads them (the trees that never run it, `tests/dataflow`, `tests/layers`, `tests/xsim_sweep`, `tests/core/reporting`, are unchecked).
 - `support/layering.py`: FINN's layers, what each may import, and the import walker. Each layer names the tree whose `test_layering.py` checks it; `tests/layers` tests the table and the walker.
 - `support/refusals.py`: `refused(code, ...)`, which a test asserts a `Refusal` by: its finding's code (and its owner and details), the message of a code pinned once, in the test of the module that writes it; it imports `finn.core.reporting` and pytest only, so every tree may import it.
 - `support/value_classes.py`: the check that a frozen value class holds immutable values, used by the engine, dataflow and kernel trees.

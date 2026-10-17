@@ -463,7 +463,7 @@ def test_interrupted_completion_drains_parent_and_preserves_failure(
         else "outcome = _runtime.Evaluation(",
         "publish": "failures[task.identity] = outcome"
         if primary_failure
-        else "snapshot.cache[task.identity] = outcome",
+        else "held = snapshot.cache.setdefault(task.identity, outcome)",
         "close": "task.frame.close()",
         "retire": "tasks.pop()",
         "active": "active.pop(task.identity)",

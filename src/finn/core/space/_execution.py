@@ -348,6 +348,20 @@ def accept_read(context: Context, index: int, outcome: object) -> Evaluation:
     return entry
 
 
+def _same(snapshot: Snapshot, index: int, held: Evaluation, found: Evaluation) -> None:
+    """Refuse a node's second evaluation in one snapshot that differs from the first."""
+    differs = [
+        name
+        for name in ("result", "dependencies", "via", "decisions")
+        if getattr(held, name) != getattr(found, name)
+    ]
+    if differs:
+        raise RuntimeError(
+            f"{snapshot.linked.nodes[index].key} was evaluated twice in one snapshot and "
+            f"the evaluations differ in {', '.join(differs)}: a change's reach reads them"
+        )
+
+
 def run(snapshot: Snapshot, index: int, frame: Frame | None = None) -> Evaluation:
     """Drain a query's dependency stack, including native cleanup after failure.
 
@@ -397,7 +411,14 @@ def run(snapshot: Snapshot, index: int, frame: Frame | None = None) -> Evaluatio
                 _runtime.read_decisions(snapshot, dependencies, via),
             )
             if isinstance(task.identity, int):
-                snapshot.cache[task.identity] = outcome
+                # A query made from native code runs on the same snapshot and may have
+                # cached this node first: the cache is only added to, and the first
+                # entry stays (``setdefault`` adds without replacing, in one lookup). A
+                # change's reach reads ``dependencies``, ``via`` and ``decisions``, so
+                # that is sound only if this run read the same.
+                held = snapshot.cache.setdefault(task.identity, outcome)
+                if held is not outcome:
+                    _same(snapshot, task.identity, held, outcome)
         task.frame.close()
         tasks.pop()
         active.pop(task.identity)

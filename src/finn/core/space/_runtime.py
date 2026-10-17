@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Generator, Mapping
 from dataclasses import dataclass, field
+from itertools import islice
 from threading import RLock
 from types import MappingProxyType
 from typing import TYPE_CHECKING, TypeAlias, cast
@@ -35,6 +36,7 @@ from .results import (
     owned_result,
     reject,
 )
+from .semantics import equal
 from .semantics import snapshot as snapshot_value
 
 if TYPE_CHECKING:
@@ -82,13 +84,172 @@ def unaffected(
     """The evaluations of ``cache`` that are none of ``decisions`` and read none of them,
     directly or through another. Where only those Decisions' answers differ, these
     answer the same: an evaluation is a function of what it read. What a kept
-    evaluation read is kept with it, so its evidence stays complete."""
+    evaluation read is kept with it, so its evidence stays complete. This is how a
+    small cache is copied, and what a large one gives back (``inherit`` finds the same
+    from the ``Readers`` of a large one without looking at each evaluation)."""
     seeds = decisions if isinstance(decisions, (set, frozenset)) else frozenset(decisions)
     return {
         index: entry
         for index, entry in cache.items()
         if index not in seeds and seeds.isdisjoint(entry.decisions)
     }
+
+
+# What makes a snapshot's cache: an exact ``dict``, so production pays nothing for the
+# rule that a cache is only added to (``Snapshot``). The tests install a dict that refuses
+# what the rule forbids (``tests/support/checked_cache.py``, from ``tests/conftest.py``).
+# Called with no argument it makes an empty cache, and with a mapping a cache of its entries.
+cache_factory: Callable[..., dict[int, Evaluation]] = dict
+
+
+def new_cache() -> dict[int, Evaluation]:
+    """An empty cache, of the kind ``cache_factory`` makes."""
+    return cache_factory()
+
+
+def _cache_of(entries: dict[int, Evaluation]) -> dict[int, Evaluation]:
+    """``entries`` as a cache: themselves, where caches are exact dicts."""
+    return entries if cache_factory is dict else cache_factory(entries)
+
+
+# A cache of fewer evaluations than this is copied by looking at each (``unaffected``);
+# from this many, ``inherit`` uses the cache's ``Readers``. Looking at each evaluation costs
+# about 0.4-0.7 us an evaluation. The index (a copy of the dict, of the readers' table, and the
+# readers of what goes undone) costs 0.03 us an evaluation where one cache is copied again
+# and again (a change on a whole Space), and about 0.4 us where a chain of copies each gains
+# back what it lost and reads it in (forcing's copies, on a trial's way). Measured on a
+# cache of 100 evaluations the two ways are level for the first and the scan is 1.2-1.9
+# times faster for the second; at 500 the index is 2.6 and 1.2-1.4 times faster; at 10,000
+# 14 and 1.7-1.9 times. A network's member Space holds up to about 140 evaluations and
+# copies most of them whole (the network trial at 64 kernels), a whole Space about 10,000
+# and a change reaches a few of them. The answers are the same either way; only the work
+# differs.
+INDEX_FROM = 500
+
+
+class Readers:
+    """Who read which Decision, in one cache: for each Decision, the evaluations that
+    read it (``Evaluation.decisions``). It is brought up to date from what was added to
+    the cache since, in insertion order, at the time a change asks (``sync``), so what a
+    change reaches is found from the Decisions it touches and not by looking at every
+    evaluation. The cache is only added to (``Snapshot``), so the evaluations the index
+    has read are the cache's leading ones. A set of readers is shared with the index
+    it was copied from until this one changes it."""
+
+    __slots__ = ("_readers", "_owned", "synced")
+
+    def __init__(self) -> None:
+        self._readers: dict[int, set[int]] = {}
+        self._owned: set[int] = set()
+        self.synced = 0  # how many of its cache's leading evaluations this index accounts for
+
+    def sync(self, cache: Mapping[int, Evaluation]) -> None:
+        """Read what was added to ``cache`` since."""
+        if self.synced == len(cache):
+            return
+        for index, entry in islice(cache.items(), self.synced, None):
+            self.read(index, entry)
+        self.synced = len(cache)
+
+    def read(self, index: int, entry: Evaluation) -> None:
+        readers, owned = self._readers, self._owned
+        for read in entry.decisions:
+            if read in owned:
+                readers[read].add(index)
+            else:
+                readers[read] = {*readers.get(read, ()), index}
+                owned.add(read)
+
+    def unread(self, index: int, entry: Evaluation) -> None:
+        readers, owned = self._readers, self._owned
+        for read in entry.decisions:
+            if read not in owned:
+                readers[read] = set(readers.get(read, ()))
+                owned.add(read)
+            readers[read].discard(index)
+
+    def reached(self, seeds: Collection[int]) -> set[int]:
+        """The ``seeds`` and the evaluations that read any of them (up to date: ``sync``)."""
+        found = set(seeds)
+        for seed in seeds:
+            found.update(self._readers.get(seed, ()))
+        return found
+
+    def copy(self) -> Readers:
+        """An index for a copy of the cache, sharing the sets of readers with this one."""
+        child = Readers()
+        child._readers = dict(self._readers)
+        child.synced = self.synced
+        # What is shared is no longer this index's alone.
+        self._owned = set()
+        return child
+
+
+def fresh(snapshot: Snapshot) -> dict[int, Evaluation]:
+    """What was added to ``snapshot``'s cache since it was made, in order (``inherit`` may
+    carry its base's along): all a successor or a forcing run gives back to the snapshot
+    it started from."""
+    return dict(islice(snapshot.cache.items(), snapshot.made, None))
+
+
+def inherit(
+    target: Snapshot,
+    base: Snapshot,
+    seeds: Collection[int],
+    *,
+    keep_fresh: bool = False,
+    replacing: Mapping[int, Evaluation] | None = None,
+) -> None:
+    """Start ``target``'s cache from the evaluations of ``base``'s that are none of
+    ``seeds`` and read none of them, directly or through another (``unaffected``): where
+    only those Decisions' answers differ, these answer the same. ``replacing`` gives
+    evaluations in place of those of the same index, which are fresh in it, and
+    ``keep_fresh`` carries along what ``base`` itself gained since it was made.
+
+    A cache of ``INDEX_FROM`` evaluations or more is copied from its ``Readers`` (made
+    on the first asking and handed on to the copy, to be brought up to date when the copy
+    is asked in turn): a copy of the dict and the readers of the seeds, not a look at
+    each evaluation. A smaller one is looked through, and its copy has no index until
+    it grows to that size. ``base`` is left as it was."""
+    cache, made = base.cache, base.made
+    given = replacing or {}
+    readers: Readers | None = None
+    if len(cache) < INDEX_FROM:
+        kept = unaffected(cache, seeds)
+        for index in given:
+            kept.pop(index, None)
+        carried = (
+            sum(1 for index in islice(cache, made, None) if index in kept) if keep_fresh else 0
+        )
+        made = len(kept) - carried
+    else:
+        index_of = base.readers
+        if index_of is None:
+            index_of = Readers()
+            object.__setattr__(base, "readers", index_of)
+        index_of.sync(cache)
+        kept = dict(cache)
+        readers = index_of.copy()
+        removed = index_of.reached(seeds) | given.keys()
+        for index in removed:
+            old = kept.pop(index, None)
+            if old is not None:
+                readers.unread(index, old)
+        carried = (
+            sum(1 for index in islice(cache, made, None) if index not in removed)
+            if keep_fresh
+            else 0
+        )
+        made = len(kept) - carried
+    for index, entry in given.items():
+        kept[index] = entry
+        if readers is not None:
+            readers.read(index, entry)
+    if readers is not None:
+        readers.synced = len(kept)
+    object.__setattr__(target, "made", made)
+    object.__setattr__(target, "cache", _cache_of(kept))
+    object.__setattr__(target, "readers", readers)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -98,12 +259,30 @@ class Snapshot:
     An open Decision with one viable case reads as that case (``forcing``), false
     only on the copies forcing evaluates on. ``found`` holds the snapshot's forced
     Decisions once found; ``verdicts`` are the ones its base found, which forcing
-    reuses where the change did not reach (``finn.core.space._forcing``). A
+    reuses where the change did not reach, and ``carried`` the forced values its base
+    found, in the order it found them, which forcing starts its own from where their
+    verdicts still hold (``finn.core.space._forcing``). A
     successor's cache starts from what its base and its trial evaluated that the
-    change does not reach, and ``admissions`` holds the Decisions each assignment's
-    admission read, which a later trial reuses where the change does not reach them
-    (``_TrialSnapshot``). ``answers`` holds what inspection answered of it, by
-    question and scope (``inspection``), where the answer shares its values.
+    change does not reach (a change reaches what it adds, removes or replaces, and
+    each open Decision whose forced value's verdict read one of those:
+    ``_touched``), and ``admissions`` holds the Decisions each assignment's admission
+    read, which a later trial reuses where the change does not reach them
+    (``_TrialSnapshot``). ``assumed`` holds, for the few assignments whose admission
+    read a Decision its trial's base forced and this snapshot leaves open, the value
+    the admission saw: a later trial reuses that admission only while this snapshot
+    forces the Decision to an equal value (``_reusable``). ``answers`` holds what
+    inspection answered of it, by question and scope (``inspection``), where the answer
+    shares its values. The cache is an exact ``dict``, **only added to**: an evaluation is
+    given by ``setdefault``, and none is replaced or removed once held, or ``readers`` would
+    go on holding what the replaced evaluation read. A successor, a trial or a forcing copy
+    starts from its base's by leaving out what a set of Decisions reaches (``inherit``),
+    and each is its own: it holds nothing of the base's it leaves out. ``readers``, where
+    the cache is large enough to pay for it, holds who read each Decision in it
+    (``Readers``); ``made`` counts the leading evaluations that were inherited, so what
+    was added since is ``fresh``. The rule that a cache is only added to is checked where
+    it costs production nothing: the tests make every cache a dict that refuses what the
+    rule forbids (``cache_factory``), and a test of the engine's source finds no write to
+    a cache but those the rule allows.
     """
 
     model: Model[Space]
@@ -112,8 +291,12 @@ class Snapshot:
     lock: RLock = field(default_factory=RLock, repr=False)
     forcing: bool = True
     verdicts: Mapping[int, object] = field(default_factory=dict, repr=False)
+    carried: Mapping[int, object] = field(default_factory=dict, repr=False)
     admissions: Mapping[int, frozenset[int]] = field(default_factory=dict, repr=False)
-    cache: dict[int, Evaluation] = field(default_factory=dict, init=False, repr=False)
+    assumed: Mapping[int, Mapping[int, object]] = field(default_factory=dict, repr=False)
+    cache: dict[int, Evaluation] = field(default_factory=new_cache, init=False, repr=False)
+    readers: Readers | None = field(default=None, init=False, repr=False)
+    made: int = field(default=0, init=False, repr=False)
     answers: dict[tuple[str, int], object] = field(default_factory=dict, init=False, repr=False)
     work: _execution.Work = field(default_factory=_execution.Work, init=False, repr=False)
     found: object = field(default=None, init=False, repr=False)
@@ -129,71 +312,164 @@ class Snapshot:
 
 
 def _touched(base: Snapshot, candidates: Mapping[int, object]) -> list[int]:
-    """The Decisions a change from ``base`` to ``candidates`` touches: added, removed
-    or replaced (not the identical value), and every one open in the base, where a
-    forced value may differ."""
+    """The Decisions a change from ``base`` to ``candidates`` touches: those it adds,
+    removes or replaces (not the identical value), and the open ones its reach
+    includes: every Decision open in both whose forced value's verdict, in what
+    ``base`` found, read a touched one (to a fixed point), or has no verdict, or one
+    that does not hold under the base's final values (``Found.reach``). A Decision
+    open in both and not touched is **stable**: its verdict read nothing the change
+    touched, so it reads the same, forced to the same value, refused alike or open
+    alike, in the trial, in the successor and in the base. Where ``base``'s forced
+    Decisions were never found there is nothing to bound with, and every Decision open
+    in the base is touched, as a value it forces may differ."""
+    from ._forcing import Found  # noqa: PLC0415 - runtime/forcing cycle
+
     assignments = base.assignments
-    return [
+    changed = {
         index
         for index in base.linked.decisions
-        if index not in assignments
-        or index not in candidates
-        or assignments[index] is not candidates[index]
-    ]
+        if (index in assignments) != (index in candidates)
+        or (index in candidates and assignments[index] is not candidates[index])
+    }
+    found = base.found
+    if not isinstance(found, Found):
+        return [
+            index for index in base.linked.decisions if index not in assignments or index in changed
+        ]
+    reached = found.reach(base, changed)
+    return [index for index in base.linked.decisions if index in changed or index in reached]
+
+
+def _stable(
+    base: Snapshot, candidates: Mapping[int, object], touched: Collection[int]
+) -> frozenset[int]:
+    """The Decisions open in both ``base`` and the candidates that the change does not
+    touch (``_touched``)."""
+    excluded = frozenset(touched)
+    return frozenset(
+        index
+        for index in base.linked.decisions
+        if index not in base.assignments and index not in candidates and index not in excluded
+    )
 
 
 def _reusable(
-    base: Snapshot, candidates: Mapping[int, object], touched: Collection[int]
+    base: Snapshot,
+    candidates: Mapping[int, object],
+    touched: Collection[int],
+    stable: Collection[int],
 ) -> dict[int, frozenset[int]]:
     """The retained choices whose admission read nothing the change touched, with the
     Decisions it read: each would be admitted identically. An admission that read a
     retained choice through an evaluation of the base recorded that choice and not
     its admission's reads, so a choice is reusable only while every Decision its
-    admission read is reusable too; a touched Decision never is."""
+    admission read is reusable too, or stable (it reads as the base forces it, as it
+    did in that admission); a touched Decision never is.
+
+    An admission may also have read, for a Decision its own trial's base forced and
+    its successor left open, the value that base forced (``Snapshot.assumed``). A
+    stable Decision reads as ``base`` forces it, so such an admission is reusable
+    only where ``base`` forces each of those Decisions to an equal value; otherwise
+    it is admitted again."""
     excluded = frozenset(touched)
     reusable = {
         index: read
         for index, read in base.admissions.items()
-        if index in candidates and index not in excluded
+        if index in candidates and index not in excluded and _assumptions_hold(base, index)
     }
     while True:
-        lost = [index for index, read in reusable.items() if not read <= reusable.keys()]
+        allowed = reusable.keys() | stable
+        lost = [index for index, read in reusable.items() if not read <= allowed]
         if not lost:
             return reusable
         for index in lost:
             del reusable[index]
 
 
+def _assumptions_hold(base: Snapshot, index: int) -> bool:
+    """Whether every value the admission of ``index`` assumed (``Snapshot.assumed``) is
+    the one ``base`` forces: found, and equal."""
+    assumed = base.assumed.get(index)
+    if not assumed:
+        return True
+    from ._forcing import Found  # noqa: PLC0415 - runtime/forcing cycle
+
+    found = base.found
+    if not isinstance(found, Found):
+        return False
+    nodes = base.linked.nodes
+    for other, seen in assumed.items():
+        if other not in found.values:
+            return False
+        if seen is found.values[other]:
+            continue
+        semantics = nodes[other].semantics
+        assert semantics is not None
+        if not equal(
+            semantics, seen, found.values[other], owner=nodes[other].owner, role="forcing equality"
+        ):
+            return False
+    return True
+
+
 class _TrialSnapshot(Snapshot):
     """Private complete candidates, admitted on demand before value publication.
 
     Every candidate, including retained assignments, must pass admission before
-    publication. The base contributes its model, frozen facts and lock, its
-    verdicts, and the values it forces, which the trial reads for the Decisions it
-    does not change. A Decision the base does not force reads as the configuration
-    the trial would publish forces it (``successor``): found once, and that
-    configuration is the one published.
+    publication, except a retained choice whose admission the change cannot reach
+    (the first bullet), which keeps the admission the base recorded. The base
+    contributes its model, frozen facts and lock, its verdicts, and the values it
+    forces, which the trial reads for the Decisions it does not change. A Decision
+    the base does not force reads as the configuration the trial would publish
+    forces it (``successor``): found once, and that configuration is the one
+    published.
 
-    What was evaluated is kept where the change cannot reach it:
+    What was evaluated is kept where the change cannot reach it. A change touches
+    what it adds, removes or replaces and the open Decisions whose forced values it
+    reaches (``_touched``); the other Decisions open in both are **stable**: each
+    reads the same in the trial, in the successor and in the base, because its
+    verdict read nothing the change touched.
 
     - A retained choice whose admission read no Decision the change touched, and
-      only retained choices so admitted (``_reusable``), is admitted identically:
-      the trial takes its admission as the base recorded it. Every other candidate
-      is admitted on its first read in the trial.
+      only reused choices and stable Decisions (``_reusable``), is admitted
+      identically: the trial takes its admission as the base recorded it. Every
+      other candidate is admitted on its first read in the trial.
     - The trial starts from its base's evaluations that read no Decision but those
-      reused choices. So nothing that read another candidate is inherited, and
-      ``admit`` still refuses a candidate already resolved; a retained choice whose
-      admission now fails refuses what reads it.
+      reused choices and the stable Decisions (found, in a large cache, from the readers
+      of the others, ``inherit``), with the reused choices' admissions as they were
+      recorded. So nothing that read another
+      candidate is inherited, and ``admit`` still refuses a candidate already
+      resolved; a retained choice whose admission now fails refuses what reads it.
     - The successor starts from its base's evaluations that read no Decision the
-      change touched (``_touched``), and on publication gains the trial's that read
-      no Decision open in the successor: the trial's candidates are the successor's
-      assignments, each admitted before it was read. A candidate's own answer is
-      taken as the successor gives it, without the reads of its admission; what
-      read it counts those reads among its own, which only keeps less. The
-      successor records each candidate's admission reads (``admissions``).
+      change touched, and on publication gains the trial's own (what it evaluated or
+      was given: the rest is its base's, which the successor already has) that read no
+      Decision open in the successor but a stable one (a stable Decision reads in the trial
+      as the base forces it, which is how the successor reads it): the trial's
+      candidates are the successor's assignments, each admitted before it was
+      read. A candidate's own answer is
+      taken as the successor gives it: with the reads of its guard, which its
+      frame makes first, and without the reads of its admission; what read it
+      counts those reads among its own, which only keeps less. A choice whose
+      admission was reused did not evaluate its guard, and the base's cache may not
+      hold it: the successor takes neither that choice nor what read it, and
+      evaluates it when something asks. The successor
+      records each candidate's admission reads (``admissions``), and beside them
+      the value it saw of each Decision it read that was neither a candidate nor
+      stable and that the base forces (``assumed``): the trial read that Decision as
+      the base forces it, which the successor, leaving it open, may not. A later trial
+      checks the assumption against the successor's own forcing when it reuses the
+      admission (``_reusable``).
     """
 
-    __slots__ = ("_pending", "_published", "_candidates", "_base", "_successor", "_touches")
+    __slots__ = (
+        "_pending",
+        "_published",
+        "_candidates",
+        "_base",
+        "_successor",
+        "_touches",
+        "_stable",
+    )
 
     _pending: dict[int, object]
     _published: bool
@@ -201,21 +477,28 @@ class _TrialSnapshot(Snapshot):
     _base: Snapshot
     _successor: Snapshot | None
     _touches: list[int]
+    _stable: frozenset[int]
 
     def __init__(self, base: Snapshot, candidates: Mapping[int, object]) -> None:
         super().__init__(base.model, base.parameters, {}, base.lock, base.forcing)
         candidates = MappingProxyType(dict(candidates))
         touched = _touched(base, candidates)
-        reused = _reusable(base, candidates, touched)
+        stable = _stable(base, candidates, touched)
+        reused = _reusable(base, candidates, touched, stable)
         pending = {index: candidates[index] for index in reused}
-        held = [index for index in base.linked.decisions if index not in reused]
-        self.cache.update(unaffected(base.cache, held))
-        for index, read in reused.items():
-            # As the decision frame admits it, with its admission's reads.
-            self.cache[index] = Evaluation(Available(candidates[index]), decisions=read)
+        held = [
+            index for index in base.linked.decisions if index not in reused and index not in stable
+        ]
+        # As the decision frame admits it, with its admission's reads.
+        admitted = {
+            index: Evaluation(Available(candidates[index]), decisions=read)
+            for index, read in reused.items()
+        }
+        inherit(self, base, held, replacing=admitted)
         object.__setattr__(self, "_base", base)
         object.__setattr__(self, "_successor", None)
         object.__setattr__(self, "_touches", touched)
+        object.__setattr__(self, "_stable", stable)
         object.__setattr__(self, "assignments", MappingProxyType(pending))
         object.__setattr__(self, "_pending", pending)
         object.__setattr__(self, "_candidates", candidates)
@@ -231,7 +514,7 @@ class _TrialSnapshot(Snapshot):
     def successor(self) -> Snapshot:
         """The configuration this trial would publish: every candidate committed."""
         if self._successor is None:
-            from ._forcing import inherited  # noqa: PLC0415 - runtime/forcing cycle
+            from ._forcing import carried, inherited  # noqa: PLC0415 - runtime/forcing cycle
 
             base = self._base
             successor = Snapshot(
@@ -240,8 +523,9 @@ class _TrialSnapshot(Snapshot):
                 self._candidates,
                 forcing=self.forcing,
                 verdicts=inherited(base),
+                carried=carried(base),
             )
-            successor.cache.update(unaffected(base.cache, self._touches))
+            inherit(successor, base, self._touches)
             object.__setattr__(self, "_successor", successor)
         assert self._successor is not None
         return self._successor
@@ -253,18 +537,69 @@ class _TrialSnapshot(Snapshot):
         # Every candidate was admitted: the successor's assignments are the pending ones.
         successor = self.successor()
         candidates = self._candidates
-        object.__setattr__(
-            successor,
-            "admissions",
-            MappingProxyType({index: self.cache[index].decisions for index in candidates}),
+        admissions, assumed = self._admissions()
+        object.__setattr__(successor, "admissions", MappingProxyType(admissions))
+        object.__setattr__(successor, "assumed", MappingProxyType(assumed))
+        nodes = self.linked.nodes
+        # A choice whose admission the trial reused did not evaluate its guard, and the
+        # base's cache may not hold it. Its record would have no guard to name, so the
+        # successor does not take it, nor what read it: it evaluates the choice when
+        # something asks, as any snapshot does.
+        unrecorded = frozenset(
+            index
+            for index in candidates
+            if nodes[index].guard is not None and nodes[index].guard not in self.cache
         )
-        open_ = frozenset(index for index in self.linked.decisions if index not in candidates)
-        for index, entry in unaffected(self.cache, open_).items():
+        open_ = frozenset(
+            index
+            for index in self.linked.decisions
+            if index not in candidates and index not in self._stable
+        )
+        for index, entry in unaffected(fresh(self), open_ | unrecorded).items():
             if index in candidates:
-                # As the successor's decision frame answers: without its admission's reads.
-                entry = Evaluation(entry.result)
+                entry = self._record(index, entry)
             successor.cache.setdefault(index, entry)
         return successor
+
+    def _admissions(
+        self,
+    ) -> tuple[dict[int, frozenset[int]], dict[int, Mapping[int, object]]]:
+        """The Decisions each candidate's admission read, and what it assumed. A candidate
+        that read a Decision the change touched and the successor leaves open, as its
+        base forces it, was admitted under that value, which the successor may not give
+        it (a choice the change left waiting): it assumed the value, and a later trial
+        reuses the admission only where the successor forces an equal one."""
+        from ._forcing import forced  # noqa: PLC0415 - runtime/forcing cycle
+
+        candidates, stable = self._candidates, self._stable
+        recorded: dict[int, frozenset[int]] = {}
+        assumed: dict[int, Mapping[int, object]] = {}
+        base_values: Mapping[int, object] | None = None
+        for index in candidates:
+            read = self.cache[index].decisions
+            recorded[index] = read
+            seen: dict[int, object] | None = None
+            for other in read:
+                if other in candidates or other in stable:
+                    continue
+                if base_values is None:
+                    base_values = forced(self._base).values
+                if other in base_values:
+                    if seen is None:
+                        seen = assumed[index] = {}
+                    seen[other] = base_values[other]
+        return recorded, assumed
+
+    def _record(self, index: int, entry: Evaluation) -> Evaluation:
+        """A candidate's entry as the successor's decision frame records it: its answer
+        and what the frame reads, its guard (and so the Decisions the guard reads),
+        and nothing of its admission."""
+        guard = self.linked.nodes[index].guard
+        if guard is None:
+            return Evaluation(entry.result)
+        if guard not in self.cache:
+            raise RuntimeError("a published choice's guard was never evaluated in its trial")
+        return Evaluation(entry.result, (guard,), decisions=read_decisions(self, (guard,), ()))
 
 
 def _forced(snapshot: Snapshot, index: int) -> QueryResult[object] | None:
@@ -731,15 +1066,21 @@ def copy_assessment(snapshot: Snapshot, node_index: int, assessment: Assessment)
 
 
 __all__ = [
+    "INDEX_FROM",
     "Evaluation",
+    "Readers",
     "Snapshot",
+    "cache_factory",
     "candidate_values",
     "copy_result",
     "copy_assessment",
     "decision_state",
     "enumeration",
     "evaluate",
+    "fresh",
+    "inherit",
     "membership",
+    "new_cache",
     "read_decisions",
     "unaffected",
 ]
