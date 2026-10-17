@@ -408,8 +408,8 @@ class KernelOp(CustomOp):
             raise KernelOpError.refused(
                 "choice-set-refused",
                 self.op_type,
-                f"{self.label}: {name} is a choice, set by the compiler; to fix one, Hold it "
-                "in a step after the cut (explore_partition(body, Hold({node: {key: value}})))",
+                f"{self.label}: {name} is a choice, set by the compiler; to fix one, set it "
+                "in a step after the cut, with Hold",
                 (name,),
                 node=self.label,
             )
