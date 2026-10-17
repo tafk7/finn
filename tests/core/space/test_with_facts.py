@@ -26,17 +26,25 @@ from core.space._toys_support import House
 from finn.core.space import (
     Available,
     ConfigurationError,
+    ConstraintGroup,
     Decision,
+    Inapplicable,
     Param,
+    Rejected,
     RequestError,
     Space,
     Unresolved,
     ValueHandle,
     _forcing,
     _runtime,
+    constraint,
     derived,
     design_space,
+    divisors_of,
+    inspection,
     occurrence,
+    reject,
+    supplied,
 )
 
 # Each test runs with the readers index used for every cache, then for none: the same answers.
@@ -72,6 +80,74 @@ def test_the_house_walked_through_other_budgets() -> None:
             facts={"budget": (60, 100, 150, 300, 400, 500)},
         )
         check(report, forced=False, facts=True, known=True)
+
+
+# -- an optional formal: its presence is a fact an evaluation reads ---------------------------
+
+
+class Gauge(Space):
+    """Reads an optional formal through ``present`` and through a ``supplied`` guard."""
+
+    reading: int = Param(required=False)
+    valued = supplied(reading)
+    scale: int = Decision(values=(1, 2), when=valued)
+
+    @derived
+    def seen(self) -> int:
+        return self.reading if self.present(Gauge.reading) else 0
+
+
+class Office(Space):
+    """A root with an optional formal, bound to a child and read by ``present`` here too."""
+
+    width: int = Param()
+    rate: int = Param(required=False)
+    gauge = Gauge(reading=rate)
+    mode: int = Decision(values=(1, 2, 4))
+
+    @derived
+    def charged(self) -> int:
+        return self.rate * self.mode if self.present(Office.rate) else self.width
+
+
+def test_an_optional_formal_walked_through_being_supplied_and_changed() -> None:
+    # Every walk starts with `rate` omitted. A fact can supply it and change it; none can
+    # omit it again (``with_facts`` keeps the formals it is not given).
+    for seed in (1, 2, 3):
+        report = walk(
+            design_space(Office(width=4)),
+            seed=seed,
+            steps=100,
+            facts={"width": (4, 6, 8), "rate": (1, 2, 3)},
+        )
+        assert not report.differences, "\n".join(report.differences[:5])
+        assert report.tallies.facts_changed > 10
+
+
+def test_supplying_an_omitted_formal_replaces_what_read_it_omitted() -> None:
+    point = design_space(Office(width=4))
+    assert (point.present(Office.rate), point.charged, point.gauge.seen) == (False, 4, 0)
+    assert point.gauge.present(Gauge.reading) is False
+    state = occurrence.state(point)
+    assert isinstance(
+        _runtime.evaluate(state, state.linked.keys["gauge.scale"]).result, Inapplicable
+    )
+    moved = point.with_facts({Office.rate: 3}, {Office.mode: 2})
+    assert (moved.present(Office.rate), moved.charged, moved.gauge.seen) == (True, 6, 3)
+    assert moved.gauge.present(Gauge.reading) is True
+    assert isinstance(
+        _runtime.evaluate(occurrence.state(moved), state.linked.keys["gauge.scale"]).result,
+        Unresolved,
+    )
+    assert read(moved.with_facts({Office.rate: 5}), Office.charged) == 10
+    assert (point.present(Office.rate), point.charged) == (False, 4)  # the base is as it was
+
+
+def test_a_formal_cannot_be_set_back_to_omitted() -> None:
+    point = design_space(Office(width=4, rate=2))
+    with pytest.raises(RequestError, match="expected value of nominal type int"):
+        point.with_facts({Office.rate: None})
+    assert point.present(Office.rate) is True
 
 
 # -- the facts an evaluation, an admission and a verdict read ------------------------------
@@ -230,6 +306,16 @@ def test_facts_and_choices_change_together_and_the_formals_must_be_the_roots() -
 # -- a refusal is as ``with_choices`` makes it, and names the choice --------------------------
 
 
+def reference_of(point: Space, key: str) -> Any:
+    """The reference of the Decision ``key`` of ``point``."""
+    return {item.key: item.reference for item in inspection.decisions(point)}[key]
+
+
+def state_of(point: Space, key: str) -> object:
+    """The state of the Decision ``key`` of ``point``."""
+    return point.field(reference_of(point, key)).state
+
+
 def refused(point: Space, facts: dict[object, object]) -> dict[str, list[str]]:
     """The owners the change to ``facts`` refuses, with the codes of their findings."""
     report = point.try_with_facts(facts)
@@ -275,14 +361,105 @@ def test_a_retained_choice_whose_selector_the_new_facts_open_is_refused_not_publ
     assert committed(both.instance)["u0.compute.packed.pe"] == 3
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the published reading refuses `pe` on its guard, a selector with no viable case, "
-    "and does not reach `pe`'s own domain (the 2026-10-03 finding): to be decided",
-)
-def test_a_refusal_names_the_choice_domain_where_the_new_facts_leave_its_selector_no_case() -> None:
+def test_a_refusal_names_the_choice_domain_beside_a_selector_left_no_case() -> None:
     # At 9 only the packed core is viable (the stub refuses an odd width), so `pe = 3` is
     # admitted. At 71 (odd, and past the packed core's 64 lanes) neither core is viable, and
-    # 3 does not divide 71: the choice's own domain excludes it.
+    # 3 does not divide 71: the choice's own check is false as well. A choice's own check is
+    # its domain and the requirements naming its value, on the stored value; a selector with
+    # no case is the configuration's refusal, reported beside it and never in its place.
     point = replay(design_space(Pipeline(width=9)), {"u0.compute.packed.pe": 3})
-    assert refused(point, {Pipeline.width: 71}) == {"u0.compute.packed.pe": ["domain-membership"]}
+    report = point.try_with_facts({Pipeline.width: 71})
+    assert not report.accepted
+    (outcome,) = (o for o in report.outcomes if o.status == "refused")
+    assert outcome.owner == "u0.compute.packed.pe"
+    assert {(item.code, item.owner) for item in outcome.result.findings} == {  # type: ignore[union-attr]
+        ("domain-membership", "u0.compute.packed.pe"),
+        ("decision-no-viable-case", "u0.compute"),
+    }
+
+
+# -- a selector's case refused by the choice it holds -----------------------------------------
+
+
+class Lanes(Space):
+    """A core whose admission reads its own choice: it needs the lanes to divide the width."""
+
+    width: int = Param()
+    pe: int = Decision(domain=divisors_of(width))
+
+    @constraint
+    def divides(self) -> bool | Rejected:
+        if self.width % self.pe:
+            return reject("lanes-divide", "the lanes do not divide the width")
+        return True
+
+    admission = ConstraintGroup(divides)
+
+
+class Tight(Space):
+    """A core whose admission reads its own choice against a quarter of the width."""
+
+    width: int = Param()
+    pe: int = Decision(domain=divisors_of(width))
+
+    @constraint
+    def quarter(self) -> bool | Rejected:
+        if self.pe * 4 > self.width:
+            return reject("lanes-quarter", "the core takes at most a quarter of the width in lanes")
+        return True
+
+    admission = ConstraintGroup(quarter)
+
+
+class Holder(Space):
+    """A selector with one case, whose admission reads the choice committed under it."""
+
+    width: int = Param()
+    compute: Lanes = Decision({"core": Lanes}, width=width)
+
+
+class Narrow(Space):
+    width: int = Param()
+    compute: Tight = Decision({"core": Tight}, width=width)
+
+
+def test_a_choice_failing_its_domain_is_reported_where_that_leaves_its_selector_no_case() -> None:
+    # 3 divides 12. At width 7 it fails its domain, and that is why the selector's only case
+    # (whose admission needs the lanes to divide the width) is refused: the circular shape.
+    point = replay(design_space(Holder(width=12)), {"compute.core.pe": 3})
+    assert committed(point) == {"compute.core.pe": 3}
+    report = point.try_with_facts({Holder.width: 7})
+    assert not report.accepted
+    (outcome,) = (o for o in report.outcomes if o.status == "refused")
+    assert outcome.owner == "compute.core.pe"
+    assert {(item.code, item.owner) for item in outcome.result.findings} == {  # type: ignore[union-attr]
+        ("domain-membership", "compute.core.pe"),
+        ("decision-no-viable-case", "compute"),
+    }
+    assert committed(point) == {"compute.core.pe": 3}  # the base is as it was
+
+
+def test_a_commit_the_choice_reading_accepts_leaves_a_configuration_no_case_reads_viable() -> None:
+    # At 12 a quarter of the width is 3, so `pe = 4` is the core's own check true (4 divides
+    # 12) while the core's admission refuses it. The choice reading, which reads the selector
+    # as the base forces it, accepts the commit; the configuration it leaves has no viable case.
+    point = design_space(Narrow(width=12))
+    assert isinstance(point.compute, Tight)
+    accepted = point.try_with_choices({reference_of(point, "compute.core.pe"): 4})
+    assert accepted.accepted
+    state = state_of(accepted.instance, "compute.core.pe")
+    assert isinstance(state, Rejected)
+    assert [item.code for item in state.findings] == ["decision-no-viable-case"]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="the published reading refuses a commit the choice reading accepts: the selector's "
+    "only case reads the new value, and the trial reads the selector as the successor forces "
+    "it (a stop for the switch of `try_with_choices` onto the published reading)",
+)
+def test_the_published_reading_accepts_a_commit_the_choice_reading_accepts() -> None:
+    point = design_space(Narrow(width=12))
+    change = {reference_of(point, "compute.core.pe"): 4}
+    assert point.try_with_choices(change).accepted
+    assert point.try_with_facts({}, change).accepted

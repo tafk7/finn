@@ -849,6 +849,19 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
         guard = cast(QueryResult[object], (yield node.guard))
         inactive = _guard_result(node, guard)
         if inactive is not None:
+            if (
+                isinstance(inactive, Rejected)
+                and isinstance(snapshot, _TrialSnapshot)
+                and node.index in snapshot._candidates
+            ):
+                # A refused guard is the configuration's refusal; the candidate's own
+                # check (its domain and the requirements naming it) is reported beside it.
+                own = yield from _membership_frame(
+                    snapshot, node, snapshot._candidates[node.index], check_guard=False
+                )
+                merged = _blocked([inactive, own.result])
+                assert merged is not None
+                inactive = merged
             return Evaluation(inactive, assessment=_guard_assessment(node, inactive))
     return (yield from _FRAMES[node.kind](snapshot, node))
 
