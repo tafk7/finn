@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from qonnx.core.modelwrapper import ModelWrapper
+from support.configure import configured, write_raw
 from support.ipxact_ports import AXILITE
 from support.models import (
     ROW_MAJOR_W2,
@@ -303,7 +304,13 @@ def test_an_iodma_end_refuses_w2_repeated_or_tiled_by_name() -> None:
         write_target(model, ZYNQ)
         if folding is not None:
             (second,) = [node for node in model.graph.node if node.name == "second"]
-            kernel_op(model, second).save(folding)
+            # A folding the shell refuses at its end, which the seam refuses to set
+            # (``decision-no-viable-case``): the graph as one FINN did not write is stated by
+            # its raw attributes, for the read side's refusal below.
+            with refused("decision-no-viable-case", owner="w2.end"):
+                configured(model, {second.name: folding})
+            for key, value in folding.items():
+                write_raw(model, second.name, key, value)
         choose_memories(model)
         with refused(
             "choices-open",

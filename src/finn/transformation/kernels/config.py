@@ -3,17 +3,17 @@
 
 """A partition body's choices, by graph name: the form ``Hold`` reads back.
 
-FINN's ``extract_model_config_to_json`` reads every attribute through
-``get_nodeattr``, which answers an absent choice with its default, so an open
-choice would come back as a value. This export is what the body states: each
+qonnx's ``extract_model_config_to_json`` (``qonnx.util.config``) reads every attribute through
+``get_nodeattr``, which a KernelOp refuses for an absent choice (``choice-absent``),
+so an open choice would stop the export. This export is what the body states: each
 KernelOp node's choices as its node holds them, each channel's as its tensor states
 them (``finn.channel``), absent ones absent (on a body the cut created, every choice
 but a required one no strategy set), in graph order: each node's input channels
 not yet written (a parameter it owns among them), the node, its output channels. A
 node and a tensor never share a name in a partition's body (its network refuses it,
 and this export too, by raw name, on a body no network has seen), so
-``{graph name: {key: value}}`` names each once. The nodes' entries are also
-the form ``ApplyConfig`` applies; it applies no tensor's.
+``{graph name: {key: value}}`` names each once. This is the form ``Hold`` reads back, and
+the test helper ``configured`` sets.
 """
 
 from __future__ import annotations

@@ -12,6 +12,7 @@ network of its kernel and a channel on each ONNX input and output (conversion's)
 
 from __future__ import annotations
 
+import inspect
 import json
 from contextvars import Context
 from pathlib import Path
@@ -27,7 +28,8 @@ import finn.kernels.members as members
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import integer_tensor
 from finn.core.space import DefinitionError, Rejected, design_space, inspection
-from finn.custom_op.kernels.base import kernel_op
+from finn.custom_op.kernels.base import KernelOp, kernel_op
+from finn.custom_op.kernels.conv import Conv
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
@@ -47,10 +49,38 @@ from finn.kernels.members import (
 )
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
+from finn.transformation.kernels.infer import infer_node
 
 INT3 = dtype("INT3")
 X = Tensor((3, 4), ScalarEncoding(INT3))
 STORED = tuple(tuple((r + c) % 3 - 1 for c in range(4)) for r in range(4))
+
+
+def test_a_kernelop_declares_no_formals_its_facts_build_the_arguments() -> None:
+    """What a node's kernel is bound with is what its ``facts`` build, op by op: a KernelOp
+    has no ``formals`` member to keep beside it (nothing read one)."""
+    assert not any(hasattr(op, "formals") for op in (KernelOp, MatMul, Conv, Thresholding))
+
+
+def test_an_op_made_without_its_model_is_refused_and_points_to_kernel_op() -> None:
+    """A node's op made by hand (no model attached) refuses to read the model, by code,
+    and its message names the way to get an attached one: the package's ``kernel_op``."""
+    model = matmul_model()
+    with refused(
+        "model-unattached",
+        error=KernelOpError,
+        owner="MatMul",
+        node="first",
+        message=r"kernel_op\(model, node\)",
+    ):
+        MatMul(model.graph.node[0]).model()
+
+
+def test_conversion_admits_through_admitted_alone() -> None:
+    """``KernelOp.admitted`` is the one way a node is admitted: the network at its baselines
+    or the refusals. ``infer_node`` does not admit, and no second method says the same."""
+    assert not hasattr(KernelOp, "admission")
+    assert "admit" not in inspect.signature(infer_node).parameters
 
 
 def test_the_schema_is_the_kernel_classs_decision_keys() -> None:
@@ -178,7 +208,9 @@ def test_a_node_without_a_baseline_is_refused_by_the_decision_naming_the_node(
         message="no case is viable",
     ):
         op.baselined()
-    ((code, owner, details),) = [(f.code, f.owner, dict(f.details)) for f in op.admission()]
+    refusals = op.admitted()
+    assert isinstance(refusals, tuple)
+    ((code, owner, details),) = [(f.code, f.owner, dict(f.details)) for f in refusals]
     assert (code, owner, details) == ("decision-no-viable-case", "compute", {"node": "first"})
 
 

@@ -17,12 +17,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 import pytest
 from onnx import StringStringEntryProto, TensorProto, helper
 from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
+from support.configure import configured, write_raw
 from support.explore_models import kernel_model as open_model
 from support.helpers import Lanes
 from support.models import EDGE, kernel_model
@@ -40,7 +40,6 @@ from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
-from finn.custom_op.kernels.shell import save_channels
 from finn.kernels.channels import Channel
 from finn.kernels.explore import ExploreError, Hold, Ranked, Rebaseline
 from finn.transformation.kernels import explore_kernel_choices, kernel_choices_config
@@ -86,7 +85,7 @@ def test_the_namespace_is_generated_from_the_channels_decisions() -> None:
 
 def test_a_channels_choices_are_typed_entries_of_its_tensor() -> None:
     model = kernel_model()
-    save_channels(model, {"levels": FIFO})
+    configured(model, {"levels": FIFO})
     assert entries(model, "levels") == {
         "finn.channel/@version": "1",
         "finn.channel/@follow": "true",
@@ -105,46 +104,34 @@ def test_a_channels_choices_are_typed_entries_of_its_tensor() -> None:
 def test_the_writer_is_checked_by_replaying_the_network() -> None:
     """Only the network holds both of a channel's ends: a choice it refuses, a key no
     channel declares, a value of another type and a tensor that is no channel are
-    refused, by name, and nothing is written; ``None`` clears a choice."""
+    refused, by the seam's code, and nothing is written; a choice is cleared on its tensor (the
+    seam has no clearing)."""
     model = kernel_model()
     before = kernel_choices_config(model)
-    rejections: list[tuple[str, dict[str, Any], str | None, dict[str, dict[str, object]]]] = [
+    rejections: list[tuple[str, str, dict[str, dict[str, object]]]] = [
         (
-            "choices-refused",
-            {"tensor": "levels", "keys": ("transport.fifo.buffer.depth",)},
             "domain-membership",
+            "transport.fifo.buffer.depth",
             {"levels": {**FIFO, "transport.fifo.buffer.depth": 1}},
         ),
         (
-            "choices-refused",
-            {"tensor": "x", "keys": ("adapter.input_gen_vpc.input_gen.ram_style",)},
             "inapplicable",
+            "adapter.input_gen_vpc.input_gen.ram_style",
             {"x": {"adapter.input_gen_vpc.input_gen.ram_style": "auto"}},
         ),
+        ("not-a-decision", "levels.memory", {"levels": {"memory": "auto"}}),
         (
-            "channel-choice-unknown",
-            {"tensor": "levels", "keys": ("memory",)},
-            r"are not a channel's choices \(finn.channel\)",
-            {"levels": {"memory": "auto"}},
-        ),
-        (
-            "channel-choice-invalid",
-            {"tensor": "levels", "keys": ("transport.fifo.buffer.depth",)},
-            r"cannot store '8'",
+            "request-refused",
+            "transport.fifo.buffer.depth",
             {"levels": {"transport.fifo.buffer.depth": "8"}},
         ),
-        (
-            "channel-unknown",
-            {"tensor": "thresholds", "keys": ("thresholds",)},
-            r"no channel of the partition",
-            {"thresholds": EDGE},
-        ),
+        ("member-unknown", "configured", {"thresholds": EDGE}),
     ]
-    for code, details, message, choices in rejections:
-        with refused(code, error=KernelOpError, message=message, **details):
-            save_channels(model, {"hidden": FIFO, **choices})
+    for code, owner, choices in rejections:
+        with refused(code, owner=owner):
+            configured(model, {"hidden": FIFO, **choices})
         assert kernel_choices_config(model) == before
-    save_channels(model, {"levels": {"transport": None}})
+    model.clear(CHANNEL, tensor="levels")  # its one choice, transport; the seam has no clearing
     assert "levels" not in kernel_choices_config(model)
 
 
@@ -164,8 +151,10 @@ def test_a_graph_with_nodes_on_the_host_states_no_channel_choice(tmp_path: Path)
         keys=every,
     ):
         network(model, nodes)
-    with refused("channel-choices-outside-body", error=KernelOpError, keys=("x",)):
-        save_channels(model, {"x": EDGE})
+    # The helper no longer asks up front (``persist`` does): this model states channel
+    # choices on every tensor, so the bind it starts from refuses them all, as above.
+    with refused("channel-choices-outside-body", error=KernelOpError, keys=every):
+        configured(model, {"x": EDGE})
     # A node replays its kernel's choices only: its weight channel's are the network's.
     assert kernel_op(model, nodes[0]).verify_node() == []
     with refused("channel-choices-outside-body", error=KernelOpError):
@@ -185,7 +174,7 @@ def test_the_cut_moves_a_channels_choices_into_the_body(tmp_path: Path) -> None:
     model states and gives what it leaves open its baseline (an adapter's memory, a
     FIFO's style)."""
     model = kernel_model()
-    save_channels(model, {"levels": FIFO})
+    configured(model, {"levels": FIFO})
     stated = kernel_choices_config(model)
     assert {"x", "y", "levels"} <= set(stated)
     parent = model.transform(CutKernelPartition(tmp_path))
@@ -209,7 +198,7 @@ def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
     choices, created at conversion, and no channel's. ``BaselineChoices`` creates each
     channel's at its baseline on its tensor, keeps the nodes', and leaves nothing for
     the exploration to baseline; a node's choice its facts refuse in context (written
-    past ``save``) is dropped, named, and re-baselined, as the cut does."""
+    raw) is dropped, named, and re-baselined, as the cut does."""
     model = open_model()
     nodes = kernel_choices_config(model)
     assert list(nodes) == ["first", "activate", "second"] and not model.tensors_stating(CHANNEL)
@@ -221,15 +210,14 @@ def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
     assert {name: config[name] for name in nodes} == nodes
     assert all(held["transport"] == "direct" for name, held in config.items() if name not in nodes)
     assert explore_kernel_choices(model).report["baselined"] == []
-    first = kernel_op(model, model.graph.node[0])
-    first.set_nodeattr("compute.packed.simd", 2)
-    first.set_nodeattr("compute.packed.pe", 3)
+    write_raw(model, "first", "compute.packed.simd", 2)  # past the space, as another tool wrote it
+    write_raw(model, "first", "compute.packed.pe", 3)
     model = model.transform(baselining)
     # Its input buffer's memory, which reads the folding, waits with it: the channel's
     # ends wait on the reopened pe, and its stored memory is replayed once the baseline
     # chooses one, where it still applies.
     assert sorted(baselining.dropped) == ["first.compute.packed.pe"]
-    assert "domain-membership" in baselining.dropped["first.compute.packed.pe"]
+    assert [f.code for f in baselining.dropped["first.compute.packed.pe"]] == ["domain-membership"]
     first = kernel_op(model, model.graph.node[0])
     assert first.choices() == {
         **nodes["first"],
@@ -252,8 +240,8 @@ def test_the_baseline_strategy_resets_the_bodys_channel_choices_too() -> None:
     assert reset["strategy"] == "baseline" and reset["changed"]
     cleared = kernel_model()
     for node in cleared.graph.node:
-        op = kernel_op(cleared, node)
-        op.save(dict.fromkeys(op.choices()))
+        for key in list(kernel_op(cleared, node).choices()):
+            write_raw(cleared, node.name, key, None)
     clear_channel_choices(cleared)
     explore_kernel_choices(cleared)
     assert kernel_choices_config(model) == kernel_choices_config(cleared)
@@ -325,9 +313,9 @@ def test_the_export_refuses_a_node_named_like_a_stating_tensor() -> None:
     model = open_model()
     model.set(CHANNEL_KEYS["transport"], "direct", tensor="hidden")
     (activate,) = [node for node in model.graph.node if node.name == "activate"]
-    op = kernel_op(model, activate)
-    op.save(dict.fromkeys(op.choices()))
-    assert not op.choices()
+    for key in list(kernel_op(model, activate).choices()):
+        write_raw(model, "activate", key, None)
+    assert not kernel_op(model, activate).choices()
     activate.name = "hidden"
     with refused(
         "name-shared",
@@ -376,9 +364,13 @@ def test_choices_on_a_tensor_that_is_no_channel_are_dropped_and_cleared() -> Non
     model = kernel_model()
     model.set(CHANNEL_KEYS["transport"], "direct", tensor="thresholds")
     bound = network(model, model.graph.node)
-    assert dict(bound.stale) == {
-        "thresholds.transport": "stated on a tensor that is no channel of the partition"
-    }
+    ((key, (found,)),) = bound.stale.items()
+    assert key == "thresholds.transport"
+    assert (found.code, found.owner, dict(found.details)) == (
+        "channel-choice-stray",
+        "transport",
+        {"tensor": "thresholds"},
+    )
     persist(model, bound)
     assert "thresholds" not in model.tensors_stating(CHANNEL)
     assert not network(model, model.graph.node).stale

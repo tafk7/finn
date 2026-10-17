@@ -92,7 +92,6 @@ class Thresholding(KernelOp):
     op_type = "Thresholding"
     op_version = ThresholdingAxiKernel.version
     kernel = ThresholdingAxiKernel
-    formals = ("threshold_dtype", "thresholds", "bias", "platform")
     ports = ("x", None)
     wiring = {
         "x": Wiring("input_tensor", "input_end"),

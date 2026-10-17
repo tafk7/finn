@@ -17,7 +17,7 @@ The pattern refuses a B that is not 2-D (``matmul-batched``).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import numpy.typing as npt
@@ -76,7 +76,6 @@ class MatMul(KernelOp):
     op_type = "MatMul"
     op_version = MatMulKernel.version
     kernel = MatMulKernel
-    formals: ClassVar[tuple[str, ...]] = ("weights_dtype", "platform")
     ports = ("x", "w")
     wiring = {
         "x": Wiring("x_tensor", "x_end"),

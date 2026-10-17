@@ -31,6 +31,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.infer_shapes import InferShapes
+from support.configure import configured, write_raw
 from support.explore_models import kernel_model as open_model
 from support.helpers import Lanes
 from support.models import (
@@ -97,8 +98,7 @@ from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest, partitio
 from finn.core.onnx_exec import execute_onnx
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import FINDING, RECORDS, write_report
-from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import configured_network, save_channels
+from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.channels import Channel
 from finn.kernels.explore import Hold, Ranked, TargetThroughput
@@ -525,7 +525,7 @@ def test_the_verification_notes_what_its_check_finds_and_records_the_design(
     its report states the check (``fifos_judged``, ``fifo_check``), and the body it saves
     records the design it verified."""
     model = kernel_model()
-    save_channels(model, {"levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8}})
+    configured(model, {"levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8}})
     model_file = tmp_path / "chain.onnx"
     model.save(str(model_file))
     monkeypatch.setattr(explore_module, "holds", _holds_nothing)
@@ -890,13 +890,12 @@ def test_the_bitfiles_clock_findings_are_noted(
 def test_a_choice_stale_at_the_cut_is_noted(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A node's choice its facts refuse in context (written past ``save``) is reset at the
+    """A node's choice its facts refuse in context (written raw) is reset at the
     cut and noted once: a limitation owned by the choice, the finding attached for the
     manifest."""
     model = open_model()
-    first = kernel_op(model, model.graph.node[0])
-    first.set_nodeattr("compute.packed.simd", 2)
-    first.set_nodeattr("compute.packed.pe", 3)
+    write_raw(model, "first", "compute.packed.simd", 2)  # past the space, as another tool wrote it
+    write_raw(model, "first", "compute.packed.pe", 3)
     with caplog.at_level(logging.INFO, logger=REPORTS_LOG):
         step_create_dataflow_partition(model, config(tmp_path))
     (noted,) = [record for record in caplog.records if record.levelno >= logging.WARNING]
@@ -912,6 +911,13 @@ def test_a_choice_stale_at_the_cut_is_noted(
         "first.compute.packed.pe",
     )
     assert "domain-membership" in finding.message
+    # The key is named once, with the value and the values it could take; the kernel's
+    # finding is kept as the note's cause.
+    assert finding.message.count("compute.packed.pe") == 1
+    assert "first.compute.packed.pe = 3: not one of 1, 2, 4" in finding.message
+    assert [(cause.code, dict(cause.details)) for cause in finding.causes] == [
+        ("domain-membership", {"value": 3, "candidates": (1, 2, 4)})
+    ]
 
 
 def test_a_step_that_moves_the_target_s_folding_leaves_the_bitfile_no_objective(
@@ -1727,8 +1733,7 @@ def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     node, body, body_file = partition_body(parent)
     built_from = design_digest(body)
     parent.set(OUTPUT_BITFILE_MADE_FROM, built_from)
-    (activate,) = [each for each in body.graph.node if each.name == "activate"]
-    kernel_op(body, activate).save({"deep_pipeline": 1})
+    configured(body, {"activate": {"deep_pipeline": True}})
     body.save(body_file)
     now = design_digest(body)
     assert now != built_from

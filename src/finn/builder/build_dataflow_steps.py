@@ -61,6 +61,7 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import note, reported, write_report
+from finn.custom_op.kernels.network import stale_text
 from finn.custom_op.kernels.shell import verify_partition
 from finn.kernels.explore import (
     FIFOS_BY_MODEL,
@@ -331,12 +332,13 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
     partition is named ``partition``: its node, its body (partition/partition.onnx), its
     IP and its block-design instance. Each channel's choices are created here, and each
     KernelOp's checked again in context: one made stale by an edit since conversion is
-    reset to its baseline, noted as a limitation (``choice-stale``, owned by the choice)."""
+    reset to its baseline, noted as a limitation (``choice-stale``, owned by the choice, the
+    kernel's findings its causes)."""
     cut = CutKernelPartition(Path(cfg.output_dir) / "partition")
     model = model.transform(cut)
-    for key, why in cut.dropped.items():
-        message = f"dropped as stale at the cut and re-baselined: {why}"
-        note(Finding(FindingKind.LIMITATION, "choice-stale", key, message))
+    for key, found in cut.dropped.items():
+        message = f"dropped as stale at the cut and re-baselined: {stale_text(key, found)}"
+        note(Finding(FindingKind.LIMITATION, "choice-stale", key, message, causes=found))
     return model
 
 

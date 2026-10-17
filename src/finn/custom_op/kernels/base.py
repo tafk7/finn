@@ -22,7 +22,7 @@ Both are kept by the facts, by value, in the build's member cache
 
 Conversion asks two questions of a node. Does the op's pattern cover it? ``match`` reads
 only the graph's structure (op types, connections, attributes), never a datatype or a
-value, and never changes the model. Will a kernel build it? ``admission`` asks its
+value, and never changes the model. Will a kernel build it? ``admitted`` asks its
 kernel, and the node alone as a network (``network``: its kernel, and a channel on each
 ONNX input and output as a boundary, ``in<i>_V``, ``out<j>_V``), whose channels must be
 realized once its choices take their baselines. A missing shape or datatype raises
@@ -39,6 +39,27 @@ A node's attributes are its semantic attributes, which are part of the operation
 (Thresholding's ``bias``), and its kernel's choices, named by the kernel's own decision
 keys (``compute.packed.pe``), each set to its baseline at conversion. A channel's
 choices are stored on its tensor instead, and only in a partition's body (``CHANNEL``).
+Only the compiler writes a choice (``persist``): ``get_nodeattr`` of a choice answers what
+the node stores or refuses it as absent, and ``set_nodeattr`` of one is refused.
+
+**Who calls what.** One writer, the readers beside it, and a guard on the door:
+
+- *Writes*, all through ``persist`` (``network.persist``, which writes past the guard).
+  Conversion persists the one-node network its admission baselined, only the node's
+  choices (``baseline_kernel_op``). The cut persists the body's choices at their
+  baselines, the channels' too (``shell.baseline_choices``). Every strategy persists the
+  network it returns (``explore_kernel_choices``). A user sets a choice by ``Hold`` in
+  a step after the cut, which the strategies apply: no one writes an attribute.
+- *Reads*: ``choices`` (the attributes the node holds), ``stored`` (as the kernel's
+  Decisions take them), ``point`` (the kernel with them committed), ``verify_node`` and
+  every bind of a network. They never write: a stored choice the facts refuse is
+  refused by name (``point``, ``verify_node``) or dropped as stale where a network is
+  bound (``Partition.stale``).
+- *The guard*: ``get_nodeattr`` and ``set_nodeattr`` of a KernelOp, the way qonnx's
+  transformations reach an attribute. They guard the choice keys only: reading an absent
+  choice is refused (``choice-absent``), setting one is refused (``choice-set-refused``),
+  each naming the node and the key, and the second the route, ``Hold``. Any other
+  attribute is qonnx's.
 
 Its outputs are its kernel's product, one rule for every op: the kernel bound on its
 inputs states each output's tensor (``output_tensors``), its shape and its element, a
@@ -69,6 +90,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, TypeGuard, cast
 
+import numpy.typing as npt
 from onnx import helper
 from qonnx.custom_op.base import CustomOp
 from qonnx.util.basic import get_by_name
@@ -89,10 +111,19 @@ from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.target import Target
 
 if TYPE_CHECKING:
-    from onnx import NodeProto
+    from onnx import AttributeProto, NodeProto
     from qonnx.core.modelwrapper import ModelWrapper
 
 ONNX_TYPES = {"int": "i", "bool": "i", "str": "s"}
+
+#: What qonnx's ``get_nodeattr`` returns and ``set_nodeattr`` takes.
+_NodeAttr = int | float | str | bool | npt.NDArray[Any] | list[str | int | float] | None
+
+
+def _decoded(attribute: AttributeProto, kind: str) -> int | str:
+    """A choice attribute's value: its string, or its integer."""
+    return attribute.s.decode() if kind == "s" else int(attribute.i)
+
 
 # -- patterns ----------------------------------------------------------------------------
 
@@ -196,8 +227,9 @@ class KernelOp(CustomOp):
 
     - ``op_type``, and ``op_version``, its kernel's version;
     - ``kernel``, the kernel class;
-    - ``formals``, the kernel arguments read from the graph beside its tensors
-      (``facts``);
+    - ``facts``, the method that reads the kernel's arguments from the graph (each op
+      names them where it builds them) and binds the node's kernel on them beside its
+      tensors (``binding``);
     - ``ports``, the channel name of each ONNX input (None for an input read as an
       argument, such as Thresholding's thresholds), and ``outputs``, of each output;
     - ``wiring``, how each port meets the kernel (``Wiring``, the module docstring);
@@ -214,7 +246,6 @@ class KernelOp(CustomOp):
     op_type: ClassVar[str]
     op_version: ClassVar[int]
     kernel: ClassVar[type[Kernel]]
-    formals: ClassVar[tuple[str, ...]]
     ports: ClassVar[tuple[str | None, ...]]
     outputs: ClassVar[tuple[str, ...]] = ("y",)
     wiring: ClassVar[Mapping[str, Wiring]]
@@ -289,7 +320,7 @@ class KernelOp(CustomOp):
             raise KernelOpError.refused(
                 "model-unattached",
                 self.op_type,
-                f"{self.label}: no model attached (use get_customop_wrapper)",
+                f"{self.label}: no model attached (get the op with kernel_op(model, node))",
                 node=self.label,
             )
         return model
@@ -344,7 +375,10 @@ class KernelOp(CustomOp):
         under a port), channel choices are stored on the tensor."""
         ports = {port for port in (*self.ports, *self.outputs) if port}
         if any(name.partition(".")[0] in ports for name in names):
-            return f"; a channel's choices are its tensor's ({CHANNEL.name}, save_channels)"
+            return (
+                f"; a channel's choices are its tensor's ({CHANNEL.name}): set them in a step "
+                "after the cut, with Hold"
+            )
         return ""
 
     def choices(self) -> dict[str, object]:
@@ -365,8 +399,44 @@ class KernelOp(CustomOp):
                     (name,),
                     node=self.label,
                 )
-            found[name] = attribute.s.decode() if schema[name][0] == "s" else int(attribute.i)
+            found[name] = _decoded(attribute, schema[name][0])
         return found
+
+    def get_nodeattr(self, name: str) -> _NodeAttr:
+        """The attribute ``name``: a choice as the node stores it (as ``choices`` decodes
+        it), refused (``choice-absent``) where the node holds none, never a made-up 0 or
+        "". A choice is not stored when it is open, forced (never stored), or not
+        applicable under the selected case; the value in effect is read from ``point()``
+        (``inspection.forced`` explains a forced one). Any other name is qonnx's."""
+        schema = self.schema()
+        if name not in schema:
+            return super().get_nodeattr(name)
+        held = get_by_name(self.onnx_node.attribute, name)
+        if held is None:
+            raise KernelOpError.refused(
+                "choice-absent",
+                self.op_type,
+                f"{self.label}: {name} is not stored: it is open, forced (never stored), or "
+                "not applicable under the selected case; read the value in effect from the "
+                "op's configuration (KernelOp.point(); inspection.forced explains a forced one)",
+                (name,),
+                node=self.label,
+            )
+        return _decoded(held, schema[name][0])
+
+    def set_nodeattr(self, name: str, value: _NodeAttr) -> None:
+        """Set the attribute ``name``: a choice is refused (``choice-set-refused``), the
+        compiler sets it (``persist`` writes the node itself); any other name is qonnx's."""
+        if name in self.schema():
+            raise KernelOpError.refused(
+                "choice-set-refused",
+                self.op_type,
+                f"{self.label}: {name} is a choice, set by the compiler; to fix one, set it "
+                "in a step after the cut, with Hold",
+                (name,),
+                node=self.label,
+            )
+        super().set_nodeattr(name, value)
 
     def stored(self) -> dict[str, object]:
         """The node's choices (``choices``), as its kernel's Decisions take them."""
@@ -391,17 +461,13 @@ class KernelOp(CustomOp):
         point: Kernel = found.point  # type: ignore[assignment]
         return point
 
-    def save(self, choices: Mapping[str, object | None]) -> None:
-        """Store ``choices`` as the node's attributes, over its stored ones, after
-        checking them all together on a fresh point; ``None`` clears one. Channel
-        choices go through ``shell.save_channels``."""
-        merged = self.saved(choices)
-        self.write(merged)
-
-    def saved(self, choices: Mapping[str, object | None]) -> dict[str, int | str]:
-        """What ``save`` would store: ``choices`` over the node's stored ones, ``None``
-        clearing one, each checked for its attribute's type and all checked together on a
-        fresh point. Writes nothing."""
+    def _saved(self, choices: Mapping[str, object]) -> dict[str, int | str]:
+        """What ``persist`` stores on this node, its whole: ``choices`` (by attribute),
+        the committed Decisions of the node's kernel in the network it persists. ``persist``
+        alone calls it (a route to a choice is ``Hold`` in a step after the cut, ``persist``
+        for the compiler, ``support.configure.configured`` for a test). Each key is checked
+        to be one of the schema's and each value for its attribute's type and encoding, so a
+        write cannot fail halfway; no replay, the network has bound them. Writes nothing."""
         schema = self.schema()
         unknown = sorted(set(choices) - set(schema))
         if unknown:
@@ -414,9 +480,7 @@ class KernelOp(CustomOp):
                 node=self.label,
             )
         merged: dict[str, int | str] = {}
-        for name, value in {**self.choices(), **choices}.items():
-            if value is None:
-                continue
+        for name, value in choices.items():
             kind, cases = schema[name]
             if not _is_choice_value(value, kind, cases):
                 raise KernelOpError.refused(
@@ -428,17 +492,20 @@ class KernelOp(CustomOp):
                     node=self.label,
                 )
             merged[name] = value
-        self._replayed(merged)  # refuses before any write; a cleared choice is not replayed
         return merged
 
-    def write(self, merged: Mapping[str, int | str]) -> None:
-        """Store ``merged`` (``saved``'s) as the node's choice attributes, its whole."""
+    def _write(self, merged: Mapping[str, int | str]) -> None:
+        """Store ``merged`` (``_saved``'s) as the node's choice attributes, its whole;
+        ``persist``'s alone. It writes the NodeProto itself, past the guard of
+        ``set_nodeattr``."""
         for name in self.schema():
             present = get_by_name(self.onnx_node.attribute, name)
             if present is not None:
                 self.onnx_node.attribute.remove(present)
         for name, value in sorted(merged.items()):
-            self.set_nodeattr(name, int(value) if isinstance(value, bool) else value)
+            self.onnx_node.attribute.append(
+                helper.make_attribute(name, int(value) if isinstance(value, bool) else value)
+            )
 
     # -- in a network ---------------------------------------------------------------------
 
@@ -527,6 +594,10 @@ class KernelOp(CustomOp):
         return self.output_tensors()
 
     def make_shape_compatible_op(self, model: ModelWrapper) -> Any:
+        """The stand-in qonnx's ``InferShapes`` asks a custom op for: a constant of the
+        output's shape. It assumes one output: an op that lengthens ``outputs`` fails at
+        the unpacking and must override it. FINN's own inference (``infer_node``) does
+        not call it for a KernelOp."""
         (tensor,) = self.infer_output_tensors(model).values()
         return self.make_const_shape_op(list(tensor.shape))
 
@@ -570,11 +641,13 @@ class KernelOp(CustomOp):
                 findings=tuple(finding.about(node=self.label) for finding in error.findings),
             ) from error
 
-    def admission(self) -> tuple[Finding, ...]:
-        """Why conversion refuses this node: its kernel's refusals bound on its inputs,
-        whatever its open choices (``refusals``); and, its choices at their baselines, the
-        node alone as a network (``baselined``): each channel not realized, its admission
-        or a Decision of it without a viable case."""
+    def admitted(self) -> Network | tuple[Finding, ...]:
+        """The node alone at its baselines (``baselined``), where conversion admits it;
+        else why it does not: its kernel's refusals bound on its inputs, whatever its open
+        choices (``refusals``), or, the node alone as a network, each channel not realized,
+        its admission or a Decision of it without a viable case. Conversion persists the
+        network it gets here, the node's own choices (``persist``), rather than baselining
+        the node again."""
         found = self.refusals(self.bound())
         if found:
             return found
@@ -589,7 +662,7 @@ class KernelOp(CustomOp):
             else:
                 found_here = based.checked([name]).values()
                 refused.extend(finding for each in found_here for finding in each)
-        return tuple(dict.fromkeys(refused))
+        return based if not refused else tuple(dict.fromkeys(refused))
 
     def verify_node(self) -> list[str]:
         """Why the node's stored choices are refused, or each of ``refusals`` of its

@@ -35,6 +35,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import is_custom_op
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
+from support.configure import configured
 from support.kernel_path import config
 from support.models import convert
 from support.op_specs import conv
@@ -97,7 +98,7 @@ def folded(name: str, simd: int, pe: int, directory: Path) -> ModelWrapper:
     what that opens (pumping, at SIMD 2 and more) given its baseline (``BaselineChoices``)."""
     body = single_layer(name, directory)
     (node,) = body.graph.node
-    kernel_op(body, node).save({"compute.packed.simd": simd, "compute.packed.pe": pe})
+    configured(body, {node.name: {"compute.packed.simd": simd, "compute.packed.pe": pe}})
     return body.transform(BaselineChoices())
 
 
@@ -158,9 +159,13 @@ def thresholded(pe: int, simd: int) -> ModelWrapper:
     graph = source(nodes, {"x": ([1, 6, 6, 4], "INT4")}, stored).transform(InferShapes())
     model, conversion = convert(graph)
     assert [outcome.op for outcome in conversion.outcomes] == ["Thresholding", "Conv"]
-    kernel_op(model, model.graph.node[0]).save({"pe": pe})
-    kernel_op(model, model.graph.node[1]).save(
-        {"compute.packed.simd": simd, "compute.packed.pe": 2}
+    first, second = model.graph.node
+    configured(
+        model,
+        {
+            first.name: {"pe": pe},
+            second.name: {"compute.packed.simd": simd, "compute.packed.pe": 2},
+        },
     )
     return model
 

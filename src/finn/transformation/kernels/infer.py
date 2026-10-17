@@ -77,12 +77,9 @@ def _standard(model: ModelWrapper, node: NodeProto) -> None:
             model.set_tensor_shape(name, dims)
 
 
-def infer_node(model: ModelWrapper, node: NodeProto, admit: bool = False) -> tuple[Finding, ...]:
-    """Infer ``node``'s outputs from its inputs (see the module docstring).
-
-    With ``admit``, as conversion calls it, a KernelOp the kernels refuse
-    (``KernelOp.admission``) returns their refusals instead, its outputs left unset.
-    """
+def infer_node(model: ModelWrapper, node: NodeProto) -> tuple[Finding, ...]:
+    """Infer ``node``'s outputs from its inputs (see the module docstring). It does not
+    admit the node: conversion does, through ``KernelOp.admitted``."""
     if not is_custom_op(node.domain):
         _standard(model, node)
         infer_node_datatype(model, node, False)
@@ -93,10 +90,6 @@ def infer_node(model: ModelWrapper, node: NodeProto, admit: bool = False) -> tup
         _standard(model, standin)
         op.infer_node_datatype(model)
         return ()
-    if admit:
-        refused = op.admission()
-        if refused:
-            return refused
     for name, tensor in op.infer_output_tensors(model).items():
         model.set_tensor_shape(name, list(tensor.shape))
         state(model, name, tensor.element)

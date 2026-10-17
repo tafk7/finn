@@ -3,9 +3,9 @@
 
 """Small ONNX models of KernelOps, and of the source graphs conversion reads.
 
-Also the Chain (``support.chain``) as KernelOps with its choices saved (each kernel's
-on its node, each channel's on its tensor), its partition's network bound again, and a
-KernelOp's schema digest."""
+Also the Chain (``support.chain``) as KernelOps with its choices configured (each kernel's
+on its node, each channel's on its tensor, as ``support.configure`` sets them), its
+partition's network bound again, and a KernelOp's schema digest."""
 
 from __future__ import annotations
 
@@ -21,13 +21,14 @@ from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 
 from finn.core.graph.annotations.platform import write_target
-from finn.custom_op.kernels.base import KernelOp, kernel_op
+from finn.custom_op.kernels.base import KernelOp
 from finn.custom_op.kernels.network import Partition, persist
-from finn.custom_op.kernels.shell import InShell, in_shell, save_channels
+from finn.custom_op.kernels.shell import InShell, in_shell
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 from support import chain
+from support.configure import configured
 from support.helpers import ADAPTER_RAM_STYLES, open_choices, with_adapter_memories
 from support.op_specs.base import GENERAL
 from support.packaging import verified
@@ -300,25 +301,24 @@ def convert(model: ModelWrapper) -> tuple[ModelWrapper, ToKernelOps]:
 
 
 def kernel_model(**options: Any) -> ModelWrapper:
-    """The Chain as KernelOps, each node's choices saved on it and each channel's on its
-    tensor, as ``support.chain`` configures them."""
+    """The Chain as KernelOps, each node's choices set on it and each channel's on its
+    tensor, as ``support.chain`` configures them (``configured``)."""
     model = (
         chain_source(**options)
         .transform(InferShapes())
         .transform(ToKernelOps(TARGET))
         .transform(InferKernelTensors())
     )
-    channels: dict[str, dict[str, object]] = {}
+    choices: dict[str, Mapping[str, object]] = {}
     for node in model.graph.node:
-        kernel_op(model, node).save(MATMUL if node.op_type == "MatMul" else THRESHOLDING)
-        channels[node.input[0]] = EDGE
+        choices[node.name] = MATMUL if node.op_type == "MatMul" else THRESHOLDING
+        choices[node.input[0]] = EDGE
         if node.op_type == "MatMul":
             # Streamed weights: no value, so no source; the weight edge's transport.
             stored = model.get_initializer(node.input[1]) is not None
-            channels[node.input[1]] = WEIGHT_CHANNEL if stored else EDGE
-    channels |= {output.name: EDGE for output in model.graph.output}
-    save_channels(model, channels)
-    return model
+            choices[node.input[1]] = WEIGHT_CHANNEL if stored else EDGE
+    choices |= {output.name: EDGE for output in model.graph.output}
+    return configured(model, choices)
 
 
 #: The second MatMul's folding under which the Chain's streamed w2 presents each pass
@@ -336,11 +336,7 @@ def streamed_w2_model() -> ModelWrapper:
     that x is read once (at PE 2 it is read twice: over one row, the replay of each
     row is a repetition of the whole pass); the second folded ``ROW_MAJOR_W2``."""
     model = kernel_model(second_weights=False, rows=1)
-    (first,) = [node for node in model.graph.node if node.name == "first"]
-    kernel_op(model, first).save({"compute.packed.pe": 4})
-    (second,) = [node for node in model.graph.node if node.name == "second"]
-    kernel_op(model, second).save(ROW_MAJOR_W2)
-    return model
+    return configured(model, {"first": {"compute.packed.pe": 4}, "second": ROW_MAJOR_W2})
 
 
 def open_memories(bound: Partition) -> tuple[Partition, list[str]]:

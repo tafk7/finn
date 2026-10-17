@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 from qonnx.transformation.infer_shapes import InferShapes
 from support import chain
+from support.configure import configured, write_raw
 from support.helpers import Lanes, built, choose, cycles_of, labels
 from support.models import (
     INT3,
@@ -47,7 +48,6 @@ from finn.core.space import Available
 from finn.custom_op.kernels import shell
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
-from finn.custom_op.kernels.shell import save_channels
 from finn.kernels.explore import Ranked, SizeFifos
 from finn.kernels.network import dotted
 from finn.toolchain.launcher import host_toolchain
@@ -97,8 +97,7 @@ def test_channel_choices_persist_on_their_tensors() -> None:
 def test_a_refold_that_converts_widths_keeps_the_input_side_s_memory() -> None:
     model = kernel_model()
     configure_partition(model)
-    second = kernel_op(model, model.graph.node[2])
-    second.save({"compute.packed.simd": 4})
+    configured(model, {model.graph.node[2].name: {"compute.packed.simd": 4}})
     bound = network(model, model.graph.node, name="chain")
     # The levels edge now converts widths before its transport; its replay after it is
     # the same input_gen, whose memory choice still applies.
@@ -112,16 +111,18 @@ def test_a_refold_that_converts_widths_keeps_the_input_side_s_memory() -> None:
 def test_a_stale_edge_choice_is_dropped_and_the_forced_adapter_applies() -> None:
     model = kernel_model()
     configure_partition(model)
-    # A memory of a chain the levels edge does not take: the writer refuses it, so it is
+    # A memory of a chain the levels edge does not take: the seam refuses it, so it is
     # written past it.
     other = {"adapter.input_gen_vpc.input_gen.ram_style": "auto"}
-    with refused("choices-refused", error=KernelOpError, tensor="levels", keys=tuple(other)):
-        save_channels(model, {"levels": other})
+    with refused("inapplicable", owner="adapter.input_gen_vpc.input_gen.ram_style"):
+        configured(model, {"levels": other})
     model.set(CHANNEL_KEYS["adapter.input_gen_vpc.input_gen.ram_style"], "auto", tensor="levels")
     bound = network(model, model.graph.node, name="chain")
     stale = "levels.adapter.input_gen_vpc.input_gen.ram_style"
     assert list(bound.stale) == [stale]
-    assert bound.stale[stale] == "inapplicable"
+    assert [(f.code, dict(f.details)) for f in bound.stale[stale]] == [
+        ("inapplicable", {"value": "auto"})
+    ]
     levels = bound.member("levels")
     assert levels.query(type(levels).adapter).value == "input_gen"
 
@@ -131,9 +132,8 @@ def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> No
     value, so no source, and the source's choices, stated on the tensor w, now the
     weight edge's, are the partition's to replay: it drops them as stale."""
     model = matmul_model()
-    stored = kernel_op(model, model.graph.node[0])
-    stored.save(MATMUL)  # folded, so its channels' ends are known
-    save_channels(model, {"w": {"source.memstream.ram_style": "block"}})
+    configured(model, {"first": MATMUL})  # folded, so its channels' ends are known
+    configured(model, {"w": {"source.memstream.ram_style": "block"}})
     owned = network(model, model.graph.node)
     assert owned.member("w").source.ram_style == "block"  # the node owns w's channel
     lift(model, "w")
@@ -354,21 +354,64 @@ def test_a_parameter_two_nodes_own_is_refused_by_name() -> None:
 
 
 def test_a_kernel_choice_the_network_refuses_is_dropped_named_and_cleared_by_persist() -> None:
-    """A choice written past ``save`` reaches the network's replay, which drops it as
-    stale with why; the rest replays, and persisting the network clears the stale
-    attribute."""
+    """A choice written raw (as a graph FINN did not write holds it) reaches the network's
+    replay, which drops it as stale with why; the rest replays, and persisting the network
+    clears the stale attribute."""
     model = kernel_model()
-    first = kernel_op(model, model.graph.node[0])
-    first.set_nodeattr("compute.packed.simd", 2)
-    first.set_nodeattr("compute.packed.pe", 3)
+    write_raw(model, "first", "compute.packed.simd", 2)
+    write_raw(model, "first", "compute.packed.pe", 3)
     bound = network(model, model.graph.node, name="chain")
     assert list(bound.stale) == ["first.compute.packed.pe"]
-    assert "domain-membership" in bound.stale["first.compute.packed.pe"]
+    assert [f.code for f in bound.stale["first.compute.packed.pe"]] == ["domain-membership"]
     assert bound.member("first").compute.simd == 2
     # Its pe is open again; once chosen, the node holds the new value, nothing stale.
     persist(model, choose(bound, {"first.compute.packed.pe": 2}))
-    assert first.choices()["compute.packed.pe"] == 2
+    assert kernel_op(model, model.graph.node[0]).choices()["compute.packed.pe"] == 2
     assert not network(model, model.graph.node, name="chain").stale
+
+
+def test_a_stale_choice_keeps_the_kernel_s_finding_naming_its_value_and_candidates() -> None:
+    """The misfolded MatMul (``pe`` 3, written raw): the network keeps, per key, the
+    finding the kernel gave (its code and owner), with the value stored and the values the
+    decision could take now (its viable cases), and its message names them."""
+    model = kernel_model()
+    write_raw(model, "first", "compute.packed.simd", 2)
+    write_raw(model, "first", "compute.packed.pe", 3)
+    bound = network(model, model.graph.node, name="chain")
+    ((key, (found,)),) = bound.stale.items()
+    assert key == "first.compute.packed.pe"
+    assert (found.kind, found.code, found.owner) == (
+        FindingKind.REJECTION,
+        "domain-membership",
+        "compute.packed.pe",
+    )
+    ((_, viable),) = [
+        item for item in bound.viable(["first"]) if item[0] == ("first", "compute.packed.pe")
+    ]
+    assert 3 not in viable.cases
+    assert dict(found.details) == {"value": 3, "candidates": viable.cases}
+    assert found.message == "not one of " + ", ".join(map(str, viable.cases))
+
+
+def test_a_stale_choice_is_refused_naming_its_key_once() -> None:
+    """The refusal of the shell's network prints the key once, with the value stored and the
+    values it could take, and carries the kernel's finding as its cause."""
+    model = kernel_model()
+    write_raw(model, "first", "compute.packed.simd", 2)
+    write_raw(model, "first", "compute.packed.pe", 3)
+    with refused(
+        "choices-stale",
+        error=KernelOpError,
+        owner="configured_network",
+        node="label",
+        keys=("first.compute.packed.pe",),
+    ) as stale:
+        shell.configured_network(model, "label")
+    assert str(stale.error).count("compute.packed.pe") == 1
+    assert "first.compute.packed.pe = 3: not one of 1, 2, 4" in str(stale.error)
+    assert [(cause.code, cause.owner) for cause in stale.finding.causes] == [
+        ("domain-membership", "compute.packed.pe")
+    ]
 
 
 def test_persist_clears_what_the_network_does_not_hold() -> None:
