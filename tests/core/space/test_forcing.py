@@ -111,8 +111,14 @@ def test_a_batch_commits_a_choice_under_a_selector_another_choice_of_it_forces()
     # Three lanes refuse the stub core, so packed is forced, and its PE applies.
     point = commit(base, {"lanes": 3, "compute.packed.pe": 1})
     assert forced(point) == {"compute": "packed"} and point.compute.pe == 1
-    refused = base.try_with_choices(commit_handles(base, {"lanes": 2, "compute.packed.pe": 1}))
-    assert not refused.accepted  # two lanes leave both cores open: pe is not applicable
+    # Two lanes leave both cores open: pe's own check cannot conclude (its selector is
+    # open), so the choice is kept unchecked with the selector as its blocker.
+    kept = base.try_with_choices(commit_handles(base, {"lanes": 2, "compute.packed.pe": 1}))
+    assert kept.accepted
+    assert inspection.unchecked(kept.instance) == (
+        inspection.Unchecked("compute.packed.pe", 1, ("compute",)),
+    )
+    assert inspection.unchecked(fresh(kept.instance)) == inspection.unchecked(kept.instance)
 
 
 def commit_handles(point: Any, choices: dict[str, object]) -> dict[Any, object]:

@@ -36,10 +36,16 @@ ChangeRequest: TypeAlias = Change[Any]
 
 @dataclass(frozen=True, slots=True)
 class ChangeOutcome:
+    """What a change did to one choice. ``unchecked``: the choice is kept, and its own check
+    cannot conclude yet (it reads a choice still open, or an input not supplied): ``result``
+    is the unresolved answer naming what it waits on, and the choice reads unresolved until
+    a change makes its check succeed (``inspection.unchecked`` lists them)."""
+
     owner: str
     result: QueryResult[bool]
     status: Literal["unchanged", "admissible", "refused", "changed", "removed"]
     requested: bool = True
+    unchecked: bool = False
 
 
 @dataclass(frozen=True, slots=True)

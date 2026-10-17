@@ -61,14 +61,14 @@ def test_a_chain_walked_through_other_widths() -> None:
         report = walk(
             design_space(Pipeline(width=10)), seed=seed, steps=120, facts={"width": WIDTHS}
         )
-        check(report, facts=True, known=True)
+        check(report, facts=True)
 
 
 def test_a_chain_walked_through_other_widths_from_a_configured_start() -> None:
     start = replay(
         design_space(Pipeline(width=10)), {"u0.compute": "packed", "probe.enabled": True}
     )
-    check(walk(start, seed=4, steps=120, facts={"width": WIDTHS}), facts=True, known=True)
+    check(walk(start, seed=4, steps=120, facts={"width": WIDTHS}), facts=True)
 
 
 def test_the_house_walked_through_other_budgets() -> None:
@@ -79,7 +79,7 @@ def test_the_house_walked_through_other_budgets() -> None:
             steps=120,
             facts={"budget": (60, 100, 150, 300, 400, 500)},
         )
-        check(report, forced=False, facts=True, known=True)
+        check(report, forced=False, facts=True)
 
 
 # -- an optional formal: its presence is a fact an evaluation reads ---------------------------
@@ -341,24 +341,28 @@ def test_other_facts_refuse_a_retained_choice_their_domain_excludes_and_name_its
     assert committed(point)["u0.compute.packed.pe"] == 2  # the base is as it was
 
 
-def test_a_retained_choice_whose_selector_the_new_facts_open_is_refused_not_published() -> None:
+def test_a_retained_choice_whose_selector_the_new_facts_open_is_kept_unchecked() -> None:
     # At 9 the stub core refuses (an odd width), so the selector is forced to the packed
-    # core and `pe` is admitted. At 12 both cores are viable: the selector is open, and a
-    # trial that read the base's forced value would publish a choice that waits on it.
+    # core and `pe` is admitted. At 12 both cores are viable: the selector is open, and the
+    # choice's own check cannot conclude. It is kept unchecked with the selector as its
+    # blocker, not published as an ordinary choice and not refused.
     point = design_space(Pipeline(width=9))
     assert isinstance(point.u0.compute, Packed)
     point = replay(point, {"u0.compute.packed.pe": 3})
     report = point.try_with_facts({Pipeline.width: 12})
-    assert not report.accepted
-    waiting = {o.owner: o.result for o in report.outcomes if o.status == "refused"}
-    assert isinstance(waiting["u0.compute.packed.pe"], Unresolved)
-    # What a binding at width 12 says of the same choice.
-    with pytest.raises(ConfigurationError):
-        replay(design_space(Pipeline(width=12)), {"u0.compute.packed.pe": 3})
-    # The same choice once the selector is committed with it: admitted at width 12.
+    assert report.accepted
+    kept = [(o.owner, o.status, o.unchecked) for o in report.outcomes if o.unchecked]
+    assert kept == [("u0.compute.packed.pe", "unchanged", True)]
+    assert inspection.unchecked(report.instance) == (
+        inspection.Unchecked("u0.compute.packed.pe", 3, ("u0.compute",)),
+    )
+    assert inspection.unchecked(fresh(report.instance)) == inspection.unchecked(report.instance)
+    # What a binding at width 12 says of the same choice: it is kept unchecked there too.
+    # The same choice once the selector is committed with it: checked at width 12.
     both = point.try_with_facts({Pipeline.width: 12}, {Pipeline.u0.compute: "packed"})
     assert both.accepted and both.instance.width == 12
     assert committed(both.instance)["u0.compute.packed.pe"] == 3
+    assert inspection.unchecked(both.instance) == ()
 
 
 def test_a_refusal_names_the_choice_domain_beside_a_selector_left_no_case() -> None:
