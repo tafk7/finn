@@ -21,6 +21,7 @@ from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
 from support import chain
+from support.configure import configured, write_raw
 from support.helpers import exact_result_dtype
 from support.models import DOMAIN, TARGET, chain_source, lift
 from support.refusals import refused
@@ -29,9 +30,7 @@ from finn.core.graph.annotations.platform import PLATFORM_KEYS, read_target
 from finn.core.graph.errors import FactUnstated, KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import save_channels
 from finn.kernels.values.semantics import IntegerTensorValue
-from finn.transformation.general import ApplyConfig
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps, kernel_choices_config
 
 
@@ -171,18 +170,22 @@ def test_the_converted_graph_computes_the_source_graphs_results(second_weights: 
     assert np.array_equal(produced["y"], expected["y"])
 
 
-def test_the_nodes_choices_round_trip_through_apply_config() -> None:
-    """The export names nodes and, after them, tensors: ApplyConfig applies the nodes'
-    (a channel's, on its tensor, ``Hold`` reads back: test_explore). Each node holds every
-    choice of its own from conversion on (its baselines); ApplyConfig sets attributes
-    and clears none, so it applies them on nodes holding none."""
+def test_the_export_of_the_choices_round_trips_through_configured() -> None:
+    """The export names nodes and, after them, tensors: ``configured`` sets what the export
+    holds (a node's, and a channel's on its tensor), as ``Hold`` reads it back
+    (test_explore). Each node holds every choice of its own from conversion on (its
+    baselines); the round trip starts from nodes holding none, as a graph FINN did not
+    write holds them. A forced key is never stored (``ram_style`` auto forces the stages
+    to 0), so the export does not hold it."""
     model = inferred()
-    first = model.get_customop_wrapper(model.graph.node[0])
-    first.save({"compute.packed.pe": 2})
-    activate = model.get_customop_wrapper(model.graph.node[1])
-    # By hand, a change names what it clears: no block stage under auto.
-    activate.save({"ram_style": "auto", "ultra_stages": 0, "block_stages": None})
-    save_channels(model, {"w1": {"transport": "direct"}})
+    configured(
+        model,
+        {
+            "first": {"compute.packed.pe": 2},
+            "activate": {"ram_style": "auto"},
+            "w1": {"transport": "direct"},
+        },
+    )
     config = kernel_choices_config(model)
     assert config == {
         "first": {
@@ -190,7 +193,7 @@ def test_the_nodes_choices_round_trip_through_apply_config() -> None:
             "compute.packed.reducer": "tree",
             "compute.packed.simd": 1,
         },
-        "activate": {"deep_pipeline": 0, "pe": 1, "ram_style": "auto", "ultra_stages": 0},
+        "activate": {"deep_pipeline": 0, "pe": 1, "ram_style": "auto"},
         "second": {
             "compute.packed.pe": 1,
             "compute.packed.reducer": "tree",
@@ -198,13 +201,12 @@ def test_the_nodes_choices_round_trip_through_apply_config() -> None:
         },
         "w1": {"transport": "direct"},
     }
-    nodes = {name: held for name, held in config.items() if name != "w1"}
     blank = inferred()
     for node in blank.graph.node:
-        op = blank.get_customop_wrapper(node)
-        op.save(dict.fromkeys(op.choices()))
-    applied = blank.transform(ApplyConfig(nodes))
-    assert kernel_choices_config(applied) == nodes
+        for key in kernel_op(blank, node).choices():
+            write_raw(blank, node.name, key, None)
+    applied = configured(blank, config)
+    assert kernel_choices_config(applied) == config
 
 
 # -- the TFC path's input: a Reshape, then thresholds as streamlining leaves them ---------

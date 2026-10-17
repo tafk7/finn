@@ -38,7 +38,6 @@ from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
-from finn.transformation.general import ApplyConfig
 from finn.transformation.kernels import InferKernelTensors
 
 FOLDING = {
@@ -299,16 +298,16 @@ def test_an_unknown_attribute_is_refused() -> None:
         node.attribute.pop()
 
 
-def test_apply_config_writes_choices_replay_checks() -> None:
-    model = matmul_model()
-    model = model.transform(
-        ApplyConfig({"first": {**FOLDING, "compute.packed.compute_pumping": 0}})
-    )
+def test_replay_reads_the_stored_folding_and_verify_node_catches_a_misfolding() -> None:
+    model = configured(matmul_model(), {"first": FOLDING})
     assert op(model).point().compute.pe == 2
-    # A folding config naming only the nested key replays under the forced selector.
-    alone = matmul_model().transform(ApplyConfig({"first": {"compute.packed.pe": 2}}))
+    # A folding naming only the nested key replays under the forced selector.
+    alone = configured(matmul_model(), {"first": {"compute.packed.pe": 2}})
     assert op(alone).point().compute.pe == 2
-    misfolded = matmul_model().transform(ApplyConfig({"first": {"compute.packed.pe": 3}}))
+    # A misfolding the seam would refuse is stored raw, as a graph FINN did not write holds
+    # it: the replay's verification names the key.
+    misfolded = matmul_model()
+    write_raw(misfolded, "first", "compute.packed.pe", 3)
     assert "compute.packed.pe" in op(misfolded).verify_node()[0]
 
 

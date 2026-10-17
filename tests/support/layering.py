@@ -374,7 +374,7 @@ LAYERS: tuple[Layer, ...] = (
         ("numpy", "onnx", "qonnx", "pynq", "driver", "driver_base", "dataset_loading"),
         "tests/kernel_ops",
     ),
-    # The flow: every FINN module no other layer claims (the builder, ApplyConfig).
+    # The flow: every FINN module no other layer claims (the builder).
     Layer(
         "flow",
         ("finn",),

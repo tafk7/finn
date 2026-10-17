@@ -12,8 +12,8 @@ but a required one no strategy set), in graph order: each node's input channels
 not yet written (a parameter it owns among them), the node, its output channels. A
 node and a tensor never share a name in a partition's body (its network refuses it,
 and this export too, by raw name, on a body no network has seen), so
-``{graph name: {key: value}}`` names each once. The nodes' entries are also
-the form ``ApplyConfig`` applies; it applies no tensor's.
+``{graph name: {key: value}}`` names each once. This is the form ``Hold`` reads back, and
+the test helper ``configured`` sets.
 """
 
 from __future__ import annotations
