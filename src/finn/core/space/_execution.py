@@ -411,14 +411,13 @@ def run(snapshot: Snapshot, index: int, frame: Frame | None = None) -> Evaluatio
                 _runtime.read_decisions(snapshot, dependencies, via),
             )
             if isinstance(task.identity, int):
-                held = snapshot.cache.get(task.identity)
-                if held is None:
-                    snapshot.cache[task.identity] = outcome
-                else:
-                    # A query made from native code runs on the same snapshot and may have
-                    # cached this node first: the cache is only added to, and the first
-                    # entry stays. A change's reach reads ``dependencies``, ``via`` and
-                    # ``decisions``, so that is sound only if this run read the same.
+                # A query made from native code runs on the same snapshot and may have
+                # cached this node first: the cache is only added to, and the first
+                # entry stays (``setdefault`` adds without replacing, in one lookup). A
+                # change's reach reads ``dependencies``, ``via`` and ``decisions``, so
+                # that is sound only if this run read the same.
+                held = snapshot.cache.setdefault(task.identity, outcome)
+                if held is not outcome:
                     _same(snapshot, task.identity, held, outcome)
         task.frame.close()
         tasks.pop()
