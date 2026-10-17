@@ -126,6 +126,18 @@ def test_a_key_forced_to_its_own_value_is_accepted_and_not_stored() -> None:
     assert stored(model)["pe"] == THRESHOLDING["pe"]
 
 
+def test_a_key_the_batch_opens_is_set_though_it_was_forced_before_it() -> None:
+    """On the converted Chain the baseline holds ``compute_pumping`` forced (pumping reads
+    SIMD, and SIMD is at 1); the folding of the same call opens it. One call stores it, as
+    a strategy's later set would, which saw what the earlier one opened."""
+    model = open_chain()
+    configured(model, {"first": MATMUL})
+    pumping = "compute.packed.compute_pumping"
+    assert stored(model)[pumping] == MATMUL[pumping]
+    assert "compute" not in stored(model)
+    assert stored(model)["compute.packed.simd"] == MATMUL["compute.packed.simd"]
+
+
 def test_a_key_forced_to_another_value_is_refused() -> None:
     with refused("forced", owner="first.compute"):
         configured(matmul_model(), {"first": {"compute": "int8_dsp58"}})

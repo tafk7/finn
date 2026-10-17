@@ -318,9 +318,6 @@ def kernel_model(**options: Any) -> ModelWrapper:
             stored = model.get_initializer(node.input[1]) is not None
             choices[node.input[1]] = WEIGHT_CHANNEL if stored else EDGE
     choices |= {output.name: EDGE for output in model.graph.output}
-    # Twice: the folding opens choices that were forced at the baseline (pumping reads SIMD),
-    # which the helper drops from a batch while forced and the second pass sets.
-    configured(model, choices)
     return configured(model, choices)
 
 

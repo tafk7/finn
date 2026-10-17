@@ -22,7 +22,7 @@ from support.models import MATMUL, TARGET, matmul_model, thresholding_model
 from support.refusals import refused
 
 from finn.core.graph.annotations.platform import write_target
-from finn.core.space import DefinitionError, Rejected, design_space
+from finn.core.space import DefinitionError, Rejected, design_space, inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import InShell, in_shell
 from finn.kernels.configure import commit
@@ -91,10 +91,13 @@ def test_a_doubled_clock_is_the_shells_not_the_platforms() -> None:
 
 def test_runtime_writable_thresholds_need_a_control_bus() -> None:
     # A KernelOp places no control bus to present its AXI-Lite interface through: the choice
-    # is forced False (the kernel's tests pin its reason, ``threshold-control``), so the seam
+    # is forced False, its reason ``threshold-control`` on the op's own choice, and the seam
     # refuses it as forced.
+    model = thresholding_model()
+    (forced,) = [item for item in inspection.forced(op(model).point()) if item.key == "use_axilite"]
+    assert forced.value is False and "threshold-control" in forced.refused["True"]
     with refused("forced", owner="activate.use_axilite"):
-        configured(thresholding_model(), {"activate": {"use_axilite": True}})
+        configured(model, {"activate": {"use_axilite": True}})
 
 
 def test_a_partitions_weight_stream_reads_the_platform() -> None:
