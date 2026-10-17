@@ -50,6 +50,9 @@ from finn.core.space import (
     requiring,
 )
 
+# Each test runs with the readers index used for every cache, then for none: the same answers.
+pytestmark = pytest.mark.usefixtures("index_path")
+
 
 class Unit(Space):
     width: int = Param()

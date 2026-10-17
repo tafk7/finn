@@ -34,9 +34,10 @@ one Decision and starts from that one's evaluations that did not read it, so a
 case's trial re-derives only what the case reaches. The snapshot then keeps what
 the last copy evaluated that read no refused Decision: there, every other open
 Decision reads as it does on the snapshot. An evaluation records every Decision it
-read (``Evaluation.decisions``), so each of these is one pass: found from the readers of
-the Decisions a copy adds, not by looking at every evaluation (``Cache.without``), and
-what the last copy evaluated is all the snapshot gains. A trial reads its
+read (``Evaluation.decisions``), so each of these is one pass: found, in a large
+cache, from the readers of the Decisions a copy adds and not by looking at every
+evaluation (``_runtime.inherit``), and what the last copy evaluated is all the snapshot
+gains. A trial reads its
 base's forced values for the Decisions it does not change; where the base
 forces nothing, the forced values of the configuration it would publish, found
 once and published with it, so a batch may commit a choice nested under a
@@ -241,7 +242,7 @@ def _extended(base: Snapshot, assignments: Mapping[int, object], added: int) -> 
     Decision ``added``. It starts from every evaluation of ``base`` that did not read
     ``added``, directly or through another: those answer the same in the copy."""
     copy = Snapshot(base.model, base.parameters, assignments, forcing=False)
-    object.__setattr__(copy, "cache", base.cache.without((added,), keep_fresh=True))
+    _runtime.inherit(copy, base, (added,), keep_fresh=True)
     return copy
 
 
@@ -419,11 +420,7 @@ def _rounds(
     current = Snapshot(
         snapshot.model, snapshot.parameters, {**snapshot.assignments, **values}, forcing=False
     )
-    object.__setattr__(
-        current,
-        "cache",
-        snapshot.cache.without([index for index in open_ if index not in values]),
-    )
+    _runtime.inherit(current, snapshot, [index for index in open_ if index not in values])
     refused: dict[int, Rejected] = {}
     progressed = True
     while progressed:
@@ -467,7 +464,7 @@ def _publish(
     # The last copy assigns every forced value as the snapshot reads it, and an open
     # Decision that is not forced reads as unassigned on both, unless it is refused:
     # what the copy evaluated that read no refused Decision answers the same here.
-    for index, entry in _runtime.unaffected(current.cache.fresh, refused).items():
+    for index, entry in _runtime.unaffected(_runtime.fresh(current), refused).items():
         snapshot.cache.setdefault(index, entry)
     return Found(
         MappingProxyType(values), MappingProxyType(dict(refused)), MappingProxyType(verdicts)

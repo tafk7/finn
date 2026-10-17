@@ -17,6 +17,7 @@ publishes records its guard's reads, as a recomputation does, and answers as one
 
 from __future__ import annotations
 
+import pytest
 from support.space_cores import Exclusive, Gated, Mutual
 from support.space_walk import check, fresh, walk
 
@@ -42,6 +43,9 @@ from finn.core.space import (
     view,
 )
 from finn.core.space import _runtime as runtime
+
+# Each test runs with the readers index used for every cache, then for none: the same answers.
+pytestmark = pytest.mark.usefixtures("index_path")
 
 # -- a chain of units whose widths follow their neighbours' choices -------------------------
 

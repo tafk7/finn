@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from support.space_cores import CORES, Packed, Stub, commit, forced
 from support.space_walk import fresh as recomputed
 
@@ -33,6 +34,9 @@ from finn.core.space import (
     inspection,
     requires,
 )
+
+# Each test runs with the readers index used for every cache, then for none: the same answers.
+pytestmark = pytest.mark.usefixtures("index_path")
 
 
 def test_a_successor_keeps_what_its_change_does_not_reach_and_derives_the_rest() -> None:
