@@ -238,15 +238,21 @@ def package_tcl(
                 + (", ".join(free) or "none")
             )
         [primary] = free
-        doubled = [name for name, rate in rates.items() if isinstance(rate, Derived)]
+        derived = {name: rate for name, rate in rates.items() if isinstance(rate, Derived)}
+        for name, rate in derived.items():
+            if rate.of != primary:
+                raise IpxactError(
+                    f"{name}: derived from {rate.of}, but the out-of-context constraints"
+                    f" know only the free clock {primary}'s period"
+                )
         tcl += [
             "set xdc [open $project/clocks.xdc w]",
             f'puts $xdc "create_clock -period {clock_ns} -name {primary}'
             f' \\[get_ports {primary}\\]"',
             *(
-                f'puts $xdc "create_clock -period {clock_ns / 2} -name {name}'
+                f'puts $xdc "create_clock -period {clock_ns / rate.ratio} -name {name}'
                 f' \\[get_ports {name}\\]"'
-                for name in doubled
+                for name, rate in derived.items()
             ),
             "close $xdc",
             "add_files -fileset constrs_1 -norecurse $project/clocks.xdc",

@@ -272,6 +272,28 @@ def test_the_out_of_context_clock_is_the_one_free_clock_or_refused() -> None:
         _synthesized(two)
 
 
+def test_a_derived_clock_is_constrained_at_its_clocks_period_over_its_ratio() -> None:
+    tripled = (
+        Signal("core_clk", Direction.IN, 1, Clock(Free())),
+        Signal("core_clk3x", Direction.IN, 1, Clock(Derived("core_clk", 3))),
+    )
+    assert f"create_clock -period {5.0 / 3} -name core_clk3x \\[get_ports core_clk3x\\]" in (
+        _synthesized(tripled)
+    )
+
+
+def test_a_derived_clock_of_another_clock_than_the_free_one_is_refused() -> None:
+    free = Signal("core_clk", Direction.IN, 1, Clock(Free()))
+    elsewhere = Signal("fast", Direction.IN, 1, Clock(Derived("other_clk", 2)))
+    with pytest.raises(IpxactError, match="fast.*other_clk.*core_clk"):
+        _synthesized((free, elsewhere))
+    # Derived of a derived clock: the constraints know only the free clock's period.
+    chained = Signal("faster", Direction.IN, 1, Clock(Derived("fast", 2)))
+    base = Signal("fast", Direction.IN, 1, Clock(Derived("core_clk", 2)))
+    with pytest.raises(IpxactError, match="faster.*fast.*core_clk"):
+        _synthesized((free, base, chained))
+
+
 def test_the_script_searches_the_headers_directories_and_only_with_headers() -> None:
     def script(sources: tuple[str, ...]) -> str:
         emitted = EmittedModule("top__0", Path("/p/src"), sources, ())
