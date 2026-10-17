@@ -25,8 +25,9 @@ project (``project/``) is not kept. Vivado records the IP's include directories 
 absolute path; the store rewrites each one inside the project relative to the IP, so an
 entry, and every copy of it, can move. An IP whose ``component.xml`` still names the
 directory it was packaged in is refused. The entry's files are read-only: ``place``
-copies an entry into a build's directory by hard links where it can, so a write into
-the copy would change the store.
+copies an entry into a build's directory by hard links where it can, and a link is the
+store's own file, so read-only refuses a write into the copy, which would change the
+store. A build replaces a placed file; it does not write into it.
 
 It takes directories, never a kernel value: ``finn.toolchain`` imports no kernel layer.
 """

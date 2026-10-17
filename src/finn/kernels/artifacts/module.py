@@ -88,9 +88,10 @@ def typed_canonical(value: object) -> object:
     """``value`` with each enum and dataclass tagged by its type, for a digest.
 
     A second canonical form beside ``projection.project``, which differs from it only
-    by the dataclass type tag; ``fingerprint`` alone reads it. Folding the two changes
-    every module digest, and so the emitted module names: it waits for the next
-    ``PROJECTION_VERSION`` bump.
+    by the dataclass type tag (``project`` names a dataclass's fields alone, this also
+    its type); ``fingerprint`` alone reads it, and ``digest`` projects its result.
+    Folding the two would change every module digest, and so every emitted module
+    name.
     """
     if isinstance(value, Enum):
         return (f"enum:{type(value).__module__}.{type(value).__qualname__}", value.name)

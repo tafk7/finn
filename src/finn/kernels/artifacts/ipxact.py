@@ -212,7 +212,12 @@ def package_tcl(
     ip_name: str,
     run_synth: bool,
 ) -> str:
-    """The Vivado batch script that packages ``emitted`` in ``emitted.directory``'s parent."""
+    """The Vivado batch script that packages ``emitted`` in ``emitted.directory``'s parent.
+
+    With ``run_synth``, its out-of-context constraints give the module's one free clock
+    pin ``clock_ns`` and each derived clock that period over its ratio; ``IpxactError``
+    unless the pins have exactly one free clock and every derived clock is derived from
+    it."""
     top = emitted.entry_point
     # A header is found where its includers read it from.
     includes = " ".join(f"$project/src/{d}" for d in include_directories(emitted.sources))

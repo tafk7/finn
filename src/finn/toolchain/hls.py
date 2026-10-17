@@ -239,8 +239,16 @@ def synthesize(
     default); ``toolchain`` runs the frontend; ``libraries`` are the directories the
     script reads in place, each by a Tcl variable of its name. The running step's
     manifest lists the entry, built or reused (``finn.core.reporting.manifest.stored``).
-    Raises ``ToolFailed`` when the tool fails or leaves no exported RTL,
-    ``ToolUnavailable`` when the toolchain has no HLS installation or frontend to run."""
+    Raises, before anything is looked up or run, ``ValueError`` when ``request`` holds no
+    ``script.tcl`` or the selection names no HLS frontend (``selected_frontend``), and
+    ``ToolUnavailable`` when the toolchain names no HLS installation (``XILINX_HLS`` or
+    ``XILINX_VITIS``): a cache hit needs the installation, whose identity is in the key,
+    but runs no tool. A build also raises ``ToolUnavailable`` when the frontend is not on
+    the toolchain's route or its version cannot be probed, ``Refusal``
+    (``hls-frontend-mismatch``) when the probed release does not match the frontend
+    (``command``; a ``vitis-run`` that does not advertise HLS is a ``RuntimeError``), and
+    ``ToolFailed`` when the tool does not finish, exits non-zero or
+    leaves no exported RTL."""
     cache = hls_cache() if cache is None else cache
     libraries = dict(libraries or {})
     if not (Path(request) / REQUEST_SCRIPT).is_file():
