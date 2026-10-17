@@ -107,7 +107,7 @@ from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available
 from finn.custom_op.kernels.base import why
-from finn.custom_op.kernels.network import Partition, persist
+from finn.custom_op.kernels.network import Partition, persist, stale_text
 from finn.custom_op.kernels.shell import (
     InShell,
     ShellResources,
@@ -561,7 +561,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         "fifos": _fifos(strategy, entry, placed),
         "fifos_judged": _judged(entry, check),
         "dropped": {
-            **bound.stale,
+            **{key: stale_text(key, found) for key, found in bound.stale.items()},
             **{dotted(key): why(found) for key, found in seam.dropped.items()},
         },
         **({} if check is None else {"fifo_check": check.report()}),

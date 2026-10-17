@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Collection, Hashable, Iterable, Mapping
+from dataclasses import replace
 from functools import partial
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
@@ -87,7 +88,7 @@ from finn.core.graph.facts import edge_tensor, initializer, reading
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available, QueryResult, Rejected, Space, Unresolved
-from finn.custom_op.kernels.base import KernelOp, kernel_op, typed, why
+from finn.custom_op.kernels.base import KernelOp, kernel_op, typed
 from finn.kernels.artifacts.module import Composed, ProducerIdentity
 from finn.kernels.base import RESOURCES
 from finn.kernels.channels import Channel
@@ -116,20 +117,71 @@ def member(name: str) -> str:
     return re.sub(r"\W", "_", name)
 
 
+def _primitive(value: object) -> bool:
+    """Whether a finding can hold ``value`` as a detail."""
+    return type(value) in (bool, int, float, str)
+
+
+def _described(bound: Network, stored: Mapping[Key, object]) -> dict[str, tuple[Finding, ...]]:
+    """What replay dropped of ``bound``'s stored choices, by dotted key, each with the
+    kernel's findings kept: the value stored, and for a value outside its domain the cases
+    the decision could take now (its viable ones, read where the dropped choice is open
+    again), which its message names."""
+    dropped = bound.dropped
+    if not dropped:
+        return {}
+    cases = {key: item.cases for key, item in bound.viable({name for name, _ in dropped})}
+
+    def described(key: Key, finding: Finding) -> Finding:
+        details = dict(finding.details)
+        message = finding.message
+        if key in stored and _primitive(stored[key]):
+            details["value"] = stored[key]
+        viable = cases.get(key, ())
+        if finding.code == "domain-membership" and viable and all(map(_primitive, viable)):
+            details["candidates"] = viable
+            message = "not one of " + ", ".join(map(str, viable))
+        return replace(finding, message=message, details=tuple(details.items()))
+
+    return {
+        dotted(key): tuple(described(key, finding) for finding in found)
+        for key, found in dropped.items()
+    }
+
+
+def stale_text(key: str, found: Iterable[Finding]) -> str:
+    """A stale choice as a line, its key (dotted, ``first.compute.packed.pe``) named once:
+    ``first.compute.packed.pe = 3: not one of 1, 2, 4 (domain-membership)``, the value
+    where the findings hold it, each finding's message and its code (an inapplicable one
+    is its code only)."""
+    findings = tuple(found)
+    values = [dict(each.details)["value"] for each in findings if "value" in dict(each.details)]
+    named = f"{key} = {values[0]}" if values else key
+    said = []
+    for finding in findings:
+        message = finding.message
+        if values:
+            message = message.removeprefix(f"{values[0]!r}: ")
+        said.append(message if message == finding.code else f"{message} ({finding.code})")
+    return f"{named}: " + "; ".join(said)
+
+
 class Partition(Network):
     """A network bound from a graph's nodes (see the module docstring): its ``name`` (its
     module's), its ``boundary`` (each boundary tensor and its port, inputs then outputs),
     the boundary channels offered ends (``ends``), the stored choices dropped as stale
-    where it was bound, by key, with why (``stale``), and whether it holds every KernelOp
-    of its model (``whole``). Immutable, as a network: a change returns another, which
-    keeps these."""
+    where it was bound, by key, with the kernel's findings (``stale``: each keeps its code,
+    its owner and its details, which add the value stored, ``value``, and for a value
+    outside its domain the cases the decision could take, ``candidates``; ``stale_text``
+    makes a line of them), and whether it holds every KernelOp of its model (``whole``).
+    Immutable, as a network: a change returns another, which keeps these."""
 
     __slots__ = ("_memo", "boundary", "ends", "name", "stale", "whole")
 
     name: str
     boundary: tuple[tuple[str, str], ...]
     ends: tuple[str, ...]
-    stale: Mapping[str, str]
+    stale: Mapping[str, tuple[Finding, ...]]
     whole: bool
     _memo: dict[str, object]
 
@@ -141,13 +193,13 @@ class Partition(Network):
         ends: tuple[EndOffer, ...],
         boundary: tuple[tuple[str, str], ...],
         stored: Mapping[Key, object],
-        stray: Mapping[str, str],
+        stray: Mapping[str, tuple[Finding, ...]],
         whole: bool,
     ) -> None:
         super().__init__(members, stored=stored, nodes={each: member(each) for each in members})
         self.name, self.boundary, self.whole = name, boundary, whole
         self.ends = tuple(tensor for tensor, _ in boundary) if ends else ()
-        self.stale = {dotted(key): why(found) for key, found in self.dropped.items()} | dict(stray)
+        self.stale = _described(self, stored) | dict(stray)
         self._memo = {}
 
     def _changed(self) -> None:
@@ -284,10 +336,11 @@ def _stored(
     tensors: list[str],
     stating: Mapping[str, Mapping[str, object]],
     whole: bool,
-) -> tuple[dict[Key, object], dict[str, str]]:
+) -> tuple[dict[Key, object], dict[str, tuple[Finding, ...]]]:
     """The choices the network replays, by key: each node's attributes, each channel's as
     its tensor states them (or as ``stating`` gives a tensor's); and, where ``whole``, those
-    of a tensor that states some and is no channel of it, by dotted key, each with why."""
+    of a tensor that states some and is no channel of it, by dotted key, each with its
+    finding (``channel-choice-stray``)."""
     found: dict[Key, object] = {}
     for node, op in zip(nodes, ops):
         found |= {(node.name, key): value for key, value in op.stored().items()}
@@ -302,8 +355,16 @@ def _stored(
             continue
         found |= {(tensor, key): value for key, value in typed(Channel, values).items()}
     channels = set(tensors)
-    stray = {
-        dotted((tensor, key)): "stated on a tensor that is no channel of the partition"
+    stray: dict[str, tuple[Finding, ...]] = {
+        dotted((tensor, key)): (
+            Finding(
+                FindingKind.REJECTION,
+                "channel-choice-stray",
+                key,
+                "stated on a tensor that is no channel of the partition",
+                (("tensor", tensor),),
+            ),
+        )
         for tensor in stated
         if whole and tensor not in channels
         for key in channel_choices(model, tensor)
@@ -662,4 +723,5 @@ __all__ = [
     "member",
     "network",
     "persist",
+    "stale_text",
 ]

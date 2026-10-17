@@ -911,6 +911,13 @@ def test_a_choice_stale_at_the_cut_is_noted(
         "first.compute.packed.pe",
     )
     assert "domain-membership" in finding.message
+    # The key is named once, with the value and the values it could take; the kernel's
+    # finding is kept as the note's cause.
+    assert finding.message.count("compute.packed.pe") == 1
+    assert "first.compute.packed.pe = 3: not one of 1, 2, 4" in finding.message
+    assert [(cause.code, dict(cause.details)) for cause in finding.causes] == [
+        ("domain-membership", {"value": 3, "candidates": (1, 2, 4)})
+    ]
 
 
 def test_a_step_that_moves_the_target_s_folding_leaves_the_bitfile_no_objective(

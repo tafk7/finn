@@ -53,6 +53,7 @@ from finn.custom_op.kernels.network import (
     _together,
     member,
     persist,
+    stale_text,
 )
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import CYCLES
@@ -254,13 +255,23 @@ def configured_network(
     FIFO the model calls too small."""
     bound = in_shell(model, model.graph.node)
     if bound.stale:
-        raise KernelOpError.refused(
-            "choices-stale",
-            "configured_network",
-            f"{label}: stale choices, refused by the partition: "
-            + "; ".join(f"{key}: {reason}" for key, reason in bound.stale.items()),
-            tuple(bound.stale),
-            node=label,
+        keys = tuple(bound.stale)
+        message = f"{label}: stale choices, refused by the partition: " + "; ".join(
+            stale_text(key, found) for key, found in bound.stale.items()
+        )
+        raise KernelOpError(
+            message,
+            keys,
+            findings=(
+                Finding(
+                    FindingKind.REJECTION,
+                    "choices-stale",
+                    "configured_network",
+                    message,
+                    (("keys", keys), ("node", label)),
+                    tuple(finding for found in bound.stale.values() for finding in found),
+                ),
+            ),
         )
     open_keys = bound.undecided()
     if open_keys:
@@ -385,15 +396,15 @@ def refuse_unverified(model: ModelWrapper, label: str) -> None:
 # -- a body's choices, on its network in its shell ---------------------------------------
 
 
-def baseline_choices(model: ModelWrapper) -> dict[str, str]:
+def baseline_choices(model: ModelWrapper) -> dict[str, tuple[Finding, ...]]:
     """Every choice of a partition's body, ``model``, at its baseline where the body
     leaves it open, and persisted, each owner's whole (``persist``): the network of its
     KernelOps bound in its shell (``in_shell``), their stored choices replayed in context,
     and every open choice with cases that is not required given its first viable case the
     seam accepts, in rank order (``Seam.baseline``). The channels' choices are created here
     (a channel has both its ends only in the network), and the nodes' own are re-checked:
-    one replay drops as stale is re-baselined. Returns the dropped choices, by key, with
-    why, as replay reports them. A required choice (a FIFO's depth) stays open."""
+    one replay drops as stale is re-baselined. Returns the dropped choices, by key, with the
+    kernel's findings (``Partition.stale``). A required choice (a FIFO's depth) stays open."""
     bound = in_shell(model, model.graph.node)
     baselined = Seam(read_target(model).platform).baseline(bound)
     persist(model, baselined)

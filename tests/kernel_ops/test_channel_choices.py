@@ -217,7 +217,7 @@ def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
     # ends wait on the reopened pe, and its stored memory is replayed once the baseline
     # chooses one, where it still applies.
     assert sorted(baselining.dropped) == ["first.compute.packed.pe"]
-    assert "domain-membership" in baselining.dropped["first.compute.packed.pe"]
+    assert [f.code for f in baselining.dropped["first.compute.packed.pe"]] == ["domain-membership"]
     first = kernel_op(model, model.graph.node[0])
     assert first.choices() == {
         **nodes["first"],
@@ -364,9 +364,13 @@ def test_choices_on_a_tensor_that_is_no_channel_are_dropped_and_cleared() -> Non
     model = kernel_model()
     model.set(CHANNEL_KEYS["transport"], "direct", tensor="thresholds")
     bound = network(model, model.graph.node)
-    assert dict(bound.stale) == {
-        "thresholds.transport": "stated on a tensor that is no channel of the partition"
-    }
+    ((key, (found,)),) = bound.stale.items()
+    assert key == "thresholds.transport"
+    assert (found.code, found.owner, dict(found.details)) == (
+        "channel-choice-stray",
+        "transport",
+        {"tensor": "thresholds"},
+    )
     persist(model, bound)
     assert "thresholds" not in model.tensors_stating(CHANNEL)
     assert not network(model, model.graph.node).stale
