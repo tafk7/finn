@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from support.configure import configured
-from support.models import configure_partition, kernel_model
+from support.configure import configured, write_raw
+from support.models import choose_memories, configure_partition, kernel_model
 from support.packaging import NoVivado, reaches_vivado
 from support.refusals import refused
 from support.xsim import requires_vivado
@@ -37,8 +37,10 @@ from finn.core.graph.annotations.outputs import (
 )
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
-from finn.custom_op.kernels.shell import configured_network
+from finn.core.space import inspection
+from finn.custom_op.kernels.shell import configured_network, in_shell
 from finn.kernels.artifacts import build
+from finn.kernels.configure import undecided
 from finn.toolchain.launcher import (
     Selection,
     Toolchain,
@@ -89,6 +91,34 @@ def test_a_choice_never_created_refuses_packaging_and_is_named() -> None:
     reference = configured_network(configured, "partition")[0].module
     module = configured_network(model.transform(BaselineChoices()), "sdp_1")[0].module
     assert (module.fragment, module.abi) == (reference.fragment, reference.abi)
+
+
+def test_an_unchecked_choice_is_refused_through_the_open_choice_it_waits_on() -> None:
+    """A choice stored while the choice its check reads is open is kept unchecked (the
+    engine's rule: read unresolved, listed by ``inspection.unchecked``): the thresholding's
+    ``block_stages`` with its ``ram_style`` cleared. Emission refuses the network, and the
+    refusal is ``choices-open`` (``KernelOpError``), naming ``activate.ram_style``, the open
+    choice. It does not name the unchecked ``block_stages``: ``undecided``, which the
+    refusal reads, counts only the open Decisions, and an unchecked choice passes it. The
+    network is refused only because every unchecked choice waits on an open one, so none
+    passes on its own; the follow-up is that an unchecked choice should be refused by name,
+    like an open one."""
+    model = kernel_model()
+    choose_memories(model)
+    write_raw(model, "activate", "ram_style", None)
+    point = in_shell(model, model.graph.node).member("activate")
+    assert inspection.unchecked(point) == (inspection.Unchecked("block_stages", 0, ("ram_style",)),)
+    assert undecided(point, "*") == ["ram_style"]  # the open one; the unchecked is not counted
+    with refused(
+        "choices-open",
+        error=KernelOpError,
+        owner="configured_network",
+        node="sdp_1",
+        keys=("activate.ram_style",),
+        message=r"open choices, refused at emission: activate\.ram_style \(not created",
+    ) as left:
+        configured_network(model, "sdp_1")
+    assert "block_stages" not in str(left.error)
 
 
 def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:
