@@ -47,6 +47,38 @@ def test_an_absent_choice_is_read_as_absent(key: str) -> None:
         op.get_nodeattr(key)
 
 
+def test_a_key_never_stored_is_absent_and_its_value_in_effect_is_read_from_the_point() -> None:
+    """A forced key is never stored, and nor is one that the selected case does not have:
+    ``get_nodeattr`` refuses either as absent, and the value in effect is the point's.
+    A Thresholding's ``use_axilite`` is forced False (no control bus); a MatMul's
+    ``compute`` is forced to ``packed``, so ``compute.int8_dsp58.pe`` does not apply."""
+    model = configured(
+        thresholding_model(),
+        {"activate": {"pe": 2, "ram_style": "distributed", "block_stages": 1}},
+    )
+    found = kernel_op(model, model.graph.node[0])
+    assert isinstance(found, Thresholding)
+    assert "use_axilite" not in found.choices()
+    with refused(
+        "choice-absent",
+        owner=Thresholding.op_type,
+        error=KernelOpError,
+        node="activate",
+        keys=("use_axilite",),
+    ):
+        found.get_nodeattr("use_axilite")
+    assert found.point().use_axilite is False  # type: ignore[attr-defined]
+
+    op = matmul(configured(matmul_model(), {"first": FOLDING}))
+    assert {"compute", "compute.int8_dsp58.pe"}.isdisjoint(op.choices())
+    for key in ("compute", "compute.int8_dsp58.pe"):
+        with refused(
+            "choice-absent", owner=MatMul.op_type, error=KernelOpError, node="first", keys=(key,)
+        ):
+            op.get_nodeattr(key)
+    assert type(op.point().compute).__name__ == "PackedDotpKernel"  # type: ignore[attr-defined]
+
+
 @pytest.mark.parametrize("key", FOLDING)
 def test_a_held_choice_is_read_as_choices_gives_it(key: str) -> None:
     op = matmul(configured(matmul_model(), {"first": FOLDING}))

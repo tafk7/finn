@@ -405,7 +405,9 @@ class KernelOp(CustomOp):
     def get_nodeattr(self, name: str) -> _NodeAttr:
         """The attribute ``name``: a choice as the node stores it (as ``choices`` decodes
         it), refused (``choice-absent``) where the node holds none, never a made-up 0 or
-        ""; any other name is qonnx's."""
+        "". A choice is not stored when it is open, forced (never stored), or not
+        applicable under the selected case; the value in effect is read from ``point()``
+        (``inspection.forced`` explains a forced one). Any other name is qonnx's."""
         schema = self.schema()
         if name not in schema:
             return super().get_nodeattr(name)
@@ -414,7 +416,9 @@ class KernelOp(CustomOp):
             raise KernelOpError.refused(
                 "choice-absent",
                 self.op_type,
-                f"{self.label}: {name} is absent: the compiler has not set it",
+                f"{self.label}: {name} is not stored: it is open, forced (never stored), or "
+                "not applicable under the selected case; read the value in effect from the "
+                "op's configuration (KernelOp.point(); inspection.forced explains a forced one)",
                 (name,),
                 node=self.label,
             )
