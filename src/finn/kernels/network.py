@@ -618,13 +618,22 @@ class Network:
         found: T = self._asked[key]  # type: ignore[assignment]
         return found
 
-    def chosen(self, names: Iterable[str] | None = None) -> dict[Key, object]:
+    def chosen(
+        self, names: Iterable[str] | None = None, *, unchecked: bool = False
+    ) -> dict[Key, object]:
         """Every choice stored (of ``names`` only, where named), by key, ranked: each bound
-        member's committed Decisions, and the choices an unbound channel holds."""
+        member's committed Decisions, and the choices an unbound channel holds. With
+        ``unchecked``, the choices kept unchecked too, by their stored values: what saving
+        writes (``persist``)."""
         found: dict[Key, object] = {}
         for name in self._wanted(names):
             held = self._unbound.get(name)
-            values = held.stored if held is not None else self._answer(name, "chosen", chosen)
+            question = "saved" if unchecked else "chosen"
+            values = (
+                held.stored
+                if held is not None
+                else self._answer(name, question, lambda at: chosen(at, unchecked=unchecked))
+            )
             found |= {(name, key): value for key, value in values.items()}
         return found
 
