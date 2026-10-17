@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 from support.space_pipeline import Packed, Pipeline, Stub, Unit
-from support.space_walk import check, walk
+from support.space_walk import check, fresh, walk
 
 from core.space._choices_support import committed, replay
 from core.space._toys_support import House
@@ -462,3 +462,54 @@ def test_the_published_reading_accepts_a_commit_the_choice_reading_accepts() -> 
     # choice refused through its selector's guard, and the same as each other.
     states = [state_of(report.instance, "compute.core.pe") for report in (by_choices, by_facts)]
     assert states[0] == states[1] and isinstance(states[0], Rejected)
+
+
+# -- a choice admitted under a selector that stays refused ----------------------------------------
+
+
+class Closed(Space):
+    """A core that refuses every width past 8, whatever its choice is."""
+
+    width: int = Param()
+    n: int = Decision(values=(1, 2, 3))
+
+    @derived
+    def doubled(self) -> int:
+        return self.n * 2
+
+    @constraint
+    def fits(self) -> bool | Rejected:
+        if self.width > 8:
+            return reject("too-wide", "the core takes widths up to 8")
+        return True
+
+    admission = ConstraintGroup(fits)
+
+
+class Gate(Space):
+    """A selector with one case, which is refused at width 12 without reading the core's choice."""
+
+    width: int = Param()
+    compute: Closed = Decision({"closed": Closed}, width=width)
+    other: int = Decision(values=(1, 2))
+
+
+def test_a_choice_under_a_selector_that_stays_refused_is_read_refused_in_the_successor() -> None:
+    # The selector is refused in the base, and its verdict does not read the choice, so the
+    # change reaches neither. The choice's own check holds (3 is in its values): it is admitted,
+    # and the configuration reads it refused through its guard, as a binding built from nothing.
+    point = design_space(Gate(width=12))
+    assert isinstance(point.query(Gate.compute), Rejected)
+    n = reference_of(point, "compute.closed.n")
+    moved = point.try_with_facts({}, {n: 3}, {Gate.other: 2})
+    assert moved.accepted
+    got, want = occurrence.state(moved.instance), occurrence.state(fresh(moved.instance))
+    for index in range(len(got.linked.nodes)):
+        _runtime.evaluate(got, index)
+    assert got.cache
+    wrong = [
+        got.linked.nodes[index].key
+        for index, entry in got.cache.items()
+        if _runtime.evaluate(want, index).result != entry.result
+    ]
+    assert not wrong

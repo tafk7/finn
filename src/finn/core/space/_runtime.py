@@ -639,11 +639,13 @@ class _TrialSnapshot(Snapshot):
         # A choice whose admission the trial reused did not evaluate its guard, and the
         # base's cache may not hold it. Its record would have no guard to name, so the
         # successor does not take it, nor what read it: it evaluates the choice when
-        # something asks, as any snapshot does.
+        # something asks, as any snapshot does. Nor does it take a choice whose guard
+        # did not answer true in the trial (a refused selector admits the choice its own
+        # check holds for, which the configuration reads refused through the guard).
         unrecorded = frozenset(
             index
             for index in candidates
-            if nodes[index].guard is not None and nodes[index].guard not in self.cache
+            if nodes[index].guard is not None and not self._guard_holds(nodes[index].guard)
         )
         open_ = frozenset(
             index
@@ -687,6 +689,11 @@ class _TrialSnapshot(Snapshot):
                     seen[other] = base_values[other]
         return recorded, assumed
 
+    def _guard_holds(self, guard: int | None) -> bool:
+        """Whether the trial evaluated ``guard`` and it answered true."""
+        entry = self.cache.get(guard) if guard is not None else None
+        return entry is not None and entry.result == Available(True)
+
     def _record(self, index: int, entry: Evaluation) -> Evaluation:
         """A candidate's entry as the successor's decision frame records it: its answer
         and what the frame reads, its guard (and so the Decisions the guard reads),
@@ -696,6 +703,7 @@ class _TrialSnapshot(Snapshot):
             return Evaluation(entry.result)
         if guard not in self.cache:
             raise RuntimeError("a published choice's guard was never evaluated in its trial")
+        assert self._guard_holds(guard), "a recorded choice's guard answered true in its trial"
         decisions, facts = reads(self, (guard,), ())
         return Evaluation(entry.result, (guard,), decisions=decisions, facts=facts)
 
