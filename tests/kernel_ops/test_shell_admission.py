@@ -23,6 +23,7 @@ from typing import Any
 
 import pytest
 from qonnx.core.datatype import DataType
+from support.configure import configured
 from support.helpers import built, choose, with_adapter_memories, with_direct_transports
 from support.models import MATMUL, configure_partition, kernel_model
 from support.refusals import refused
@@ -32,7 +33,6 @@ import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.reporting.findings import Finding
-from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_network, in_shell
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.network import Interface, Network, wire
@@ -164,7 +164,7 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     ``clock-unavailable``."""
     model = kernel_model()
     pumped = {**MATMUL, "compute.packed.compute_pumping": True}
-    kernel_op(model, model.graph.node[0]).save(pumped)
+    configured(model, {model.graph.node[0].name: pumped})
     configure_partition(model)
     point, _ = configured_network(model, "chain")
     assert point.row is IP_ROW and IP_ROW.clk2x

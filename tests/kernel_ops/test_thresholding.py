@@ -15,6 +15,7 @@ from qonnx.transformation.infer_data_layouts import InferDataLayouts
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
+from support.configure import configured
 from support.models import THRESHOLDS, convert, schema_digest, thresholding_model
 from support.refusals import refused
 
@@ -78,7 +79,9 @@ def test_one_row_for_every_channel_is_bound_as_the_graph_states_it() -> None:
     assert model.get_initializer("t").shape == (1, 3)
     stated = IntegerTensorValue.of(((tuple(int(v) for v in THRESHOLDS[0]),),))
     assert op(model).facts().arguments["thresholds"] == stated
-    op(model).save({"pe": 4, "use_axilite": False, "deep_pipeline": False, **MEMORY})
+    configured(
+        model, {"activate": {"pe": 4, "use_axilite": False, "deep_pipeline": False, **MEMORY}}
+    )
     activate = op(model).point()
     parameters = dict(activate.module.parameters)
     assert (parameters["C"], parameters["PE"]) == (1, 4)
@@ -86,9 +89,9 @@ def test_one_row_for_every_channel_is_bound_as_the_graph_states_it() -> None:
     assert activate.thresholds_file.data == b"17\n01\n08\n00\n"
     # One row a lane: stage 1 holds two words, whatever the channels.
     assert parameters["DEPTH_TRIGGER_BRAM"] == 2
-    with pytest.raises(KernelOpError) as error:
-        op(model).save({"pe": 3})  # not a divisor of the input's 4 channels
-    assert error.value.keys == ("pe",)
+    with refused("domain-membership", owner="pe"):  # not a divisor of the input's 4 channels
+        configured(model, {"activate": {"pe": 3}})
+    assert op(model).choices()["pe"] == 4
     values = np.arange(-12, 12, dtype=np.float32).reshape(3, 8)[:, :4]
     produced = execute_onnx(model, {"x": values})["y"]
     expected = execute_onnx(multithreshold(model), {"x": values})["y"]
@@ -188,14 +191,15 @@ def test_the_schema_is_pinned_for_its_op_version() -> None:
     assert Thresholding.op_version == ThresholdingAxiKernel.version
 
 
-def test_save_and_replay_a_memory_choice() -> None:
+def test_a_memory_choice_is_written_and_replayed() -> None:
     model = thresholding_model()
-    op(model).save({"pe": 2, "use_axilite": False, "deep_pipeline": False, **MEMORY})
+    configured(
+        model, {"activate": {"pe": 2, "use_axilite": False, "deep_pipeline": False, **MEMORY}}
+    )
     point = op(model).point()
     assert dict(point.module.parameters)["DEPTH_TRIGGER_BRAM"] == 4  # stage 1, PE 2
-    with pytest.raises(KernelOpError) as error:
-        op(model).save({"block_stages": 3})
-    assert error.value.keys == ("block_stages",)
+    with refused("domain-membership", owner="block_stages"):
+        configured(model, {"activate": {"block_stages": 3}})
     assert op(model).choices()["block_stages"] == 1
 
 

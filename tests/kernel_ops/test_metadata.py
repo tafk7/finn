@@ -16,6 +16,7 @@ from onnx import StringStringEntryProto, helper
 from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
+from support.configure import configured
 from support.models import TARGET, chain_source, configure_partition, kernel_model
 from support.refusals import refused
 
@@ -42,8 +43,6 @@ from finn.core.graph.annotations.platform import (
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
 from finn.core.reporting.findings import by_code
-from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import save_channels
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
 from finn.transformation.kernels import ToKernelOps
@@ -328,12 +327,11 @@ def test_the_design_digest_ignores_orders_that_carry_no_meaning() -> None:
 
 
 def changed_choice(model: ModelWrapper) -> None:
-    (node,) = [node for node in model.graph.node if node.name == "activate"]
-    kernel_op(model, node).save({"deep_pipeline": 1})
+    configured(model, {"activate": {"deep_pipeline": 1}})
 
 
 def changed_channel(model: ModelWrapper) -> None:
-    save_channels(model, {"x": {"adapter.input_gen.input_gen.ram_style": "block"}})
+    configured(model, {"x": {"adapter.input_gen.input_gen.ram_style": "block"}})
 
 
 def changed_weight(model: ModelWrapper) -> None:

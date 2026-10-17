@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
-from support.configure import configured
+from support.configure import configured, write_raw
 from support.explore_models import kernel_model as open_chain
 from support.helpers import FULL_DSP58
 from support.models import (
@@ -258,3 +258,23 @@ def test_none_is_no_value_and_the_seam_has_no_clearing() -> None:
     with refused("request-refused", owner="compute.packed.simd"):
         configured(model, {"first": {"compute.packed.simd": None}})
     assert stored(model) == before
+
+
+# -- the raw attribute -------------------------------------------------------------------
+
+
+def test_write_raw_stands_for_a_graph_finn_did_not_write() -> None:
+    """A choice as the node's raw attribute, replaced when there, removed for ``None``;
+    nothing is checked (a divisor-less ``pe`` is written), the read side finds it."""
+    model = matmul_model()
+    write_raw(model, "first", "compute.packed.pe", 3)
+    write_raw(model, "first", "compute.packed.reducer", "tree")
+    assert stored(model) == {"compute.packed.pe": 3, "compute.packed.reducer": "tree"}
+    write_raw(model, "first", "compute.packed.pe", 2)
+    assert stored(model)["compute.packed.pe"] == 2
+    write_raw(model, "first", "compute.packed.pe", None)
+    write_raw(model, "first", "compute.packed.simd", None)  # none there: nothing
+    assert stored(model) == {"compute.packed.reducer": "tree"}
+    assert [attribute.name for attribute in model.graph.node[0].attribute] == [
+        "compute.packed.reducer"
+    ]

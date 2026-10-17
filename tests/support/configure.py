@@ -25,6 +25,11 @@ The seam has no clearing: a value of ``None`` is no value of any Decision, so th
 refuses it (``case-not-viable``). A test of a stale or cleared choice writes the raw ONNX
 attribute instead.
 
+``write_raw(model, node_name, key, value)`` writes a choice as the node's raw ONNX
+attribute, as a graph FINN did not write holds it (or, with ``None``, removes it): no
+network, no seam, no checking. It stands for the read side's tests and for a cleared
+state, which ``configured`` cannot state.
+
 A test helper, imported as ``support.configure``.
 """
 
@@ -32,6 +37,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.graph.annotations.channel import refuse_outside_body
@@ -74,4 +80,16 @@ def configured(model: ModelWrapper, choices: Mapping[str, Mapping[str, object]])
     return model
 
 
-__all__ = ["configured"]
+def write_raw(model: ModelWrapper, node_name: str, key: str, value: int | str | None) -> None:
+    """``key`` on the node ``node_name`` as a raw ONNX attribute holding ``value`` (one
+    already there is replaced), or no attribute for ``None``. Nothing is checked: the
+    graph is as one FINN did not write, or whose choice was cleared."""
+    (node,) = [node for node in model.graph.node if node.name == node_name]
+    kept = [attribute for attribute in node.attribute if attribute.name != key]
+    if value is not None:
+        kept.append(helper.make_attribute(key, value))
+    del node.attribute[:]
+    node.attribute.extend(kept)
+
+
+__all__ = ["configured", "write_raw"]

@@ -4,9 +4,9 @@
 """The MatMul KernelOp: facts from the model, the choice schema, persistence and replay.
 
 A node's choice attributes are its own choices, each at its baseline once the node is
-converted, absent on a node made by hand until saved; ``save`` takes
-choices, never a point, and a forced Decision is never committed, so it is
-never written; a nested choice applies under its forced selector.
+converted, absent on a node made by hand until configured (``support.configure``, which sets
+choices as the compiler does, never a point); a forced Decision is never committed, so it
+is never written; a nested choice applies under its forced selector.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from onnx import helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import get_domain_opset_version, getCustomOp, op_identity
+from support.configure import configured, write_raw
 from support.models import WEIGHTS, X, matmul_model, schema_digest
 from support.refusals import refused
 
@@ -32,7 +33,6 @@ from finn.core.reporting.findings import by_code
 from finn.custom_op.kernels.conv import Conv
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.network import network
-from finn.custom_op.kernels.shell import save_channels
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -133,21 +133,34 @@ def test_the_schema_is_pinned_for_its_op_version() -> None:
 # -- persistence ------------------------------------------------------------------------
 
 
-def test_save_writes_choices_and_replay_reads_them() -> None:
+def test_configured_choices_are_written_and_replay_reads_them() -> None:
     model = matmul_model()
-    op(model).save(FOLDING)
-    assert attributes(model) == sorted(FOLDING)
+    configured(model, {"first": FOLDING})
+    # ``compute`` is forced on this target: the compiler never stores it, nor does the helper.
+    assert attributes(model) == sorted(set(FOLDING) - {"compute"})
     assert op(model).choices()["compute.packed.pe"] == 2
     point = op(model).point()
     assert point.compute.pe == 2
-    # A refused save writes nothing; the refusal names the key.
-    with pytest.raises(KernelOpError) as error:
-        op(model).save({"compute.packed.pe": 3})
-    assert error.value.keys == ("compute.packed.pe",)
+    # A refused choice writes nothing.
+    with refused("domain-membership", owner="compute.packed.pe"):
+        configured(model, {"first": {"compute.packed.pe": 3}})
     assert op(model).choices()["compute.packed.pe"] == 2
-    # None clears a choice; the check replays what is written, so a clear that leaves a
-    # stored choice reading it (pumping reads SIMD) is refused, named, and nothing is
-    # written.
+    # A value no case holds, and a forced selector (here, DSP48E2): each refused by its code.
+    with refused("forced", owner="first.compute"):
+        configured(model, {"first": {"compute": 1}})
+    with refused("forced", owner="first.compute"):
+        configured(model, {"first": {"compute": "dense"}})
+    # A channel's choice is no node's: refused, naming the key.
+    with refused("not-a-decision", owner="first.w.transport"):
+        configured(model, {"first": {"w.transport": "direct"}})
+    assert attributes(model) == sorted(set(FOLDING) - {"compute"})
+
+
+def test_a_clear_that_leaves_a_reader_is_refused_by_save() -> None:
+    """Of ``save``'s own mechanics (its clearing, which the seam has no equivalent of): to
+    go with ``save``."""
+    model = matmul_model()
+    configured(model, {"first": FOLDING})
     with refused(
         "choices-refused",
         error=KernelOpError,
@@ -160,25 +173,19 @@ def test_save_writes_choices_and_replay_reads_them() -> None:
     assert "compute.packed.simd" in attributes(model)
     op(model).save({"compute.packed.simd": None, "compute.packed.compute_pumping": None})
     assert "compute.packed.simd" not in attributes(model)
-    with refused(
-        "choice-value-invalid",
-        error=KernelOpError,
-        node="first",
-        keys=("compute",),
-        message="not an 's' value",
-    ):
-        op(model).save({"compute": 1})
-    with refused("choice-value-invalid", error=KernelOpError, node="first", keys=("compute",)):
-        op(model).save({"compute": "dense"})
-    # A channel's choice is no node's: refused, naming where it is stated.
-    with refused(
-        "choice-unknown",
-        error=KernelOpError,
-        node="first",
-        keys=("w.transport",),
-        message="are not choices of MatMul; a channel's choices",
-    ):
-        op(model).save({"w.transport": "direct"})
+
+
+def test_a_graph_with_a_cleared_choice_a_reader_needs_is_stale() -> None:
+    """The read side of a clear: a graph whose SIMD is gone, its pumping still stored, is
+    stated as the raw attributes state it, and replay refuses the pumping."""
+    model = matmul_model()
+    configured(model, {"first": FOLDING})
+    write_raw(model, "first", "compute.packed.simd", None)
+    assert "compute.packed.simd" not in attributes(model)
+    (problem,) = op(model).verify_node()
+    assert "compute.packed.compute_pumping: " in problem and "simd" in problem
+    write_raw(model, "first", "compute.packed.compute_pumping", None)
+    assert op(model).verify_node() == []
 
 
 def test_a_refused_save_names_its_rule_owned_by_the_op_about_the_node() -> None:
@@ -220,17 +227,18 @@ def test_the_weight_sources_choices_persist_on_the_weights_and_the_network_repla
     kernel's alone. The source, its one case forced, is written only when saved on
     purpose."""
     model = matmul_model()
-    op(model).save(FOLDING)  # its ends known, so its channels bind
-    save_channels(model, {"w": {"source.memstream.ram_style": "block", "transport": "direct"}})
-    assert attributes(model) == sorted(FOLDING)
+    configured(model, {"first": FOLDING})  # its ends known, so its channels bind
+    configured(model, {"w": {"source.memstream.ram_style": "block", "transport": "direct"}})
+    assert attributes(model) == sorted(set(FOLDING) - {"compute"})
     assert channel_choices(model, "w") == {
         "source.memstream.ram_style": "block",
         "transport": "direct",
     }
     weights = network(model, model.graph.node).member("w")
     assert weights.source.ram_style == "block" and isinstance(weights.source, MemStreamKernel)
-    save_channels(model, {"w": {"source": "memstream"}})
-    assert channel_choices(model, "w")["source"] == "memstream"
+    # The source's one case is forced: stating it is dropped, as the compiler never stores it.
+    configured(model, {"w": {"source": "memstream"}})
+    assert "source" not in channel_choices(model, "w")
     assert network(model, model.graph.node).member("w").source.ram_style == "block"
 
 
@@ -240,21 +248,20 @@ def test_a_forced_choice_is_never_saved() -> None:
     model = matmul_model()
     point = op(model).point({"compute.packed.pe": 2})
     assert point.compute.pe == 2  # under the forced selector
-    op(model).save({"compute.packed.pe": 2})
+    configured(model, {"first": {"compute": "packed", "compute.packed.pe": 2}})
     assert attributes(model) == ["compute.packed.pe"]
 
 
 def test_a_nested_choice_under_a_case_not_forced_is_refused_by_name() -> None:
     model = matmul_model()
-    with pytest.raises(KernelOpError) as error:
-        op(model).save({"compute.int8_dsp58.pe": 2})
-    assert error.value.keys == ("compute.int8_dsp58.pe",)
-    assert "inapplicable" in str(error.value)
+    with refused("inapplicable", owner="compute.int8_dsp58.pe"):
+        configured(model, {"first": {"compute.int8_dsp58.pe": 2}})
+    assert attributes(model) == []
 
 
 def test_a_choice_goes_stale_when_a_fact_changes() -> None:
     model = matmul_model()
-    op(model).save({**FOLDING, "compute.packed.pe": 4})
+    configured(model, {"first": {**FOLDING, "compute.packed.pe": 4}})
     assert op(model).verify_node() == []
     # The weights' columns change from 4 to 6: pe = 4 no longer divides them.
     model.set_initializer("w", np.concatenate([WEIGHTS, WEIGHTS[:, :2]], axis=1).astype(np.float32))
@@ -307,7 +314,7 @@ def test_apply_config_writes_choices_replay_checks() -> None:
 
 def test_choices_survive_save_and_load(tmp_path: Path) -> None:
     model = matmul_model()
-    op(model).save(FOLDING)
+    configured(model, {"first": FOLDING})
     model.save(str(tmp_path / "model.onnx"))
     loaded = ModelWrapper(str(tmp_path / "model.onnx"))
     assert op(loaded).choices() == op(model).choices()
