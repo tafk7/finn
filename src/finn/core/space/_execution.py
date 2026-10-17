@@ -352,7 +352,7 @@ def _same(snapshot: Snapshot, index: int, held: Evaluation, found: Evaluation) -
     """Refuse a node's second evaluation in one snapshot that differs from the first."""
     differs = [
         name
-        for name in ("result", "dependencies", "via", "decisions")
+        for name in ("result", "dependencies", "via", "decisions", "facts")
         if getattr(held, name) != getattr(found, name)
     ]
     if differs:
@@ -403,12 +403,9 @@ def run(snapshot: Snapshot, index: int, frame: Frame | None = None) -> Evaluatio
             failures[task.identity] = outcome
         else:
             dependencies, via = tuple(task.context.dependencies), tuple(task.context.via.items())
+            decisions, facts = _runtime.reads(snapshot, dependencies, via)
             outcome = _runtime.Evaluation(
-                outcome.result,
-                dependencies,
-                outcome.assessment,
-                via,
-                _runtime.read_decisions(snapshot, dependencies, via),
+                outcome.result, dependencies, outcome.assessment, via, decisions, facts
             )
             if isinstance(task.identity, int):
                 # A query made from native code runs on the same snapshot and may have

@@ -56,42 +56,53 @@ class Evaluation:
     assessment: Assessment | None = None
     # Method reads that went straight to a forwarding alias's source: (alias, source).
     via: tuple[tuple[int, int], ...] = ()
-    # Every Decision read, directly or through another evaluation (``read_decisions``).
+    # Every Decision read, directly or through another evaluation (``reads``).
     decisions: frozenset[int] = _NONE
+    # Every formal read the same way: the snapshot's ``param`` nodes, whose values are its
+    # facts. A configuration with other facts keeps what read none of the changed ones.
+    facts: frozenset[int] = _NONE
 
 
-def read_decisions(
+def reads(
     snapshot: Snapshot, dependencies: Collection[int], via: Collection[tuple[int, int]]
-) -> frozenset[int]:
-    """The Decisions an evaluation of ``snapshot`` read: those among its dependencies,
-    and every one its dependencies read, and a forwarding alias it read through its
-    source, as far as the cache holds them. A successful evaluation's dependencies all
-    succeeded first, so they are cached."""
+) -> tuple[frozenset[int], frozenset[int]]:
+    """The Decisions and the formals an evaluation of ``snapshot`` read: those among its
+    dependencies, and every one its dependencies read, and a forwarding alias it read
+    through its source, as far as the cache holds them. A successful evaluation's
+    dependencies all succeeded first, so they are cached."""
     nodes, cache = snapshot.linked.nodes, snapshot.cache
-    found = _NONE
+    decisions = facts = _NONE
     for read in (*dependencies, *(alias for alias, _ in via)):
         entry = cache.get(read)
-        if entry is not None and entry.decisions and not entry.decisions <= found:
-            found = entry.decisions if not found else found | entry.decisions
-        if read not in found and nodes[read].kind == "decision":
-            found = found | {read}
-    return found
+        if entry is not None:
+            if entry.decisions and not entry.decisions <= decisions:
+                decisions = entry.decisions if not decisions else decisions | entry.decisions
+            if entry.facts and not entry.facts <= facts:
+                facts = entry.facts if not facts else facts | entry.facts
+        kind = nodes[read].kind
+        if kind == "decision":
+            if read not in decisions:
+                decisions = decisions | {read}
+        elif kind == "param" and read not in facts:
+            facts = facts | {read}
+    return decisions, facts
 
 
-def unaffected(
-    cache: Mapping[int, Evaluation], decisions: Collection[int]
-) -> dict[int, Evaluation]:
-    """The evaluations of ``cache`` that are none of ``decisions`` and read none of them,
-    directly or through another. Where only those Decisions' answers differ, these
-    answer the same: an evaluation is a function of what it read. What a kept
-    evaluation read is kept with it, so its evidence stays complete. This is how a
-    small cache is copied, and what a large one gives back (``inherit`` finds the same
-    from the ``Readers`` of a large one without looking at each evaluation)."""
-    seeds = decisions if isinstance(decisions, (set, frozenset)) else frozenset(decisions)
+def unaffected(cache: Mapping[int, Evaluation], reached: Collection[int]) -> dict[int, Evaluation]:
+    """The evaluations of ``cache`` that are none of ``reached`` (Decisions, or the formals
+    of a configuration with other facts) and read none of them, directly or through
+    another. Where only those answers differ, these answer the same: an evaluation is a
+    function of what it read. What a kept evaluation read is kept with it, so its
+    evidence stays complete. This is how a small cache is copied, and what a large one
+    gives back (``inherit`` finds the same from the ``Readers`` of a large one without
+    looking at each evaluation)."""
+    seeds = reached if isinstance(reached, (set, frozenset)) else frozenset(reached)
     return {
         index: entry
         for index, entry in cache.items()
-        if index not in seeds and seeds.isdisjoint(entry.decisions)
+        if index not in seeds
+        and seeds.isdisjoint(entry.decisions)
+        and seeds.isdisjoint(entry.facts)
     }
 
 
@@ -128,13 +139,13 @@ INDEX_FROM = 500
 
 
 class Readers:
-    """Who read which Decision, in one cache: for each Decision, the evaluations that
-    read it (``Evaluation.decisions``). It is brought up to date from what was added to
-    the cache since, in insertion order, at the time a change asks (``sync``), so what a
-    change reaches is found from the Decisions it touches and not by looking at every
-    evaluation. The cache is only added to (``Snapshot``), so the evaluations the index
-    has read are the cache's leading ones. A set of readers is shared with the index
-    it was copied from until this one changes it."""
+    """Who read which Decision or formal, in one cache: for each, the evaluations that
+    read it (``Evaluation.decisions``, ``Evaluation.facts``). It is brought up to date from
+    what was added to the cache since, in insertion order, at the time a change asks
+    (``sync``), so what a change reaches is found from the Decisions it touches and not by
+    looking at every evaluation. The cache is only added to (``Snapshot``), so the
+    evaluations the index has read are the cache's leading ones. A set of readers is shared
+    with the index it was copied from until this one changes it."""
 
     __slots__ = ("_readers", "_owned", "synced")
 
@@ -153,7 +164,7 @@ class Readers:
 
     def read(self, index: int, entry: Evaluation) -> None:
         readers, owned = self._readers, self._owned
-        for read in entry.decisions:
+        for read in (*entry.decisions, *entry.facts) if entry.facts else entry.decisions:
             if read in owned:
                 readers[read].add(index)
             else:
@@ -162,14 +173,15 @@ class Readers:
 
     def unread(self, index: int, entry: Evaluation) -> None:
         readers, owned = self._readers, self._owned
-        for read in entry.decisions:
+        for read in (*entry.decisions, *entry.facts) if entry.facts else entry.decisions:
             if read not in owned:
                 readers[read] = set(readers.get(read, ()))
                 owned.add(read)
             readers[read].discard(index)
 
     def reached(self, seeds: Collection[int]) -> set[int]:
-        """The ``seeds`` and the evaluations that read any of them (up to date: ``sync``)."""
+        """The ``seeds`` (Decisions or formals) and the evaluations that read any of them
+        (up to date: ``sync``)."""
         found = set(seeds)
         for seed in seeds:
             found.update(self._readers.get(seed, ()))
@@ -266,9 +278,9 @@ class Snapshot:
     change does not reach (a change reaches what it adds, removes or replaces, and
     each open Decision whose forced value's verdict read one of those:
     ``_touched``), and ``admissions`` holds the Decisions each assignment's admission
-    read, which a later trial reuses where the change does not reach them
-    (``_TrialSnapshot``). ``assumed`` holds, for the few assignments whose admission
-    read a Decision its trial's base forced and this snapshot leaves open, the value
+    read, and ``admission_facts`` the formals, which a later trial reuses where the change
+    does not reach them (``_TrialSnapshot``). ``assumed`` holds, for the few assignments
+    whose admission read a Decision its trial's base forced and this snapshot leaves open, the value
     the admission saw: a later trial reuses that admission only while this snapshot
     forces the Decision to an equal value (``_reusable``). ``answers`` holds what
     inspection answered of it, by question and scope (``inspection``), where the answer
@@ -294,6 +306,7 @@ class Snapshot:
     carried: Mapping[int, object] = field(default_factory=dict, repr=False)
     admissions: Mapping[int, frozenset[int]] = field(default_factory=dict, repr=False)
     assumed: Mapping[int, Mapping[int, object]] = field(default_factory=dict, repr=False)
+    admission_facts: Mapping[int, frozenset[int]] = field(default_factory=dict, repr=False)
     cache: dict[int, Evaluation] = field(default_factory=new_cache, init=False, repr=False)
     readers: Readers | None = field(default=None, init=False, repr=False)
     made: int = field(default=0, init=False, repr=False)
@@ -311,12 +324,37 @@ class Snapshot:
         return self.model.linked
 
 
-def _touched(base: Snapshot, candidates: Mapping[int, object]) -> list[int]:
-    """The Decisions a change from ``base`` to ``candidates`` touches: those it adds,
-    removes or replaces (not the identical value), and the open ones its reach
-    includes: every Decision open in both whose forced value's verdict, in what
-    ``base`` found, read a touched one (to a fixed point), or has no verdict, or one
-    that does not hold under the base's final values (``Found.reach``). A Decision
+def changed_facts(base: Snapshot, parameters: Mapping[int, object]) -> frozenset[int]:
+    """The formals whose value in ``parameters`` is not ``base``'s: supplied in one and
+    not the other, or unequal by the formal's value semantics."""
+    nodes, held = base.linked.nodes, base.parameters
+    changed = set()
+    for index in held.keys() | parameters.keys():
+        if (index in held) != (index in parameters):
+            changed.add(index)
+        elif held[index] is not parameters[index]:
+            node = nodes[index]
+            assert node.semantics is not None
+            if not equal(
+                node.semantics,
+                held[index],
+                parameters[index],
+                owner=node.owner,
+                role="parameter equality",
+            ):
+                changed.add(index)
+    return frozenset(changed)
+
+
+def _touched(
+    base: Snapshot, candidates: Mapping[int, object], facts: Collection[int] = ()
+) -> list[int]:
+    """The Decisions a change from ``base`` to ``candidates``, and to other values of the
+    formals ``facts``, touches: those it adds, removes or replaces (not the identical
+    value), and the open ones its reach includes: every Decision open in both whose
+    forced value's verdict, in what ``base`` found, read a touched one or a changed
+    formal (to a fixed point), or has no verdict, or one that does not hold under the
+    base's final values (``Found.reach``). A Decision
     open in both and not touched is **stable**: its verdict read nothing the change
     touched, so it reads the same, forced to the same value, refused alike or open
     alike, in the trial, in the successor and in the base. Where ``base``'s forced
@@ -336,7 +374,7 @@ def _touched(base: Snapshot, candidates: Mapping[int, object]) -> list[int]:
         return [
             index for index in base.linked.decisions if index not in assignments or index in changed
         ]
-    reached = found.reach(base, changed)
+    reached = found.reach(base, changed, facts)
     return [index for index in base.linked.decisions if index in changed or index in reached]
 
 
@@ -358,9 +396,11 @@ def _reusable(
     candidates: Mapping[int, object],
     touched: Collection[int],
     stable: Collection[int],
+    facts: frozenset[int] = _NONE,
 ) -> dict[int, frozenset[int]]:
-    """The retained choices whose admission read nothing the change touched, with the
-    Decisions it read: each would be admitted identically. An admission that read a
+    """The retained choices whose admission read nothing the change touched (a Decision,
+    or one of the changed formals ``facts``), with the Decisions it read: each would be
+    admitted identically. An admission that read a
     retained choice through an evaluation of the base recorded that choice and not
     its admission's reads, so a choice is reusable only while every Decision its
     admission read is reusable too, or stable (it reads as the base forces it, as it
@@ -375,7 +415,10 @@ def _reusable(
     reusable = {
         index: read
         for index, read in base.admissions.items()
-        if index in candidates and index not in excluded and _assumptions_hold(base, index)
+        if index in candidates
+        and index not in excluded
+        and _assumptions_hold(base, index)
+        and facts.isdisjoint(base.admission_facts.get(index, _NONE))
     }
     while True:
         allowed = reusable.keys() | stable
@@ -424,6 +467,16 @@ class _TrialSnapshot(Snapshot):
     forces it (``successor``): found once, and that configuration is the one
     published.
 
+    A trial may be over other values of the base's formals (``parameters``, as
+    ``try_with_facts`` makes it): its facts are those, and the formals that differ from
+    the base's are reached as a Decision is. Evaluations, admissions and verdicts that
+    read one are left out (``changed_facts``, ``_reusable``, ``successor``), and every
+    open Decision whose verdict read one is touched (``_touched``). Such a trial reads
+    what it would publish (``reads_successor``): a touched Decision reads as the
+    successor forces it, since the base's forced values are of other facts; a stable
+    one still as the base forces it, the two being equal. A trial over the base's own
+    facts keeps the base's forced values for every Decision it reads, for now.
+
     What was evaluated is kept where the change cannot reach it. A change touches
     what it adds, removes or replaces and the open Decisions whose forced values it
     reaches (``_touched``); the other Decisions open in both are **stable**: each
@@ -469,6 +522,8 @@ class _TrialSnapshot(Snapshot):
         "_successor",
         "_touches",
         "_stable",
+        "_changed",
+        "_reads_successor",
     )
 
     _pending: dict[int, object]
@@ -478,27 +533,49 @@ class _TrialSnapshot(Snapshot):
     _successor: Snapshot | None
     _touches: list[int]
     _stable: frozenset[int]
+    _changed: frozenset[int]
+    _reads_successor: bool
 
-    def __init__(self, base: Snapshot, candidates: Mapping[int, object]) -> None:
-        super().__init__(base.model, base.parameters, {}, base.lock, base.forcing)
+    def __init__(
+        self,
+        base: Snapshot,
+        candidates: Mapping[int, object],
+        parameters: Mapping[int, object] | None = None,
+        *,
+        reads_successor: bool = False,
+    ) -> None:
+        facts = _NONE if parameters is None else changed_facts(base, parameters)
+        super().__init__(
+            base.model,
+            base.parameters if parameters is None else parameters,
+            {},
+            base.lock,
+            base.forcing,
+        )
         candidates = MappingProxyType(dict(candidates))
-        touched = _touched(base, candidates)
+        touched = _touched(base, candidates, facts)
         stable = _stable(base, candidates, touched)
-        reused = _reusable(base, candidates, touched, stable)
+        reused = _reusable(base, candidates, touched, stable, facts)
         pending = {index: candidates[index] for index in reused}
         held = [
             index for index in base.linked.decisions if index not in reused and index not in stable
         ]
         # As the decision frame admits it, with its admission's reads.
         admitted = {
-            index: Evaluation(Available(candidates[index]), decisions=read)
+            index: Evaluation(
+                Available(candidates[index]),
+                decisions=read,
+                facts=base.admission_facts.get(index, _NONE),
+            )
             for index, read in reused.items()
         }
-        inherit(self, base, held, replacing=admitted)
+        inherit(self, base, [*held, *facts], replacing=admitted)
         object.__setattr__(self, "_base", base)
         object.__setattr__(self, "_successor", None)
         object.__setattr__(self, "_touches", touched)
         object.__setattr__(self, "_stable", stable)
+        object.__setattr__(self, "_changed", facts)
+        object.__setattr__(self, "_reads_successor", reads_successor)
         object.__setattr__(self, "assignments", MappingProxyType(pending))
         object.__setattr__(self, "_pending", pending)
         object.__setattr__(self, "_candidates", candidates)
@@ -514,18 +591,31 @@ class _TrialSnapshot(Snapshot):
     def successor(self) -> Snapshot:
         """The configuration this trial would publish: every candidate committed."""
         if self._successor is None:
-            from ._forcing import carried, inherited  # noqa: PLC0415 - runtime/forcing cycle
+            from ._forcing import (  # noqa: PLC0415 - runtime/forcing cycle
+                Verdict,
+                carried,
+                inherited,
+            )
 
             base = self._base
+            verdicts = inherited(base)
+            changed = self._changed
+            if changed:
+                # A verdict that read a formal with another value is found again.
+                verdicts = {
+                    index: verdict
+                    for index, verdict in verdicts.items()
+                    if not isinstance(verdict, Verdict) or changed.isdisjoint(verdict.facts)
+                }
             successor = Snapshot(
                 self.model,
                 self.parameters,
                 self._candidates,
                 forcing=self.forcing,
-                verdicts=inherited(base),
+                verdicts=verdicts,
                 carried=carried(base),
             )
-            inherit(successor, base, self._touches)
+            inherit(successor, base, [*self._touches, *changed])
             object.__setattr__(self, "_successor", successor)
         assert self._successor is not None
         return self._successor
@@ -540,6 +630,11 @@ class _TrialSnapshot(Snapshot):
         admissions, assumed = self._admissions()
         object.__setattr__(successor, "admissions", MappingProxyType(admissions))
         object.__setattr__(successor, "assumed", MappingProxyType(assumed))
+        object.__setattr__(
+            successor,
+            "admission_facts",
+            MappingProxyType({index: self.cache[index].facts for index in candidates}),
+        )
         nodes = self.linked.nodes
         # A choice whose admission the trial reused did not evaluate its guard, and the
         # base's cache may not hold it. Its record would have no guard to name, so the
@@ -578,6 +673,8 @@ class _TrialSnapshot(Snapshot):
         for index in candidates:
             read = self.cache[index].decisions
             recorded[index] = read
+            if self._reads_successor:
+                continue  # every Decision read was read as the successor forces it
             seen: dict[int, object] | None = None
             for other in read:
                 if other in candidates or other in stable:
@@ -599,22 +696,27 @@ class _TrialSnapshot(Snapshot):
             return Evaluation(entry.result)
         if guard not in self.cache:
             raise RuntimeError("a published choice's guard was never evaluated in its trial")
-        return Evaluation(entry.result, (guard,), decisions=read_decisions(self, (guard,), ()))
+        decisions, facts = reads(self, (guard,), ())
+        return Evaluation(entry.result, (guard,), decisions=decisions, facts=facts)
 
 
 def _forced(snapshot: Snapshot, index: int) -> QueryResult[object] | None:
     """An open Decision's forced value (its one viable case), its refusal (no viable
     case), or None (several, or a snapshot that does not force). A trial reads its
-    base's, and where the base forces nothing, the configuration's it would publish."""
+    base's, and where the base forces nothing, the configuration's it would publish. A
+    trial that reads what it would publish (``_TrialSnapshot._reads_successor``: the
+    base's forced values may be of other facts) reads a stable Decision as the base
+    forces it, the two being equal, and every other as that configuration does."""
     from ._forcing import forced  # noqa: PLC0415 - runtime/forcing cycle
 
     if not snapshot.forcing:
         return None
     source = snapshot
     if isinstance(snapshot, _TrialSnapshot):
-        base = forced(snapshot._base)
-        if index in base.values:
-            return Available(base.values[index])
+        if not snapshot._reads_successor or index in snapshot._stable:
+            base = forced(snapshot._base)
+            if index in base.values:
+                return Available(base.values[index])
         source = snapshot.successor()
     found = forced(source)
     if index in found.values:
@@ -1084,6 +1186,6 @@ __all__ = [
     "inherit",
     "membership",
     "new_cache",
-    "read_decisions",
+    "reads",
     "unaffected",
 ]

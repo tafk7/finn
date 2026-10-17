@@ -44,8 +44,10 @@ once and published with it, so a batch may commit a choice nested under a
 selector that another choice of the batch forces (``_runtime``). Each
 Decision's **verdict** (its viable cases and why
 the others are not) records the Decisions it read and the value it saw of
-each, and is reused while none of them changed: within the rounds, and by a
-successor from its base, so a change re-checks only the verdicts it reaches.
+each, and the formals it read, and is reused while none of them changed: within the
+rounds, and by a successor from its base, so a change re-checks only the verdicts it
+reaches. A configuration with other values for a formal (``try_with_facts``) finds
+again the verdicts that read it.
 """
 
 from __future__ import annotations
@@ -79,13 +81,16 @@ _BUSY = object()
 @dataclass(frozen=True)
 class Verdict:
     """A Decision's viable cases (None: not applicable, or not enumerable here), why
-    each other case is not viable, and the Decisions read with the value seen.
-    ``membership``: applicable, and known by its domain's membership only."""
+    each other case is not viable, and the Decisions read with the value seen, and the
+    formals read (``facts``). ``membership``: applicable, and known by its domain's
+    membership only."""
 
     cases: tuple[object, ...] | None
     reasons: Mapping[str, str]
     reads: Mapping[int, object]
     membership: bool = False
+    # The formals it read: a configuration with other values for any of them finds it again.
+    facts: frozenset[int] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -96,23 +101,32 @@ class Found:
     values: Mapping[int, object] = field(default_factory=dict)
     refused: Mapping[int, Rejected] = field(default_factory=dict)
     verdicts: Mapping[int, Verdict] = field(default_factory=dict)
-    # Who reads whom among the snapshot's open Decisions, built on the first ``reach``.
-    _graph: list[tuple[Mapping[int, frozenset[int]], frozenset[int]]] = field(
-        default_factory=list, init=False, repr=False, compare=False
-    )
+    # Who reads whom among the snapshot's open Decisions, and who reads which formal (both
+    # by Decision), and which are unsettled: built on the first ``reach``.
+    _graph: list[
+        tuple[Mapping[int, frozenset[int]], Mapping[int, frozenset[int]], frozenset[int]]
+    ] = field(default_factory=list, init=False, repr=False, compare=False)
 
-    def reach(self, base: Snapshot, seeds: Collection[int]) -> set[int]:
+    def reach(
+        self, base: Snapshot, seeds: Collection[int], facts: Collection[int] = ()
+    ) -> set[int]:
         """The Decisions open in ``base`` (the snapshot these were found on) that a change
-        to ``seeds`` reaches: those whose verdict read a seed, or read one of these, to a
-        fixed point; and those with no verdict, or whose verdict does not hold under
-        ``base``'s own final values. Such a verdict records a point in the rounds (a
-        Decision it read was still open and forced later), not the answer that stands,
-        so what it decided is not known to be stable."""
+        to ``seeds``, or to other values of the formals ``facts``, reaches: those whose
+        verdict read a seed or a changed formal, or read one of these, to a fixed point;
+        and those with no verdict, or whose verdict does not hold under ``base``'s own
+        final values. Such a verdict records a point in the rounds (a Decision it read
+        was still open and forced later), not the answer that stands, so what it
+        decided is not known to be stable."""
         if not self._graph:
             self._graph.append(self._reads_by(base))
-        readers, unsettled = self._graph[0]
+        readers, formal_readers, unsettled = self._graph[0]
         reached = set(unsettled)
         pending = [*seeds, *unsettled]
+        for fact in facts:
+            for reader in formal_readers.get(fact, ()):
+                if reader not in reached:
+                    reached.add(reader)
+                    pending.append(reader)
         while pending:
             for reader in readers.get(pending.pop(), ()):
                 if reader not in reached:
@@ -120,12 +134,16 @@ class Found:
                     pending.append(reader)
         return reached
 
-    def _reads_by(self, base: Snapshot) -> tuple[Mapping[int, frozenset[int]], frozenset[int]]:
-        """The open Decisions whose verdicts read each Decision, and the open Decisions
-        whose verdicts are not known to hold (``reach``)."""
+    def _reads_by(
+        self, base: Snapshot
+    ) -> tuple[Mapping[int, frozenset[int]], Mapping[int, frozenset[int]], frozenset[int]]:
+        """The open Decisions whose verdicts read each Decision, those whose verdicts read
+        each formal, and the open Decisions whose verdicts are not known to hold
+        (``reach``)."""
         linked = base.linked
         final = {**base.assignments, **self.values}
         readers: dict[int, set[int]] = {}
+        formal_readers: dict[int, set[int]] = {}
         unsettled: set[int] = set()
         for index in linked.decisions:
             if index in base.assignments:
@@ -136,7 +154,13 @@ class Found:
                 continue
             for read in verdict.reads:
                 readers.setdefault(read, set()).add(index)
-        return {read: frozenset(each) for read, each in readers.items()}, frozenset(unsettled)
+            for fact in verdict.facts:
+                formal_readers.setdefault(fact, set()).add(index)
+        return (
+            {read: frozenset(each) for read, each in readers.items()},
+            {fact: frozenset(each) for fact, each in formal_readers.items()},
+            frozenset(unsettled),
+        )
 
 
 NOTHING = Found()
@@ -231,6 +255,19 @@ def _reads(snapshot: Snapshot, roots: Iterable[int], own: int) -> dict[int, obje
     return found
 
 
+def _facts(snapshot: Snapshot, roots: Iterable[int]) -> frozenset[int]:
+    """Every formal the evaluation of ``roots`` read in ``snapshot``."""
+    nodes, cache = snapshot.linked.nodes, snapshot.cache
+    found: set[int] = set()
+    for root in roots:
+        entry = cache.get(root)
+        if nodes[root].kind == "param":
+            found.add(root)
+        if entry is not None:
+            found.update(entry.facts)
+    return frozenset(found)
+
+
 def _extended(base: Snapshot, assignments: Mapping[int, object], added: int) -> Snapshot:
     """A copy of ``base`` (one that does not force) with ``assignments``: ``base``'s and the
     Decision ``added``. It starts from every evaluation of ``base`` that did not read
@@ -259,13 +296,15 @@ def _unchanged(linked: LinkedModel, verdict: Verdict, values: Mapping[int, objec
 
 def _nodes(
     current: Snapshot, index: int, choice: Choice, candidates: tuple[object, ...]
-) -> tuple[tuple[object, ...], dict[str, str], dict[int, object]]:
+) -> tuple[tuple[object, ...], dict[str, str], dict[int, object], frozenset[int]]:
     """A Decision over nodes' viable cases: those whose candidate's admission does not
-    refuse the configuration plus the case."""
+    refuse the configuration plus the case, and what the admissions read: the Decisions
+    with the values seen, and the formals."""
     scopes = dict(choice.cases)
     viable: list[object] = []
     reasons: dict[str, str] = {}
     reads: dict[int, object] = {}
+    facts: set[int] = set()
     for case in candidates:
         scope = scopes[str(case)]
         if scope is None:
@@ -277,29 +316,32 @@ def _nodes(
         verdict, node = admitted(trial, scope)
         if node is not None:
             reads.update(_reads(trial, (node,), index))
+            facts |= _facts(trial, (node,))
         if isinstance(verdict, Rejected):
             reasons[str(case)] = _describe(verdict)
             continue
         viable.append(case)
-    return tuple(viable), reasons, reads
+    return tuple(viable), reasons, reads, frozenset(facts)
 
 
 def _values(
     current: Snapshot, index: int, candidates: tuple[object, ...]
-) -> tuple[tuple[object, ...], dict[str, str], dict[int, object]]:
+) -> tuple[tuple[object, ...], dict[str, str], dict[int, object], frozenset[int]]:
     """A Decision over values' viable cases: those its domain's membership admits here,
-    every requirement holding."""
+    every requirement holding, and what membership read (as ``_nodes``)."""
     viable: list[object] = []
     reasons: dict[str, str] = {}
     reads: dict[int, object] = {}
+    facts: set[int] = set()
     for case in candidates:
         entry = _runtime.membership(current, index, case)
         reads.update(_reads(current, entry.dependencies, index))
+        facts |= _facts(current, entry.dependencies)
         if isinstance(entry.result, Rejected):
             reasons[repr(case)] = _describe(entry.result)
         else:
             viable.append(case)  # waiting on an open choice is not a refusal
-    return tuple(viable), reasons, reads
+    return tuple(viable), reasons, reads, frozenset(facts)
 
 
 def _verdict(current: Snapshot, index: int) -> Verdict:
@@ -312,20 +354,27 @@ def _verdict(current: Snapshot, index: int) -> Verdict:
     applicable = _runtime.decision_state(current, index)
     if not isinstance(applicable, Available):
         # Inapplicable, or its guard waits on an open choice.
-        return Verdict(None, {}, _reads(current, guard, index))
+        return Verdict(None, {}, _reads(current, guard, index), facts=_facts(current, guard))
     listed = _runtime.enumeration(current, index)
-    reads = _reads(current, (*guard, *listed.dependencies), index)
+    roots = (*guard, *listed.dependencies)
+    reads = _reads(current, roots, index)
+    facts = _facts(current, roots)
     if not isinstance(listed.result, Available) or listed.result.value is None:
-        return Verdict(None, {}, reads, isinstance(listed.result, Available))
+        return Verdict(None, {}, reads, isinstance(listed.result, Available), facts)
     candidates = tuple(cast("Iterable[object]", listed.result.value))
     choice = linked.selector_choices.get(index)
     if choice is not None:
-        cases, reasons, more = _nodes(current, index, linked.choices[choice], candidates)
+        cases, reasons, more, seen = _nodes(current, index, linked.choices[choice], candidates)
     elif node.domain is not None and node.domain.requirements:
-        cases, reasons, more = _values(current, index, candidates)
+        cases, reasons, more, seen = _values(current, index, candidates)
     else:
-        cases, reasons, more = candidates, {}, {}
-    return Verdict(cases, MappingProxyType(reasons), MappingProxyType({**reads, **more}))
+        cases, reasons, more, seen = candidates, {}, {}, frozenset()
+    return Verdict(
+        cases,
+        MappingProxyType(reasons),
+        MappingProxyType({**reads, **more}),
+        facts=facts | seen,
+    )
 
 
 def _find(snapshot: Snapshot) -> Found:
