@@ -16,15 +16,15 @@ from typing import Any
 
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
+from support.configure import configured
 from support.helpers import FULL_DSP58, choose
 from support.models import MATMUL, TARGET, matmul_model, thresholding_model
 from support.refusals import refused
 
 from finn.core.graph.annotations.platform import write_target
-from finn.core.graph.errors import KernelOpError
 from finn.core.space import DefinitionError, Rejected, design_space
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import InShell, in_shell, save_channels
+from finn.custom_op.kernels.shell import InShell, in_shell
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -49,7 +49,7 @@ def op(model: ModelWrapper) -> Any:
 def folded(model: ModelWrapper) -> InShell:
     """The MatMul folded as the Chain's first, its network bound in its shell: its
     channels' ends known."""
-    op(model).save(MATMUL)
+    configured(model, {"first": MATMUL})
     return in_shell(model, model.graph.node)
 
 
@@ -66,25 +66,14 @@ def test_a_memory_case_the_device_cannot_build_is_refused_by_name() -> None:
     ultra = {"w": {"source.memstream.ram_style": "ultra"}}
     ultra96 = matmul_model()  # TARGET: Ultra96, no UltraRAM
     # Its weight channel's ends wait on the MatMul's folding: nothing to check yet.
-    with refused(
-        "channel-unbound",
-        error=KernelOpError,
-        message="w: its channel's ends wait on first's open",
-    ):
-        save_channels(ultra96, ultra)
-    op(ultra96).save(MATMUL)
-    with refused(
-        "choices-refused",
-        error=KernelOpError,
-        owner="save_channels",
-        tensor="w",
-        keys=("source.memstream.ram_style",),
-        message="^w: refused choices: .*uram-absent",
-    ):
-        save_channels(ultra96, ultra)
+    with refused("decision-unassigned", owner="compute.packed.pe"):
+        configured(ultra96, ultra)
+    configured(ultra96, {"first": MATMUL})
+    with refused("case-not-viable", owner="w.source.memstream.ram_style", message="uram-absent"):
+        configured(ultra96, ultra)
     uram = targeted(matmul_model(), URAM)
-    op(uram).save(MATMUL)
-    save_channels(uram, ultra)
+    configured(uram, {"first": MATMUL})
+    configured(uram, ultra)
     assert folded(uram).member("w").source.ram_style == "ultra"
 
 
@@ -95,17 +84,17 @@ def test_a_doubled_clock_is_the_shells_not_the_platforms() -> None:
     assert "clk2x" not in {item.name for item in fields(Platform)}
     for target in (TARGET, ZYNQ):
         model = targeted(matmul_model(), target)
-        op(model).save(MATMUL)
-        save_channels(model, {"w": {"source.memstream.pumped_memory": True}})
+        configured(model, {"first": MATMUL})
+        configured(model, {"w": {"source.memstream.pumped_memory": True}})
         assert folded(model).member("w").source.pumped_memory is True
 
 
 def test_runtime_writable_thresholds_need_a_control_bus() -> None:
-    # A KernelOp places no control bus to present its AXI-Lite interface through.
-    with refused(
-        "choices-refused", error=KernelOpError, keys=("use_axilite",), message="threshold-control"
-    ):
-        op(thresholding_model()).save({"use_axilite": True})
+    # A KernelOp places no control bus to present its AXI-Lite interface through: the choice
+    # is forced False (the kernel's tests pin its reason, ``threshold-control``), so the seam
+    # refuses it as forced.
+    with refused("forced", owner="activate.use_axilite"):
+        configured(thresholding_model(), {"activate": {"use_axilite": True}})
 
 
 def test_a_partitions_weight_stream_reads_the_platform() -> None:

@@ -47,9 +47,10 @@ from finn.core.graph.annotations.channel import channel_choices
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import link_stream, measure
 from finn.custom_op.kernels.network import Partition, member, network
-from finn.custom_op.kernels.shell import configured_network, save_channels
+from finn.custom_op.kernels.shell import configured_network
 from finn.harness.toolchain import print_identity
 from finn.toolchain.launcher import host_toolchain
+from support.configure import configured
 
 
 @dataclass(frozen=True)
@@ -101,20 +102,14 @@ def alone_body(model: ModelWrapper, node: NodeProto) -> ModelWrapper:
         field.extend(copy.deepcopy(infos[name]) for name in names)
     del graph.value_info[:]
     outputs = {each.name for each in model.graph.output}
-    direct = {
-        "transport": "direct",
-        "transport.fifo.buffer.depth": None,
-        "transport.fifo.buffer.ram_style": None,
-    }
-    save_channels(
+    return configured(
         single,
         {
-            tensor: direct
+            tensor: {"transport": "direct"}
             for tensor in node.output
             if tensor not in outputs or "transport" not in channel_choices(single, tensor)
         },
     )
-    return single
 
 
 #: FINN's ``get_exp_cycles`` of ``MVAU`` and ``Thresholding`` at each folding measured

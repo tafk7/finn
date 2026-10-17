@@ -26,6 +26,7 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
+from support.configure import configured
 from support.models import choose_memories, configure_partition, streamed_w2_model
 from support.packaging import (
     TIMING_REPORT,
@@ -51,7 +52,6 @@ from finn.core.graph.annotations.outputs import (
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.partition import design_digest, partition_body
 from finn.core.reporting.manifest import RECORDS, STORED
-from finn.custom_op.kernels.base import kernel_op
 from finn.platform.resolve import resolve_target
 from finn.shells.pynq import runner as pynq_runner
 from finn.shells.pynq.driver import (
@@ -407,8 +407,7 @@ def test_a_partition_packaged_earlier_in_the_build_is_not_packaged_again(
 
 def changed_choice(body: ModelWrapper) -> None:
     """The threshold kernel's pipeline deepened: a choice changed since packaging."""
-    (node,) = [node for node in body.graph.node if node.name == "activate"]
-    kernel_op(body, node).save({"deep_pipeline": 1})
+    configured(body, {"activate": {"deep_pipeline": True}})
 
 
 def other_sources(body: ModelWrapper) -> None:
