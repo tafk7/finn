@@ -60,6 +60,20 @@ def test_a_kernelop_declares_no_formals_its_facts_build_the_arguments() -> None:
     assert not any(hasattr(op, "formals") for op in (KernelOp, MatMul, Conv, Thresholding))
 
 
+def test_an_op_made_without_its_model_is_refused_and_points_to_kernel_op() -> None:
+    """A node's op made by hand (no model attached) refuses to read the model, by code,
+    and its message names the way to get an attached one: the package's ``kernel_op``."""
+    model = matmul_model()
+    with refused(
+        "model-unattached",
+        error=KernelOpError,
+        owner="MatMul",
+        node="first",
+        message=r"kernel_op\(model, node\)",
+    ):
+        MatMul(model.graph.node[0]).model()
+
+
 def test_the_schema_is_the_kernel_classs_decision_keys() -> None:
     """A node's choice attributes are its kernel's own decision keys, with no member
     prefix to strip."""

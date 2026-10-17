@@ -42,6 +42,25 @@ choices are stored on its tensor instead, and only in a partition's body (``CHAN
 Only the compiler writes a choice (``persist``): ``get_nodeattr`` of a choice answers what
 the node stores or refuses it as absent, and ``set_nodeattr`` of one is refused.
 
+**Who calls what.** One writer, the readers beside it, and a guard on the door:
+
+- *Writes*, all through ``persist`` (``network.persist``, which writes past the guard).
+  Conversion persists the one-node network its admission baselined, only the node's
+  choices (``baseline_kernel_op``). The cut persists the body's choices at their
+  baselines, the channels' too (``shell.baseline_choices``). Every strategy persists the
+  network it returns (``explore_kernel_choices``). A user sets a choice by ``Hold`` in
+  a step after the cut, which the strategies apply: no one writes an attribute.
+- *Reads*: ``choices`` (the attributes the node holds), ``stored`` (as the kernel's
+  Decisions take them), ``point`` (the kernel with them committed), ``verify_node`` and
+  every bind of a network. They never write: a stored choice the facts refuse is
+  refused by name (``point``, ``verify_node``) or dropped as stale where a network is
+  bound (``Partition.stale``).
+- *The guard*: ``get_nodeattr`` and ``set_nodeattr`` of a KernelOp, the way qonnx's
+  transformations reach an attribute. They guard the choice keys only: reading an absent
+  choice is refused (``choice-absent``), setting one is refused (``choice-set-refused``),
+  each naming the node and the key, and the second the route, ``Hold``. Any other
+  attribute is qonnx's.
+
 Its outputs are its kernel's product, one rule for every op: the kernel bound on its
 inputs states each output's tensor (``output_tensors``), its shape and its element, a
 datatype over a range (MatMul's results over their exact range), which inference writes
@@ -301,7 +320,7 @@ class KernelOp(CustomOp):
             raise KernelOpError.refused(
                 "model-unattached",
                 self.op_type,
-                f"{self.label}: no model attached (use get_customop_wrapper)",
+                f"{self.label}: no model attached (get the op with kernel_op(model, node))",
                 node=self.label,
             )
         return model
@@ -571,6 +590,10 @@ class KernelOp(CustomOp):
         return self.output_tensors()
 
     def make_shape_compatible_op(self, model: ModelWrapper) -> Any:
+        """The stand-in qonnx's ``InferShapes`` asks a custom op for: a constant of the
+        output's shape. It assumes one output: an op that lengthens ``outputs`` fails at
+        the unpacking and must override it. FINN's own inference (``infer_node``) does
+        not call it for a KernelOp."""
         (tensor,) = self.infer_output_tensors(model).values()
         return self.make_const_shape_op(list(tensor.shape))
 

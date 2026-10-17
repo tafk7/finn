@@ -3,7 +3,7 @@
 
 """A partition body's choices, by graph name: the form ``Hold`` reads back.
 
-FINN's ``extract_model_config_to_json`` reads every attribute through
+qonnx's ``extract_model_config_to_json`` (``qonnx.util.config``) reads every attribute through
 ``get_nodeattr``, which a KernelOp refuses for an absent choice (``choice-absent``),
 so an open choice would stop the export. This export is what the body states: each
 KernelOp node's choices as its node holds them, each channel's as its tensor states
