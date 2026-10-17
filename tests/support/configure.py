@@ -11,8 +11,8 @@ seam refuses is refused, by the seam's own findings (its codes: ``not-a-decision
 ``case-not-viable``, ``forced``, ``inapplicable``, the engine's, ...) at the top of the
 ``Refusal``, so a test asserts it by code (``support.refusals.refused``); an owner that is
 no member of the network is ``Hold``'s own refusal (``member-unknown``); a channel's
-choice on a graph with nodes on the host is refused as the readers refuse it
-(``channel-choices-outside-body``), since ``persist`` writes it without asking.
+choice on a graph with nodes on the host is refused by ``persist``, the one writer, before
+anything is written (``channel-choices-outside-body``).
 
 A key the network reports forced to the very value given is held back from the batch, not
 refused: the compiler never stores a forced Decision (``persist`` writes only the
@@ -43,7 +43,6 @@ from collections.abc import Mapping
 from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
 
-from finn.core.graph.annotations.channel import refuse_outside_body
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN
 from finn.core.reporting.findings import Refusal
@@ -63,11 +62,6 @@ def configured(model: ModelWrapper, choices: Mapping[str, Mapping[str, object]])
     code. ``model`` is changed in place and
     returned."""
     nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
-    # Channel choices are a partition's body's only; nothing below checks it before a write.
-    names = {node.name for node in model.graph.node}
-    refuse_outside_body(
-        model, [owner for owner, given in choices.items() if given and owner not in names]
-    )
     bound = in_shell(model, nodes)
     seam = Seam(read_target(model).platform)
     waiting = seam.keyed(bound, choices, "configured")

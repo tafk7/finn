@@ -9,14 +9,14 @@ inputs as the nodes before it left them.
 
 The KernelOps anchored at a node's op type each try to match it. The matches are tried
 on a copy of the model, largest first, and each is asked to admit it
-(``KernelOp.admission``: its kernel, and the node alone as a network, whose channels
-must be realized). The first match admitted replaces the nodes it covers with one
-KernelOp, which keeps the anchor's name and the covered nodes' outside tensors, and its
-choices are set to their baselines on the node alone (``baseline_kernel_op``): its
-kernel's, never a channel's, so nothing is written on a tensor. A node that no match
-converts stays on the host, unchanged. Two KernelOps matching the same nodes is an
-authoring error: one computation is one KernelOp, its alternatives a decision of its
-kernel.
+(``KernelOp.admitted``: its kernel, and the node alone as a network at its baselines,
+whose channels must be realized). The first match admitted replaces the nodes it covers
+with one KernelOp, which keeps the anchor's name and the covered nodes' outside tensors,
+and its choices are those of the network its admission baselined, persisted once
+(``baseline_kernel_op``, through ``persist``): its kernel's, never a channel's, so nothing
+is written on a tensor. A node that no match converts stays on the host, unchanged. Two
+KernelOps matching the same nodes is an authoring error: one computation is one KernelOp,
+its alternatives a decision of its kernel.
 
 A match of several nodes must be convex and must not hide a tensor that something
 outside it reads (``match-not-convex``, ``match-interior-exposed``). Nodes it depends on
@@ -46,6 +46,8 @@ from finn.core.graph.partition import KERNEL_OPS_DOMAIN
 from finn.core.graph.walk import between, upstream
 from finn.core.reporting.findings import Finding, FindingKind, by_code
 from finn.custom_op.kernels.base import KernelOp, Match, kernel_op, unstated
+from finn.custom_op.kernels.network import persist
+from finn.kernels.network import Network
 from finn.platform.target import Target
 from finn.transformation.kernels.infer import infer_node
 
@@ -144,13 +146,13 @@ class ToKernelOps(Transformation):
                 if _move_upstream(model, subgraph):
                     moved = True  # visit the nodes it moved before the anchor first
                     break
-                trial, refused = _trial(model, op, match, subgraph)
-                if not refused:
+                trial, admitted = _trial(model, op, match, subgraph)
+                if isinstance(admitted, Network):
                     labels = tuple(_label(model.graph.node[i]) for i in subgraph.indices)
                     model, converted = trial, op.op_type
-                    baseline_kernel_op(model, model.graph.node[index])
+                    baseline_kernel_op(model, model.graph.node[index], admitted)
                     break
-                findings.extend(refused)
+                findings.extend(admitted)
             if moved:
                 continue
             if converted is None:
@@ -284,12 +286,13 @@ def _move_upstream(model: ModelWrapper, subgraph: _Subgraph) -> bool:
 
 def _trial(
     model: ModelWrapper, op: type[KernelOp], match: Match, subgraph: _Subgraph
-) -> tuple[ModelWrapper, tuple[Finding, ...]]:
+) -> tuple[ModelWrapper, Network | tuple[Finding, ...]]:
     """Try ``match`` on a copy of the model: replace the covered nodes with one
     KernelOp, named as the anchor, on their outside tensors, and ask the kernels to
-    admit it. Returns the copy and the refusals: none if admitted (its outputs then
-    inferred), a missing shape or datatype as ``fact-unstated``. A copy, so a refused
-    trial leaves ``model`` as it was. Any other wrong fact raises."""
+    admit it (``KernelOp.admitted``). Returns the copy and, if admitted, the node alone as
+    a network at its baselines (its outputs then inferred), else the refusals: a missing
+    shape or datatype as ``fact-unstated``. A copy, so a refused trial leaves ``model`` as
+    it was. Any other wrong fact raises."""
     trial = copy.deepcopy(model)
     index = subgraph.indices[0]
     new = helper.make_node(
@@ -312,24 +315,26 @@ def _trial(
             if getattr(infos[position], key) in subgraph.interior:
                 del infos[position]
     trial.graph.node.insert(index, new)
+    node = trial.graph.node[index]
     try:
-        refused = infer_node(trial, trial.graph.node[index], admit=True)
+        admitted = kernel_op(trial, node).admitted()
+        if isinstance(admitted, Network):
+            infer_node(trial, node)
     except FactUnstated as error:
         return trial, (unstated(op.op_type, str(error), tensor=error.tensor),)
-    flat = (cause for finding in refused for cause in (finding.causes or (finding,)))
+    if isinstance(admitted, Network):
+        return trial, admitted
+    flat = (cause for finding in admitted for cause in (finding.causes or (finding,)))
     return trial, tuple(dict.fromkeys(flat))
 
 
-def baseline_kernel_op(model: ModelWrapper, node: NodeProto) -> dict[str, object]:
-    """Set the KernelOp ``node``'s own choices to their baselines on the node alone
-    (``KernelOp.baselined``: its one-node network) and store them as its attributes: its
-    kernel's choices only, nothing on a tensor. Channel choices wait for the cut, where
-    each channel has both its ends (``baseline_choices``). Returns the node's choices."""
-    op = kernel_op(model, node)
-    baselined = op.baselined()
-    own = {key: value for (owner, key), value in baselined.chosen().items() if owner == op.label}
-    op.save(own)
-    return op.choices()
+def baseline_kernel_op(model: ModelWrapper, node: NodeProto, baselined: Network) -> None:
+    """Store the KernelOp ``node``'s own choices as its attributes: those of ``baselined``,
+    the node alone at its baselines (``KernelOp.admitted``, the network conversion's
+    admission baselined), written through ``persist`` and only its node's: its kernel's
+    choices, nothing on a tensor. Channel choices wait for the cut, where each channel has
+    both its ends (``baseline_choices``)."""
+    persist(model, baselined, [kernel_op(model, node).label])
 
 
 def between_kernel_ops(model: ModelWrapper) -> tuple[str, ...]:

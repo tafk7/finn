@@ -344,7 +344,10 @@ class KernelOp(CustomOp):
         under a port), channel choices are stored on the tensor."""
         ports = {port for port in (*self.ports, *self.outputs) if port}
         if any(name.partition(".")[0] in ports for name in names):
-            return f"; a channel's choices are its tensor's ({CHANNEL.name}, save_channels)"
+            return (
+                f"; a channel's choices are its tensor's ({CHANNEL.name}): set them in a step "
+                "after the cut, with Hold"
+            )
         return ""
 
     def choices(self) -> dict[str, object]:
@@ -391,17 +394,13 @@ class KernelOp(CustomOp):
         point: Kernel = found.point  # type: ignore[assignment]
         return point
 
-    def save(self, choices: Mapping[str, object | None]) -> None:
-        """Store ``choices`` as the node's attributes, over its stored ones, after
-        checking them all together on a fresh point; ``None`` clears one. Channel
-        choices go through ``shell.save_channels``."""
-        merged = self.saved(choices)
-        self.write(merged)
-
-    def saved(self, choices: Mapping[str, object | None]) -> dict[str, int | str]:
-        """What ``save`` would store: ``choices`` over the node's stored ones, ``None``
-        clearing one, each checked for its attribute's type and all checked together on a
-        fresh point. Writes nothing."""
+    def _saved(self, choices: Mapping[str, object]) -> dict[str, int | str]:
+        """What ``persist`` stores on this node, its whole: ``choices`` (by attribute),
+        the committed Decisions of the node's kernel in the network it persists. ``persist``
+        alone calls it (a route to a choice is ``Hold`` in a step after the cut, ``persist``
+        for the compiler, ``support.configure.configured`` for a test). Each key is checked
+        to be one of the schema's and each value for its attribute's type and encoding, so a
+        write cannot fail halfway; no replay, the network has bound them. Writes nothing."""
         schema = self.schema()
         unknown = sorted(set(choices) - set(schema))
         if unknown:
@@ -414,9 +413,7 @@ class KernelOp(CustomOp):
                 node=self.label,
             )
         merged: dict[str, int | str] = {}
-        for name, value in {**self.choices(), **choices}.items():
-            if value is None:
-                continue
+        for name, value in choices.items():
             kind, cases = schema[name]
             if not _is_choice_value(value, kind, cases):
                 raise KernelOpError.refused(
@@ -428,11 +425,11 @@ class KernelOp(CustomOp):
                     node=self.label,
                 )
             merged[name] = value
-        self._replayed(merged)  # refuses before any write; a cleared choice is not replayed
         return merged
 
-    def write(self, merged: Mapping[str, int | str]) -> None:
-        """Store ``merged`` (``saved``'s) as the node's choice attributes, its whole."""
+    def _write(self, merged: Mapping[str, int | str]) -> None:
+        """Store ``merged`` (``_saved``'s) as the node's choice attributes, its whole;
+        ``persist``'s alone."""
         for name in self.schema():
             present = get_by_name(self.onnx_node.attribute, name)
             if present is not None:
@@ -574,7 +571,16 @@ class KernelOp(CustomOp):
         """Why conversion refuses this node: its kernel's refusals bound on its inputs,
         whatever its open choices (``refusals``); and, its choices at their baselines, the
         node alone as a network (``baselined``): each channel not realized, its admission
-        or a Decision of it without a viable case."""
+        or a Decision of it without a viable case. Empty where ``admitted`` gives a
+        network."""
+        admitted = self.admitted()
+        return admitted if isinstance(admitted, tuple) else ()
+
+    def admitted(self) -> Network | tuple[Finding, ...]:
+        """The node alone at its baselines (``baselined``), where conversion admits it;
+        else why it does not (``admission``'s findings). Conversion persists the network
+        it gets here, the node's own choices (``persist``), rather than baselining the
+        node again."""
         found = self.refusals(self.bound())
         if found:
             return found
@@ -589,7 +595,7 @@ class KernelOp(CustomOp):
             else:
                 found_here = based.checked([name]).values()
                 refused.extend(finding for each in found_here for finding in each)
-        return tuple(dict.fromkeys(refused))
+        return based if not refused else tuple(dict.fromkeys(refused))
 
     def verify_node(self) -> list[str]:
         """Why the node's stored choices are refused, or each of ``refusals`` of its

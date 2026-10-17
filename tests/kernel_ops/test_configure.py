@@ -15,7 +15,7 @@ from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from support.configure import configured, write_raw
 from support.explore_models import kernel_model as open_chain
-from support.helpers import FULL_DSP58
+from support.helpers import FULL_DSP58, choose
 from support.models import (
     EDGE,
     MATMUL,
@@ -29,7 +29,8 @@ from support.refusals import refused
 from finn.core.graph.annotations.channel import channel_choices
 from finn.core.graph.annotations.platform import write_target
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import network
+from finn.custom_op.kernels.network import network, persist
+from finn.custom_op.kernels.shell import in_shell
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors
 
@@ -91,8 +92,8 @@ def test_a_channels_choices_are_set_with_its_kernels_in_one_batch() -> None:
 
 
 def test_the_chain_is_configured_as_the_compiler_states_it() -> None:
-    """Every kernel and channel of a partition's body in one call: the same committed
-    choices as the model the tests built with ``save`` and ``save_channels``."""
+    """Every kernel and channel of a partition's body in one call: the network replays
+    them whole, none stale, and a forced key is not stored."""
     model = open_chain()
     channels = {"x": EDGE, "w1": WEIGHT_CHANNEL, "hidden": EDGE, "levels": EDGE, "y": EDGE}
     configured(
@@ -256,6 +257,21 @@ def test_a_channel_choice_on_a_graph_with_host_nodes_is_refused() -> None:
     with refused("channel-choices-outside-body", keys=("w",)):
         configured(model, {"w": WEIGHT_CHANNEL})
     assert channel_choices(model, "w") == {}
+
+
+def test_persist_refuses_a_channel_choice_on_a_graph_with_host_nodes_before_any_write() -> None:
+    """The compiler's path, not the helper's: a network of the kernels set at a channel's
+    choice and persisted on a graph that is no partition's body is refused by ``persist``
+    itself, the one writer, and nothing is written, the kernel's choices included."""
+    model = hosted(matmul_model())
+    configured(model, {"first": FOLDED})
+    before = stored(model)
+    nodes = [node for node in model.graph.node if node.name == "first"]
+    stated = choose(in_shell(model, nodes), {"w.transport": "direct"})
+    with refused("channel-choices-outside-body", keys=("w",)):
+        persist(model, stated)
+    assert channel_choices(model, "w") == {}
+    assert stored(model) == before
 
 
 # -- clearing ----------------------------------------------------------------------------

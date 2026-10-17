@@ -29,10 +29,9 @@ from finn.core.graph.annotations.channel import channel_choices
 from finn.core.graph.annotations.platform import PLATFORM_KEYS
 from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
-from finn.core.reporting.findings import by_code
 from finn.custom_op.kernels.conv import Conv
 from finn.custom_op.kernels.matmul import MatMul
-from finn.custom_op.kernels.network import network
+from finn.custom_op.kernels.network import Partition, network, persist
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -155,25 +154,6 @@ def test_configured_choices_are_written_and_replay_reads_them() -> None:
     assert attributes(model) == sorted(set(FOLDING) - {"compute"})
 
 
-def test_a_clear_that_leaves_a_reader_is_refused_by_save() -> None:
-    """Of ``save``'s own mechanics (its clearing, which the seam has no equivalent of): to
-    go with ``save``."""
-    model = matmul_model()
-    configured(model, {"first": FOLDING})
-    with refused(
-        "choices-refused",
-        error=KernelOpError,
-        owner="MatMul",
-        node="first",
-        keys=("compute.packed.compute_pumping",),
-        message=r"compute\.packed\.compute_pumping: .*simd",
-    ):
-        op(model).save({"compute.packed.simd": None})
-    assert "compute.packed.simd" in attributes(model)
-    op(model).save({"compute.packed.simd": None, "compute.packed.compute_pumping": None})
-    assert "compute.packed.simd" not in attributes(model)
-
-
 def test_a_graph_with_a_cleared_choice_a_reader_needs_is_stale() -> None:
     """The read side of a clear: a graph whose SIMD is gone, its pumping still stored, is
     stated as the raw attributes state it, and replay refuses the pumping."""
@@ -183,28 +163,41 @@ def test_a_graph_with_a_cleared_choice_a_reader_needs_is_stale() -> None:
     assert "compute.packed.simd" not in attributes(model)
     (problem,) = op(model).verify_node()
     assert "compute.packed.compute_pumping: " in problem and "simd" in problem
+    # By its code: the point's replay refuses the pumping, the node in its details.
+    with refused(
+        "choices-refused",
+        error=KernelOpError,
+        owner="MatMul",
+        node="first",
+        keys=("compute.packed.compute_pumping",),
+        message=r"compute\.packed\.compute_pumping: .*simd",
+    ):
+        op(model).point()
     write_raw(model, "first", "compute.packed.compute_pumping", None)
     assert op(model).verify_node() == []
 
 
-def test_a_refused_save_names_its_rule_owned_by_the_op_about_the_node() -> None:
-    """Three saves refused for three reasons: each its own code, owned by the op's type,
-    the node in its details, so ``by_code`` tells them apart."""
+def test_persist_checks_every_value_before_it_writes_any(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The one writer's own checks (it replays nothing, the network bound each value): a
+    key that is no choice of the op and a value of another type than its attribute's, each
+    its own code, owned by the op's type, the node in its details; nothing is written, the
+    node's other choices included."""
     model = matmul_model()
-    label = op(model).label
-    found = []
-    for choices in ({"compute.packed.typo": 1}, {"compute": 1}, {"compute.packed.pe": 3}):
-        with pytest.raises(KernelOpError) as rejection:
-            op(model).save(choices)
-        (finding,) = rejection.value.findings
-        assert finding.owner == "MatMul" and dict(finding.details)["node"] == label
-        found.append(finding)
-    assert [finding.code for finding in found] == [
-        "choice-unknown",
-        "choice-value-invalid",
-        "choices-refused",
-    ]
-    assert len(by_code(found)) == 3
+    configured(model, {"first": FOLDING})
+    before = op(model).choices()
+    bound = network(model, model.graph.node)
+    for forged, code in (
+        ("compute.packed.typo", "choice-unknown"),
+        ("compute.packed.simd", "choice-value-invalid"),
+    ):
+        stated = {("first", "compute.packed.pe"): 4, ("first", forged): "two"}
+        monkeypatch.setattr(Partition, "chosen", lambda self, names=None, stated=stated: stated)
+        with refused(
+            code, error=KernelOpError, owner="MatMul", node="first", keys=(forged,)
+        ) as caught:
+            persist(model, bound)
+        assert dict(caught.finding.details)["node"] == op(model).label
+    assert op(model).choices() == before
 
 
 def test_a_kernel_op_error_carries_at_least_one_finding() -> None:

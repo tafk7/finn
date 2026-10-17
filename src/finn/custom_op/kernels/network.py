@@ -37,8 +37,8 @@ shell of the model's target (``in_shell``).
   partition's body only, ``refuse_outside_body``). A stored choice the current facts
   refuse is dropped as stale, with why (``Partition.stale``); a channel whose ends wait
   holds its choices until it is bound. With every KernelOp of the model selected, choices
-  a tensor states that is no channel of it are stale too. Nothing is written: ``persist``
-  writes a network's choices back, each owner's whole;
+  a tensor states that is no channel of it are stale too. Nothing is written: ``persist``,
+  the one writer of choices, writes a network's choices back, each owner's whole;
 - **its outputs**: each node's output is its kernel's product. Where the graph's
   annotation of an output (its shape's element count and last axis, its datatype and
   its range) differs from what its producer states, the graph is stale, refused by name
@@ -60,15 +60,14 @@ In the verifying mode a hit is bound again with no cache open and compared.
 
 A partition's resources (``Partition.own_resources``) are its members'. The shell's
 admission and resources over a network (its members', its ends' and its static region's),
-and the body's choices stated by hand (``save_channels``) or given their baselines
-(``baseline_choices``), each on the network in its shell, are
-``finn.custom_op.kernels.shell``'s.
+and the body's choices given their baselines (``baseline_choices``) on the network in its
+shell, are ``finn.custom_op.kernels.shell``'s.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Hashable, Iterable, Mapping
+from collections.abc import Callable, Collection, Hashable, Iterable, Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
@@ -600,31 +599,45 @@ def _write_channel(model: ModelWrapper, tensor: str, choices: Mapping[str, objec
         model.set(CHANNEL_KEYS[key], value, tensor=tensor)
 
 
-def persist(model: ModelWrapper, network: Partition) -> dict[str, dict[str, object]]:
+def persist(
+    model: ModelWrapper, network: Network, owners: Collection[str] | None = None
+) -> dict[str, dict[str, object]]:
     """Write ``network``'s choices, a network of ``model``'s nodes (``network``), back
     where they are stated, each owner's whole: every Decision it commits (a forced one
     is never committed), and the choices an unbound channel holds, on its owner, a
     kernel's node or a channel's tensor; a choice an owner holds that the network does
-    not (one replay dropped as stale) cleared, and, where it holds every KernelOp of the
-    model, so are the channel choices of a tensor that is no channel of it. Every value is
-    checked and encoded before any is written, so a write cannot fail halfway. Returns
-    what each owner now holds, by graph name."""
-    held_by: dict[str, dict[str, object]] = {name: {} for name in network.members}
-    for (owner, key), value in network.chosen().items():
+    not (one replay dropped as stale) cleared, and, where it is a partition holding every
+    KernelOp of the model, so are the channel choices of a tensor that is no channel of it.
+    Of ``owners`` only, where named (conversion writes its node's own, and no tensor's).
+
+    The one writer of choices: a route to one is ``Hold`` in a step after the cut, this
+    function for the compiler, and ``support.configure.configured`` for a test. Channel
+    choices are a partition's body's only: written on a graph that is not (host nodes
+    beside the KernelOps) they are refused, by name, before anything is written
+    (``channel-choices-outside-body``). Every value is checked and encoded before any is
+    written, so a write cannot fail halfway; none is replayed on a fresh point, since the
+    network has bound each (its committed Decisions are checked as it commits them).
+    Returns what each owner now holds, by graph name."""
+    names = [name for name in network.members if owners is None or name in owners]
+    held_by: dict[str, dict[str, object]] = {name: {} for name in names}
+    for (owner, key), value in network.chosen(names).items():
         held_by[owner][key] = value
+    refuse_outside_body(
+        model, [name for name, values in held_by.items() if values and name not in network.kernels]
+    )
     nodes = {node.name: node for node in model.graph.node}
     stated = model.tensors_stating(CHANNEL)
     writes: list[Callable[[], None]] = []
     for name, values in held_by.items():
         if name in network.kernels:
             op = kernel_op(model, nodes[name])
-            held = op.choices()
-            if values or held:
-                writes.append(_kernel_write(op, op.saved(dict.fromkeys(held) | values)))
+            if values or op.choices():
+                writes.append(_kernel_write(op, op._saved(values)))
         elif values or name in stated:
             _encoded(name, values)
             writes.append(_channel_write(model, name, values))
-    stray = [tensor for tensor in stated if network.whole and tensor not in held_by]
+    whole = owners is None and isinstance(network, Partition) and network.whole
+    stray = [tensor for tensor in stated if whole and tensor not in held_by]
     for write in writes:
         write()
     for tensor in stray:
@@ -633,7 +646,7 @@ def persist(model: ModelWrapper, network: Partition) -> dict[str, dict[str, obje
 
 
 def _kernel_write(op: KernelOp, merged: Mapping[str, int | str]) -> Callable[[], None]:
-    return lambda: op.write(merged)
+    return lambda: op._write(merged)
 
 
 def _channel_write(

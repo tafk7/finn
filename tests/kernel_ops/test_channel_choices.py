@@ -151,7 +151,9 @@ def test_a_graph_with_nodes_on_the_host_states_no_channel_choice(tmp_path: Path)
         keys=every,
     ):
         network(model, nodes)
-    with refused("channel-choices-outside-body", error=KernelOpError, keys=("x",)):
+    # The helper no longer asks up front (``persist`` does): this model states channel
+    # choices on every tensor, so the bind it starts from refuses them all, as above.
+    with refused("channel-choices-outside-body", error=KernelOpError, keys=every):
         configured(model, {"x": EDGE})
     # A node replays its kernel's choices only: its weight channel's are the network's.
     assert kernel_op(model, nodes[0]).verify_node() == []

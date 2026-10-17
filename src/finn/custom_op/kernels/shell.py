@@ -26,9 +26,8 @@ check of its FIFOs against their streams before emission (a strategy may call th
 check too, ``Seam.check_fifos``), and records the design it verified on the body; emission
 (packaging, the shell's integration, the testbench) compares it (``refuse_unverified``),
 and refuses a design never verified or changed since. Simulation and elaboration only
-bind. A body's choices are stated by hand
-(``save_channels``) and given their baselines (``baseline_choices``) on its network in its
-shell, which alone holds both of a boundary channel's ends.
+bind. A body's choices are given their baselines (``baseline_choices``) on its network in
+its shell, which alone holds both of a boundary channel's ends, and written by ``persist``.
 """
 
 from __future__ import annotations
@@ -40,7 +39,6 @@ from typing import TYPE_CHECKING, Any
 
 from onnx import NodeProto
 
-from finn.core.graph.annotations.channel import channel_choices, refuse_outside_body
 from finn.core.graph.annotations.choices import held_keys
 from finn.core.graph.annotations.outputs import OUTPUT_VERIFIED
 from finn.core.graph.annotations.platform import read_target
@@ -48,14 +46,11 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available, Inapplicable, QueryResult, Rejected, Space
-from finn.custom_op.kernels.base import refusal, why
 from finn.custom_op.kernels.network import (
     PARTITION,
     Partition,
-    _encoded,
     _network,
     _together,
-    _write_channel,
     member,
     persist,
 )
@@ -390,57 +385,6 @@ def refuse_unverified(model: ModelWrapper, label: str) -> None:
 # -- a body's choices, on its network in its shell ---------------------------------------
 
 
-def save_channels(model: ModelWrapper, choices: Mapping[str, Mapping[str, object | None]]) -> None:
-    """Commit ``choices`` (made on purpose), by tensor, over those each tensor's channel
-    states (``CHANNEL``), in a partition's body, ``model``: replayed with every other
-    choice of the network of its KernelOps in its shell (``in_shell``), which alone holds
-    both of a channel's ends,
-    and written only if replay keeps each of them; ``None`` clears a choice. A key
-    ``CHANNEL`` does not declare, a value it does not admit, a tensor that is no channel
-    of the network, a channel whose ends wait on a kernel's open choices (its choices
-    cannot be checked yet) and a model that is not a partition's body are refused, by
-    name. Public API on purpose, though only tests call it: the checked way to state a
-    channel's choices by hand."""
-    refuse_outside_body(model, list(choices))
-    merged: dict[str, dict[str, object]] = {}
-    for tensor, given in choices.items():
-        _encoded(tensor, {key: value for key, value in given.items() if value is not None})
-        merged[tensor] = {
-            key: value
-            for key, value in {**channel_choices(model, tensor), **given}.items()
-            if value is not None
-        }
-    bound = _bound(model, list(model.graph.node), PARTITION, merged)
-    for tensor in merged:
-        if tensor not in bound.channels:
-            raise KernelOpError.refused(
-                "channel-unknown",
-                "save_channels",
-                f"{tensor}: no channel of the partition (a stream between its kernels, or "
-                "on its boundary, or a parameter a kernel owns)",
-                (tensor,),
-                tensor=tensor,
-            )
-        waiting = bound.unbound(tensor)
-        if waiting is not None:
-            raise KernelOpError.refused(
-                "channel-unbound",
-                "save_channels",
-                f"{tensor}: its channel's ends wait on {waiting.member}'s open choices ("
-                + "; ".join(map(str, waiting.result.findings))
-                + f"), so its choices cannot be checked: save {waiting.member}'s first",
-                (tensor,),
-                tensor=tensor,
-            )
-        refused = {
-            key: why(found) for (owner, key), found in bound.dropped.items() if owner == tensor
-        }
-        if refused:
-            raise refusal("save_channels", tensor, refused, tensor=tensor)
-    for tensor, values in merged.items():
-        _write_channel(model, tensor, values)
-
-
 def baseline_choices(model: ModelWrapper) -> dict[str, str]:
     """Every choice of a partition's body, ``model``, at its baseline where the body
     leaves it open, and persisted, each owner's whole (``persist``): the network of its
@@ -465,7 +409,6 @@ __all__ = [
     "configured_network",
     "in_shell",
     "refuse_unverified",
-    "save_channels",
     "shell_resources",
     "verify_partition",
 ]
