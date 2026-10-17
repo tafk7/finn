@@ -29,6 +29,7 @@ from finn.core.space import (
     Available,
     ConstraintGroup,
     Decision,
+    Inapplicable,
     Param,
     Rejected,
     Space,
@@ -44,6 +45,7 @@ from finn.core.space import (
     supplied,
 )
 from finn.core.space import _runtime as runtime
+from finn.core.space.inspection import candidate
 
 # Each test runs with the readers index used for every cache, then for none: the same answers.
 pytestmark = pytest.mark.usefixtures("index_path")
@@ -389,3 +391,64 @@ def test_a_forced_value_is_not_kept_when_a_checked_choice_becomes_unchecked() ->
     assert forced(point) == forced(want) == {"compute": "wide"}
     assert point.query(Gauge.compute) == want.query(Gauge.compute)
     assert inspection.viable(point) == inspection.viable(want)
+
+
+class Sized(Space):
+    """A core whose ``size`` is checked against its ``limit``."""
+
+    limit: int = Param()
+    size: int = Decision(domain=domain(accepts=within, limit=limit))
+
+
+class Plain(Space):
+    """A core with no choice of its own."""
+
+    limit: int = Param()
+
+
+class Selected(Space):
+    """``mode`` selects the core; the cores read the root's ``limit``."""
+
+    limit: int = Decision(values=(3, 9))
+    mode: Sized | Plain = Decision({"sized": Sized, "plain": Plain}, limit=limit)
+
+
+def test_an_unchecked_choice_whose_selector_settles_to_another_case_is_refused() -> None:
+    """A choice kept unchecked under an open selector is not silently removed when the
+    selector is committed to another case: the change is refused, in one Space, and the
+    refusal names the choice (it is inactive: ``Inapplicable``), though the change did not
+    request it. Settling the selector to the case that holds the choice keeps it
+    unchecked; clearing the choice in the same change as the selector is accepted."""
+    point = design_space(Selected())
+    owned = {item.key: item.reference for item in inspection.decisions(point)}
+    core = candidate(point, Selected.mode, "sized")
+    assert core is not None
+    held = point.try_with_choices(core.field(Sized.size).change(8))
+    assert held.accepted
+    point = held.instance
+    size = owned["mode.sized.size"]
+    # Kept unchecked: it waits on the limit and on the selector, both still open.
+    assert inspection.unchecked(point) == (
+        inspection.Unchecked("mode.sized.size", 8, ("limit", "mode")),
+    )
+    refused = point.try_with_choices({owned["mode"]: "plain"})
+    assert not refused.accepted and refused.instance is point
+    assert [(o.owner, o.status, o.requested) for o in refused.outcomes] == [
+        ("mode", "admissible", True),
+        ("mode.sized.size", "refused", False),
+    ]
+    assert isinstance(refused.outcomes[-1].result, Inapplicable)
+    assert inspection.unchecked(point) == (
+        inspection.Unchecked("mode.sized.size", 8, ("limit", "mode")),
+    )
+    # The same case as the choice's keeps it, now waiting on the limit alone.
+    same = point.try_with_choices({owned["mode"]: "sized"})
+    assert same.accepted
+    assert inspection.unchecked(same.instance) == (
+        inspection.Unchecked("mode.sized.size", 8, ("limit",)),
+    )
+    # Clearing it in the same change removes it, and the selector settles.
+    cleared = point.try_with_choices({owned["mode"]: "plain"}, point.field(size).clear())
+    assert cleared.accepted
+    assert inspection.unchecked(cleared.instance) == ()
+    assert cleared.instance.query(owned["mode"]) == Available("plain")
