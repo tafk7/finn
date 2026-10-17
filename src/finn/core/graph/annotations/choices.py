@@ -18,17 +18,22 @@ CHOICES = Namespace("finn.choices", version=1)
 """The namespace, on a partition's body: ``HELD`` and ``OBJECTIVE_FPS``."""
 
 
-def _by_owner_values(value: object) -> bool:
-    return isinstance(value, dict) and all(isinstance(held, dict) for held in value.values())
+def _keys_by_owner(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(keys, list) and all(isinstance(key, str) for key in keys)
+        for keys in value.values()
+    )
 
 
 HELD = CHOICES.key(
-    "held", JSON, check=_by_owner_values, expect="{graph name: {key: value}}, the pinned choices"
+    "held", JSON, check=_keys_by_owner, expect="{graph name: [key, ...]}, the held choices' keys"
 )
-"""The choices pinned in a partition's body, by owner and key (``{graph name: {key:
-value}}``, the form ``kernel_choices.json`` takes). Every exploration of the body keeps
-them (``Seam.held``), so a pin holds for the whole build. Absent where nothing is
-pinned."""
+"""The keys of the choices held in a partition's body, by owner (``{graph name: [key,
+...]}``, each owner's keys sorted). Strategies leave a held choice alone: every
+exploration of the body keeps it (``Seam.held``), so a hold holds for the whole build.
+The mark names keys only; a held choice's value is the one its node or tensor states.
+Absent where nothing is held. It is no part of the design (``design_digest``): a hold
+changes no hardware."""
 
 OBJECTIVE_FPS = CHOICES.key("objective_fps", float)
 """The frames a second a target throughput explored the body to (``TargetThroughput``),
@@ -36,10 +41,11 @@ which a shell's build reports its delivered clock against. Absent where none did
 where an exploration whose strategy changed any kernel's choice saved it since."""
 
 
-def held_choices(model: ModelWrapper) -> dict[str, dict[str, object]]:
-    """The choices pinned in a partition's body, ``model``, by owner and key there
-    (``HELD``); none where nothing is pinned."""
-    held: dict[str, dict[str, object]] | None = model.get(HELD)
+def held_keys(model: ModelWrapper) -> dict[str, list[str]]:
+    """The keys of the choices held in a partition's body, ``model``, by owner (``HELD``):
+    which choices strategies leave alone, their values being the ones the nodes and tensors
+    state; none where nothing is held."""
+    held: dict[str, list[str]] | None = model.get(HELD)
     return {} if held is None else held
 
 
@@ -47,5 +53,5 @@ __all__ = [
     "CHOICES",
     "HELD",
     "OBJECTIVE_FPS",
-    "held_choices",
+    "held_keys",
 ]

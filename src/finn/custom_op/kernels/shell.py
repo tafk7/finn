@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING, Any
 from onnx import NodeProto
 
 from finn.core.graph.annotations.channel import channel_choices, refuse_outside_body
-from finn.core.graph.annotations.choices import held_choices
+from finn.core.graph.annotations.choices import held_keys
 from finn.core.graph.annotations.outputs import OUTPUT_VERIFIED
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
@@ -340,11 +340,13 @@ def verify_partition(model: ModelWrapper, label: str) -> tuple[Configured, FifoC
     point, _ = configured_network(model, label)
     seam = Seam(read_target(model).platform)
     # Only which keys are held matters here, not their values (exploration checks those).
+    stated = seam.chosen(point.network)
     seam.held.update(
         {
-            (owner, key): value
-            for owner, held in held_choices(model).items()
-            for key, value in held.items()
+            (owner, key): stated[(owner, key)]
+            for owner, keys in held_keys(model).items()
+            for key in keys
+            if (owner, key) in stated
         }
     )
     found = seam.check_fifos(point.network)

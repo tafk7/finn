@@ -23,10 +23,8 @@ through the partition and compare it with ``execute_onnx`` of the source.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Any
 
 import numpy as np
@@ -46,7 +44,7 @@ from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network
 from finn.dataflow.tensor import ScalarEncoding
-from finn.kernels.explore import Pinned, Ranked
+from finn.kernels.explore import Hold, Ranked
 from finn.kernels.matmul import column_range
 from finn.kernels.values.domains import range_dtype
 from finn.platform.resolve import resolve_target
@@ -175,7 +173,7 @@ def source(case: Case) -> ModelWrapper:
 
 def kernel_ops(case: Case, target: Any = ULTRA96, compute: str | None = None) -> ModelWrapper:
     """The case as KernelOps, inferred, every choice committed at two lanes; ``compute``
-    pins each MatMul's core first (``Pinned``, held in the body for the ranking after
+    holds each MatMul's core first (``Hold``, held in the body for the ranking after
     it): ranking reopens every choice not held, so a core saved on the node would be
     ranked again, and the pin replaces the core conversion stored with the choices under
     it."""
@@ -186,11 +184,7 @@ def kernel_ops(case: Case, target: Any = ULTRA96, compute: str | None = None) ->
     pins = {
         node.name: {"compute": compute} for node in model.graph.node if node.op_type == "MatMul"
     }
-    with TemporaryDirectory() as directory:
-        path = Path(directory) / "pinned.json"
-        path.write_text(json.dumps(pins))
-        pinned = Pinned(path)
-    model = model.transform(ExploreKernelChoices(pinned))
+    model = model.transform(ExploreKernelChoices(Hold(pins)))
     return model.transform(ExploreKernelChoices(ranked))
 
 

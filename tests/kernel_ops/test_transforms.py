@@ -173,7 +173,7 @@ def test_the_converted_graph_computes_the_source_graphs_results(second_weights: 
 
 def test_the_nodes_choices_round_trip_through_apply_config() -> None:
     """The export names nodes and, after them, tensors: ApplyConfig applies the nodes'
-    (a channel's, on its tensor, Pinned reads back: test_explore). Each node holds every
+    (a channel's, on its tensor, ``Hold`` reads back: test_explore). Each node holds every
     choice of its own from conversion on (its baselines); ApplyConfig sets attributes
     and clears none, so it applies them on nodes holding none."""
     model = inferred()

@@ -342,7 +342,7 @@ def test_a_fifo_too_small_for_its_stream_is_refused_at_verification(
         "(8 words) no longer keeps its producer"
     )
     assert body.get(OUTPUT_VERIFIED) is None
-    body.set(HELD, {"levels": {"transport.fifo.buffer.depth": 8}})
+    body.set(HELD, {"levels": ["transport.fifo.buffer.depth"]})
     _, check = verify_partition(body, node.name)
     assert [(f.kind, f.code) for f in check.findings] == [
         (FindingKind.LIMITATION, "fifo-held-stale")

@@ -17,7 +17,7 @@ A network is complete when every choice with cases that is not required holds a 
 its baseline until a strategy sets another; a required Decision (a FIFO's depth) stays
 open until a strategy sets it. ``baseline``, ``reopen`` and ``settle`` keep a network
 complete, in rank order: kernels first, then channels in the order the wiring reads them.
-``held`` maps the keys no strategy changes to their values: those a ``Pinned`` strategy
+``held`` maps the keys no strategy changes to their values: those a ``Hold`` strategy
 fixes, and those the build seeds from its partition's body (``HELD``,
 ``finn.transformation.kernels.choose``).
 
@@ -30,9 +30,8 @@ settles, so a value it does not decide keeps what an earlier strategy set.
 
 The strategies, each an objective and its constraints searched through the seam:
 
-- ``Pinned(path)``: fixed choices, by owner and key (``{graph name: {key: value}}``:
-  a kernel's under its node, a channel's under its tensor, the form the build's
-  ``kernel_choices.json`` takes), set as one batch and held;
+- ``Hold(values)``: fixed choices, by owner and key (``{graph name: {key: value}}``:
+  a kernel's under its node, a channel's under its tensor), set as one batch and held;
 - ``TargetThroughput(fps)``: the least parallelism meeting ``fps`` frames a
   second at the target's clock (``TargetCycles``, a budget of cycles a frame),
   folding through an unordered choice its cycles wait on by trying each case (a
@@ -65,12 +64,10 @@ nothing of itself: the build checks once, before emission
 
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Collection, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import product
 from math import floor
-from os import PathLike
 from typing import Any, Generic, Protocol, TypeVar
 
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
@@ -148,7 +145,7 @@ S = TypeVar("S", bound=Composition)
 class ExploreError(Refusal):
     """An exploration that cannot go on, and why: its one finding (``findings``), owned by
     who refused: a Decision none of whose cases is viable or accepted, by its key; a
-    pin the seam refuses, by the file that states it; a strategy's own setting or need,
+    hold the seam refuses, by the strategy that states it; a strategy's own setting or need,
     by the strategy. What the seam or the engine found against it are the finding's
     causes. Its message is the finding's line."""
 
@@ -1032,7 +1029,7 @@ def _first_case(
 
 class Rebaseline:
     """Every choice not held back at its baseline (``baseline``): written first, it
-    starts an exploration over from the kernels' baselines, the pins kept."""
+    starts an exploration over from the kernels' baselines, the holds kept."""
 
     strategy = "baseline"
 
@@ -1085,64 +1082,70 @@ class DebugPlaceholder:
 # -- fixed choices -------------------------------------------------------------------------
 
 
-class Pinned:
-    """Fixed choices by owner and key (``{graph name: {key: value}}``: a kernel's under
-    its node, a channel's under its tensor, the form ``kernel_choices.json`` takes),
-    read from ``path``, set as one batch (``Seam.set``: replacing what is stored, the
-    choices the change makes stale dropped and settled) and held (``Seam.held``): no
-    strategy after it changes them. A choice already at the same value is not in the
-    batch, and held all the same; anything the seam refuses (an owner or key that is no
-    choice here, a value it does not take, a key another pin holds otherwise) is
-    refused, named. Pins go first, so that the strategies after them fold around them.
-    ``held`` keeps the keys it held, with their values."""
+class Hold:
+    """Fixed choices by owner and key (``values``, ``{graph name: {key: value}}``: a
+    kernel's under its node, a channel's under its tensor), set as one batch and held
+    (``Seam.held``): no strategy after it changes them. Holds go first, so that the
+    strategies after them fold around them. A choice already at the same value is not in
+    the batch, and held all the same; anything the seam refuses (an owner or key that is
+    no choice here, a value it does not take, a key another hold keeps at another value:
+    ``already held``) is refused, named, its owner ``held``. ``held`` keeps the keys it
+    held, with their values."""
 
-    strategy = "pinned"
+    strategy = "held"
 
-    def __init__(self, path: str | PathLike[str]) -> None:
-        self.path = str(path)
-        try:
-            with open(path) as file:
-                loaded = json.load(file)
-        except (OSError, ValueError) as error:
-            raise ExploreError("pins-invalid", self.path, f"not read: {error}") from error
-        if not isinstance(loaded, dict) or not all(
-            isinstance(values, dict) for values in loaded.values()
-        ):
-            raise ExploreError("pins-invalid", self.path, "not a {graph name: {key: value}} file")
-        self.choices: dict[str, dict[str, object]] = loaded
+    def __init__(self, values: Mapping[str, Mapping[str, object]]) -> None:
+        self.values = {owner: dict(keys) for owner, keys in values.items()}
         self.held: dict[Key, object] = {}
 
     def explore(self, seam: Seam, network: S) -> S:
-        stored = seam.chosen(network)
-        wanted = seam.keyed(network, self.choices, self.path)
-        refused = {
-            key: _refusal(key, "held", f"already held to {seam.held[key]!r}")
-            for key, value in wanted.items()
-            if key in seam.held and seam.held[key] != value
-        }
-        if refused:
-            raise _pins_refused(self.path, refused)
-        batch = {key: value for key, value in wanted.items() if stored.get(key, _ABSENT) != value}
-
-        def pin(opened: S, _: Mapping[Key, object]) -> S:
-            if not batch:
-                return opened
-            outcome = seam.set(opened, batch)
-            if isinstance(outcome, Refused):
-                raise _pins_refused(self.path, outcome.why)
-            return outcome.network
-
-        self.held = wanted
-        seam.held.update(wanted)
-        try:
-            return seam.run(network, (), pin, self.strategy)
-        except Unsettled as error:
-            raise ExploreError(
-                "pin-refused", self.path, f"refused choices: {error}", causes=error.findings
-            ) from error
+        self.held = _hold(seam, network, self.values, self.strategy)
+        return _held_run(seam, network, self.held, self.strategy, self.strategy)
 
     def report(self) -> dict[str, object]:
-        return {"strategy": self.strategy, "path": self.path}
+        return {"strategy": self.strategy}
+
+
+def _hold(
+    seam: Seam,
+    network: S,
+    values: Mapping[str, Mapping[str, object]],
+    owner: str,
+) -> dict[Key, object]:
+    """The keys ``values`` fixes, with their values, none of them held to another value
+    already (refused, owned by ``owner``)."""
+    wanted = seam.keyed(network, values, owner)
+    refused = {
+        key: _refusal(key, "held", f"already held to {seam.held[key]!r}")
+        for key, value in wanted.items()
+        if key in seam.held and seam.held[key] != value
+    }
+    if refused:
+        raise _pins_refused(owner, refused)
+    return wanted
+
+
+def _held_run(seam: Seam, network: S, wanted: Mapping[Key, object], owner: str, strategy: str) -> S:
+    """``network`` with ``wanted`` set as one batch, a choice already there left out, and
+    held; a refusal is owned by ``owner``."""
+    stored = seam.chosen(network)
+    batch = {key: value for key, value in wanted.items() if stored.get(key, _ABSENT) != value}
+
+    def hold(opened: S, _: Mapping[Key, object]) -> S:
+        if not batch:
+            return opened
+        outcome = seam.set(opened, batch)
+        if isinstance(outcome, Refused):
+            raise _pins_refused(owner, outcome.why)
+        return outcome.network
+
+    seam.held.update(wanted)
+    try:
+        return seam.run(network, (), hold, strategy)
+    except Unsettled as error:
+        raise ExploreError(
+            "pin-refused", owner, f"refused choices: {error}", causes=error.findings
+        ) from error
 
 
 def _named(why: Mapping[Key, tuple[Finding, ...]]) -> str:
@@ -1150,7 +1153,7 @@ def _named(why: Mapping[Key, tuple[Finding, ...]]) -> str:
 
 
 def _pins_refused(path: str, why: Mapping[Key, tuple[Finding, ...]]) -> ExploreError:
-    """The refusal of the pins ``path`` states, the seam's reasons by key its causes."""
+    """The refusal of the holds ``path`` states, the seam's reasons by key its causes."""
     return ExploreError("pin-refused", path, "refused choices: " + _named(why), causes=_all(why))
 
 
@@ -2078,7 +2081,7 @@ class SizeFifos:
         """The style ``transport``'s FIFO is built in, which its depth is sized for: the
         one named, committed with the depth; else the one settling gives it
         (``Seam.settle``), its held value, else its earlier value, else its baseline,
-        ``auto``. A held value is not checked until settling (a pin or the graph's held
+        ``auto``. A held value is not checked until settling (a ``Hold`` or the graph's held
         choices may state ``None``, which settling refuses): ``None`` is sized as ``auto``."""
         if self.ram_style is not None:
             return self.ram_style
@@ -2203,8 +2206,8 @@ __all__ = [
     "FIFOS_BY_MODEL",
     "FIFOS_NOT_CHECKED",
     "FifoCheck",
+    "Hold",
     "MaxThroughput",
-    "Pinned",
     "RankPolicy",
     "Ranked",
     "Rebaseline",

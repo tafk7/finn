@@ -846,6 +846,7 @@ def test_tfc_builds_on_ip_through_the_directory_entry(tmp_path: Path, tfc_export
     built = ModelWrapper(str(output / "intermediate_models" / "step_verify_partition.onnx"))
     _, body, _ = partition_body(built)
     assert read_target(body) == resolve_target(part=ULTRA96.part, period_ns=5.0)
-    assert json.loads((output / "kernel_choices.json").read_text()) == kernel_choices_config(body)
+    logged = json.loads((output / "report" / "kernel_choices.json").read_text())
+    assert logged == kernel_choices_config(body)
     report = json.loads((output / "report" / "step_target_throughput.json").read_text())
     assert report["bottleneck"]["cycles"] == 196

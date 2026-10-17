@@ -13,7 +13,8 @@ its shell (``finn.custom_op.kernels.shell.in_shell``: their kernels, the channel
 them and the channels on its boundary, members named as the graph, ``MatMul_0``; the nodes'
 and the channels' saved choices replayed, a stale one dropped with why), which its ``Seam``
 (``finn.kernels.explore``) explores, each choice keyed by its owner, a node or a
-tensor, and the key there; holds the pins the body records (``HELD``), gives every
+tensor, and the key there; holds the keys the body records (``HELD``; a held key the
+bound network does not state is refused, ``held-not-taken``, ``held-owner-unknown``), gives every
 choice the body leaves open its baseline (``Seam.baseline``: what ``BaselineChoices``
 does, a no-op on a body the cut created; on a body made by hand, or for a choice replay
 dropped as stale, the report names what it baselined), runs the strategy, which reopens
@@ -31,19 +32,20 @@ the choices it decides, explores and settles, and then:
   (``persist``): a kernel's on its node, a channel's on its tensor (``finn.channel``);
   a required choice no strategy set stays open, and emission refuses it by name
   (``configured_network``);
-- records the pins held, those the body recorded and those the strategy pinned, in the
-  body (``HELD``, ``{graph name: {key: value}}``), so that every later exploration of
-  the body holds them: a pin holds for the build, and re-baselining keeps it; and a
+- records the keys held, those the body recorded and those a ``Hold`` fixed, in the
+  body as keys (``HELD``, ``{graph name: [key, ...]}``; the values are the ones the nodes
+  and tensors state), so that every later exploration of the body holds them: a hold lasts
+  for the build, and re-baselining keeps it; and a
   target throughput's frames a second (``OBJECTIVE_FPS``), which a later exploration
   whose strategy changes any kernel's choice removes;
 - keeps what it found (``explored``): the network, its cost and the report: the choices
   the body left open and the baseline took (``baselined``); the strategy with every
   value it changed (``changed``: before and after, by owner), how many it reopened and
-  settling kept, the ones settling re-baselined, a pin's held keys, attempts and time;
+  settling kept, the ones settling re-baselined, a ``Hold``'s held keys, attempts and time;
   every value by its owner (a node or a tensor, by graph name, and the key there, as
-  ``kernel_choices.json`` names it), with who set it (``saved``: the body, ``baseline``,
-  or the strategy); the keys held; the choices left open (a required one named so); each
-  FIFO's memory style beside the storage FinnLib's selection gives it and what it uses
+  the log ``report/kernel_choices.json`` names it), with who set it (``saved``: the body,
+  ``baseline``, or the strategy); the keys held; the choices left open (a required one named
+  so); each FIFO's memory style beside the storage FinnLib's selection gives it and what it uses
   (``fifo_storage``: its ``auto`` is FinnLib's, not Vivado's); whether FIFOs were
   sized; how they were judged (``fifos_judged``: ``model``, where the strategy sized them
   or checked them; ``not checked``; or what the strategy's report states); the dropped
@@ -57,7 +59,7 @@ the choices it decides, explores and settles, and then:
 
 ``exploration_summary`` gives an exploration's lines for a build's log.
 
-Pins go first, and FIFO sizing after the last strategy that changes the folding: a FIFO
+A ``Hold`` goes first, and FIFO sizing after the last strategy that changes the folding: a FIFO
 sized before a fold that leaves it too small for its stream is refused when the build
 verifies the partition (``fifo-stale``), unless a strategy dropped it to be sized again.
 
@@ -98,7 +100,7 @@ from typing import TYPE_CHECKING, Any
 
 from qonnx.transformation.base import Transformation
 
-from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS, held_choices
+from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS, held_keys
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
@@ -122,7 +124,7 @@ from finn.kernels.explore import (
     Cost,
     Explorer,
     FifoCheck,
-    Pinned,
+    Hold,
     Seam,
     SizeFifos,
     TargetThroughput,
@@ -396,10 +398,56 @@ def _end_rows(network: Partition, ends: Sequence[str]) -> dict[str, dict[str, ob
     return rows
 
 
+def _held_values(
+    network: Partition, saved: Mapping[Key, object], held: Mapping[str, Sequence[str]]
+) -> dict[Key, object]:
+    """The values of the keys the body's mark holds (``held``, by owner), the ones
+    ``network`` states (``saved``). A held key is the user's exact value, so one the network
+    does not take is refused, by name, never dropped and given its baseline: an owner that
+    is no member of the network (``held-owner-unknown``), or a key the bound network states
+    no value for, because replay refused the stored one or it is gone (``held-not-taken``;
+    replay's findings are its causes)."""
+    members = set(network.members)
+    kernels = set(network.kernels)
+    values: dict[Key, object] = {}
+    lost: list[Finding] = []
+    refused_keys: list[str] = []
+    for owner, keys in held.items():
+        for key in keys:
+            if owner not in members:
+                code, reason = "held-owner-unknown", "no member of the network owns it"
+                subject: tuple[tuple[str, str], ...] = ()
+            elif (owner, key) not in saved:
+                code, reason = "held-not-taken", "the bound network states no value for it"
+                subject = (("node" if owner in kernels else "tensor", owner),)
+            else:
+                values[(owner, key)] = saved[(owner, key)]
+                continue
+            refused_keys.append(dotted((owner, key)))
+            lost.append(
+                Finding(
+                    FindingKind.REJECTION,
+                    code,
+                    "explore_kernel_choices",
+                    f"{dotted((owner, key))}: held by the body, but {reason}; the held value "
+                    "was not taken, and no baseline takes its place",
+                    (("keys", (key,)), *subject),
+                    causes=network.dropped.get((owner, key), ()),
+                )
+            )
+    if lost:
+        raise KernelOpError(
+            "a held choice is refused: " + "; ".join(each.message for each in lost),
+            tuple(refused_keys),
+            findings=lost,
+        )
+    return values
+
+
 def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None) -> Explored:
     """The KernelOps of a partition's body, ``model``, explored by ``strategy`` (None: only
     the body's open choices given their baselines) and every value persisted, on its
-    network in the shell of the model's target, the body's pins held and recorded; see the
+    network in the shell of the model's target, the body's holds kept and recorded; see the
     module docstring."""
     if not model.graph.node:
         raise KernelOpError.refused(
@@ -418,9 +466,10 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     bound = in_shell(model, nodes)
     seam = Seam(read_target(model).platform)
     network = bound
-    seam.held.update(seam.keyed(network, held_choices(model), HELD.entry))
     saved = seam.chosen(network)
-    # A choice the body leaves open takes its baseline before the strategy runs; a pin
+    # The body's mark names the keys held; their values are the ones the network states.
+    seam.held.update(_held_values(network, saved, held_keys(model)))
+    # A choice the body leaves open takes its baseline before the strategy runs; a hold
     # the body records must hold there.
     network = seam.baseline(network)
     values = seam.chosen(network)
@@ -456,7 +505,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
             "attempts": seam.attempts - attempts,
             "seconds": round(time.perf_counter() - began, 3),
         }
-        if isinstance(strategy, Pinned):
+        if isinstance(strategy, Hold):
             entry["held"] = [dotted(key) for key in strategy.held]
     refused = seam.refusals(network)
     if refused:
@@ -476,7 +525,8 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         )
     persist(model, network)
     if seam.held:
-        model.set(HELD, _by_owner(seam.held))
+        held = _by_owner(seam.held)
+        model.set(HELD, {owner: sorted(held[owner]) for owner in sorted(held)})
     if isinstance(strategy, TargetThroughput):
         model.set(OBJECTIVE_FPS, strategy.fps)
     elif any(owner in network.kernels for owner, _ in changed):
@@ -528,7 +578,7 @@ def explore_partition(parent: ModelWrapper, strategy: Explorer) -> Explored:
     """The partition of the build's parent graph ``parent`` explored by ``strategy``:
     its body opened through the partition node (``partition_body``), explored
     (``explore_kernel_choices``) and saved in its file. The parent graph is unchanged;
-    a later exploration of the body holds the pins this one recorded."""
+    a later exploration of the body holds the keys this one recorded."""
     _, body, body_file = partition_body(parent)
     explored = explore_kernel_choices(body, strategy)
     body.save(body_file)
@@ -564,7 +614,7 @@ def shell_bottleneck(model: ModelWrapper) -> Bottleneck | None:
 
 class ExploreKernelChoices(Transformation):
     """A partition body's KernelOps explored by ``strategy`` and every value saved, on its
-    network in the shell of the model's target, the body's pins held and recorded;
+    network in the shell of the model's target, the body's holds kept and recorded;
     ``explored`` holds the result (``explore_kernel_choices``)."""
 
     def __init__(self, strategy: Explorer | None = None) -> None:
