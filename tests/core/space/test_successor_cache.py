@@ -297,7 +297,7 @@ def test_an_admission_that_read_a_forced_decision_is_reused_unless_the_change_re
     assert forced(narrow) == forced(fresh)
 
 
-def test_an_admission_that_assumed_a_forced_value_is_reused_only_while_that_value_stands() -> None:
+def test_an_admission_is_reused_while_the_successor_forces_the_same_value() -> None:
     calls: list[str] = []
 
     def within(*, candidate: int, limit: int) -> bool:
@@ -331,18 +331,13 @@ def test_an_admission_that_assumed_a_forced_value_is_reused_only_while_that_valu
     built = recomputed(glossy)
     assert inspection.explain(glossy, Fit.depth) == inspection.explain(built, Fit.depth)
 
-    # Here the successor forces the packed core: the stub the admission assumed is gone.
-    # ``depth`` of 2 was admitted under the base's stub (two rows) and stands, as a
-    # configuration built from nothing admits it. A change that does not reach ``compute``
-    # admits it again, under the packed core (one row), and refuses it, as that
-    # configuration built from nothing does.
+    # Here the successor would force the packed core. ``depth`` of 2 was admitted under the
+    # base's stub (two rows); a trial reads the forced value of the configuration it would
+    # publish, so ``lanes = 3`` admits it again under the packed core (one row) and refuses it,
+    # as the configuration built from nothing does.
     two = commit(first, {"depth": 2})
-    packed = commit(two, {"lanes": 3})
-    assert forced(packed) == {"compute": "packed"} and packed.depth == 2
-    calls.clear()
-    report = packed.try_with_choices({Fit.finish: "gloss"})
-    assert calls == ["depth"]  # admitted again
-    want = recomputed(packed).try_with_choices({Fit.finish: "gloss"})
+    report = two.try_with_choices({Fit.lanes: 3})
+    want = recomputed(two).try_with_choices({Fit.lanes: 3})
     assert not report.accepted and not want.accepted
     refusals = [
         {item.owner: item.result for item in each.outcomes if item.status == "refused"}

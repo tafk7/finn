@@ -452,6 +452,54 @@ def viable(point: Space) -> tuple[Viable, ...]:
     return _answered(current, "viable", point._scope, compute)
 
 
+@dataclass(frozen=True, slots=True)
+class Unchecked:
+    """A stored choice whose own check cannot conclude yet, for inspection: its key, the
+    value stored, and what it waits on: the keys of the choices still open (or unchecked
+    themselves) and of the inputs not supplied that its check, and its guard, read. A read
+    of the choice answers unresolved until a change makes its check succeed; a change then
+    checks it again, and refuses it if the check fails."""
+
+    key: str
+    value: object
+    blockers: tuple[str, ...]
+
+
+def unchecked(point: Space) -> tuple[Unchecked, ...]:
+    """The choices below this scope that are stored and unchecked (see ``Unchecked``), by
+    key. A configuration that holds one is not complete: a choice kept unchecked is a
+    commitment with pending evidence, not an accepted value, and what generates hardware
+    from a configuration is to refuse it."""
+    _execution.driver_only("unchecked inspection")
+    current = state(point)
+    linked = current.linked
+    included = _scope_set(linked, point._scope)
+
+    def blockers(index: int) -> tuple[str, ...]:
+        node = linked.nodes[index]
+        entries = [_runtime.membership(current, index, current.assignments[index])]
+        if node.guard is not None:
+            entries.append(_runtime.evaluate(current, node.guard))
+        read = {item for entry in entries for item in (*entry.decisions, *entry.facts)}
+        return tuple(
+            sorted(
+                linked.nodes[item].key
+                for item in read
+                if not isinstance(_runtime.evaluate(current, item).result, Available)
+            )
+        )
+
+    def compute(copy: _Copies) -> tuple[Unchecked, ...]:
+        return tuple(
+            Unchecked(decision_key(linked, index), copy(index, current.assignments[index]), found)
+            for index in sorted(current.unchecked, key=lambda item: linked.nodes[item].key)
+            if linked.nodes[index].scope in included
+            for found in (blockers(index),)
+        )
+
+    return _answered(current, "unchecked", point._scope, compute)
+
+
 def open(point: Space) -> tuple[Open, ...]:  # noqa: A001 - the inspection's name
     """The open Decisions below this scope whose cases the engine cannot enumerate (a
     domain known by membership only, a FIFO's depth): applicable, neither committed
@@ -571,6 +619,7 @@ __all__ = [
     "ModelStatistics",
     "Open",
     "QueryEvidence",
+    "Unchecked",
     "Viable",
     "admission",
     "candidate",
@@ -583,6 +632,7 @@ __all__ = [
     "model",
     "open",
     "statistics",
+    "unchecked",
     "value_handle",
     "viable",
 ]

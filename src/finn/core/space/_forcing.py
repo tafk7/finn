@@ -26,7 +26,9 @@ round), evaluated on copies that do not force themselves. A successor of a base
 whose forced values were found starts its rounds from them (``_find``): the base's
 forced values, replayed in the order the base found them, each held only while its
 verdict's reads hold, are assigned on the first copy, and the rounds then find only
-what the change reaches; the result is kept only where it is a derivation of the
+what the change reaches; a verdict is held only while a read of each Decision it read
+answers what it did (the value, open, or unresolved as an unchecked choice, which is never
+assigned); the result is kept only where it is a derivation of the
 plain rounds' forcing, and otherwise the plain rounds run. The first copy starts
 from the snapshot's evaluations that read no open Decision (but a seed). Each copy (one per
 forced value, one per case of a Decision over nodes) extends the one before it by
@@ -67,23 +69,31 @@ from .results import Available, QueryResult, Rejected
 from .semantics import equal
 
 
-class _Open:
-    """A Decision a verdict read while it was open."""
+class _Reading:
+    """What a read of a Decision answered, where it answered no value: the Decision was
+    open (``OPEN``), or stored and unresolved because its own check cannot conclude
+    (``UNCHECKED``). A read answers its value, or one of these: a verdict records that, not
+    the stored candidate, so a candidate that stays equal while its check concludes is a
+    changed answer."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
 
     def __repr__(self) -> str:
-        return "OPEN"
+        return self.name
 
 
-OPEN = _Open()
+OPEN = _Reading("OPEN")
+UNCHECKED = _Reading("UNCHECKED")
 _BUSY = object()
 
 
 @dataclass(frozen=True)
 class Verdict:
     """A Decision's viable cases (None: not applicable, or not enumerable here), why
-    each other case is not viable, and the Decisions read with the value seen, and the
-    formals read (``facts``). ``membership``: applicable, and known by its domain's
-    membership only."""
+    each other case is not viable, and the Decisions read with the answer seen (its
+    value, ``OPEN`` or ``UNCHECKED``), and the formals read (``facts``). ``membership``:
+    applicable, and known by its domain's membership only."""
 
     cases: tuple[object, ...] | None
     reasons: Mapping[str, str]
@@ -142,6 +152,7 @@ class Found:
         (``reach``)."""
         linked = base.linked
         final = {**base.assignments, **self.values}
+        unchecked = base.unchecked
         readers: dict[int, set[int]] = {}
         formal_readers: dict[int, set[int]] = {}
         unsettled: set[int] = set()
@@ -149,7 +160,7 @@ class Found:
             if index in base.assignments:
                 continue
             verdict = self.verdicts.get(index)
-            if verdict is None or not _unchanged(linked, verdict, final):
+            if verdict is None or not _unchanged(linked, verdict, final, unchecked):
                 unsettled.add(index)
                 continue
             for read in verdict.reads:
@@ -243,15 +254,17 @@ def _describe(result: Rejected) -> str:
 
 def _reads(snapshot: Snapshot, roots: Iterable[int], own: int) -> dict[int, object]:
     """Every Decision the evaluation of ``roots`` read in ``snapshot`` (but ``own``), with
-    the value it had there (``OPEN`` if none)."""
-    nodes, cache, assignments = snapshot.linked.nodes, snapshot.cache, snapshot.assignments
+    what a read of it answered there: its value, ``UNCHECKED`` where it is stored and its
+    check cannot conclude, ``OPEN`` if it has none."""
+    nodes, cache = snapshot.linked.nodes, snapshot.cache
+    assignments, unchecked = snapshot.assignments, snapshot.unchecked
     found: dict[int, object] = {}
     for root in roots:
         entry = cache.get(root)
         read = (root,) if nodes[root].kind == "decision" else ()
         for index in (*read, *(entry.decisions if entry is not None else ())):
             if index != own:
-                found[index] = assignments.get(index, OPEN)
+                found[index] = UNCHECKED if index in unchecked else assignments.get(index, OPEN)
     return found
 
 
@@ -272,18 +285,27 @@ def _extended(base: Snapshot, assignments: Mapping[int, object], added: int) -> 
     """A copy of ``base`` (one that does not force) with ``assignments``: ``base``'s and the
     Decision ``added``. It starts from every evaluation of ``base`` that did not read
     ``added``, directly or through another: those answer the same in the copy."""
-    copy = Snapshot(base.model, base.parameters, assignments, forcing=False)
+    copy = Snapshot(
+        base.model, base.parameters, assignments, forcing=False, unchecked=base.unchecked
+    )
     _runtime.inherit(copy, base, (added,), keep_fresh=True)
     return copy
 
 
-def _unchanged(linked: LinkedModel, verdict: Verdict, values: Mapping[int, object]) -> bool:
-    """Whether every Decision a verdict read still has the value it saw."""
+def _unchanged(
+    linked: LinkedModel,
+    verdict: Verdict,
+    values: Mapping[int, object],
+    unchecked: frozenset[int] = frozenset(),
+) -> bool:
+    """Whether a read of every Decision a verdict read still answers what it saw: the
+    value, or open, or unresolved as a stored choice (``unchecked``) whose check cannot
+    conclude. An unchecked candidate is never a value here."""
     for index, seen in verdict.reads.items():
-        now = values.get(index, OPEN)
+        now = UNCHECKED if index in unchecked else values.get(index, OPEN)
         if now is seen:
             continue
-        if now is OPEN or seen is OPEN:
+        if isinstance(now, _Reading) or isinstance(seen, _Reading):
             return False
         semantics = linked.nodes[index].semantics
         assert semantics is not None
@@ -417,7 +439,9 @@ def _find(snapshot: Snapshot) -> Found:
     if seeds:
         values, refused, current = _rounds(snapshot, verdicts, open_, seeds)
         final = {**snapshot.assignments, **values}
-        if not refused and all(_unchanged(linked, verdicts[index], final) for index in values):
+        if not refused and all(
+            _unchanged(linked, verdicts[index], final, snapshot.unchecked) for index in values
+        ):
             return _publish(snapshot, verdicts, values, refused, current)
     values, refused, current = _rounds(snapshot, verdicts, open_, {})
     return _publish(snapshot, verdicts, values, refused, current)
@@ -439,7 +463,7 @@ def _replay(snapshot: Snapshot, verdicts: Mapping[int, Verdict]) -> dict[int, ob
             and verdict is not None
             and verdict.cases is not None
             and len(verdict.cases) == 1
-            and _unchanged(linked, verdict, assigned)
+            and _unchanged(linked, verdict, assigned, snapshot.unchecked)
         ):
             seeds[index] = assigned[index] = verdict.cases[0]
     return seeds
@@ -461,7 +485,11 @@ def _rounds(
     # seed: an open Decision reads as unassigned on the copy, and as forced on the
     # snapshot, and a seed is assigned on the copy, forced to the same value on the snapshot.
     current = Snapshot(
-        snapshot.model, snapshot.parameters, {**snapshot.assignments, **values}, forcing=False
+        snapshot.model,
+        snapshot.parameters,
+        {**snapshot.assignments, **values},
+        forcing=False,
+        unchecked=snapshot.unchecked,
     )
     _runtime.inherit(current, snapshot, [index for index in open_ if index not in values])
     refused: dict[int, Rejected] = {}
@@ -473,7 +501,9 @@ def _rounds(
             if index in values:
                 continue
             verdict = verdicts.get(index)
-            if verdict is None or not _unchanged(linked, verdict, current.assignments):
+            if verdict is None or not _unchanged(
+                linked, verdict, current.assignments, snapshot.unchecked
+            ):
                 verdict = verdicts[index] = _verdict(current, index)
             if verdict.cases is None:
                 continue
