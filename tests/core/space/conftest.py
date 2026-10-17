@@ -5,6 +5,7 @@
 from collections.abc import Iterator
 
 import pytest
+from support.space_checks import index_path, pytest_terminal_summary  # noqa: F401
 
 from finn.core.space import _execution
 

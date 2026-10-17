@@ -432,6 +432,7 @@ LAYERS: tuple[Layer, ...] = (
         (
             "core.space",
             "support.checked_cache",
+            "support.space_checks",
             "support.space_cores",
             "support.space_pipeline",
             "support.space_walk",

@@ -33,16 +33,12 @@ import pytest
 
 import numpy as np
 import random
-import sys
-from support.checked_cache import DIFFERING_READS, CheckedCache
 from support.member_cache import _member_cache, pytest_sessionfinish  # noqa: F401
 from support.rng_seed import seed_from_nodeid
 
-from finn.core.space import _runtime
-
-# Every Space snapshot's cache, in every suite, refuses what the engine's rule forbids
-# (support.checked_cache); production keeps exact dicts.
-_runtime.cache_factory = CheckedCache
+# Every Space snapshot's cache refuses what the engine's rule forbids, and a test may take
+# the index path (support.space_checks).
+from support.space_checks import index_path, pytest_terminal_summary  # noqa: F401
 
 try:
     import torch
@@ -73,20 +69,3 @@ def _deterministic_random_state(request, finn_test_seed):
         np.random.set_state(numpy_state)
         if torch_state is not None:
             torch.set_rng_state(torch_state)
-
-
-@pytest.fixture(params=["index", "scan"])
-def index_path(request, monkeypatch):
-    """Run a test with the Space's readers index used for every cache, then for none: the
-    answers are the same either way (``_runtime.INDEX_FROM``)."""
-    monkeypatch.setattr(_runtime, "INDEX_FROM", 0 if request.param == "index" else sys.maxsize)
-    return request.param
-
-
-def pytest_terminal_summary(terminalreporter):
-    if DIFFERING_READS:
-        terminalreporter.section(
-            "cache setdefault: kept and dropped evaluations differing in reads"
-        )
-        for (site, kind), count in sorted(DIFFERING_READS.items()):
-            terminalreporter.write_line(f"{count:6d}  {site}: {kind}")
