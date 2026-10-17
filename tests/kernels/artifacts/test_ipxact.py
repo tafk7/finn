@@ -19,6 +19,8 @@ from finn.kernels.artifacts.abi import (
     Bus,
     Data,
     Direction,
+    Endpoint,
+    Member,
     Reset,
     Signal,
     StandardProtocol,
@@ -78,6 +80,30 @@ def test_an_active_high_reset_says_so() -> None:
     reset = Signal("rst", Direction.IN, 1, Reset(False, True, ("ap_clk",)))
     declared = interfaces(interface_tcl((PORTS[0], reset), 5.0))
     assert declared["rst"].parameters["POLARITY"] == "ACTIVE_HIGH"
+
+
+@pytest.mark.parametrize("data_bits", [32, 64])
+def test_the_register_block_is_as_wide_as_its_bus(data_bits: int) -> None:
+    bus = Bus(
+        "s_axilite",
+        StandardProtocol.AXILITE,
+        [
+            Member(logical, f"s_axilite_{logical.upper()}", width)
+            for logical, width in (
+                ("awaddr", 6),
+                ("awvalid", 1),
+                ("wdata", data_bits),
+                ("rdata", data_bits),
+            )
+        ],
+        Endpoint.TARGET,
+        associated_clock="ap_clk",
+    )
+    declared = interfaces(interface_tcl((PORTS[0], bus), 5.0))
+    memory_map = declared["s_axilite"].memory_map
+    assert memory_map is not None
+    [block] = memory_map.blocks
+    assert block.width == data_bits
 
 
 @pytest.mark.parametrize("clock_ns", [5.0, 3.3])
