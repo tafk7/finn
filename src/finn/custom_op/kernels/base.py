@@ -39,6 +39,8 @@ A node's attributes are its semantic attributes, which are part of the operation
 (Thresholding's ``bias``), and its kernel's choices, named by the kernel's own decision
 keys (``compute.packed.pe``), each set to its baseline at conversion. A channel's
 choices are stored on its tensor instead, and only in a partition's body (``CHANNEL``).
+Only the compiler writes a choice (``persist``): ``get_nodeattr`` of a choice answers what
+the node stores or refuses it as absent, and ``set_nodeattr`` of one is refused.
 
 Its outputs are its kernel's product, one rule for every op: the kernel bound on its
 inputs states each output's tensor (``output_tensors``), its shape and its element, a
@@ -69,6 +71,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, TypeGuard, cast
 
+import numpy.typing as npt
 from onnx import helper
 from qonnx.custom_op.base import CustomOp
 from qonnx.util.basic import get_by_name
@@ -89,10 +92,19 @@ from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.target import Target
 
 if TYPE_CHECKING:
-    from onnx import NodeProto
+    from onnx import AttributeProto, NodeProto
     from qonnx.core.modelwrapper import ModelWrapper
 
 ONNX_TYPES = {"int": "i", "bool": "i", "str": "s"}
+
+#: What qonnx's ``get_nodeattr`` returns and ``set_nodeattr`` takes.
+_NodeAttr = int | float | str | bool | npt.NDArray[Any] | list[str | int | float] | None
+
+
+def _decoded(attribute: AttributeProto, kind: str) -> int | str:
+    """A choice attribute's value: its string, or its integer."""
+    return attribute.s.decode() if kind == "s" else int(attribute.i)
+
 
 # -- patterns ----------------------------------------------------------------------------
 
@@ -368,8 +380,40 @@ class KernelOp(CustomOp):
                     (name,),
                     node=self.label,
                 )
-            found[name] = attribute.s.decode() if schema[name][0] == "s" else int(attribute.i)
+            found[name] = _decoded(attribute, schema[name][0])
         return found
+
+    def get_nodeattr(self, name: str) -> _NodeAttr:
+        """The attribute ``name``: a choice as the node stores it (as ``choices`` decodes
+        it), refused (``choice-absent``) where the node holds none, never a made-up 0 or
+        ""; any other name is qonnx's."""
+        schema = self.schema()
+        if name not in schema:
+            return super().get_nodeattr(name)
+        held = get_by_name(self.onnx_node.attribute, name)
+        if held is None:
+            raise KernelOpError.refused(
+                "choice-absent",
+                self.op_type,
+                f"{self.label}: {name} is absent: the compiler has not set it",
+                (name,),
+                node=self.label,
+            )
+        return _decoded(held, schema[name][0])
+
+    def set_nodeattr(self, name: str, value: _NodeAttr) -> None:
+        """Set the attribute ``name``: a choice is refused (``choice-set-refused``), the
+        compiler sets it (``persist`` writes the node itself); any other name is qonnx's."""
+        if name in self.schema():
+            raise KernelOpError.refused(
+                "choice-set-refused",
+                self.op_type,
+                f"{self.label}: {name} is a choice, set by the compiler; to fix one, Hold it "
+                "in a step after the cut (explore_partition(body, Hold({node: {key: value}})))",
+                (name,),
+                node=self.label,
+            )
+        super().set_nodeattr(name, value)
 
     def stored(self) -> dict[str, object]:
         """The node's choices (``choices``), as its kernel's Decisions take them."""
@@ -429,13 +473,16 @@ class KernelOp(CustomOp):
 
     def _write(self, merged: Mapping[str, int | str]) -> None:
         """Store ``merged`` (``_saved``'s) as the node's choice attributes, its whole;
-        ``persist``'s alone."""
+        ``persist``'s alone. It writes the NodeProto itself, past the guard of
+        ``set_nodeattr``."""
         for name in self.schema():
             present = get_by_name(self.onnx_node.attribute, name)
             if present is not None:
                 self.onnx_node.attribute.remove(present)
         for name, value in sorted(merged.items()):
-            self.set_nodeattr(name, int(value) if isinstance(value, bool) else value)
+            self.onnx_node.attribute.append(
+                helper.make_attribute(name, int(value) if isinstance(value, bool) else value)
+            )
 
     # -- in a network ---------------------------------------------------------------------
 

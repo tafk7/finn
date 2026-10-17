@@ -4,8 +4,8 @@
 """A partition body's choices, by graph name: the form ``Hold`` reads back.
 
 FINN's ``extract_model_config_to_json`` reads every attribute through
-``get_nodeattr``, which answers an absent choice with its default, so an open
-choice would come back as a value. This export is what the body states: each
+``get_nodeattr``, which a KernelOp refuses for an absent choice (``choice-absent``),
+so an open choice would stop the export. This export is what the body states: each
 KernelOp node's choices as its node holds them, each channel's as its tensor states
 them (``finn.channel``), absent ones absent (on a body the cut created, every choice
 but a required one no strategy set), in graph order: each node's input channels
