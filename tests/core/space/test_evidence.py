@@ -165,7 +165,7 @@ def test_refusal_causes_stay_visible_while_another_obligation_is_unresolved() ->
 
     point = design_space(Example())
     evidence = inspection.explain(point, Example.physical)
-    assert isinstance(evidence.result, Unresolved)
+    assert isinstance(evidence.result, Rejected)
     assert evidence.assessment is not None
     refused = next(node for node in evidence.nodes if node.declaration.key == "supported")
     assert isinstance(refused.result, Rejected)

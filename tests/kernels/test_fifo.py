@@ -68,8 +68,12 @@ def test_fifo_passes_its_ram_style_to_its_native_parameter(style: str) -> None:
 @pytest.mark.parametrize("depth", (1, 1 << 32))
 def test_fifo_refuses_an_unsupported_geometry_before_and_after_its_ram_style(depth: int) -> None:
     base = design_space(fifo_node(word_bits=13, depth=depth))
-    assert base.inspect(FifoKernel.module).constraints.refused == ("geometry_supported",)
-    assert isinstance(base.inspect(FifoKernel.module).accepted_result, Unresolved)
+    # The capacity constraint reads the storage view, which the geometry refusal refuses.
+    assert base.inspect(FifoKernel.module).constraints.refused == (
+        "capacity_supported",
+        "geometry_supported",
+    )
+    assert isinstance(base.inspect(FifoKernel.module).accepted_result, Rejected)
     chosen = base.with_choices(ram_style="auto")
     assert isinstance(chosen.inspect(FifoKernel.module).accepted_result, Rejected)
     with pytest.raises(ValueUnavailableError) as error:

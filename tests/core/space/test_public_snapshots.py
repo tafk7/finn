@@ -156,7 +156,7 @@ def test_grouped_view_obligations_keep_refusals_visible_while_waiting() -> None:
     grouped = point.inspect(Grouped.support)
     for _ in range(2):
         assessment = point.inspect(Grouped.physical)
-        assert isinstance(assessment.accepted_result, Unresolved)
+        assert isinstance(assessment.accepted_result, Rejected)
         assert assessment.constraints.refused == ("refused",)
         assert assessment.constraints.results == grouped.results
         refused = assessment.constraints.results["refused"]

@@ -144,6 +144,32 @@ def test_an_admission_waiting_on_an_open_choice_does_not_refuse() -> None:
     assert candidate is not None and isinstance(inspection.admission(candidate), Unresolved)
 
 
+def test_an_admission_refused_beside_one_waiting_refuses() -> None:
+    class Both(Space):
+        width: int = Param()
+        pe: int = Decision(values=(1, 2))
+
+        @constraint
+        def waits(self) -> bool:
+            return self.pe > 0
+
+        @constraint
+        def never() -> bool:
+            return False
+
+        admission = ConstraintGroup(waits, never)
+
+    class Root(Space):
+        width: int = Param()
+        entries: dict[str, type[Space] | Space] = {"both": Both, "stub": Stub}
+        compute: Both | Stub = Decision(entries, width=width)
+
+    point = design_space(Root(width=8))  # even: the stub core takes it; both always refuses
+    assert forced(point) == {"compute": "stub"}
+    (found,) = inspection.forced(point)
+    assert list(found.refused) == ["both"]
+
+
 def test_forcing_cascades_through_a_choice_the_forced_case_opens() -> None:
     class Chain(Space):
         width: int = Param()

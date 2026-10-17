@@ -623,9 +623,11 @@ def _forced(snapshot: Snapshot, index: int) -> QueryResult[object] | None:
 
 
 def _blocked(answers: list[QueryResult[object]]) -> NonValue | None:
-    """Required inputs retain all distinct findings of the highest-precedence nonvalue."""
+    """Required inputs retain all distinct findings of the highest-precedence nonvalue:
+    refused, then unresolved, then inapplicable. A refused input read no open Decision,
+    so no choice added later lifts it, and it settles the answer beside one still waiting."""
 
-    for variant in (Unresolved, Rejected, Inapplicable):
+    for variant in (Rejected, Unresolved, Inapplicable):
         matches = tuple(answer for answer in answers if isinstance(answer, variant))
         if matches:
             return variant(merged_findings(matches))
@@ -689,8 +691,9 @@ def _obligation(
 
 
 def _present(node: Node, answers: list[QueryResult[object]]) -> QueryResult[object]:
-    """The single present source. While any source is unresolved the answer is
-    unresolved too: a later commitment could still make a second one present."""
+    """The single present source. A refused source refuses the answer. Otherwise, while
+    any source is unresolved the answer is unresolved too: a later commitment could
+    still make a second one present."""
     active = [answer for answer in answers if not isinstance(answer, Inapplicable)]
     blocked = _blocked([answer for answer in active if not isinstance(answer, Available)])
     if blocked is not None:

@@ -11,13 +11,13 @@ a candidate's own refusal.
 A case of a Decision over nodes is **viable** when the candidate it places does
 not refuse the configuration through its ``admission`` member (a
 ``ConstraintGroup``, a constraint or a view; a group refuses as soon as one of
-its constraints does). An admission still waiting on an open choice does not
-refuse, and the Decision's owner is not consulted. A case of a Decision over
-values is viable when every requirement it states holds (``requiring``), read
-through the domain's membership; without requirements every enumerated case
-is. One viable case forces the Decision, several leave it open, and none
-refuses it (``decision-no-viable-case``, each case with its reason): the same
-for both kinds.
+its constraints does, whatever else the group still waits on). An admission still
+waiting on an open choice, with nothing refused, does not refuse, and the Decision's
+owner is not consulted. A case of a Decision over values is viable when every
+requirement it states holds (``requiring``), read through the domain's membership;
+without requirements every enumerated case is. One viable case forces the Decision,
+several leave it open, and none refuses it (``decision-no-viable-case``, each case
+with its reason): the same for both kinds.
 
 A snapshot finds its forced Decisions once, on the first read of an open
 Decision: rounds over the open Decisions in rank order, each forced value
@@ -61,7 +61,7 @@ from . import _runtime
 from ._runtime import Snapshot
 from .declarations import Constraint, ConstraintGroup, View
 from .ir import Choice, LinkedModel
-from .results import Available, ConstraintAssessment, QueryResult, Rejected
+from .results import Available, QueryResult, Rejected
 from .semantics import equal
 
 
@@ -210,12 +210,6 @@ def admitted(snapshot: Snapshot, scope: int) -> tuple[QueryResult[object] | None
         return None, None
     index = snapshot.model.resolve(scope, member)
     entry = _runtime.evaluate(snapshot, index)
-    if isinstance(member, ConstraintGroup) and isinstance(entry.assessment, ConstraintAssessment):
-        refused = [
-            result for result in entry.assessment.results.values() if isinstance(result, Rejected)
-        ]
-        if refused:
-            return Rejected(tuple(item for result in refused for item in result.findings)), index
     return entry.result, index
 
 
