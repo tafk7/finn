@@ -36,7 +36,7 @@ JSON.
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from typing import Any, cast
 
 from . import _forcing, _runtime
@@ -129,12 +129,14 @@ def _key(linked: Any, index: int) -> str:
     return decision_key(linked, index) if node.kind == "decision" else str(node.key)
 
 
-def _walk(snapshot: _runtime.Snapshot, start: int, own: int) -> dict[int, list[int]]:
+def _walk(
+    snapshot: _runtime.Snapshot, start: int, own: int, skip: Collection[int] = ()
+) -> dict[int, list[int]]:
     """Every leaf (a Decision, an input or a constant) the evaluation of ``start`` read in
     ``snapshot``, through the evaluations it demanded, with the shortest path to each
     (node indices, forwarding aliases spliced in where a read went straight to the
     alias's source). A Decision is a leaf: its own check is its own. ``own`` is not
-    followed."""
+    followed, nor ``skip`` (the guards of the reader's own presence, reported apart)."""
     linked, cache = snapshot.linked, snapshot.cache
     _runtime.evaluate(snapshot, start)
     paths: dict[int, list[int]] = {start: [start]}
@@ -152,7 +154,7 @@ def _walk(snapshot: _runtime.Snapshot, start: int, own: int) -> dict[int, list[i
             continue
         aliases = {source: alias for alias, source in (*node.via, *entry.via)}
         for read in entry.dependencies:
-            if read in paths or read == own:
+            if read in paths or read == own or read in skip:
                 continue
             step = [aliases[read], read] if read in aliases else [read]
             paths[read] = [*paths[index], *step]
@@ -170,6 +172,15 @@ def _enclosing(linked: Any, scope: int) -> set[int]:
         if place is not None
     }
     return {candidates[each] for each in _ancestors(linked, scope) if each in candidates}
+
+
+def _presence_guards(linked: Any, index: int) -> set[int]:
+    """The guards of the Decision ``index`` and of every selector enclosing it: what makes
+    it present. Its guard's reads are reported as its guard's, not as its checks'."""
+    selectors = _enclosing(linked, linked.nodes[index].scope) | {index}
+    return {
+        guard for guard in (linked.nodes[each].guard for each in selectors) if guard is not None
+    }
 
 
 def _reads(
@@ -245,7 +256,7 @@ def _own_check(copy: _runtime.Snapshot, index: int, cases: Sequence[object] | No
     for argument in node.domain_arguments:
         requirement = argument.name.startswith("requires[")
         prefix = [_key(linked, index)]
-        leaves = _walk(copy, argument.node, index)
+        leaves = _walk(copy, argument.node, index, _presence_guards(linked, index))
         if argument.node in via:
             # The edge went straight to the alias's source: name the alias.
             leaves = {leaf: [via[argument.node], *path] for leaf, path in leaves.items()}
@@ -304,7 +315,7 @@ def _case_checks(copy: _runtime.Snapshot, index: int) -> list[Data]:
             item["admission"] = None
             found.append(item)
             continue
-        leaves = _walk(trial, node, index)
+        leaves = _walk(trial, node, index, _presence_guards(linked, index))
         choices, enclosing, facts = _reads(
             linked,
             leaves,
@@ -566,15 +577,13 @@ def _cost(row: Data) -> str:
     where = f"{space['scope']} ({space['space_type']})"
     if row["relation"] == "requirement":
         named = row["named_cases"]
-        trials = (
-            "one trial per named case"
-            if named is None
-            else f"{len(named)} trials, one per named case ({', '.join(named)})"
-        )
+        cases = "each named case" if named is None else f"its named cases ({', '.join(named)})"
+        count = "" if named is None else f"{len(named)} trial{'s' if len(named) != 1 else ''}: "
         return (
-            f"forcing {row['choice']} adds {trials}, reading a constraint of {where}; "
-            f"the refusal {row['check_code']} moves from the commit of {row['choice']} to the "
-            "configuration"
+            f"forcing {row['choice']} reads {cases} by a trial each ({count}a copy with the case "
+            f"assigned, reading a constraint of {where}) where today it calls the domain's "
+            f"membership; the refusal {row['check_code']} moves from the commit of "
+            f"{row['choice']} to the configuration"
         )
     if row["relation"] == "leftover":
         return (

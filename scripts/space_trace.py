@@ -425,7 +425,9 @@ def main() -> None:
             "private_reads": list(_trace.PRIVATE_READS),
             "spaces": spaces,
         }
-        (out / f"{name}.json").write_text(json.dumps(document, indent=1, default=str) + "\n")
+        (out / f"{name}.json").write_text(
+            json.dumps(document, separators=(",", ":"), default=str) + "\n"
+        )
         print(f"{name}: {len(spaces)} spaces, {time.perf_counter() - started:.1f} s", flush=True)
         for space in spaces:
             print(f"  {space['space']}: {json.dumps(space['summary'])}", flush=True)
