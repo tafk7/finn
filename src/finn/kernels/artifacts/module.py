@@ -273,8 +273,9 @@ pin of None a constant marker, tied high."""
 @dataclass(frozen=True)
 class Link:
     """One channel hop: sink lane ``i`` takes source lane ``lanes[i]``, lane zero least
-    significant, each ``lane_bits`` wide; valid forward, ready back, and each marker pair
-    from source to sink (a constant marker, closing every beat, tied high)."""
+    significant, each ``lane_bits`` wide; the lanes are distinct (no source lane is taken
+    twice). Valid forward, ready back, and each marker pair from source to sink (a constant
+    marker, closing every beat, tied high)."""
 
     source: LinkEnd
     sink: LinkEnd
@@ -288,6 +289,11 @@ class Link:
             raise BuildError("a link carries at least one lane of at least one bit")
         if min(lanes) < 0 or (max(lanes) + 1) * self.lane_bits > self.source.data_bits:
             raise BuildError(f"{self.source.data}: a lane lies outside the source word")
+        if len(set(lanes)) != len(lanes):
+            repeated = sorted({lane for lane in lanes if lanes.count(lane) > 1})
+            raise BuildError(
+                f"{self.source.data}: a link takes source lanes {repeated} more than once"
+            )
         if len(lanes) * self.lane_bits > self.sink.data_bits:
             raise BuildError(f"{self.sink.data}: the lanes exceed the sink word")
         object.__setattr__(self, "lanes", lanes)
