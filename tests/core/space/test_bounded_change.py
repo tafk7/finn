@@ -19,159 +19,28 @@ from __future__ import annotations
 
 import pytest
 from support.space_cores import Exclusive, Gated, Mutual
+from support.space_pipeline import Meter, Pipeline, Probe
 from support.space_walk import check, fresh, walk
 
 from core.space._choices_support import replay
 from core.space._toys_support import House
 from finn.core.space import (
-    ConstraintGroup,
     Decision,
     Param,
     Rejected,
     Space,
     Unresolved,
     _forcing,
-    constraint,
     derived,
     design_space,
-    divisors_of,
     inspection,
     occurrence,
-    reject,
-    requires,
     supplied,
-    view,
 )
 from finn.core.space import _runtime as runtime
 
 # Each test runs with the readers index used for every cache, then for none: the same answers.
 pytestmark = pytest.mark.usefixtures("index_path")
-
-# -- a chain of units whose widths follow their neighbours' choices -------------------------
-
-
-class Packed(Space):
-    """Refuses more than 64 lanes."""
-
-    width: int = Param()
-    pe: int = Decision(domain=divisors_of(width))
-
-    @constraint
-    def fits(self) -> bool | Rejected:
-        if self.width > 64:
-            return reject("packed-width", "the packed core takes at most 64 lanes")
-        return True
-
-    admission = ConstraintGroup(fits)
-
-
-class Stub(Space):
-    """Refuses an odd width."""
-
-    width: int = Param()
-    rows: int = Decision(values=(1, 2, 4))
-
-    @constraint
-    def even(self) -> bool | Rejected:
-        if self.width % 2:
-            return reject("stub-width", "the stub core takes an even width")
-        return True
-
-    admission = ConstraintGroup(even)
-
-
-CORES: dict[str, type[Space] | Space] = {"packed": Packed, "stub": Stub}
-
-
-class Unit(Space):
-    """A selector over two cores; its output width follows the selected core's choice."""
-
-    width: int = Param()
-    compute: Packed | Stub = Decision(CORES, width=width)
-
-    @derived
-    def lanes(self) -> int:
-        core = self.compute
-        return core.pe if isinstance(core, Packed) else core.rows
-
-    @derived
-    def out(self) -> int:
-        return self.width + self.lanes
-
-    @derived
-    def packed(self) -> bool:
-        return isinstance(self.compute, Packed)
-
-
-class Direct(Space):
-    width: int = Param()
-    upstream_packed: bool = Param()
-
-
-class Gearbox(Space):
-    """Takes only what a packed core feeds."""
-
-    width: int = Param()
-    upstream_packed: bool = Param()
-
-    @constraint
-    def fed(self) -> bool | Rejected:
-        if not self.upstream_packed:
-            return reject("gearbox-source", "the gearbox takes a packed core's stream")
-        return True
-
-    admission = ConstraintGroup(fed)
-
-
-class Link(Space):
-    """Between two units: its verdicts read the upstream unit's selected core."""
-
-    width: int = Param()
-    upstream_packed: bool = Param()
-    adapter: Direct | Gearbox = Decision(
-        {"direct": Direct, "gearbox": Gearbox}, width=width, upstream_packed=upstream_packed
-    )
-    burst: int = Decision(
-        values=(1, 2, 4),
-        requires=(
-            requires(upstream_packed, "burst-source: bursts need a packed core", cases=(2, 4)),
-        ),
-    )
-
-    @derived
-    def out(self) -> int:
-        return self.width
-
-
-class Probe(Space):
-    enabled: bool = Decision(values=(False, True))
-
-    @view(when=enabled)
-    def level(self) -> int:
-        return 3
-
-
-class Meter(Space):
-    """Reads through ``present`` and ``supplied``, guarded by the probe's Decision."""
-
-    reading: int = Param(required=False)
-    valued = supplied(reading)
-    scale: int = Decision(values=(1, 2), when=valued)
-
-    @derived
-    def seen(self) -> int:
-        return self.reading if self.present(Meter.reading) else 0
-
-
-class Pipeline(Space):
-    width: int = Param()
-    u0 = Unit(width=width)
-    l0 = Link(width=u0.out, upstream_packed=u0.packed)
-    u1 = Unit(width=l0.out)
-    l1 = Link(width=u1.out, upstream_packed=u1.packed)
-    u2 = Unit(width=l1.out)
-    probe = Probe()
-    meter = Meter(reading=probe.level)
 
 
 def test_a_chain_whose_forced_selectors_move_with_their_neighbours() -> None:

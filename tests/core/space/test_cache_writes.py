@@ -20,9 +20,9 @@ from pathlib import Path
 
 import pytest
 from support.checked_cache import CheckedCache
+from support.space_pipeline import Pipeline
 from support.space_walk import walk
 
-from core.space.test_bounded_change import Pipeline
 from finn.core.space import _runtime, design_space
 
 SOURCE = Path(_runtime.__file__).parent

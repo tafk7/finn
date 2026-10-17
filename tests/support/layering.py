@@ -429,7 +429,13 @@ LAYERS: tuple[Layer, ...] = (
     ),
     Layer(
         "tests.core.space",
-        ("core.space", "support.checked_cache", "support.space_cores", "support.space_walk"),
+        (
+            "core.space",
+            "support.checked_cache",
+            "support.space_cores",
+            "support.space_pipeline",
+            "support.space_walk",
+        ),
         ("reporting", "space", "tests.layering", "tests.refusals", "tests.value_classes"),
         ("pytest", "_typeshed"),
         "tests/core/space",
