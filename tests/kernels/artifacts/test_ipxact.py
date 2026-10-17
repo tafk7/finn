@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from support.ipxact_ports import PORTS
+from support.ipxact_ports import PORTS, axilite
 from support.ipxact_script import BusInterface, interfaces
 
 from finn.kernels.artifacts.abi import (
@@ -104,6 +104,24 @@ def test_the_register_block_is_as_wide_as_its_bus(data_bits: int) -> None:
     assert memory_map is not None
     [block] = memory_map.blocks
     assert block.width == data_bits
+
+
+def test_a_64_bit_bus_is_stated_as_wide_by_the_script_and_the_description() -> None:
+    ports = (*PORTS[:-1], axilite(64))
+    facts = {
+        pin.name: {
+            **dict.fromkeys(STREAM_FACTS),
+            "tdata": next(member.width for member in pin.signals if member.logical == "tdata"),
+        }
+        for pin in ports
+        if isinstance(pin, Bus) and pin.protocol is StandardProtocol.AXIS
+    }
+    described = describe_interface(ports, facts, part="xczu3eg-sbva484-1-e", period_ns=5.0)
+    memory_map = interfaces(interface_tcl(ports, 5.0))["s_axilite"].memory_map
+    assert memory_map is not None
+    [block] = memory_map.blocks
+    [window] = described["axilite"][0]["register_map"]
+    assert block.width == window["width"] == 64
 
 
 @pytest.mark.parametrize("clock_ns", [5.0, 3.3])
