@@ -302,8 +302,10 @@ def step_size_fifos(
     """Size each channel of the partition from the beat patterns at both its ends, at the
     current folding: a direct connection, or a FIFO of the least depth that keeps its
     producer within its idle time, plus ``fifo_margin`` words. A held channel is kept.
-    ``fifo_ram_style`` commits a memory style with each FIFO's depth; None leaves it to
-    FinnLib (``auto``). Writes report/step_size_fifos.json."""
+    ``fifo_ram_style`` commits a memory style with each FIFO's depth; None commits none:
+    the FIFO keeps the style settling gives it (its held style, else an earlier one, else
+    ``auto``, FinnLib's own choice by depth and width), and its depth is sized for that
+    style. Writes report/step_size_fifos.json."""
     strategy = SizeFifos(margin=fifo_margin, ram_style=fifo_ram_style)
     _explore(model, cfg, "step_size_fifos", strategy)
     return model

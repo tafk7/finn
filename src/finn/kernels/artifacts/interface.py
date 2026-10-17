@@ -5,7 +5,8 @@
 hand needs to know of its pins, as JSON (``interface.json`` beside the IP).
 
 ``describe_interface`` states, from the module's ABI pins and the facts of its
-streams (the partition's boundary facts, read from its configured root):
+streams (the partition's boundary facts, read from its configured network, at the free
+side of each boundary channel):
 
 - ``part`` and ``period_ns``: what the module was explored and packaged for;
 - ``clocks``: each clock pin with its ``FREQ_HZ`` at the period, as the IP-XACT
