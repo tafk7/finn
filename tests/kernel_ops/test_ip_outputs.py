@@ -29,6 +29,7 @@ from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.ranges import TensorRange
+from support.configure import configured
 from support.models import (
     choose_memories,
     configure_partition,
@@ -60,7 +61,7 @@ from finn.core.reporting.findings import FindingKind
 from finn.core.reporting.manifest import STORED
 from finn.core.rtlsim_bench import SimulationFailed
 from finn.custom_op.kernels.network import network
-from finn.custom_op.kernels.shell import configured_network, save_channels, verify_partition
+from finn.custom_op.kernels.shell import configured_network, verify_partition
 from finn.kernels.artifacts.build import instance_name
 from finn.kernels.artifacts.interface import STREAM_FACTS
 from finn.platform.capabilities import Resources
@@ -325,7 +326,7 @@ def test_a_fifo_too_small_for_its_stream_is_refused_at_verification(
         "transport.fifo.buffer.depth": 8,
         "transport.fifo.buffer.ram_style": "auto",
     }
-    save_channels(body, {"levels": fifo})
+    configured(body, {"levels": fifo})
     monkeypatch.setattr(explore_module, "holds", _levels_short)
     configured_network(body, node.name)
     with pytest.raises(KernelOpError) as refused:
@@ -410,7 +411,7 @@ def test_packaging_and_the_integration_refuse_a_design_not_verified_as_it_is(
         "transport.fifo.buffer.depth": 32,
         "transport.fifo.buffer.ram_style": "auto",
     }
-    save_channels(body, {"levels": fifo})
+    configured(body, {"levels": fifo})
     body.save(body_file)
     refused("design-changed")
     verified(body, node.name)
@@ -445,7 +446,7 @@ def test_the_testbench_refuses_a_design_not_verified_as_it_is(tmp_path: Path) ->
         "transport.fifo.buffer.depth": 32,
         "transport.fifo.buffer.ram_style": "auto",
     }
-    save_channels(body, {"levels": fifo})
+    configured(body, {"levels": fifo})
     refused("design-changed")
     verified(body, node.name)
     write()

@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from support.configure import configured, write_raw
 from support.explore_models import choices, kernel_model
 from support.helpers import Lanes
 from support.models import TARGET, matmul_model
@@ -37,7 +38,7 @@ from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import FindingKind
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import Partition, network
-from finn.custom_op.kernels.shell import configured_network, save_channels, verify_partition
+from finn.custom_op.kernels.shell import configured_network, verify_partition
 from finn.kernels.explore import (
     Accepted,
     DebugPlaceholder,
@@ -369,13 +370,7 @@ def test_a_memory_saved_or_pinned_auto_is_kept_and_stated_as_vivado_s(tmp_path: 
     it, nothing dropped, and a hold of it commits it (the thresholds'
     ``ram_style`` attribute too); either way the report names the memory unstated."""
     model = kernel_model()
-    for node in model.graph.node:
-        if node.name in AUTO:
-            # By hand, a change names what it clears: the thresholds' block stages, stored
-            # at their baseline at conversion, are no choice under auto.
-            cleared: dict[str, object] = {"block_stages": None} if node.name == "activate" else {}
-            kernel_op(model, node).save({**AUTO[node.name], **cleared})
-    save_channels(model, {"w1": AUTO["w1"]})
+    configured(model, AUTO)
     model.save(tmp_path / "saved.onnx")
     saved = ModelWrapper(str(tmp_path / "saved.onnx"))
     report = explore_kernel_choices(saved).report
@@ -408,10 +403,8 @@ def test_a_strategy_changes_what_it_decides_and_baseline_starts_over() -> None:
 
 
 def save_choice(model: ModelWrapper, node: str, key: str, value: object) -> ModelWrapper:
-    """``model`` with ``key`` of ``node`` saved at ``value``, its other choices kept."""
-    op = kernel_op(model, next(each for each in model.graph.node if each.name == node))
-    op.save({**op.choices(), key: value})
-    return model
+    """``model`` with ``key`` of ``node`` set at ``value``, its other choices kept."""
+    return configured(model, {node: {key: value}})
 
 
 def explored_at_baseline() -> ModelWrapper:
@@ -476,9 +469,8 @@ def test_a_held_key_the_bound_network_does_not_state_is_refused_by_name() -> Non
     drops it at bind, and the exploration is refused, naming the node and the key, the
     replay's finding its cause. The held value is not dropped and re-baselined."""
     model = explored_at_baseline()
-    first = kernel_op(model, model.graph.node[0])
-    first.set_nodeattr("compute.packed.simd", 2)
-    first.set_nodeattr("compute.packed.pe", 3)
+    write_raw(model, "first", "compute.packed.simd", 2)
+    write_raw(model, "first", "compute.packed.pe", 3)
     # SIMD is held too, and stated: only the refused key is the error's.
     model.set(HELD, {"first": ["compute.packed.pe", "compute.packed.simd"]})
     with refused(
@@ -549,7 +541,7 @@ def test_an_exploration_checks_its_fifos_only_where_its_strategy_does(
     and the verification names it, a limitation."""
     model = kernel_model()
     explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 6)))
-    save_channels(model, {"levels": LEVELS_FIFO})
+    configured(model, {"levels": LEVELS_FIFO})
     folded = explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 12)))
     assert folded.report["strategy"]["changed"]
     assert choices(model)["levels"]["transport.fifo.buffer.depth"] == 8

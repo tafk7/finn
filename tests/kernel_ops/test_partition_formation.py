@@ -21,6 +21,7 @@ from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
 from support import chain
+from support.configure import configured
 from support.models import configure_partition, kernel_model
 from support.refusals import refused
 
@@ -30,7 +31,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.core.space import Available
 from finn.custom_op.kernels.network import network
-from finn.custom_op.kernels.shell import configured_network, save_channels
+from finn.custom_op.kernels.shell import configured_network
 from finn.transformation.kernels.cut import CutKernelPartition
 
 
@@ -88,7 +89,7 @@ def partitioned(tmp_path: Path) -> tuple[ModelWrapper, ModelWrapper, dict[str, d
     parent = source.transform(CutKernelPartition(tmp_path))
     body_file = getCustomOp(parent.graph.node[1]).get_nodeattr("model")
     body = ModelWrapper(body_file)
-    save_channels(body, channels)
+    configured(body, channels)
     body.save(body_file)
     return source, parent, channels
 

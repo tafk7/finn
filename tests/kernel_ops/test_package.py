@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from support.configure import configured
 from support.models import configure_partition, kernel_model
 from support.packaging import NoVivado, reaches_vivado
 from support.refusals import refused
@@ -36,7 +37,7 @@ from finn.core.graph.annotations.outputs import (
 )
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
-from finn.custom_op.kernels.shell import configured_network, save_channels
+from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.artifacts import build
 from finn.toolchain.launcher import (
     Selection,
@@ -94,7 +95,7 @@ def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:
     # A FIFO saved with no depth, its style created (BaselineChoices): the depth is
     # required, and no strategy set it.
     configure_partition(model := kernel_model())
-    save_channels(model, {"levels": {"transport": "fifo"}})
+    configured(model, {"levels": {"transport": "fifo"}})
     model = model.transform(BaselineChoices())
     with refused(
         "choices-open",
