@@ -35,8 +35,9 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
-from finn.core.space import Space, _trace, design_space, inspection, occurrence
+from finn.core.space import Space
 from finn.core.space import _runtime as runtime
+from finn.core.space import _trace, design_space, inspection, occurrence
 
 Traced = tuple[str, Space]
 
@@ -176,10 +177,11 @@ def pipeline() -> list[dict[str, Any]]:
 
 
 def dotp() -> list[dict[str, Any]]:
-    from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel  # noqa: PLC0415
-    from finn.platform.capabilities import DspBlock  # noqa: PLC0415
     from support.kernel_specs.base import placed  # noqa: PLC0415
     from support.kernel_specs.dotp import dotp as case  # noqa: PLC0415
+
+    from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel  # noqa: PLC0415
+    from finn.platform.capabilities import DspBlock  # noqa: PLC0415
 
     found = []
     for name, space_type, dsp, bits in (
@@ -198,10 +200,11 @@ def dotp() -> list[dict[str, Any]]:
 
 
 def matmul() -> list[dict[str, Any]]:
-    from finn.platform.capabilities import DspBlock  # noqa: PLC0415
     from support.helpers import full_platform  # noqa: PLC0415
     from support.kernel_specs.base import placed  # noqa: PLC0415
     from support.kernel_specs.matmul import matmul as case  # noqa: PLC0415
+
+    from finn.platform.capabilities import DspBlock  # noqa: PLC0415
 
     spec = case()
     point = placed(spec)
@@ -238,11 +241,12 @@ def matmul() -> list[dict[str, Any]]:
 
 
 def tfc() -> list[dict[str, Any]]:
-    from finn.custom_op.kernels.base import kernel_op  # noqa: PLC0415
-    from finn.transformation.kernels import ExploreKernelChoices  # noqa: PLC0415
-    from finn.kernels.explore import Ranked  # noqa: PLC0415
     from support.models import DOMAIN  # noqa: PLC0415
     from support.tfc import LANES, ULTRA96, cut, streamlined  # noqa: PLC0415
+
+    from finn.custom_op.kernels.base import kernel_op  # noqa: PLC0415
+    from finn.kernels.explore import Ranked  # noqa: PLC0415
+    from finn.transformation.kernels import ExploreKernelChoices  # noqa: PLC0415
 
     work = Path(tempfile.mkdtemp(prefix="space-trace-tfc-"))
     source = streamlined(work / "tfc")
@@ -292,7 +296,10 @@ def chain8() -> list[dict[str, Any]]:
     from qonnx.util.basic import qonnx_make_model  # noqa: PLC0415
 
     from finn.platform.resolve import resolve_target  # noqa: PLC0415
-    from finn.transformation.kernels import InferKernelTensors, ToKernelOps  # noqa: PLC0415
+    from finn.transformation.kernels import (  # noqa: PLC0415
+        InferKernelTensors,
+        ToKernelOps,
+    )
 
     width, rows, layers = 16, 4, 4
 
