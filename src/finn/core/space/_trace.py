@@ -23,7 +23,11 @@ engine's private state and changes nothing the engine does. For one configuratio
 
 A selector whose candidate encloses the reader (a member below a candidate reads its
 guard, so its candidate's selection) is the reader's **presence**, kept apart from the
-choices it reads.
+choices it reads. The guards of a Decision's presence (its own, and its enclosing
+selectors') are not followed through its checks: what they read is its guard's.
+
+The checks are read as forcing's last round reads them, on one copy that does not force
+with every forced value assigned; forcing itself reads them round by round.
 
 Reads are discovered at evaluation: an unexecuted branch reads nothing, so a caller
 traces a Space in several configurations and joins them (``join``), each read naming
