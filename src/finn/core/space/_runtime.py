@@ -624,8 +624,8 @@ def _forced(snapshot: Snapshot, index: int) -> QueryResult[object] | None:
 
 def _blocked(answers: list[QueryResult[object]]) -> NonValue | None:
     """Required inputs retain all distinct findings of the highest-precedence nonvalue:
-    refused, then unresolved, then inapplicable. A refused input read no open Decision,
-    so no choice added later lifts it, and it settles the answer beside one still waiting."""
+    refused, then unresolved, then inapplicable. Every input is required, so a refused one
+    settles the answer whatever the inputs still waiting become."""
 
     for variant in (Rejected, Unresolved, Inapplicable):
         matches = tuple(answer for answer in answers if isinstance(answer, variant))
