@@ -32,17 +32,27 @@ def stream(name: str, width: int, endpoint: Endpoint) -> Bus:
     )
 
 
-AXILITE = Bus(
-    "s_axilite",
-    StandardProtocol.AXILITE,
-    [
-        Member(logical, f"s_axilite_{logical.upper()}", width)
-        for logical, width in (("awaddr", 5), ("awvalid", 1), ("wdata", 32), ("rdata", 32))
-    ],
-    Endpoint.TARGET,
-    associated_clock="ap_clk",
-    associated_reset="ap_rst_n",
-)
+def axilite(data_bits: int) -> Bus:
+    """The module's AXI-Lite bus, ``data_bits`` wide."""
+    return Bus(
+        "s_axilite",
+        StandardProtocol.AXILITE,
+        [
+            Member(logical, f"s_axilite_{logical.upper()}", width)
+            for logical, width in (
+                ("awaddr", 5),
+                ("awvalid", 1),
+                ("wdata", data_bits),
+                ("rdata", data_bits),
+            )
+        ],
+        Endpoint.TARGET,
+        associated_clock="ap_clk",
+        associated_reset="ap_rst_n",
+    )
+
+
+AXILITE = axilite(32)
 PORTS = (
     Signal("ap_clk", Direction.IN, 1, Clock(Free())),
     Signal("ap_clk2x", Direction.IN, 1, Clock(Derived("ap_clk", 2))),
