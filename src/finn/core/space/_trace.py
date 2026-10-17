@@ -16,10 +16,14 @@ engine's private state and changes nothing the engine does. For one configuratio
   the domain's own enumeration or membership follows another choice;
 - for a requirement, the cases it names, and for each enumerated case it does not name,
   whether that case's membership read its fact (``_runtime.membership``'s reads);
-- its guard's reads of other Decisions;
+- its guard's reads of other Decisions (its applicability, not its check);
 - for a Decision over nodes, **each case's check**: the candidate's ``admission`` read
   on a copy that does not force, with the case assigned (as ``_forcing._nodes`` reads
   it), each Decision it reached inside the candidate or outside it.
+
+A selector whose candidate encloses the reader (a member below a candidate reads its
+guard, so its candidate's selection) is the reader's **presence**, kept apart from the
+choices it reads.
 
 Reads are discovered at evaluation: an unexecuted branch reads nothing, so a caller
 traces a Space in several configurations and joins them (``join``), each read naming
@@ -586,11 +590,13 @@ def _cost(row: Data) -> str:
 def summary(joined: Data) -> Data:
     """The counts of a joined trace: choice checks that read only their own domain, that
     read another choice (by a requirement, by a domain: the leftover case), case checks
-    reading outside their candidate, and requirement facts read for cases they do not
-    name."""
+    reading outside their candidate, requirement facts read for cases they do not name,
+    and Decisions whose guard (their applicability, not their check) reads another
+    choice."""
     checked = selectors = own_only = reads_other = by_requirement = leftover = 0
-    case_checks = outside = requirement_facts = facts_unnamed = 0
+    case_checks = outside = requirement_facts = facts_unnamed = guards = 0
     for decision in joined["decisions"]:
+        guards += bool(decision.get("guard_choices"))
         arguments = decision.get("own_check")
         if arguments is not None:
             checked += 1
@@ -625,6 +631,7 @@ def summary(joined: Data) -> Data:
         "case_checks_reading_outside_their_candidate": outside,
         "requirement_facts": requirement_facts,
         "requirement_facts_read_for_unnamed_cases": facts_unnamed,
+        "guards_reading_another_choice": guards,
     }
 
 

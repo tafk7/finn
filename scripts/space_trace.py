@@ -15,7 +15,8 @@ Space set, and ``index.json`` with every Space's counts:
 - ``matmul``: MatMul's node root, placed as its conformance case places it;
 - ``tfc``: every kernel of TFC's network, each its KernelOp's own root: nothing chosen,
   the baselines stored at conversion, and the choices exploration stores at 16 lanes
-  (``ExploreKernelChoices(Ranked(Lanes(16)))``);
+  (``ExploreKernelChoices(Ranked(Lanes(16)))``); and its partition body whole, kernels
+  and channels as one Space, at the same three;
 - ``chain8``: stage 7's synthetic chain of eight kernels and its channels as one Space,
   nothing committed and the network's baselines committed (the engine pass's profile
   reader, ``probe_profile.py``).
@@ -241,7 +242,7 @@ def tfc() -> list[dict[str, Any]]:
     from finn.transformation.kernels import ExploreKernelChoices  # noqa: PLC0415
     from finn.kernels.explore import Ranked  # noqa: PLC0415
     from support.models import DOMAIN  # noqa: PLC0415
-    from support.tfc import LANES, cut, streamlined  # noqa: PLC0415
+    from support.tfc import LANES, ULTRA96, cut, streamlined  # noqa: PLC0415
 
     work = Path(tempfile.mkdtemp(prefix="space-trace-tfc-"))
     source = streamlined(work / "tfc")
@@ -264,6 +265,19 @@ def tfc() -> list[dict[str, Any]]:
                 ],
             )
         )
+    point, stored = whole(body, ULTRA96.platform, "tfc")
+    found.append(
+        traced(
+            "tfc (the whole network)",
+            "TFC's partition body: its eight kernels and their channels as one Space "
+            "(channels declared first)",
+            [
+                ("nothing", point),
+                ("baselines (the network's)", committed(point, stored)),
+                ("explored at 16 lanes", committed(point, chosen(explored))),
+            ],
+        )
+    )
     return found
 
 
@@ -277,13 +291,6 @@ def chain8() -> list[dict[str, Any]]:
     from qonnx.core.modelwrapper import ModelWrapper  # noqa: PLC0415
     from qonnx.util.basic import qonnx_make_model  # noqa: PLC0415
 
-    from finn.core.space import composite  # noqa: PLC0415
-    from finn.custom_op.kernels.base import kernel_op  # noqa: PLC0415
-    from finn.custom_op.kernels.shell import in_shell  # noqa: PLC0415
-    from finn.kernels.channels import Channel  # noqa: PLC0415
-    from finn.kernels.configure import commit  # noqa: PLC0415
-    from finn.kernels.explore import Seam  # noqa: PLC0415
-    from finn.kernels.network import Fact, Interface  # noqa: PLC0415
     from finn.platform.resolve import resolve_target  # noqa: PLC0415
     from finn.transformation.kernels import InferKernelTensors, ToKernelOps  # noqa: PLC0415
 
@@ -333,32 +340,55 @@ def chain8() -> list[dict[str, Any]]:
 
     target = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)
     model = model.transform(ToKernelOps(target)).transform(InferKernelTensors())
-    members = list(model.graph.node)
-    net = in_shell(model, members)
-    base = Seam(target.platform).baseline(net)
-    declared = {}
-    for node in members:
-        facts = kernel_op(model, node).facts()
-        declared[node.name] = facts.space_type(**facts.arguments)
-    channels = {}
-    for name in net.channels:
-        given = {}
-        for fact, value in net.wiring(name).facts.items():
-            if isinstance(value, (Interface, Fact)):
-                value = getattr(declared[value.member], value.view)
-            given[fact] = value
-        channels[name] = Channel(**given)
-    whole = composite("chain_8", {**channels, **declared})
-    point = design_space(whole())
-    stored = {f"{owner}.{key}": value for (owner, key), value in base.chosen().items()}
+    point, stored = whole(model, target.platform, "chain_8")
     return [
         traced(
             "chain_8",
             "stage 7's synthetic chain: four MatMuls and four thresholdings (eight kernels) "
             "and their channels, as one Space (channels declared first)",
-            [("nothing", point), ("baselines (the network's)", commit(point, stored))],
+            [("nothing", point), ("baselines (the network's)", committed(point, stored))],
         )
     ]
+
+
+def whole(model: Any, platform: Any, name: str) -> tuple[Space, dict[str, object]]:
+    """``model``'s KernelOps and their channels as one Space (channels declared first), as
+    the engine pass's profile reader builds it, nothing committed; and the network's
+    baselines (``Seam.baseline``), by the whole Space's keys."""
+    from finn.core.space import composite  # noqa: PLC0415
+    from finn.custom_op.kernels.base import kernel_op  # noqa: PLC0415
+    from finn.custom_op.kernels.shell import in_shell  # noqa: PLC0415
+    from finn.kernels.channels import Channel  # noqa: PLC0415
+    from finn.kernels.explore import Seam  # noqa: PLC0415
+    from finn.kernels.network import Fact, Interface  # noqa: PLC0415
+
+    members = list(model.graph.node)
+    net = in_shell(model, members)
+    base = Seam(platform).baseline(net)
+    declared = {}
+    for node in members:
+        facts = kernel_op(model, node).facts()
+        declared[node.name] = facts.space_type(**facts.arguments)
+    channels = {}
+    for channel in net.channels:
+        given = {}
+        for fact, value in net.wiring(channel).facts.items():
+            if isinstance(value, (Interface, Fact)):
+                value = getattr(declared[value.member], value.view)
+            given[fact] = value
+        channels[channel] = Channel(**given)
+    space = composite(name, {**channels, **declared})
+    stored = {f"{owner}.{key}": value for (owner, key), value in base.chosen().items()}
+    return design_space(space()), stored
+
+
+def chosen(model: Any) -> dict[str, object]:
+    """The choices ``model``'s partition stores (its KernelOps' and its channels'), by the
+    whole Space's keys."""
+    from finn.custom_op.kernels.shell import in_shell  # noqa: PLC0415
+
+    net = in_shell(model, list(model.graph.node))
+    return {f"{owner}.{key}": value for (owner, key), value in net.chosen().items()}
 
 
 SETS: dict[str, Callable[[], list[dict[str, Any]]]] = {
