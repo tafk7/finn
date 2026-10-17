@@ -226,16 +226,23 @@ def package_tcl(
         "update_compile_order -fileset sources_1",
     ]
     if run_synth:
-        doubled = [
-            pin.name
+        rates = {
+            pin.name: pin.role.rate
             for pin in pins
-            if isinstance(pin, Signal)
-            and isinstance(pin.role, Clock)
-            and isinstance(pin.role.rate, Derived)
-        ]
+            if isinstance(pin, Signal) and isinstance(pin.role, Clock)
+        }
+        free = [name for name, rate in rates.items() if not isinstance(rate, Derived)]
+        if len(free) != 1:
+            raise IpxactError(
+                "the out-of-context constraints need exactly one free clock pin, found "
+                + (", ".join(free) or "none")
+            )
+        [primary] = free
+        doubled = [name for name, rate in rates.items() if isinstance(rate, Derived)]
         tcl += [
             "set xdc [open $project/clocks.xdc w]",
-            f'puts $xdc "create_clock -period {clock_ns} -name ap_clk \\[get_ports ap_clk\\]"',
+            f'puts $xdc "create_clock -period {clock_ns} -name {primary}'
+            f' \\[get_ports {primary}\\]"',
             *(
                 f'puts $xdc "create_clock -period {clock_ns / 2} -name {name}'
                 f' \\[get_ports {name}\\]"'

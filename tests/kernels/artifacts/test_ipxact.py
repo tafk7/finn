@@ -17,9 +17,12 @@ from support.ipxact_script import BusInterface, interfaces
 
 from finn.kernels.artifacts.abi import (
     Bus,
+    Clock,
     Data,
+    Derived,
     Direction,
     Endpoint,
+    Free,
     Member,
     Reset,
     Signal,
@@ -232,6 +235,41 @@ def test_the_script_packages_sources_or_a_checkpoint() -> None:
     assert "set_property sdx_kernel true $core" in synthesized
     assert synthesized.index("write_checkpoint") < synthesized.index("ipx::package_project")
     assert vlnv("sdp_1") == "xilinx_finn:finn:sdp_1:1.0"
+
+
+def _synthesized(pins: tuple[Signal, ...]) -> str:
+    emitted = EmittedModule("top__0", Path("/p/src"), ("top__0.sv",), ())
+    return package_tcl(
+        emitted, pins, part="xczu3eg-sbva484-1-e", clock_ns=5.0, ip_name="sdp_1", run_synth=True
+    )
+
+
+def test_the_out_of_context_clock_is_the_modules_own_clock_pin() -> None:
+    named = (
+        Signal("core_clk", Direction.IN, 1, Clock(Free())),
+        Signal("core_clk2x", Direction.IN, 1, Clock(Derived("core_clk", 2))),
+    )
+    script = _synthesized(named)
+    assert 'puts $xdc "create_clock -period 5.0 -name core_clk \\[get_ports core_clk\\]"' in script
+    assert 'puts $xdc "create_clock -period 2.5 -name core_clk2x' in script
+    assert "ap_clk" not in script
+    # A module whose clock is ``ap_clk`` constrains it as it always did.
+    assert (
+        'puts $xdc "create_clock -period 5.0 -name ap_clk \\[get_ports ap_clk\\]"'
+        in _synthesized(tuple(pin for pin in PORTS if isinstance(pin, Signal)))
+    )
+
+
+def test_the_out_of_context_clock_is_the_one_free_clock_or_refused() -> None:
+    reset = Signal("rst", Direction.IN, 1, Reset(False, False))
+    with pytest.raises(IpxactError, match="exactly one free clock.*found none"):
+        _synthesized((reset,))
+    two = (
+        Signal("clk_a", Direction.IN, 1, Clock(Free())),
+        Signal("clk_b", Direction.IN, 1, Clock(Free())),
+    )
+    with pytest.raises(IpxactError, match=r"exactly one free clock.*found clk_a, clk_b"):
+        _synthesized(two)
 
 
 def test_the_script_searches_the_headers_directories_and_only_with_headers() -> None:
