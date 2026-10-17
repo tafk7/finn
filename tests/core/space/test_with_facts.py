@@ -452,14 +452,13 @@ def test_a_commit_the_choice_reading_accepts_leaves_a_configuration_no_case_read
     assert [item.code for item in state.findings] == ["decision-no-viable-case"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the published reading refuses a commit the choice reading accepts: the selector's "
-    "only case reads the new value, and the trial reads the selector as the successor forces "
-    "it (a stop for the switch of `try_with_choices` onto the published reading)",
-)
 def test_the_published_reading_accepts_a_commit_the_choice_reading_accepts() -> None:
     point = design_space(Narrow(width=12))
     change = {reference_of(point, "compute.core.pe"): 4}
-    assert point.try_with_choices(change).accepted
-    assert point.try_with_facts({}, change).accepted
+    by_choices = point.try_with_choices(change)
+    by_facts = point.try_with_facts({}, change)
+    assert by_choices.accepted and by_facts.accepted
+    # A change checks only the choice's own values: both leave the configuration reading the
+    # choice refused through its selector's guard, and the same as each other.
+    states = [state_of(report.instance, "compute.core.pe") for report in (by_choices, by_facts)]
+    assert states[0] == states[1] and isinstance(states[0], Rejected)

@@ -854,11 +854,21 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
                 and isinstance(snapshot, _TrialSnapshot)
                 and node.index in snapshot._candidates
             ):
-                # A refused guard is the configuration's refusal; the candidate's own
-                # check (its domain and the requirements naming it) is reported beside it.
+                # A refused guard is the configuration's refusal, not the choice's: a change
+                # checks only the candidate's own check (its domain and the requirements
+                # naming its value), and a failure of it is reported beside the guard's.
                 own = yield from _membership_frame(
                     snapshot, node, snapshot._candidates[node.index], check_guard=False
                 )
+                if (
+                    snapshot._reads_successor
+                    and isinstance(own.result, Available)
+                    and own.result.value is True
+                ):
+                    # Its own check holds: admitted, and the configuration reads it
+                    # refused through its guard, as the choice reading's does.
+                    snapshot.admit(node.index, snapshot._candidates[node.index])
+                    return Evaluation(Available(snapshot.assignments[node.index]))
                 merged = _blocked([inactive, own.result])
                 assert merged is not None
                 inactive = merged
