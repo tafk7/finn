@@ -195,10 +195,10 @@ def assess_constraints(answers: Mapping[str, QueryResult[bool]]) -> ConstraintAs
     unresolved = _unresolved(values)
     refused = _rejected(values)
     result: QueryResult[bool] = (
-        unresolved
-        if unresolved is not None
-        else refused
+        refused
         if refused is not None
+        else unresolved
+        if unresolved is not None
         else Available(True)
     )
     return ConstraintAssessment(normalized, result)
@@ -257,13 +257,14 @@ def assess_view(
         accepted = applicability
     elif applicability.value is False:
         accepted = Inapplicable()
-    elif isinstance(readiness.result, Unresolved):
-        accepted = readiness.result
-    elif isinstance(output_result, Inapplicable):
-        accepted = output_result
     else:
         refusal = _rejected(required.values())
-        accepted = refusal if refusal is not None else output_result
+        if refusal is not None:
+            accepted = refusal
+        elif isinstance(readiness.result, Unresolved):
+            accepted = readiness.result
+        else:
+            accepted = output_result
     return ViewAssessment(output_result, readiness, constraint_results, accepted)
 
 

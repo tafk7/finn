@@ -117,6 +117,39 @@ def test_inherit_answers_what_unaffected_answers_and_leaves_its_base_as_it_was(
         assert 2000 in indexed(base)[3] and 1000 not in indexed(base)[3]
 
 
+@pytest.mark.parametrize("seed", range(20))
+def test_a_changed_formal_reaches_what_read_it_as_a_changed_decision_does(
+    seed: int, path: str
+) -> None:
+    # Formals are nodes too: an evaluation records the ones it read beside its Decisions,
+    # and what read a changed one is left out as what read a changed Decision is.
+    rng = Random(seed)
+    base = snapshot()
+    for index in range(120):
+        base.cache[index] = Evaluation(
+            Available(0),
+            decisions=frozenset(rng.randrange(25) for _ in range(rng.randrange(3))),
+            facts=frozenset(rng.randrange(200, 204) for _ in range(rng.randrange(3))),
+        )
+    seeds = {rng.randrange(200, 204)} | {rng.randrange(25)}
+    kept = inherited(base, seeds)
+    assert dict(kept.cache) == {
+        index: held
+        for index, held in base.cache.items()
+        if index not in seeds and seeds.isdisjoint(held.decisions | held.facts)
+    }
+    assert dict(kept.cache) == unaffected(base.cache, seeds)
+    assert len(kept.cache) < len(base.cache)
+    if path == "index":
+        assert kept.readers is not None
+        kept.readers.sync(kept.cache)
+        found: dict[int, set[int]] = {}
+        for index, held in kept.cache.items():
+            for read in held.decisions | held.facts:
+                found.setdefault(read, set()).add(index)
+        assert {read: set(each) for read, each in kept.readers._readers.items() if each} == found
+
+
 def test_what_a_cache_gained_since_it_was_made_is_carried_only_where_asked(path: str) -> None:
     base = random_snapshot(Random(1))
     first = inherited(base, {0})
@@ -196,3 +229,16 @@ def test_setdefault_keeps_the_held_one_only_if_the_given_answers_alike_and_reads
     with pytest.raises(RuntimeError, match="must not have read more"):
         cache.setdefault(5, Evaluation(Available(1), decisions=frozenset()))
     assert cache[5] is held and not DIFFERING_READS
+
+
+@pytest.mark.usefixtures("own_counts")
+def test_setdefault_refuses_to_keep_an_evaluation_that_read_a_formal_the_given_one_did_not() -> (
+    None
+):
+    cache = snapshot().cache
+    held = Evaluation(Available(1), facts=frozenset({1}))
+    assert cache.setdefault(5, held) is held
+    assert cache.setdefault(5, Evaluation(Available(1), facts=frozenset({1, 2}))) is held
+    with pytest.raises(RuntimeError, match="read formals.*must not have read more"):
+        cache.setdefault(5, Evaluation(Available(1), facts=frozenset()))
+    assert cache[5] is held

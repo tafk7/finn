@@ -6,11 +6,14 @@ Every supplied choice, and every retained choice the change can reach, is admitt
 again before publication; a retained choice whose admission read nothing the change
 reaches keeps the admission its base recorded (``_runtime._TrialSnapshot``).
 Requests are checked as a batch; only a fully admitted trial becomes a configuration.
+A configuration with other values for its formals (``try_with_facts``) is the same
+replacement over other facts: it keeps what read none of the formals that changed, and
+its trial reads the forced values of the configuration it would publish.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any, Literal, TypeVar, cast
 
@@ -113,11 +116,60 @@ def try_with_choices(
     """Build and validate a replacement choice set over the same frozen facts."""
 
     _execution.driver_only("configuration replacement")
-    current = state(point)
     keyword_changes = tuple(_keyword_change(point, name, value) for name, value in choices.items())
     all_changes = (*_requests(point, changes), *keyword_changes)
-    normalized = _normalize_changes(point, all_changes)
+    return _replace(point, {}, all_changes, reads_successor=False)
+
+
+def try_with_facts(
+    point: S, facts: Mapping[Any, object], /, *changes: ChangeRequest | Mapping[Any, object]
+) -> ConfigurationResult[S]:
+    """Build and validate a replacement over other values of the root's formals, and
+    the choices ``changes`` make. What read none of the formals that changed is kept,
+    and the retained choices are admitted as a trial admits them; a trial reads the
+    forced values of the configuration it would publish."""
+
+    _execution.driver_only("configuration replacement")
+    return _replace(
+        point, _fact_nodes(point, facts), _requests(point, changes), reads_successor=True
+    )
+
+
+def _fact_nodes(point: Space, facts: Mapping[Any, object]) -> dict[int, object]:
+    """``{formal: value}`` by node: each formal a root formal the model exposes."""
+    current = state(point)
+    nodes: dict[int, object] = {}
+    for reference, value in facts.items():
+        index = current.model.resolve(point._scope, reference)
+        if index not in current.linked.parameters:
+            raise RequestError(f"{current.linked.nodes[index].key} is not an exposed parameter")
+        if index in nodes:
+            raise RequestError(f"duplicate fact for {current.linked.nodes[index].key}")
+        nodes[index] = value
+    return nodes
+
+
+def _replace(
+    point: S,
+    facts: Mapping[int, object],
+    all_changes: Sequence[Change[object]],
+    *,
+    reads_successor: bool,
+) -> ConfigurationResult[S]:
+    current = state(point)
+    normalized = _normalize_changes(point, tuple(all_changes))
     with current.lock:
+        given = prepare_values(current.linked, facts, "parameter")
+        parameters = {**current.parameters, **given}
+        changed = _runtime.changed_facts(current, parameters) if given else frozenset[int]()
+        fact_status: list[ChangeOutcome] = [
+            ChangeOutcome(
+                current.linked.nodes[index].owner,
+                Available(True),
+                "unchanged",
+            )
+            for index in given
+        ]
         prepared = prepare_values(
             current.linked,
             {index: item.value for index, item in normalized.items() if not item.remove},
@@ -130,13 +182,17 @@ def try_with_choices(
             else:
                 merged[index] = prepared[index]
 
-        semantically_same = len(merged) == len(current.assignments) and all(
-            index in current.assignments
-            and (
-                value is current.assignments[index]
-                or _values_equal(current.linked.nodes[index], value, current.assignments[index])
+        semantically_same = (
+            not changed
+            and len(merged) == len(current.assignments)
+            and all(
+                index in current.assignments
+                and (
+                    value is current.assignments[index]
+                    or _values_equal(current.linked.nodes[index], value, current.assignments[index])
+                )
+                for index, value in merged.items()
             )
-            for index, value in merged.items()
         )
         if semantically_same:
             no_op_outcomes = tuple(
@@ -147,9 +203,11 @@ def try_with_choices(
                 )
                 for item in all_changes
             )
-            return ConfigurationResult(point, True, no_op_outcomes)
+            return ConfigurationResult(point, True, (*fact_status, *no_op_outcomes))
 
-        trial = _runtime._TrialSnapshot(current, merged)
+        trial = _runtime._TrialSnapshot(
+            current, merged, parameters if changed else None, reads_successor=reads_successor
+        )
         validation = {
             index: _admission(trial, index)
             for index in sorted(merged, key=current.linked.ranks.__getitem__)
@@ -176,11 +234,15 @@ def try_with_choices(
                 ChangeOutcome(node.owner, validation[index], "refused", requested=False)
             )
         if refused:
-            return ConfigurationResult(point, False, tuple(outcomes))
+            admissible = [replace(outcome, status="admissible") for outcome in fact_status]
+            return ConfigurationResult(point, False, (*admissible, *outcomes))
 
         snapshot = trial.publish()
         successor = cast(S, attach(snapshot, point._scope))
-        published: list[ChangeOutcome] = []
+        published: list[ChangeOutcome] = [
+            replace(outcome, status="changed" if index in changed else "unchanged")
+            for index, outcome in zip(given, fact_status)
+        ]
         for request, outcome in zip(all_changes, outcomes):
             item = normalized[request.node]
             if item.remove and item.node in current.assignments:
@@ -203,6 +265,15 @@ def with_choices(
     point: S, /, *changes: ChangeRequest | Mapping[Any, object], **choices: object
 ) -> S:
     report = try_with_choices(point, *changes, **choices)
+    if not report.accepted:
+        raise ConfigurationError(report)
+    return report.instance
+
+
+def with_facts(
+    point: S, facts: Mapping[Any, object], /, *changes: ChangeRequest | Mapping[Any, object]
+) -> S:
+    report = try_with_facts(point, facts, *changes)
     if not report.accepted:
         raise ConfigurationError(report)
     return report.instance

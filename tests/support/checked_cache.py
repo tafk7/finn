@@ -70,6 +70,12 @@ class CheckedCache(dict[int, Evaluation]):
                 f"{sorted(held.decisions - entry.decisions)} which the one given in its place "
                 "did not: the kept one must not have read more"
             )
+        if not held.facts <= entry.facts:
+            raise RuntimeError(
+                f"the cache holds an evaluation at index {index} that read formals "
+                f"{sorted(held.facts - entry.facts)} which the one given in its place "
+                "did not: the kept one must not have read more"
+            )
         if held.decisions != entry.decisions:
             DIFFERING_READS[sys._getframe(1).f_code.co_name, "kept reads a strict subset"] += 1
         return held

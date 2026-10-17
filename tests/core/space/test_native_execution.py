@@ -354,7 +354,7 @@ def test_a_node_cached_twice_in_one_run_has_read_what_a_fresh_evaluation_reads(
     }
 
 
-@pytest.mark.parametrize("field", ("result", "dependencies", "via", "decisions"))
+@pytest.mark.parametrize("field", ("result", "dependencies", "via", "decisions", "facts"))
 def test_a_node_evaluated_twice_with_different_reads_is_refused(field: str) -> None:
     class Example(Space):
         want: bool = Decision(values=(True, False))
@@ -368,6 +368,7 @@ def test_a_node_evaluated_twice_with_different_reads_is_refused(field: str) -> N
         "dependencies": (*held.dependencies, 99),
         "via": ((0, 1),),
         "decisions": held.decisions | {99},
+        "facts": held.facts | {99},
     }
     found = replace(held, **{field: different[field]})
     with pytest.raises(RuntimeError, match=rf"choice\.\$guard.*differ in {field}"):

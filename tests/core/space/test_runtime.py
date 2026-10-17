@@ -19,6 +19,7 @@ from finn.core.space import (
     derived,
     design_space,
     inspection,
+    reject,
     view,
 )
 from finn.core.space.domains import divisors_of
@@ -78,10 +79,27 @@ def test_fifo_configure_replace_and_inspect_is_immutable() -> None:
 def test_final_constraint_refusal_remains_visible_while_output_unresolved() -> None:
     base = design_space(Fifo(word_bits=0, depth=8))
     assessment = base.inspect(Fifo.physical)
-    assert isinstance(assessment.accepted_result, Unresolved)
+    assert isinstance(assessment.accepted_result, Rejected)
     assert assessment.constraints.refused == ("supported",)
     ready = base.with_choices(ram_style="auto").inspect(Fifo.physical)
     assert isinstance(ready.accepted_result, Rejected)
+
+
+def test_required_inputs_one_refused_and_another_waiting_read_as_refused() -> None:
+    class Inputs(Space):
+        lanes: int = Decision(values=(1, 2))
+
+        @derived
+        def refusing() -> int | Rejected:
+            return reject("no-width", "no width")
+
+        @derived
+        def both(*, lanes: int, refusing: int) -> int:
+            return lanes + refusing
+
+    point = design_space(Inputs())
+    assert isinstance(point.query(Inputs.both), Rejected)
+    assert isinstance(point.query(Inputs.lanes), Unresolved)
 
 
 def test_atomic_refinement_follows_dependencies_and_never_publishes_partial_state() -> None:

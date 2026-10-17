@@ -367,6 +367,23 @@ class Space(metaclass=SpaceMeta):
 
         return try_with_choices(self, *changes, **choices)
 
+    def with_facts(
+        self, facts: Mapping[Any, object], /, *changes: ChangeRequest | Mapping[Any, object]
+    ) -> Self:
+        """The same model with other values for root formals (``{House.budget: 120}``),
+        keeping every evaluation that read none of them, and the retained choices admitted
+        as a trial admits them. ``changes`` are choices, as for ``with_choices``."""
+        from ._changes import with_facts
+
+        return with_facts(self, facts, *changes)
+
+    def try_with_facts(
+        self, facts: Mapping[Any, object], /, *changes: ChangeRequest | Mapping[Any, object]
+    ) -> ConfigurationResult[Self]:
+        from ._changes import try_with_facts
+
+        return try_with_facts(self, facts, *changes)
+
     @property
     def root(self) -> Space:
         from .occurrence import root

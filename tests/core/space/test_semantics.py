@@ -133,12 +133,14 @@ def test_only_constraints_convert_false_to_refusal() -> None:
     assert constraint_result(True, "supported") == Available(True)
 
 
-def test_unresolved_constraints_keep_individual_refusal_inspectable() -> None:
+def test_a_refused_constraint_beside_an_unresolved_one_refuses_the_group() -> None:
     refused = reject("geometry", "too wide", owner="width")
     assessment = assess_constraints(
         {"lanes": blocker(), "width": refused, "unused": Inapplicable()}
     )
-    assert assessment.verdict is None
+    assert assessment.verdict is False
+    assert isinstance(assessment.result, Rejected)
+    assert isinstance(assessment.results["lanes"], Unresolved)
     assert assessment.refused == ("width",)
     assert assessment.not_applicable == ("unused",)
     assert assessment.results["width"] is not None
@@ -162,12 +164,17 @@ def test_view_reducer_obeys_readiness_output_and_refusal_precedence() -> None:
     refused = reject("geometry", "too wide", owner="width")
     waiting = assess_view(raw, owner="physical", constraints={"lanes": blocker(), "width": refused})
     assert waiting.output_result == raw
-    assert isinstance(waiting.accepted_result, Unresolved)
+    assert waiting.accepted_result == refused
+    assert waiting.readiness.ready is None
     assert waiting.constraints.refused == ("width",)
     inactive: ViewAssessment[int] = assess_view(
         Inapplicable(), owner="physical", constraints={"width": refused}
     )
-    assert isinstance(inactive.accepted_result, Inapplicable)
+    assert inactive.accepted_result == refused
+    absent: ViewAssessment[int] = assess_view(
+        Inapplicable(), owner="physical", constraints={"lanes": blocker()}
+    )
+    assert isinstance(absent.accepted_result, Unresolved)
     denied = assess_view(raw, owner="physical", constraints={"width": refused})
     assert denied.accepted_result == refused
     accepted = assess_view(raw, owner="physical")

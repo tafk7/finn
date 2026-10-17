@@ -5,7 +5,7 @@
 
 from support.helpers import eltwise, threshold_base
 
-from finn.core.space import Rejected, Unresolved, inspection
+from finn.core.space import Rejected, inspection
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
 
@@ -20,4 +20,4 @@ def test_threshold_type_refusal_precedes_unrelated_configuration_choices():
     base = threshold_base(input_dtype="BIPOLAR")
     assessment = base.inspect(ThresholdingAxiKernel.module)
     assert isinstance(assessment.constraints.results["types_supported"], Rejected)
-    assert isinstance(assessment.accepted_result, Unresolved)
+    assert isinstance(assessment.accepted_result, Rejected)
