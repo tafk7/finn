@@ -156,12 +156,31 @@ def _walk(snapshot: _runtime.Snapshot, start: int, own: int) -> dict[int, list[i
     return leaves
 
 
+def _enclosing(linked: Any, scope: int) -> set[int]:
+    """The selectors whose candidate is ``scope`` or encloses it: a member below a
+    candidate reads its presence (its guard) through them."""
+    candidates = {
+        place: choice.selector
+        for choice in linked.choices
+        for _, place in choice.cases
+        if place is not None
+    }
+    return {candidates[each] for each in _ancestors(linked, scope) if each in candidates}
+
+
 def _reads(
-    linked: Any, leaves: Mapping[int, list[int]], prefix: Sequence[str], inside: set[int] | None
-) -> tuple[list[Data], list[Data]]:
-    """The Decisions and the facts among ``leaves``, each with its path (keys), and, where
-    ``inside`` names a candidate's scopes, whether it lies inside the candidate."""
+    linked: Any,
+    leaves: Mapping[int, list[int]],
+    prefix: Sequence[str],
+    inside: set[int] | None,
+    presence: set[int],
+) -> tuple[list[Data], list[Data], list[Data]]:
+    """The Decisions, the enclosing selectors (``presence``: read for the reader's own
+    presence, not a relation to another choice) and the facts among ``leaves``, each with
+    its path (keys), and, where ``inside`` names a candidate's scopes, whether it lies
+    inside the candidate."""
     choices: list[Data] = []
+    enclosing: list[Data] = []
     facts: list[Data] = []
     for index, path in sorted(leaves.items(), key=lambda item: _key(linked, item[0])):
         node = linked.nodes[index]
@@ -173,8 +192,14 @@ def _reads(
         }
         if inside is not None:
             item["inside"] = node.scope in inside
-        (choices if node.kind == "decision" else facts).append(item)
-    return choices, facts
+        if node.kind != "decision":
+            facts.append(item)
+        elif index in presence:
+            item.pop("inside", None)
+            enclosing.append(item)
+        else:
+            choices.append(item)
+    return choices, enclosing, facts
 
 
 def _cases_named(requirement: Any, cases: Sequence[object] | None) -> Data:
@@ -220,7 +245,9 @@ def _own_check(copy: _runtime.Snapshot, index: int, cases: Sequence[object] | No
         if argument.node in via:
             # The edge went straight to the alias's source: name the alias.
             leaves = {leaf: [via[argument.node], *path] for leaf, path in leaves.items()}
-        choices, facts = _reads(linked, leaves, prefix, None)
+        choices, enclosing, facts = _reads(
+            linked, leaves, prefix, None, _enclosing(linked, node.scope)
+        )
         result = _runtime.evaluate(copy, argument.node).result
         item: Data = {
             "argument": argument.name,
@@ -228,6 +255,7 @@ def _own_check(copy: _runtime.Snapshot, index: int, cases: Sequence[object] | No
             "node": _key(linked, argument.node),
             "outcome": _outcome(result),
             "choices": choices,
+            "presence": enclosing,
             "facts": facts,
         }
         if requirement and domain is not None:
@@ -273,13 +301,18 @@ def _case_checks(copy: _runtime.Snapshot, index: int) -> list[Data]:
             found.append(item)
             continue
         leaves = _walk(trial, node, index)
-        choices, facts = _reads(
-            linked, leaves, [_key(linked, index) + f"[{case}]"], _within(linked, scope)
+        choices, enclosing, facts = _reads(
+            linked,
+            leaves,
+            [_key(linked, index) + f"[{case}]"],
+            _within(linked, scope),
+            _enclosing(linked, linked.nodes[index].scope),
         )
         item["admission"] = _key(linked, node)
         item["outcome"] = _outcome(verdict)
         item["codes"] = _codes(verdict)
         item["choices"] = choices
+        item["presence"] = enclosing
         item["facts"] = facts
         found.append(item)
     return found
@@ -328,7 +361,9 @@ def trace(point: Space, configuration: str) -> Data:
         elif status == "forced":
             item["value"] = repr(found.values[index])
         if node.guard is not None:
-            guard_choices, _ = _reads(linked, _walk(copy, node.guard, index), [], None)
+            guard_choices, _, _ = _reads(
+                linked, _walk(copy, node.guard, index), [], None, _enclosing(linked, node.scope)
+            )
             _place(linked, index, guard_choices)
             item["guard_choices"] = guard_choices
         if status == "inapplicable" or node.domain is None:
@@ -350,7 +385,7 @@ def trace(point: Space, configuration: str) -> Data:
         reads = _own_check(copy, index, cases)
         for read in reads:
             _place(linked, index, read["choices"])
-            for fact in read["facts"]:
+            for fact in (*read["facts"], *read["presence"]):
                 fact.pop("scope")
         item["own_check"] = reads
         if selector:
@@ -358,7 +393,7 @@ def trace(point: Space, configuration: str) -> Data:
             for check in checks:
                 for read in check.get("choices", ()):
                     _place(linked, index, [read])
-                for fact in check.get("facts", ()):
+                for fact in (*check.get("facts", ()), *check.get("presence", ())):
                     fact.pop("scope")
             item["case_checks"] = checks
         decisions.append(item)
@@ -428,6 +463,8 @@ def join(traces: Iterable[Data]) -> Data:
                     _seen(argument, "choices", choice["key"], choice, name)
                 for fact in read["facts"]:
                     _seen(argument, "facts", fact["key"], fact, name)
+                for selector in read["presence"]:
+                    _seen(argument, "presence", selector["key"], selector, name)
                 for case in read.get("unnamed_cases", ()):
                     cases = argument.setdefault("unnamed_cases", {})
                     entry = cases.setdefault(
@@ -449,6 +486,8 @@ def join(traces: Iterable[Data]) -> Data:
                         _seen(case, "choices", choice["key"], choice, name)
                     for fact in check["facts"]:
                         _seen(case, "facts", fact["key"], fact, name)
+                    for selector in check["presence"]:
+                        _seen(case, "presence", selector["key"], selector, name)
     return {
         "configurations": configurations,
         "decisions": sorted(decisions.values(), key=lambda item: (item["rank"], item["key"])),
