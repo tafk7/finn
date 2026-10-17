@@ -277,7 +277,8 @@ class Selection:
     command_dir: str | None = None
     launcher: tuple[str, ...] = ()
     hls_frontend: str | None = None
-    #: How many runs Vivado launches at once (``launch_runs -jobs``); None, the machine's.
+    #: How many runs Vivado launches at once (``launch_runs -jobs``), and how many HLS
+    #: syntheses a module's build runs at once (``built_hls``); None, the machine's.
     vivado_jobs: int | None = None
 
     def __post_init__(self) -> None:
@@ -658,8 +659,9 @@ def identity(toolchain: Toolchain, tool: str) -> str:
 #: ``xelab``, ``v++``, ``g++``, ... that may hand a tool to a compute farm.
 COMMAND_DIR_SETTING = "FINN_TOOL_DIR_OVERRIDE"
 
-#: The machine setting that says how many runs Vivado launches at once
-#: (``Selection.vivado_jobs``), a positive number; unset, the machine's cores, capped.
+#: The machine setting that says how many runs Vivado launches at once, and how many HLS
+#: syntheses a build runs at once (``Selection.vivado_jobs``), a positive number; unset,
+#: the machine's cores, capped.
 VIVADO_JOBS_SETTING = "FINN_VIVADO_JOBS"
 
 

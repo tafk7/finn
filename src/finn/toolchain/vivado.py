@@ -158,8 +158,9 @@ VIVADO_JOBS_CAP = 16
 
 
 def vivado_jobs(requested: int | None = None) -> int:
-    """The number of runs Vivado launches at once (``launch_runs -jobs``): the
-    ``requested`` number, or by default the machine's cores, at most VIVADO_JOBS_CAP.
+    """The number of runs Vivado launches at once (``launch_runs -jobs``), which also bounds
+    the HLS syntheses a build runs at once (``built_hls``): the ``requested`` number, or by
+    default the machine's cores, at most VIVADO_JOBS_CAP.
     Raises ValueError unless ``requested`` is a positive integer."""
     if requested is None:
         return max(1, min(os.cpu_count() or 1, VIVADO_JOBS_CAP))

@@ -8,11 +8,13 @@ source is an ``HlsSource``, each request once), stages each
 (``finn.kernels.artifacts.hls.stage_hls``, FinnLib as FINN resolves it), and takes
 its product from the HLS cache, synthesizing what is missing
 (``finn.toolchain.hls.synthesize``), the requests in parallel, each its own tool
-process. Each product's exported top is then checked against the leaf's declared
-pins (``finn.kernels.artifacts.rtl.check_abi``): the declaration stays the ABI, and a
-product that contradicts it is refused (``HlsAbiRefused``), as is one the checker
-cannot read. What it returns is what ``emit_module`` takes as ``built``: each
-request's exported Verilog by its top's name.
+process, at most as many at once as the toolchain's selection states Vivado's runs
+(``Selection.vivado_jobs``, by default the machine's cores, capped:
+``finn.toolchain.vivado.vivado_jobs``). Each product's exported top is then checked
+against the leaf's declared pins (``finn.kernels.artifacts.rtl.check_abi``): the
+declaration stays the ABI, and a product that contradicts it is refused
+(``HlsAbiRefused``), as is one the checker cannot read. What it returns is what
+``emit_module`` takes as ``built``: each request's exported Verilog by its top's name.
 
 Every caller that emits a module calls it first: ``PackagePartition`` and
 ``ElaboratePartition`` with the partition's part, the harness with the part it
@@ -34,6 +36,7 @@ from finn.kernels.artifacts.module import Composed, Leaf, Module
 from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.toolchain.hls import HlsProduct, synthesize
 from finn.toolchain.launcher import Toolchain
+from finn.toolchain.vivado import vivado_jobs
 
 
 class HlsAbiRefused(Refusal):
@@ -89,7 +92,9 @@ def built_hls(
     """Each HLS request's exported Verilog in ``module``, by its top's name, synthesized for
     ``part`` unless cached (``cache``, ``$FINN_HOME/hls`` by default) and checked against
     its leaf's pins. ``roots`` resolves the headers' roots (FinnLib as FINN resolves it by
-    default); ``toolchain`` runs HLS."""
+    default); ``toolchain`` runs HLS, at most ``vivado_jobs(toolchain.selection.vivado_jobs)``
+    syntheses at once: the number its selection states for Vivado's runs, else the machine's
+    cores, capped."""
     requests = hls_requests(module)
     if not requests:
         return {}
@@ -106,7 +111,8 @@ def built_hls(
             )
             return request.function, _verified(leaf, product)
 
-        with ThreadPoolExecutor(max_workers=len(requests)) as pool:
+        jobs = min(len(requests), vivado_jobs(toolchain.selection.vivado_jobs))
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
             return dict(pool.map(build, requests))
 
 
