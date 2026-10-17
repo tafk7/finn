@@ -374,3 +374,17 @@ def test_choices_on_a_tensor_that_is_no_channel_are_dropped_and_cleared() -> Non
     persist(model, bound)
     assert "thresholds" not in model.tensors_stating(CHANNEL)
     assert not network(model, model.graph.node).stale
+
+
+def test_a_channel_choice_kept_unchecked_is_saved_and_replayed_as_unchecked() -> None:
+    """A FIFO's depth stored while the channel's transport is open waits on the transport:
+    it is kept unchecked, and saving writes it on the tensor, as it writes a checked one.
+    The model read again holds it unchecked, waiting on the same transport."""
+    model = kernel_model()
+    model.clear(CHANNEL, tensor="levels")
+    configured(model, {"levels": {"transport.fifo.buffer.depth": 8}})
+    assert entries(model, "levels")["finn.channel/transport.fifo.buffer.depth"] == "8"
+    point = network(model, model.graph.node).member("levels")
+    assert inspection.unchecked(point) == (
+        inspection.Unchecked("transport.fifo.buffer.depth", 8, ("transport",)),
+    )

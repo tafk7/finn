@@ -664,8 +664,9 @@ def persist(
     model: ModelWrapper, network: Network, owners: Collection[str] | None = None
 ) -> dict[str, dict[str, object]]:
     """Write ``network``'s choices, a network of ``model``'s nodes (``network``), back
-    where they are stated, each owner's whole: every Decision it commits (a forced one
-    is never committed), and the choices an unbound channel holds, on its owner, a
+    where they are stated, each owner's whole: every Decision it commits, and every choice
+    it keeps unchecked (a commitment whose check cannot conclude yet; a forced one is never
+    committed), and the choices an unbound channel holds, on its owner, a
     kernel's node or a channel's tensor; a choice an owner holds that the network does
     not (one replay dropped as stale) cleared, and, where it is a partition holding every
     KernelOp of the model, so are the channel choices of a tensor that is no channel of it.
@@ -681,7 +682,7 @@ def persist(
     Returns what each owner now holds, by graph name."""
     names = [name for name in network.members if owners is None or name in owners]
     held_by: dict[str, dict[str, object]] = {name: {} for name in names}
-    for (owner, key), value in network.chosen(names).items():
+    for (owner, key), value in network.chosen(names, unchecked=True).items():
         held_by[owner][key] = value
     refuse_outside_body(
         model, [name for name, values in held_by.items() if values and name not in network.kernels]

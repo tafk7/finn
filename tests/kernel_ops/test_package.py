@@ -38,6 +38,7 @@ from finn.core.graph.annotations.outputs import (
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
 from finn.core.space import inspection
+from finn.custom_op.kernels.network import persist
 from finn.custom_op.kernels.shell import configured_network, in_shell
 from finn.kernels.artifacts import build
 from finn.kernels.configure import undecided
@@ -119,6 +120,25 @@ def test_an_unchecked_choice_is_refused_through_the_open_choice_it_waits_on() ->
     ) as left:
         configured_network(model, "sdp_1")
     assert "block_stages" not in str(left.error)
+
+
+def test_an_unchecked_choice_is_saved_and_replayed_as_unchecked() -> None:
+    """Saving writes a choice kept unchecked by its stored value, as it writes a checked
+    one: nothing a user or a strategy committed is dropped. ``block_stages`` stays on its
+    node while its ``ram_style`` is open, and the model read again holds it unchecked,
+    waiting on the same ``ram_style``. (A channel's choice kept unchecked is saved the same
+    way: ``test_channel_choices``.)"""
+    model = kernel_model()
+    choose_memories(model)
+    write_raw(model, "activate", "ram_style", None)
+    bound = in_shell(model, model.graph.node)
+    waiting = (inspection.Unchecked("block_stages", 0, ("ram_style",)),)
+    assert inspection.unchecked(bound.member("activate")) == waiting
+    assert persist(model, bound)["activate"]["block_stages"] == 0
+    (node,) = [node for node in model.graph.node if node.name == "activate"]
+    assert "block_stages" in {attribute.name for attribute in node.attribute}
+    again = in_shell(model, model.graph.node)
+    assert inspection.unchecked(again.member("activate")) == waiting
 
 
 def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:
