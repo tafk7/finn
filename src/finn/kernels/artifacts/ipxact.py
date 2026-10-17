@@ -162,7 +162,7 @@ def interface_tcl(pins: Sequence[Pin], clock_ns: float) -> list[str]:
                     f"set map [ipx::add_memory_map {pin.name} $core]",
                     "set block [ipx::add_address_block Reg0 $map]",
                     f"set_property range {window} $block",
-                    "set_property width 32 $block",
+                    f"set_property width {_width(pin, 'wdata')} $block",
                     "set_property usage register $block",
                     f"set_property slave_memory_map_ref {pin.name} $bus",
                 ]
