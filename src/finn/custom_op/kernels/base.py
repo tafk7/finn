@@ -208,8 +208,9 @@ class KernelOp(CustomOp):
 
     - ``op_type``, and ``op_version``, its kernel's version;
     - ``kernel``, the kernel class;
-    - ``formals``, the kernel arguments read from the graph beside its tensors
-      (``facts``);
+    - ``facts``, the method that reads the kernel's arguments from the graph (each op
+      names them where it builds them) and binds the node's kernel on them beside its
+      tensors (``binding``);
     - ``ports``, the channel name of each ONNX input (None for an input read as an
       argument, such as Thresholding's thresholds), and ``outputs``, of each output;
     - ``wiring``, how each port meets the kernel (``Wiring``, the module docstring);
@@ -226,7 +227,6 @@ class KernelOp(CustomOp):
     op_type: ClassVar[str]
     op_version: ClassVar[int]
     kernel: ClassVar[type[Kernel]]
-    formals: ClassVar[tuple[str, ...]]
     ports: ClassVar[tuple[str | None, ...]]
     outputs: ClassVar[tuple[str, ...]] = ("y",)
     wiring: ClassVar[Mapping[str, Wiring]]

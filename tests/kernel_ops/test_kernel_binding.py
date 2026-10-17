@@ -27,7 +27,8 @@ import finn.kernels.members as members
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import integer_tensor
 from finn.core.space import DefinitionError, Rejected, design_space, inspection
-from finn.custom_op.kernels.base import kernel_op
+from finn.custom_op.kernels.base import KernelOp, kernel_op
+from finn.custom_op.kernels.conv import Conv
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
@@ -51,6 +52,12 @@ from finn.kernels.values.semantics import IntegerTensorValue
 INT3 = dtype("INT3")
 X = Tensor((3, 4), ScalarEncoding(INT3))
 STORED = tuple(tuple((r + c) % 3 - 1 for c in range(4)) for r in range(4))
+
+
+def test_a_kernelop_declares_no_formals_its_facts_build_the_arguments() -> None:
+    """What a node's kernel is bound with is what its ``facts`` build, op by op: a KernelOp
+    has no ``formals`` member to keep beside it (nothing read one)."""
+    assert not any(hasattr(op, "formals") for op in (KernelOp, MatMul, Conv, Thresholding))
 
 
 def test_the_schema_is_the_kernel_classs_decision_keys() -> None:

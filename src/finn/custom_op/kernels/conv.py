@@ -63,7 +63,6 @@ class Conv(MatMul):
     op_type = "Conv"
     op_version = MatMulKernel.version
     kernel = MatMulKernel
-    formals = (*MatMul.formals, "window")
     semantic = {name: ("ints", True, []) for name in GEOMETRY}
     anchor = IM2COL
 
