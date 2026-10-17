@@ -116,6 +116,15 @@ def test_a_link_carries_whole_lanes_of_its_words() -> None:
         LinkEnd("a", "o", 0, "v", "r")
 
 
+def test_a_link_takes_each_source_lane_at_most_once() -> None:
+    # Eight bits of source, read twice into a wider sink: the netlist would carry a
+    # negative padding, so the link is refused, naming the repeated lane.
+    with pytest.raises(BuildError, match=r"source lanes \[0\] more than once"):
+        Link(LinkEnd("a", "o", 8, "v", "r"), LinkEnd(None, "i", 24, "v", "r"), 8, (0, 0))
+    with pytest.raises(BuildError, match=r"source lanes \[1, 2\] more than once"):
+        Link(LinkEnd("a", "o", 32, "v", "r"), LinkEnd("b", "i", 48, "v", "r"), 8, (1, 2, 1, 2, 0))
+
+
 def test_a_fragment_placed_under_a_node_names_everything_below_it() -> None:
     # A kernel's own fragment: itself, the empty label.
     kernel = Fragment((("", stage()),), (), (BusExport("", CONFIG, "s_axilite"),))
