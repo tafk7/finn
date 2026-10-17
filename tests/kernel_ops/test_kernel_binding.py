@@ -12,6 +12,7 @@ network of its kernel and a channel on each ONNX input and output (conversion's)
 
 from __future__ import annotations
 
+import inspect
 import json
 from contextvars import Context
 from pathlib import Path
@@ -48,6 +49,7 @@ from finn.kernels.members import (
 )
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
+from finn.transformation.kernels.infer import infer_node
 
 INT3 = dtype("INT3")
 X = Tensor((3, 4), ScalarEncoding(INT3))
@@ -72,6 +74,13 @@ def test_an_op_made_without_its_model_is_refused_and_points_to_kernel_op() -> No
         message=r"kernel_op\(model, node\)",
     ):
         MatMul(model.graph.node[0]).model()
+
+
+def test_conversion_admits_through_admitted_alone() -> None:
+    """``KernelOp.admitted`` is the one way a node is admitted: the network at its baselines
+    or the refusals. ``infer_node`` does not admit, and no second method says the same."""
+    assert not hasattr(KernelOp, "admission")
+    assert "admit" not in inspect.signature(infer_node).parameters
 
 
 def test_the_schema_is_the_kernel_classs_decision_keys() -> None:
@@ -199,7 +208,9 @@ def test_a_node_without_a_baseline_is_refused_by_the_decision_naming_the_node(
         message="no case is viable",
     ):
         op.baselined()
-    ((code, owner, details),) = [(f.code, f.owner, dict(f.details)) for f in op.admission()]
+    refusals = op.admitted()
+    assert isinstance(refusals, tuple)
+    ((code, owner, details),) = [(f.code, f.owner, dict(f.details)) for f in refusals]
     assert (code, owner, details) == ("decision-no-viable-case", "compute", {"node": "first"})
 
 

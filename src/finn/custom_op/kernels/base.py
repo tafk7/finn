@@ -22,7 +22,7 @@ Both are kept by the facts, by value, in the build's member cache
 
 Conversion asks two questions of a node. Does the op's pattern cover it? ``match`` reads
 only the graph's structure (op types, connections, attributes), never a datatype or a
-value, and never changes the model. Will a kernel build it? ``admission`` asks its
+value, and never changes the model. Will a kernel build it? ``admitted`` asks its
 kernel, and the node alone as a network (``network``: its kernel, and a channel on each
 ONNX input and output as a boundary, ``in<i>_V``, ``out<j>_V``), whose channels must be
 realized once its choices take their baselines. A missing shape or datatype raises
@@ -637,20 +637,13 @@ class KernelOp(CustomOp):
                 findings=tuple(finding.about(node=self.label) for finding in error.findings),
             ) from error
 
-    def admission(self) -> tuple[Finding, ...]:
-        """Why conversion refuses this node: its kernel's refusals bound on its inputs,
-        whatever its open choices (``refusals``); and, its choices at their baselines, the
-        node alone as a network (``baselined``): each channel not realized, its admission
-        or a Decision of it without a viable case. Empty where ``admitted`` gives a
-        network."""
-        admitted = self.admitted()
-        return admitted if isinstance(admitted, tuple) else ()
-
     def admitted(self) -> Network | tuple[Finding, ...]:
         """The node alone at its baselines (``baselined``), where conversion admits it;
-        else why it does not (``admission``'s findings). Conversion persists the network
-        it gets here, the node's own choices (``persist``), rather than baselining the
-        node again."""
+        else why it does not: its kernel's refusals bound on its inputs, whatever its open
+        choices (``refusals``), or, the node alone as a network, each channel not realized,
+        its admission or a Decision of it without a viable case. Conversion persists the
+        network it gets here, the node's own choices (``persist``), rather than baselining
+        the node again."""
         found = self.refusals(self.bound())
         if found:
             return found
