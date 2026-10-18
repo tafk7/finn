@@ -50,6 +50,22 @@ _CASES = "test_reference_cases"
 
 ROWS: tuple[Row, ...] = (
     Row(
+        "commit-under-open-selector",
+        "lane 0",
+        "a choice committed under a selector still open is accepted and kept unchecked, "
+        "waiting on the selector, not refused",
+        f"{_CASES}::test_a_choice_committed_under_an_open_selector_is_kept_unchecked",
+        "commit-waits",
+    ),
+    Row(
+        "facts-open-selector",
+        "lane 0",
+        "new facts that open the selector a retained choice sits under keep the choice "
+        "unchecked, not refused",
+        f"{_CASES}::test_new_facts_that_open_a_selector_keep_a_choice_under_it_unchecked",
+        "commit-waits",
+    ),
+    Row(
         "commit-under-refused-selector",
         "lane 0",
         "a change reads the configuration it would publish, so a value inside its domain "
@@ -75,6 +91,44 @@ ROWS: tuple[Row, ...] = (
         "possible",
         f"{_CASES}::test_a_guards_choice_takes_no_case_that_makes_a_rule_under_it_false",
         "value-case-trial",
+    ),
+    Row(
+        "listed-value-not-member-possible",
+        "lane 1",
+        "every listed value is checked by the domain's membership, so a listed value it "
+        "rejects is not possible",
+        f"{_CASES}::test_a_listed_value_the_domain_rejects_is_not_possible",
+        "listed-not-member",
+    ),
+    Row(
+        "listed-value-not-member-forced",
+        "lane 1",
+        "every listed value is checked by the domain's membership, so the one listed value "
+        "it accepts is forced",
+        f"{_CASES}::test_a_listed_value_the_domain_rejects_leaves_the_other_forced",
+        "listed-not-member",
+    ),
+    Row(
+        "empty-list-choice",
+        "lane 1",
+        "an empty listed domain refuses its choice (no possible value), not left open",
+        f"{_CASES}::test_an_empty_list_refuses_its_choice",
+        "empty-list",
+    ),
+    Row(
+        "empty-computed-list-choice",
+        "lane 1",
+        "a domain whose computed list is empty refuses its choice (no possible value), not "
+        "left open",
+        f"{_CASES}::test_an_empty_computed_list_refuses_its_choice",
+        "empty-list",
+    ),
+    Row(
+        "empty-list-validity",
+        "lane 1",
+        "a choice with an empty list is a false piece of validity: the configuration is refused",
+        f"{_CASES}::test_an_empty_list_refuses_the_configuration",
+        "empty-list",
     ),
 )
 

@@ -21,16 +21,19 @@ from core.space.reference import (
     Change,
     Choice,
     Constraint,
+    Derived,
     Scope,
     Selector,
     Space,
     When,
     computed,
     listed,
+    membership,
 )
 from core.space.reference_harness import (
     Case,
     ChangeForm,
+    Pair,
     RuleForm,
     Spelling,
     StateForm,
@@ -234,3 +237,170 @@ def test_a_guards_choice_takes_no_case_that_makes_a_rule_under_it_false() -> Non
     # At a budget of 5 ``costly``'s rule is false wherever it applies, and it applies when
     # ``want`` is false: so ``want`` has one possible case, and it is forced.
     GUARDS.start({"budget": 5}).check_state("want")
+
+
+# -- 3. exhaustive and empty domains ---------------------------------------------------------------
+#
+# A listed domain lists all its values, and every listed value is checked by its
+# membership: ``x`` lists 1, 2 and 3 and rejects 2; ``y`` lists 1 and 2 and rejects 2. ``w``
+# is known by membership only. ``d`` lists the divisors of ``n``: none at 0.
+
+DOMAINS = Case(
+    "exhaustive domains",
+    Space(
+        ("n",),
+        Scope(
+            "",
+            choices=(
+                Choice("x", listed(1, 2, 3, member=lambda value, read: value != 2)),
+                Choice("y", listed(1, 2, member=lambda value, read: value != 2)),
+                Choice("w", membership(lambda value, read: value >= 2)),
+                Choice("d", computed(lambda read: divisors(read["n"]), ("n",))),
+            ),
+        ),
+    ),
+)
+EMPTY = Case("an empty domain", Space((), Scope("", choices=(Choice("z", listed()),))))
+
+
+@expected("listed-value-not-member-possible")
+def test_a_listed_value_the_domain_rejects_is_not_possible() -> None:
+    DOMAINS.start({"n": 6}).check_possible("x")
+
+
+@expected("listed-value-not-member-forced")
+def test_a_listed_value_the_domain_rejects_leaves_the_other_forced() -> None:
+    DOMAINS.start({"n": 6}).check_state("y")
+
+
+def test_a_listed_value_the_domain_rejects_is_refused_at_commit() -> None:
+    DOMAINS.start({"n": 6}).check_change(Change(commit={"x": 2}))
+
+
+def test_a_choice_known_by_membership_only_is_open_with_no_list() -> None:
+    DOMAINS.start({"n": 6}).check_state("w")
+
+
+def test_a_value_outside_a_membership_only_domain_is_refused_at_commit() -> None:
+    DOMAINS.start({"n": 6}).check_change(Change(commit={"w": 1}))
+
+
+@expected("empty-list-choice")
+def test_an_empty_list_refuses_its_choice() -> None:
+    EMPTY.start().check_state("z")
+
+
+@expected("empty-computed-list-choice")
+def test_an_empty_computed_list_refuses_its_choice() -> None:
+    DOMAINS.start({"n": 0}).check_state("d")
+
+
+@expected("empty-list-validity")
+def test_an_empty_list_refuses_the_configuration() -> None:
+    EMPTY.start().check_validity()
+
+
+def test_a_value_under_an_empty_list_is_outside_its_domain() -> None:
+    EMPTY.start().check_change(Change(commit={"z": 1}))
+
+
+# -- 4. unchecked readability ----------------------------------------------------------------------
+#
+# The two cores again, their width a choice ``lanes`` (9 or 12): at 9 the stub core
+# refuses, so packed is forced; at 12 both are possible and the selector is open. ``doubled``
+# is a value computed from packed's ``pe``. One Space: a change that leaves a stored choice
+# inactive is refused.
+
+UNCHECKED = Case(
+    "unchecked readability",
+    Space(
+        (),
+        Scope(
+            "",
+            choices=(Choice("lanes", listed(9, 12)),),
+            selectors=(
+                Selector(
+                    "compute",
+                    (
+                        Scope(
+                            "packed",
+                            choices=(Choice("pe", listed(1, 3)),),
+                            constraints=(
+                                Constraint(
+                                    "fits",
+                                    ("lanes",),
+                                    lambda read: read["lanes"] <= 64,
+                                    "packed-width",
+                                ),
+                            ),
+                        ),
+                        Scope(
+                            "stub",
+                            choices=(Choice("rows", listed(1, 2)),),
+                            constraints=(
+                                Constraint(
+                                    "even",
+                                    ("lanes",),
+                                    lambda read: read["lanes"] % 2 == 0,
+                                    "stub-width",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            derived=(
+                Derived(
+                    "doubled", ("compute.packed.pe",), lambda read: 2 * read["compute.packed.pe"]
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def opened() -> Pair:
+    """``pe`` committed while packed is forced, then the selector opened by ``lanes``."""
+    point = UNCHECKED.start({}, {"lanes": 9}).step(Change(commit={"compute.packed.pe": 3}))
+    return point.step(Change(commit={"lanes": 12}))
+
+
+def test_a_change_that_opens_a_selector_keeps_a_choice_under_it_unchecked() -> None:
+    point = UNCHECKED.start({}, {"lanes": 9}).step(Change(commit={"compute.packed.pe": 3}))
+    point.check_change(Change(commit={"lanes": 12}))
+
+
+def test_an_unchecked_choice_waits_on_its_selector() -> None:
+    opened().check_state("compute.packed.pe")
+
+
+def test_an_unchecked_choice_reads_unresolved() -> None:
+    opened().check_answer("compute.packed.pe")
+
+
+def test_a_value_computed_from_an_unchecked_choice_is_unresolved() -> None:
+    opened().check_answer("doubled")
+
+
+def test_an_unchecked_choice_leaves_the_configuration_undecided() -> None:
+    opened().check_validity()
+
+
+def test_an_unchecked_choice_is_checked_when_its_selector_settles() -> None:
+    opened().step(Change(commit={"compute": "packed"})).check_state("compute.packed.pe")
+
+
+def test_a_selector_settling_elsewhere_refuses_the_change() -> None:
+    opened().check_change(Change(commit={"compute": "stub"}))
+
+
+@expected("commit-under-open-selector")
+def test_a_choice_committed_under_an_open_selector_is_kept_unchecked() -> None:
+    UNCHECKED.start({}, {"lanes": 12}).check_change(Change(commit={"compute.packed.pe": 3}))
+
+
+@expected("facts-open-selector")
+def test_new_facts_that_open_a_selector_keep_a_choice_under_it_unchecked() -> None:
+    # At 12 both cores are possible: the selector is open, and ``pe`` (3 divides 12) waits.
+    point = TYPED.start({"width": 9}, {"compute.packed.pe": 3})
+    point.check_change(Change(facts={"width": 12}))
