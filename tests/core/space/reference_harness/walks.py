@@ -12,8 +12,8 @@ harness's comparison (:mod:`.compare`) asks both sides every question: each choi
 state, each value's answer, each rule, validity, and the change's verdict.
 
 **The filter.** A disagreement gets a **kind** (:func:`classify`): a mechanism the
-model's answers show at work in the configuration (a case refused by a constraint, a
-conflict, a case's trial reading a choice kept unchecked, ...) that reaches the question.
+model's answers show at work in the configuration (a conflict, a case's trial reading a
+choice kept unchecked, ...) that reaches the question.
 A disagreement whose kind a row of the acceptance matrix still names (``matrix.ROWS``) is
 expected, and counted; any other fails the walk, printing the seed, the step, the
 description and both answers. Moving or removing a row moves the filter with it.
@@ -560,11 +560,9 @@ def presence(solution: model.Solution, scope: str) -> str:
     return "present"
 
 
-def mechanisms(solution: model.Solution, engine_refused: bool | None = None) -> dict[str, set[str]]:
+def mechanisms(solution: model.Solution) -> dict[str, set[str]]:
     """The mechanisms the model's answers show at work in one configuration, by kind, each
-    with the choices (or views) it acts on. ``engine_refused``: whether the engine reads
-    the configuration refused (``None``: not asked); a view refused with its Space is a
-    mechanism of its own only where both sides read it refused."""
+    with the choices it acts on."""
     index = solution.index
     found: dict[str, set[str]] = {}
 
@@ -580,11 +578,6 @@ def mechanisms(solution: model.Solution, engine_refused: bool | None = None) -> 
             cases = state.impossible
         elif isinstance(state, model.RefusedChoice) and not state.stored:
             cases = state.cases
-            no_value = any(r.kind is model.ReasonKind.NO_POSSIBLE_VALUE for r in state.reasons)
-            if no_value and not state.cases:
-                # no possible value and no case refused: its list is empty (a forced
-                # choice refused by a conflict has no possible value reason)
-                add("empty-list", path)
             if state.peers or any(r.kind is model.ReasonKind.CONFLICT for r in state.reasons):
                 add("conflict", path, *state.peers)
         elif isinstance(state, (model.Readable, model.GuardRefused)) and state.conflict:
@@ -597,41 +590,11 @@ def mechanisms(solution: model.Solution, engine_refused: bool | None = None) -> 
             add("inactive-under-refused-selector", path)
         for case, reasons in cases:
             for reason in reasons:
-                kind = _case_kind(index, path, case, reason)
-                if kind:
-                    add(kind, path)
                 if _reads_unchecked(solution, path, case, reason):
                     add("trial-reads-unchecked", path)
     for conflict in solution.conflicts():
         add("conflict", *conflict.participants)
-    if engine_refused is not False:
-        for path in index.views:
-            answer = solution.read(path)
-            if isinstance(answer, model.Refused) and any(
-                reason.kind is model.ReasonKind.SPACE_REFUSED for reason in answer.reasons
-            ):
-                add("view-of-refused-space", path)
     return found
-
-
-def _case_kind(index: model.Index, choice: str, case: object, reason: model.Reason) -> str | None:
-    """What refused one case of an open choice, as a kind the engine at this commit lacks;
-    ``None`` for what it does too (a selector's case refused by a rule of the case's own
-    Space, a listed value outside a list it computes). Another choice's own check refusing
-    the case (``trial-counts-own-checks``) is a kind no row names: it never explains a
-    disagreement."""
-    info = index.choices[choice]
-    if reason.subject in index.constraints:
-        if info.cases is not None:
-            if index.constraints[reason.subject][1] == _join(choice, str(case)):
-                return None
-            return "selector-case-trial"
-        return "value-case-trial"
-    if reason.kind is model.ReasonKind.OUTSIDE_DOMAIN and reason.subject == choice:
-        return "listed-not-member" if info.domain.member is not None else None
-    if reason.kind in (model.ReasonKind.OUTSIDE_DOMAIN, model.ReasonKind.INACTIVE):
-        return "trial-counts-own-checks"
-    return "selector-case-trial" if info.cases is not None else "value-case-trial"
 
 
 def _reads_unchecked(
@@ -789,11 +752,10 @@ class Context:
 
     solution: model.Solution
     reach: Reach
-    engine_refused: bool | None = None
     found: dict[str, set[str]] = field(init=False)
 
     def __post_init__(self) -> None:
-        self.found = mechanisms(self.solution, self.engine_refused)
+        self.found = mechanisms(self.solution)
 
 
 def _subjects(question: Question, expected: Form, engine: Form) -> set[str] | None:
@@ -1019,9 +981,7 @@ class _Walk:
         solution = configuration.solve()
         expected = model_forms(solution, self.asked)
         engine = engine_forms(point, self.asked)
-        validity = engine[("validity", "")]
-        assert isinstance(validity, ValidityForm)
-        context = Context(solution, self.reach, validity.verdict == "refused")
+        context = Context(solution, self.reach)
         self.tally.compared += 1
         found: dict[Question, tuple[str, ...]] = {}
         for question in self.asked:
