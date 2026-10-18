@@ -83,7 +83,6 @@ LINKED_DOMAIN = Case(
 )
 
 
-@expected("linked-possible")
 def test_a_linking_rule_leaves_the_other_choice_the_cases_it_holds_for() -> None:
     LINKED.start({}, {"b": 2}).check_state("a")
 
@@ -96,7 +95,6 @@ def test_a_linking_rule_refuses_the_configuration_naming_itself() -> None:
     reach(LINKED.start({}, {"b": 2}), Change(commit={"a": 1})).check_validity()
 
 
-@expected("linked-forced")
 def test_a_linking_rule_forces_the_open_choice() -> None:
     LINKED.start({}, {"a": 1}).check_state("b")
 
@@ -148,17 +146,14 @@ def test_a_case_needing_a_capability_the_facts_lack_is_not_possible() -> None:
     REQUIRED.start({"has_big": False}).check_state("style")
 
 
-@expected("requirement-unknown-fact")
 def test_a_case_needing_an_unknown_capability_is_possible() -> None:
     REQUIRED.start().check_state("style")
 
 
-@expected("requirement-commit")
 def test_committing_a_case_needing_a_missing_capability_is_accepted() -> None:
     REQUIRED.start({"has_big": False}).check_change(Change(commit={"style": "big"}))
 
 
-@expected("requirement-validity")
 def test_committing_a_case_needing_a_missing_capability_refuses_the_configuration() -> None:
     reach(REQUIRED.start({"has_big": False}), Change(commit={"style": "big"})).check_validity()
 
@@ -243,7 +238,6 @@ def test_a_committed_participant_keeps_its_value() -> None:
     reach(PAIR.start(), Change(commit={"x": 1})).check_state("x")
 
 
-@expected("pair-committed-peer")
 def test_the_other_choice_of_a_rule_with_a_committed_one_has_no_possible_value() -> None:
     reach(PAIR.start(), Change(commit={"x": 1})).check_state("y")
 

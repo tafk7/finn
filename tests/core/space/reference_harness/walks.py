@@ -427,12 +427,7 @@ PRIORITY = (
     "inactive-under-refused-selector",
     "trial-reads-unchecked",
     "trial-reads-waiting",
-    "view-of-refused-space",
-    "empty-list",
-    "listed-not-member",
     "conflict",
-    "selector-case-trial",
-    "value-case-trial",
 )
 
 
@@ -648,9 +643,7 @@ def _reads_unchecked(
     it present when it is a selector's case holding it, or when a ``when`` guard above it
     reads the choice (a value choice's case, or a selector's). The rule may be the case's
     own or one outside it (a rule of the root reading the stored choice): the same trial
-    reads the same value. Where the rule is not the case's own, the trial against it is also
-    ``selector-case-trial`` or ``value-case-trial`` (:func:`_case_kind`); both are told, the
-    more specific first."""
+    reads the same value."""
     index = solution.index
     if reason.subject not in index.constraints:
         return False

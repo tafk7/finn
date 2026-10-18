@@ -73,7 +73,6 @@ VIEWED = Case(
 )
 
 
-@expected("view-of-refused-space")
 def test_a_view_refuses_when_its_space_is_refused() -> None:
     VIEWED.start({"limit": 2, "name": "bad"}).check_answer("title")
 
@@ -169,17 +168,14 @@ def test_a_parent_reading_its_childrens_views_is_not_a_cycle() -> None:
     check_definition("children's views", CHILDREN)
 
 
-@expected("cycle-storage-view")
 def test_a_constraint_on_a_storage_view_of_its_own_space_is_a_cycle() -> None:
     check_definition("a constraint on a storage view", STORAGE)
 
 
-@expected("cycle-by-name")
 def test_a_constraint_reading_views_of_its_own_space_by_name_is_a_cycle() -> None:
     check_definition("views read by name", BY_NAME, Spelling(rules={"carried": ByName()}))
 
 
-@expected("cycle-own-stages")
 def test_a_parent_reading_its_childrens_stages_through_its_own_view_is_a_cycle() -> None:
     check_definition("stages through a parent's view", STAGES, Spelling(types={"stages": tuple}))
 
@@ -274,27 +270,22 @@ def test_a_choice_three_deep_under_an_unselected_case_is_inactive() -> None:
     NESTED.start(OPEN, {"kernel": "plain"}).check_state(PE)
 
 
-@expected("nested-outer-forced")
 def test_forcing_selects_the_outer_kernel() -> None:
     NESTED.start(CLOSED).check_state("kernel")
 
 
-@expected("nested-inner-forced")
 def test_forcing_selects_the_core_inside_the_forced_kernel() -> None:
     NESTED.start(CLOSED).check_state(COMPUTE)
 
 
-@expected("nested-possible")
 def test_a_choice_three_deep_under_forced_selectors_lists_its_possible_cases() -> None:
     NESTED.start(CLOSED).check_state(PE)
 
 
-@expected("nested-commit-forced")
 def test_a_commit_three_deep_under_forced_selectors_is_accepted() -> None:
     NESTED.start(CLOSED).check_change(Change(commit={PE: 2}))
 
 
-@expected("nested-readable")
 def test_a_commit_three_deep_under_forced_selectors_is_readable() -> None:
     reach(NESTED.start(CLOSED), Change(commit={PE: 2})).check_state(PE)
 
@@ -308,7 +299,6 @@ def test_a_commit_three_deep_under_two_open_selectors_is_kept_unchecked() -> Non
     NESTED.start(OPEN).check_change(Change(commit={PE: 2}))
 
 
-@expected("nested-conflict-commit")
 def test_a_commit_three_deep_in_a_conflict_with_the_forced_selectors_is_accepted() -> None:
     # 4 does not divide 6, so ``packed`` is refused; ``serial`` is refused by its fact, so
     # ``compute`` has no possible case; ``kernel`` was forced to ``inner`` only because
@@ -460,11 +450,9 @@ def test_the_selector_a_committed_case_puts_in_scope_refuses_the_configuration()
     LOOK.start(NO_CORES, {"realization": "native"}).check_validity()
 
 
-@expected("look-ahead-parent-rule")
 def test_a_parent_rule_over_the_capabilities_makes_the_case_impossible() -> None:
     RULED.start(NO_CORES).check_state("realization")
 
 
-@expected("look-ahead-inactive")
 def test_the_selector_under_the_impossible_case_is_inactive() -> None:
     RULED.start(NO_CORES).check_state("native_impl.compute")

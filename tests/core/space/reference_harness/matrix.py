@@ -62,94 +62,7 @@ ROWS: tuple[Row, ...] = (
         "the engine refuses it as inactive with no finding: the core's trial reads the false own "
         "check and forcing selects the other core",
     ),
-    Row(
-        "value-case-trial",
-        "lane 1",
-        "a value case is tried against the rules whose answer depends on the choice, "
-        "through the presence of what they read, so a case that makes one false is not "
-        "possible",
-        f"{_CASES}::test_a_guards_choice_takes_no_case_that_makes_a_rule_under_it_false",
-        "value-case-trial",
-    ),
-    Row(
-        "listed-value-not-member-possible",
-        "lane 1",
-        "every listed value is checked by the domain's membership, so a listed value it "
-        "rejects is not possible",
-        f"{_CASES}::test_a_listed_value_the_domain_rejects_is_not_possible",
-        "listed-not-member",
-    ),
-    Row(
-        "listed-value-not-member-forced",
-        "lane 1",
-        "every listed value is checked by the domain's membership, so the one listed value "
-        "it accepts is forced",
-        f"{_CASES}::test_a_listed_value_the_domain_rejects_leaves_the_other_forced",
-        "listed-not-member",
-    ),
-    Row(
-        "empty-list-choice",
-        "lane 1",
-        "an empty listed domain refuses its choice (no possible value), not left open",
-        f"{_CASES}::test_an_empty_list_refuses_its_choice",
-        "empty-list",
-    ),
-    Row(
-        "empty-computed-list-choice",
-        "lane 1",
-        "a domain whose computed list is empty refuses its choice (no possible value), not "
-        "left open",
-        f"{_CASES}::test_an_empty_computed_list_refuses_its_choice",
-        "empty-list",
-    ),
-    Row(
-        "empty-list-validity",
-        "lane 1",
-        "a choice with an empty list is a false piece of validity: the configuration is refused",
-        f"{_CASES}::test_an_empty_list_refuses_the_configuration",
-        "empty-list",
-    ),
     # -- rules between choices (cases 5 to 8)
-    Row(
-        "linked-possible",
-        "lane 1",
-        "a value case is tried against the constraints that read the choice, so a case a "
-        "linking rule makes false is not possible",
-        f"{_RULES}::test_a_linking_rule_leaves_the_other_choice_the_cases_it_holds_for",
-        "value-case-trial",
-    ),
-    Row(
-        "linked-forced",
-        "lane 1",
-        "a value case is tried against the constraints that read the choice, so the one case "
-        "a linking rule leaves is forced",
-        f"{_RULES}::test_a_linking_rule_forces_the_open_choice",
-        "value-case-trial",
-    ),
-    Row(
-        "requirement-unknown-fact",
-        "lane 1",
-        "an unknown fact blocks only the cases a constraint reads it for, so a choice whose "
-        "requirement waits on a fact lists its cases",
-        f"{_RULES}::test_a_case_needing_an_unknown_capability_is_possible",
-        "unknown-fact",
-    ),
-    Row(
-        "requirement-commit",
-        "lane 1",
-        "a requirement is a constraint: committing a case it refuses is accepted, not refused "
-        "at commit",
-        f"{_RULES}::test_committing_a_case_needing_a_missing_capability_is_accepted",
-        "requirement-at-commit",
-    ),
-    Row(
-        "requirement-validity",
-        "lane 1",
-        "a requirement is a constraint: a committed case it refuses leaves the configuration "
-        "refused, naming it",
-        f"{_RULES}::test_committing_a_case_needing_a_missing_capability_refuses_the_configuration",
-        "requirement-at-commit",
-    ),
     Row(
         "pair-first",
         "lane 2",
@@ -175,15 +88,6 @@ ROWS: tuple[Row, ...] = (
         "conflict",
     ),
     Row(
-        "pair-committed-peer",
-        "lane 1",
-        "a value case is tried against the constraints that read the choice, so a choice whose "
-        "one value a rule with a committed choice refuses has no possible value (a plain "
-        "refusal: no forced value, no conflict), not forced to the value the rule refuses",
-        f"{_RULES}::test_the_other_choice_of_a_rule_with_a_committed_one_has_no_possible_value",
-        "value-case-trial",
-    ),
-    Row(
         "four-participants",
         "lane 2",
         "the four-choice conflict refuses every participant, each naming the other three",
@@ -207,89 +111,6 @@ ROWS: tuple[Row, ...] = (
         "conflict-order",
     ),
     # -- views, nested scopes, look-ahead (case 9, the composing cores' two)
-    Row(
-        "view-of-refused-space",
-        "lane 1",
-        "a view refuses when its Space is refused, every view, not only one with obligations",
-        f"{_SCOPES}::test_a_view_refuses_when_its_space_is_refused",
-        "view-of-refused-space",
-    ),
-    Row(
-        "cycle-storage-view",
-        "lane 1",
-        "a view refuses when its Space is refused, so a constraint on a storage view of its "
-        "own Space is a dependency cycle the engine reports",
-        f"{_SCOPES}::test_a_constraint_on_a_storage_view_of_its_own_space_is_a_cycle",
-        "view-cycle",
-    ),
-    Row(
-        "cycle-by-name",
-        "lane 1",
-        "a view refuses when its Space is refused, so a constraint reading views of its own "
-        "Space by name is a dependency cycle the engine reports",
-        f"{_SCOPES}::test_a_constraint_reading_views_of_its_own_space_by_name_is_a_cycle",
-        "view-cycle",
-    ),
-    Row(
-        "cycle-own-stages",
-        "lane 1",
-        "a view refuses when its Space is refused, so a parent's constraint reading its "
-        "children's stages through its own view is a dependency cycle the engine reports",
-        f"{_SCOPES}::test_a_parent_reading_its_childrens_stages_through_its_own_view_is_a_cycle",
-        "view-cycle",
-    ),
-    Row(
-        "nested-outer-forced",
-        "lane 1",
-        "a selector's case is tried against the constraints reading the selector, so a "
-        "parent's rule refusing one kernel forces the other",
-        f"{_SCOPES}::test_forcing_selects_the_outer_kernel",
-        "selector-case-trial",
-    ),
-    Row(
-        "nested-inner-forced",
-        "lane 1",
-        "a selector's case is tried against the constraints reading the selector, so the core "
-        "inside the forced kernel is forced too",
-        f"{_SCOPES}::test_forcing_selects_the_core_inside_the_forced_kernel",
-        "selector-case-trial",
-    ),
-    Row(
-        "nested-possible",
-        "lane 1",
-        "a selector's case is tried against the constraints reading the selector, so a choice "
-        "three deep under the forced selectors lists its possible cases",
-        f"{_SCOPES}::test_a_choice_three_deep_under_forced_selectors_lists_its_possible_cases",
-        "selector-case-trial",
-    ),
-    Row(
-        "nested-commit-forced",
-        "lane 1",
-        "a selector's case is tried against the constraints reading the selector, so a commit "
-        "three deep under the forced selectors is accepted, checked",
-        f"{_SCOPES}::test_a_commit_three_deep_under_forced_selectors_is_accepted",
-        "selector-case-trial",
-        "the engine accepts it kept unchecked; lane 1 forces the selectors",
-    ),
-    Row(
-        "nested-readable",
-        "lane 1",
-        "a selector's case is tried against the constraints reading the selector, so a commit "
-        "three deep under the forced selectors is readable",
-        f"{_SCOPES}::test_a_commit_three_deep_under_forced_selectors_is_readable",
-        "selector-case-trial",
-        "the engine accepts it kept unchecked; lane 1 forces the selectors",
-    ),
-    Row(
-        "nested-conflict-commit",
-        "lane 1",
-        "a value inside its domain three deep, whose core the forced selectors refuse, is "
-        "accepted, admitted under the refused core",
-        f"{_SCOPES}::test_a_commit_three_deep_in_a_conflict_with_the_forced_selectors_is_accepted",
-        "selector-case-trial",
-        "the engine accepts it kept unchecked; lane 1 forces the outer selector and refuses the "
-        "inner one",
-    ),
     Row(
         "inactive-under-refused-selector",
         "lane 2",
@@ -361,48 +182,6 @@ ROWS: tuple[Row, ...] = (
         f"{_SCOPES}::test_a_conflict_with_a_choice_three_deep_refuses_the_configuration",
         "conflict",
     ),
-    # -- a domain reading a derived value that refuses on its facts
-    Row(
-        "refused-input-commit",
-        "lane 1",
-        "a refusal elsewhere never refuses a commit: a choice whose domain input refuses is "
-        "kept and the configuration refused through the input",
-        f"{_CASES}::test_a_commit_whose_domain_input_is_refused_is_accepted",
-        note="the engine refuses the commit, the choice carrying the input's refusal",
-    ),
-    Row(
-        "refused-input-new-facts",
-        "lane 1",
-        "a refusal elsewhere never refuses a commit: new facts that refuse a kept choice's "
-        "domain input are accepted, the choice kept and the configuration refused through the "
-        "input",
-        f"{_CASES}::test_new_facts_that_refuse_a_kept_choices_domain_input_are_accepted",
-        note="the engine refuses the change, reaching the kept choice with the input's refusal",
-    ),
-    Row(
-        "refused-input-state",
-        "lane 1",
-        "a refusal elsewhere never refuses a commit: the kept choice whose domain input "
-        "refuses reads refused through the input",
-        f"{_CASES}::test_a_choice_whose_domain_input_is_refused_reads_refused_through_it",
-        note="asked once the commit is accepted; the engine refuses the commit",
-    ),
-    Row(
-        "refused-input-answer",
-        "lane 1",
-        "a refusal elsewhere never refuses a commit: the kept choice whose domain input "
-        "refuses is queried refused through the input",
-        f"{_CASES}::test_a_choice_whose_domain_input_is_refused_is_queried_refused_through_it",
-        note="asked once the commit is accepted; the engine refuses the commit",
-    ),
-    Row(
-        "refused-input-validity",
-        "lane 1",
-        "a refusal elsewhere never refuses a commit: a kept choice whose domain input refuses "
-        "refuses the configuration through the input, blamed there once",
-        f"{_CASES}::test_a_choice_whose_domain_input_is_refused_refuses_the_configuration_through_it",
-        note="asked once the commit is accepted; the engine refuses the commit",
-    ),
     # -- a domain reading an input refused by forcing, or one that does not apply
     Row(
         "forcing-refused-input-commit",
@@ -428,97 +207,6 @@ ROWS: tuple[Row, ...] = (
         "refuses is unchecked, waiting on the input",
         f"{_CASES}::test_a_choice_whose_domain_input_forcing_refuses_waits_on_it",
         note="asked once the commit is accepted; the engine refuses the commit",
-    ),
-    Row(
-        "inapplicable-input-commit",
-        "lane 1",
-        "a domain input that does not apply leaves the own check unknown: the commit is "
-        "accepted and the choice kept unchecked, waiting on the input's guard, not refused as "
-        "inactive",
-        f"{_CASES}::test_a_commit_whose_domain_input_does_not_apply_is_kept_unchecked",
-        note="the engine refuses the commit as inactive",
-    ),
-    Row(
-        "inapplicable-input-new-facts",
-        "lane 1",
-        "a domain input that does not apply leaves the own check unknown: new facts under "
-        "which a kept choice's domain input does not apply are accepted, the choice kept "
-        "unchecked",
-        f"{_CASES}::test_new_facts_under_which_a_kept_choices_domain_input_does_not_apply_keep_it",
-        note="the engine refuses the change, reaching the kept choice as inactive",
-    ),
-    Row(
-        "inapplicable-input-state",
-        "lane 1",
-        "a domain input that does not apply leaves the own check unknown: the kept choice is "
-        "unchecked, waiting on the input's guard",
-        f"{_CASES}::test_a_choice_whose_domain_input_does_not_apply_waits_on_it",
-        note="asked once the commit is accepted; the engine refuses the commit as inactive",
-    ),
-    # -- a kept choice under a refused guard whose domain input refuses: applicability first
-    Row(
-        "guard-first-new-facts",
-        "lane 1",
-        "a refusal elsewhere never refuses a commit: new facts that refuse a kept choice's guard "
-        "and its domain input are accepted, nothing kept unchecked",
-        f"{_CASES}::test_new_facts_refusing_a_kept_choices_guard_and_its_input_are_accepted",
-        note="the engine refuses the change, reaching the kept choice with no finding of its own",
-    ),
-    Row(
-        "guard-first-state",
-        "lane 1",
-        "applicability first: a kept choice under a refused guard whose domain input refuses "
-        "reads refused through the guard only",
-        f"{_CASES}::test_a_kept_choice_under_a_refused_guard_and_input_reads_refused_through_the_guard",
-        note="asked once the change is accepted; the engine refuses the change",
-    ),
-    Row(
-        "guard-first-answer",
-        "lane 1",
-        "applicability first: a kept choice under a refused guard whose domain input refuses is "
-        "queried refused through the guard only",
-        f"{_CASES}::test_a_kept_choice_under_a_refused_guard_and_input_is_queried_refused_through_it",
-        note="asked once the change is accepted; the engine refuses the change",
-    ),
-    Row(
-        "guard-first-validity",
-        "lane 1",
-        "applicability first: a kept choice under a refused guard whose domain input refuses adds "
-        "nothing to validity beside the guard's piece",
-        f"{_CASES}::test_a_kept_choice_under_a_refused_guard_and_input_adds_nothing_to_validity",
-        note="asked once the change is accepted; the engine refuses the change",
-    ),
-    Row(
-        "guard-first-back",
-        "lane 1",
-        "a refusal elsewhere never refuses a commit: a choice kept through a refused guard and "
-        "input reads its value again once both hold",
-        f"{_CASES}::test_a_kept_choice_back_under_its_guard_and_an_even_input_is_readable",
-        note="asked once the change refusing both is accepted; the engine refuses that change",
-    ),
-    Row(
-        "guard-first-holding-guard",
-        "lane 1",
-        "a refusal elsewhere never refuses a commit: with its guard holding, a kept choice whose "
-        "domain input refuses reads refused through the input",
-        f"{_CASES}::test_a_kept_choice_under_a_holding_guard_reads_refused_through_its_input",
-        note="asked once the change is accepted; the engine refuses the change",
-    ),
-    Row(
-        "look-ahead-parent-rule",
-        "lane 1",
-        "a value case is tried against the constraints that read it, so a parent's rule over "
-        "the capabilities makes the case impossible and forces the other",
-        f"{_SCOPES}::test_a_parent_rule_over_the_capabilities_makes_the_case_impossible",
-        "value-case-trial",
-    ),
-    Row(
-        "look-ahead-inactive",
-        "lane 1",
-        "a value case is tried against the constraints that read it, so the selector under the "
-        "impossible case is inactive, not open",
-        f"{_SCOPES}::test_the_selector_under_the_impossible_case_is_inactive",
-        "value-case-trial",
     ),
 )
 
