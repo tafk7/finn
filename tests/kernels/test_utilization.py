@@ -13,6 +13,7 @@ fitted LUT and FF coefficients are not pinned here; the counts the RTL fixes are
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -29,7 +30,7 @@ from support.helpers import (
     with_direct_transports,
 )
 
-from finn.core.space import Available, Rejected, design_space
+from finn.core.space import Available, Decision, Param, Rejected, Space, design_space, inspection
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
@@ -61,8 +62,10 @@ from finn.kernels.utilization import (
     read_mux,
     total,
     uram,
+    uram_constraint,
+    uram_init_constraint,
 )
-from finn.platform.capabilities import DspBlock, Fabric, Resources
+from finn.platform.capabilities import DspBlock, Fabric, Platform, Resources
 
 INT2, INT4, INT8 = (resolve_qonnx_datatype_name(name) for name in ("INT2", "INT4", "INT8"))
 
@@ -326,6 +329,44 @@ def test_a_memory_in_auto_states_no_resources(memory_point: Any) -> None:
     assert isinstance(answer, Rejected)
     assert [finding.code for finding in answer.findings] == ["memory-auto"]
     assert answer.findings[0].message.endswith("ram_style auto, placed by Vivado, not stated")
+
+
+class Stored(Space):
+    """A memory whose style and stage count may store in UltraRAM, with initial contents."""
+
+    platform: Platform = Param()
+    ram_style: str = Decision(values=("block", "ultra"))
+    stages: int = Decision(values=(0, 1, 2))
+    uram_present = uram_constraint(platform, ram_style, ("ultra",))
+    uram_init_taken = uram_init_constraint(platform, ram_style, ("ultra",))
+    stages_present = uram_constraint(platform, stages, lambda count: count != 0)
+
+
+def test_a_choice_that_stores_in_ultraram_is_a_constraint_on_the_platform() -> None:
+    def refusing(*, uram: bool = True, uram_init: bool = True) -> dict[str, set[str]]:
+        platform = replace(FULL_DSP58, uram=uram, uram_init=uram_init)
+        point = design_space(Stored(platform=platform)).with_choices(ram_style="ultra", stages=1)
+        validity = inspection.validity(point)
+        return {
+            piece.owner: {finding.code for finding in piece.result.findings}
+            for piece in validity.pieces
+        }
+
+    assert refusing() == {}
+    assert refusing(uram_init=False) == {"uram_init_taken": {"uram-init"}}
+    assert refusing(uram=False, uram_init=False) == {
+        "uram_present": {"uram-absent"},
+        "uram_init_taken": {"uram-init"},
+        "stages_present": {"uram-absent"},
+    }
+    # A case that stores elsewhere asks nothing of the platform; the cases that would are
+    # not possible on it.
+    bare = design_space(Stored(platform=replace(FULL_DSP58, uram=False, uram_init=False)))
+    assert inspection.validity(bare.with_choices(ram_style="block", stages=0)).status == "valid"
+    assert {item.key: item.value for item in inspection.forced(bare)} == {
+        "ram_style": "block",
+        "stages": 0,
+    }
 
 
 def test_every_fabric_has_its_primitives() -> None:

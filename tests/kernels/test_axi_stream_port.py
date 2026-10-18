@@ -9,7 +9,9 @@ read of the tensor, and its kernel binds each index's extent from those reads
 (``LeafKernel.extents``): a kernel writes no extent getter, and its folding factors'
 domains read ``extent_of`` members. A producer's tensor is its kernel's statement,
 derived from those extents, and its element is that tensor's. An input without its
-tensor is idle: an interface not used.
+tensor is idle: an interface not used. A port's constraint counts toward its holder's
+validity, while what the holder reads to bind its extents and check its clock are values:
+a refused port still answers them.
 """
 
 from __future__ import annotations
@@ -21,15 +23,17 @@ from support.helpers import FULL_DSP58, choose, with_direct_transports
 from support.refusals import refused
 
 from finn.core.space import (
-    ConstraintGroup,
+    Available,
     Decision,
     DefinitionError,
+    Members,
     Param,
     Rejected,
     Space,
     derived,
     design_space,
     divisors_of,
+    inspection,
     reject,
     view,
 )
@@ -40,12 +44,13 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution
-from finn.kernels.base import LeafKernel, extent_of, interface
+from finn.kernels.base import ACCESS, CLOCKED, PINS, LeafKernel, extent_of, interface
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.network import Interface, Network, wire
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.port import INTEGER_POLICY, AxiStreamPort
 from finn.kernels.utilization import RESOURCES_SEMANTICS
+from finn.kernels.values.domains import Integer
 from finn.platform.capabilities import Resources
 
 b, s, c = Index("b"), Index("s"), Index("c")
@@ -57,7 +62,6 @@ class Pool(LeafKernel):
     id = "test.accpool"
     rtl_module = "accpool_axi"
     x_tensor: Tensor = Param(required=False)
-    admission = ConstraintGroup()
 
     channels = extent_of(c)
     pe: int = Decision(domain=divisors_of(channels))
@@ -246,3 +250,39 @@ def test_dotp_binds_from_its_inputs_through_the_dense_view() -> None:
     assert coded_messages(wide.query(PackedDotpKernel.extents)) == {
         ("kernel-extents", "k is 14 (x axis 1) and 12 (w axis 0)")
     }
+
+
+class Holding(Space):
+    """A holder of one input port, reading what a leaf reads of its ports: their reads of
+    their tensors (``ACCESS``), their clocks (``CLOCKED``) and their pins (``PINS``)."""
+
+    admits: Integer | None = Param(default=None, semantics=INTEGER_POLICY)
+    x = AxiStreamPort(
+        name="s_axis_input",
+        endpoint=Endpoint.TARGET,
+        tensor=X,
+        sequence=BeatSequence(vector_major((1, 4, 8), 8)),
+        index=(b, s, c),
+        lanes=(c,),
+        admits=admits,
+    )
+    accesses = Members(ACCESS)
+    clocks = Members(CLOCKED)
+    pins = Members(PINS)
+
+
+def test_a_refused_port_still_exports_its_access_and_its_clock_as_values() -> None:
+    taken = design_space(Holding())
+    assert inspection.validity(taken).status == "valid"
+    assert isinstance(taken.query(Holding.pins), Available)
+
+    point = design_space(Holding(admits=Integer(max_bits=2)))
+    validity = inspection.validity(point)
+    assert validity.status == "refused"
+    assert [piece.owner for piece in validity.pieces] == ["x.element_taken"]
+    # The values its holder reads answer all the same: its extents and clock stand.
+    ((access,),) = [[item.value for item in point.accesses]]
+    assert (access.name, access.shape) == ("s_axis_input", (1, 4, 8))
+    assert [(item.node, item.value) for item in point.clocks] == [("x", "ap_clk")]
+    # Its pins are a product, refused with it.
+    assert "dtype-maximum-bits" in {code for code, _ in coded_messages(point.query(Holding.pins))}
