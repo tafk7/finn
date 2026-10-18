@@ -153,6 +153,16 @@ def choose(network: N, choices: Mapping[str, object]) -> N:
     return network.with_choices(keyed(choices)) if choices else network
 
 
+def refused_codes(network: N, choices: Mapping[str, object]) -> set[str]:
+    """The codes a change of ``choices`` (``member.key``) is refused with, checked as the
+    seam checks it (``Network.trial``): its findings' and their causes'. The change must
+    be refused: committed, a choice a member's rule refuses leaves the member refused."""
+    trial = network.trial(keyed(choices))
+    assert not trial.accepted, choices
+    found = [finding for why in trial.refused.values() for finding in why]
+    return {finding.code for finding in found} | {c.code for f in found for c in f.causes}
+
+
 def module_of(network: Network, stem: str) -> QueryResult[Composed]:
     """``network``'s module, named ``finn_<stem>``."""
     return network.module(PRODUCER, f"finn_{stem}")

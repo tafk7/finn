@@ -14,7 +14,7 @@ from qonnx.core.datatype import DataType
 from support.refusals import refused
 
 from finn.core.reporting.findings import FindingKind
-from finn.core.space import Rejected, design_space
+from finn.core.space import design_space, inspection
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import tile
 from finn.kernels.ends import iodma_hls
@@ -242,16 +242,23 @@ def test_versal_s_ultraram_takes_initial_contents_so_initialised_ultra_memories_
             )
         )
 
-    assert memstream(versal).try_with_choices(ram_style="ultra").accepted
-    assert thresholding(versal).try_with_choices(ultra_stages=1).accepted
+    for attempt in (
+        memstream(versal).try_with_choices(ram_style="ultra"),
+        thresholding(versal).try_with_choices(ultra_stages=1),
+    ):
+        assert attempt.accepted and inspection.validity(attempt.instance).status != "refused"
+    # Committed on xczu7ev too (each is a value of its domain): the configuration is
+    # refused by the rule that the UltraRAM takes the contents.
     for attempt in (
         memstream(zynq).try_with_choices(ram_style="ultra"),
         thresholding(zynq).try_with_choices(ultra_stages=1),
     ):
-        assert not attempt.accepted
-        result = attempt.outcomes[0].result
-        assert isinstance(result, Rejected)
-        assert {finding.code for finding in result.findings} == {"uram-init"}
+        assert attempt.accepted
+        validity = inspection.validity(attempt.instance)
+        assert [
+            (piece.owner, {finding.code for finding in piece.result.findings})
+            for piece in validity.pieces
+        ] == [("uram_init_taken", {"uram-init"})]
 
 
 def test_a_name_the_catalog_lacks_is_refused_with_close_names_none_chosen() -> None:

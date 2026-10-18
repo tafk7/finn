@@ -238,12 +238,20 @@ def test_a_channel_whose_ends_wait_on_an_open_kernel_is_refused() -> None:
 
 
 def test_a_memory_the_device_cannot_build_is_refused() -> None:
-    """Ultra96 has no UltraRAM: batched with the folding the platform's own finding, once
-    the folding is stored, the seam's (``case-not-viable``)."""
+    """Ultra96 has no UltraRAM: batched with the folding, the style is committed and the
+    memory's rules on the platform leave the channel's source with no possible case,
+    their findings its causes; once the folding is stored, the seam's
+    (``case-not-viable``)."""
     ultra = {"w": {"source.memstream.ram_style": "ultra"}}
     model = matmul_model()
-    with refused("uram-absent", owner="source.memstream.ram_style"):
+    with refused(
+        "decision-no-viable-case", owner="w.source", message="uram_present: uram-absent"
+    ) as caught:
         configured(model, {"first": FOLDED, **ultra})
+    assert {(cause.owner, cause.code) for cause in caught.finding.causes} == {
+        ("source.memstream.uram_present", "uram-absent"),
+        ("source.memstream.uram_init_taken", "uram-init"),
+    }
     configured(model, {"first": FOLDED})
     with refused("case-not-viable", owner="w.source.memstream.ram_style"):
         configured(model, ultra)

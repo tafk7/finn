@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Admission at conversion: ``ToKernelOps`` asks the kernels about each node a pattern
+"""Acceptance at conversion: ``ToKernelOps`` asks the kernels about each node a pattern
 matches, on its inputs as the nodes before it state them. A node the kernels refuse
 stays on the host with their codes; a fact the graph does not state is
 ``fact-unstated``; a contradiction stops the build."""
@@ -44,7 +44,7 @@ def model_of(
     y = helper.make_tensor_value_info(nodes[-1].output[0], TensorProto.FLOAT, None)
     model = ModelWrapper(
         qonnx_make_model(
-            helper.make_graph(nodes, "admission", infos, [y]),
+            helper.make_graph(nodes, "acceptance", infos, [y]),
             opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(GENERAL, 1)],
         )
     )
@@ -95,12 +95,21 @@ def test_an_integer_matmul_and_multithreshold_convert() -> None:
         assert convert(model)[1].outcomes == (Outcome((model.graph.node[0].name,), op),)
 
 
+#: Each core's ports' rules on float operands: the element their hardware takes.
+FLOAT_PORTS = [
+    (f"compute.{core}.{port}.element_taken", "dtype-family")
+    for core in ("int8_dsp58", "packed")
+    for port in ("w", "x")
+]
+
+
 def test_a_float_matmul_stays_on_the_host_with_the_kernels_codes() -> None:
-    # Each core refuses with the same finding, reported once; float weights that are
-    # not integers are no contradiction of FLOAT32.
+    # Each core refuses with the same finding, reported once, and each core's ports by
+    # their own rules (every rule of a present Space counts); float weights that are not
+    # integers are no contradiction of FLOAT32.
     for weights in (np.eye(4), np.full((4, 4), 0.5)):
         found = rejected(matmul("FLOAT32", "FLOAT32", weights))
-        assert found == [("result_range", "matmul-arithmetic")]
+        assert found == [*FLOAT_PORTS, ("result_range", "matmul-arithmetic")]
 
 
 def test_an_int20_matmul_stays_on_the_host_with_each_cores_code() -> None:
@@ -176,7 +185,7 @@ class _Stated(InferKernelTensors):
         return model, False
 
 
-def test_admission_reads_the_types_the_nodes_before_state() -> None:
+def test_conversion_reads_the_types_the_nodes_before_state() -> None:
     """``h`` carries a stale INT20 annotation, which the second MatMul's cores refuse.
     Conversion states ``h`` from the first MatMul's kernel (its weights' columns) before
     it asks the kernels about the second, so both convert."""

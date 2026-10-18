@@ -134,12 +134,17 @@ def test_a_positive_graph_no_kernel_admits_is_a_gap_record() -> None:
         "graph": "float",
         "gap": True,
         "admitted": [],
+        # Each core's ports refuse float operands by their own rules too.
         "refused": [
-            {
-                "owner": "result_range",
-                "code": "matmul-arithmetic",
-                "rows": [list(row) for row in ROWS],
-            }
+            {"owner": owner, "code": code, "rows": [list(row) for row in ROWS]}
+            for owner, code in (
+                *(
+                    (f"compute.{core}.{port}.element_taken", "dtype-family")
+                    for core in ("int8_dsp58", "packed")
+                    for port in ("w", "x")
+                ),
+                ("result_range", "matmul-arithmetic"),
+            )
         ],
     }
     json.dumps(covered.record())  # a report collects it as it is
@@ -193,7 +198,7 @@ def test_a_float_matmuls_reference_is_onnxs_float_matmul() -> None:
     _, conversion = converted(source, TARGET)
     (outcome,) = conversion.outcomes
     assert outcome.op is None
-    assert {(f.owner, f.code) for f in outcome.findings} == {("result_range", "matmul-arithmetic")}
+    assert ("result_range", "matmul-arithmetic") in {(f.owner, f.code) for f in outcome.findings}
 
 
 def _restated(model: ModelWrapper, annotation: str | None) -> ModelWrapper:

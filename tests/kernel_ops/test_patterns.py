@@ -195,7 +195,7 @@ def test_every_refusal_of_a_node_is_reported() -> None:
 
 def test_the_pattern_reads_no_datatype() -> None:
     """A float MatMul and a float MultiThreshold match: whether hardware builds them is
-    the kernels' to say (``test_admission``)."""
+    the kernels' to say (``test_conversion_acceptance``)."""
     for build in (matmul, multithreshold):
         model = build()
         for tensor in (*model.graph.input, *model.graph.initializer):

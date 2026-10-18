@@ -14,10 +14,9 @@ from __future__ import annotations
 from dataclasses import fields, replace
 from typing import Any
 
-import pytest
 from qonnx.core.modelwrapper import ModelWrapper
 from support.configure import configured
-from support.helpers import FULL_DSP58, choose
+from support.helpers import FULL_DSP58, choose, refused_codes
 from support.models import MATMUL, TARGET, matmul_model, thresholding_model
 from support.refusals import refused
 
@@ -79,8 +78,8 @@ def test_a_memory_case_the_device_cannot_build_is_refused_by_name() -> None:
 
 def test_a_doubled_clock_is_the_shells_not_the_platforms() -> None:
     """The platform carries no doubled clock (the shell row owns it, and the shell
-    admits it): a KernelOp offers a pumped memory on any target, the Zynq shell's
-    included, whose admission then refuses it (``test_shell_admission``)."""
+    supplies it): a KernelOp offers a pumped memory on any target, the Zynq shell's
+    included, whose budgets then refuse it (``test_shell_budgets``)."""
     assert "clk2x" not in {item.name for item in fields(Platform)}
     for target in (TARGET, ZYNQ):
         model = targeted(matmul_model(), target)
@@ -108,8 +107,10 @@ def test_a_partitions_weight_stream_reads_the_platform() -> None:
     assert isinstance(stream.source, MemStreamKernel)
     # Its transport FIFO reads it too: Ultra96 has no UltraRAM.
     fifo = {"w.transport": "fifo", "w.transport.fifo.buffer.depth": 4096}
-    with pytest.raises(ValueError, match="uram-absent"):
-        choose(bound, {**fifo, "w.transport.fifo.buffer.ram_style": "ultra"})
+    # Committed, ultra leaves the buffer refused by its rule on the platform.
+    assert "uram-absent" in refused_codes(
+        bound, {**fifo, "w.transport.fifo.buffer.ram_style": "ultra"}
+    )
     assert choose(bound, {**fifo, "w.transport.fifo.buffer.ram_style": "block"})
 
 

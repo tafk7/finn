@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The shell's admission (``finn.platform.shells.budgets``): what the module presents,
+"""The shell's budgets (``finn.platform.shells.budgets``): what the module presents,
 within what its shell's row takes.
 
 The Zynq shell (``pynq``) takes nine AXI-Lite buses, the partition's and its ends'
@@ -11,7 +11,7 @@ the clock. Each refusal is named: ``interface-budget-exceeded``, ``clock-unavail
 
 No KernelOp names a control port, so a partition of KernelOps presents no AXI-Lite bus:
 the buses are counted here on a network built from the kernels directly, AXI-Lite
-thresholdings each given its port, its module's counts (``bus_counts``) admitted by the
+thresholdings each given its port, its module's counts (``bus_counts``) checked by the
 same ``budgets`` and rows a partition's network reads. No kernel initiates a memory port
 (no bus protocol states one), so that count is always zero.
 """
@@ -96,7 +96,7 @@ def ends_of(point: Network) -> tuple[Any, ...]:
     return tuple(point.member("x").placed_end) + tuple(point.member("y").placed_end)
 
 
-def admission(point: Network, row: ShellRow) -> tuple[Finding, ...]:
+def over_budget(point: Network, row: ShellRow) -> tuple[Finding, ...]:
     """``row``'s budgets of ``point``'s module and of its ends' AXI-Lite buses."""
     ends = sum(end.control_buses for end in ends_of(point))
     return budgets(row, bus_counts(built(point, "shell").abi), ends)
@@ -105,7 +105,7 @@ def admission(point: Network, row: ShellRow) -> tuple[Finding, ...]:
 def test_eight_axi_lite_thresholdings_and_two_ends_exceed_the_zynq_shells_nine() -> None:
     point = thresholdings(8, PYNQ_ROW)
     assert [end.control_buses for end in ends_of(point)] == [1, 1]
-    (found,) = admission(point, PYNQ_ROW)
+    (found,) = over_budget(point, PYNQ_ROW)
     assert str(found) == (
         "budgets: interface-budget-exceeded: the 'pynq' shell takes 9 AXI-Lite buses; "
         "the partition presents 8 and its ends 2"
@@ -113,12 +113,12 @@ def test_eight_axi_lite_thresholdings_and_two_ends_exceed_the_zynq_shells_nine()
 
 
 def test_seven_and_two_ends_fill_the_budget() -> None:
-    assert admission(thresholdings(7, PYNQ_ROW), PYNQ_ROW) == ()
+    assert over_budget(thresholdings(7, PYNQ_ROW), PYNQ_ROW) == ()
 
 
-def test_the_ip_shell_admits_the_same_partition_presenting_every_bus() -> None:
+def test_the_ip_shell_takes_the_same_partition_presenting_every_bus() -> None:
     point = thresholdings(8, IP_ROW)
-    assert admission(point, IP_ROW) == ()
+    assert over_budget(point, IP_ROW) == ()
     assert tuple(point.member("x").placed_end) == ()
     ports = [pin.name for pin in built(point, "shell").abi.pins if getattr(pin, "protocol", None)]
     assert [port for port in ports if port.endswith("_s_axilite")] == [
@@ -159,7 +159,7 @@ def test_a_partition_of_kernel_ops_counts_its_ends() -> None:
 
 def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     """The shell row owns the doubled clock (SZ11 (e)): the Chain, its first MatMul's
-    compute pumped, which its kernel offers on any platform, is admitted by the ip row,
+    compute pumped, which its kernel offers on any platform, is within the ip row,
     which supplies ap_clk2x, and refused by Ultra96's pynq row, which does not:
     ``clock-unavailable``."""
     model = kernel_model()
