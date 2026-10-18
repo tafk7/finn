@@ -201,6 +201,37 @@ def test_a_refused_selector_over_an_admitted_value_refuses_the_configuration() -
     refused_under().check_validity()
 
 
+# The same cores with a rule of the root reading packed's ``pe``: once the selector has no
+# possible case, the admitted ``pe`` reads refused through it, so the rule is false, naming
+# the selector's no-possible-case (the reasons of the refused input it reads).
+
+ROOT_RULE = Case(
+    "a root rule reading a choice under the cores",
+    Space(
+        ("width",),
+        Scope(
+            "",
+            selectors=(CORES,),
+            constraints=(
+                Constraint(
+                    "small",
+                    ("compute.packed.pe",),
+                    lambda read: read["compute.packed.pe"] <= 8,
+                    "pe-small",
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def test_a_root_rule_reading_a_choice_admitted_under_a_refused_selector_is_false_through_it() -> (
+    None
+):
+    point = ROOT_RULE.start({"width": 9}, {"compute.packed.pe": 3})
+    point.step(Change(facts={"width": 99})).check_rule("small")
+
+
 # -- 2. guards -----------------------------------------------------------------------------------
 #
 # ``core`` selects ``big`` (whose rule needs a budget of 10) or ``small``; ``extra`` is
