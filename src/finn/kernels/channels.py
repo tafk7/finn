@@ -460,24 +460,21 @@ class Channel(ComposedKernel):
 
     @derived
     def output_adapted(self) -> tuple[Stage, ...]:
-        """The output adapter's stages, in order, labelled below the channel; none when
-        the plan converts no width before the transport."""
+        """The output adapter's stages (its ``stages``), in order, labelled below the
+        channel; none when the plan converts no width before the transport."""
         if not self.output_adapting:
             return ()
-        return tuple(
-            replace(stage, label=f"output_adapter.{stage.label}")
-            for stage in self.output_adapter_stages
-        )
+        stages: tuple[Stage, ...] = self.output_adapter.stages
+        return tuple(replace(stage, label=f"output_adapter.{stage.label}") for stage in stages)
 
     @derived
     def adapted(self) -> tuple[Stage, ...]:
-        """The input adapter's stages, in order, labelled below the channel; none when
-        nothing is left to do after the transport."""
+        """The input adapter's stages (its ``stages``), in order, labelled below the
+        channel; none when nothing is left to do after the transport."""
         if not self.adapting:
             return ()
-        return tuple(
-            replace(stage, label=f"adapter.{stage.label}") for stage in self.adapter_stages
-        )
+        stages: tuple[Stage, ...] = self.adapter.stages
+        return tuple(replace(stage, label=f"adapter.{stage.label}") for stage in stages)
 
     @derived
     def arriving(self) -> BeatSequence:
@@ -499,14 +496,16 @@ class Channel(ComposedKernel):
     )
     adapter_stages = View(adapter.stages)
 
-    @view
-    def stages(self) -> tuple[Stage, ...]:
+    @derived
+    def staged(self) -> tuple[Stage, ...]:
         """The output adapter's stages, the transport's FIFO, if any, then the input
-        adapter's stages."""
-        transported = tuple(
-            replace(stage, label=f"transport.{stage.label}") for stage in self.transport_stages
-        )
+        adapter's stages: each its child's ``stages``, labelled below the channel."""
+        transport: tuple[Stage, ...] = self.transport.stages
+        transported = tuple(replace(stage, label=f"transport.{stage.label}") for stage in transport)
         return (*self.output_adapted, *transported, *self.adapted)
+
+    # The stages, the product its holder reads; ``compatible`` and ``hops`` read the value.
+    stages = View(staged)
 
     @constraint
     def compatible(self) -> bool | Rejected:
@@ -518,7 +517,7 @@ class Channel(ComposedKernel):
         ends = self.endpoints
         found: list[Mismatch] = []
         current, current_top = ends.source, ends.source_owner is None
-        for stage in self.stages:
+        for stage in self.staged:
             found += compatibility(
                 current, stage.input, source_is_top=current_top, sink_is_top=False
             )
@@ -559,7 +558,7 @@ class Channel(ComposedKernel):
         links: list[Link] = []
         owner, current = owners[0], ends.source
         try:
-            for stage in self.stages:
+            for stage in self.staged:
                 links.append(wired(owner, current, stage.label, stage.input))
                 owner, current = stage.label, stage.output
             links.append(wired(owner, current, owners[1], ends.sink))

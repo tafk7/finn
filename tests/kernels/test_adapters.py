@@ -193,6 +193,100 @@ def test_a_fifo_refuses_what_carries_markers():
     assert not isinstance(inspection.admission(design_space(tied)), Rejected)
 
 
+def validity_of(point):
+    """The point's validity status, and each piece that is not true with its codes."""
+    found = inspection.validity(point)
+    return found.status, [
+        (piece.owner, {finding.code for finding in piece.result.findings}) for piece in found.pieces
+    ]
+
+
+#: The FIFO of channel ``x`` of ``adapted`` (its output adapter's vpc before it, its
+#: input adapter's input_gen after it), 32 words deep.
+FIFO = {"x.transport": "fifo", "x.transport.fifo.buffer.depth": 32}
+WAITING = {"decision-unassigned"}
+
+
+def no_ultraram_fifo():
+    """``transposed``'s input channel ``a`` on a platform without UltraRAM, its FIFO in
+    UltraRAM."""
+    point = transposed(6, 4, 2, platform=replace(FULL_DSP48E2, uram=False))
+    return choose(
+        point,
+        {
+            "a.transport": "fifo",
+            "a.transport.fifo.buffer.depth": 32,
+            "a.transport.fifo.buffer.ram_style": "ultra",
+        },
+    ).member("a")
+
+
+@pytest.mark.parametrize(
+    ("channel", "status", "pieces", "candidate"),
+    (
+        (lambda: adapted(columns_first(ROWS, CHANNELS, 4), 2).member("x"), "valid", [], None),
+        (
+            lambda: choose(
+                adapted(columns_first(ROWS, CHANNELS, 4), 2),
+                {**FIFO, "x.transport.fifo.buffer.ram_style": "auto"},
+            ).member("x"),
+            "valid",
+            [],
+            ("valid", []),
+        ),
+        # The channel's own rule: a plan, and no adapter admitted.
+        (
+            lambda: adapted(vector_major((ROWS, CHANNELS), 4), 2, adaptable=False).member("x"),
+            "refused",
+            [("realizable", {"channel-plan"})],
+            None,
+        ),
+        # Its FIFO's rule. ``compatible`` checks the stages its children present, products
+        # refused with them: it repeats the root.
+        (
+            no_ultraram_fifo,
+            "refused",
+            [
+                ("compatible", {"uram-absent"}),
+                ("transport.fifo.buffer.uram_present", {"uram-absent"}),
+            ],
+            ("refused", [("transport.fifo.buffer.uram_present", {"uram-absent"})]),
+        ),
+        # The FIFO's memory open: its stage, a module, waits on it.
+        (
+            lambda: choose(adapted(columns_first(ROWS, CHANNELS, 4), 2), FIFO).member("x"),
+            "undecided",
+            [
+                ("compatible", WAITING),
+                ("transport.fifo.buffer.capacity_supported", WAITING),
+                ("transport.fifo.buffer.uram_present", WAITING),
+            ],
+            (
+                "undecided",
+                [
+                    ("transport.fifo.buffer.capacity_supported", WAITING),
+                    ("transport.fifo.buffer.uram_present", WAITING),
+                ],
+            ),
+        ),
+    ),
+)
+def test_a_channel_s_rules_and_its_fifo_read_the_values_its_views_present(
+    channel, status, pieces, candidate
+):
+    """``compatible`` and ``hops`` read the stages as a value (``staged``: its children's
+    ``stages``), not the channel's ``stages`` view, and the FIFO candidate reads what
+    arrives through its formal, after the output adapter's stages: valid, refused and
+    undecided each answer, with no dependency cycle."""
+    point = channel()
+    assert validity_of(point) == (status, pieces)
+    if candidate is not None:
+        assert validity_of(point.transport) == candidate
+    if status == "valid":
+        assert point.stages == point.staged
+        assert point.query(Channel.hops).value
+
+
 def test_a_channel_s_cost_waits_on_no_memory_style():
     # The adapter's input_gen memory is left open: cost does not read it.
     point = adapted(columns_first(ROWS, CHANNELS, 4), 4, commit_all=False)
