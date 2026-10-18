@@ -629,3 +629,53 @@ def test_a_choice_under_a_selector_that_stays_refused_is_read_refused_in_the_suc
         if _runtime.evaluate(want, index).result != entry.result
     ]
     assert not wrong
+
+
+# -- a choice under a selector still open ------------------------------------------------------
+
+
+class Spread(Space):
+    """A core whose choice's domain reads a value of its own, and whose admission does not read
+    the choice: a value outside the domain leaves the core viable."""
+
+    width: int = Param()
+
+    @derived
+    def lanes(self) -> int:
+        return self.width
+
+    pe: int = Decision(domain=divisors_of(lanes))
+
+
+SPREAD_OR_CLOSED: dict[str, type[Space] | Space] = {"core": Spread, "closed": Closed}
+
+
+class Either(Space):
+    """A selector whose two cases are both viable up to width 8, so it stays open."""
+
+    width: int = Param()
+    compute: Spread | Closed = Decision(SPREAD_OR_CLOSED, width=width)
+
+
+def test_a_choice_under_an_open_selector_is_refused_by_its_own_check_or_waits() -> None:
+    # Both cores are viable at 4 and at 8, so the selector is open and `pe` waits on it. A
+    # commit is a check of the value against its domain where the choice exists, so `pe`'s own
+    # check is read with the case assumed all the same: 3 divides neither 4 nor 8, which no
+    # later commitment mends, and the commit is refused by `pe`'s own finding. 2 divides both,
+    # and is kept unchecked, waiting on the selector. Both readings (8 by other facts).
+    point = design_space(Either(width=4))
+    assert isinstance(point.query(Either.compute), Unresolved)
+    pe = reference_of(point, "compute.core.pe")
+
+    def readings(value: int) -> tuple[Any, Any]:
+        change = {pe: value}
+        return point.try_with_choices(change), point.try_with_facts({Either.width: 8}, change)
+
+    for three in readings(3):
+        assert not three.accepted
+        assert refusals(three) == {"compute.core.pe": {("domain-membership", "compute.core.pe")}}
+    for two in readings(2):
+        assert two.accepted
+        assert inspection.unchecked(two.instance) == (
+            inspection.Unchecked("compute.core.pe", 2, ("compute",)),
+        )

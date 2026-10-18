@@ -465,9 +465,9 @@ class _TrialSnapshot(Snapshot):
     candidate, so that it reads as its value; refused refuses the change; unresolved
     (it reads a choice still open, or an input not supplied) keeps the candidate
     **unchecked**: stored, and read unresolved. A candidate's own check is read whatever
-    its guard answers: where the guard is refused, in the configuration with the selector
-    cases its guard holds under committed too (``assumed``), since what the check reads in
-    its own scope is under that guard as well. Which candidates are unchecked is given
+    its guard answers: where the guard is refused or waits, in the configuration with the
+    selector cases its guard holds under committed too (``assumed``), since what the check
+    reads in its own scope is under that guard as well. Which candidates are unchecked is given
     to the trial (``unchecked``), since the configuration it would publish forces by
     them: a change starts from none, and runs again with those its own checks found
     unresolved until they are the same (``_changes``). The base contributes its model,
@@ -679,8 +679,9 @@ class _TrialSnapshot(Snapshot):
     def assumed(self, node: Node) -> _TrialSnapshot | None:
         """The trial of this change with each selector case ``node``'s guard holds under
         committed too (every case guard on its chain whose selector is no candidate), over
-        the same base, facts and unchecked candidates: where a candidate's guard is refused,
-        its own check is read there, as the configuration reads it once that guard holds.
+        the same base, facts and unchecked candidates: where a candidate's guard is refused
+        or waits, its own check is read there, as the configuration reads it once that guard
+        holds.
         None where there is no such case to commit. One per set of cases, kept for the
         trial's other candidates."""
         cases = _case_guards(self.model)
@@ -904,21 +905,23 @@ def _candidate_frame(snapshot: _TrialSnapshot, node: Node) -> _execution.Frame:
     so private admission keeps its protection). A guard is the configuration's, not the
     choice's: a guard that waits leaves the check unresolved, and one that is refused is
     the configuration's refusal, which a change reports beside the choice's own check and
-    never in its place. The own check is then read whatever the guard answers: what it reads
-    in the choice's own scope (a domain over the scope's own values) is under the same
-    guard, so it is read in the trial with the selector cases the guard holds under
-    committed too (``_TrialSnapshot.assumed``), and what that read is this evaluation's
-    read too (a later change to it reaches the choice). Its own check true is then enough
-    to admit the choice (the configuration reads it refused through its guard); false
-    refuses it with both findings; unresolved keeps it unchecked. An inapplicable guard
-    refuses it."""
+    never in its place. The own check is then read whatever the guard answers, refused or
+    waiting: what it reads in the choice's own scope (a domain over the scope's own values)
+    is under the same guard, so it is read in the trial with the selector cases the guard
+    holds under committed too (``_TrialSnapshot.assumed``), and what that read is this
+    evaluation's read too. Under a refused guard, its own check true is then enough to admit
+    the choice (the configuration reads it refused through its guard); false refuses it with
+    both findings; unresolved keeps it unchecked. Under a guard that waits, its own check
+    false refuses it (a commit is a check of the value against its domain where the choice
+    exists, which a value that can never hold there fails at once), and true or unresolved
+    keeps it unchecked, waiting on its guard. An inapplicable guard refuses it."""
     candidate = snapshot._candidates[node.index]
     inactive: NonValue | None = None
     if node.guard is not None:
         guard = cast(QueryResult[object], (yield node.guard))
         inactive = _guard_result(node, guard)
     decisions = facts = _NONE
-    if inactive is None or isinstance(inactive, Rejected):
+    if not isinstance(inactive, Inapplicable):
         assumed = snapshot.assumed(node) if inactive is not None else None
         if assumed is not None:
             read = evaluate(assumed, node.index)
@@ -928,7 +931,10 @@ def _candidate_frame(snapshot: _TrialSnapshot, node: Node) -> _execution.Frame:
             checked = yield from _membership_frame(snapshot, node, candidate, check_guard=False)
             own = checked.result
         holds = isinstance(own, Available) and own.value is True
-        if inactive is not None and not holds and not isinstance(own, Unresolved):
+        if isinstance(inactive, Unresolved):
+            if not isinstance(own, Rejected):
+                own = inactive
+        elif inactive is not None and not holds and not isinstance(own, Unresolved):
             merged = _blocked([inactive, own])
             assert merged is not None
             own = merged
