@@ -269,6 +269,26 @@ def carried(base: Snapshot) -> Mapping[int, object]:
     return found.values if isinstance(found, Found) else {}
 
 
+def moved(linked: LinkedModel, before: Found, after: Found, decisions: Iterable[int]) -> set[int]:
+    """Those of ``decisions`` (open in both configurations) whose forced answer differs
+    from ``before`` to ``after``: forced in one and not the other, forced to another value,
+    refused in one and not the other, or refused with other findings. A read of an open
+    Decision answers its forced value, its refusal, or unassigned, so where none of these
+    differs it answers alike."""
+    found: set[int] = set()
+    for index in decisions:
+        if index in before.values or index in after.values:
+            if (
+                index not in before.values
+                or index not in after.values
+                or not _same_case(linked, index, before.values[index], after.values[index])
+            ):
+                found.add(index)
+        elif before.refused.get(index) != after.refused.get(index):
+            found.add(index)
+    return found
+
+
 def validity(snapshot: Snapshot, scope: int) -> tuple[QueryResult[object], int]:
     """A Space's validity read in ``snapshot``, and the node that answers it."""
     index = snapshot.linked.scopes[scope].validity
@@ -848,5 +868,6 @@ __all__ = [
     "carried",
     "forced",
     "inherited",
+    "moved",
     "validity",
 ]

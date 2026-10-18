@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """Two cores sharing a ``width``, the helpers that commit choices on a point and read its
-forced ones, and Spaces whose forced Decisions read each other (``Exclusive``, ``Mutual``,
-``Gated``), which the forcing tests and the bounded change's walks share."""
+forced ones, Spaces whose forced Decisions read each other (``Exclusive``, ``Mutual``,
+``Gated``), and a chain whose changes reach far and move few forced answers (``chain``),
+which the forcing tests, the successor's cache tests and the bounded change's walks share."""
 
 from __future__ import annotations
 
@@ -131,3 +132,44 @@ class Gated(Space):
     x: Unless | Never = Decision({"a": Unless, "b": Never}, peer=y_is_a)
     gate: int = Decision(values=(1, 2))
     y: Unless | Free = Decision({"a": Unless, "b": Free}, peer=gate_shut)
+
+
+class Stage(Space):
+    """A stage of a chain, one or two wide."""
+
+    size: int = Decision(values=(1, 2))
+
+
+class Hop(Space):
+    """Between two stages: two wide stages side by side are refused, and its depth is the
+    upstream stage's size. Its constraints read both stages' sizes, so a stage's verdict
+    reads its neighbours' and theirs read theirs: a change to one stage reaches every open
+    Decision of the chain, and moves the forced answers next to it only."""
+
+    up: int = Param()
+    down: int = Param()
+    depth: int = Decision(values=(1, 2))
+
+    @constraint
+    def narrow(self) -> bool | Rejected:
+        if self.up == 2 and self.down == 2:
+            return reject("hop-wide", "two wide stages side by side")
+        return True
+
+    @constraint
+    def deep(self) -> bool | Rejected:
+        if self.depth != self.up:
+            return reject("hop-depth", "the depth is the upstream stage's size")
+        return True
+
+
+def chain(length: int, *, stages_first: bool = True) -> type[Space]:
+    """A chain of ``length`` stages (``s0``, ``s1``, ...) and a hop between each two
+    (``h0`` between ``s0`` and ``s1``, ...), the stages declared first or the hops."""
+    stages = {f"s{i}": Stage() for i in range(length)}
+    hops = {
+        f"h{i}": Hop(up=stages[f"s{i}"].size, down=stages[f"s{i + 1}"].size)
+        for i in range(length - 1)
+    }
+    members = {**stages, **hops} if stages_first else {**hops, **stages}
+    return type("Chain", (Space,), {"__module__": __name__, **members})

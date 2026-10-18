@@ -19,7 +19,7 @@ does, and answers as one.
 from __future__ import annotations
 
 import pytest
-from support.space_cores import Exclusive, Gated, Mutual, forced
+from support.space_cores import Exclusive, Gated, Mutual, chain, forced
 from support.space_pipeline import Meter, Pipeline, Probe
 from support.space_walk import check, fresh, walk
 
@@ -79,6 +79,20 @@ def test_a_walk_over_decisions_that_exclude_each_other() -> None:
             report = walk(design_space(space()), seed=seed, steps=100)
             assert not report.differences, "\n".join(report.differences[:3])
             assert report.tallies.accepted and report.tallies.forced_moved, report.tallies
+
+
+@pytest.mark.parametrize("stages_first", [True, False])
+def test_a_chain_whose_changes_reach_far_and_move_few_forced_answers(stages_first: bool) -> None:
+    # A change to one stage reaches the verdict of every open Decision of the chain and moves
+    # the forced answers next to it only: the change touches those, and the successor keeps
+    # what read the rest. Each successor answers as a recomputation, in either order of
+    # declaration (stages or hops first).
+    for seed in (1, 2):
+        report = walk(design_space(chain(8, stages_first=stages_first)()), seed=seed, steps=150)
+        assert not report.differences, "\n".join(report.differences[:3])
+        tallies = report.tallies
+        assert tallies.accepted and tallies.clears and tallies.pairs, tallies
+        assert tallies.forced_moved, tallies
 
 
 def test_the_house() -> None:

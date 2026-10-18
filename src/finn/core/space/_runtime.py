@@ -277,9 +277,9 @@ class Snapshot:
     found, in the order it found them, which forcing starts its own from where their
     verdicts still hold (``finn.core.space._forcing``). A
     successor's cache starts from what its base and its trial evaluated that the
-    change does not reach (a change reaches what it adds, removes or replaces, and
-    each open Decision whose forced value's verdict read one of those:
-    ``_touched``), and ``admissions`` holds the Decisions each assignment's admission
+    change does not touch (a change touches what it assigns, and each open Decision whose
+    forced answer differs in the successor: ``_TrialSnapshot``), and ``admissions`` holds
+    the Decisions each assignment's admission
     read, and ``admission_facts`` the formals, which a later trial reuses where the change
     does not reach them (``_TrialSnapshot``; a choice whose own check was read with its
     guard's cases assumed has none, and is checked again on every change). ``unchecked``
@@ -358,50 +358,47 @@ def changed_facts(base: Snapshot, parameters: Mapping[int, object]) -> frozenset
     return frozenset(changed)
 
 
-def _touched(
-    base: Snapshot,
-    candidates: Mapping[int, object],
-    facts: Collection[int] = (),
-    unchecked: Collection[int] = (),
-) -> list[int]:
-    """The Decisions a change from ``base`` to ``candidates``, and to other values of the
-    formals ``facts``, touches: those it adds, removes or replaces (not the identical
-    value), those ``base`` holds unchecked and those the change leaves unchecked
-    (``unchecked``: what a read of either answers may change with its check, not only
-    with its value), and the open ones its reach includes: every Decision open in both whose
-    forced value's verdict, in what ``base`` found, read a touched one or a changed
-    formal (to a fixed point), or has no verdict, or one that does not hold under the
-    base's final values (``Found.reach``). A Decision
-    open in both and not touched is **stable**: its verdict read nothing the change
-    touched, so it reads the same, forced to the same value, refused alike or open
-    alike, in the trial, in the successor and in the base. Where ``base``'s forced
-    Decisions were never found there is nothing to bound with, and every Decision open
-    in the base is touched, as a value it forces may differ."""
-    from ._forcing import Found  # noqa: PLC0415 - runtime/forcing cycle
-
+def _assigned(
+    base: Snapshot, candidates: Mapping[int, object], unchecked: Collection[int] = ()
+) -> set[int]:
+    """The Decisions a change from ``base`` to ``candidates`` assigns: those it adds,
+    removes or replaces (not the identical value), and those ``base`` holds unchecked and
+    those the change leaves unchecked (``unchecked``: what a read of either answers may
+    change with its check, not only with its value)."""
     assignments = base.assignments
     unsettled = base.unchecked.union(unchecked)
-    changed = {
+    return {
         index
         for index in base.linked.decisions
         if (index in assignments) != (index in candidates)
         or (index in candidates and assignments[index] is not candidates[index])
         or index in unsettled
     }
+
+
+def _reached(base: Snapshot, assigned: Collection[int], facts: Collection[int]) -> set[int] | None:
+    """The Decisions open in ``base`` and in the change that a change assigning ``assigned``,
+    and giving the formals ``facts`` other values, may move: every one whose forced value's
+    verdict, in what ``base`` found, read an assigned one or a changed formal (to a fixed
+    point), or has no verdict, or one that does not hold under the base's final values
+    (``Found.reach``). Any other Decision open in both is **stable** whatever the change
+    forces: its verdict read nothing the change assigns, so it reads the same, forced to the
+    same value, refused alike or open alike, in the base and in the successor. None where
+    ``base``'s forced Decisions were never found: there is nothing to bound with, and every
+    Decision open in the base may move."""
+    from ._forcing import Found  # noqa: PLC0415 - runtime/forcing cycle
+
     found = base.found
     if not isinstance(found, Found):
-        return [
-            index for index in base.linked.decisions if index not in assignments or index in changed
-        ]
-    reached = found.reach(base, changed, facts)
-    return [index for index in base.linked.decisions if index in changed or index in reached]
+        return None
+    return found.reach(base, assigned, facts).difference(assigned)
 
 
 def _stable(
     base: Snapshot, candidates: Mapping[int, object], touched: Collection[int]
 ) -> frozenset[int]:
     """The Decisions open in both ``base`` and the candidates that the change does not
-    touch (``_touched``)."""
+    touch (``_TrialSnapshot._touch``)."""
     excluded = frozenset(touched)
     return frozenset(
         index
@@ -491,15 +488,17 @@ class _TrialSnapshot(Snapshot):
     ``try_with_facts`` makes it): its facts are those, and the formals that differ from
     the base's are reached as a Decision is. Evaluations, admissions and verdicts that
     read one are left out (``changed_facts``, ``_reusable``, ``successor``), and every
-    open Decision whose verdict read one is touched (``_touched``). The base's forced
-    values may be of other facts, so a touched Decision reads as the successor forces
-    it; a stable one still as the base forces it, the two being equal.
+    open Decision whose verdict read one may move, and is touched where it does
+    (``_touch``). The base's forced values may be of other facts, so a touched Decision
+    reads as the successor forces it; a stable one still as the base forces it, the two
+    being equal.
 
-    What was evaluated is kept where the change cannot reach it. A change touches
-    what it adds, removes or replaces and the open Decisions whose forced values it
-    reaches (``_touched``); the other Decisions open in both are **stable**: each
-    reads the same in the trial, in the successor and in the base, because its
-    verdict read nothing the change touched.
+    What was evaluated is kept where the change does not touch it. A change touches
+    what it assigns (adds, removes or replaces, and the choices unchecked before or
+    after) and the open Decisions whose forced answer differs in the successor, which
+    it finds by forcing the successor first where it may move one (``_touch``); the
+    other Decisions open in both are **stable**: each reads the same in the trial, in
+    the successor and in the base, forced to the same value, refused alike or open alike.
 
     - A retained choice whose admission read no Decision the change touched, and
       only reused choices and stable Decisions (``_reusable``), is admitted
@@ -568,6 +567,7 @@ class _TrialSnapshot(Snapshot):
         *,
         unchecked: frozenset[int] = _NONE,
         input_refused: frozenset[int] = _NONE,
+        publishes: bool = True,
     ) -> None:
         facts = _NONE if parameters is None else changed_facts(base, parameters)
         super().__init__(
@@ -580,7 +580,11 @@ class _TrialSnapshot(Snapshot):
             input_refused=input_refused,
         )
         candidates = MappingProxyType(dict(candidates))
-        touched = _touched(base, candidates, facts, unchecked)
+        object.__setattr__(self, "_base", base)
+        object.__setattr__(self, "_candidates", candidates)
+        object.__setattr__(self, "_changed", facts)
+        object.__setattr__(self, "_successor", None)
+        touched = self._touch(base, candidates, facts, publishes)
         stable = _stable(base, candidates, touched)
         reused = _reusable(base, candidates, touched, stable, facts)
         pending = {index: candidates[index] for index in reused}
@@ -597,18 +601,14 @@ class _TrialSnapshot(Snapshot):
             for index, read in reused.items()
         }
         inherit(self, base, [*held, *facts], replacing=admitted)
-        object.__setattr__(self, "_base", base)
-        object.__setattr__(self, "_successor", None)
         object.__setattr__(self, "_touches", touched)
         object.__setattr__(self, "_stable", stable)
-        object.__setattr__(self, "_changed", facts)
         object.__setattr__(self, "_own", {})
         object.__setattr__(self, "_assumed", {})
         object.__setattr__(self, "_read_assumed", set())
         object.__setattr__(self, "_through", set())
         object.__setattr__(self, "assignments", MappingProxyType(pending))
         object.__setattr__(self, "_pending", pending)
-        object.__setattr__(self, "_candidates", candidates)
         object.__setattr__(self, "_published", False)
 
     def admit(self, node_index: int, value: object) -> None:
@@ -618,36 +618,97 @@ class _TrialSnapshot(Snapshot):
             raise RuntimeError("admission dependency order admitted a previously resolved decision")
         self._pending[node_index] = value
 
-    def successor(self) -> Snapshot:
-        """The configuration this trial would publish: every candidate committed."""
-        if self._successor is None:
-            from ._forcing import (  # noqa: PLC0415 - runtime/forcing cycle
-                Verdict,
-                carried,
-                inherited,
-            )
+    def _touch(
+        self,
+        base: Snapshot,
+        candidates: Mapping[int, object],
+        facts: frozenset[int],
+        publishes: bool,
+    ) -> list[int]:
+        """The Decisions this change touches: those it assigns (``_assigned``), and each
+        Decision open in both whose forced answer differs in the successor: forced to another
+        value, forced where it was open or open where it was forced, refused where it was
+        not, or refused with other findings (``_forcing.moved``). An evaluation reads an open
+        Decision as that answer, so one that read only Decisions untouched answers the same.
 
-            base = self._base
-            verdicts = inherited(base)
-            changed = self._changed
-            if changed:
-                # A verdict that read a formal with another value is found again.
-                verdicts = {
-                    index: verdict
-                    for index, verdict in verdicts.items()
-                    if not isinstance(verdict, Verdict) or changed.isdisjoint(verdict.every_fact)
-                }
-            successor = Snapshot(
-                self.model,
-                self.parameters,
-                self._candidates,
-                forcing=self.forcing,
-                verdicts=verdicts,
-                carried=carried(base),
-                unchecked=self.unchecked,
-                input_refused=self.input_refused,
-            )
-            inherit(successor, base, [*self._touches, *changed])
+        Where the change may move a forced answer (``_reached``), the successor's forcing
+        runs first, to find which do: on the successor started, as before, from the base's
+        evaluations that read nothing the change may reach, seeded from the base's forced
+        values and kept only where that is a derivation of the plain rounds (``_forcing``).
+        The successor then keeps every evaluation of the base that read none of the touched
+        Decisions, with what its forcing evaluated, and holds the forced values found. The
+        rest of the reach is stable. Nothing is dropped from a verdict: each keeps every read
+        it records. Where none may move, the change touches what it assigns, and the successor
+        is forced when something asks. A trial that is never published (``assumed``: it reads
+        one candidate's own check) touches the whole reach instead, and forces its successor
+        only if it reads a Decision there. Where the base's forced Decisions were never found,
+        every Decision open in the base is touched; on a base that does not force, the reach."""
+        linked = base.linked
+        assigned = _assigned(base, candidates, self.unchecked)
+        reached = _reached(base, assigned, facts)
+        if reached is None:
+            return [
+                index
+                for index in linked.decisions
+                if index not in base.assignments or index in assigned
+            ]
+        if not reached or not base.forcing or not publishes:
+            return [index for index in linked.decisions if index in assigned or index in reached]
+        from ._forcing import forced, moved  # noqa: PLC0415 - runtime/forcing cycle
+
+        first = self._configuration()
+        inherit(first, base, [*assigned, *reached, *facts])
+        found = forced(first)
+        open_ = (
+            index
+            for index in linked.decisions
+            if index not in base.assignments and index not in candidates
+        )
+        touched = assigned | moved(linked, forced(base), found, open_)
+        successor = self._configuration()
+        inherit(successor, base, [*touched, *facts], replacing=fresh(first))
+        object.__setattr__(successor, "found", found)
+        object.__setattr__(self, "_successor", successor)
+        return [index for index in linked.decisions if index in touched]
+
+    def _configuration(self) -> Snapshot:
+        """The configuration this trial would publish, every candidate committed, with no
+        evaluation yet: it starts from its base's verdicts (but those that read a formal with
+        another value) and replays its base's forced values."""
+        from ._forcing import (  # noqa: PLC0415 - runtime/forcing cycle
+            Verdict,
+            carried,
+            inherited,
+        )
+
+        base = self._base
+        verdicts = inherited(base)
+        changed = self._changed
+        if changed:
+            # A verdict that read a formal with another value is found again.
+            verdicts = {
+                index: verdict
+                for index, verdict in verdicts.items()
+                if not isinstance(verdict, Verdict) or changed.isdisjoint(verdict.every_fact)
+            }
+        return Snapshot(
+            self.model,
+            self.parameters,
+            self._candidates,
+            forcing=self.forcing,
+            verdicts=verdicts,
+            carried=carried(base),
+            unchecked=self.unchecked,
+            input_refused=self.input_refused,
+        )
+
+    def successor(self) -> Snapshot:
+        """The configuration this trial would publish: every candidate committed. Where the
+        change found it first (``_touch``), that one; else started from its base's
+        evaluations that read nothing the change touches."""
+        if self._successor is None:
+            successor = self._configuration()
+            inherit(successor, self._base, [*self._touches, *self._changed])
             object.__setattr__(self, "_successor", successor)
         assert self._successor is not None
         return self._successor
@@ -736,6 +797,7 @@ class _TrialSnapshot(Snapshot):
                 self.parameters if self._changed else None,
                 unchecked=self.unchecked,
                 input_refused=self.input_refused,
+                publishes=False,
             )
             self._assumed[key] = trial
         return trial
