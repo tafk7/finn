@@ -14,9 +14,9 @@ import json
 from typing import Any
 
 import pytest
-from support.ipxact_ports import PORTS
+from support.ipxact_ports import PORTS, axilite
 
-from finn.kernels.artifacts.abi import Direction, Signal
+from finn.kernels.artifacts.abi import Direction, Pin, Signal
 from finn.kernels.artifacts.interface import InterfaceError, describe_interface
 from finn.kernels.artifacts.module import RegisterMap
 
@@ -136,16 +136,27 @@ def test_a_pin_outside_every_interface_is_refused() -> None:
         describe_interface((*PORTS, loose), FACTS, part="xczu3eg-sbva484-1-e", period_ns=5.0)
 
 
-def test_a_buses_register_width_is_its_register_maps() -> None:
-    """The register map's width is the word its ``RegisterMap`` writes: 64 bits where the
-    bus's configuration writes 64-bit words, 32 for a bus that states no map."""
+def test_a_declared_register_map_must_match_its_bus() -> None:
+    """The register block is as wide as its bus. A declared map whose words are another
+    width is refused, naming the bus and both widths; a matching map describes the bus's."""
 
-    def width(registers: dict[str, RegisterMap] | None) -> int:
-        described = describe_interface(
-            PORTS, FACTS, part="xczu3eg-sbva484-1-e", period_ns=5.0, registers=registers
+    def describe(ports: tuple[Pin, ...], registers: dict[str, RegisterMap]) -> dict[str, Any]:
+        return describe_interface(
+            ports, FACTS, part="xczu3eg-sbva484-1-e", period_ns=5.0, registers=registers
         )
-        ((register,),) = [bus["register_map"] for bus in described["axilite"]]
-        return int(register["width"])
 
-    assert width({"s_axilite": RegisterMap(((0, 1), (8, 2)), word_bits=64)}) == 64
-    assert width({"s_axilite": RegisterMap()}) == width(None) == width({}) == 32
+    wide = RegisterMap(((0, 1), (8, 2)), word_bits=64)
+    with pytest.raises(InterfaceError, match=r"s_axilite.*64.*32"):
+        describe(PORTS, {"s_axilite": wide})
+    ports64 = (*PORTS[:-1], axilite(64))
+    with pytest.raises(InterfaceError, match=r"s_axilite.*32.*64"):
+        describe(ports64, {"s_axilite": RegisterMap()})
+
+    for ports, registers, bits in (
+        (PORTS, {"s_axilite": RegisterMap()}, 32),
+        (PORTS, {}, 32),
+        (ports64, {"s_axilite": wide}, 64),
+        (ports64, {}, 64),
+    ):
+        ((register,),) = [bus["register_map"] for bus in describe(ports, registers)["axilite"]]
+        assert register["width"] == bits

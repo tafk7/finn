@@ -12,13 +12,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from support.ipxact_ports import PORTS
+from support.ipxact_ports import PORTS, axilite
 from support.ipxact_script import BusInterface, interfaces
 
 from finn.kernels.artifacts.abi import (
     Bus,
+    Clock,
     Data,
+    Derived,
     Direction,
+    Endpoint,
+    Free,
+    Member,
     Reset,
     Signal,
     StandardProtocol,
@@ -78,6 +83,48 @@ def test_an_active_high_reset_says_so() -> None:
     reset = Signal("rst", Direction.IN, 1, Reset(False, True, ("ap_clk",)))
     declared = interfaces(interface_tcl((PORTS[0], reset), 5.0))
     assert declared["rst"].parameters["POLARITY"] == "ACTIVE_HIGH"
+
+
+@pytest.mark.parametrize("data_bits", [32, 64])
+def test_the_register_block_is_as_wide_as_its_bus(data_bits: int) -> None:
+    bus = Bus(
+        "s_axilite",
+        StandardProtocol.AXILITE,
+        [
+            Member(logical, f"s_axilite_{logical.upper()}", width)
+            for logical, width in (
+                ("awaddr", 6),
+                ("awvalid", 1),
+                ("wdata", data_bits),
+                ("rdata", data_bits),
+            )
+        ],
+        Endpoint.TARGET,
+        associated_clock="ap_clk",
+    )
+    declared = interfaces(interface_tcl((PORTS[0], bus), 5.0))
+    memory_map = declared["s_axilite"].memory_map
+    assert memory_map is not None
+    [block] = memory_map.blocks
+    assert block.width == data_bits
+
+
+def test_a_64_bit_bus_is_stated_as_wide_by_the_script_and_the_description() -> None:
+    ports = (*PORTS[:-1], axilite(64))
+    facts = {
+        pin.name: {
+            **dict.fromkeys(STREAM_FACTS),
+            "tdata": next(member.width for member in pin.signals if member.logical == "tdata"),
+        }
+        for pin in ports
+        if isinstance(pin, Bus) and pin.protocol is StandardProtocol.AXIS
+    }
+    described = describe_interface(ports, facts, part="xczu3eg-sbva484-1-e", period_ns=5.0)
+    memory_map = interfaces(interface_tcl(ports, 5.0))["s_axilite"].memory_map
+    assert memory_map is not None
+    [block] = memory_map.blocks
+    [window] = described["axilite"][0]["register_map"]
+    assert block.width == window["width"] == 64
 
 
 @pytest.mark.parametrize("clock_ns", [5.0, 3.3])
@@ -188,6 +235,63 @@ def test_the_script_packages_sources_or_a_checkpoint() -> None:
     assert "set_property sdx_kernel true $core" in synthesized
     assert synthesized.index("write_checkpoint") < synthesized.index("ipx::package_project")
     assert vlnv("sdp_1") == "xilinx_finn:finn:sdp_1:1.0"
+
+
+def _synthesized(pins: tuple[Signal, ...]) -> str:
+    emitted = EmittedModule("top__0", Path("/p/src"), ("top__0.sv",), ())
+    return package_tcl(
+        emitted, pins, part="xczu3eg-sbva484-1-e", clock_ns=5.0, ip_name="sdp_1", run_synth=True
+    )
+
+
+def test_the_out_of_context_clock_is_the_modules_own_clock_pin() -> None:
+    named = (
+        Signal("core_clk", Direction.IN, 1, Clock(Free())),
+        Signal("core_clk2x", Direction.IN, 1, Clock(Derived("core_clk", 2))),
+    )
+    script = _synthesized(named)
+    assert 'puts $xdc "create_clock -period 5.0 -name core_clk \\[get_ports core_clk\\]"' in script
+    assert 'puts $xdc "create_clock -period 2.5 -name core_clk2x' in script
+    assert "ap_clk" not in script
+    # A module whose clock is ``ap_clk`` constrains it as it always did.
+    assert (
+        'puts $xdc "create_clock -period 5.0 -name ap_clk \\[get_ports ap_clk\\]"'
+        in _synthesized(tuple(pin for pin in PORTS if isinstance(pin, Signal)))
+    )
+
+
+def test_the_out_of_context_clock_is_the_one_free_clock_or_refused() -> None:
+    reset = Signal("rst", Direction.IN, 1, Reset(False, False))
+    with pytest.raises(IpxactError, match="exactly one free clock.*found none"):
+        _synthesized((reset,))
+    two = (
+        Signal("clk_a", Direction.IN, 1, Clock(Free())),
+        Signal("clk_b", Direction.IN, 1, Clock(Free())),
+    )
+    with pytest.raises(IpxactError, match=r"exactly one free clock.*found clk_a, clk_b"):
+        _synthesized(two)
+
+
+def test_a_derived_clock_is_constrained_at_its_clocks_period_over_its_ratio() -> None:
+    tripled = (
+        Signal("core_clk", Direction.IN, 1, Clock(Free())),
+        Signal("core_clk3x", Direction.IN, 1, Clock(Derived("core_clk", 3))),
+    )
+    assert f"create_clock -period {5.0 / 3} -name core_clk3x \\[get_ports core_clk3x\\]" in (
+        _synthesized(tripled)
+    )
+
+
+def test_a_derived_clock_of_another_clock_than_the_free_one_is_refused() -> None:
+    free = Signal("core_clk", Direction.IN, 1, Clock(Free()))
+    elsewhere = Signal("fast", Direction.IN, 1, Clock(Derived("other_clk", 2)))
+    with pytest.raises(IpxactError, match="fast.*other_clk.*core_clk"):
+        _synthesized((free, elsewhere))
+    # Derived of a derived clock: the constraints know only the free clock's period.
+    chained = Signal("faster", Direction.IN, 1, Clock(Derived("fast", 2)))
+    base = Signal("fast", Direction.IN, 1, Clock(Derived("core_clk", 2)))
+    with pytest.raises(IpxactError, match="faster.*fast.*core_clk"):
+        _synthesized((free, base, chained))
 
 
 def test_the_script_searches_the_headers_directories_and_only_with_headers() -> None:

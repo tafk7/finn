@@ -162,7 +162,7 @@ def interface_tcl(pins: Sequence[Pin], clock_ns: float) -> list[str]:
                     f"set map [ipx::add_memory_map {pin.name} $core]",
                     "set block [ipx::add_address_block Reg0 $map]",
                     f"set_property range {window} $block",
-                    "set_property width 32 $block",
+                    f"set_property width {_width(pin, 'wdata')} $block",
                     "set_property usage register $block",
                     f"set_property slave_memory_map_ref {pin.name} $bus",
                 ]
@@ -212,7 +212,12 @@ def package_tcl(
     ip_name: str,
     run_synth: bool,
 ) -> str:
-    """The Vivado batch script that packages ``emitted`` in ``emitted.directory``'s parent."""
+    """The Vivado batch script that packages ``emitted`` in ``emitted.directory``'s parent.
+
+    With ``run_synth``, its out-of-context constraints give the module's one free clock
+    pin ``clock_ns`` and each derived clock that period over its ratio; ``IpxactError``
+    unless the pins have exactly one free clock and every derived clock is derived from
+    it."""
     top = emitted.entry_point
     # A header is found where its includers read it from.
     includes = " ".join(f"$project/src/{d}" for d in include_directories(emitted.sources))
@@ -226,20 +231,33 @@ def package_tcl(
         "update_compile_order -fileset sources_1",
     ]
     if run_synth:
-        doubled = [
-            pin.name
+        rates = {
+            pin.name: pin.role.rate
             for pin in pins
-            if isinstance(pin, Signal)
-            and isinstance(pin.role, Clock)
-            and isinstance(pin.role.rate, Derived)
-        ]
+            if isinstance(pin, Signal) and isinstance(pin.role, Clock)
+        }
+        free = [name for name, rate in rates.items() if not isinstance(rate, Derived)]
+        if len(free) != 1:
+            raise IpxactError(
+                "the out-of-context constraints need exactly one free clock pin, found "
+                + (", ".join(free) or "none")
+            )
+        [primary] = free
+        derived = {name: rate for name, rate in rates.items() if isinstance(rate, Derived)}
+        for name, rate in derived.items():
+            if rate.of != primary:
+                raise IpxactError(
+                    f"{name}: derived from {rate.of}, but the out-of-context constraints"
+                    f" know only the free clock {primary}'s period"
+                )
         tcl += [
             "set xdc [open $project/clocks.xdc w]",
-            f'puts $xdc "create_clock -period {clock_ns} -name ap_clk \\[get_ports ap_clk\\]"',
+            f'puts $xdc "create_clock -period {clock_ns} -name {primary}'
+            f' \\[get_ports {primary}\\]"',
             *(
-                f'puts $xdc "create_clock -period {clock_ns / 2} -name {name}'
+                f'puts $xdc "create_clock -period {clock_ns / rate.ratio} -name {name}'
                 f' \\[get_ports {name}\\]"'
-                for name in doubled
+                for name, rate in derived.items()
             ),
             "close $xdc",
             "add_files -fileset constrs_1 -norecurse $project/clocks.xdc",

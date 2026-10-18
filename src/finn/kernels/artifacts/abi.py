@@ -12,8 +12,11 @@ directions for the *initiator*; a target reuses the same signature flipped.
 **A name is build ABI, not meaning.** A module or pin name is a symbol a tool
 resolves; it carries no semantics.
 
-``Clock(Derived(of, ratio))`` says a doubled clock is not a free one: its rate
-is the reference clock's, and a consumer must not pin a frequency for it.
+``Clock(Derived(of, ratio))`` says a doubled clock is not a free one: its rate is the
+reference clock's times ``ratio``, so there is none to choose for it. The packaging
+states it so (``ipxact.frequency_hz``: the IP's ``FREQ_HZ``; the out-of-context
+period, the reference's over ``ratio``), and an integrator supplies it at that
+multiple of the reference clock they supply.
 """
 
 from __future__ import annotations

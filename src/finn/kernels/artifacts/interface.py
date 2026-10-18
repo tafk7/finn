@@ -5,7 +5,8 @@
 hand needs to know of its pins, as JSON (``interface.json`` beside the IP).
 
 ``describe_interface`` states, from the module's ABI pins and the facts of its
-streams (the partition's boundary facts, read from its configured root):
+streams (the partition's boundary facts, read from its configured network, at the free
+side of each boundary channel):
 
 - ``part`` and ``period_ns``: what the module was explored and packaged for;
 - ``clocks``: each clock pin with its ``FREQ_HZ`` at the period, as the IP-XACT
@@ -21,8 +22,8 @@ streams (the partition's boundary facts, read from its configured root):
   supplies or reads it that many times), and the traversal;
 - ``axilite``: each AXI-Lite bus, its address and data widths, its clock and its
   register map, the IP-XACT's one ``Reg0`` block (``ipxact.register_window``), its
-  registers as wide as the bus's ``RegisterMap`` writes them (32 bits for a bus that
-  states none);
+  registers as wide as the bus (its ``wdata``, as the IP-XACT's block): a declared
+  ``RegisterMap`` must write words of that width, and is refused otherwise;
 - ``aximm``: each AXI-MM port with its map. The ABI has no AXI-MM protocol yet, so
   the list is empty.
 
@@ -74,8 +75,9 @@ def describe_interface(
 ) -> dict[str, Any]:
     """The interface description of a module with ``pins``; ``streams`` holds each
     AXI-Stream port's facts by port name (``STREAM_FACTS`` and its ``tdata``), and
-    ``registers`` each AXI-Lite bus's ``RegisterMap`` by port name (none: the default
-    map, 32-bit words)."""
+    ``registers`` each AXI-Lite bus's declared ``RegisterMap`` by port name. A bus's
+    registers are as wide as the bus, and a declared map whose ``word_bits`` is another
+    width is refused (``InterfaceError``)."""
     registers = registers or {}
     described: dict[str, Any] = {
         "part": part,
@@ -124,18 +126,25 @@ def describe_interface(
                 }
             )
         elif isinstance(pin, Bus) and pin.protocol is StandardProtocol.AXILITE:
+            data_width = _width(pin, "wdata")
+            declared = registers.get(pin.name)
+            if declared is not None and declared.word_bits != data_width:
+                raise InterfaceError(
+                    f"{pin.name}: its register map writes {declared.word_bits}-bit words, "
+                    f"its bus is {data_width} bits wide"
+                )
             described["axilite"].append(
                 {
                     "name": pin.name,
                     "address_width": address_width(pin),
-                    "data_width": _width(pin, "wdata"),
+                    "data_width": data_width,
                     "clock": pin.associated_clock,
                     "register_map": [
                         {
                             "name": "Reg0",
                             "base": 0,
                             "range": register_window(pin),
-                            "width": registers.get(pin.name, RegisterMap()).word_bits,
+                            "width": data_width,
                             "usage": "register",
                         }
                     ],
