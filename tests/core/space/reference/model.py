@@ -39,16 +39,22 @@ choice there reads refused through its guard, and its own pieces (no possible va
 add nothing: it is blamed at the guard.
 
 **A choice's own check** is membership of its stored value in its domain, with its
-presence. Membership is the type check, evaluated first, with its guard's cases
-assumed: a value outside its domain is false whatever the guard (absent included), and
-that is its own reason only. A value inside its domain is: under an unknown guard,
-unknown (**unchecked**, waiting on the guard); under a refused guard, true; absent,
-inactive. Forcing never reads a stored choice whose own check is false, as it never
-reads an unchecked one.
+presence. Under a guard false on known information (another case committed or forced,
+a ``when`` false on facts) the key does not exist: the choice is inactive and its own
+check is not evaluated; named, it refuses the change as inactive. Otherwise membership
+is the type check, evaluated with its guard's cases assumed: a value outside its domain
+is false under an unknown or refused guard too, and that is its own reason only. A
+value inside its domain is: under an unknown guard, unknown (**unchecked**, waiting on
+the guard); under a refused guard, true. Forcing never reads a stored choice whose own
+check is false, so a guard never goes false because forcing read the bad value.
 
 **Readable.** A stored choice is read as its value only when its own check is true; an
 unchecked choice reads as unresolved and is never used as a value, by any rule or by
-forcing.
+forcing, when its own check cannot conclude on its own inputs. One that waits only on
+its presence is not unknown in a world that settles that presence: in a trial assuming
+a case, or in the world an own check assumes, a stored choice made present there whose
+own check holds there reads as its value (so a rule of a selector's case refusing it
+makes the case not possible).
 
 **Possible cases.** A listed case of an open choice is possible unless, with the case
 assumed on a copy of the state (a trial), a piece turns false among: the choice's own
@@ -97,18 +103,17 @@ change; the configuration's validity is reported beside the result.
 Readings chosen where the semantics leave room
 ==============================================
 
-1. *Readability is the least fixed point.* Start with every stored choice unchecked;
-   repeat: force from the readable choices, evaluate every stored choice's own check
-   against the readable and forced values, and take the ones whose check is true as
-   readable; until the readable set stops changing (:func:`_settle`). The other
-   reading, a greatest fixed point, would make two choices whose checks read each
-   other readable together; the least one keeps them unchecked. Marks do not
-   accumulate across the iteration: a mark taken while another commitment was not yet
-   readable can rest on a value forced from too little (a core forced before the
-   committed choice that refuses it is read), and keeping it would disagree with a
-   build from scratch. Should the iteration revisit an earlier readable set, the
-   choices on the loop that are not readable in every set of it are kept unchecked,
-   waiting on each other (no test or random walk has reached this).
+1. *Readability is the least fixed point, recomputed each round from nothing
+   readable.* A round forces from the readable choices, evaluates every stored
+   choice's own check against the readable and forced values, and gives the choices
+   whose check is true; the iteration starts from none and stops when a round gives
+   back its input (:func:`settle_readable`). Nothing carries from one round to the
+   next: a round's intermediate state is no configuration anyone held, and a mark
+   taken from a value forced on too little would disagree with a build from scratch.
+   The other reading, a greatest fixed point, would make two choices whose checks read
+   each other readable together. A round that revisits an earlier set is reported as
+   :class:`NonConvergence`, with the choices that move and the sets visited, never
+   settled by an added rule (no test or random walk has reached one).
 2. *A change re-checks every stored choice.* The semantics say the named and the
    reached ones. A retained choice whose check reads nothing the change touches has
    the same answer before and after, so the two readings agree on every
@@ -166,9 +171,9 @@ Readings chosen where the semantics leave room
 from __future__ import annotations
 
 import enum
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeVar
 
 from .answers import (
     Answer,
@@ -199,9 +204,24 @@ from .answers import (
 )
 from .description import Index, Refuse, Space, join
 
+_T = TypeVar("_T")
+
 
 class ConfigurationError(ValueError):
     """A configuration or change naming a choice or fact the description lacks."""
+
+
+class NonConvergence(Exception):
+    """Readability's iteration revisited an earlier readable set without settling.
+
+    Reported, never resolved: ``choices`` are the stored choices readable in some sets
+    of the loop and not in others, ``visited`` the readable sets of the loop in order.
+    """
+
+    def __init__(self, choices: tuple[str, ...], visited: tuple[tuple[str, ...], ...]) -> None:
+        super().__init__(f"readability does not settle: {', '.join(choices)} over {visited}")
+        self.choices = choices
+        self.visited = visited
 
 
 def same(a: Any, b: Any) -> bool:
@@ -599,35 +619,16 @@ class _Evaluation:
 
     def _check(self, choice: str, value: Any) -> Check:
         info = self.index.choices[choice]
-        domain = info.domain
-        member = Verdict.TRUE
-        waits: set[str] = set()
         presence = self.presence(info.scope)
-        reader: _Evaluation = self
-        if presence.state is not Guard.PRESENT and domain.reads:
-            # membership is the type check: evaluated with the guard's cases assumed
-            assumed = dict(self.values)
-            assumed.update(self._guard_cases(info.scope))
-            reader = _Evaluation(self.index, self.facts, self.stored, assumed, self.refused, False)
-        inputs = reader.inputs(domain.reads, published=False)
-        if inputs.values is None:
-            member = Verdict.UNKNOWN
-            waits.update(inputs.waits, inputs.refused, inputs.inapplicable)
-        else:
-            if domain.values is not None:
-                held = _contains(domain.values, value)
-            elif domain.enumerate is not None:
-                held = _contains(domain.enumerate(inputs.values), value)
-            else:
-                held = True
-            if held and domain.member is not None:
-                held = bool(domain.member(value, inputs.values))
-            member = Verdict.TRUE if held else Verdict.FALSE
-        if member is Verdict.FALSE:
-            # its own reason only, whatever its guard (absent included)
-            return Check(Verdict.FALSE, (Reason(ReasonKind.OUTSIDE_DOMAIN, choice, info.scope),))
         if presence.state is Guard.ABSENT:
+            # a guard false on known information: the key does not exist here, and its
+            # own check is not evaluated
             return Check(None)
+        member, found = self.membership(choice, value, promote=True)
+        waits = set(found)
+        if member is Verdict.FALSE:
+            # its own reason only, under an unknown or refused guard too
+            return Check(Verdict.FALSE, (Reason(ReasonKind.OUTSIDE_DOMAIN, choice, info.scope),))
         if presence.state is Guard.UNKNOWN:
             waits |= presence.waits
         if member is Verdict.UNKNOWN or presence.state is Guard.UNKNOWN:
@@ -635,6 +636,64 @@ class _Evaluation:
         # present, or under a refused guard: a refused guard never gains a case
         # without a revision, so the choice is checked on its value alone
         return Check(Verdict.TRUE)
+
+    def membership(self, choice: str, value: Any, promote: bool) -> tuple[Verdict, frozenset[str]]:
+        """Whether ``value`` is one of ``choice``'s domain's values, and what an unknown
+        answer waits on. The type check: evaluated in the world assuming its guard's
+        cases when its scope is not present (``promote`` reading there, as their values,
+        the stored choices whose presence that world settles)."""
+
+        info = self.index.choices[choice]
+        domain = info.domain
+        reader: _Evaluation = self
+        if domain.reads and self.presence(info.scope).state is not Guard.PRESENT:
+            reader = self.world(self._guard_cases(info.scope), promote)
+        inputs = reader.inputs(domain.reads, published=False)
+        if inputs.values is None:
+            waits = inputs.waits | set(inputs.refused) | set(inputs.inapplicable)
+            return Verdict.UNKNOWN, frozenset(waits)
+        if domain.values is not None:
+            held = _contains(domain.values, value)
+        elif domain.enumerate is not None:
+            held = _contains(domain.enumerate(inputs.values), value)
+        else:
+            held = True
+        if held and domain.member is not None:
+            held = bool(domain.member(value, inputs.values))
+        return (Verdict.TRUE if held else Verdict.FALSE), frozenset()
+
+    def world(self, assumed: Mapping[str, Any], promote: bool = True) -> _Evaluation:
+        """This state with ``assumed`` values (a trial's case, or a guard's cases).
+
+        With ``promote``, a stored choice that is unchecked here only because its
+        presence waits reads as its value in that world when the world makes it present
+        and its own check holds there: its membership holds with its guard assumed, so
+        nothing but its presence was unknown. A choice whose own check cannot conclude
+        on its own inputs is never read so.
+        """
+
+        values = dict(self.values)
+        values.update(assumed)
+        world = _Evaluation(self.index, self.facts, self.stored, values, self.refused, False)
+        if not promote:
+            return world
+        while True:
+            added = {}
+            for name in sorted(self.stored):
+                if name in values or name in self.refused:
+                    continue
+                scope = self.index.choices[name].scope
+                if world.presence(scope).state is not Guard.PRESENT:
+                    continue
+                stored = self.stored[name]
+                if self.membership(name, stored, promote=False)[0] is not Verdict.TRUE:
+                    continue
+                if world.check(name, stored).verdict is Verdict.TRUE:
+                    added[name] = stored
+            if not added:
+                return world
+            values.update(added)
+            world = _Evaluation(self.index, self.facts, self.stored, values, self.refused, False)
 
     def _guard_cases(self, scope: str) -> dict[str, Any]:
         """Each selector above ``scope`` set to the case holding it."""
@@ -812,9 +871,7 @@ def _trial(
     impossible: list[CaseReasons] = []
     support: set[str] = set()
     for case in cases:
-        trial_values = dict(values)
-        trial_values[choice] = case
-        trial = state.evaluation(trial_values, refused)
+        trial = base.world({choice: case})
         reasons: list[Reason] = []
         reads: set[str] = set()
         subjects: set[str] = set()
@@ -978,37 +1035,43 @@ class _Settled:
     checks: dict[str, Check]
 
 
+def settle_readable(round_: Callable[[frozenset[str]], tuple[frozenset[str], _T]]) -> _T:
+    """Readability's least fixed point: from nothing readable, apply ``round_`` (which
+    gives, from the readable set, the next one and what that round found) until a round
+    reproduces its input, and return what that round found. A round revisiting an
+    earlier set raises :class:`NonConvergence`."""
+
+    readable: frozenset[str] = frozenset()
+    history: list[frozenset[str]] = []
+    while True:
+        following, found = round_(readable)
+        if following == readable:
+            return found
+        if following in history:
+            loop = [*history[history.index(following) :], readable]
+            moving = frozenset().union(*loop) - frozenset.intersection(*loop)
+            raise NonConvergence(tuple(sorted(moving)), tuple(tuple(sorted(item)) for item in loop))
+        history.append(readable)
+        readable = following
+
+
 def _settle(state: _State) -> _Settled:
     """The least fixed point of readability (decision 1 of the module docstring)."""
 
     stored = state.stored
-    readable: dict[str, Any] = {}
-    history: list[dict[str, Any]] = []
-    while True:
+
+    def round_(names: frozenset[str]) -> tuple[frozenset[str], _Settled]:
+        readable = {name: stored[name] for name in sorted(names)}
         forcing = _force(state, readable)
         blocked = {name: () for name in forcing.refused}
         evaluation = state.evaluation(forcing.values, blocked)
         checks = {name: evaluation.check(name, stored[name]) for name in sorted(stored)}
-        following = {
-            name: stored[name] for name, check in checks.items() if check.verdict is Verdict.TRUE
-        }
-        if following == readable:
-            return _Settled(readable, forcing, checks)
-        if following in history:
-            loop = [*history[history.index(following) :], readable]
-            keep = set.intersection(*(set(item) for item in loop))
-            unstable = set.union(*(set(item) for item in loop)) - keep
-            readable = {name: stored[name] for name in sorted(keep)}
-            forcing = _force(state, readable)
-            blocked = {name: () for name in forcing.refused}
-            evaluation = state.evaluation(forcing.values, blocked)
-            checks = {name: evaluation.check(name, stored[name]) for name in sorted(stored)}
-            for name, check in checks.items():
-                if check.verdict is Verdict.TRUE and name not in keep:
-                    checks[name] = Check(Verdict.UNKNOWN, waits=tuple(sorted(unstable - {name})))
-            return _Settled(readable, forcing, checks)
-        history.append(readable)
-        readable = following
+        following = frozenset(
+            name for name, check in checks.items() if check.verdict is Verdict.TRUE
+        )
+        return following, _Settled(readable, forcing, checks)
+
+    return settle_readable(round_)
 
 
 # --- a configuration's answers -------------------------------------------------------

@@ -34,6 +34,7 @@ from core.space.reference import (
     Inactive,
     Inapplicable,
     Known,
+    NonConvergence,
     Open,
     PieceKind,
     Readable,
@@ -59,7 +60,7 @@ from core.space.reference import (
     listed,
     membership,
 )
-from core.space.reference.model import same
+from core.space.reference.model import same, settle_readable
 
 T, F, U = Verdict.TRUE, Verdict.FALSE, Verdict.UNKNOWN
 
@@ -330,6 +331,47 @@ def test_a_selector_refused_by_a_conflict_is_a_refused_guard() -> None:
             Reason(ReasonKind.INPUT_REFUSED, "mode.a.p", "mode.a", related=("mode",)),
         ),
     )
+
+
+def test_a_case_trial_reads_a_choice_waiting_only_on_its_presence_as_its_value() -> None:
+    """``p = 2`` waits only on ``mode``; the trial assuming ``mode = a`` settles that, so
+    it reads ``p`` as 2, the case's rule refuses it, and ``b`` is forced. Clearing the
+    committed ``mode = a`` is therefore refused: it would leave ``p`` inactive."""
+
+    base = Configuration(three_guards(), {"a_ok": True, "b_ok": True}, {"mode": "a", "mode.a.p": 2})
+    assert base.solve().validity().verdict is F
+    result = rejected(change(base, Change(clear=("mode",))))
+    assert result.refusals == (
+        ChangeRefusal("mode.a.p", "reached", (Reason(ReasonKind.INACTIVE, "mode.a.p", "mode.a"),)),
+    )
+    cold = solve_at(three_guards(), {"mode.a.p": 2}, {"a_ok": True, "b_ok": True})
+    assert cold.state("mode") == Forced(
+        "b", (("a", (constraint_reason("mode.a.small", "too-big", "mode.a"),)),)
+    )
+    assert cold.state("mode.a.p") == Inactive(True, 2)
+    # where its value fits the case's rule, it stays waiting on the selector
+    fits = solve_at(three_guards(), {"mode.a.p": 1}, {"a_ok": True, "b_ok": True})
+    assert fits.state("mode") == Open(("a", "b"))
+    assert fits.state("mode.a.p") == Unchecked(1, ("mode",))
+
+
+def test_a_readability_round_that_revisits_a_set_is_reported_not_resolved() -> None:
+    """The detector, with a stubbed round flipping between two readable sets."""
+
+    flips = {frozenset(): frozenset({"x"}), frozenset({"x"}): frozenset()}
+
+    def round_(readable: frozenset[str]) -> tuple[frozenset[str], str]:
+        return flips[readable], "unsettled"
+
+    with pytest.raises(NonConvergence) as raised:
+        settle_readable(round_)
+    assert raised.value.choices == ("x",)
+    assert raised.value.visited == ((), ("x",))
+
+    def settles(readable: frozenset[str]) -> tuple[frozenset[str], str]:
+        return frozenset({"x", "y"}), f"settled at {sorted(readable)}"
+
+    assert settle_readable(settles) == "settled at ['x', 'y']"
 
 
 # --- guards -----------------------------------------------------------------------------
@@ -891,10 +933,35 @@ def test_a_named_value_outside_its_domain_is_refused_with_its_own_reason_only(re
     )
     held = solve_at(space, {"mode.a.p": 3})
     assert held.state("mode") == Open(("a", "b"))
-    # its own reason, not inactive, also where another case is selected
-    elsewhere = solve_at(space, {"mode": "b", "mode.a.p": 3})
-    assert elsewhere.state("mode.a.p") == RefusedChoice(
-        (Reason(ReasonKind.OUTSIDE_DOMAIN, "mode.a.p", "mode.a"),), stored=True, value=3
+
+
+def test_a_value_under_a_guard_false_on_known_information_is_inactive() -> None:
+    """Another case committed, or a ``when`` false on facts: the key does not exist in
+    this configuration, so its own check is not evaluated; named, it refuses the change
+    as inactive, even outside its domain."""
+
+    committed = Configuration(two_cores(), {}, {"mode": "b"})
+    result = rejected(change(committed, Change(commit={"mode.a.p": 3})))
+    assert result.refusals == (
+        ChangeRefusal("mode.a.p", "named", (Reason(ReasonKind.INACTIVE, "mode.a.p", "mode.a"),)),
+    )
+    assert solve_at(two_cores(), {"mode": "b", "mode.a.p": 3}).own_check("mode.a.p") == Check(None)
+    space = Space(
+        ("wide",),
+        Scope(
+            "",
+            children=(
+                Scope(
+                    "extra",
+                    when=When(("wide",), lambda r: bool(r["wide"])),
+                    choices=(Choice("n", listed(1, 2)),),
+                ),
+            ),
+        ),
+    )
+    result = rejected(change(Configuration(space, {"wide": False}), Change(commit={"extra.n": 7})))
+    assert result.refusals == (
+        ChangeRefusal("extra.n", "named", (Reason(ReasonKind.INACTIVE, "extra.n", "extra"),)),
     )
 
 
