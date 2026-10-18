@@ -561,13 +561,13 @@ def test_a_choice_whose_domain_reads_its_core_is_refused_by_its_own_finding() ->
     }
 
 
-def test_an_admission_under_a_refused_selector_records_what_its_own_check_read() -> None:
+def test_an_admission_under_a_refused_selector_is_checked_again_on_a_change() -> None:
     # At 12 the core refuses whatever its choices are (past 8), so the selector is refused,
     # and its verdict reads no choice of the core. `pumped`'s own check holds with two lanes:
     # admitted, the configuration reading it refused through its guard. Its check read `simd`
-    # with the case assumed, so a change to one lane reaches it (the selector, all the guard
-    # read, is stable): it is checked again and refused, as a configuration built from
-    # nothing refuses it.
+    # with the case assumed, and such a check is never reused, so on the change to one lane
+    # (the selector, all the guard read, is stable) it is checked again and refused, as a
+    # configuration built from nothing refuses it.
     point = design_space(Folder(width=12))
     two = point.try_with_choices(folder_change(point, simd=2, pumped=True))
     assert two.accepted
@@ -679,3 +679,110 @@ def test_a_choice_under_an_open_selector_is_refused_by_its_own_check_or_waits() 
         assert inspection.unchecked(two.instance) == (
             inspection.Unchecked("compute.core.pe", 2, ("compute",)),
         )
+
+
+# -- a forced value read with the case assumed, under a selector that stays refused ----------------
+
+
+class Forced(Space):
+    """A core whose choice's domain reads a Decision of its own forced by a formal (``y``: 1
+    where ``x`` is 1, else 2), and whose admission refuses widths past 8 reading neither."""
+
+    width: int = Param()
+    x: int = Param()
+
+    @derived
+    def small(self) -> bool:
+        return self.x == 1
+
+    @derived
+    def big(self) -> bool:
+        return self.x != 1
+
+    y: int = Decision(
+        values=(1, 2),
+        requires=(
+            requires(small, "y-small: 1 needs x = 1", cases=(1,)),
+            requires(big, "y-big: 2 needs x > 1", cases=(2,)),
+        ),
+    )
+
+    @derived
+    def ys(self) -> int:
+        return self.y
+
+    pe: int = Decision(domain=divisors_of(ys))
+
+    @constraint
+    def fits(self) -> bool | Rejected:
+        if self.width > 8:
+            return reject("too-wide", "the core takes widths up to 8")
+        return True
+
+    admission = ConstraintGroup(fits)
+
+
+class Reach(Space):
+    """The core under a selector with one case, given ``x`` as a fact."""
+
+    width: int = Param()
+    x: int = Param()
+    compute: Forced = Decision({"core": Forced}, width=width, x=x)
+
+
+class ReachByChoice(Space):
+    """The same, given ``x`` as a choice."""
+
+    width: int = Param()
+    x: int = Decision(values=(1, 2))
+    compute: Forced = Decision({"core": Forced}, width=width, x=x)
+
+
+def test_an_own_check_read_with_the_case_assumed_is_checked_again_when_a_fact_changes() -> None:
+    # At 12 the core refuses whatever its choices are, so the selector is refused, and `pe`'s
+    # own check is read with the case assumed, where `x` forces `y`: at x = 2 to 2, which 2
+    # divides, so `pe = 2` is admitted. At x = 1 `y` is forced to 1 there, which 2 does not
+    # divide. In the configuration `y` is under the refused guard and its reading does not
+    # follow `x`, so no reach connects `x` to `pe`'s admission: an own check read with the case
+    # assumed is never reused, and is checked again on every change. The change and a
+    # configuration built from nothing refuse it alike. At 4 the guard holds, for comparison.
+    for width in (4, 12):
+        point = design_space(Reach(width=width, x=2))
+        step = point.try_with_choices({reference_of(point, "compute.core.pe"): 2})
+        assert step.accepted
+        bounded = step.instance.try_with_facts({Reach.x: 1})
+        built = design_space(Reach(width=width, x=1))
+        cold = built.try_with_choices({reference_of(built, "compute.core.pe"): 2})
+        assert not bounded.accepted and not cold.accepted
+        assert refusals(bounded) == refusals(cold)
+        assert ("domain-membership", "compute.core.pe") in refusals(bounded)["compute.core.pe"]
+
+
+def test_an_own_check_read_with_the_case_assumed_is_checked_again_when_a_choice_changes() -> None:
+    # The same with `x` a choice of the root: the change to `x` touches the choice it changes,
+    # and `pe`'s admission is checked again as above.
+    for width in (4, 12):
+        point = design_space(ReachByChoice(width=width))
+        change = {reference_of(point, "x"): 2, reference_of(point, "compute.core.pe"): 2}
+        step = point.try_with_choices(change)
+        assert step.accepted
+        bounded = step.instance.try_with_choices({reference_of(step.instance, "x"): 1})
+        built = design_space(ReachByChoice(width=width))
+        change = {reference_of(built, "x"): 1, reference_of(built, "compute.core.pe"): 2}
+        cold = built.try_with_choices(change)
+        assert not bounded.accepted and not cold.accepted
+        assert refusals(bounded) == refusals(cold)
+        assert ("domain-membership", "compute.core.pe") in refusals(bounded)["compute.core.pe"]
+
+
+def test_a_forced_value_read_with_the_case_assumed_walked_through_other_facts() -> None:
+    for seed in (1, 2, 3):
+        report = walk(
+            design_space(Reach(width=12, x=2)),
+            seed=seed,
+            steps=60,
+            facts={"width": (4, 12), "x": (1, 2)},
+        )
+        assert not report.differences, "\n".join(report.differences[:5])
+        report = walk(design_space(ReachByChoice(width=12)), seed=seed, steps=60)
+        assert not report.differences, "\n".join(report.differences[:5])

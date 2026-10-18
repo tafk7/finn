@@ -404,12 +404,6 @@ def run(snapshot: Snapshot, index: int, frame: Frame | None = None) -> Evaluatio
         else:
             dependencies, via = tuple(task.context.dependencies), tuple(task.context.via.items())
             decisions, facts = _runtime.reads(snapshot, dependencies, via)
-            # What a frame read in another snapshot for its answer (a trial candidate's own
-            # check, read with its guard's cases assumed) is its read too.
-            if outcome.decisions:
-                decisions = decisions | outcome.decisions
-            if outcome.facts:
-                facts = facts | outcome.facts
             outcome = _runtime.Evaluation(
                 outcome.result, dependencies, outcome.assessment, via, decisions, facts
             )

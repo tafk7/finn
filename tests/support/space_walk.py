@@ -47,6 +47,7 @@ from finn.core.space import (
     occurrence,
 )
 from finn.core.space.edits import Change, ConfigurationResult
+from finn.core.space.ir import Argument
 
 SHOWN = 5  # the keys a difference names
 FACT_STEPS = 0.3  # the share of a walk's steps that change a root formal, where it may
@@ -343,7 +344,9 @@ class _Walk:
     ) -> None:
         """Which choices the successor holds unchecked and what each waits on, against the
         recomputation; and that every other stored choice's own check holds, and every
-        unchecked one's cannot conclude, on the successor."""
+        unchecked one's cannot conclude or its guard waits (and its own check is not false),
+        on the successor. Under a guard that does not hold, the own check is read with the
+        guard's cases assumed (``own_check``)."""
         tallies = self.report.tallies
         got, keys = occurrence.state(successor), self.keys
         unchecked = inspection.unchecked(successor)
@@ -354,12 +357,20 @@ class _Walk:
         unadmitted: list[str] = []
         for i, value in got.assignments.items():
             tallies.assignments_rechecked += 1
-            answer = _runtime.membership(got, i, value).result
             guard = got.linked.nodes[i].guard
             applies = Available(True) if guard is None else _runtime.evaluate(got, guard).result
+            answer = (
+                self.own_check(got, i, value)
+                if isinstance(applies, (Rejected, Unresolved))
+                else _runtime.membership(got, i, value).result
+            )
             if i in got.unchecked:
-                # Unresolved: its guard waits, or its own check does.
-                if not (isinstance(applies, Unresolved) or isinstance(answer, Unresolved)):
+                # Unresolved: its guard waits (and its own check is not false), or its own
+                # check does.
+                if not (
+                    (isinstance(applies, Unresolved) and not isinstance(answer, Rejected))
+                    or isinstance(answer, Unresolved)
+                ):
                     unadmitted.append(keys[i])
             elif not (
                 isinstance(answer, Available)
@@ -385,6 +396,37 @@ class _Walk:
         tallies.unchecked_held += len(unchecked)
         tallies.unchecked_kept += bool({item.key for item in unchecked} - before)
         tallies.unchecked_checked += bool(before - {item.key for item in unchecked})
+
+    @staticmethod
+    def own_check(got: _runtime.Snapshot, i: int, value: object) -> object:
+        """A stored choice's own check as the configuration reads it where the choice exists:
+        in a snapshot of the same model, facts and choices with each selector case its guard
+        sits under committed too (where that selector is not committed), built from nothing;
+        in place where there is none."""
+        linked = got.linked
+        nodes = linked.nodes
+        # The node that holds where a selector is one of its cases, for each case's scope.
+        held: dict[int, tuple[int, str]] = {}
+        for choice in linked.choices:
+            selected = (Argument("selected", choice.selector),)
+            for case, scope in choice.cases:
+                guard = None if scope is None else linked.scopes[scope].guard
+                while guard is not None and nodes[guard].arguments != selected:
+                    guard = nodes[guard].guard
+                if guard is not None:
+                    held[guard] = (choice.selector, case)
+        cases: dict[int, object] = {}
+        guard = nodes[i].guard
+        while guard is not None:
+            if guard in held and held[guard][0] not in got.assignments:
+                cases[held[guard][0]] = held[guard][1]
+            guard = nodes[guard].guard
+        if not cases:
+            return _runtime.membership(got, i, value).result
+        assumed = _runtime.Snapshot(
+            got.model, got.parameters, {**got.assignments, **cases}, unchecked=got.unchecked
+        )
+        return _runtime.membership(assumed, i, value).result
 
     # -- the walk -----------------------------------------------------------------------
 
