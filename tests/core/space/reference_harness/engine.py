@@ -7,23 +7,22 @@ engine asked the model's questions, each answer put in the comparable form (``fo
 Everything that depends on how the engine is **authored** or **asked** at this commit is in
 this one module, so a milestone that changes either changes it here:
 
-- **Spelling.** A rule of the description is a constraint in the model. The engine at this
-  commit spells it one of six ways (``Spelling.rules``, beside each case):
-  ``Admission`` (the default: a ``@constraint`` in its Space's ``admission =
-  ConstraintGroup(...)``, the only rules the engine counts for a selector's case),
-  ``Plain`` (a ``@constraint`` in no group, which the engine does not count),
-  ``Requirement`` (``requires(...)`` on a choice's domain, refused at commit),
-  ``Membership`` (a choice's domain reading the rule's other inputs: a linking rule
-  written as membership), ``Obligation`` (a view's ``requires=``) and ``ByName`` (a
-  ``@constraint`` method reading its inputs by attribute name, ``getattr(self, name)``,
-  in its Space's admission group). A domain with a membership predicate is a
-  ``domain(accepts=, candidates=)``: membership is the model's whole membership, the
-  enumeration the listed values, unchecked by membership as the engine enumerates today.
-- **Questions.** The engine has no query for a configuration's validity at this commit.
-  ``Point.validity`` assembles validity from what the engine counts (each present Space's
-  admission group and each choice's refusal). The choices kept unchecked, and what each
-  waits on, are the engine's own list (``inspection.unchecked``): a stored choice's state
-  and a change's unchecked choices are read from it.
+- **Spelling.** A rule of the description is a constraint in the model, and in the engine
+  every rule is a ``@constraint`` of the Space that owns it, which its Space's validity
+  counts. The spellings (``Spelling.rules``, beside each case) name where a rule came from
+  and how it reads: ``Admission`` (the default), ``Plain``, ``Requirement`` (a rule over a
+  choice and a fact, for some of the choice's cases) and ``Obligation`` (a rule stated
+  beside a view of its Space) are each a plain ``@constraint`` reading its inputs
+  explicitly; ``ByName`` is a ``@constraint`` method reading its inputs by attribute name,
+  ``getattr(self, name)``; ``Membership`` is the one rule that is not a constraint: a
+  choice's domain reading the rule's other inputs (a linking rule written as membership).
+  A view carries no rule. A domain with a membership predicate is a ``domain(accepts=,
+  candidates=)``: membership is the model's whole membership, the enumeration the listed
+  values.
+- **Questions.** ``Point.validity`` is the engine's own answer (``inspection.validity``):
+  its false pieces' codes, or what its unknown pieces wait on. The choices kept unchecked,
+  and what each waits on, are the engine's own list (``inspection.unchecked``): a stored
+  choice's state and a change's unchecked choices are read from it.
 
 The description becomes one Space class per scope, built with ``composite``. Every member
 keeps the description's path as its key: a choice ``compute.packed.pe`` is the engine's
@@ -44,7 +43,6 @@ from core.space import reference as model
 from core.space.reference.model import same
 from finn.core.space import (
     Available,
-    ConstraintGroup,
     Decision,
     Inapplicable,
     Param,
@@ -60,8 +58,6 @@ from finn.core.space import (
     inspection,
     occurrence,
     reject,
-    requires,
-    requiring,
     selected,
     view,
 )
@@ -88,19 +84,20 @@ class NotTranslatable(Exception):
 
 @dataclass(frozen=True)
 class Admission:
-    """A rule in its Space's ``admission = ConstraintGroup(...)`` (the default)."""
+    """A ``@constraint`` of its Space (the default)."""
 
 
 @dataclass(frozen=True)
 class Plain:
-    """A ``@constraint`` of its Space, in no group."""
+    """A ``@constraint`` of its Space: every constraint counts, so the same as
+    ``Admission``."""
 
 
 @dataclass(frozen=True)
 class Requirement:
-    """``requires(fact, ...)`` on ``choice``'s domain for ``cases``: the model's rule must
-    read ``choice`` and ``fact`` and hold exactly when the value is not one of ``cases`` or
-    ``fact`` is truthy."""
+    """A rule that ``choice``'s ``cases`` need ``fact``: a ``@constraint`` of its Space, like
+    any rule. The model's rule must read ``choice`` and ``fact`` and hold exactly when the
+    value is not one of ``cases`` or ``fact`` is truthy."""
 
     choice: str
     fact: str
@@ -118,15 +115,16 @@ class Membership:
 
 @dataclass(frozen=True)
 class ByName:
-    """A ``@constraint`` method of its Space, in its admission group, reading each input by
-    name (``getattr(self, name)`` over a list of names, through child nodes for a child's
-    member): the engine discovers the reads when the body runs."""
+    """A ``@constraint`` method of its Space, reading each input by name (``getattr(self,
+    name)`` over a list of names, through child nodes for a child's member): the engine
+    discovers the reads when the body runs."""
 
 
 @dataclass(frozen=True)
 class Obligation:
-    """A view's obligation: ``@view(requires=(rule,))`` on ``view``, of the rule's own
-    Space."""
+    """A rule stated beside ``view``, a view of the rule's own Space: a ``@constraint`` of
+    that Space, like any rule (a view carries none; it refuses when its Space is
+    refused)."""
 
     view: str
 
@@ -197,8 +195,8 @@ class _Acyclic(model.Index):
         return None
 
 
-#: spellings that write a rule into a choice's domain, not as a member of its Space
-_IN_DOMAIN = (Requirement, Membership)
+#: the spelling that writes a rule into a choice's domain, not as a member of its Space
+_IN_DOMAIN = (Membership,)
 
 
 class _Builder:
@@ -208,7 +206,6 @@ class _Builder:
         self.index = _Acyclic(space) if cycles else space.validate()
         self.spelling = spelling
         index = self.index
-        self.requirements: dict[str, list[tuple[str, Requirement]]] = {}
         self.memberships: dict[str, list[str]] = {}
         for path, rule in spelling.rules.items():
             if path not in index.constraints:
@@ -223,10 +220,10 @@ class _Builder:
                 ):
                     raise NotTranslatable(f"{path}: a membership of a value choice it reads")
                 self.memberships.setdefault(rule.choice, []).append(path)
-            if isinstance(rule, Requirement):
-                if rule.choice not in index.choices or index.kind(rule.fact) is None:
-                    raise NotTranslatable(f"{path}: its requirement names unknown nodes")
-                self.requirements.setdefault(rule.choice, []).append((path, rule))
+            if isinstance(rule, Requirement) and (
+                rule.choice not in index.choices or index.kind(rule.fact) is None
+            ):
+                raise NotTranslatable(f"{path}: its requirement names unknown nodes")
             if isinstance(rule, Obligation) and (
                 rule.view not in index.views
                 or index.views[rule.view][1] != index.constraints[path][1]
@@ -242,8 +239,6 @@ class _Builder:
         self.pending: set[tuple[str, str]] = set()
         #: an engine alias key (a scope's formal) -> the model path it takes
         self.aliases: dict[str, str] = {}
-        #: (engine owner, code) -> the model rule a requirement's finding is about
-        self.subjects: dict[tuple[str, str], str] = {}
 
     # -- reads
 
@@ -259,11 +254,9 @@ class _Builder:
         for path, choice in index.choices.items():
             if index.within(choice.scope, scope):
                 found.update(choice.domain.reads)
-                found.update(rule.fact for _, rule in self.requirements.get(path, ()))
         for table in (index.derived, index.views, index.constraints):
             for path, (node, owner) in table.items():
-                rule = self.spelling.rules.get(path)
-                if index.within(owner, scope) and not isinstance(rule, Requirement):
+                if index.within(owner, scope):
                     found.update(node.reads)
         for path, info in index.scopes.items():
             if path != scope and info.when is not None and index.within(path, scope):
@@ -380,14 +373,6 @@ class _Builder:
     def _choice(self, scope: str, path: str) -> object:
         info = self.index.choices[path]
         domain_ = info.domain
-        requirements = []
-        for rule_path, rule in self.requirements.get(path, ()):
-            code = self.index.constraints[rule_path][0].code
-            finding = f"{code}: the rule refuses"
-            requirements.append(
-                requires(self.reference(scope, rule.fact), finding, cases=rule.cases)
-            )
-            self.subjects[(path, code)] = rule_path
         rules = [self.index.constraints[rule][0] for rule in self.memberships.get(path, ())]
         simple = (
             domain_.values is not None
@@ -396,9 +381,7 @@ class _Builder:
             and not rules
         )
         if simple and domain_.values:
-            return Decision(
-                values=domain_.values, requires=tuple(requirements), required=info.required
-            )
+            return Decision(values=domain_.values, required=info.required)
         reads = tuple(
             dict.fromkeys(
                 (*domain_.reads, *(read for rule in rules for read in rule.reads if read != path))
@@ -435,8 +418,6 @@ class _Builder:
             candidates=candidates if domain_.listed else None,
             **dict(zip(names, (self.reference(scope, read) for read in reads), strict=True)),
         )
-        if requirements:
-            built = requiring(built, *requirements)
         return Decision(domain=built, required=info.required)
 
     def _derived(self, scope: str, path: str) -> object:
@@ -454,11 +435,6 @@ class _Builder:
 
     def _view(self, scope: str, path: str) -> object:
         node = self.index.views[path][0]
-        obligations = tuple(
-            self.member(scope, rule_path)
-            for rule_path, rule in sorted(self.spelling.rules.items())
-            if isinstance(rule, Obligation) and rule.view == path
-        )
 
         def body(read: dict[str, Any]) -> object:
             output = node.body(read)
@@ -467,9 +443,7 @@ class _Builder:
             return output
 
         returns = self.value_type(path) | Rejected
-        return view(requires=obligations, **self._aliases(scope, node.reads))(
-            _explicit(node.reads, body, returns)
-        )
+        return view(**self._aliases(scope, node.reads))(_explicit(node.reads, body, returns))
 
     def _constraint(self, scope: str, path: str) -> object:
         rule = self.index.constraints[path][0]
@@ -585,14 +559,6 @@ class _Builder:
                 members[_name(path)] = self.node(scope, path)
                 if child.when is not None:
                     members["when-" + _name(path)] = self.member(scope, "when-" + _name(path))
-        admitted = [
-            self.member(scope, path)
-            for path in mine
-            if path in index.constraints
-            and isinstance(self.spelling.rule(path), (Admission, ByName))
-        ]
-        if admitted:
-            members["admission"] = ConstraintGroup(*admitted)
         # bind every placed node's formals (assigned after the node, as a class body may)
         for below, placed in self.nodes[scope].items():
             for path in self.externals[below]:
@@ -601,7 +567,7 @@ class _Builder:
         owned = {_name(path) for path in mine} | {
             _name(path) for path, child in index.scopes.items() if child.parent == scope
         }
-        clashes = sorted(name for name in owned if name == "admission" or "-" in name)
+        clashes = sorted(name for name in owned if "-" in name)
         if clashes:
             raise NotTranslatable(f"{scope}: names the harness generates: {clashes}")
         name = "Ref_" + (scope.replace(".", "_") or "root")
@@ -622,7 +588,6 @@ class Engine:
     root: type[Space]
     index: model.Index
     aliases: Mapping[str, str]
-    subjects: Mapping[tuple[str, str], str]
 
     def open(self, facts: Mapping[str, object]) -> Point:
         """The configuration with ``facts`` and nothing committed."""
@@ -635,10 +600,7 @@ class Engine:
     def codes(self, findings: Iterable[Any], only: str | None = None) -> frozenset[Code]:
         """Findings as codes; ``only``: the findings owned by that node alone."""
         return frozenset(
-            (
-                finding.code,
-                self.subjects.get((finding.owner, finding.code), self.path(finding.owner)),
-            )
+            (finding.code, self.path(finding.owner))
             for finding in findings
             if only is None or finding.owner == only
         )
@@ -663,7 +625,6 @@ def build(
         root,
         builder.index,
         dict(builder.aliases),
-        dict(builder.subjects),
     )
 
 
@@ -779,35 +740,24 @@ class Point:
         return _rule(self.engine, result)
 
     def validity(self) -> ValidityForm:
-        """Assembled from what the engine counts at this commit: every present Space's
-        admission group, and every choice that reads refused (a stored choice that reads
-        unresolved, kept waiting, is an unknown piece)."""
+        """The engine's validity of the configuration (``inspection.validity``): refused
+        with its false pieces' codes, undecided with what its unknown pieces wait on (each
+        piece's own key aside), or valid."""
         engine = self.engine
-        false: set[Code] = set()
-        blockers: set[str] = set()
-        unknown = False
-        members = self._members()
-        for key in sorted(members):
-            if key == "admission" or key.endswith(".admission"):
-                answer = _rule(engine, self.point.query(members[key]))
-                false |= answer.codes
-                if answer.kind == "unknown":
-                    unknown = True
-                    blockers |= answer.blockers
-        stored = self.stored()
-        for path in sorted(engine.index.choices):
-            state = self.state(path)
-            if state.kind == "refused":
-                false |= state.codes
-            elif state.kind == "unchecked" and path in stored:
-                unknown = True
-                blockers |= state.blockers
-        if false:
-            # what unknown pieces wait on is compared for an undecided verdict only, as the
-            # model's answer is put in the form (``compare.validity_form``)
-            return ValidityForm("refused", frozenset(false))
-        if unknown:
-            return ValidityForm("undecided", blockers=frozenset(blockers))
+        answer = inspection.validity(self.point)
+        if answer.status == "refused":
+            false = frozenset().union(
+                *(engine.codes(piece.result.findings) for piece in answer.pieces)
+            )
+            return ValidityForm("refused", false)
+        if answer.status == "undecided":
+            blockers = frozenset().union(
+                *(
+                    engine.blockers(piece.result.findings, engine.path(piece.owner))
+                    for piece in answer.pieces
+                )
+            )
+            return ValidityForm("undecided", blockers=blockers)
         return ValidityForm("valid")
 
     def change(self, edit: model.Change) -> tuple[ChangeForm, Point | None]:
