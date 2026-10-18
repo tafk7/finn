@@ -22,7 +22,7 @@ Both are kept by the facts, by value, in the build's member cache
 
 Conversion asks two questions of a node. Does the op's pattern cover it? ``match`` reads
 only the graph's structure (op types, connections, attributes), never a datatype or a
-value, and never changes the model. Will a kernel build it? ``admitted`` asks its
+value, and never changes the model. Will a kernel build it? ``accepted`` asks its
 kernel, and the node alone as a network (``network``: its kernel, and a channel on each
 ONNX input and output as a boundary, ``in<i>_V``, ``out<j>_V``), whose channels must be
 realized once its choices take their baselines. A missing shape or datatype raises
@@ -45,7 +45,7 @@ the node stores or refuses it as absent, and ``set_nodeattr`` of one is refused.
 **Who calls what.** One writer, the readers beside it, and a guard on the door:
 
 - *Writes*, all through ``persist`` (``network.persist``, which writes past the guard).
-  Conversion persists the one-node network its admission baselined, only the node's
+  Conversion persists the one-node network its acceptance baselined, only the node's
   choices (``baseline_kernel_op``). The cut persists the body's choices at their
   baselines, the channels' too (``shell.baseline_choices``). Every strategy persists the
   network it returns (``explore_kernel_choices``). A user sets a choice by ``Hold`` in
@@ -61,27 +61,29 @@ the node stores or refuses it as absent, and ``set_nodeattr`` of one is refused.
   each naming the node and the key, and the second the route, ``Hold``. Any other
   attribute is qonnx's.
 
-Its outputs are its kernel's product, one rule for every op: the kernel bound on its
+Its outputs are its kernel's statement, one rule for every op: the kernel bound on its
 inputs states each output's tensor (``output_tensors``), its shape and its element, a
-datatype over a range (MatMul's results over their exact range), which inference writes
-on the graph, the range with the datatype (``finn.core.graph.facts.state``). The
-graph's annotation of an output is the record of that statement: a network that finds
-the two differ refuses the graph as stale (``network.network``, ``tensor-stale``). The
-next node reads it as its input's tensor (``edge_tensor``), its range included.
+datatype over a range (MatMul's results over their exact range), a value of its facts
+read whatever the kernel's validity (a refused kernel is ``verify_node``'s to report),
+which inference writes on the graph, the range with the datatype
+(``finn.core.graph.facts.state``). The graph's annotation of an output is the record
+of that statement: a network that finds the two differ refuses the graph as stale
+(``network.network``, ``tensor-stale``). The next node reads it as its input's tensor
+(``edge_tensor``), its range included.
 
 **Wiring.** Each ONNX input and output that carries a stream (a *port*: ``x``, ``w``,
 ``y``) meets the kernel as a ``Wiring``: an input's the kernel's Param its tensor is
-given as, an output's the kernel's view of the tensor it writes (``tensor``,
-``x_tensor``, ``y_tensor``: an output's tensor is the kernel's statement, never given
-to it), and the kernel's interface its channel takes as an end (``end``, ``x_end``, a
-view of a ``finn.kernels.base.PortEnd``). A parameter port,
+given as, an output's the kernel's derived value of the tensor it writes (``tensor``,
+``x_tensor``, ``result_tensor``: an output's tensor is the kernel's statement, never
+given to it), and the kernel's interface its channel takes as an end (``end``,
+``x_end``, a view of a ``finn.kernels.base.PortEnd``). A parameter port,
 whose initializer the node may hold (MatMul's weights), also names the kernel's Param
 the initializer's values are given as (``contents``, ``w_contents``, in place of its
-tensor) and the kernel's views of what its channel carries, downstream of the kernel:
-the tensor (``carried``, ``w_carried``) and the values its source stores (``stored``,
-``w_stored``). A network wires the kernel and its channels by it
+tensor) and the kernel's derived values of what its channel carries, downstream of the
+kernel: the tensor (``carried``, ``carried_weights``) and the values its source stores
+(``stored``, ``stored_weights``). A network wires the kernel and its channels by it
 (``finn.kernels.network``): each channel's tensor (a parameter channel's from the
-kernel's views, ``Fact``) and its end from the kernel (``Interface``).
+kernel's values, ``Fact``) and its end from the kernel (``Interface``).
 """
 
 from __future__ import annotations
@@ -103,7 +105,8 @@ from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available, Rejected, Space, inspection
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
-from finn.kernels.configure import describe
+from finn.kernels.configure import describe, refusals
+from finn.kernels.configure import refusal as refusal_of
 from finn.kernels.explore import ExploreError, Seam
 from finn.kernels.members import Facts, configured
 from finn.kernels.network import Fact, Interface, Network, NetworkError, Wire, wire
@@ -131,10 +134,9 @@ def _decoded(attribute: AttributeProto, kind: str) -> int | str:
 @dataclass(frozen=True)
 class Wiring:
     """How one port of a KernelOp meets its kernel (the module docstring): the kernel's
-    Param of an input's tensor, or its view of an output's, and the view of its
-    interface's end; for a parameter port,
-    the kernel's Param of the held values and its views of the tensor and the values the
-    port's channel carries."""
+    Param of an input's tensor, or its derived value of an output's, and the view of its
+    interface's end; for a parameter port, the kernel's Param of the held values and its
+    derived values of the tensor and the values the port's channel carries."""
 
     tensor: str
     end: str
@@ -574,8 +576,10 @@ class KernelOp(CustomOp):
 
     def output_tensors(self) -> dict[str, Tensor]:
         """Each output's tensor, by graph name: what the kernel bound on the node's inputs
-        states it writes (each output's ``Wiring.tensor``), one rule for every op. It may
-        read an input's value (MatMul's result range comes from its weights)."""
+        states it writes (each output's ``Wiring.tensor``), one rule for every op: a value
+        of its facts, whatever the kernel's validity (``verify_node`` reports a refused
+        kernel). It may read an input's value (MatMul's result range comes from its
+        weights)."""
         kernel = self.bound()
         found: dict[str, Tensor] = {}
         for port, name in zip(self.outputs, self.onnx_node.output):
@@ -607,27 +611,11 @@ class KernelOp(CustomOp):
             state(model, name, tensor.element)
 
     def refusals(self, point: Kernel) -> tuple[Finding, ...]:
-        """What stops its kernel from building ``point``, whatever its open choices: the
-        kernel's admission as far as it is decided, and each open decision with no
-        viable case (``decision-no-viable-case``, why each case was refused as its
-        causes). Empty when nothing does."""
-        found: list[Finding] = []
-        admitted = inspection.admission(point)
-        if isinstance(admitted, Rejected):
-            found.extend(admitted.findings)
-        for item in inspection.viable(point):
-            if not item.cases:
-                detail = "; ".join(f"{case}: {reason}" for case, reason in item.refused.items())
-                found.append(
-                    Finding(
-                        FindingKind.REJECTION,
-                        "decision-no-viable-case",
-                        item.key,
-                        f"no case is viable: {detail}",
-                        causes=candidate_refusals(point, item.key, tuple(item.refused)),
-                    )
-                )
-        return tuple(found)
+        """What stops its kernel from building ``point``, whatever its open choices: its
+        validity's refusal, each open decision with no viable case among it with why each
+        case was refused as its causes (``finn.kernels.configure.refusals``). Empty when
+        nothing does."""
+        return refusals(point)
 
     def baselined(self) -> Network:
         """The node alone (``network``), every choice with cases at its baseline
@@ -641,13 +629,13 @@ class KernelOp(CustomOp):
                 findings=tuple(finding.about(node=self.label) for finding in error.findings),
             ) from error
 
-    def admitted(self) -> Network | tuple[Finding, ...]:
-        """The node alone at its baselines (``baselined``), where conversion admits it;
+    def accepted(self) -> Network | tuple[Finding, ...]:
+        """The node alone at its baselines (``baselined``), where conversion accepts it;
         else why it does not: its kernel's refusals bound on its inputs, whatever its open
         choices (``refusals``), or, the node alone as a network, each channel not realized,
-        its admission or a Decision of it without a viable case. Conversion persists the
-        network it gets here, the node's own choices (``persist``), rather than baselining
-        the node again."""
+        its validity refused (a Decision of it without a viable case among its pieces).
+        Conversion persists the network it gets here, the node's own choices
+        (``persist``), rather than baselining the node again."""
         found = self.refusals(self.bound())
         if found:
             return found
@@ -658,7 +646,7 @@ class KernelOp(CustomOp):
         refused: list[Finding] = []
         for name in based.members:
             if based.unbound(name) is not None:
-                refused.extend(based.admission(name))
+                refused.extend(refusal_of(based.validity(name)))
             else:
                 found_here = based.checked([name]).values()
                 refused.extend(finding for each in found_here for finding in each)
@@ -672,36 +660,6 @@ class KernelOp(CustomOp):
         except KernelOpError as error:
             return [str(error)]
         return [f"{self.label}: {finding}" for finding in self.refusals(point)]
-
-
-def candidate_refusals(point: Space, key: str, cases: tuple[str, ...]) -> tuple[Finding, ...]:
-    """Why each of ``cases`` of the selector ``key`` is refused on ``point``: the
-    admission of the case's candidate once the case is committed, each finding once. A
-    decision over values gives none: its own finding says why."""
-    decisions = {item.key: item for item in inspection.decisions(point)}
-    if not decisions[key].selector:
-        return ()
-    selectors = {name for name, item in decisions.items() if item.selector}
-    found: list[Finding] = []
-    for case in cases:
-        report = point.try_with_choices({decisions[key].reference: case})
-        if not report.accepted:
-            for outcome in report.outcomes:
-                if isinstance(outcome.result, Rejected):
-                    found.extend(outcome.result.findings)
-            continue
-        candidate: Any = report.instance
-        walked: list[str] = []
-        for part in key.split("."):
-            # A key names a case after its selector (compute.packed.pe): the selector's
-            # member is already that case's candidate.
-            if ".".join(walked) not in selectors:
-                candidate = getattr(candidate, part)
-            walked.append(part)
-        admitted = inspection.admission(candidate)
-        if isinstance(admitted, Rejected):
-            found.extend(admitted.findings)
-    return tuple(dict.fromkeys(found))
 
 
 def kernel_op(model: ModelWrapper, node: NodeProto) -> KernelOp:

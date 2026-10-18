@@ -32,7 +32,7 @@ itself. With none open, nothing is kept.
 **The verifying mode** (the environment variable ``FINN_VERIFY_MEMBER_CACHE``, any value
 but ``0``): every hit is configured again without the cache and compared with it, by
 what a network reads of a member (its class, its stored choices, what replay dropped and
-refused, its forced, viable and open Decisions, its admission and every export's
+refused, its forced, viable and open Decisions, its validity and every export's
 answer); a mismatch raises ``MemberCacheMismatch``, naming the key. Where the variable
 names a directory, each process writes its counts there when it ends
 (``verification_counts``). The graph's network cache
@@ -387,7 +387,7 @@ def observed(entry: Configured) -> object:
         inspection.forced(point),
         inspection.viable(point),
         inspection.open(point),
-        inspection.admission(point),
+        inspection.validity(point),
         exports,
     )
 

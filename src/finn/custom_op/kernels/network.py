@@ -59,7 +59,7 @@ selected (by position), the name and the channel choices given. A refusal is nev
 In the verifying mode a hit is bound again with no cache open and compared.
 
 A partition's resources (``Partition.own_resources``) are its members'. The shell's
-admission and resources over a network (its members', its ends' and its static region's),
+budgets and resources over a network (its members', its ends' and its static region's),
 and the body's choices given their baselines (``baseline_choices``) on the network in its
 shell, are ``finn.custom_op.kernels.shell``'s.
 """

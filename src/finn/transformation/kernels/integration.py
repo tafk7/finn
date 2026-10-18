@@ -222,7 +222,7 @@ def iodma_configuration(contract: EndContract) -> IodmaConfiguration:
 
 def wire_one_bus_each(contract: EndContract, where: str) -> None:
     """Refuse an end (at ``where``, for the message) the block design cannot wire: it
-    connects one AXI-Lite bus and one memory port an end, while the shell's admission
+    connects one AXI-Lite bus and one memory port an end, while the shell's budgets
     and costing read the counts the end's contract states."""
     if (contract.control_buses, contract.memory_ports) != (1, 1):
         raise IntegrationError(

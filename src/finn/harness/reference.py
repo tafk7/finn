@@ -12,7 +12,7 @@ the op (``OpSpec``, in ``tests/``):
   (``check_positive``):
   1. ``match`` leaves the model unchanged (``check_match_pure``: its serialized
      digest before and after), and matches every node at the op's anchor;
-  2. the kernels' admission on every platform row the repository declares
+  2. the kernels' acceptance on every platform row the repository declares
      (``platform_rows``: each architecture rule of the part catalog,
      ``finn.platform.architectures``, with each shell FINN builds for it),
      by ``ToKernelOps`` on each row's target (``coverage``): the rows that convert

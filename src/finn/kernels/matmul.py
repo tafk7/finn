@@ -52,11 +52,13 @@ depthwise form (it may read ``realization``), and ``w_carried`` the tensor it
 carries, over the stored values' range, narrowed to it (``stored_element``:
 INT8-typed ternary weights are ``INT2``); without known weights, ``w_carried``
 is ``w_tensor``. Its network binds the weight channel's ``tensor`` and
-``contents`` to them. With several weight sets the contents hold one operand a
-set, and the channel's ``sets`` and ``index_tensor`` select one per row. Each
-core reads its weights as ``w_carried`` presents them, the value
-``carried_weights`` (a rule reads values; a view is a product for its holder):
-its weight width, and the packed core's ``NARROW_WEIGHTS``. A dense realization
+``contents`` to the values the two present (``carried_weights``, ``stored_weights``),
+whatever MatMul's validity: what a kernel states for the graph from its facts is a
+value. With several weight sets the contents hold one operand a set, and the
+channel's ``sets`` and ``index_tensor`` select one per row. Each core reads its
+weights as ``w_carried`` presents them, the value ``carried_weights`` (a rule reads
+values; a view is a product for its holder): its weight width, and the packed core's
+``NARROW_WEIGHTS``. A dense realization
 of a depthwise operation reads block-diagonal weights, so it needs known weights
 (``matmul-realization``).
 
@@ -67,9 +69,10 @@ products over the activations' range (``column_range``), unioned over the column
 otherwise, every dot product of the two tensors' values. The result's type is the
 range's smallest encoding, ``UINT`` when no value is negative (``range_dtype``,
 ``result_type``), whatever core computes it; the result element states the range
-(``y_tensor``), which inference writes on the graph with the type, so the next kernel
-reads it. Each core derives its accumulator from the range (the core's
-``result_range``) and states its results' tensor over it, which its ``y`` port writes.
+(``y_tensor``, presenting the value ``result_tensor``), which inference writes on the
+graph with the type, so the next kernel reads it. Each core derives its accumulator
+from the range (the core's ``result_range``) and states its results' tensor over it,
+which its ``y`` port writes.
 
 - ``compute`` is a Decision over the dot-product cores. They share the facts
   and tensors. Each core owns its folding factors (``compute.<core>.pe``,
@@ -421,12 +424,16 @@ class MatMulKernel(ComposedKernel):
         found: tuple[int, ...] = shape[: -2 if self.depthwise else -1]
         return found
 
-    @view
-    def y_tensor(self) -> Tensor | Rejected:
+    @derived
+    def result_tensor(self) -> Tensor | Rejected:
         """Its results: ``(..., N)``, the activations' leading axes (``leading``) and N, in
-        the result type over the result range."""
+        the result type over the result range. A value of its facts and its realization,
+        which inference reads whatever MatMul's validity."""
         least, greatest = self.result_range
         return self._tensor((*self.leading, self.n), self.result_type, TensorRange(least, greatest))
+
+    # The product its holder reads; inference reads the value it presents.
+    y_tensor = View(result_tensor)
 
     @derived
     def weighted(self) -> bool:
@@ -463,7 +470,8 @@ class MatMulKernel(ComposedKernel):
         return Tensor(shape, stored_element(dtype, (least, greatest)))
 
     # What the weight channel's source stores and what it carries, the products its
-    # network reads (``Fact(member, "w_carried")``); the cores read the values.
+    # holder reads; its network (``Fact(member, "carried_weights")``) and the cores read
+    # the values.
     w_stored = View(stored_weights, when=stored)
     w_carried = View(carried_weights, when=weighted)
 

@@ -79,7 +79,7 @@ def _standard(model: ModelWrapper, node: NodeProto) -> None:
 
 def infer_node(model: ModelWrapper, node: NodeProto) -> tuple[Finding, ...]:
     """Infer ``node``'s outputs from its inputs (see the module docstring). It does not
-    admit the node: conversion does, through ``KernelOp.admitted``."""
+    accept the node: conversion does, through ``KernelOp.accepted``."""
     if not is_custom_op(node.domain):
         _standard(model, node)
         infer_node_datatype(model, node, False)

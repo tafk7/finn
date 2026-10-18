@@ -13,8 +13,9 @@ read from a member:
   interface (a kernel's ``x_end``; a channel's ``set_end``, its source's set port),
   labelled from the network (``PortEnd.under``: ``first.compute.packed.x``), given to
   the channel's ``producer`` or ``consumer``; a side without one is a boundary;
-- a fact a member states (``Fact(member, view)``): a parameter channel's tensor and
-  contents, as its kernel states them (``MatMulKernel.w_carried``, ``w_stored``).
+- a fact a member states (``Fact(member, name)``): a parameter channel's tensor and
+  contents, as its kernel states them, values read whatever the kernel's validity
+  (``MatMulKernel.carried_weights``, ``stored_weights``).
 
 Facts flow one way: a kernel's facts are values, and a channel's are read from the
 members before it. So the members are ranked kernels first, in the order declared,
@@ -40,8 +41,8 @@ a change, atomic over the members it reaches:
 3. each channel named, or given another fact: bound again (from the member cache), its
    stored choices replayed with the change's. What replay refuses of the stored choices is
    ``dropped``, with why; a refusal of a choice the change names refuses the change;
-4. every member touched by a change of values checked: its ``admission``, and no
-   Decision left without a viable case.
+4. every member touched by a change of values checked: its validity
+   (``inspection.validity``), which no Decision left without a viable case passes.
 
 Keys are pairs, ``(owner, key)``: a member by name and the decision key in its space
 (``("first", "compute.packed.pe")``). Findings keep their owner, the key or the
@@ -59,7 +60,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Generic, Self, TypeVar
 
@@ -89,7 +90,7 @@ from finn.kernels.artifacts.module import (
 )
 from finn.kernels.base import BOUNDARY, CLOCK2X, NETLIST, Clocking, PortEnd
 from finn.kernels.channels import Channel
-from finn.kernels.configure import chosen, undecided
+from finn.kernels.configure import chosen, refusals, undecided
 from finn.kernels.control import CONTROL, Control, Exported, top_bus
 from finn.kernels.control import presented as presented_buses
 from finn.kernels.members import Configured, Facts, commit, configured, rejection, replayed
@@ -199,10 +200,11 @@ class Interface:
 
 @dataclass(frozen=True)
 class Fact:
-    """A channel's fact a member states: its view ``view`` (MatMul's ``w_carried``)."""
+    """A channel's fact a member states, by ``name``: a derived value, read whatever the
+    member's validity (MatMul's ``carried_weights``), or a view."""
 
     member: str
-    view: str
+    name: str
 
 
 # A wire, an unbound channel and a trial are records the network reads, never values a
@@ -269,11 +271,6 @@ class Trial(Generic[N]):
 
 def _forced(point: Space) -> dict[str, object]:
     return {item.key: item.value for item in inspection.forced(point)}
-
-
-def _admission(point: Space) -> tuple[Finding, ...]:
-    found = inspection.admission(point)
-    return found.findings if isinstance(found, Rejected) else ()
 
 
 FactsKey = tuple[tuple[str, object], ...]
@@ -669,14 +666,17 @@ class Network:
             for item in self._answer(name, "unchecked", inspection.unchecked)
         )
 
-    def admission(self, name: str) -> tuple[Finding, ...]:
-        """Why member ``name`` refuses itself (its ``admission``, as far as it is
-        decided), or nothing; an unbound channel whose read is refused, that read's
-        findings."""
+    def validity(self, name: str) -> inspection.Validity:
+        """Member ``name``'s validity (``inspection.validity``); an unbound channel's is its
+        read's: refused with the read's findings, or undecided on what the read waits on
+        (one piece, owned by the member read)."""
         held = self._unbound.get(name)
-        if held is not None:
-            return held.result.findings if isinstance(held.result, Rejected) else ()
-        return _admission(self.member(name))
+        if held is None:
+            return inspection.validity(self.member(name))
+        piece = (inspection.Piece(held.member, held.result),)
+        if isinstance(held.result, Rejected):
+            return inspection.Validity("refused", piece, held.result)
+        return inspection.Validity("undecided", piece, held.result)
 
     # -- a change ---------------------------------------------------------------------------
 
@@ -695,10 +695,11 @@ class Network:
             if held is not None:
                 return Unbound(held.member, held.result, stored)
             point = points[source]
-            view = getattr(type(point), value.view, None)
-            if view is None:
-                raise NetworkError(f"{name}: {source} has no view {value.view!r}")
-            answer = point.query(view)
+            stated = value.view if isinstance(value, Interface) else value.name
+            handle = getattr(type(point), stated, None)
+            if handle is None:
+                raise NetworkError(f"{name}: {source} states no {stated!r}")
+            answer = point.query(handle)
             if isinstance(answer, Inapplicable):
                 continue
             if isinstance(answer, (Unresolved, Rejected)):
@@ -706,7 +707,7 @@ class Network:
             found = answer.value
             if isinstance(value, Interface):
                 if not isinstance(found, PortEnd):
-                    raise NetworkError(f"{name}: {source}.{value.view} is no end: {found!r}")
+                    raise NetworkError(f"{name}: {source}.{stated} is no end: {found!r}")
                 found = found.under(self._nodes[source])
             resolved[fact] = found
         return tuple(sorted(resolved.items(), key=lambda item: item[0]))
@@ -798,26 +799,25 @@ class Network:
         return Trial(network, dropped, {})
 
     def checked(self, members: Iterable[str]) -> dict[Key, tuple[Finding, ...]]:
-        """Why each of ``members`` is refused: a Decision left without a viable case (by
-        its key) or the member's ``admission`` (by ``(name, "")``)."""
+        """Why each of ``members`` is refused, its validity's findings (``refusals``): a
+        Decision left without a viable case by its key (why each case is refused its
+        causes), the rest by ``(name, "")``."""
         refused: dict[Key, tuple[Finding, ...]] = {}
         for name in members:
-            for item in inspection.viable(self.member(name)):
-                if not item.cases:
-                    detail = "; ".join(f"{case}: {why}" for case, why in item.refused.items())
-                    refused[(name, item.key)] = rejection(
-                        "decision-no-viable-case",
-                        dotted((name, item.key)),
-                        f"no case is viable: {detail}",
-                    )
-            admitted = self.admission(name)
-            if admitted:
-                refused[(name, "")] = admitted
+            rest: list[Finding] = []
+            for finding in refusals(self.member(name)):
+                if finding.code == "decision-no-viable-case":
+                    key = (name, finding.owner)
+                    refused[key] = (replace(finding, owner=dotted(key)),)
+                else:
+                    rest.append(finding)
+            if rest:
+                refused[(name, "")] = tuple(rest)
         return refused
 
     def with_choices(self, changes: Mapping[Key, object]) -> Self:
         """``changes`` committed as the engine accepts them (a member's own refusal is its
-        admission's to state, not checked here), every stored choice kept; a refusal, or a
+        validity's to state, not checked here), every stored choice kept; a refusal, or a
         stored choice the change would drop, is a ``NetworkError`` naming each."""
         trial = self.trial(changes, check=False)
         why = {**trial.refused, **trial.dropped}

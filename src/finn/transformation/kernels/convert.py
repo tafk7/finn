@@ -8,11 +8,11 @@ order, inferring shapes and datatypes as it goes (``infer_node``), so each node 
 inputs as the nodes before it left them.
 
 The KernelOps anchored at a node's op type each try to match it. The matches are tried
-on a copy of the model, largest first, and each is asked to admit it
-(``KernelOp.admitted``: its kernel, and the node alone as a network at its baselines,
-whose channels must be realized). The first match admitted replaces the nodes it covers
+on a copy of the model, largest first, and each is asked to accept it
+(``KernelOp.accepted``: its kernel, and the node alone as a network at its baselines,
+whose channels must be realized). The first match accepted replaces the nodes it covers
 with one KernelOp, which keeps the anchor's name and the covered nodes' outside tensors,
-and its choices are those of the network its admission baselined, persisted once
+and its choices are those of the network its acceptance baselined, persisted once
 (``baseline_kernel_op``, through ``persist``): its kernel's, never a channel's, so nothing
 is written on a tensor. A node that no match converts stays on the host, unchanged. Two
 KernelOps matching the same nodes is an authoring error: one computation is one KernelOp,
@@ -84,7 +84,7 @@ def kernel_ops_by_anchor() -> dict[tuple[str, str], tuple[type[KernelOp], ...]]:
 
 
 class ToKernelOps(Transformation):
-    """Convert each node a KernelOp's pattern matches and the kernels admit into that
+    """Convert each node a KernelOp's pattern matches and the kernels accept into that
     KernelOp (see the module docstring). ``outcomes`` says what became of each node, in
     graph order."""
 
@@ -137,7 +137,7 @@ class ToKernelOps(Transformation):
             sets = [(op, match, _covered(model, index, op, match)) for op, match in matches]
             converted, moved = None, False
             labels: tuple[str, ...] = (_label(node),)
-            # The largest match first (nested patterns); the first the kernels admit wins.
+            # The largest match first (nested patterns); the first the kernels accept wins.
             for op, match, subgraph in sorted(sets, key=lambda each: -len(each[1].nodes)):
                 refused = _structure(model, type(self).__name__, op, subgraph)
                 if refused:
@@ -146,13 +146,13 @@ class ToKernelOps(Transformation):
                 if _move_upstream(model, subgraph):
                     moved = True  # visit the nodes it moved before the anchor first
                     break
-                trial, admitted = _trial(model, op, match, subgraph)
-                if isinstance(admitted, Network):
+                trial, accepted = _trial(model, op, match, subgraph)
+                if isinstance(accepted, Network):
                     labels = tuple(_label(model.graph.node[i]) for i in subgraph.indices)
                     model, converted = trial, op.op_type
-                    baseline_kernel_op(model, model.graph.node[index], admitted)
+                    baseline_kernel_op(model, model.graph.node[index], accepted)
                     break
-                findings.extend(admitted)
+                findings.extend(accepted)
             if moved:
                 continue
             if converted is None:
@@ -289,7 +289,7 @@ def _trial(
 ) -> tuple[ModelWrapper, Network | tuple[Finding, ...]]:
     """Try ``match`` on a copy of the model: replace the covered nodes with one
     KernelOp, named as the anchor, on their outside tensors, and ask the kernels to
-    admit it (``KernelOp.admitted``). Returns the copy and, if admitted, the node alone as
+    accept it (``KernelOp.accepted``). Returns the copy and, if accepted, the node alone as
     a network at its baselines (its outputs then inferred), else the refusals: a missing
     shape or datatype as ``fact-unstated``. A copy, so a refused trial leaves ``model`` as
     it was. Any other wrong fact raises."""
@@ -317,21 +317,21 @@ def _trial(
     trial.graph.node.insert(index, new)
     node = trial.graph.node[index]
     try:
-        admitted = kernel_op(trial, node).admitted()
-        if isinstance(admitted, Network):
+        accepted = kernel_op(trial, node).accepted()
+        if isinstance(accepted, Network):
             infer_node(trial, node)
     except FactUnstated as error:
         return trial, (unstated(op.op_type, str(error), tensor=error.tensor),)
-    if isinstance(admitted, Network):
-        return trial, admitted
-    flat = (cause for finding in admitted for cause in (finding.causes or (finding,)))
+    if isinstance(accepted, Network):
+        return trial, accepted
+    flat = (cause for finding in accepted for cause in (finding.causes or (finding,)))
     return trial, tuple(dict.fromkeys(flat))
 
 
 def baseline_kernel_op(model: ModelWrapper, node: NodeProto, baselined: Network) -> None:
     """Store the KernelOp ``node``'s own choices as its attributes: those of ``baselined``,
-    the node alone at its baselines (``KernelOp.admitted``, the network conversion's
-    admission baselined), written through ``persist`` and only its node's: its kernel's
+    the node alone at its baselines (``KernelOp.accepted``, the network conversion's
+    acceptance baselined), written through ``persist`` and only its node's: its kernel's
     choices, nothing on a tensor. Channel choices wait for the cut, where each channel has
     both its ends (``baseline_choices``)."""
     persist(model, baselined, [kernel_op(model, node).label])
