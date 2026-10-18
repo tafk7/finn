@@ -169,7 +169,8 @@ def test_writable_thresholds_present_their_bus_at_the_port_they_are_given():
 
 def test_writable_thresholds_without_a_control_port_are_not_offered():
     # The platform has a control port, but no port is named for the bus: the case is
-    # refused where it is declared, so the Decision is forced and a commit refused.
+    # refused by a constraint of the kernel, so the Decision is forced; committed all the
+    # same (a constraint never gates a commit), the configuration is refused by it.
     point = design_space(
         ThresholdingAxiKernel(
             threshold_dtype=R,
@@ -182,10 +183,14 @@ def test_writable_thresholds_without_a_control_port_are_not_offered():
     (forced,) = [item for item in inspection.forced(point) if item.key == "use_axilite"]
     assert forced.value is False and "threshold-control" in forced.refused["True"]
     report = point.try_with_choices(use_axilite=True)
-    assert not report.accepted
-    assert {finding.code for outcome in report.outcomes for finding in outcome.result.findings} == {
-        "threshold-control"
-    }
+    assert report.accepted
+    validity = inspection.validity(report.instance)
+    assert validity.status == "refused"
+    assert {
+        (piece.owner, finding.code)
+        for piece in validity.pieces
+        for finding in piece.result.findings
+    } == {("control_for_writes", "threshold-control")}
 
 
 @requires_xsim

@@ -36,11 +36,12 @@ placement, with no stage in block RAM), which states no resources
 assignment has one spelling: with every stage in UltraRAM none is left, and
 ``ram_style`` does not apply. Counted in stages,
 not depths, the choices do not move with PE; ``parameters`` maps them to the
-triggers (the depth of the first stage in each resource, 0 for none). An UltraRAM stage requires the
+triggers (the depth of the first stage in each resource, 0 for none). An UltraRAM stage needs the
 ``platform``'s UltraRAM that takes initial contents (the table is the
 memories' initial contents, a data file the RTL reads: ``thresholds_file``), and
-runtime-writable thresholds a port named for their control bus (``control``), each
-a named refusal of the case.
+runtime-writable thresholds a port named for their control bus (``control``): each a
+constraint of the kernel, refusing the case by name (``uram-absent``, ``uram-init``,
+``threshold-control``).
 
 All native pins remain present when AXI-Lite or set selection is disabled;
 disabled outputs may be unspecified. Bound by a network (or placed in a kernel with
@@ -66,7 +67,6 @@ from collections.abc import Sequence
 from qonnx.core.ranges import TensorRange
 
 from finn.core.space import (
-    ConstraintGroup,
     Decision,
     Domain,
     Param,
@@ -77,8 +77,6 @@ from finn.core.space import (
     divisors_of,
     domain,
     reject,
-    requires,
-    requiring,
     view,
 )
 from finn.dataflow.datatypes import (
@@ -106,7 +104,8 @@ from finn.kernels.utilization import (
     Fit,
     auto_unstated,
     memory,
-    uram_requirements,
+    uram_constraint,
+    uram_init_constraint,
 )
 from finn.kernels.values.domains import Integer, admit_element, set_index_dtype
 from finn.kernels.values.semantics import (
@@ -245,18 +244,16 @@ class ThresholdingAxiKernel(LeafKernel):
         reach it by."""
         return self.present(ThresholdingAxiKernel.control)
 
+    use_axilite: bool = Decision(values=(False, True))
+
     # Runtime-writable thresholds need a control bus to export their AXI-Lite
-    # interface through; how many buses a shell takes is its admission's, not theirs.
-    use_axilite: bool = Decision(
-        values=(False, True),
-        requires=(
-            requires(
-                controllable,
-                "threshold-control: runtime-writable thresholds need a control bus",
-                cases=(True,),
-            ),
-        ),
-    )
+    # interface through; how many buses a shell takes is the shell's to count, not theirs.
+    @constraint
+    def control_for_writes(self) -> bool | Rejected:
+        if self.use_axilite and not self.controllable:
+            return reject("threshold-control", "runtime-writable thresholds need a control bus")
+        return True
+
     deep_pipeline: bool = Decision(values=(False, True))
 
     @derived
@@ -267,12 +264,11 @@ class ThresholdingAxiKernel(LeafKernel):
     # The threshold memories (module docstring): the deepest ``ultra_stages`` in
     # UltraRAM; when any stage is left above them, the ``block_stages`` in block RAM
     # and the rest ``ram_style``.
-    ultra_stages: int = Decision(
-        domain=requiring(
-            stage_counts(stages),
-            *uram_requirements(platform, _staged, init=True),
-        )
-    )
+    ultra_stages: int = Decision(domain=stage_counts(stages))
+    # An UltraRAM stage needs the platform's UltraRAM, and one that takes the initial
+    # contents (the table).
+    uram_present = uram_constraint(platform, ultra_stages, _staged)
+    uram_init_taken = uram_init_constraint(platform, ultra_stages, _staged)
 
     @derived
     def left(self) -> bool:
@@ -388,15 +384,6 @@ class ThresholdingAxiKernel(LeafKernel):
                 "the native AXI wrapper does not address multiple configuration sets",
             )
         return True
-
-    admission = ConstraintGroup(
-        types_supported,
-        table_supported,
-        saturation_supported,
-        memory_supported,
-        bias_supported,
-        configuration_supported,
-    )
 
     @derived
     def config_bus(self) -> Bus | Rejected:
@@ -606,8 +593,8 @@ class ThresholdingAxiKernel(LeafKernel):
 
     @derived
     def held(self) -> Held:
-        """AXI-Lite, without runtime writes (with them, ``use_axilite`` requires a control
-        bus, which presents it)."""
+        """AXI-Lite, without runtime writes (with them, a control bus presents it:
+        ``control_for_writes``)."""
         return Held() if self.use_axilite else held_bus(self.config_bus)
 
     @derived

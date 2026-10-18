@@ -176,7 +176,7 @@ def test_the_platform_narrows_the_memories_and_a_control_bus_the_axilite() -> No
     forced = {item.key: item for item in inspection.forced(point(FULL_DSP48E2))}
     assert "ultra_stages" not in forced
     assert forced["use_axilite"].refused == {
-        "True": "use_axilite: threshold-control: True: runtime-writable thresholds need a "
+        "True": "control_for_writes: threshold-control: runtime-writable thresholds need a "
         "control bus"
     }
     bare = {item.key: item for item in inspection.forced(point(replace(FULL_DSP48E2, uram=False)))}
@@ -184,6 +184,14 @@ def test_the_platform_narrows_the_memories_and_a_control_bus_the_axilite() -> No
     assert {"1", "2"} == set(bare["ultra_stages"].refused)
     assert all("uram-absent" in why for why in bare["ultra_stages"].refused.values())
     zynq = point(replace(FULL_DSP48E2, uram_init=False))
+    # A constraint never gates a commit: the case is committed, and the configuration is
+    # refused by the constraint that names it.
     report = zynq.try_with_choices(ultra_stages=1)
-    assert not report.accepted
-    assert {finding.code for finding in report.outcomes[0].result.findings} == {"uram-init"}
+    assert report.accepted
+    validity = inspection.validity(report.instance)
+    assert validity.status == "refused"
+    assert {
+        (piece.owner, finding.code)
+        for piece in validity.pieces
+        for finding in piece.result.findings
+    } == {("uram_init_taken", "uram-init")}
