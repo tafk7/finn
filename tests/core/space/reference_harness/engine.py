@@ -634,8 +634,11 @@ class Engine:
             if only is None or finding.owner == only
         )
 
-    def blockers(self, findings: Iterable[Any]) -> frozenset[str]:
-        return frozenset(self.path(finding.owner) for finding in findings)
+    def blockers(self, findings: Iterable[Any], asked: str | None = None) -> frozenset[str]:
+        """What an answer waits on: its findings' owners, but for ``asked``, the node whose
+        answer it is (the engine names a choice whose own check waits as the owner of what
+        it waits on; the model names the inputs, and blockers compare as a subset)."""
+        return frozenset(self.path(finding.owner) for finding in findings) - {asked}
 
 
 def build(
@@ -699,7 +702,7 @@ class Point:
                 return StateForm("inactive", stored[path])
             if isinstance(state, Unresolved):
                 return StateForm(
-                    "unchecked", stored[path], blockers=engine.blockers(state.findings)
+                    "unchecked", stored[path], blockers=engine.blockers(state.findings, path)
                 )
             if isinstance(state, Rejected):
                 return StateForm("refused", codes=engine.codes(state.findings))
@@ -708,7 +711,7 @@ class Point:
                 return StateForm("readable", stored[path])
             if isinstance(answer, Unresolved):
                 return StateForm(
-                    "unchecked", stored[path], blockers=engine.blockers(answer.findings)
+                    "unchecked", stored[path], blockers=engine.blockers(answer.findings, path)
                 )
             if isinstance(answer, Rejected):
                 return StateForm("refused", codes=engine.codes(answer.findings))
@@ -718,7 +721,7 @@ class Point:
         if isinstance(state, Rejected):
             return StateForm("refused", codes=engine.codes(state.findings))
         if isinstance(state, Unresolved):
-            return StateForm("open", blockers=engine.blockers(state.findings))
+            return StateForm("open", blockers=engine.blockers(state.findings, path))
         forced = {item.key: item.value for item in inspection.forced(self.point)}
         if path in forced:
             return StateForm("forced", forced[path])
@@ -729,9 +732,11 @@ class Point:
         if path in viable:
             return StateForm("open", possible=tuple(viable[path]))
         blockers = (
-            engine.blockers(answer.findings) if isinstance(answer, Unresolved) else frozenset()
+            engine.blockers(answer.findings, path)
+            if isinstance(answer, Unresolved)
+            else frozenset()
         )
-        return StateForm("open", blockers=blockers - {path})
+        return StateForm("open", blockers=blockers)
 
     def answer(self, path: str) -> AnswerForm:
         """A fact's, a choice's, a derived value's or a view's answer."""
@@ -744,7 +749,7 @@ class Point:
                 value = result.value
             return AnswerForm("value", value)
         if isinstance(result, Unresolved):
-            return AnswerForm("unresolved", blockers=engine.blockers(result.findings))
+            return AnswerForm("unresolved", blockers=engine.blockers(result.findings, path))
         if isinstance(result, Rejected):
             return AnswerForm("refused", codes=engine.codes(result.findings))
         return AnswerForm("inapplicable")

@@ -392,6 +392,18 @@ ROWS: tuple[Row, ...] = (
         "inner one",
     ),
     Row(
+        "inactive-under-refused-selector",
+        "E2",
+        "a choice under an inner selector admitted, under a refused outer selector, on another "
+        "case is inactive in the configuration a change would publish: the change is refused, "
+        "reaching it as inactive",
+        f"{_SCOPES}::test_a_choice_on_an_inner_selectors_other_case_is_inactive_under_a_refused_outer",
+        "inactive-under-refused-selector",
+        "unclassified: pending a ruling on whether the inner selector's admitted case or the "
+        "refused outer selector decides the choice's presence; the model reads it absent, "
+        "lane 0's engine under a refused guard (at the base the commits are refused first)",
+    ),
+    Row(
         "nested-conflict-choice",
         "lane 2",
         "a committed choice in a conflict keeps its value, read refused through both selectors "

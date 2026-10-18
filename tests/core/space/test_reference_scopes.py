@@ -337,6 +337,55 @@ def test_a_conflict_with_a_choice_three_deep_refuses_the_configuration() -> None
     reach(NESTED.start(CLOSED), Change(commit={PE: 4})).check_validity()
 
 
+# An inner selector inside a case of an outer one: ``inner`` committed to ``y`` and a choice
+# under its other case ``x`` committed too, both while ``outer`` is open (both wait on it).
+# New facts then leave ``outer`` no possible case: ``inner`` is admitted under the refused
+# selector, and the choice under ``x``, its guard's other case committed, is inactive.
+
+OUTER = Case(
+    "an inner selector under a refused outer one",
+    Space(
+        ("on",),
+        Scope(
+            "",
+            selectors=(
+                Selector(
+                    "outer",
+                    (
+                        Scope(
+                            "a",
+                            selectors=(
+                                Selector(
+                                    "inner",
+                                    (Scope("x", choices=(Choice("c", listed(1, 2)),)), Scope("y")),
+                                ),
+                            ),
+                            constraints=(
+                                Constraint("needs", ("on",), lambda read: read["on"] >= 1, "off-a"),
+                            ),
+                        ),
+                        Scope(
+                            "b",
+                            constraints=(
+                                Constraint("needs", ("on",), lambda read: read["on"] >= 2, "off-b"),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+@expected("inactive-under-refused-selector")
+def test_a_choice_on_an_inner_selectors_other_case_is_inactive_under_a_refused_outer() -> None:
+    point = reach(
+        OUTER.start({"on": 2}), Change(commit={"outer.a.inner": "y", "outer.a.inner.x.c": 1})
+    )
+    point.check_change(Change(facts={"on": 0}))
+
+
 # -- a look-ahead against a choice with no possible value ------------------------------------------
 #
 # ``realization`` is ``native`` or ``other``; ``native`` puts a scope in place whose selector

@@ -428,6 +428,7 @@ PRIORITY = (
     "own-reason",
     "own-reason-forcing",
     "own-reason-false-guard",
+    "inactive-under-refused-selector",
     "stale-forced",
     "view-of-refused-space",
     "empty-list",
@@ -663,6 +664,21 @@ def _own_reason(
     if presence(base, scope) == "unknown":
         return "own-reason-forcing" if inactive else "own-reason"
     return None
+
+
+def _under_refused(solution: model.Solution, scope: str) -> bool:
+    """Whether a selector above ``scope`` is refused (its own check false, no possible case,
+    or admitted under a refused selector itself)."""
+    index = solution.index
+    current: str | None = scope
+    while current is not None:
+        info = index.scopes[current]
+        if info.selector is not None and isinstance(
+            solution.state(info.selector), (model.RefusedChoice, model.GuardRefused)
+        ):
+            return True
+        current = info.parent
+    return False
 
 
 @dataclass
@@ -979,7 +995,8 @@ class _Walk:
         """What only a change's verdict shows, on the choices the two verdicts differ on: a
         choice the configuration the change would publish keeps unchecked, or admits under
         a refused guard; a named value outside its domain the model refuses with its own
-        reason (:func:`_own_reason`); a change the engine refuses that a cold build of the
+        reason (:func:`_own_reason`); a retained choice the model reaches as inactive
+        under a refused selector; a change the engine refuses that a cold build of the
         configuration it would publish accepts (only its base's forced values refused it),
         or accepts where that cold build refuses (an admission its base made kept)."""
         found: dict[str, set[str]] = {}
@@ -998,6 +1015,10 @@ class _Walk:
                     kind = _own_reason(base, solution, choice, engine.get(choice))
                     if kind:
                         found.setdefault(kind, set()).add(choice)
+                elif refusal.kind == "reached" and _under_refused(
+                    solution, self.index.choices[choice].scope
+                ):
+                    found.setdefault("inactive-under-refused-selector", set()).add(choice)
         cold = self.engine.open(published.facts)
         rebuilt, _ = cold.change(model.Change(commit=published.stored))
         if rebuilt.accepted != form.accepted:
