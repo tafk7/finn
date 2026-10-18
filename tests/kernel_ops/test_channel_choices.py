@@ -217,7 +217,11 @@ def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
     # ends wait on the reopened pe, and its stored memory is replayed once the baseline
     # chooses one, where it still applies.
     assert sorted(baselining.dropped) == ["first.compute.packed.pe"]
-    assert [f.code for f in baselining.dropped["first.compute.packed.pe"]] == ["domain-membership"]
+    # Its own domain refuses 3, and its selector, left with no viable case, stands beside it.
+    assert {(f.code, f.owner) for f in baselining.dropped["first.compute.packed.pe"]} == {
+        ("domain-membership", "compute.packed.pe"),
+        ("decision-no-viable-case", "compute"),
+    }
     first = kernel_op(model, model.graph.node[0])
     assert first.choices() == {
         **nodes["first"],
@@ -374,3 +378,17 @@ def test_choices_on_a_tensor_that_is_no_channel_are_dropped_and_cleared() -> Non
     persist(model, bound)
     assert "thresholds" not in model.tensors_stating(CHANNEL)
     assert not network(model, model.graph.node).stale
+
+
+def test_a_channel_choice_kept_unchecked_is_saved_and_replayed_as_unchecked() -> None:
+    """A FIFO's depth stored while the channel's transport is open waits on the transport:
+    it is kept unchecked, and saving writes it on the tensor, as it writes a checked one.
+    The model read again holds it unchecked, waiting on the same transport."""
+    model = kernel_model()
+    model.clear(CHANNEL, tensor="levels")
+    configured(model, {"levels": {"transport.fifo.buffer.depth": 8}})
+    assert entries(model, "levels")["finn.channel/transport.fifo.buffer.depth"] == "8"
+    point = network(model, model.graph.node).member("levels")
+    assert inspection.unchecked(point) == (
+        inspection.Unchecked("transport.fifo.buffer.depth", 8, ("transport",)),
+    )

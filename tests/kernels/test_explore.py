@@ -479,7 +479,9 @@ def test_the_baseline_takes_each_open_choice_s_first_viable_case_and_leaves_requ
 def test_reopen_clears_what_the_engine_names_and_a_channel_waits_on_its_kernel() -> None:
     """Clearing a MatMul's folding leaves its channels' ends open: they wait, their
     stored choices with them, and come back when the folding does. Within a member, what
-    the engine names is cleared too. Nothing outside the reach is touched."""
+    the engine names is cleared too; a choice the clear only leaves waiting is kept
+    unchecked, and dropped with why if what it waits on settles against it. Nothing
+    outside the reach is touched."""
     explorer, network = seam()
     base = explorer.baseline(network)
     opened, reach = explorer.reopen(base, [("first", "compute.packed.pe")])
@@ -495,13 +497,28 @@ def test_reopen_clears_what_the_engine_names_and_a_channel_waits_on_its_kernel()
     assert explorer.chosen(again.network) == explorer.chosen(base)
     # A key not stored is nothing to reopen.
     assert explorer.reopen(network, [("first", "compute.packed.pe")]) == (network, ())
-    # A selector's nested choices are the engine's to name too.
+    # A selector's nested choice waits on its presence: the engine keeps it unchecked, so
+    # it is not in the reach.
     sized = explorer.set(
         base, keyed({"hidden.transport": "fifo", "hidden.transport.fifo.buffer.depth": 16})
     )
     assert isinstance(sized, Accepted)
-    _, reach = explorer.reopen(sized.network, [("hidden", "transport")])
-    assert ("hidden", "transport.fifo.buffer.depth") in reach
+    depth = ("hidden", "transport.fifo.buffer.depth")
+    waiting, reach = explorer.reopen(sized.network, [("hidden", "transport")])
+    assert reach == (("hidden", "transport"),)
+    assert [(key, item.value, item.blockers) for key, item in waiting.unchecked()] == [
+        (depth, 16, ("transport",))
+    ]
+    # The FIFO again, it is checked and kept; another transport drops it, named with why.
+    fifo = explorer.set(waiting, keyed({"hidden.transport": "fifo"}))
+    assert isinstance(fifo, Accepted) and not fifo.dropped
+    assert explorer.chosen(fifo.network)[depth] == 16 and not fifo.network.unchecked()
+    direct = explorer.set(waiting, keyed({"hidden.transport": "direct"}))
+    assert isinstance(direct, Accepted)
+    assert {key: [f.code for f in why] for key, why in direct.dropped.items()} == {
+        depth: ["inapplicable"]
+    }
+    assert depth not in direct.network.chosen(unchecked=True)
 
 
 def test_settle_keeps_each_prior_value_still_accepted_and_rebaselines_the_rest() -> None:
@@ -548,6 +565,9 @@ def test_set_drops_a_stored_choice_the_change_makes_invalid_then_settles() -> No
 
 
 def test_a_held_choice_a_change_would_drop_refuses_the_change() -> None:
+    """A held choice a change would drop refuses the change; one a change only leaves
+    waiting is kept unchecked, and the hold waits with it; one settling cannot bring back
+    is ``Unsettled``."""
     explorer, network = seam()
     pumped = explorer.set(
         explorer.baseline(network),
@@ -570,14 +590,27 @@ def test_a_held_choice_a_change_would_drop_refuses_the_change() -> None:
     kept = explorer.set(pumped.network, keyed({"first.compute.packed.simd": 4}))
     assert isinstance(kept, Accepted)
     assert explorer.chosen(kept.network)[pumping] is True
-    opened = explorer.reopen(pumped.network, [("first", "compute.packed.simd")])[0]
+    # SIMD reopened, the held pumping is kept unchecked, waiting on it: the hold waits with
+    # it, and settling takes the first SIMD that keeps it (one lane would drop it).
+    opened, reach = explorer.reopen(pumped.network, [("first", "compute.packed.simd")])
+    assert reach == (("first", "compute.packed.simd"),)
+    assert [(key, item.value, item.blockers) for key, item in opened.unchecked()] == [
+        (pumping, True, ("compute.packed.simd",))
+    ]
+    settled = explorer.settle(opened, {})
+    assert explorer.chosen(settled)[pumping] is True
+    assert explorer.chosen(settled)[("first", "compute.packed.simd")] == 2
+    assert not settled.unchecked()
+    # Reopened itself, it is cleared for settling to bring back: SIMD's baseline, one
+    # lane, forces it off, so the hold is not met.
+    cleared = explorer.reopen(pumped.network, [("first", "compute.packed.simd"), pumping])[0]
     with refused(
         "pin-unsettled",
         error=Unsettled,
         owner="first.compute.packed.compute_pumping",
         message="held to True",
     ) as unsettled:
-        explorer.settle(opened, {})
+        explorer.settle(cleared, {})
     assert unsettled.error.findings == (unsettled.finding,)
 
 

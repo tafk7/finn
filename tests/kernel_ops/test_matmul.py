@@ -29,6 +29,7 @@ from finn.core.graph.annotations.channel import channel_choices
 from finn.core.graph.annotations.platform import PLATFORM_KEYS
 from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
+from finn.core.space import inspection
 from finn.custom_op.kernels.conv import Conv
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.network import Partition, network, persist
@@ -156,13 +157,23 @@ def test_configured_choices_are_written_and_replay_reads_them() -> None:
 
 def test_a_graph_with_a_cleared_choice_a_reader_needs_is_stale() -> None:
     """The read side of a clear: a graph whose SIMD is gone, its pumping still stored, is
-    stated as the raw attributes state it, and replay refuses the pumping."""
+    stated as the raw attributes state it. The pumping, whose check reads SIMD, is kept
+    unchecked, waiting on it, not stale; once SIMD is stated, replay checks it, and refuses
+    a pumping one lane cannot split."""
     model = matmul_model()
     configured(model, {"first": FOLDING})
     write_raw(model, "first", "compute.packed.simd", None)
     assert "compute.packed.simd" not in attributes(model)
+    assert op(model).verify_node() == []
+    assert inspection.unchecked(op(model).point()) == (
+        inspection.Unchecked("compute.packed.compute_pumping", False, ("compute.packed.simd",)),
+    )
+    # Pumped, it waits all the same; SIMD stated as one lane, it is stale.
+    write_raw(model, "first", "compute.packed.compute_pumping", True)
+    assert op(model).verify_node() == []
+    write_raw(model, "first", "compute.packed.simd", 1)
     (problem,) = op(model).verify_node()
-    assert "compute.packed.compute_pumping: " in problem and "simd" in problem
+    assert "compute.packed.compute_pumping: " in problem and "SIMD" in problem
     # By its code: the point's replay refuses the pumping, the node in its details.
     with refused(
         "choices-refused",
@@ -170,7 +181,7 @@ def test_a_graph_with_a_cleared_choice_a_reader_needs_is_stale() -> None:
         owner="MatMul",
         node="first",
         keys=("compute.packed.compute_pumping",),
-        message=r"compute\.packed\.compute_pumping: .*simd",
+        message=r"compute\.packed\.compute_pumping: .*SIMD",
     ):
         op(model).point()
     write_raw(model, "first", "compute.packed.compute_pumping", None)
@@ -191,7 +202,9 @@ def test_persist_checks_every_value_before_it_writes_any(monkeypatch: pytest.Mon
         ("compute.packed.simd", "choice-value-invalid"),
     ):
         stated = {("first", "compute.packed.pe"): 4, ("first", forged): "two"}
-        monkeypatch.setattr(Partition, "chosen", lambda self, names=None, stated=stated: stated)
+        monkeypatch.setattr(
+            Partition, "chosen", lambda self, names=None, *, unchecked=False, stated=stated: stated
+        )
         with refused(
             code, error=KernelOpError, owner="MatMul", node="first", keys=(forged,)
         ) as caught:

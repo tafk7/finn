@@ -47,9 +47,9 @@ S = TypeVar("S", bound=Space)
 
 @dataclass(frozen=True, slots=True)
 class Model(Generic[S]):
-    """A compiled declaration: its structure, with no inputs or choices. What
-    inspection reads of its structure alone (its Decisions below a scope) is kept
-    with it (``read``)."""
+    """A compiled declaration: its structure, with no inputs or choices. What is read
+    of its structure alone (inspection's Decisions below a scope, the runtime's
+    selector case of each case guard) is kept with it (``_read``)."""
 
     space_type: type[S]
     linked: LinkedModel

@@ -8,6 +8,7 @@ from qonnx.core.datatype import DataType
 from support.emitted_netlist import read
 from support.helpers import (
     FULL_DSP48E2,
+    FULL_DSP58,
     WeightDelivery,
     built,
     choose,
@@ -29,8 +30,11 @@ from finn.core.space import (
     Unresolved,
     View,
     constraint,
+    design_space,
+    inspection,
     reject,
 )
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
@@ -45,6 +49,10 @@ FACTS = dict(
     weights_dtype=DataType["INT3"],
     platform=FULL_DSP48E2,
 )
+
+
+def int4(shape: tuple[int, ...]) -> Tensor:
+    return Tensor(shape, ScalarEncoding(DataType["INT4"]))
 
 
 def assembly(**changes):
@@ -180,6 +188,50 @@ def test_precision_covers_full_ranges_and_is_minimal(activation, weight, length,
 def test_invalid_configuration_fails_during_construction(changes, match):
     with pytest.raises(ValueError, match=match):
         assembly(**changes)
+
+
+def test_a_folding_factor_outside_its_domain_is_refused_by_its_own_finding_alone():
+    """PE 3 divides neither extent, and that is also why no core is viable once it is
+    committed. It is refused with its own finding (the selector's beside it); SIMD and
+    pumping, committed with it, whose own values hold, are not refused through the
+    selector."""
+    trial = matmul_point(**FACTS).trial(
+        {
+            ("matmul", "compute.packed.pe"): 3,
+            ("matmul", "compute.packed.simd"): 2,
+            ("matmul", "compute.packed.compute_pumping"): False,
+        },
+        check=False,
+    )
+    assert list(trial.refused) == [("matmul", "compute.packed.pe")]
+    found = {(item.code, item.owner) for item in trial.refused[("matmul", "compute.packed.pe")]}
+    assert ("domain-membership", "compute.packed.pe") in found
+
+
+def test_a_folding_factor_under_an_open_core_is_refused_by_its_domain_or_waits() -> None:
+    """On DSP58 two cores are viable, so ``compute`` stays open. PE is checked against its
+    domain all the same, where it exists: 3 divides no extent of 4, and is refused at its own
+    commit by its own finding; 2 is kept unchecked, waiting on ``compute``. Both readings
+    (other facts: twice the rows)."""
+    point = design_space(
+        MatMulKernel(platform=FULL_DSP58, x_tensor=int4((8, 4)), w_tensor=int4((4, 4)))
+    )
+    assert isinstance(point.query(MatMulKernel.compute), Unresolved)
+    pe = {item.key: item.reference for item in inspection.decisions(point)}["compute.packed.pe"]
+    for reading in (
+        lambda change: point.try_with_choices(change),
+        lambda change: point.try_with_facts({MatMulKernel.x_tensor: int4((16, 4))}, change),
+    ):
+        three = reading({pe: 3})
+        assert not three.accepted
+        (outcome,) = (item for item in three.outcomes if item.status == "refused")
+        assert outcome.owner == "compute.packed.pe"
+        assert [item.code for item in outcome.result.findings] == ["domain-membership"]
+        two = reading({pe: 2})
+        assert two.accepted
+        assert inspection.unchecked(two.instance) == (
+            inspection.Unchecked("compute.packed.pe", 2, ("compute",)),
+        )
 
 
 def test_weights_that_are_not_integers_are_unrecognized_as_the_weights_value() -> None:

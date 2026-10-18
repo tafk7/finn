@@ -75,14 +75,19 @@ def undecided(point: Space, pattern: str) -> list[str]:
     return found
 
 
-def chosen(point: Space) -> dict[str, object]:
+def chosen(point: Space, *, unchecked: bool = False) -> dict[str, object]:
     """Every Decision ``point`` commits, by key: the choices made on purpose (a forced
-    Decision is never committed)."""
+    Decision is never committed). With ``unchecked``, a choice kept unchecked (its own check
+    cannot conclude yet: ``inspection.unchecked``) too, by its stored value: what saving
+    writes, a commitment whose evidence is pending."""
+    waiting = {item.key: item.value for item in inspection.unchecked(point)} if unchecked else {}
     found: dict[str, object] = {}
     for item in inspection.decisions(point):
         state = point.field(item.reference).state
         if isinstance(state, Available) and state.value.status == "committed":
             found[item.key] = state.value.value
+        elif item.key in waiting:
+            found[item.key] = waiting[item.key]
     return found
 
 

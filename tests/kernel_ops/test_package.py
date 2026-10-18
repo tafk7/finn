@@ -22,8 +22,8 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from support.configure import configured
-from support.models import configure_partition, kernel_model
+from support.configure import configured, write_raw
+from support.models import choose_memories, configure_partition, kernel_model
 from support.packaging import NoVivado, reaches_vivado
 from support.refusals import refused
 from support.xsim import requires_vivado
@@ -37,8 +37,11 @@ from finn.core.graph.annotations.outputs import (
 )
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
-from finn.custom_op.kernels.shell import configured_network
+from finn.core.space import inspection
+from finn.custom_op.kernels.network import persist
+from finn.custom_op.kernels.shell import InShell, configured_network, in_shell
 from finn.kernels.artifacts import build
+from finn.kernels.configure import undecided
 from finn.toolchain.launcher import (
     Selection,
     Toolchain,
@@ -89,6 +92,87 @@ def test_a_choice_never_created_refuses_packaging_and_is_named() -> None:
     reference = configured_network(configured, "partition")[0].module
     module = configured_network(model.transform(BaselineChoices()), "sdp_1")[0].module
     assert (module.fragment, module.abi) == (reference.fragment, reference.abi)
+
+
+def test_an_unchecked_choice_is_refused_by_name_beside_the_open_choice_it_waits_on() -> None:
+    """A choice stored while the choice its check reads is open is kept unchecked (the
+    engine's rule: read unresolved, listed by ``inspection.unchecked``): the thresholding's
+    ``block_stages`` with its ``ram_style`` cleared. Emission demands a buildable point, so
+    it refuses both by name, in one ``KernelOpError``: ``choices-open`` names
+    ``activate.ram_style``, and ``choices-unchecked`` names ``activate.block_stages``, its
+    stored value and what it waits on. ``undecided`` still counts only the open one."""
+    model = kernel_model()
+    choose_memories(model)
+    write_raw(model, "activate", "ram_style", None)
+    bound = in_shell(model, model.graph.node)
+    point = bound.member("activate")
+    waiting = inspection.Unchecked("block_stages", 0, ("ram_style",))
+    assert inspection.unchecked(point) == (waiting,)
+    assert undecided(point, "*") == ["ram_style"]  # the open one; the unchecked is not counted
+    assert bound.unchecked() == ((("activate", "block_stages"), waiting),)
+    with refused(
+        "choices-open",
+        error=KernelOpError,
+        owner="configured_network",
+        node="sdp_1",
+        keys=("activate.ram_style",),
+        message=r"open choices, refused at emission: activate\.ram_style \(not created",
+    ) as left:
+        configured_network(model, "sdp_1")
+    with refused(
+        "choices-unchecked",
+        error=KernelOpError,
+        owner="configured_network",
+        node="sdp_1",
+        keys=("activate.block_stages",),
+        message=r"unchecked choices, refused at emission: activate\.block_stages = 0"
+        r" \(waits on activate\.ram_style\)",
+    ):
+        raise left.error
+    assert cast(KernelOpError, left.error).keys == ("activate.ram_style", "activate.block_stages")
+
+
+def test_an_unchecked_choice_alone_refuses_emission_by_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Emission refuses a network whose only incomplete choice is one kept unchecked, by
+    name (``choices-unchecked``), as it refuses an open one. No real kernel keeps a choice
+    unchecked without an open choice it waits on, so a double of the network's
+    ``undecided`` hides the open ``ram_style`` that ``block_stages`` waits on: what is left
+    for emission to refuse is the unchecked choice."""
+    model = kernel_model()
+    choose_memories(model)
+    write_raw(model, "activate", "ram_style", None)
+    monkeypatch.setattr(InShell, "undecided", lambda self: ())
+    with refused(
+        "choices-unchecked",
+        error=KernelOpError,
+        owner="configured_network",
+        node="sdp_1",
+        keys=("activate.block_stages",),
+        message=r"activate\.block_stages = 0 \(waits on activate\.ram_style\)",
+    ) as left:
+        configured_network(model, "sdp_1")
+    assert [finding.code for finding in left.error.findings] == ["choices-unchecked"]
+
+
+def test_an_unchecked_choice_is_saved_and_replayed_as_unchecked() -> None:
+    """Saving writes a choice kept unchecked by its stored value, as it writes a checked
+    one: nothing a user or a strategy committed is dropped. ``block_stages`` stays on its
+    node while its ``ram_style`` is open, and the model read again holds it unchecked,
+    waiting on the same ``ram_style``. (A channel's choice kept unchecked is saved the same
+    way: ``test_channel_choices``.)"""
+    model = kernel_model()
+    choose_memories(model)
+    write_raw(model, "activate", "ram_style", None)
+    bound = in_shell(model, model.graph.node)
+    waiting = (inspection.Unchecked("block_stages", 0, ("ram_style",)),)
+    assert inspection.unchecked(bound.member("activate")) == waiting
+    assert persist(model, bound)["activate"]["block_stages"] == 0
+    (node,) = [node for node in model.graph.node if node.name == "activate"]
+    assert "block_stages" in {attribute.name for attribute in node.attribute}
+    again = in_shell(model, model.graph.node)
+    assert inspection.unchecked(again.member("activate")) == waiting
 
 
 def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:

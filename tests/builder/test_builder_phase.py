@@ -912,12 +912,17 @@ def test_a_choice_stale_at_the_cut_is_noted(
     )
     assert "domain-membership" in finding.message
     # The key is named once, with the value and the values it could take; the kernel's
-    # finding is kept as the note's cause.
+    # findings are kept as the note's causes: its own, and beside it the selector's
+    # (``compute`` left with no viable case).
     assert finding.message.count("compute.packed.pe") == 1
-    assert "first.compute.packed.pe = 3: not one of 1, 2, 4" in finding.message
-    assert [(cause.code, dict(cause.details)) for cause in finding.causes] == [
-        ("domain-membership", {"value": 3, "candidates": (1, 2, 4)})
-    ]
+    assert "first.compute.packed.pe = 3: " in finding.message
+    assert "not one of 1, 2, 4 (domain-membership)" in finding.message
+    assert {(cause.code, cause.owner) for cause in finding.causes} == {
+        ("domain-membership", "compute.packed.pe"),
+        ("decision-no-viable-case", "compute"),
+    }
+    (own,) = [cause for cause in finding.causes if cause.code == "domain-membership"]
+    assert dict(own.details) == {"value": 3, "candidates": (1, 2, 4)}
 
 
 def test_a_step_that_moves_the_target_s_folding_leaves_the_bitfile_no_objective(

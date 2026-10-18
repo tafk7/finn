@@ -208,8 +208,8 @@ def _resources(network: InShell) -> QueryResult[ShellResources]:
 @dataclass(frozen=True)
 class Configured:
     """A partition's network as emission builds it (``configured_network``): every choice
-    stored, none open, admitted by its shell; its ``module`` and its ``cycles`` a frame,
-    its slowest member's."""
+    stored, none open or unchecked, admitted by its shell; its ``module`` and its
+    ``cycles`` a frame, its slowest member's."""
 
     network: InShell
     module: Composed
@@ -248,7 +248,9 @@ def configured_network(
     completed here. A stale choice; an open choice, each by name: one no case of which is
     viable (each case's reason), a required one no strategy set ("required: run
     step_size_fifos or step_placeholder_choices"), any other one never baselined ("not
-    created: BaselineChoices"); a network the shell does not admit
+    created: BaselineChoices"); a choice kept unchecked, each by name with its stored value
+    and what it waits on (one error names the open and the unchecked together, a finding
+    each: ``choices-open``, ``choices-unchecked``); a network the shell does not admit
     (``admission_refusal``), or whose module or cycles its members refuse; or graph inputs
     and outputs out of port order refuse, named. It only binds: it does not check the
     FIFOs against their streams (``verify_partition`` does), so a simulation can run a
@@ -274,6 +276,8 @@ def configured_network(
             ),
         )
     open_keys = bound.undecided()
+    waiting = bound.unchecked()
+    choices: list[tuple[str, str, tuple[str, ...]]] = []
     if open_keys:
         required = {key for key, item in bound.decisions().items() if item.required}
         unviable = {
@@ -289,12 +293,34 @@ def configured_network(
             else f"{dotted(key)} (not created: BaselineChoices)"
             for key in open_keys
         ]
-        raise KernelOpError.refused(
-            "choices-open",
-            "configured_network",
-            f"{label}: open choices, refused at emission: " + "; ".join(named),
-            tuple(dotted(key) for key in open_keys),
-            node=label,
+        text = f"{label}: open choices, refused at emission: " + "; ".join(named)
+        choices.append(("choices-open", text, tuple(dotted(key) for key in open_keys)))
+    if waiting:
+        named = [
+            f"{dotted(key)} = {item.value!r}"
+            + (
+                " (waits on " + ", ".join(dotted((key[0], each)) for each in item.blockers) + ")"
+                if item.blockers
+                else ""
+            )
+            for key, item in waiting
+        ]
+        text = f"{label}: unchecked choices, refused at emission: " + "; ".join(named)
+        choices.append(("choices-unchecked", text, tuple(dotted(key) for key, _ in waiting)))
+    if choices:
+        raise KernelOpError(
+            "\n".join(text for _, text, _ in choices),
+            tuple(key for _, _, keys in choices for key in keys),
+            findings=tuple(
+                Finding(
+                    FindingKind.REJECTION,
+                    code,
+                    "configured_network",
+                    text,
+                    (("keys", keys), ("node", label)),
+                )
+                for code, text, keys in choices
+            ),
         )
     unadmitted = admission_refusal(bound)
     if unadmitted:

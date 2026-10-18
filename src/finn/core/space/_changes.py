@@ -2,13 +2,17 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Atomic choice replacement through private admission trials.
 
-Every supplied choice, and every retained choice the change can reach, is admitted
+Every supplied choice, and every retained choice the change can reach, is checked
 again before publication; a retained choice whose admission read nothing the change
 reaches keeps the admission its base recorded (``_runtime._TrialSnapshot``).
-Requests are checked as a batch; only a fully admitted trial becomes a configuration.
-A configuration with other values for its formals (``try_with_facts``) is the same
-replacement over other facts: it keeps what read none of the formals that changed, and
-its trial reads the forced values of the configuration it would publish.
+Requests are checked as a batch, and a trial reads the forced values of the configuration
+it would publish. A choice whose own check is false refuses the batch. One whose own
+check cannot conclude (it reads a choice still open, or an input not supplied) is kept
+**unchecked**: stored, read unresolved, and reported. Which choices are unchecked also
+decides what the configuration forces, so the batch is checked again with the choices
+found unchecked declared, until the same ones are found. A configuration with other
+values for its formals (``try_with_facts``) is the same replacement over other facts: it
+keeps what read none of the formals that changed.
 """
 
 from __future__ import annotations
@@ -23,7 +27,7 @@ from .edits import Change, ChangeOutcome, ChangeRequest, ConfigurationResult
 from .errors import ConfigurationError, RequestError
 from .ir import Node
 from .occurrence import attach, decision_index, prepare_values, state
-from .results import Available, QueryResult
+from .results import Available, QueryResult, Unresolved
 from .semantics import equal, snapshot
 
 T = TypeVar("T")
@@ -104,10 +108,35 @@ def _values_equal(node: Node, left: object, right: object) -> bool:
     return equal(semantics, left, right, owner=node.owner, role=role)
 
 
-def _admission(trial: _runtime.Snapshot, index: int) -> QueryResult[bool]:
-    """The decision frame publishes a candidate only after its membership succeeds."""
-    result = _runtime.evaluate(trial, index).result
-    return Available(True) if isinstance(result, Available) else result
+def _admission(trial: _runtime._TrialSnapshot, index: int) -> QueryResult[bool]:
+    """A candidate's own check: true once it is admitted, else its refusal, or unresolved
+    where it cannot conclude."""
+    _runtime.evaluate(trial, index)
+    return cast(QueryResult[bool], trial.own(index))
+
+
+def _checked(
+    base: _runtime.Snapshot, merged: Mapping[int, object], parameters: Mapping[int, object] | None
+) -> tuple[_runtime._TrialSnapshot, dict[int, QueryResult[bool]]]:
+    """The trial of ``merged`` over ``base`` and each candidate's own check in it, with the
+    choices found unchecked declared to it: a trial reads a declared one unresolved, as the
+    configuration it would publish does, and forces by that. Starting from none, a pass
+    declares the choices whose own check it found unresolved and runs again, until a pass
+    finds the choices it was given. Less is read each time, so a check that was unresolved
+    stays so and the choices only grow, at most one pass for each (a pass that declares
+    nothing, the usual one, is the only one)."""
+    ranked = sorted(merged, key=base.linked.ranks.__getitem__)
+    unchecked = frozenset[int]()
+    for _ in range(len(ranked) + 1):
+        trial = _runtime._TrialSnapshot(base, merged, parameters, unchecked=unchecked)
+        validation = {index: _admission(trial, index) for index in ranked}
+        found = frozenset(
+            index for index, result in validation.items() if isinstance(result, Unresolved)
+        )
+        if found == unchecked:
+            return trial, validation
+        unchecked = found
+    raise RuntimeError("the choices found unchecked did not settle")
 
 
 def try_with_choices(
@@ -118,7 +147,7 @@ def try_with_choices(
     _execution.driver_only("configuration replacement")
     keyword_changes = tuple(_keyword_change(point, name, value) for name, value in choices.items())
     all_changes = (*_requests(point, changes), *keyword_changes)
-    return _replace(point, {}, all_changes, reads_successor=False)
+    return _replace(point, {}, all_changes)
 
 
 def try_with_facts(
@@ -130,9 +159,7 @@ def try_with_facts(
     forced values of the configuration it would publish."""
 
     _execution.driver_only("configuration replacement")
-    return _replace(
-        point, _fact_nodes(point, facts), _requests(point, changes), reads_successor=True
-    )
+    return _replace(point, _fact_nodes(point, facts), _requests(point, changes))
 
 
 def _fact_nodes(point: Space, facts: Mapping[Any, object]) -> dict[int, object]:
@@ -153,8 +180,6 @@ def _replace(
     point: S,
     facts: Mapping[int, object],
     all_changes: Sequence[Change[object]],
-    *,
-    reads_successor: bool,
 ) -> ConfigurationResult[S]:
     current = state(point)
     normalized = _normalize_changes(point, tuple(all_changes))
@@ -194,7 +219,9 @@ def _replace(
                 for index, value in merged.items()
             )
         )
-        if semantically_same:
+        # A change that names an unchecked choice is checked again, and reports it as unchecked
+        # where it still is, as any other does.
+        if semantically_same and current.unchecked.isdisjoint(normalized):
             no_op_outcomes = tuple(
                 ChangeOutcome(
                     current.linked.nodes[item.node].owner,
@@ -205,18 +232,12 @@ def _replace(
             )
             return ConfigurationResult(point, True, (*fact_status, *no_op_outcomes))
 
-        trial = _runtime._TrialSnapshot(
-            current, merged, parameters if changed else None, reads_successor=reads_successor
-        )
-        validation = {
-            index: _admission(trial, index)
-            for index in sorted(merged, key=current.linked.ranks.__getitem__)
-        }
-
+        trial, validation = _checked(current, merged, parameters if changed else None)
+        waiting = {index for index, result in validation.items() if isinstance(result, Unresolved)}
         refused = {
             index
             for index, result in validation.items()
-            if not (isinstance(result, Available) and result.value is True)
+            if index not in waiting and not (isinstance(result, Available) and result.value is True)
         }
         outcomes: list[ChangeOutcome] = []
         requested_nodes = set(normalized)
@@ -227,7 +248,9 @@ def _replace(
             status: Literal["refused", "admissible"] = (
                 "refused" if item.node in refused else "admissible"
             )
-            outcomes.append(ChangeOutcome(node.owner, result, status))
+            outcomes.append(
+                ChangeOutcome(node.owner, result, status, unchecked=item.node in waiting)
+            )
         for index in sorted(refused - requested_nodes, key=current.linked.ranks.__getitem__):
             node = current.linked.nodes[index]
             outcomes.append(
@@ -258,6 +281,19 @@ def _replace(
             else:
                 final_status = "changed"
             published.append(replace(outcome, status=final_status))
+        # A retained choice this change leaves unchecked, which its base held checked.
+        for index in sorted(
+            waiting - requested_nodes - current.unchecked, key=current.linked.ranks.__getitem__
+        ):
+            published.append(
+                ChangeOutcome(
+                    current.linked.nodes[index].owner,
+                    validation[index],
+                    "unchanged",
+                    requested=False,
+                    unchecked=True,
+                )
+            )
         return ConfigurationResult(successor, True, tuple(published))
 
 

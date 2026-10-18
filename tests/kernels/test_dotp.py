@@ -235,7 +235,8 @@ def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
 
 def test_pumping_needs_lanes_to_split_and_is_not_offered_with_one():
     """Pumping splits SIMD lanes over the doubled clock: with SIMD 1 its case is refused
-    where it is declared, so the Decision is forced, never a dead end."""
+    where it is declared, so the Decision is forced, never a dead end. Committed before
+    SIMD, it is kept unchecked, waiting on SIMD, and checked once SIMD is committed."""
     one = kernel(simd=1, compute_pumping=None, outputs=2, reduction=4)
     (forced,) = [item for item in inspection.forced(one) if item.key == "compute_pumping"]
     assert forced.value is False and "dotp-pumping" in forced.refused["True"]
@@ -244,9 +245,26 @@ def test_pumping_needs_lanes_to_split_and_is_not_offered_with_one():
     two = kernel(simd=2, compute_pumping=None, outputs=2, reduction=4)
     (viable,) = [item for item in inspection.viable(two) if item.key == "compute_pumping"]
     assert viable.cases == (False, True)
-    # Its cases read SIMD, so pumping is committed with or after it.
-    with pytest.raises(ValueError, match="compute.compute_pumping: simd: decision-unassigned"):
-        kernel(simd=None, compute_pumping=False, reduction=4)
+    # Commit order does not matter: its cases read SIMD, so pumping committed first is kept,
+    # unchecked, waiting on SIMD; it reads unresolved until SIMD is committed.
+    waiting = kernel(simd=None, compute_pumping=None, outputs=2, reduction=4)
+    early = waiting.try_with_choices(compute_pumping=True)
+    assert early.accepted
+    assert [(o.owner, o.status, o.unchecked) for o in early.outcomes] == [
+        ("compute_pumping", "changed", True)
+    ]
+    assert inspection.unchecked(early.instance) == (
+        inspection.Unchecked("compute_pumping", True, ("simd",)),
+    )
+    assert isinstance(early.instance.query(PackedDotpKernel.compute_pumping), Unresolved)
+    # Then checked: refused where one lane cannot split, its value where lanes can.
+    split = early.instance.try_with_choices(simd=1)
+    assert not split.accepted
+    (refusal,) = [o for o in split.outcomes if o.owner == "compute_pumping"]
+    assert refusal.status == "refused" and codes(refusal.result) == {"dotp-pumping"}
+    lanes = early.instance.try_with_choices(simd=2)
+    assert lanes.accepted and inspection.unchecked(lanes.instance) == ()
+    assert lanes.instance.query(PackedDotpKernel.compute_pumping) == Available(True)
 
 
 def test_narrow_weights_derive_from_the_weight_stream_s_range():
