@@ -1109,6 +1109,164 @@ def test_a_check_refused_through_its_input_is_blamed_once_inside_trials(reach: b
     assert [p.subject for p in solution.validity().false] == ["lanes"]
 
 
+def cores_over_lanew() -> Space:
+    """``compute``: ``packed`` (``width <= 64``) or ``stub`` (``width`` even); ``packed``'s
+    ``pe`` divides the derived ``lanew``, which refuses an odd fact ``w``."""
+
+    packed = Scope(
+        "packed",
+        choices=(
+            Choice(
+                "pe",
+                computed(
+                    lambda r: tuple(d for d in (1, 2, 4, 8) if r["lanew"] % d == 0), ("lanew",)
+                ),
+            ),
+        ),
+        constraints=(Constraint("narrow", ("width",), lambda r: r["width"] <= 64, "too-wide"),),
+    )
+    stub = Scope(
+        "stub",
+        constraints=(Constraint("even", ("width",), lambda r: r["width"] % 2 == 0, "odd"),),
+    )
+    return Space(
+        ("width", "w"),
+        Scope(
+            "",
+            selectors=(Selector("compute", (packed, stub)),),
+            derived=(Derived("lanew", ("w",), even_lanew),),
+        ),
+    )
+
+
+def even_lanew(r: Reads) -> Any:
+    return Refuse("bad-width") if r["w"] % 2 else r["w"]
+
+
+PE_ = "compute.packed.pe"
+
+
+def test_a_refused_input_under_a_refused_guard_is_refused_through_the_guard_only() -> None:
+    """Applicability first: at width 99 neither core is possible; ``pe``'s input also
+    refuses, but under the refused guard ``pe`` is refused through the guard only, and
+    validity's only false piece is the selector's."""
+
+    base = Configuration(cores_over_lanew(), {"width": 9, "w": 8}, {PE_: 4})
+    assert base.solve().state(PE_) == Readable(4)
+    result = accepted(change(base, Change(facts={"width": 99, "w": 7})))
+    assert result.unchecked == ()
+    assert {(p.kind, p.subject) for p in result.validity.false} == {
+        (PieceKind.NO_POSSIBLE_VALUE, "compute")
+    }
+    solution = result.configuration.solve()
+    assert solution.state(PE_) == GuardRefused(
+        4,
+        (
+            Reason(ReasonKind.INPUT_REFUSED, PE_, "compute.packed", related=("compute",)),
+            Reason(ReasonKind.NO_POSSIBLE_VALUE, "compute", ""),
+        ),
+    )
+    back = accepted(change(result.configuration, Change(facts={"width": 9, "w": 8})))
+    assert back.configuration.solve().state(PE_) == Readable(4)
+
+
+def test_a_refused_input_where_the_guard_holds_is_refused_through_the_input() -> None:
+    solution = solve_at(cores_over_lanew(), {PE_: 4}, {"width": 9, "w": 7})
+    assert solution.state("compute") == Forced(
+        "packed", (("stub", (constraint_reason("compute.stub.even", "odd", "compute.stub"),)),)
+    )
+    assert solution.state(PE_) == InputRefused(
+        4,
+        (
+            Reason(ReasonKind.DERIVED_BODY, "lanew", "", "bad-width"),
+            Reason(ReasonKind.INPUT_REFUSED, PE_, "compute.packed", related=("lanew",)),
+        ),
+    )
+
+
+def test_a_value_outside_its_domain_under_a_refused_guard_keeps_its_own_piece() -> None:
+    solution = solve_at(cores_over_lanew(), {PE_: 3}, {"width": 99, "w": 8})
+    own = Reason(ReasonKind.OUTSIDE_DOMAIN, PE_, "compute.packed")
+    assert solution.state(PE_) == RefusedChoice((own,), stored=True, value=3)
+    assert (PieceKind.OWN_CHECK, PE_) in false_kinds(solution)
+
+
+def guarded_even(selector: bool) -> Space:
+    """``g`` is present when ``s`` is ``b`` (a selector) or ``v`` is 1 (a value choice);
+    it holds ``c5`` (even) and a view ``w`` of it; a root rule reads the view."""
+
+    test = (lambda r: r["s"] == "b") if selector else (lambda r: r["v"] == 1)
+    g = Scope(
+        "g",
+        when=When(("s",) if selector else ("v",), test),
+        choices=(Choice("c5", membership(lambda v, r: v % 2 == 0)),),
+        views=(View("w", ("g.c5",), lambda r: r["g.c5"] * 2),),
+    )
+    guard: dict[str, Any] = (
+        {"selectors": (Selector("s", (Scope("a"), Scope("b"))),)}
+        if selector
+        else {"choices": (Choice("v", listed(0, 1)),)}
+    )
+    choices = (Choice("c0", listed(0, 1, 2)), *guard.get("choices", ()))
+    return Space(
+        (),
+        Scope(
+            "",
+            choices=choices,
+            selectors=guard.get("selectors", ()),
+            children=(g,),
+            constraints=(Constraint("r8", ("c0", "g.w"), lambda r: r["c0"] <= r["g.w"], "r8"),),
+        ),
+    )
+
+
+@pytest.mark.parametrize("selector", [True, False], ids=["selector", "value"])
+def test_a_false_own_check_is_blamed_once_at_its_own_piece(selector: bool) -> None:
+    """Committing ``g.c5 = 1`` (odd) while the guard is open: inside the guard's trial
+    nothing is false only through it (its Space's view reads unresolved, so ``r8`` does
+    too), so the guard stays open and the change is refused with ``c5``'s own reason."""
+
+    space = guarded_even(selector)
+    guard = "s" if selector else "v"
+    base = Configuration(space, {}, {"c0": 1})
+    result = rejected(change(base, Change(commit={"g.c5": 1})))
+    assert result.refusals == (
+        ChangeRefusal("g.c5", "named", (Reason(ReasonKind.OUTSIDE_DOMAIN, "g.c5", "g"),)),
+    )
+    held = solve_at(space, {"c0": 1, "g.c5": 1})
+    assert held.state(guard) == Open(("a", "b") if selector else (0, 1))
+
+
+def test_a_choice_whose_domain_input_does_not_apply_waits_on_that_inputs_guard() -> None:
+    """The input's scope is absent: the choice waits on what decides its presence (a
+    fact read by a ``when``, or a selector), not on the input."""
+
+    extra = Scope(
+        "extra",
+        when=When(("wide",), lambda r: bool(r["wide"])),
+        derived=(Derived("size", ("n",), lambda r: r["n"]),),
+    )
+    a = Scope("a", derived=(Derived("span", ("n",), lambda r: r["n"]),))
+    space = Space(
+        ("wide", "n"),
+        Scope(
+            "",
+            choices=(
+                Choice("k", computed(lambda r: tuple(range(r["extra.size"])), ("extra.size",))),
+                Choice("j", computed(lambda r: tuple(range(r["mode.a.span"])), ("mode.a.span",))),
+            ),
+            selectors=(Selector("mode", (a, Scope("b"))),),
+            children=(extra,),
+        ),
+    )
+    base = Configuration(space, {"wide": False, "n": 3}, {"mode": "b"})
+    result = accepted(change(base, Change(commit={"k": 1, "j": 1})))
+    assert result.unchecked == ("j", "k")
+    solution = result.configuration.solve()
+    assert solution.state("k") == Unchecked(1, ("wide",))
+    assert solution.state("j") == Unchecked(1, ("mode",))
+
+
 # --- views and validity -----------------------------------------------------------------
 
 

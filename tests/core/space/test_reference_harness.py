@@ -17,18 +17,30 @@ from pathlib import Path
 import pytest
 
 from core.space import reference
-from core.space.reference import Change, Choice, Scope, Selector, Space, listed
+from core.space.reference import (
+    Change,
+    Choice,
+    Constraint,
+    Derived,
+    Refuse,
+    Scope,
+    Selector,
+    Space,
+    computed,
+    listed,
+)
 from core.space.reference_harness import (
     MILESTONES,
     ROWS,
     Case,
     Disagreement,
     NotTranslatable,
+    RuleForm,
     StateForm,
     ValidityForm,
     markdown,
 )
-from core.space.reference_harness.compare import agrees
+from core.space.reference_harness.compare import agrees, rule_form
 from core.space.reference_harness.matrix import problems
 from core.space.reference_harness.walks import generate
 from finn.core.space import inspection
@@ -119,6 +131,58 @@ def test_the_possible_cases_of_a_choice_whose_answer_waits_are_not_compared() ->
 
 def test_values_compare_by_type_as_well() -> None:
     assert not agrees(StateForm("forced", True), StateForm("forced", 1))
+
+
+def test_a_rule_reading_a_refused_choice_carries_the_reasons_that_refuse_it() -> None:
+    # Whatever refuses the choice it reads: its own check (a value outside its domain), its
+    # guard (admitted under a selector with no possible case) or its domain's input (refused
+    # on facts), the rule is false with those reasons' codes, never with none.
+    cores = Selector(
+        "compute",
+        (
+            Scope(
+                "packed",
+                choices=(Choice("pe", listed(1, 2, 3)),),
+                constraints=(Constraint("fits", ("width",), lambda r: r["width"] <= 8, "wide"),),
+            ),
+            Scope(
+                "stub",
+                constraints=(Constraint("even", ("width",), lambda r: r["width"] % 2 == 0, "odd"),),
+            ),
+        ),
+    )
+    space = Space(
+        ("width", "w"),
+        Scope(
+            "",
+            choices=(
+                Choice("x", listed(1, 2)),
+                Choice(
+                    "lanes",
+                    computed(lambda r: tuple(d for d in (1, 2) if r["half"] % d == 0), ("half",)),
+                ),
+            ),
+            selectors=(cores,),
+            derived=(Derived("half", ("w",), lambda r: Refuse("odd-w") if r["w"] % 2 else r["w"]),),
+            constraints=(
+                Constraint("on-x", ("x",), lambda r: r["x"] > 0, "x"),
+                Constraint(
+                    "on-pe", ("compute.packed.pe",), lambda r: r["compute.packed.pe"] > 0, "pe"
+                ),
+                Constraint("on-lanes", ("lanes",), lambda r: r["lanes"] > 0, "lanes"),
+            ),
+        ),
+    )
+    stored = {"x": 3, "compute.packed.pe": 3, "lanes": 1}
+    solution = reference.Configuration(space, {"width": 9, "w": 7}, stored).solve()
+    assert isinstance(solution.state("x"), reference.RefusedChoice)
+    assert isinstance(solution.state("compute.packed.pe"), reference.GuardRefused)
+    assert isinstance(solution.state("lanes"), reference.InputRefused)
+    assert rule_form(solution, "on-x") == RuleForm("false", frozenset({("domain-membership", "x")}))
+    assert rule_form(solution, "on-pe") == RuleForm(
+        "false", frozenset({("decision-no-viable-case", "compute")})
+    )
+    assert rule_form(solution, "on-lanes") == RuleForm("false", frozenset({("odd-w", "half")}))
 
 
 def test_a_disagreement_names_the_case_the_question_and_both_answers() -> None:

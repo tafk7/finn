@@ -124,7 +124,9 @@ def _refusal(solution: reference.Solution, path: str) -> frozenset[Code]:
     """Why a refused input is refused."""
     if path in solution.index.choices:
         state = solution.state(path)
-        if isinstance(state, reference.RefusedChoice):
+        if isinstance(
+            state, (reference.RefusedChoice, reference.GuardRefused, reference.InputRefused)
+        ):
             return _codes(solution, state.reasons)
         return frozenset()
     answer = solution.read(path)

@@ -183,13 +183,18 @@ class Check:
     forcing (a derived value or view refusing on its facts): it cannot conclude, and
     never will without a revision, so ``verdict`` is unknown inside trials and forcing
     (blamed once, at the input) while ``reasons`` say why; published, its piece reads
-    refused through that input.
+    refused through that input. Under a refused guard the guard comes first: such a
+    check has ``through_guard`` set, no reasons and no waits, and the choice is
+    refused through its guard only.
     """
 
     verdict: Verdict | None
     reasons: tuple[Reason, ...] = ()
     waits: tuple[str, ...] = ()
     refused_input: bool = False
+    #: under a refused guard, a check that cannot conclude only through a refused
+    #: input: its answer is its guard's (no reasons of its own, nothing in validity)
+    through_guard: bool = False
 
 
 # --- a choice's state ----------------------------------------------------------------

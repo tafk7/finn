@@ -312,7 +312,8 @@ ROWS: tuple[Row, ...] = (
         "trial-reads-unchecked",
         "classified beside the two-cores row (outside-domain-forcing): the engine lists the "
         "case as possible (more than the model, never a wrong forced value); with two cases "
-        "it forces the other one, as the model does",
+        "it forces the other one, as the model does; a walk meets it through a rule of the "
+        "root reading the case's choice too",
     ),
     Row(
         "case-trial-reads-waiting",
@@ -401,6 +402,107 @@ ROWS: tuple[Row, ...] = (
         "refuses the configuration through the input, blamed there once",
         f"{_CASES}::test_a_choice_whose_domain_input_is_refused_refuses_the_configuration_through_it",
         note="asked once the commit is accepted; the engine refuses the commit",
+    ),
+    # -- a domain reading an input refused by forcing, or one that does not apply
+    Row(
+        "forcing-refused-input-commit",
+        "lane 2",
+        "forcing never reads a refused value as one: a choice whose domain input forcing "
+        "refuses (a selector with no possible case) is accepted and kept unchecked, waiting on "
+        "the input",
+        f"{_CASES}::test_a_commit_whose_domain_input_forcing_refuses_is_kept_unchecked",
+        note="the engine refuses the commit, naming the choice with no finding of its own",
+    ),
+    Row(
+        "forcing-refused-input-new-facts",
+        "lane 2",
+        "forcing never reads a refused value as one: new facts that leave a kept choice's "
+        "domain input no possible case are accepted, the choice kept unchecked",
+        f"{_CASES}::test_new_facts_that_leave_a_kept_choices_domain_input_no_case_keep_it_unchecked",
+        note="the engine refuses the change, reaching the kept choice with no finding of its own",
+    ),
+    Row(
+        "forcing-refused-input-state",
+        "lane 2",
+        "forcing never reads a refused value as one: a kept choice whose domain input forcing "
+        "refuses is unchecked, waiting on the input",
+        f"{_CASES}::test_a_choice_whose_domain_input_forcing_refuses_waits_on_it",
+        note="asked once the commit is accepted; the engine refuses the commit",
+    ),
+    Row(
+        "inapplicable-input-commit",
+        "lane 1",
+        "a domain input that does not apply leaves the own check unknown: the commit is "
+        "accepted and the choice kept unchecked, waiting on the input's guard, not refused as "
+        "inactive",
+        f"{_CASES}::test_a_commit_whose_domain_input_does_not_apply_is_kept_unchecked",
+        note="the engine refuses the commit as inactive",
+    ),
+    Row(
+        "inapplicable-input-new-facts",
+        "lane 1",
+        "a domain input that does not apply leaves the own check unknown: new facts under "
+        "which a kept choice's domain input does not apply are accepted, the choice kept "
+        "unchecked",
+        f"{_CASES}::test_new_facts_under_which_a_kept_choices_domain_input_does_not_apply_keep_it",
+        note="the engine refuses the change, reaching the kept choice as inactive",
+    ),
+    Row(
+        "inapplicable-input-state",
+        "lane 1",
+        "a domain input that does not apply leaves the own check unknown: the kept choice is "
+        "unchecked, waiting on the input's guard",
+        f"{_CASES}::test_a_choice_whose_domain_input_does_not_apply_waits_on_it",
+        note="asked once the commit is accepted; the engine refuses the commit as inactive",
+    ),
+    # -- a kept choice under a refused guard whose domain input refuses: applicability first
+    Row(
+        "guard-first-new-facts",
+        "lane 1",
+        "a refusal elsewhere never refuses a commit: new facts that refuse a kept choice's guard "
+        "and its domain input are accepted, nothing kept unchecked",
+        f"{_CASES}::test_new_facts_refusing_a_kept_choices_guard_and_its_input_are_accepted",
+        note="the engine refuses the change, reaching the kept choice with no finding of its own",
+    ),
+    Row(
+        "guard-first-state",
+        "lane 1",
+        "applicability first: a kept choice under a refused guard whose domain input refuses "
+        "reads refused through the guard only",
+        f"{_CASES}::test_a_kept_choice_under_a_refused_guard_and_input_reads_refused_through_the_guard",
+        note="asked once the change is accepted; the engine refuses the change",
+    ),
+    Row(
+        "guard-first-answer",
+        "lane 1",
+        "applicability first: a kept choice under a refused guard whose domain input refuses is "
+        "queried refused through the guard only",
+        f"{_CASES}::test_a_kept_choice_under_a_refused_guard_and_input_is_queried_refused_through_it",
+        note="asked once the change is accepted; the engine refuses the change",
+    ),
+    Row(
+        "guard-first-validity",
+        "lane 1",
+        "applicability first: a kept choice under a refused guard whose domain input refuses adds "
+        "nothing to validity beside the guard's piece",
+        f"{_CASES}::test_a_kept_choice_under_a_refused_guard_and_input_adds_nothing_to_validity",
+        note="asked once the change is accepted; the engine refuses the change",
+    ),
+    Row(
+        "guard-first-back",
+        "lane 1",
+        "a refusal elsewhere never refuses a commit: a choice kept through a refused guard and "
+        "input reads its value again once both hold",
+        f"{_CASES}::test_a_kept_choice_back_under_its_guard_and_an_even_input_is_readable",
+        note="asked once the change refusing both is accepted; the engine refuses that change",
+    ),
+    Row(
+        "guard-first-holding-guard",
+        "lane 1",
+        "a refusal elsewhere never refuses a commit: with its guard holding, a kept choice whose "
+        "domain input refuses reads refused through the input",
+        f"{_CASES}::test_a_kept_choice_under_a_holding_guard_reads_refused_through_its_input",
+        note="asked once the change is accepted; the engine refuses the change",
     ),
     Row(
         "look-ahead-parent-rule",
