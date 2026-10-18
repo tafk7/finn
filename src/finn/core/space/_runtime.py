@@ -42,6 +42,8 @@ from .semantics import snapshot as snapshot_value
 if TYPE_CHECKING:
     from ._configuration import Space
     from .compiler import Model
+    from .domains import Domain
+    from .semantics import ValueSemantics
 
 Assessment: TypeAlias = ViewAssessment[object] | ConstraintAssessment
 
@@ -1362,8 +1364,8 @@ def _listed_frame(
         return Evaluation(failure)
     assert node.domain is not None and node.semantics is not None
     called = yield _execution.Call(
-        node.domain.listed_members,
-        (candidates, arguments),
+        _listed_members,
+        (node.domain, candidates, arguments),
         {"semantics": node.semantics, "owner": node.owner},
         "domain membership",
     )
@@ -1373,6 +1375,21 @@ def _listed_frame(
         return Evaluation(blocked)
     assert isinstance(called, _execution._Returned)
     return Evaluation(Available(called.value))
+
+
+def _listed_members(
+    domain: Domain[object],
+    candidates: tuple[object, ...],
+    arguments: Mapping[str, object],
+    *,
+    semantics: ValueSemantics[object],
+    owner: str,
+) -> tuple[QueryResult[bool], ...]:
+    """Membership of each of a domain's listed values, in one call."""
+    return tuple(
+        domain.membership(candidate, arguments, semantics=semantics, owner=owner)
+        for candidate in candidates
+    )
 
 
 def listed_members(

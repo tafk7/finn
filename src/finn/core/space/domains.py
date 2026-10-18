@@ -90,11 +90,6 @@ class Domain(Generic[T]):
                 "domain-enumeration-not-callable", _OWNER, "domain enumeration must be callable"
             )
 
-    @property
-    def is_finite(self) -> bool:
-        """Whether the domain is its listed values (``finite``): membership is the list."""
-        return self._finite_values is not None
-
     def with_semantics(self, semantics: ValueSemantics[T]) -> Domain[T]:
         """Bind finite values to their Decision's declared snapshot and equality."""
 
@@ -146,24 +141,6 @@ class Domain(Generic[T]):
             raise
         except Exception as cause:
             raise EvaluationError(owner, "domain membership", str(cause)) from cause
-
-    def listed_members(
-        self,
-        candidates: tuple[T, ...],
-        dependency_values: Mapping[str, object],
-        *,
-        semantics: ValueSemantics[T],
-        owner: str,
-    ) -> tuple[QueryResult[bool], ...]:
-        """Membership of each listed value (``enumerate``'s): a listed domain lists all its
-        values, and each is still checked by membership. A finite domain's values are its
-        membership, so each holds without a call."""
-        if self.is_finite:
-            return tuple(Available(True) for _ in candidates)
-        return tuple(
-            self.membership(candidate, dependency_values, semantics=semantics, owner=owner)
-            for candidate in candidates
-        )
 
     def enumerate(
         self,

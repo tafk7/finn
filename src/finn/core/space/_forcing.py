@@ -620,7 +620,7 @@ def _members(
     that waits does not reject. A finite domain's values are its membership."""
     domain = current.linked.nodes[index].domain
     assert domain is not None
-    if domain.is_finite or not listed:
+    if domain._finite_values is not None or not listed:
         return listed, {}
     checked = _runtime.listed_members(current, index, listed).result
     if not isinstance(checked, Available):
