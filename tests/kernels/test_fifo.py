@@ -12,7 +12,14 @@ import pytest
 from oracle import capture
 from support.helpers import FULL_DSP48E2, fifo_node
 
-from finn.core.space import Available, QueryResult, Rejected, Unresolved, design_space
+from finn.core.space import (
+    Available,
+    QueryResult,
+    Rejected,
+    Unresolved,
+    design_space,
+    inspection,
+)
 from finn.core.space.errors import ValueUnavailableError
 from finn.kernels.artifacts.abi import Direction, Signal
 from finn.kernels.fifo import FifoKernel, FifoStorage, fifo_resources
@@ -65,14 +72,25 @@ def test_fifo_passes_its_ram_style_to_its_native_parameter(style: str) -> None:
     assert dict(point.module.parameters)["RAM_STYLE"] == f'"{style}"'
 
 
+def pieces_of(point: FifoKernel) -> list[tuple[str, set[str]]]:
+    """Each piece of the FIFO's validity that is not true, and its findings' codes."""
+    return [
+        (piece.owner, {finding.code for finding in piece.result.findings})
+        for piece in inspection.validity(point).pieces
+    ]
+
+
 @pytest.mark.parametrize("depth", (1, 1 << 32))
 def test_fifo_refuses_an_unsupported_geometry_before_and_after_its_ram_style(depth: int) -> None:
     base = design_space(fifo_node(word_bits=13, depth=depth))
-    # The capacity constraint reads the storage view, which the geometry refusal refuses.
-    assert base.inspect(FifoKernel.module).constraints.refused == (
-        "capacity_supported",
-        "geometry_supported",
-    )
+    # The capacity constraint reads the planned storage, which refuses the geometry
+    # itself: both constraints are refused, by the one root.
+    for point in (base, base.with_choices(ram_style="auto")):
+        assert inspection.validity(point).status == "refused"
+        assert pieces_of(point) == [
+            ("capacity_supported", {"fifo-geometry"}),
+            ("geometry_supported", {"fifo-geometry"}),
+        ]
     assert isinstance(base.inspect(FifoKernel.module).accepted_result, Rejected)
     chosen = base.with_choices(ram_style="auto")
     assert isinstance(chosen.inspect(FifoKernel.module).accepted_result, Rejected)
@@ -99,6 +117,36 @@ def test_fifo_auto_takes_ultraram_only_on_a_platform_that_has_it(
     )
     assert point.storage == storage
     assert dict(point.module.parameters)["RAM_STYLE"] == rtl_style
+
+
+@pytest.mark.parametrize(
+    ("uram", "choices", "status", "pieces"),
+    (
+        (True, {"ram_style": "auto"}, "valid", []),
+        (False, {"ram_style": "ultra"}, "refused", [("uram_present", {"uram-absent"})]),
+        (
+            True,
+            {},
+            "undecided",
+            [
+                ("capacity_supported", {"decision-unassigned"}),
+                ("uram_present", {"decision-unassigned"}),
+            ],
+        ),
+    ),
+)
+def test_fifo_s_capacity_reads_the_storage_its_view_presents(
+    uram: bool, choices: dict[str, str], status: str, pieces: list[tuple[str, set[str]]]
+) -> None:
+    """``capacity_supported`` reads the planned storage, a value, not the ``storage``
+    view: valid, refused and undecided each answer, with no dependency cycle."""
+    platform = replace(FULL_DSP48E2, uram=uram)
+    point = design_space(fifo_node(word_bits=8, depth=64, platform=platform))
+    point = point.with_choices(**choices) if choices else point
+    assert inspection.validity(point).status == status
+    assert pieces_of(point) == pieces
+    if status == "valid":
+        assert point.storage == point.planned_storage == FifoStorage("shift", 64)
 
 
 #: The HWCustomOp flow's FIFO model (``finn.custom_op.fpgadataflow.resource_models``) at
