@@ -23,6 +23,7 @@ import pytest
 from core.space.reference_harness.forms import AnswerForm, Form, StateForm, ValidityForm
 from core.space.reference_harness.walks import (
     Question,
+    added_unknown,
     expected_kinds,
     generate,
     moved_down,
@@ -118,3 +119,41 @@ def test_nothing_moves_down_in_a_configuration_refused_after_the_step() -> None:
     undecided: dict[Question, Form] = {**refused, ("validity", ""): ValidityForm("undecided")}
     assert violations(before, refused, ()) == {}
     assert set(violations(before, undecided, ())) == {("state", "x"), ("validity", "")}
+
+
+def test_a_commitment_kept_unchecked_may_leave_validity_undecided_waiting_on_it() -> None:
+    # The commitment adds a piece, its own check, unknown while its guard waits: validity
+    # goes from valid to undecided through it, waiting on what it waits on.
+    before: dict[Question, Form] = {
+        ("state", "x"): StateForm("open", blockers=frozenset({"g"})),
+        ("state", "y"): StateForm("readable", 1),
+        ("validity", ""): ValidityForm("valid"),
+    }
+    after: dict[Question, Form] = {
+        ("state", "x"): StateForm("unchecked", 2, blockers=frozenset({"g"})),
+        ("state", "y"): StateForm("readable", 1),
+        ("validity", ""): ValidityForm("undecided", blockers=frozenset({"g"})),
+    }
+    assert added_unknown(after, ("x",)) == {"g"}
+    assert violations(before, after, ("x",)) == {}
+    # waiting on anything else, it is a piece that existed before the step moving down
+    other = {**after, ("validity", ""): ValidityForm("undecided", blockers=frozenset({"y"}))}
+    assert set(violations(before, other, ("x",))) == {("validity", "")}
+    # and a commitment checked adds no unknown piece
+    checked = {**after, ("state", "x"): StateForm("readable", 2)}
+    assert added_unknown(checked, ("x",)) == frozenset()
+    assert set(violations(before, checked, ("x",))) == {("validity", "")}
+
+
+def test_a_commitment_kept_unchecked_never_excuses_a_piece_that_existed_before() -> None:
+    before: dict[Question, Form] = {
+        ("state", "x"): StateForm("open", blockers=frozenset({"g"})),
+        ("state", "y"): StateForm("readable", 1),
+        ("validity", ""): ValidityForm("valid"),
+    }
+    after: dict[Question, Form] = {
+        ("state", "x"): StateForm("unchecked", 2, blockers=frozenset({"g"})),
+        ("state", "y"): StateForm("unchecked", 1, blockers=frozenset({"g"})),
+        ("validity", ""): ValidityForm("undecided", blockers=frozenset({"g"})),
+    }
+    assert set(violations(before, after, ("x",))) == {("state", "y")}

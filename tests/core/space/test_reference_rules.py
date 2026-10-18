@@ -232,7 +232,7 @@ def test_a_committed_participant_keeps_its_value() -> None:
 
 
 @expected("pair-committed-peer")
-def test_the_other_participant_of_a_committed_one_is_refused_naming_it() -> None:
+def test_the_other_choice_of_a_rule_with_a_committed_one_has_no_possible_value() -> None:
     reach(PAIR.start(), Change(commit={"x": 1})).check_state("y")
 
 
@@ -333,20 +333,15 @@ def test_a_retained_choice_false_on_the_commitments_is_refused_as_a_cold_build_i
     FIT.start().check_change(Change(commit={"lanes": 3, "span": 2}))
 
 
+@expected("retained-check-forced-core")
 def test_a_retained_choice_checked_against_the_successors_forced_core() -> None:
     # ``depth`` of 2 holds under the stub that 128 lanes force; 3 lanes leave only packed,
-    # under which it does not hold. The model accepts the change: forcing never takes a
-    # value that refuses a retained choice, so the core has no possible case, a conflict
-    # naming ``depth`` and ``lanes``, and the configuration reads refused.
+    # under which it does not hold. Forcing takes packed, so the change is refused, reaching
+    # ``depth`` with its own reason: the configuration it would publish, as a cold build of
+    # the same choices reads it, not the admission ``depth`` had under the stub.
     FIT.start({}, {"lanes": 128, "depth": 2}).check_change(Change(commit={"lanes": 3}))
 
 
-@expected("forced-core-validity")
-def test_a_retained_choice_checked_against_the_successors_forced_core_refuses_it() -> None:
-    reach(FIT.start({}, {"lanes": 128, "depth": 2}), Change(commit={"lanes": 3})).check_validity()
-
-
-@expected("forced-core-cold")
 def test_a_retained_choice_checked_against_the_successors_forced_core_as_a_cold_build() -> None:
     FIT.start().check_change(Change(commit={"lanes": 3, "depth": 2}))
 

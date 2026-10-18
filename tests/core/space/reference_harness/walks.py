@@ -18,11 +18,15 @@ kind a row of the acceptance matrix still names (``matrix.ROWS``) is expected, a
 counted; any other fails the walk, printing the seed, the step, the description and both
 answers. Moving or removing a row moves the filter with it.
 
-**Refinement** (on the engine): over a step that only commits choices nothing was stored
-for, no answer moves down the information order (a value or a forced value becomes
-unresolved or open, a settled verdict undecided, a refusal disappears) unless the
-configuration reads refused after the step. A move the model does not make is a
-disagreement like any other; one the model makes too is a question for the model.
+**Refinement** (on both sides): over a step that only commits choices nothing was stored
+for, no answer to a piece that existed before the step moves down the information order
+(a value or a forced value becomes unresolved or open, a settled verdict undecided, a
+refusal disappears) unless the configuration reads refused after the step. A commitment
+adds pieces of its own (its own check, and its presence where its guard waits): kept
+unchecked, it adds an unknown piece rather than refining one, so validity may go from
+valid to undecided, but only through the step's added unknown pieces, waiting on what
+they wait on (:func:`violations`). An engine move the model does not make is a
+disagreement like any other; one the model makes is a question for the model.
 
 **A cold build** beside the walked one: at every step the engine's configuration built
 from nothing (``support.space_walk.fresh``) answers every question as the walked one, and
@@ -61,7 +65,7 @@ from .compare import (
     validity_form,
 )
 from .engine import Engine, NotTranslatable, Point, build
-from .forms import AnswerForm, ChangeForm, Form, RuleForm, StateForm, ValidityForm
+from .forms import AnswerForm, ChangeForm, Form, Refusal, RuleForm, StateForm, ValidityForm
 from .matrix import ROWS
 
 # --- the generator --------------------------------------------------------------------------------
@@ -422,8 +426,9 @@ PRIORITY = (
     "commit-under-refused-selector",
     "commit-waits",
     "own-reason",
+    "own-reason-forcing",
+    "own-reason-false-guard",
     "stale-forced",
-    "state-under-refused-selector",
     "view-of-refused-space",
     "empty-list",
     "listed-not-member",
@@ -571,14 +576,11 @@ def mechanisms(solution: model.Solution, engine_refused: bool | None = None) -> 
 
     for path in index.choices:
         state = solution.state(path)
-        info = index.choices[path]
         cases: tuple[model.CaseReasons, ...] = ()
         if isinstance(state, model.Forced):
             cases = state.others
         elif isinstance(state, model.Open):
             cases = state.impossible
-            if state.waits and presence(solution, info.scope) == "refused":
-                add("state-under-refused-selector", path)
         elif isinstance(state, model.RefusedChoice) and not state.stored:
             cases = state.cases
             no_value = any(r.kind is model.ReasonKind.NO_POSSIBLE_VALUE for r in state.reasons)
@@ -646,6 +648,23 @@ def outside(solution: model.Solution, choice: str, value: object) -> bool:
     return domain.member is not None and not domain.member(value, reads)
 
 
+def _own_reason(
+    base: model.Solution, published: model.Solution, choice: str, engine: Refusal | None
+) -> str | None:
+    """Which shape of a named value outside its domain, refused by the model with its own
+    reason, the engine answers otherwise in: its guard false where the change would
+    publish it (``own-reason-false-guard``); its guard unknown, the engine refusing it as
+    inactive, forcing having read its false own check (``own-reason-forcing``); its guard
+    unknown before the change, the engine refusing it otherwise (``own-reason``)."""
+    scope = published.index.choices[choice].scope
+    inactive = engine is not None and ("inactive", choice) in engine.codes
+    if presence(published, scope) == "absent":
+        return "own-reason-false-guard" if inactive else None
+    if presence(base, scope) == "unknown":
+        return "own-reason-forcing" if inactive else "own-reason"
+    return None
+
+
 @dataclass
 class Context:
     """One configuration as the classification sees it: its model answers and the
@@ -680,19 +699,6 @@ def _subjects(question: Question, expected: Form, engine: Form) -> set[str] | No
     return None
 
 
-def _fits(kind: str, expected: Form, engine: Form) -> bool:
-    """Whether a disagreement has the shape a kind gives: an open choice under a refused
-    selector reads refused through it on the engine, open or unresolved on the model."""
-    if kind == "state-under-refused-selector":
-        return (
-            isinstance(expected, (StateForm, AnswerForm))
-            and isinstance(engine, (StateForm, AnswerForm))
-            and expected.kind in ("open", "unresolved")
-            and engine.kind == "refused"
-        )
-    return True
-
-
 def classify(
     contexts: Sequence[Context],
     question: Question,
@@ -702,7 +708,7 @@ def classify(
 ) -> tuple[str, ...]:
     """The kinds that may explain a disagreement on ``question``, most specific first: the
     mechanisms at work in ``contexts`` (and ``extra``, a change's own) that reach what the
-    disagreement is about (:class:`Reach`) and fit its shape."""
+    disagreement is about (:class:`Reach`)."""
     reach = contexts[0].reach
     subjects = _subjects(question, expected, engine)
     found: dict[str, set[str]] = {}
@@ -712,9 +718,7 @@ def classify(
     for kind, paths in (extra or {}).items():
         found.setdefault(kind, set()).update(paths)
     return tuple(
-        kind
-        for kind in PRIORITY
-        if kind in found and _fits(kind, expected, engine) and reach.reaches(found[kind], subjects)
+        kind for kind in PRIORITY if kind in found and reach.reaches(found[kind], subjects)
     )
 
 
@@ -764,19 +768,48 @@ def moved_down(before: Form, after: Form, committed: bool = False) -> str | None
     return None
 
 
+def added_unknown(after: Mapping[Question, Form], committed: Iterable[str]) -> frozenset[str]:
+    """What the step's added unknown pieces wait on: each committed choice kept unchecked
+    after the step adds its own check, unknown, waiting on its blockers (its guard among
+    them where it waits on its presence)."""
+    waits: set[str] = set()
+    for path in committed:
+        state = after.get(("state", path))
+        if isinstance(state, StateForm) and state.kind == "unchecked":
+            waits |= state.blockers
+    return frozenset(waits)
+
+
 def violations(
     before: Mapping[Question, Form], after: Mapping[Question, Form], committed: Iterable[str]
 ) -> dict[Question, str]:
     """The answers that moved down from ``before`` to ``after`` (one side's), unless the
-    configuration reads refused after the step."""
+    configuration reads refused after the step.
+
+    The one exception is validity's valid to undecided through the pieces the step added: a
+    commitment kept unchecked adds a piece, it does not refine one. Every piece that existed
+    before the step is still held to the order (each rule, value and state is asked on its
+    own), and validity may become undecided only where some committed choice is kept
+    unchecked, and then waits only on what those choices wait on."""
     validity = after[("validity", "")]
     assert isinstance(validity, ValidityForm)
     if validity.verdict == "refused":
         return {}
     named = set(committed)
+    added = added_unknown(after, named)
     found = {}
     for question, old in before.items():
-        move = moved_down(old, after[question], question[0] == "state" and question[1] in named)
+        new = after[question]
+        if (
+            isinstance(old, ValidityForm)
+            and isinstance(new, ValidityForm)
+            and old.verdict == "valid"
+            and new.verdict == "undecided"
+            and added
+            and new.blockers <= added
+        ):
+            continue
+        move = moved_down(old, new, question[0] == "state" and question[1] in named)
         if move:
             found[question] = move
     return found
@@ -945,10 +978,10 @@ class _Walk:
     ) -> dict[str, set[str]]:
         """What only a change's verdict shows, on the choices the two verdicts differ on: a
         choice the configuration the change would publish keeps unchecked, or admits under
-        a refused guard; a value outside its domain, committed under a guard that was
-        unknown, refused by the model; a change the engine refuses that a cold build of
-        the configuration it would publish accepts (only its base's forced values refused
-        it)."""
+        a refused guard; a named value outside its domain the model refuses with its own
+        reason (:func:`_own_reason`); a change the engine refuses that a cold build of the
+        configuration it would publish accepts (only its base's forced values refused it),
+        or accepts where that cold build refuses (an admission its base made kept)."""
         found: dict[str, set[str]] = {}
         subjects = _subjects(("change", ""), expected, form) or set()
         for choice in sorted(subjects):
@@ -958,20 +991,17 @@ class _Walk:
             elif isinstance(state, model.GuardRefused):
                 found.setdefault("commit-under-refused-selector", set()).add(choice)
         if isinstance(result, model.Rejected):
+            engine = {refusal.choice: refusal for refusal in form.refusals}
             for refusal in result.refusals:
                 choice = refusal.choice
-                scope = self.index.choices[choice].scope
-                if (
-                    refusal.kind == "named"
-                    and outside(solution, choice, published.stored[choice])
-                    and presence(base, scope) == "unknown"
-                ):
-                    found.setdefault("own-reason", set()).add(choice)
-        if not form.accepted:
-            cold = self.engine.open(published.facts)
-            rebuilt, _ = cold.change(model.Change(commit=published.stored))
-            if rebuilt.accepted:
-                found.setdefault("stale-forced", set()).update(subjects)
+                if refusal.kind == "named" and outside(solution, choice, published.stored[choice]):
+                    kind = _own_reason(base, solution, choice, engine.get(choice))
+                    if kind:
+                        found.setdefault(kind, set()).add(choice)
+        cold = self.engine.open(published.facts)
+        rebuilt, _ = cold.change(model.Change(commit=published.stored))
+        if rebuilt.accepted != form.accepted:
+            found.setdefault("stale-forced", set()).update(subjects)
         return found
 
     # -- drawing
@@ -1193,6 +1223,7 @@ __all__ = [
     "Generated",
     "Tally",
     "WalkFailure",
+    "added_unknown",
     "classify",
     "expected_kinds",
     "generate",

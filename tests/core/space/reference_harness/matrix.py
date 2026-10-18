@@ -49,9 +49,6 @@ class Row:
 _CASES = "test_reference_cases"
 _RULES = "test_reference_rules"
 _SCOPES = "test_reference_scopes"
-_UNNAMED_TRIAL = (
-    "unclassified: no lane brief names a trial counting other stored choices' own checks; "
-)
 
 ROWS: tuple[Row, ...] = (
     Row(
@@ -96,14 +93,25 @@ ROWS: tuple[Row, ...] = (
         "own-reason",
     ),
     Row(
-        "open-under-refused-selector",
-        "lane 0",
-        "an open choice under a selector with no possible case is open, waiting on the "
-        "selector, not refused through it",
-        f"{_CASES}::test_an_open_choice_under_a_refused_selector",
-        "state-under-refused-selector",
-        "unclassified: pending a ruling on an open choice under a refused guard; the engine "
-        "reads it refused through the guard, as a rule under it",
+        "outside-domain-forcing",
+        "lane 2",
+        "a named value whose own check is false is refused with its own reason; forcing never "
+        "reads it",
+        f"{_CASES}::test_a_value_outside_its_domain_a_cores_rule_reads_is_refused_with_its_own_reason",
+        "own-reason-forcing",
+        "lane 0 refuses it as inactive with no finding: the core's trial reads the false own "
+        "check and forcing selects the other core",
+    ),
+    Row(
+        "outside-domain-under-false-guard",
+        "lane 2",
+        "a value outside its domain under a guard that is false (another case selected, or a "
+        "guard's test false) is refused with its own reason only, not as inactive",
+        f"{_CASES}::test_a_value_outside_its_domain_under_a_false_guard_is_refused_with_its_own_reason",
+        "own-reason-false-guard",
+        "unclassified: pending a ruling on whether a false guard leaves a value outside its "
+        "domain inactive, as the engine reads it, or refused by its own check, as the model "
+        "reads it; no lane names it, and the forcing row's fix would bring it",
     ),
     Row(
         "value-case-trial",
@@ -243,12 +251,12 @@ ROWS: tuple[Row, ...] = (
     ),
     Row(
         "pair-committed-peer",
-        "lane 2",
-        "the uncommitted participant of a conflict with a committed one is refused with no "
-        "possible value, naming it, not forced to the value the rule refuses",
-        f"{_RULES}::test_the_other_participant_of_a_committed_one_is_refused_naming_it",
-        "conflict",
-        "lane 1 refuses it for no possible value; lane 2 adds the conflict",
+        "lane 1",
+        "a value case is tried against the constraints that read the choice, so a choice whose "
+        "one value a rule with a committed choice refuses has no possible value (a plain "
+        "refusal: no forced value, no conflict), not forced to the value the rule refuses",
+        f"{_RULES}::test_the_other_choice_of_a_rule_with_a_committed_one_has_no_possible_value",
+        "value-case-trial",
     ),
     Row(
         "four-participants",
@@ -274,23 +282,13 @@ ROWS: tuple[Row, ...] = (
         "conflict-order",
     ),
     Row(
-        "forced-core-validity",
-        "lane 2",
-        "forcing never takes a value under which a retained choice's own check is false: the "
-        "core has no possible value, a conflict with the retained choice refuses the "
-        "configuration",
-        f"{_RULES}::test_a_retained_choice_checked_against_the_successors_forced_core_refuses_it",
-        "trial-counts-own-checks",
-        _UNNAMED_TRIAL + "lane 2's frozen rounds are likeliest",
-    ),
-    Row(
-        "forced-core-cold",
-        "lane 2",
-        "forcing never takes a value under which a retained choice's own check is false: a "
-        "cold build of the same choices is accepted, the configuration refused by the conflict",
-        f"{_RULES}::test_a_retained_choice_checked_against_the_successors_forced_core_as_a_cold_build",
-        "trial-counts-own-checks",
-        _UNNAMED_TRIAL + "lane 2's frozen rounds are likeliest",
+        "retained-check-forced-core",
+        "lane 0",
+        "a change checks every retained choice against the configuration it would publish, "
+        "never an admission its base made: a retained value the successor's forced core puts "
+        "outside its domain refuses the change, as a cold build does",
+        f"{_RULES}::test_a_retained_choice_checked_against_the_successors_forced_core",
+        "stale-forced",
     ),
     Row(
         "stale-forced-core",
@@ -420,25 +418,9 @@ ROWS: tuple[Row, ...] = (
     Row(
         "nested-conflict-validity",
         "lane 2",
-        "a conflict with a choice three deep refuses the configuration, as a conflict and the "
-        "selector's no possible value",
+        "a conflict with a choice three deep refuses the configuration as a conflict, naming "
+        "the forced selector it refuses (the inner selector, under it, adds nothing of its own)",
         f"{_SCOPES}::test_a_conflict_with_a_choice_three_deep_refuses_the_configuration",
-        "conflict",
-    ),
-    Row(
-        "look-ahead-conflict",
-        "lane 2",
-        "a selector with no possible case is a conflict with the committed choice its "
-        "presence hangs on, refused naming it",
-        f"{_SCOPES}::test_the_selector_a_committed_case_puts_in_scope_has_no_possible_value",
-        "conflict",
-    ),
-    Row(
-        "look-ahead-conflict-validity",
-        "lane 2",
-        "a selector with no possible case under a committed case refuses the configuration as "
-        "a conflict besides its no possible value",
-        f"{_SCOPES}::test_the_selector_a_committed_case_puts_in_scope_refuses_the_configuration",
         "conflict",
     ),
     Row(

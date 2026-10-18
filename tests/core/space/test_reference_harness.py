@@ -9,6 +9,8 @@ subset and everything else exactly."""
 from __future__ import annotations
 
 import ast
+import dataclasses
+import random
 import sys
 from pathlib import Path
 
@@ -33,6 +35,7 @@ from core.space.reference_harness import (
 )
 from core.space.reference_harness.compare import agrees
 from core.space.reference_harness.matrix import problems
+from core.space.reference_harness.walks import generate
 from finn.core.space import inspection
 
 
@@ -65,6 +68,21 @@ def test_the_model_imports_the_standard_library_only() -> None:
 def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() -> None:
     assert ROWS
     assert not problems([test_reference_cases, test_reference_rules, test_reference_scopes])
+
+
+def test_the_matrix_is_built_on_the_models_default_trial_reach() -> None:
+    # Off: a value case's trial does not count other stored choices' own checks, so a forced
+    # value may make a retained choice's own check false, and the change is refused. Every
+    # case and every walk compares the model's default; flipping it moves answers, and the
+    # rows with them.
+    defaults = {item.name: item.default for item in dataclasses.fields(Space)}
+    assert defaults["trials_count_retained_checks"] is False
+    modules = (test_reference_cases, test_reference_rules, test_reference_scopes)
+    cases = [value for module in modules for value in vars(module).values()]
+    descriptions = [case.description for case in cases if isinstance(case, Case)]
+    descriptions.append(generate(random.Random(0))[0].description)
+    assert len(descriptions) > 10
+    assert not any(item.trials_count_retained_checks for item in descriptions)
 
 
 def test_the_matrix_prints_as_a_markdown_table_in_milestone_order() -> None:

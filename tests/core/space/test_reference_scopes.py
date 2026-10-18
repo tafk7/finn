@@ -403,12 +403,11 @@ def test_a_case_is_not_tried_against_another_choice_having_no_possible_value() -
     LOOK.start(NO_CORES).check_state("realization")
 
 
-@expected("look-ahead-conflict")
 def test_the_selector_a_committed_case_puts_in_scope_has_no_possible_value() -> None:
+    # A plain refusal naming each core's reason: no forced value takes part, so no conflict.
     LOOK.start(NO_CORES, {"realization": "native"}).check_state("native_impl.compute")
 
 
-@expected("look-ahead-conflict-validity")
 def test_the_selector_a_committed_case_puts_in_scope_refuses_the_configuration() -> None:
     LOOK.start(NO_CORES, {"realization": "native"}).check_validity()
 

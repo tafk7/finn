@@ -8,9 +8,6 @@ Each case is a small synthetic description, built in the model and in the engine
 both sides and compares the answers. A question the engine answers differently at this
 commit is a strict expected failure, the witness of its row in the acceptance matrix
 (``reference_harness.matrix``), which names the milestone that removes it.
-
-Where the semantics have been ruled since the model was written and the model does not
-answer the ruling yet, the test states the ruled answer (``ruled=``).
 """
 
 from __future__ import annotations
@@ -30,14 +27,7 @@ from core.space.reference import (
     listed,
     membership,
 )
-from core.space.reference_harness import (
-    Case,
-    ChangeForm,
-    Pair,
-    Refusal,
-    Spelling,
-    expected,
-)
+from core.space.reference_harness import Case, Pair, Spelling, expected
 
 # Each test runs with the readers index used for every cache, then for none: the same answers.
 pytestmark = pytest.mark.usefixtures("index_path")
@@ -129,8 +119,8 @@ def test_an_admitted_value_under_a_refused_selector_is_queried_refused_through_i
     refused_under().check_answer("compute.packed.pe")
 
 
-@expected("open-under-refused-selector")
-def test_an_open_choice_under_a_refused_selector() -> None:
+def test_an_open_choice_under_a_refused_selector_reads_refused_through_it() -> None:
+    # Blamed at the selector: its own lack of a possible value adds nothing.
     refused_under().check_state("compute.stub.rows")
 
 
@@ -141,14 +131,68 @@ def test_a_rule_under_a_refused_selector_reads_refused_through_it() -> None:
 
 @expected("outside-domain-under-open-selector")
 def test_a_value_outside_its_domain_under_an_open_selector_is_refused_at_commit() -> None:
-    # At 12 both cores are possible: the selector is open, and 5 does not divide 12.
-    # Ruled: refused, named, with its own reason. (The model forces the other core to keep
-    # the value out of its domain, and refuses it as inactive.)
-    own = frozenset({("domain-membership", "compute.packed.pe")})
-    TYPED.start({"width": 12}).check_change(
-        Change(commit={"compute.packed.pe": 5}),
-        ruled=ChangeForm(False, refusals=frozenset({Refusal("compute.packed.pe", "named", own)})),
+    # At 12 both cores are possible: the selector is open, and 5 does not divide 12. Its own
+    # check is read with its case assumed: refused, named, with its own reason only.
+    TYPED.start({"width": 12}).check_change(Change(commit={"compute.packed.pe": 5}))
+
+
+@expected("outside-domain-under-false-guard")
+def test_a_value_outside_its_domain_under_a_false_guard_is_refused_with_its_own_reason() -> None:
+    # The stub core is selected: ``pe`` is absent, and 5 does not divide 12.
+    TYPED.start({"width": 12}, {"compute": "stub"}).check_change(
+        Change(commit={"compute.packed.pe": 5})
     )
+
+
+def test_a_value_inside_its_domain_under_a_false_guard_is_refused_as_inactive() -> None:
+    TYPED.start({"width": 12}, {"compute": "stub"}).check_change(
+        Change(commit={"compute.packed.pe": 3})
+    )
+
+
+# Two cores both possible, the first's rule reading its own ``pe`` (whether it divides the
+# width): a trial of that core reads ``pe``, so a ``pe`` outside its domain must not be read
+# there, or forcing selects the other core and ``pe`` reads inactive.
+
+TWO_CORES = Case(
+    "two cores, a rule reading a core's choice",
+    Space(
+        ("width",),
+        Scope(
+            "",
+            selectors=(
+                Selector(
+                    "compute",
+                    (
+                        Scope(
+                            "packed",
+                            choices=(
+                                Choice(
+                                    "pe", computed(lambda read: divisors(read["width"]), ("width",))
+                                ),
+                            ),
+                            constraints=(
+                                Constraint(
+                                    "divides",
+                                    ("width", "compute.packed.pe"),
+                                    lambda read: read["width"] % read["compute.packed.pe"] == 0,
+                                    "lanes-divide",
+                                ),
+                            ),
+                        ),
+                        Scope("closed", choices=(Choice("n", listed(1, 2, 3)),)),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+@expected("outside-domain-forcing")
+def test_a_value_outside_its_domain_a_cores_rule_reads_is_refused_with_its_own_reason() -> None:
+    # At 4 both cores are possible, and 3 does not divide 4.
+    TWO_CORES.start({"width": 4}).check_change(Change(commit={"compute.packed.pe": 3}))
 
 
 def test_a_refused_selector_over_an_admitted_value_refuses_the_configuration() -> None:
