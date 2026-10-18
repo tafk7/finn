@@ -125,9 +125,7 @@ class Composition(Protocol):
 
     def forced(self, names: Iterable[str] | None = None) -> Mapping[Key, object]: ...
 
-    def chosen(
-        self, names: Iterable[str] | None = None, *, unchecked: bool = False
-    ) -> Mapping[Key, object]: ...
+    def chosen(self, names: Iterable[str] | None = None) -> Mapping[Key, object]: ...
 
     def validity(self, name: str) -> inspection.Validity: ...
 
@@ -456,7 +454,7 @@ class Seam:
             trial: Trial[S] = network.trial(changes, sorted(clear))
             if trial.accepted:
                 break
-            stored = network.chosen({key[0] for key in trial.refused}, unchecked=True)
+            stored = network.chosen({key[0] for key in trial.refused})
             dependents = {key for key in trial.refused if key in stored and key not in changes}
             if not dependents or set(trial.refused) - dependents or dependents <= clear:
                 return Refused(trial.refused)
@@ -634,7 +632,7 @@ class Seam:
         value holds: a hold waits with its choice."""
         if not self.held:
             return
-        values = network.chosen(unchecked=True)
+        values = network.chosen()
         forced: Mapping[Key, object] | None = None
         for key, value in self.held.items():
             if values.get(key, _ABSENT) == value:

@@ -615,22 +615,14 @@ class Network:
         found: T = self._asked[key]  # type: ignore[assignment]
         return found
 
-    def chosen(
-        self, names: Iterable[str] | None = None, *, unchecked: bool = False
-    ) -> dict[Key, object]:
+    def chosen(self, names: Iterable[str] | None = None) -> dict[Key, object]:
         """Every choice stored (of ``names`` only, where named), by key, ranked: each bound
-        member's committed Decisions, and the choices an unbound channel holds. With
-        ``unchecked``, the choices kept unchecked too, by their stored values: what saving
-        writes (``persist``)."""
+        member's committed Decisions, those kept unchecked among them, by their stored
+        values, and the choices an unbound channel holds: what saving writes (``persist``)."""
         found: dict[Key, object] = {}
         for name in self._wanted(names):
             held = self._unbound.get(name)
-            question = "saved" if unchecked else "chosen"
-            values = (
-                held.stored
-                if held is not None
-                else self._answer(name, question, lambda at: chosen(at, unchecked=unchecked))
-            )
+            values = held.stored if held is not None else self._answer(name, "chosen", chosen)
             found |= {(name, key): value for key, value in values.items()}
         return found
 
@@ -714,12 +706,12 @@ class Network:
 
     def _stored(self, name: str) -> Mapping[str, object]:
         """What member ``name`` stores, replayed as it is bound again: its committed
-        choices and those kept unchecked, by their stored values (a commitment whose check
-        waits is replayed as any other, and dropped with why where replay refuses it)."""
+        choices, by their stored values, those kept unchecked among them (a commitment whose
+        check waits is replayed as any other, and dropped with why where replay refuses it)."""
         held = self._unbound.get(name)
         if held is not None:
             return held.stored
-        return self._answer(name, "saved", lambda at: chosen(at, unchecked=True))
+        return self._answer(name, "chosen", chosen)
 
     def trial(
         self, changes: Mapping[Key, object], clear: Collection[Key] = (), *, check: bool = True

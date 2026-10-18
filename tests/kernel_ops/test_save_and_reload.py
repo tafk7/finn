@@ -252,7 +252,7 @@ def test_a_node_choice_a_changed_fact_leaves_unknown_is_kept_unchecked() -> None
     assert not again.stale
     assert again.unchecked() == waiting
     assert inspection.unchecked(again.member("first")) == tuple(item for _, item in waiting)
-    assert again.chosen(["first"], unchecked=True) == first.chosen(["first"], unchecked=True)
+    assert again.chosen(["first"]) == first.chosen(["first"])
 
 
 def test_a_channel_whose_ends_a_changed_fact_leaves_unknown_holds_its_choices() -> None:

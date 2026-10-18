@@ -469,7 +469,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     network = bound
     # What the body states: its committed choices and those kept unchecked (a commitment
     # whose check waits, which a hold may sit on).
-    saved = network.chosen(unchecked=True)
+    saved = network.chosen()
     # The body's mark names the keys held; their values are the ones the network states.
     seam.held.update(_held_values(network, saved, held_keys(model)))
     # A choice the body leaves open takes its baseline before the strategy runs; a hold

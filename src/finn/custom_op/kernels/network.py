@@ -682,7 +682,7 @@ def persist(
     Returns what each owner now holds, by graph name."""
     names = [name for name in network.members if owners is None or name in owners]
     held_by: dict[str, dict[str, object]] = {name: {} for name in names}
-    for (owner, key), value in network.chosen(names, unchecked=True).items():
+    for (owner, key), value in network.chosen(names).items():
         held_by[owner][key] = value
     refuse_outside_body(
         model, [name for name, values in held_by.items() if values and name not in network.kernels]

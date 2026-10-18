@@ -193,9 +193,7 @@ def test_persist_checks_every_value_before_it_writes_any(monkeypatch: pytest.Mon
         ("compute.packed.simd", "choice-value-invalid"),
     ):
         stated = {("first", "compute.packed.pe"): 4, ("first", forged): "two"}
-        monkeypatch.setattr(
-            Partition, "chosen", lambda self, names=None, *, unchecked=False, stated=stated: stated
-        )
+        monkeypatch.setattr(Partition, "chosen", lambda self, names=None, stated=stated: stated)
         with refused(
             code, error=KernelOpError, owner="MatMul", node="first", keys=(forged,)
         ) as caught:

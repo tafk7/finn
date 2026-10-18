@@ -520,7 +520,7 @@ def test_reopen_clears_what_the_engine_names_and_a_channel_waits_on_its_kernel()
     assert {key: [f.code for f in why] for key, why in direct.dropped.items()} == {
         depth: ["inapplicable"]
     }
-    assert depth not in direct.network.chosen(unchecked=True)
+    assert depth not in direct.network.chosen()
 
 
 def test_settle_keeps_each_prior_value_still_accepted_and_rebaselines_the_rest() -> None:
