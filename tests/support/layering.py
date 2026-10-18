@@ -410,6 +410,9 @@ LAYERS: tuple[Layer, ...] = (
     # The default snapshot's contract on value classes: the standard library only.
     # The engine, dataflow and kernel trees check their own classes with it.
     Layer("tests.value_classes", ("support.value_classes",), (), (), "tests/core/space"),
+    # The Space engine's reference model: an oracle written independently of the engine,
+    # so the standard library only, never finn. The engine's tests compare with it.
+    Layer("tests.space_reference", ("core.space.reference",), (), (), "tests/core/space"),
     # The finn-dev oracle's captures (scripts/oracle): the standard library only. The
     # kernel tests compare with the HWCustomOp flow's values through it.
     Layer("tests.oracle", ("oracle",), (), (), "tests/kernels"),
@@ -437,7 +440,14 @@ LAYERS: tuple[Layer, ...] = (
             "support.space_pipeline",
             "support.space_walk",
         ),
-        ("reporting", "space", "tests.layering", "tests.refusals", "tests.value_classes"),
+        (
+            "reporting",
+            "space",
+            "tests.layering",
+            "tests.refusals",
+            "tests.value_classes",
+            "tests.space_reference",
+        ),
         ("pytest", "_typeshed"),
         "tests/core/space",
     ),
