@@ -28,6 +28,7 @@ from core.space._toys_support import House
 from finn.core.space import (
     Available,
     Decision,
+    DecisionState,
     Inapplicable,
     Param,
     Rejected,
@@ -250,9 +251,10 @@ def test_a_retained_choice_waits_on_a_selector_the_change_opened() -> None:
     assert not isinstance(answer, Rejected)
     assert {finding.code for finding in answer.findings} == {"decision-unassigned"}
     assert answer == runtime.membership(occurrence.state(fresh(point)), index, 1).result
-    # Reads answer unresolved; the stored value and what it waits on are inspection's.
+    # Reads answer unresolved; the state is the commitment, its stored value; what it waits
+    # on is inspection's.
     assert isinstance(point.query(beat), Unresolved)
-    assert isinstance(point.field(beat).state, Unresolved)
+    assert point.field(beat).state == Available(DecisionState("l1.beat", "committed", 1))
     assert inspection.unchecked(point) == (inspection.Unchecked("l1.beat", 1, ("u1.compute",)),)
     assert inspection.unchecked(fresh(point)) == inspection.unchecked(point)
     # A new commit of the same value, with the choice cleared first, is kept unchecked too.

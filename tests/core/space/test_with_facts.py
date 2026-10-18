@@ -27,6 +27,7 @@ from finn.core.space import (
     Available,
     ConfigurationError,
     Decision,
+    DecisionState,
     Domain,
     Inapplicable,
     Param,
@@ -317,6 +318,11 @@ def state_of(point: Space, key: str) -> object:
     return point.field(reference_of(point, key)).state
 
 
+def read_of(point: Space, key: str) -> object:
+    """What a read of the Decision ``key`` of ``point`` answers."""
+    return point.query(reference_of(point, key))
+
+
 def refused(point: Space, facts: dict[object, object]) -> dict[str, list[str]]:
     """The owners the change to ``facts`` refuses, with the codes of their findings."""
     report = point.try_with_facts(facts)
@@ -444,13 +450,16 @@ def test_a_commit_the_choice_reading_accepts_leaves_a_configuration_no_case_read
     # At 12 a quarter of the width is 3, so `pe = 4` is the core's own check true (4 divides
     # 12) while the core's constraint refuses it. The choice reading, which reads the selector
     # as the base forces it, accepts the commit; the configuration it leaves has no viable case.
+    # The choice is committed, and read refused through its selector's guard.
     point = design_space(Narrow(width=12))
     assert isinstance(point.compute, Tight)
     accepted = point.try_with_choices({reference_of(point, "compute.core.pe"): 4})
     assert accepted.accepted
     state = state_of(accepted.instance, "compute.core.pe")
-    assert isinstance(state, Rejected)
-    assert [item.code for item in state.findings] == ["decision-no-viable-case"]
+    assert state == Available(DecisionState("compute.core.pe", "committed", 4))
+    read = read_of(accepted.instance, "compute.core.pe")
+    assert isinstance(read, Rejected)
+    assert [item.code for item in read.findings] == ["decision-no-viable-case"]
 
 
 def test_the_published_reading_accepts_a_commit_the_choice_reading_accepts() -> None:
@@ -459,10 +468,12 @@ def test_the_published_reading_accepts_a_commit_the_choice_reading_accepts() -> 
     by_choices = point.try_with_choices(change)
     by_facts = point.try_with_facts({}, change)
     assert by_choices.accepted and by_facts.accepted
-    # A change checks only the choice's own values: both leave the configuration reading the
-    # choice refused through its selector's guard, and the same as each other.
+    # A change checks only the choice's own values: both leave the choice committed, the
+    # configuration reading it refused through its selector's guard, and the same as each other.
     states = [state_of(report.instance, "compute.core.pe") for report in (by_choices, by_facts)]
-    assert states[0] == states[1] and isinstance(states[0], Rejected)
+    assert states[0] == states[1] == Available(DecisionState("compute.core.pe", "committed", 4))
+    reads = [read_of(report.instance, "compute.core.pe") for report in (by_choices, by_facts)]
+    assert reads[0] == reads[1] and isinstance(reads[0], Rejected)
 
 
 # -- a choice whose own check reads its core's own values (a kernel's folding) --------------------
@@ -577,7 +588,10 @@ def test_an_own_check_under_a_refused_selector_is_checked_again_on_a_change() ->
     point = design_space(Folder(width=12))
     two = point.try_with_choices(folder_change(point, simd=2, pumped=True))
     assert two.accepted
-    assert isinstance(state_of(two.instance, "compute.core.pumped"), Rejected)
+    assert state_of(two.instance, "compute.core.pumped") == Available(
+        DecisionState("compute.core.pumped", "committed", True)
+    )
+    assert isinstance(read_of(two.instance, "compute.core.pumped"), Rejected)
     one = two.instance.try_with_choices(folder_change(two.instance, simd=1))
     built = design_space(Folder(width=12))
     cold = built.try_with_choices(folder_change(built, simd=1, pumped=True))

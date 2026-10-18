@@ -1317,26 +1317,26 @@ def _applicability(snapshot: Snapshot, node: Node) -> NonValue | None:
 
 
 def decision_state(snapshot: Snapshot, node_index: int) -> QueryResult[DecisionState[object]]:
+    """A Decision's state: the commitment, not the answer. Every kept commitment is
+    ``committed`` with its stored value, whatever a read of it answers: its value once
+    checked, unresolved while unchecked, refused through a refused guard or through a
+    refused input of its domain. An open Decision is unassigned where its guard holds,
+    and answers as its guard otherwise."""
     with snapshot.lock:
         node = snapshot.linked.nodes[node_index]
         if node.kind != "decision":
             raise EvaluationError(
                 node.owner, "decision state", "reference is not an owning decision"
             )
+        if node_index in snapshot.assignments:
+            value = _clone(
+                node, snapshot.assignments[node_index], owner=node.owner, role="decision state"
+            )
+            return Available(DecisionState(node.owner, "committed", value))
         inactive = _applicability(snapshot, node)
         if inactive is not None:
             return inactive
-        if node_index not in snapshot.assignments:
-            return Available(DecisionState(node.owner))
-        if node_index in snapshot.unchecked:
-            read = evaluate(snapshot, node_index).result
-            if isinstance(read, Rejected):
-                return read  # kept, refused through a refused input of its domain
-            return _unchecked_answer(node)
-        value = _clone(
-            node, snapshot.assignments[node_index], owner=node.owner, role="decision state"
-        )
-        return Available(DecisionState(node.owner, "committed", value))
+        return Available(DecisionState(node.owner))
 
 
 def enumeration(snapshot: Snapshot, node_index: int) -> Evaluation:

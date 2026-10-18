@@ -16,7 +16,9 @@ its Space's validity. A constraint reads values; one that reads a view of its ow
 or of an ancestor, closes a dependency cycle. An export may name a derived value, which
 a holder reads as the value whatever the exporting Space's validity. A value case is
 possible unless a constraint that reads its Decision refuses it, and a commit is checked
-against the choice's own domain only.
+against the choice's own domain only. A state describes the commitment, a read the answer:
+every kept choice is committed with its stored value, whether it reads as its value,
+unresolved while unchecked, or refused through a refused guard or a refused input.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from support.space_cores import commit, forced
 from finn.core.space import (
     Available,
     Decision,
+    DecisionState,
     EvaluationError,
     Inapplicable,
     Members,
@@ -890,7 +893,7 @@ def test_a_commit_whose_domain_input_is_refused_is_kept_and_reads_refused_throug
     # Kept, never read as a value: refused through the input, not waiting on anything.
     assert inspection.unchecked(point) == ()
     assert refused_through_width(point.query(Lanes.lanes))
-    assert refused_through_width(point.field(Lanes.lanes).state)
+    assert point.field(Lanes.lanes).state == Available(DecisionState("lanes", "committed", 1))
     validity = inspection.validity(point)
     assert validity.status == "refused" and owners(validity) == ["lanes"]
     assert refused_through_width(validity.pieces[0].result)
@@ -914,3 +917,101 @@ def test_only_a_domain_that_answers_false_refuses_a_commit() -> None:
     (outcome,) = report.outcomes
     assert isinstance(outcome.result, Rejected)
     assert {finding.code for finding in outcome.result.findings} == {"domain-membership"}
+
+
+# -- every kept commitment reads as committed ----------------------------------------------
+
+
+class Beats(Space):
+    """A beat whose domain reads ``size``, a choice: committed while ``size`` is open, the
+    beat is kept unchecked."""
+
+    size: int = Decision(values=(4, 8))
+    beat: int = Decision(domain=divisors_of(size))
+
+
+class Store(Space):
+    """A memory whose rule needs UltraRAM for ``ultra``: a rule of the Space's, not the
+    choice's domain, so the choice's own check holds whatever the platform has."""
+
+    ultra: bool = Param()
+    style: str = Decision(values=("block", "ultra"))
+
+    @constraint
+    def has_ultra(self) -> bool | Rejected:
+        if self.style == "ultra" and not self.ultra:
+            return reject("ultra-absent", "the platform has no UltraRAM")
+        return True
+
+
+class Sourced(Space):
+    """The memory as its source's one case: ``ultra`` stored without UltraRAM leaves the
+    source no possible case, which refuses the stored style's guard."""
+
+    ultra: bool = Param()
+    source: Store = Decision({"memory": Store}, ultra=ultra)
+
+
+def committed_choices(point: Space) -> dict[str, object]:
+    """Every Decision whose state is committed, by key, with its stored value: what saving
+    a configuration writes."""
+    found: dict[str, object] = {}
+    for item in inspection.decisions(point):
+        state = point.field(item.reference).state
+        if isinstance(state, Available) and state.value.status == "committed":
+            found[item.key] = state.value.value
+    return found
+
+
+def reads(point: Space) -> dict[str, object]:
+    """What a read of each Decision answers, by key."""
+    return {item.key: point.query(item.reference) for item in inspection.decisions(point)}
+
+
+def kept(built: Any, choices: dict[str, object], key: str, value: object) -> object:
+    """``choices`` committed on ``built`` keep ``key`` committed with ``value``; saved and
+    committed again on a fresh binding of the same facts, every state and read is the same.
+    The read of ``key``, for the kind to check."""
+    point = commit(design_space(built()), choices)
+    reference = {item.key: item.reference for item in inspection.decisions(point)}[key]
+    assert point.field(reference).state == Available(DecisionState(key, "committed", value))
+    assert committed_choices(point)[key] == value
+    again = commit(design_space(built()), committed_choices(point))
+    assert committed_choices(again) == committed_choices(point)
+    assert reads(again) == reads(point)
+    assert inspection.validity(again) == inspection.validity(point)
+    return point.query(reference)
+
+
+def test_a_checked_choice_is_committed_and_reads_as_its_value() -> None:
+    assert kept(lambda: Lanes(w=8), {"lanes": 4}, "lanes", 4) == Available(4)
+
+
+def test_an_unchecked_choice_is_committed_and_reads_unresolved() -> None:
+    read = kept(Beats, {"beat": 2}, "beat", 2)
+    assert isinstance(read, Unresolved)
+    assert {(f.code, f.owner) for f in read.findings} == {("decision-unchecked", "beat")}
+
+
+def test_a_choice_admitted_under_a_refused_guard_is_committed_and_reads_refused_through_it() -> (
+    None
+):
+    read = kept(
+        lambda: Sourced(ultra=False),
+        {"source.memory.style": "ultra"},
+        "source.memory.style",
+        "ultra",
+    )
+    assert isinstance(read, Rejected)
+    assert {(f.code, f.owner) for f in read.findings} == {("decision-no-viable-case", "source")}
+    # The rule is the cause, the choice's own check holding: with UltraRAM it reads as its value.
+    assert kept(
+        lambda: Sourced(ultra=True),
+        {"source.memory.style": "ultra"},
+        "source.memory.style",
+        "ultra",
+    ) == Available("ultra")
+
+
+def test_a_choice_kept_through_a_refused_input_is_committed_and_reads_refused_through_it() -> None:
+    assert refused_through_width(kept(lambda: Lanes(w=7), {"lanes": 1}, "lanes", 1))
