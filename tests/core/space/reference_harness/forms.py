@@ -86,4 +86,12 @@ class ChangeForm:
     refusals: frozenset[Refusal] = field(default_factory=frozenset)
 
 
-Form = StateForm | AnswerForm | RuleForm | ValidityForm | ChangeForm
+@dataclass(frozen=True)
+class DefinitionForm:
+    """Whether a description is a definition at all: ``error`` the kind of definition
+    error it is (``"cycle"``), or ``None`` where it builds and answers."""
+
+    error: str | None
+
+
+Form = StateForm | AnswerForm | RuleForm | ValidityForm | ChangeForm | DefinitionForm

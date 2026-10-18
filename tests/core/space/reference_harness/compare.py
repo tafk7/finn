@@ -29,12 +29,14 @@ from typing import Any
 
 from core.space import reference
 from core.space.reference.model import same
+from finn.core.space import DefinitionError, EvaluationError
 
 from .engine import Engine, Point, Spelling, build
 from .forms import (
     AnswerForm,
     ChangeForm,
     Code,
+    DefinitionForm,
     Form,
     Refusal,
     RuleForm,
@@ -302,6 +304,48 @@ class Pair:
         return None
 
 
+def check_definition(
+    name: str,
+    description: reference.Space,
+    spelling: Spelling | None = None,
+    facts: Mapping[str, object] | None = None,
+) -> None:
+    """Whether ``description`` is a definition: the model's definition error (a cycle) or
+    none, against the engine's. The engine reports a cycle when building the Space, or
+    when asked (its validity, every rule and every view of the configuration with
+    ``facts``), as a dependency cycle; it answers otherwise."""
+    try:
+        description.validate()
+        expected = DefinitionForm(None)
+    except reference.DefinitionError as error:
+        expected = DefinitionForm(error.kind)
+    _check(name, "the definition", expected, _engine_definition(description, spelling, facts))
+
+
+def _engine_definition(
+    description: reference.Space,
+    spelling: Spelling | None,
+    facts: Mapping[str, object] | None,
+) -> DefinitionForm:
+    try:
+        engine = build(description, spelling, cycles=True)
+        point = engine.open(dict(facts or {}))
+        point.validity()
+        for path in sorted(engine.index.constraints):
+            point.rule(path)
+        for path in sorted(engine.index.views):
+            point.answer(path)
+    except DefinitionError as error:
+        if any(finding.code == "cyclic-dependency" for finding in error.findings):
+            return DefinitionForm("cycle")
+        raise
+    except EvaluationError as error:
+        if error.role == "dependency cycle":
+            return DefinitionForm("cycle")
+        raise
+    return DefinitionForm(None)
+
+
 def _published(
     configuration: reference.Configuration, edit: reference.Change
 ) -> reference.Configuration:
@@ -330,6 +374,7 @@ __all__ = [
     "agrees",
     "answer_form",
     "change_form",
+    "check_definition",
     "rule_form",
     "state_form",
     "validity_form",

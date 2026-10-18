@@ -8,12 +8,15 @@ Everything that depends on how the engine is **authored** or **asked** at this c
 this one module, so a milestone that changes either changes it here:
 
 - **Spelling.** A rule of the description is a constraint in the model. The engine at this
-  commit spells it one of four ways (``Spelling.rules``, beside each case):
+  commit spells it one of six ways (``Spelling.rules``, beside each case):
   ``Admission`` (the default: a ``@constraint`` in its Space's ``admission =
   ConstraintGroup(...)``, the only rules the engine counts for a selector's case),
   ``Plain`` (a ``@constraint`` in no group, which the engine does not count),
-  ``Requirement`` (``requires(...)`` on a choice's domain, refused at commit) and
-  ``Obligation`` (a view's ``requires=``). A domain with a membership predicate is a
+  ``Requirement`` (``requires(...)`` on a choice's domain, refused at commit),
+  ``Membership`` (a choice's domain reading the rule's other inputs: a linking rule
+  written as membership), ``Obligation`` (a view's ``requires=``) and ``ByName`` (a
+  ``@constraint`` method reading its inputs by attribute name, ``getattr(self, name)``,
+  in its Space's admission group). A domain with a membership predicate is a
   ``domain(accepts=, candidates=)``: membership is the model's whole membership, the
   enumeration the listed values, unchecked by membership as the engine enumerates today.
 - **Questions.** The engine has no query for a configuration's validity at this commit, nor
@@ -105,6 +108,22 @@ class Requirement:
 
 
 @dataclass(frozen=True)
+class Membership:
+    """The rule as part of ``choice``'s domain: its membership reads the rule's other
+    inputs, and a value the rule makes false is outside the domain. ``choice`` is one of
+    the rule's reads, in the rule's own scope."""
+
+    choice: str
+
+
+@dataclass(frozen=True)
+class ByName:
+    """A ``@constraint`` method of its Space, in its admission group, reading each input by
+    name (``getattr(self, name)`` over a list of names, through child nodes for a child's
+    member): the engine discovers the reads when the body runs."""
+
+
+@dataclass(frozen=True)
 class Obligation:
     """A view's obligation: ``@view(requires=(rule,))`` on ``view``, of the rule's own
     Space."""
@@ -112,7 +131,7 @@ class Obligation:
     view: str
 
 
-Rule = Admission | Plain | Requirement | Obligation
+Rule = Admission | Plain | Requirement | Membership | Obligation | ByName
 
 
 @dataclass(frozen=True)
@@ -170,17 +189,40 @@ def _input(path: str) -> str:
     return "in-" + path.replace(".", "-")
 
 
+class _Acyclic(model.Index):
+    """The description's index without the model's cycle check: a description the model
+    refuses as a cycle is still built in the engine, to see what the engine answers."""
+
+    def _check_cycles(self) -> None:
+        return None
+
+
+#: spellings that write a rule into a choice's domain, not as a member of its Space
+_IN_DOMAIN = (Requirement, Membership)
+
+
 class _Builder:
     """The engine Space classes of one description, one per scope, built on demand."""
 
-    def __init__(self, space: model.Space, spelling: Spelling) -> None:
-        self.index = space.validate()
+    def __init__(self, space: model.Space, spelling: Spelling, cycles: bool = False) -> None:
+        self.index = _Acyclic(space) if cycles else space.validate()
         self.spelling = spelling
         index = self.index
         self.requirements: dict[str, list[tuple[str, Requirement]]] = {}
+        self.memberships: dict[str, list[str]] = {}
         for path, rule in spelling.rules.items():
             if path not in index.constraints:
                 raise NotTranslatable(f"{path}: spelled, but not a rule of the description")
+            if isinstance(rule, Membership):
+                owner = index.constraints[path][1]
+                if (
+                    rule.choice not in index.constraints[path][0].reads
+                    or rule.choice not in index.choices
+                    or index.choices[rule.choice].scope != owner
+                    or index.choices[rule.choice].cases is not None
+                ):
+                    raise NotTranslatable(f"{path}: a membership of a value choice it reads")
+                self.memberships.setdefault(rule.choice, []).append(path)
             if isinstance(rule, Requirement):
                 if rule.choice not in index.choices or index.kind(rule.fact) is None:
                     raise NotTranslatable(f"{path}: its requirement names unknown nodes")
@@ -350,12 +392,22 @@ class _Builder:
                 requires(self.reference(scope, rule.fact), finding, cases=rule.cases)
             )
             self.subjects[(path, code)] = rule_path
-        simple = domain_.values is not None and domain_.member is None and not domain_.reads
+        rules = [self.index.constraints[rule][0] for rule in self.memberships.get(path, ())]
+        simple = (
+            domain_.values is not None
+            and domain_.member is None
+            and not domain_.reads
+            and not rules
+        )
         if simple and domain_.values:
             return Decision(
                 values=domain_.values, requires=tuple(requirements), required=info.required
             )
-        reads = domain_.reads
+        reads = tuple(
+            dict.fromkeys(
+                (*domain_.reads, *(read for rule in rules for read in rule.reads if read != path))
+            )
+        )
         names = [f"a{position}" for position in range(len(reads))]
 
         def readings(arguments: Mapping[str, object]) -> dict[str, object]:
@@ -372,7 +424,10 @@ class _Builder:
             values = listing(arguments)
             if values is not None and not any(same(item, candidate) for item in values):
                 return False
-            return domain_.member is None or bool(domain_.member(candidate, readings(arguments)))
+            read = readings(arguments)
+            if not all(rule.predicate({**read, path: candidate}) for rule in rules):
+                return False
+            return domain_.member is None or bool(domain_.member(candidate, read))
 
         def candidates(**arguments: object) -> tuple[object, ...]:
             values = listing(arguments)
@@ -413,9 +468,47 @@ class _Builder:
         def body(read: dict[str, Any]) -> bool | Rejected:
             return True if rule.predicate(read) else reject(rule.code, "the rule refuses")
 
+        if isinstance(self.spelling.rule(path), ByName):
+            return constraint(self._by_name(scope, path, rule.reads, body))
         return constraint(**self._aliases(scope, rule.reads))(
             _explicit(rule.reads, body, bool | Rejected)
         )
+
+    def _by_name(
+        self,
+        scope: str,
+        path: str,
+        reads: tuple[str, ...],
+        body: Callable[[dict[str, Any]], bool | Rejected],
+    ) -> Any:
+        """A method reading each of ``reads`` by attribute name from ``self``."""
+        chains: list[tuple[str, tuple[str, ...]]] = []
+        for read in reads:
+            owner = self.owner(read)
+            if read in self.index.facts or not self.index.within(owner, scope):
+                raise NotTranslatable(f"{path}: a rule read by name reads inside its Space")
+            chain = [_name(read)]
+            current = owner
+            while current != scope:
+                info = self.index.scopes[current]
+                if info.selector is not None or info.when is not None:
+                    raise NotTranslatable(f"{path}: read by name through a plain child only")
+                chain.append(_name(current))
+                assert info.parent is not None
+                current = info.parent
+            chains.append((read, tuple(reversed(chain))))
+
+        def method(self: Any) -> bool | Rejected:
+            read: dict[str, Any] = {}
+            for target, chain in chains:
+                node = self
+                for name in chain:
+                    node = getattr(node, name)
+                read[target] = node
+            return body(read)
+
+        method.__annotations__ = {"return": bool | Rejected}
+        return method
 
     # -- scopes
 
@@ -467,7 +560,7 @@ class _Builder:
             annotations[_input(path)] = self.value_type(path)
         for path in mine:
             rule = self.spelling.rules.get(path)
-            if isinstance(rule, Requirement):
+            if isinstance(rule, _IN_DOMAIN):
                 continue
             if path in index.choices and index.choices[path].cases is not None:
                 members[_name(path)] = self.selector(scope, path)
@@ -486,7 +579,8 @@ class _Builder:
         admitted = [
             self.member(scope, path)
             for path in mine
-            if path in index.constraints and isinstance(self.spelling.rule(path), Admission)
+            if path in index.constraints
+            and isinstance(self.spelling.rule(path), (Admission, ByName))
         ]
         if admitted:
             members["admission"] = ConstraintGroup(*admitted)
@@ -544,9 +638,12 @@ class Engine:
         return frozenset(self.path(finding.owner) for finding in findings)
 
 
-def build(description: model.Space, spelling: Spelling | None = None) -> Engine:
-    """The engine Space class of ``description``, spelled as ``spelling`` says."""
-    builder = _Builder(description, spelling or Spelling())
+def build(
+    description: model.Space, spelling: Spelling | None = None, cycles: bool = False
+) -> Engine:
+    """The engine Space class of ``description``, spelled as ``spelling`` says; with
+    ``cycles``, built even where the model refuses the description as a cycle."""
+    builder = _Builder(description, spelling or Spelling(), cycles)
     root = builder.space_class("")
     return Engine(
         description,
@@ -655,8 +752,8 @@ class Point:
     def rule(self, path: str) -> RuleForm:
         """A rule's answer, read from wherever its spelling puts it."""
         spelled = self.engine.spelling.rule(path)
-        if isinstance(spelled, Requirement):
-            raise NotTranslatable(f"{path}: a requirement has no answer of its own")
+        if isinstance(spelled, _IN_DOMAIN):
+            raise NotTranslatable(f"{path}: a rule in a domain has no answer of its own")
         result = self.point.query(self._members()[path])
         return _rule(self.engine, result)
 
@@ -746,9 +843,11 @@ def _own_codes(engine: Engine, owner: str, result: QueryResult[bool]) -> frozens
 
 __all__ = [
     "Admission",
+    "ByName",
     "Engine",
     "NotTranslatable",
     "Obligation",
+    "Membership",
     "Plain",
     "Point",
     "Requirement",

@@ -15,9 +15,26 @@ this commit by the milestone that removes it.
     pair.check_change(Change(commit={"x": 3}))     # refused, named, outside its domain
 """
 
-from .compare import Case, Disagreement, Pair, SetupError
-from .engine import Admission, NotTranslatable, Obligation, Plain, Requirement, Spelling
-from .forms import AnswerForm, ChangeForm, Refusal, RuleForm, StateForm, ValidityForm
+from .compare import Case, Disagreement, Pair, SetupError, check_definition
+from .engine import (
+    Admission,
+    ByName,
+    Membership,
+    NotTranslatable,
+    Obligation,
+    Plain,
+    Requirement,
+    Spelling,
+)
+from .forms import (
+    AnswerForm,
+    ChangeForm,
+    DefinitionForm,
+    Refusal,
+    RuleForm,
+    StateForm,
+    ValidityForm,
+)
 from .matrix import MILESTONES, ROWS, Row, expected, markdown
 
 __all__ = [
@@ -25,9 +42,12 @@ __all__ = [
     "ROWS",
     "Admission",
     "AnswerForm",
+    "ByName",
     "Case",
     "ChangeForm",
+    "DefinitionForm",
     "Disagreement",
+    "Membership",
     "NotTranslatable",
     "Obligation",
     "Pair",
@@ -40,6 +60,7 @@ __all__ = [
     "Spelling",
     "StateForm",
     "ValidityForm",
+    "check_definition",
     "expected",
     "markdown",
 ]

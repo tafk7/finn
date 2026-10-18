@@ -47,6 +47,11 @@ class Row:
 
 
 _CASES = "test_reference_cases"
+_RULES = "test_reference_rules"
+_SCOPES = "test_reference_scopes"
+_UNNAMED_TRIAL = (
+    "unclassified: no lane brief names a trial counting other stored choices' own checks; "
+)
 
 ROWS: tuple[Row, ...] = (
     Row(
@@ -138,6 +143,155 @@ ROWS: tuple[Row, ...] = (
         "a choice with an empty list is a false piece of validity: the configuration is refused",
         f"{_CASES}::test_an_empty_list_refuses_the_configuration",
         "empty-list",
+    ),
+    # -- rules between choices (cases 5 to 8)
+    Row(
+        "linked-possible",
+        "lane 1",
+        "a value case is tried against the constraints that read the choice, so a case a "
+        "linking rule makes false is not possible",
+        f"{_RULES}::test_a_linking_rule_leaves_the_other_choice_the_cases_it_holds_for",
+        "value-case-trial",
+    ),
+    Row(
+        "linked-forced",
+        "lane 1",
+        "a value case is tried against the constraints that read the choice, so the one case "
+        "a linking rule leaves is forced",
+        f"{_RULES}::test_a_linking_rule_forces_the_open_choice",
+        "value-case-trial",
+    ),
+    Row(
+        "linked-domain-commit-first",
+        "lane 1",
+        "a linking rule is a constraint, not a domain reading another choice: a commit before "
+        "the choice it reads is accepted",
+        f"{_RULES}::test_a_linking_rule_in_a_domain_takes_a_commit_before_the_choice_it_reads",
+        "linking-in-domain",
+    ),
+    Row(
+        "linked-domain-commit",
+        "lane 1",
+        "a linking rule is a constraint, not a domain reading another choice: a commit it makes "
+        "false is accepted, the configuration refused naming the rule",
+        f"{_RULES}::test_a_linking_rule_in_a_domain_never_refuses_a_commit",
+        "linking-in-domain",
+    ),
+    Row(
+        "linked-domain-forced",
+        "lane 1",
+        "a linking rule is a constraint, not a domain reading another choice: the one case it "
+        "leaves is forced",
+        f"{_RULES}::test_a_linking_rule_in_a_domain_forces_the_open_choice",
+        "linking-in-domain",
+    ),
+    Row(
+        "requirement-unknown-fact",
+        "lane 1",
+        "an unknown fact blocks only the cases a constraint reads it for, so a choice whose "
+        "requirement waits on a fact lists its cases",
+        f"{_RULES}::test_a_case_needing_an_unknown_capability_is_possible",
+        "unknown-fact",
+    ),
+    Row(
+        "requirement-commit",
+        "lane 1",
+        "a requirement is a constraint: committing a case it refuses is accepted, not refused "
+        "at commit",
+        f"{_RULES}::test_committing_a_case_needing_a_missing_capability_is_accepted",
+        "requirement-at-commit",
+    ),
+    Row(
+        "requirement-validity",
+        "lane 1",
+        "a requirement is a constraint: a committed case it refuses leaves the configuration "
+        "refused, naming it",
+        f"{_RULES}::test_committing_a_case_needing_a_missing_capability_refuses_the_configuration",
+        "requirement-at-commit",
+    ),
+    Row(
+        "pair-first",
+        "lane 2",
+        "forcing runs in frozen rounds with one final check: two forced choices excluding each "
+        "other are both refused, the first naming the second, not both forced",
+        f"{_RULES}::test_the_first_of_two_forced_choices_excluding_each_other_is_refused_naming_the_other",
+        "conflict",
+    ),
+    Row(
+        "pair-second",
+        "lane 2",
+        "forcing runs in frozen rounds with one final check: two forced choices excluding each "
+        "other are both refused, the second naming the first, not both forced",
+        f"{_RULES}::test_the_second_of_two_forced_choices_excluding_each_other_is_refused_naming_the_other",
+        "conflict",
+    ),
+    Row(
+        "pair-validity",
+        "lane 2",
+        "a conflict refuses the configuration as a piece of its own, naming its participants, "
+        "in place of the rule the forced values break",
+        f"{_RULES}::test_two_forced_choices_excluding_each_other_refuse_the_configuration",
+        "conflict",
+    ),
+    Row(
+        "pair-committed-peer",
+        "lane 2",
+        "the uncommitted participant of a conflict with a committed one is refused with no "
+        "possible value, naming it, not forced to the value the rule refuses",
+        f"{_RULES}::test_the_other_participant_of_a_committed_one_is_refused_naming_it",
+        "conflict",
+        "lane 1 refuses it for no possible value; lane 2 adds the conflict",
+    ),
+    Row(
+        "four-participants",
+        "lane 2",
+        "the four-choice conflict refuses every participant, each naming the other three",
+        f"{_RULES}::test_the_four_choice_conflict_refuses_every_participant_naming_the_others",
+        "conflict",
+    ),
+    Row(
+        "four-validity",
+        "lane 2",
+        "the four-choice conflict refuses the configuration as a conflict and a choice with no "
+        "possible value, not as the first rule rank-order forcing breaks",
+        f"{_RULES}::test_the_four_choice_conflict_refuses_the_configuration",
+        "conflict",
+    ),
+    Row(
+        "four-orders",
+        "lane 2",
+        "the refused set and each participant's peers are the same in every order the choices "
+        "and rules are declared",
+        f"{_RULES}::test_the_four_choice_conflict_is_the_same_in_every_declaration_order",
+        "conflict-order",
+    ),
+    Row(
+        "forced-core-validity",
+        "lane 2",
+        "forcing never takes a value under which a retained choice's own check is false: the "
+        "core has no possible value, a conflict with the retained choice refuses the "
+        "configuration",
+        f"{_RULES}::test_a_retained_choice_checked_against_the_successors_forced_core_refuses_it",
+        "trial-counts-own-checks",
+        _UNNAMED_TRIAL + "lane 2's frozen rounds are likeliest",
+    ),
+    Row(
+        "forced-core-cold",
+        "lane 2",
+        "forcing never takes a value under which a retained choice's own check is false: a "
+        "cold build of the same choices is accepted, the configuration refused by the conflict",
+        f"{_RULES}::test_a_retained_choice_checked_against_the_successors_forced_core_as_a_cold_build",
+        "trial-counts-own-checks",
+        _UNNAMED_TRIAL + "lane 2's frozen rounds are likeliest",
+    ),
+    Row(
+        "stale-forced-core",
+        "lane 0",
+        "a change checks retained and named choices against the configuration it would "
+        "publish, never a value its base forced: accepted where only the base's forced core "
+        "refused it",
+        f"{_RULES}::test_a_change_only_the_bases_forced_core_would_refuse_is_accepted",
+        "stale-forced",
     ),
 )
 
