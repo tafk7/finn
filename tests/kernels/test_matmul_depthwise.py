@@ -28,7 +28,7 @@ from support.helpers import (
     with_direct_transports,
 )
 
-from finn.core.space import Available, Rejected, Unresolved, inspection
+from finn.core.space import Available, Unresolved, inspection
 from finn.dataflow.gemm import Form
 from finn.dataflow.plan import Step
 from finn.dataflow.traversal import Traversal
@@ -109,9 +109,10 @@ def test_a_dense_form_replays_each_row_per_output_fold():
 
 
 def test_only_the_int8_dsp58_core_reads_a_depthwise_form():
-    packed = module_of(point("packed"), "matmul")
-    assert isinstance(packed, Rejected)
-    assert "dotp-form" in {finding.code for finding in packed.findings}
+    # The packed core refuses the form, so MatMul is refused and its ends with it: the
+    # channels wait on them, and a choice of theirs is refused naming the core's rule.
+    with pytest.raises(ValueError, match="compute.packed.core_supported: dotp-form"):
+        point("packed")
     facts = {**FACTS, "pe": 2, "simd": 3}
     # External weights exclude the dense realization; natively, one core fits.
     assert matmul_assembly(**facts).module is not None
@@ -142,8 +143,15 @@ def test_native_is_offered_only_where_a_core_reads_the_depthwise_operands(
     assert found == offered
     if offered == ("dense",):
         assert "matmul-native" in realization.refused["'native'"]
-        with pytest.raises(ValueError, match="matmul-native"):
-            choose(space, {"matmul.realization": "native"})
+        # Committed, native is its value (a rule never refuses a commit), and the rule
+        # refuses the configuration.
+        native = choose(space, {"matmul.realization": "native"}).member("matmul")
+        found = inspection.validity(native)
+        assert found.status == "refused"
+        assert ("native_readable", {"matmul-native"}) in [
+            (piece.owner, {finding.code for finding in piece.result.findings})
+            for piece in found.pieces
+        ]
 
 
 def test_depthwise_cyclic_weights_are_the_channel_tile():

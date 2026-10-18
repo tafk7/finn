@@ -9,23 +9,30 @@ of kernels (dotp's cores share one), not placed. The rest is checked when a clas
 
 A **leaf** (``LeafKernel``) binds one FinnLib module. It states its ``rtl_module`` and
 ``sources`` (an HLS kernel's one source is its build request), its ``parameters``, its
-``resource_use`` (a refusal where it has no model of it, never nothing), its
-``admission`` and its ports (``finn.kernels.port``), each stream port taking the tensor
-it reads as a fact (absent: an idle port). It may state its ``clocking``, and
-``other_pins``, ``held`` and ``controlled`` for pins that are no port's. The base derives
-its module (``codegen``, a ``Leaf``), checks its pins (``pins_accounted``, ``clocked``),
-and takes its cycles as the most beats any of its ports carries a frame.
+``resource_use`` (a refusal where it has no model of it, never nothing), the constraints
+by which it refuses what it cannot build, and its ports (``finn.kernels.port``), each
+stream port taking the tensor it reads as a fact (absent: an idle port). It may state its
+``clocking``, and ``other_pins``, ``held`` and ``controlled`` for pins that are no port's.
+The base derives its module (``codegen``, a ``Leaf``), checks its pins (the constraints
+``pins_accounted``, ``clocked``), and takes its cycles as the most beats any of its ports
+carries a frame.
 
 A **kernel with children** (``ComposedKernel``) places kernels and channels, and names
 for each interface it presents (``interfaces``) the child that serves it. It merges its
 members' netlists and control buses, and is no module of its own: a network
 (``finn.kernels.network``) composes one. A channel is one (``finn.kernels.channels``).
 
-A kernel states one contract per stream interface: a view ``<name>_end`` of a
-``PortEnd`` (on a leaf ``interface("x")``; on a kernel with children the serving child's,
-labelled below it: MatMul's ``compute.packed.x``). Every kernel exports its netlist
-(``NETLIST``), a leaf its module (``MODULE``), and what an exploration ranks by, which
-waits on no admission: ``CYCLES``, ``BUFFERING`` and ``RESOURCES``.
+Every constraint of a kernel, of its ports and of its present children counts toward its
+validity (``inspection.validity``), and each of its views is a product: it refuses while
+the kernel is refused, and answers while the kernel is undecided. A kernel states one
+contract per stream interface: a view ``<name>_end`` of a ``PortEnd`` (on a leaf
+``interface("x")``; on a kernel with children the serving child's, labelled below it:
+MatMul's ``compute.packed.x``). Every kernel exports its netlist (``NETLIST``), a leaf
+its module (``MODULE``), and what an exploration ranks by: ``CYCLES``, ``BUFFERING`` and
+``RESOURCES``, views like the rest, so a refused kernel's cost refuses too. A port
+exports the values its kernel reads to bind its extents (``ACCESS``) and check its clock
+(``CLOCKED``): values, so a port's refusal stands in its kernel's validity and never in
+the kernel's extents or domains.
 """
 
 from __future__ import annotations
@@ -35,7 +42,6 @@ from dataclasses import dataclass, replace
 from typing import Any, ClassVar, cast
 
 from finn.core.space import (
-    ConstraintGroup,
     DefinitionError,
     Members,
     Rejected,
@@ -114,11 +120,13 @@ PINS = ViewKey("pins", default_semantics(tuple))
 """A port's pins (signals, or one bus), collected by its kernel into the module's pins."""
 
 CLOCKED = ViewKey("clocked", default_semantics(str))
-"""The clock pin a port runs on, collected by its kernel (``clocked``)."""
+"""The clock pin a port runs on, collected by its kernel (``clocked``): a value export,
+read whatever the port's validity."""
 
 ACCESS = ViewKey("access", default_semantics(Access))
-"""A placed scheduled port's read of its tensor, collected by its kernel to bind the
-extents of its indices (``finn.dataflow.schedule.bind_extents``)."""
+"""A placed scheduled input's read of its tensor, collected by its kernel to bind the
+extents of its indices (``finn.dataflow.schedule.bind_extents``): a value export, read
+whatever the port's validity, so a port's refusal never refuses its kernel's extents."""
 
 HELD_SEMANTICS = default_semantics(Held)
 HELD = ViewKey("held", HELD_SEMANTICS)
@@ -272,8 +280,6 @@ class Kernel(Space):
                 declaration=cls.__qualname__,
             )
 
-    admission = ConstraintGroup()
-
 
 def _declared(cls: type[Kernel], name: str, below: type[Kernel]) -> bool:
     """Whether a class from ``cls`` down to, not including, ``below`` declares ``name``."""
@@ -308,14 +314,6 @@ class LeafKernel(Kernel, protocol=True):
 
         if not all(_declared(cls, name, LeafKernel) for name in _LEAF_REQUIRED):
             return  # a base of leaves (dotp's cores'), which cannot be placed
-        if not _declared(cls, "admission", LeafKernel):
-            raise DefinitionError.broken(
-                "leaf-admission-unstated",
-                "LeafKernel",
-                f"{cls.__qualname__} states no admission: a leaf states the constraints by "
-                "which it refuses what it cannot build (ConstraintGroup() for none)",
-                declaration=cls.__qualname__,
-            )
         members = _members(cls, LeafKernel)
         if not any(isinstance(value, Port) for value in members.values()):
             raise DefinitionError.broken(
@@ -481,8 +479,8 @@ class LeafKernel(Kernel, protocol=True):
         assert isinstance(leaf, Leaf)
         return Fragment((("", leaf),))
 
-    module = View(built, requires=(Kernel.admission, pins_accounted, clocked))
-    netlist = View(fragment, requires=(Kernel.admission, pins_accounted, clocked))
+    module = View(built)
+    netlist = View(fragment)
 
     # -- what a design space exploration ranks by ------------------------------------------
 
@@ -508,7 +506,7 @@ class LeafKernel(Kernel, protocol=True):
         """What it uses of the device: its own statement, ``resource_use``."""
         return self.resource_use
 
-    # Cost, not validity: a configuration's admission is the engine's, read apart.
+    # Products like the module: a refused leaf's cost refuses with it.
     cycles = View(frame_cycles)
     buffering = View(held_bits)
     resources = View(stated_resources)
@@ -571,7 +569,7 @@ class ComposedKernel(Kernel, protocol=True):
             return buses
         return merged(((str(item.node), item.value) for item in self.netlists), buses)
 
-    netlist = View(fragment, requires=(Kernel.admission, netlists, controls))
+    netlist = View(fragment)
 
     # -- what a design space exploration ranks by ------------------------------------------
 
@@ -597,7 +595,7 @@ class ComposedKernel(Kernel, protocol=True):
         """What it uses of the device: the sum over its members."""
         return total(item.value for item in self.member_resources)
 
-    # Cost, not validity: a configuration's admission is the engine's, read apart.
+    # Products like the netlist: a refused kernel's cost refuses with it.
     cycles = View(frame_cycles)
     buffering = View(held_bits)
     resources = View(resource_use)

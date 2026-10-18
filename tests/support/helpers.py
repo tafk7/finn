@@ -14,14 +14,14 @@ parameter channel, what its kernel states for it (``Fact``). A test names a choi
 network's pair, ``choose`` commits a batch. ``placed_dotp`` places a dot-product core
 between three boundary channels. ``matmul_network`` places a MatMul (``matmul``) on
 ``x`` (``in0_V``), ``w`` (``in1_V``, buffered), ``y`` (``out0_V``) and, with several
-weight sets, ``set`` (``in2_V``). Its tensors are MatMul's own views of them
-(``activation_tensor``, ``weight_tensor``, and its results, ``y_tensor``), read from its facts
-before it is placed: they read only its facts and its ``realization``, and the
+weight sets, ``set`` (``in2_V``). Its tensors are MatMul's own statements of them, the
+values its views present (``required_weights``, and its results, ``result_tensor``), read
+from its facts before it is placed: they read only its facts and its ``realization``, and the
 result's range is the same in either realization, so one network serves every
 realization, a depthwise MatMul's left open until committed. Known weights are a fact
 given to MatMul (``w_contents``); the weight channel carries what MatMul states for it
-(``w_carried``, ``w_stored``: block-diagonal for a dense realization, over their
-range), with ``set``'s tensor its ``index_tensor`` (one index per row) and ``set``
+(``carried_weights``, ``stored_weights``: block-diagonal for a dense realization, over
+their range), with ``set``'s tensor its ``index_tensor`` (one index per row) and ``set``
 taking its ``set_end``, so the channel's ``source`` stores them. The edge choices are
 the channels' (``x.adapter``, ``w.transport``, ``w.source.memstream.ram_style``), the
 MatMul's its own (``matmul.compute.packed.pe``). ``matmul_assembly`` configures one
@@ -61,7 +61,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
 from finn.kernels.artifacts.module import Composed, Leaf, ProducerIdentity
 from finn.kernels.base import CYCLES
-from finn.kernels.configure import commit, describe, undecided
+from finn.kernels.configure import commit, describe, refusal, undecided
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.explore import Choice
 from finn.kernels.fifo import FifoKernel
@@ -151,6 +151,16 @@ def choose(network: N, choices: Mapping[str, object]) -> N:
     """``network`` with ``choices`` (``member.key``) committed, atomically; a refusal, or a
     stored choice the change would drop, is a ``NetworkError`` (a ``ValueError``)."""
     return network.with_choices(keyed(choices)) if choices else network
+
+
+def refused_codes(network: N, choices: Mapping[str, object]) -> set[str]:
+    """The codes a change of ``choices`` (``member.key``) is refused with, checked as the
+    seam checks it (``Network.trial``): its findings' and their causes'. The change must
+    be refused: committed, a choice a member's rule refuses leaves the member refused."""
+    trial = network.trial(keyed(choices))
+    assert not trial.accepted, choices
+    found = [finding for why in trial.refused.values() for finding in why]
+    return {finding.code for finding in found} | {c.code for f in found for c in f.causes}
 
 
 def module_of(network: Network, stem: str) -> QueryResult[Composed]:
@@ -267,7 +277,7 @@ def _views(
 ) -> Any:
     """A MatMul of ``space_type`` on ``facts`` alone, its ``realization`` committed where
     it is depthwise (as named; else ``dense`` with known weights, ``native`` without, or
-    whichever commits): what its views of its activations and results read. The result's
+    whichever commits): what its statements of its weights and results read. The result's
     range is the same in either realization."""
     probe = design_space(space_type(**facts))
     if facts.get("form") is not Form.DEPTHWISE:
@@ -282,8 +292,9 @@ def _views(
     return probe
 
 
-def _view(probe: Any, name: str) -> Tensor:
-    """MatMul's view ``name`` of a tensor, or a ``ValueError`` naming why it states none."""
+def _stated(probe: Any, name: str) -> Tensor:
+    """MatMul's value ``name`` of a tensor, whatever its validity, or a ``ValueError``
+    naming why it states none."""
     found = probe.query(getattr(type(probe), name))
     if not isinstance(found, Available):
         raise ValueError(f"MatMul's {name} is refused: {describe([found])}")
@@ -322,12 +333,12 @@ def matmul_network(
     views = _views(space_type, facts, realization)
     tensors: dict[str, Any] = {
         "x_tensor": facts.pop("x_tensor"),
-        "y_tensor": _view(views, "y_tensor"),
+        "y_tensor": _stated(views, "result_tensor"),
     }
     if weights is None:
-        # Unknown weights are MatMul's view of them at the realization committed; with
-        # none, as stored, (K, N) in their datatype.
-        stated = views.query(type(views).weight_tensor)
+        # Unknown weights are MatMul's statement of them at the realization committed;
+        # with none, as stored, (K, N) in their datatype.
+        stated = views.query(type(views).required_weights)
         given = facts.pop("w_tensor")
         tensors["w_tensor"] = stated.value if isinstance(stated, Available) else given
     several = weight_sets > 1
@@ -348,8 +359,8 @@ def matmul_network(
             platform=platform,
         )
     weight: dict[str, object] = dict(
-        tensor=Fact("matmul", "w_carried"),
-        contents=Fact("matmul", "w_stored"),
+        tensor=Fact("matmul", "carried_weights"),
+        contents=Fact("matmul", "stored_weights"),
         sets=weight_sets,
         port="in1_V",
         consumer=Interface("matmul", "w_end"),
@@ -723,17 +734,17 @@ def matmul_assembly(
         forced = network.forced(("matmul",))
         if ("matmul", "compute") not in forced:
             refusals = {
-                case: inspection.admission(
-                    choose(network, {"matmul.compute": case}).member("matmul").compute
+                case: refusal(
+                    inspection.validity(
+                        choose(network, {"matmul.compute": case}).member("matmul").compute
+                    )
                 )
-                for case in ("packed", "int8_dsp58")
+                for case in network.decisions()[("matmul", "compute")].cases
             }
-            cores = [
-                case for case, refusal in refusals.items() if not isinstance(refusal, Rejected)
-            ]
+            cores = [case for case, why in refusals.items() if not why]
             if cores:
                 raise ValueError(f"compute cores {', '.join(cores)} are all compatible; choose one")
-            found = describe(result for result in refusals.values() if result is not None)
+            found = "; ".join(str(finding) for why in refusals.values() for finding in why)
             raise ValueError(f"no compute core is compatible: {found}")
         core = str(forced[("matmul", "compute")])
     else:

@@ -24,7 +24,9 @@ ordered by the size of what the memory holds, then ``auto``, which hands the cho
 Vivado. ``auto`` is placed by Vivado, not stated: Vivado places it by family, by tool
 version and, for a read-only table, by more than the memory, so no statement of it
 would be exact, and ``memory`` takes none (``auto_unstated``). A FIFO's ``auto`` is
-FinnLib's own selection, which its kernel states (``finn.kernels.fifo``).
+FinnLib's own selection, which its kernel states (``finn.kernels.fifo``). A choice that
+stores in UltraRAM states what it needs of its platform as constraints of its kernel
+(``uram_constraint``; ``uram_init_constraint`` for a memory with initial contents).
 """
 
 from __future__ import annotations
@@ -35,14 +37,14 @@ from functools import lru_cache
 from math import ceil, inf
 
 from finn.core.space import (
+    Constraint,
     Domain,
     Rejected,
-    Requirement,
     ValueSemantics,
+    constraint,
     default_semantics,
     domain,
     reject,
-    requires,
 )
 from finn.platform.capabilities import Fabric, Platform, Resources
 
@@ -331,26 +333,44 @@ def auto_unstated(memory: str) -> Rejected:
     return reject("memory-auto", f"{memory}: ram_style auto, {AUTO_UNSTATED}")
 
 
-def uram_requirements(
-    platform: Platform,
-    cases: tuple[object, ...] | Callable[[object], bool],
-    *,
-    init: bool = False,
-) -> tuple[Requirement, ...]:
-    """What the ``cases`` of a value Decision that store in UltraRAM require of
-    ``platform`` (a kernel's ``Platform`` parameter): its UltraRAM, and, for a memory
-    with initial contents (``init``), an UltraRAM that takes them."""
-    absent = requires(platform.uram, "uram-absent: the platform has no UltraRAM", cases=cases)
-    if not init:
-        return (absent,)
-    return (
-        absent,
-        requires(
-            platform.uram_init,
-            "uram-init: the platform's UltraRAM takes no initial contents",
-            cases=cases,
-        ),
-    )
+_UltraCases = tuple[object, ...] | Callable[[object], bool]
+"""The cases of a choice that store in UltraRAM: listed, or a predicate over the value."""
+
+
+def _stores(cases: _UltraCases) -> Callable[[object], bool]:
+    if callable(cases):
+        return cases
+    return lambda value: value in cases
+
+
+def uram_constraint(platform: Platform, choice: object, cases: _UltraCases) -> Constraint:
+    """A constraint of the Space owning ``choice``: where ``choice`` takes one of the
+    ``cases`` that store in UltraRAM, ``platform`` (its ``Platform`` parameter) has
+    UltraRAM (``uram-absent``). Name it in the class body
+    (``uram_present = uram_constraint(platform, ram_style, ("ultra",))``)."""
+    stores = _stores(cases)
+
+    def uram_present(*, choice: object, platform: Platform) -> bool | Rejected:
+        if stores(choice) and not platform.uram:
+            return reject("uram-absent", "the platform has no UltraRAM")
+        return True
+
+    return constraint(choice=choice, platform=platform)(uram_present)
+
+
+def uram_init_constraint(platform: Platform, choice: object, cases: _UltraCases) -> Constraint:
+    """A constraint of the Space owning ``choice``, for a memory with initial contents:
+    where ``choice`` takes one of the ``cases`` that store in UltraRAM, ``platform``'s
+    UltraRAM takes initial contents (``uram-init``). A memory with initial contents
+    states both (``uram_constraint`` too): each refuses with its own finding."""
+    stores = _stores(cases)
+
+    def uram_init_taken(*, choice: object, platform: Platform) -> bool | Rejected:
+        if stores(choice) and not platform.uram_init:
+            return reject("uram-init", "the platform's UltraRAM takes no initial contents")
+        return True
+
+    return constraint(choice=choice, platform=platform)(uram_init_taken)
 
 
 __all__ = [
@@ -374,5 +394,6 @@ __all__ = [
     "read_mux",
     "total",
     "uram",
-    "uram_requirements",
+    "uram_constraint",
+    "uram_init_constraint",
 ]

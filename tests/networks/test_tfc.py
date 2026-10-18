@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from qonnx.core.modelwrapper import ModelWrapper
-from support.helpers import choose
+from support.helpers import refused_codes
 from support.models import DOMAIN
 from support.packaging import reaches_vivado, read_back
 from support.tfc import LANES, SHAPE, ULTRA96, cut, partition
@@ -265,8 +265,10 @@ def test_tfc_w2a2_binds_the_ultra96_platform(tfc_streamlined: Path, tmp_path: Pa
         if key.startswith("adapter.") and key.endswith(".ram_style")
     ]
     assert len(adapters) == 4
+    # Committed, each style leaves its memory refused by its rule on the platform, so the
+    # change is refused.
     for key in adapters:
-        with pytest.raises(ValueError, match="uram-absent"):
-            choose(bound, {key: "ultra"})
-    with pytest.raises(ValueError, match="uram-absent"):
-        choose(bound, {f"{weights[0]}.source.memstream.ram_style": "ultra"})
+        assert "uram-absent" in refused_codes(bound, {key: "ultra"})
+    assert "uram-absent" in refused_codes(
+        bound, {f"{weights[0]}.source.memstream.ram_style": "ultra"}
+    )

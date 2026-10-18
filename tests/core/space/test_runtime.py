@@ -44,7 +44,7 @@ class Fifo(Space):
     def supported(self) -> bool:
         return self.word_bits > 0 and self.depth >= 2
 
-    @view(requires=(supported,))
+    @view
     def physical(self) -> FifoShape:
         return FifoShape(self.word_bits, self.depth, self.ram_style)
 
@@ -80,7 +80,8 @@ def test_final_constraint_refusal_remains_visible_while_output_unresolved() -> N
     base = design_space(Fifo(word_bits=0, depth=8))
     assessment = base.inspect(Fifo.physical)
     assert isinstance(assessment.accepted_result, Rejected)
-    assert assessment.constraints.refused == ("supported",)
+    assert isinstance(assessment.validity, Rejected)
+    assert [piece.owner for piece in inspection.validity(base).pieces] == ["supported"]
     ready = base.with_choices(ram_style="auto").inspect(Fifo.physical)
     assert isinstance(ready.accepted_result, Rejected)
 

@@ -82,6 +82,7 @@ from finn.core.space import (
     inspection,
 )
 from finn.kernels.base import BUFFERING, CYCLES, RESOURCES
+from finn.kernels.configure import refusal
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import FRAMES, NotModelled, Sized, holds, size
 from finn.kernels.network import Key, Trial, dotted
@@ -95,7 +96,7 @@ class Composition(Protocol):
     """What the seam explores: a ``finn.kernels.network.Network`` (the graph's binds one,
     ``finn.custom_op.kernels.shell.in_shell``, in its shell). Its members by name, ranked,
     its channels among them, and per member its point, its exports, its Decisions, what
-    of them is viable, open, forced and stored, its admission, and a change (``trial``);
+    of them is viable, open, forced and stored, its validity, and a change (``trial``);
     its own statement of what it uses, where it makes one (``own_resources``)."""
 
     @property
@@ -124,11 +125,9 @@ class Composition(Protocol):
 
     def forced(self, names: Iterable[str] | None = None) -> Mapping[Key, object]: ...
 
-    def chosen(
-        self, names: Iterable[str] | None = None, *, unchecked: bool = False
-    ) -> Mapping[Key, object]: ...
+    def chosen(self, names: Iterable[str] | None = None) -> Mapping[Key, object]: ...
 
-    def admission(self, name: str) -> tuple[Finding, ...]: ...
+    def validity(self, name: str) -> inspection.Validity: ...
 
     def trial(
         self, changes: Mapping[Key, object], clear: Collection[Key] = (), *, check: bool = True
@@ -437,13 +436,12 @@ class Seam:
         membership-only value, or a value replacing a stored one, is its domain's to
         check); where the engine refuses it (a key nested under a selector the same batch
         commits is the engine's to accept); where it leaves a Decision of a member it
-        touches without a viable case; or where such a member refuses itself (its
-        ``admission``, as far as it is decided). It is otherwise committed, and what it
-        makes stale is dropped: a stored choice of a kernel the engine refuses beside it,
-        or a channel's that replay refuses once the kernel's ends change
-        (``Network.trial``), one kept unchecked as any other. Each one dropped is named with
-        why (``Accepted.dropped``) and settled again. A held choice is never dropped: the
-        change is refused, naming it.
+        touches without a viable case, or such a member refused (its validity). It is
+        otherwise committed, and what it makes stale is dropped: a stored choice of a
+        kernel the engine refuses beside it, or a channel's that replay refuses once the
+        kernel's ends change (``Network.trial``), one kept unchecked as any other. Each one
+        dropped is named with why (``Accepted.dropped``) and settled again. A held choice
+        is never dropped: the change is refused, naming it.
         """
         self.attempts += 1
         changes = self._typed(network, changes)
@@ -456,7 +454,7 @@ class Seam:
             trial: Trial[S] = network.trial(changes, sorted(clear))
             if trial.accepted:
                 break
-            stored = network.chosen({key[0] for key in trial.refused}, unchecked=True)
+            stored = network.chosen({key[0] for key in trial.refused})
             dependents = {key for key in trial.refused if key in stored and key not in changes}
             if not dependents or set(trial.refused) - dependents or dependents <= clear:
                 return Refused(trial.refused)
@@ -634,7 +632,7 @@ class Seam:
         value holds: a hold waits with its choice."""
         if not self.held:
             return
-        values = network.chosen(unchecked=True)
+        values = network.chosen()
         forced: Mapping[Key, object] | None = None
         for key, value in self.held.items():
             if values.get(key, _ABSENT) == value:
@@ -787,13 +785,13 @@ class Seam:
     def refusals(
         self, network: Composition, members: Iterable[str] | None = None
     ) -> dict[str, tuple[Finding, ...]]:
-        """Every member that refuses itself (its ``admission``, as far as it is decided),
-        with why, its findings, by name (only ``members``' where named)."""
+        """Every member whose validity is refused, with why, its findings, by name (only
+        ``members``' where named)."""
         found: dict[str, tuple[Finding, ...]] = {}
         for name in network.members if members is None else members:
-            admitted = network.admission(name)
-            if admitted:
-                found[name] = admitted
+            why = refusal(network.validity(name))
+            if why:
+                found[name] = why
         return found
 
     def cost(self, network: Composition, members: Iterable[str] | None = None) -> Cost:

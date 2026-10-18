@@ -993,9 +993,11 @@ def main() -> None:
                 "cache_reclamation": cache_reclamation(api, arguments.population),
             }
         )
+        # What a narrow query evaluates stays narrow: no inactive alternative's callback
+        # runs (``narrow_query``). What it demands grows with the branches: a view reads
+        # its Space's validity, and a view at the root reads every branch's piece of it.
         first, second = report["narrow_queries"]
-        assert first["demanded_nodes"] == second["demanded_nodes"]
-        assert first["demanded_edges"] == second["demanded_edges"]
+        assert first["inactive_callbacks"] == second["inactive_callbacks"] == 0
     if arguments.suite in ("all", "runtime"):
         report["self_workloads"] = [
             isolated_workload("runtime", name, sizes) for name in ("chain", "fan_in", "mixed")

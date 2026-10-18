@@ -23,8 +23,10 @@ FACTS: dict[str, Any] = dict(platform=FULL_DSP48E2)
 
 def _results(x: Tensor, w: Tensor, **facts: Any) -> Tensor:
     """MatMul's statement of its results on the activations ``x`` and streamed weights
-    ``w``."""
-    found: Tensor = design_space(MatMulKernel(**FACTS, **facts, x_tensor=x, w_tensor=w)).y_tensor
+    ``w``: a value, whatever MatMul's validity."""
+    found: Tensor = design_space(
+        MatMulKernel(**FACTS, **facts, x_tensor=x, w_tensor=w)
+    ).result_tensor
     return found
 
 
@@ -73,24 +75,25 @@ SPEC = KernelSpec(
         Probe(
             "a dense realization of depthwise weights it has no value of",
             lambda: placed(depthwise(), {"realization": "dense"}),
-            frozenset({"matmul-realization", "matmul-tensor"}),
+            # No core is possible on the refused tensors either.
+            frozenset({"matmul-realization", "matmul-tensor", "decision-no-viable-case"}),
         ),
         Probe(
             "a native depthwise realization no core of the platform reads",
             lambda: placed(depthwise()),
-            frozenset({"matmul-native"}),
+            frozenset({"matmul-native", "decision-no-viable-case"}),
             {"realization": "native"},
         ),
         # Its activations are then the window's image, which the channel does not carry.
         Probe(
             "a window whose pixels are not its rows",
             lambda: placed(matmul(), window=Window((2, 2), (1, 1))),
-            frozenset({"matmul-window", "matmul-tensor"}),
+            frozenset({"matmul-window", "matmul-tensor", "decision-no-viable-case"}),
         ),
         Probe(
             "a window whose taps do not divide its reduction",
             lambda: placed(matmul(), window=Window((1, 5), (1, 4))),
-            frozenset({"matmul-window", "matmul-tensor"}),
+            frozenset({"matmul-window", "matmul-tensor", "decision-no-viable-case"}),
         ),
     ),
     sweeps=(MATMUL_SWEEPS,),

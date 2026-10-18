@@ -82,7 +82,7 @@ class Aligned(Space):
             return reject("not-same", f"first.factor={first}, second.factor={second}")
         return True
 
-    @view(requires=(aligned,))
+    @view
     def factor(self) -> int:
         return self.first.factor
 
@@ -100,7 +100,8 @@ def test_a_relation_of_siblings_is_their_parents_and_owns_its_refusal() -> None:
     assert [(f.owner, f.message) for f in refused.accepted_result.findings] == [
         ("aligned", "first.factor=3, second.factor=4")
     ]
-    assert set(refused.constraints.results) == {"aligned"}
+    validity = inspection.validity(choose(point, 3, 4))
+    assert [piece.owner for piece in validity.pieces] == ["aligned"]
 
 
 # -- 2. quantification: a budget over whichever members are present -------------------
@@ -121,20 +122,21 @@ class Budgeted(Space):
             return reject("over-budget", f"{spent} exceeds {self.limit}")
         return True
 
-    @view(requires=(costs, within))
+    @view
     def total(self) -> int:
         return sum(member.value for member in self.costs)
 
 
-def test_members_range_over_present_nodes_with_per_member_obligations() -> None:
+def test_members_range_over_present_nodes_and_the_budget_counts_them() -> None:
     point = design_space(Budgeted(limit=10)).with_choices(use_third=False)
     point = point.with_choices({Budgeted.a.factor: 4})
-    assessment = point.inspect(Budgeted.total)
     # Only b is still open; the absent c is inapplicable and never refuses.
-    results = assessment.constraints.results
-    assert set(results) == {"a.cost", "b.cost", "c.cost", "within"}
-    assert isinstance(results["b.cost"], Unresolved)
-    assert isinstance(results["c.cost"], Inapplicable)
+    assert owners(point.query(Budgeted.costs)) == {"b.factor"}
+    assert isinstance(point.query(Budgeted.c.cost), Inapplicable)
+    validity = inspection.validity(point)
+    assert validity.status == "undecided"
+    assert [piece.owner for piece in validity.pieces] == ["within"]
+    assert owners(point.query(Budgeted.total)) == {"b.factor"}
     point = point.with_choices({Budgeted.b.factor: 2})
     assert point.total == 3 + 4
     assert point.costs == (Located("a", "cost", 3), Located("b", "cost", 4))

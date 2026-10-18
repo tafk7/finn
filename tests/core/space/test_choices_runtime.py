@@ -23,11 +23,11 @@ from finn.core.space import (
     Unresolved,
     View,
     ViewKey,
-    constraint,
     derived,
     design_space,
     divisors_of,
     inspection,
+    reject,
     view,
 )
 from finn.core.space.errors import (
@@ -106,13 +106,12 @@ def test_selected_view_preserves_direct_refusal_and_skips_other_alternatives() -
     calls: list[str] = []
 
     class Refused(Space):
-        output = Const(4)
+        # A rule that matters for this product only refuses in the view's body: the
+        # candidate stays valid, so the Decision stays open.
+        @view
+        def physical() -> int | Rejected:
+            return reject("unsupported", "this product is not supported")
 
-        @constraint
-        def supported() -> bool:
-            return False
-
-        physical = View(output, requires=(supported,))
         exports = {PHYSICAL: physical}
 
     class Explodes(Space):

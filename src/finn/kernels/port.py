@@ -7,9 +7,10 @@ A kernel declares one ``Port`` per interface of its module. Every port has a
 ``transport`` (its ready/valid pins, required of each kind of port) and
 exports its pins under ``PINS``, which the kernel's module collects in
 declaration order (``finn.kernels.base``), and the clock it runs on under
-``CLOCKED``, which must be its kernel's. A port its configuration leaves
+``CLOCKED`` (a value), which must be its kernel's. A port its configuration leaves
 ``idle`` exports under ``HELD`` the pins it holds: its inputs low and its
-outputs unused.
+outputs unused. A port's constraints count toward its kernel's validity; its
+pins, what it holds and its contract are products, refused while it is.
 
 An ``AxiStreamPort`` takes the tensor it reads or writes (``tensor``): an input's
 is a fact its kernel gives it, an output's the kernel's own statement of what it
@@ -20,21 +21,21 @@ produces. It presents what it carries of it (``presented``): its kernel's
 view when ``reshaped``; or, for a traversal no schedule derives, a given
 ``sequence``. Its element is its tensor's, unless its hardware fixes one
 (``dtype``: a set port's selector), which its channel holds the tensor to;
-``admits`` is the integer policy its hardware takes. It is an AXIS bus named
-``name``, with a ``TLAST`` when what it presents carries a marker, its member pins
-spelled as its module spells them (``spelling``); or, given ``signals`` (data,
+``admits`` is the integer policy its hardware takes (``element_taken``). It is an
+AXIS bus named ``name``, with a ``TLAST`` when what it presents carries a marker, its
+member pins spelled as its module spells them (``spelling``); or, given ``signals`` (data,
 valid, ready), those ready/valid pins, with a native loop-completion vector when
 ``loop_ends`` names it (``olst``: the level each bit closes), else without a marker.
 ``native_stream`` declares one on FinnLib's native pins (``idat``, ``ivld``,
 ``irdy`` for a target, ``odat``, ``ovld``, ``ordy`` for an initiator, on ``clk``
 and ``rst``): a channel stage's (``fifo``, ``vpc``, ``input_gen``), presenting the
 sequence it is given. An input placed with a schedule exports its read of the tensor
-under ``ACCESS``, from which its kernel binds its indices' extents; every placed port
-exports the beats it carries a frame under ``BEATS``, its kernel's cycles, and its
-contract states its ``pace`` (when it presents each beat, ``Schedule.beat_times``). Its
-``contract`` is what its kernel states as its end on a channel
-(``finn.kernels.base.PortEnd``). Without a tensor it is an interface not used (a set
-port without sets): idle, one lane of its ``dtype``.
+under ``ACCESS`` (a value, read whatever the port's validity), from which its kernel
+binds its indices' extents; every placed port exports the beats it carries a frame
+under ``BEATS``, its kernel's cycles, and its contract states its ``pace`` (when it
+presents each beat, ``Schedule.beat_times``). Its ``contract`` is what its kernel
+states as its end on a channel (``finn.kernels.base.PortEnd``). Without a tensor it is
+an interface not used (a set port without sets): idle, one lane of its ``dtype``.
 """
 
 from __future__ import annotations
@@ -110,8 +111,10 @@ class Port(Space):
     def pins(self) -> tuple[Pin, ...]:
         return self.transport.pins()
 
-    @view
+    @derived
     def clock_pin(self) -> str:
+        """The clock it runs on: a value export, so its kernel checks it (``clocked``)
+        whatever this port's validity."""
         return self.clock
 
     @view
@@ -173,8 +176,8 @@ class AxiStreamPort(Port):
     its marker closes (``closes``), read through a row-major view when
     ``reshaped``; or, for a traversal no schedule derives, a given ``sequence``.
     Exactly one of the two. An input placed with a schedule exports its read of the
-    tensor (``ACCESS``), from which its kernel binds its indices' extents, and every
-    scheduled port's contract states its pace (``Pace``: the schedule with its
+    tensor (``ACCESS``, a value), from which its kernel binds its indices' extents, and
+    every scheduled port's contract states its pace (``Pace``: the schedule with its
     ``reduces`` and ``holds``), so a channel reads when each end presents its beats.
 
     Its ``tensor`` is the one it reads, a fact its kernel gives it, or the one it
@@ -185,10 +188,11 @@ class AxiStreamPort(Port):
     its tensor's: a producer that knows its values states their range in it. A port
     whose hardware fixes its element (a set port's selector) states it, ``dtype``, and
     its channel holds the tensor to it. ``admits`` is the integer policy its hardware
-    takes. Without a tensor it is an interface not used: idle, one lane of its
-    ``dtype``. It is an AXIS bus named ``name``, with a ``TLAST`` when what it
-    presents carries a marker; or, given ``signals`` (data, valid, ready), those
-    ready/valid pins, without a marker.
+    takes, a constraint (``element_taken``) counted in its kernel's validity. Without
+    a tensor it is an interface not used: idle, one lane of its ``dtype``. It is an
+    AXIS bus named ``name``, with a ``TLAST`` when what it presents carries a marker;
+    or, given ``signals`` (data, valid, ready), those ready/valid pins, without a
+    marker.
     """
 
     tensor: Tensor = Param(required=False)
@@ -263,8 +267,10 @@ class AxiStreamPort(Port):
         """
         return not self.idle and self.endpoint is Endpoint.TARGET and bool(self.index)
 
-    @view(when=binds)
+    @derived(when=binds)
     def access(self) -> Access:
+        """Its read of the tensor, while it binds: a value export, so a refusal of this
+        port never refuses its kernel's extents."""
         return Access(self.name, self.tensor.shape, self.index, self.reshaped)
 
     @derived
@@ -280,7 +286,7 @@ class AxiStreamPort(Port):
         return self.tensor.element
 
     @constraint
-    def admitted(self) -> bool | Rejected:
+    def element_taken(self) -> bool | Rejected:
         """The element is one this port's hardware takes."""
         policy = self.admits
         return True if policy is None else policy.check(self.element.dtype)
@@ -346,13 +352,13 @@ class AxiStreamPort(Port):
         except ValueError as error:
             return reject("port-signals", f"{self.name}: {error}")
 
-    @view(requires=(admitted,))
+    @view
     def pins(self) -> tuple[Pin, ...]:
         if self.signals:
             return self.transport.pins()
         return (self.axis.bus(clock=self.clock, reset=self.reset),)
 
-    @view(requires=(admitted,))
+    @view
     def contract(self) -> StreamContract:
         presented = self.presented
         transport = self.transport

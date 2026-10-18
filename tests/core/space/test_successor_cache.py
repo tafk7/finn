@@ -3,8 +3,9 @@
 """What a successor and a trial keep of their base's evaluations, and what forcing
 keeps of its own.
 
-A change touches the Decisions it adds, removes or replaces, and each open Decision
-whose forced value's verdict read one of those. A published successor starts from
+A change touches the Decisions it assigns, and each open Decision whose forced answer
+differs in the successor (which it finds by forcing the successor first, where a verdict
+read what it assigns). A published successor starts from
 its base's evaluations that read no touched Decision, and from its trial's that read
 no Decision open in it but one the change does not touch; forcing's copies hand back
 what reads no refused Decision. A trial takes a retained choice's admission as its
@@ -20,7 +21,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from support.space_cores import CORES, Packed, Stub, commit, forced
+from support.space_cores import CORES, Packed, Stub, chain, commit, forced
 from support.space_walk import fresh as recomputed
 
 from finn.core.space import (
@@ -28,12 +29,16 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
+    _forcing,
+    constraint,
     derived,
     design_space,
     domain,
     inspection,
-    requires,
+    occurrence,
+    reject,
 )
+from finn.core.space import _runtime as runtime
 
 # Each test runs with the readers index used for every cache, then for none: the same answers.
 pytestmark = pytest.mark.usefixtures("index_path")
@@ -101,22 +106,28 @@ def test_forcing_keeps_its_evaluations_on_the_configuration_except_a_refused_rea
             derivations.append(self.lanes)
             return self.lanes
 
-        # Its requirement reads ``width``: forcing's copy derives it, before the cases.
-        wide: bool = Decision(
-            values=(False, True),
-            requires=(requires(width, "width-absent: no lanes", cases=(True,)),),
-        )
+        # Its constraint reads ``width`` first: forcing's copy derives it, before the cases.
+        wide: bool = Decision(values=(False, True))
         compute: Packed | Stub = Decision(CORES, width=width)
 
         @derived
         def kind(self) -> str:
             return type(self.compute).__name__
 
-        # Its requirement reads ``kind``: forcing's copy evaluates it, ``compute`` open.
-        typed: bool = Decision(
-            values=(False, True),
-            requires=(requires(kind, "kind-absent: no core", cases=(True,)),),
-        )
+        # Its constraint reads ``kind`` first: forcing's copy evaluates it, ``compute`` open.
+        typed: bool = Decision(values=(False, True))
+
+        @constraint
+        def lanes_present(self) -> bool | Rejected:
+            if not self.width and self.wide:
+                return reject("width-absent", "no lanes")
+            return True
+
+        @constraint
+        def core_known(self) -> bool | Rejected:
+            if not self.kind and self.typed:
+                return reject("kind-absent", "no core")
+            return True
 
     point = design_space(Shared(lanes=128))
     assert forced(point) == {"compute": "stub"}
@@ -255,6 +266,41 @@ def test_what_read_a_forced_decision_is_kept_unless_the_change_reaches_its_verdi
     fresh = commit(design_space(Odd()), {"lanes": 3})
     assert forced(narrow) == forced(fresh) == {"compute": "packed"}
     assert inspection.explain(narrow, Odd.kind) == inspection.explain(fresh, Odd.kind)
+
+
+@pytest.mark.parametrize("stages_first", [True, False])
+def test_a_change_touches_what_it_assigns_and_the_decisions_whose_forced_answer_moves(
+    stages_first: bool,
+) -> None:
+    # Every stage's verdict reads its neighbours' sizes through the hops' constraints, so a
+    # change to the first stage reaches the verdict of every open Decision of the chain. It
+    # moves three forced answers: the next stage narrows to one, and both hops' depths follow
+    # their upstream stage. The change touches those and the stage it assigns, no other, and
+    # the successor keeps what read only the rest.
+    point = design_space(chain(8, stages_first=stages_first)())
+    base = occurrence.state(point)
+    keys, nodes = base.linked.keys, base.linked.nodes
+    found = _forcing.forced(base)
+    assert not found.values and not found.refused
+    first = keys["s0.size"]
+    assert found.reach(base, {first}) == set(base.linked.decisions)
+    far = runtime.evaluate(base, keys["h5.narrow"])  # waits on an open stage
+    assert {nodes[i].key for i in far.decisions} == {"s5.size"}
+    trial = runtime._TrialSnapshot(base, {**base.assignments, first: 2})
+    assert sorted(nodes[i].key for i in trial._touches) == [
+        "h0.depth",
+        "h1.depth",
+        "s0.size",
+        "s1.size",
+    ]
+    wide = commit(point, {"s0.size": 2})
+    assert forced(wide) == {"s1.size": 1, "h0.depth": 2, "h1.depth": 1}
+    successor = occurrence.state(wide)
+    assert successor.cache[keys["h5.narrow"]] is far  # kept: it read untouched Decisions only
+    built = recomputed(wide)
+    assert forced(built) == forced(wide)
+    assert inspection.viable(built) == inspection.viable(wide)
+    assert runtime.evaluate(occurrence.state(built), keys["h5.narrow"]).result == far.result
 
 
 def test_an_admission_that_read_a_forced_decision_is_reused_unless_the_change_reaches_it() -> None:

@@ -290,9 +290,11 @@ def _collect_guards(effective: EffectiveSpace) -> Mapping[Declaration, ValueRef[
     return MappingProxyType(guards)
 
 
-def _exported_view(
+def _exported(
     effective: EffectiveSpace, key: ViewKey[object], declaration: object, label: str
-) -> View[object]:
+) -> View[object] | Derived[object]:
+    """The member an export names: a view (a product, read as its accepted value) or a
+    derived value (read as the value, whatever the Space's validity)."""
     space_type, members = effective.space_type, effective.members
     if not isinstance(declaration, Declaration) or declaration not in effective.aliases:
         raise DefinitionError.broken(
@@ -302,7 +304,7 @@ def _exported_view(
             declaration=space_type.__qualname__,
         )
     resolved = members[effective.aliases[declaration]]
-    if not isinstance(resolved, View):
+    if not isinstance(resolved, (View, Derived)):
         raise DefinitionError.broken(
             "export-kind-invalid",
             _OWNER,
@@ -310,7 +312,7 @@ def _exported_view(
             declaration=space_type.__qualname__,
         )
     exported_semantics = effective.semantics.get(resolved)
-    if exported_semantics is None and resolved.source is not None:
+    if exported_semantics is None and isinstance(resolved, View) and resolved.source is not None:
         exported_semantics = source_semantics(resolved.source, effective)
     if exported_semantics is not None and not key.semantics.is_compatible_with(exported_semantics):
         raise DefinitionError.broken(
@@ -325,7 +327,7 @@ def _exported_view(
 def _collect_exports(
     effective: EffectiveSpace, declared_exports: object
 ) -> Mapping[ViewKey[object], Declaration]:
-    """The exports: one view for each key."""
+    """The exports: one view or derived value for each key."""
     space_type = effective.space_type
     exports: dict[ViewKey[object], Declaration] = {}
     if not isinstance(declared_exports, Mapping):
@@ -352,7 +354,7 @@ def _collect_exports(
                 declaration=space_type.__qualname__,
             )
         export_names.add(key.name)
-        exports[key] = _exported_view(effective, key, declaration, key.name)
+        exports[key] = _exported(effective, key, declaration, key.name)
     return MappingProxyType(exports)
 
 

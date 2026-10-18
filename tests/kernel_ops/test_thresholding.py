@@ -146,7 +146,7 @@ def test_a_nan_threshold_is_refused_by_name() -> None:
 
 
 def test_a_float_thresholding_is_refused_while_its_choices_are_open() -> None:
-    """The kernel's admission refuses FLOAT32 on the facts alone, though its folding and
+    """The kernel's validity refuses FLOAT32 on the facts alone, though its folding and
     memories are still open."""
     model = thresholding_model(annotate=(), infer=False)
     for name in ("x", "t"):

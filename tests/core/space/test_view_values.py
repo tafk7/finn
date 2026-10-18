@@ -4,10 +4,10 @@
 
 On a configuration ``point.kitchen.cost`` is the accepted value (a read of a
 view that is not accepted raises ``ValueUnavailableError`` carrying its
-result). On a declaration ``kitchen.cost`` is a reference to that value: it
-supplies a formal and joins ``requires=``. Assessment and
-query are explicit calls on the configuration: ``point.inspect(Hall.total)``
-and ``point.query(Hall.total)``.
+result): refused with its Space, and answering while its Space is undecided. On a
+declaration ``kitchen.cost`` is a reference to that value: it supplies a formal.
+Assessment and query are explicit calls on the configuration:
+``point.inspect(Hall.total)`` and ``point.query(Hall.total)``.
 """
 
 from __future__ import annotations
@@ -15,14 +15,12 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
-from support.refusals import refused
 
 import finn.core.space as space
 from finn.core.space import (
     Available,
     BoundValue,
     Decision,
-    DefinitionError,
     Inapplicable,
     Param,
     Rejected,
@@ -34,6 +32,7 @@ from finn.core.space import (
     constraint,
     derived,
     design_space,
+    inspection,
     reject,
     view,
 )
@@ -47,7 +46,7 @@ class Room(Space):
     def small_enough(self) -> bool | Rejected:
         return True if self.area <= 30 else reject("too-large", f"area {self.area} exceeds 30")
 
-    @view(requires=(small_enough,))
+    @view
     def cost(self) -> int:
         return self.area * self.finish
 
@@ -61,9 +60,9 @@ class Hall(Space):
     hall.area = kitchen.cost  # a view's accepted value supplies a formal
     annex = Room(area=dining.cost)  # at the call, too
     doubled = View(kitchen.cost * 2)  # an expression over a view reference
-    checked = View(dining.area, requires=(kitchen.cost, dining.small_enough))
+    checked = View(dining.area)
 
-    @view(requires=(kitchen.cost, dining.cost))
+    @view
     def total(self) -> int:
         return self.kitchen.cost + self.dining.cost
 
@@ -93,7 +92,7 @@ def test_an_unaccepted_view_read_raises_carrying_its_result() -> None:
     assert isinstance(unresolved.value.result, Unresolved)
     assert unresolved.value.result == base.query(Hall.kitchen.cost)
     assert {finding.owner for finding in unresolved.value.result.findings} == {"kitchen.finish"}
-    # A refused obligation: the read carries the refusal.
+    # A refused Space: the read of its view carries the refusal.
     refused = chosen(kitchen=3).with_choices({Hall.hall.finish: 1})
     with pytest.raises(ValueUnavailableError) as rejected:
         _ = refused.hall.cost
@@ -121,21 +120,20 @@ def test_a_view_read_inside_a_computation_blocks_like_any_read() -> None:
             calls.append("finished")
             return value
 
-        @view(requires=(kitchen.cost, dining.cost))
+        @view
         def total(self) -> int:
             return self.sum_of_costs
 
     base = design_space(Reader())
     assert isinstance(base.query(Reader.sum_of_costs), Unresolved)
     assert calls == ["started"]  # halted at the first unavailable view read
-    # The per-view obligation results are unchanged: each view counts by its acceptance.
-    results = base.inspect(Reader.total).constraints.results
-    assert set(results) == {"kitchen.cost", "dining.cost"}
-    assert all(isinstance(answer, Unresolved) for answer in results.values())
+    # The Space is valid (an open choice is no piece): the view waits on its output alone.
+    assessment = base.inspect(Reader.total)
+    assert assessment.validity == Available(True)
+    assert isinstance(assessment.output_result, Unresolved)
+    assert assessment.accepted_result == assessment.output_result
     half = base.with_choices({Reader.kitchen.finish: 2})
-    results = half.inspect(Reader.total).constraints.results
-    assert results["kitchen.cost"] == Available(True)  # its acceptance, not its value
-    assert isinstance(results["dining.cost"], Unresolved)
+    assert isinstance(half.inspect(Reader.total).accepted_result, Unresolved)
     point = half.with_choices({Reader.dining.finish: 1})
     assert point.total == 40
     assert calls[-1] == "finished"
@@ -152,45 +150,39 @@ def test_a_view_reference_supplies_a_formal_by_assignment_and_at_the_call() -> N
     assert big.hall.area == 36 and isinstance(big.query(Hall.hall.cost), Rejected)
 
 
-def test_view_references_are_obligations_in_both_view_forms() -> None:
+def test_a_view_refuses_with_its_space_and_answers_while_it_is_undecided_in_both_forms() -> None:
     point = chosen()
-    assessment = point.inspect(Hall.checked)
-    assert assessment.constraints.results == {
-        "kitchen.cost": Available(True),
-        "dining.small_enough": Available(True),
-    }
+    # The garage's presence waits on its Decision: its constraint is unknown under it, the
+    # hall is undecided, and its views answer.
+    validity = inspection.validity(point)
+    assert validity.status == "undecided"
+    assert [piece.owner for piece in validity.pieces] == ["garage.small_enough"]
+    assert point.checked == 16 and point.total == 40
+    assert point.inspect(Hall.checked).validity == validity.result
+    # A child refused refuses the hall, and every view of it, in both forms.
     refused = chosen(kitchen=3).with_choices({Hall.hall.finish: 1})
-    # hall.cost refuses, but the obligations of total are kitchen and dining only.
-    assert refused.total == 36 + 16
-    total = refused.inspect(Hall.total)
-    assert set(total.constraints.results) == {"kitchen.cost", "dining.cost"}
+    validity = inspection.validity(refused)
+    assert validity.status == "refused"
+    assert [piece.owner for piece in validity.pieces] == ["hall.small_enough"]
+    for view_ in (Hall.total, Hall.checked):
+        answer = refused.query(view_)
+        assert isinstance(answer, Rejected)
+        assert {finding.code for finding in answer.findings} == {"too-large"}
+    # The children that are valid still answer theirs.
+    assert refused.kitchen.cost == 36 and refused.dining.cost == 16
 
     class Strict(Space):
         kitchen = Room(area=50)
         dining = Room(area=10)
-        checked = View(dining.area, requires=(kitchen.cost,))
+        checked = View(dining.area)
 
     strict = design_space(Strict()).with_choices(
         {Strict.kitchen.finish: 1, Strict.dining.finish: 1}
     )
-    results = strict.inspect(Strict.checked).constraints.results
-    assert isinstance(results["kitchen.cost"], Rejected)
+    assert isinstance(strict.inspect(Strict.checked).validity, Rejected)
     with pytest.raises(ValueUnavailableError) as caught:
         _ = strict.checked
     assert isinstance(caught.value.result, Rejected)
-
-
-def test_only_views_and_constraints_are_obligations() -> None:
-    class Wrong(Space):
-        kitchen = Room(area=12)
-        checked = View(kitchen.area, requires=(kitchen.area,))
-
-    with refused(
-        "view-obligation-invalid",
-        error=DefinitionError,
-        message="a view may require only constraints",
-    ):
-        design_space(Wrong())
 
 
 def test_inspect_and_query_are_explicit_calls_on_the_configuration() -> None:
@@ -210,9 +202,15 @@ def test_inspect_and_query_are_explicit_calls_on_the_configuration() -> None:
 
 
 def test_a_views_own_name_in_its_class_body_is_its_declaration() -> None:
-    # In its own body a view is the declaration (View[T]): it may be required,
-    # exported or wrapped, and at runtime it supplies a formal like any
-    # reference. Statically it is not the T a formal takes.
+    # In its own body a view is the declaration (View[T]): it may be exported or
+    # wrapped, and at runtime it supplies a formal like any reference. Statically it
+    # is not the T a formal takes.
+    class Plaque(Space):
+        """A child with no constraint: a constraint of it reading a view of its parent
+        would close a dependency cycle (the parent's validity counts the child's)."""
+
+        area: int = Param()
+
     class Wing(Space):
         kitchen = Room(area=12)
 
@@ -220,12 +218,12 @@ def test_a_views_own_name_in_its_class_body_is_its_declaration() -> None:
         def doubled(self) -> int:
             return 2 * self.kitchen.cost
 
-        annex = Room(area=cast(int, doubled))
-        checked = View(kitchen.area, requires=(doubled,))
+        annex = Plaque(area=cast(int, doubled))
+        checked = View(doubled)
 
     point = design_space(Wing()).with_choices({Wing.kitchen.finish: 1})
     assert point.annex.area == 24
-    assert point.inspect(Wing.checked).constraints.results == {"doubled": Available(True)}
+    assert point.checked == 24
 
 
 def test_the_callable_view_surface_is_gone() -> None:

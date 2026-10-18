@@ -4,7 +4,7 @@
 """Integer datatype policy: what a port's hardware or a kernel's arithmetic takes.
 
 A policy is plain data. A port states the one its hardware takes (``admits``);
-a kernel checks one in a constraint of its ``admission``. ``admit_element`` is
+a kernel checks one in a constraint of its own. ``admit_element`` is
 the same refusal for an element: the ``ScalarEncoding`` of a datatype and a
 range, or why there is none.
 

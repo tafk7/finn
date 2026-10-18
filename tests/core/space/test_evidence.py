@@ -83,7 +83,15 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
     assert first == second
     assert first.result == Available(12)
     assert calls == ["good"]
-    assert not any(".bad." in node.declaration.key for node in first.nodes)
+    # The unselected candidate is read only as absent: the root's validity, which the view
+    # reads, finds its validity inapplicable, and nothing of it runs.
+    bad = {
+        node.declaration.key: node.result for node in first.nodes if ".bad." in node.declaration.key
+    }
+    assert bad == {
+        "implementation.bad.$selected": Available(False),
+        "implementation.bad.$validity": Inapplicable(),
+    }
     assert any(node.selector and node.result == Available("good") for node in first.nodes)
     assert any(node.is_guard for node in first.nodes)
     assert any(
@@ -148,7 +156,7 @@ def test_inactive_parameter_evidence_does_not_expose_unused_bound_value() -> Non
         assert isinstance(formal.result, Inapplicable)
 
 
-def test_refusal_causes_stay_visible_while_another_obligation_is_unresolved() -> None:
+def test_refusal_causes_stay_visible_while_the_output_is_unresolved() -> None:
     class Example(Space):
         chosen: int = Decision(values=(1, 2))
         value = Const(3)
@@ -161,7 +169,7 @@ def test_refusal_causes_stay_visible_while_another_obligation_is_unresolved() ->
         def selected(self) -> int:
             return self.value + self.chosen
 
-        physical = View(selected, requires=(supported,))
+        physical = View(selected)  # refused with its Space, which ``supported`` refuses
 
     point = design_space(Example())
     evidence = inspection.explain(point, Example.physical)

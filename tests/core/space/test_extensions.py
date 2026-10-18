@@ -87,7 +87,8 @@ def _stream(*, dtype: Encoding, lanes: int, bits: int) -> StreamValue:
 
 
 def admitted_stream_type() -> type[AdmissionFormals]:
-    """Admission checks and the accepted stream, built as data and named by composite."""
+    """The stream's constraints and its stream, built as data and named by composite; the
+    stream is refused with the Space when a constraint refuses."""
     minimum = Const(1)
     admission = constraint(
         dtype=AdmissionFormals.dtype, maximum_bits=AdmissionFormals.maximum_bits
@@ -96,7 +97,7 @@ def admitted_stream_type() -> type[AdmissionFormals]:
     value = derived(
         dtype=AdmissionFormals.dtype, lanes=AdmissionFormals.lanes, bits=AdmissionFormals.bits
     )(_stream)
-    stream = View(value, requires=(admission, geometry))
+    stream = View(value)
     bits = View(AdmissionFormals.bits)
     return composite(
         "AdmittedStream",
@@ -160,8 +161,12 @@ def test_stream_shape_places_independent_choices_and_keeps_narrow_fields_availab
     first = missing.with_choices({Pair.left.lanes: 2})
     assert first.left.bits == 6
     assert first.right.element_bits == 6
-    assert isinstance(first.right.query(StreamShape.lanes), Unresolved)
-    assert isinstance(first.query(stream_of(Pair.left)), Unresolved)
+    # The pair's constraint reads the right lanes: only one lane balances the left's 6 bits.
+    assert first.right.query(StreamShape.lanes) == Available(1)
+    # The limit is not supplied, so the left stream's constraint waits: its Space is
+    # undecided, and its view answers all the same.
+    assert inspection.validity(first.left).status == "undecided"
+    assert first.query(stream_of(Pair.left)) == Available(StreamValue(Encoding(3), 2, 6))
     assert isinstance(missing.left.query(StreamShape.lanes), Unresolved)
 
     admitted = design_space(Pair(left_dtype=Encoding(3), right_dtype=Encoding(6), limit=4))
@@ -258,7 +263,8 @@ def test_duplicate_names_owned_declarations_and_foreign_exports_are_definition_e
             exports={ViewKey("local", int): view, ViewKey("local", int): view},
         )
     constant = Const(4)
-    with refused("export-kind-invalid", error=DefinitionError):  # exports are views only
+    # Exports are views and derived values only.
+    with refused("export-kind-invalid", error=DefinitionError):
         composite("Kind", {"constant": constant}, exports={ViewKey("constant", int): constant})
     with refused("name-invalid", error=DefinitionError):
         composite("Invalid", {"invalid.name": Const(1)})

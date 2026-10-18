@@ -35,7 +35,6 @@ reaches it: ``tests/support/kernel_specs/pool.py``.
 from __future__ import annotations
 
 from finn.core.space import (
-    ConstraintGroup,
     Decision,
     Param,
     Rejected,
@@ -261,8 +260,6 @@ class PoolKernel(LeafKernel):
     def element_supported(self) -> bool | Rejected:
         """An ordinary integer: ``std::max`` over ``ap_int`` or ``ap_uint`` lanes."""
         return ELEMENTS.check(self.input_tensor.element.dtype)
-
-    admission = ConstraintGroup(geometry_supported, element_supported)
 
     @derived(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:

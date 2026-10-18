@@ -155,35 +155,26 @@ def test_configured_choices_are_written_and_replay_reads_them() -> None:
     assert attributes(model) == sorted(set(FOLDING) - {"compute"})
 
 
-def test_a_graph_with_a_cleared_choice_a_reader_needs_is_stale() -> None:
+def test_a_graph_with_a_cleared_choice_a_rule_reads_waits_then_is_refused() -> None:
     """The read side of a clear: a graph whose SIMD is gone, its pumping still stored, is
-    stated as the raw attributes state it. The pumping, whose check reads SIMD, is kept
-    unchecked, waiting on it, not stale; once SIMD is stated, replay checks it, and refuses
-    a pumping one lane cannot split."""
+    stated as the raw attributes state it. The pumping is checked by its own domain and
+    kept; the rule that pumping needs lanes waits on SIMD, so nothing is refused; once SIMD
+    is stated as one lane, the node's point is refused (``verify_node``): no core is
+    possible, the rule the packed core's reason, its stored choices all replayed."""
     model = matmul_model()
     configured(model, {"first": FOLDING})
     write_raw(model, "first", "compute.packed.simd", None)
     assert "compute.packed.simd" not in attributes(model)
     assert op(model).verify_node() == []
-    assert inspection.unchecked(op(model).point()) == (
-        inspection.Unchecked("compute.packed.compute_pumping", False, ("compute.packed.simd",)),
-    )
-    # Pumped, it waits all the same; SIMD stated as one lane, it is stale.
+    assert inspection.unchecked(op(model).point()) == ()
+    # Pumped, it waits all the same; SIMD stated as one lane, the rule refuses it.
     write_raw(model, "first", "compute.packed.compute_pumping", True)
     assert op(model).verify_node() == []
     write_raw(model, "first", "compute.packed.simd", 1)
     (problem,) = op(model).verify_node()
-    assert "compute.packed.compute_pumping: " in problem and "SIMD" in problem
-    # By its code: the point's replay refuses the pumping, the node in its details.
-    with refused(
-        "choices-refused",
-        error=KernelOpError,
-        owner="MatMul",
-        node="first",
-        keys=("compute.packed.compute_pumping",),
-        message=r"compute\.packed\.compute_pumping: .*SIMD",
-    ):
-        op(model).point()
+    assert problem.startswith("first: compute: decision-no-viable-case: no case is viable: ")
+    assert "packed: compute.packed.pumping_has_lanes: dotp-pumping: pumping requires" in problem
+    assert inspection.validity(op(model).point()).status == "refused"
     write_raw(model, "first", "compute.packed.compute_pumping", None)
     assert op(model).verify_node() == []
 
@@ -202,9 +193,7 @@ def test_persist_checks_every_value_before_it_writes_any(monkeypatch: pytest.Mon
         ("compute.packed.simd", "choice-value-invalid"),
     ):
         stated = {("first", "compute.packed.pe"): 4, ("first", forged): "two"}
-        monkeypatch.setattr(
-            Partition, "chosen", lambda self, names=None, *, unchecked=False, stated=stated: stated
-        )
+        monkeypatch.setattr(Partition, "chosen", lambda self, names=None, stated=stated: stated)
         with refused(
             code, error=KernelOpError, owner="MatMul", node="first", keys=(forged,)
         ) as caught:
@@ -282,7 +271,7 @@ def test_a_choice_goes_stale_when_a_fact_changes() -> None:
     assert error.value.keys == ("compute.packed.pe",)
 
 
-def test_a_matmul_no_core_admits_is_refused_while_its_choices_are_open() -> None:
+def test_a_matmul_no_core_takes_is_refused_while_its_choices_are_open() -> None:
     """INT32 activations: the packed core's DSP input is too narrow and the INT8 core
     needs a DSP58, so the ``compute`` Decision has no viable case on the facts alone."""
     model = matmul_model(annotate=(), infer=False)

@@ -309,7 +309,8 @@ def test_enumerated_candidates_still_pass_membership_before_commitment() -> None
     report = base.try_with_choices(base.field(Trial.value).change(-1))
     assert not report.accepted
     assert seen == [-1]
-    assert isinstance(base.query(Trial.value), Unresolved)
+    # Every listed value is checked by membership: -1 is no case, so 1 is forced.
+    assert base.query(Trial.value) == Available(1)
 
 
 def test_programmer_failure_after_provisional_admission_never_publishes_a_successor() -> None:

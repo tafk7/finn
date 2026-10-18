@@ -15,8 +15,6 @@ from finn.core.space._nodes import node_record
 from finn.core.space.compiler import compile_model
 from finn.core.space.declarations import (
     Const,
-    Constraint,
-    ConstraintGroup,
     Decision,
     Derived,
     Param,
@@ -49,8 +47,7 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
             calls.append("supported")
             return extent > 0
 
-        admitted = ConstraintGroup(supported)
-        result = View(cycles, requires=(admitted,))
+        result = View(cycles)
 
     model = compile_model(Example)
     assert calls == []
@@ -128,7 +125,7 @@ def test_self_invocation_is_preserved_for_nested_functions_and_view_outputs() ->
         def supported(self) -> bool:
             raise AssertionError("preparation must not execute self methods")
 
-        @view(requires=(supported,))
+        @view
         def physical(self) -> int:
             raise AssertionError("preparation must not execute self methods")
 
@@ -150,7 +147,10 @@ def test_self_invocation_is_preserved_for_nested_functions_and_view_outputs() ->
         assert node.call_style == "self"
         assert node.scope == child_scope
         assert node.arguments == ()
-    assert set(physical.dependencies) == {supported.index, physical.output}
+    # A view's dependencies: its output, and its Space's validity, which reads the constraint.
+    validity = model.linked.scopes[child_scope].validity
+    assert set(physical.dependencies) == {validity, physical.output}
+    assert validity is not None and supported.index in nodes[validity].dependencies
     explicit = nodes[model.resolve(child_scope, Child.explicit)]
     assert explicit.call_style == "explicit"
     assert len(explicit.arguments) == 1
@@ -232,9 +232,11 @@ def test_twenty_thousand_dependencies_compile_and_evaluate_iteratively() -> None
         )
     space_type = cast(type[Space], type("Deep", (Space,), members))
     model = compile_model(space_type)
-    assert len(model.linked.order) == 20_001
-    assert len(model.linked.nodes[-1].dependencies) == 1
-    assert model.linked.order[-1] == model.resolve(0, members["value20000"])
+    # Every member, and the Space's validity node (no pieces: no constraint, no Decision).
+    assert len(model.linked.order) == 20_002
+    last = model.resolve(0, members["value20000"])
+    assert len(model.linked.nodes[last].dependencies) == 1
+    assert model.linked.order[-2:] == (last, model.linked.scopes[0].validity)
     assert design_space(space_type()).query(cast(Derived[int], members["value20000"])) == Available(
         20_000
     )
@@ -316,28 +318,15 @@ def test_compile_snapshots_values_domains_and_callback_references() -> None:
     assert new.linked.nodes[new.resolve(0, Example.calculated)].function is first
 
 
-def test_foreign_value_and_obligation_references_are_definition_errors() -> None:
+def test_a_foreign_value_reference_is_a_definition_error() -> None:
     class Other(Space):
         value = Const(1)
-
-        @constraint
-        def valid(*, value: int) -> bool:
-            return value > 0
 
     class ForeignView(Space):
         result = View(Other.value)
 
-    class ForeignConstraint(Space):
-        own = Const(1)
-        result = View(own, requires=(Other.valid,))
-
-    class WrongKind(Space):
-        own = Const(1)
-        result = View(own, requires=(cast(Constraint, own),))
-
-    for space_type in (ForeignView, ForeignConstraint, WrongKind):
-        with pytest.raises(DefinitionError):
-            compile_model(space_type)
+    with pytest.raises(DefinitionError):
+        compile_model(ForeignView)
 
 
 def test_domain_binding_is_validated_without_invocation() -> None:

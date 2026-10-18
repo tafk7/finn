@@ -76,11 +76,12 @@ def test_an_op_made_without_its_model_is_refused_and_points_to_kernel_op() -> No
         MatMul(model.graph.node[0]).model()
 
 
-def test_conversion_admits_through_admitted_alone() -> None:
-    """``KernelOp.admitted`` is the one way a node is admitted: the network at its baselines
-    or the refusals. ``infer_node`` does not admit, and no second method says the same."""
-    assert not hasattr(KernelOp, "admission")
-    assert "admit" not in inspect.signature(infer_node).parameters
+def test_conversion_accepts_through_accepted_alone() -> None:
+    """``KernelOp.accepted`` is the one way a node is accepted: the network at its
+    baselines or the refusals. ``infer_node`` does not accept, and no second method says
+    the same."""
+    assert not hasattr(KernelOp, "acceptance")
+    assert "accept" not in inspect.signature(infer_node).parameters
 
 
 def test_the_schema_is_the_kernel_classs_decision_keys() -> None:
@@ -191,7 +192,7 @@ def test_a_node_alone_is_a_network_of_its_kernel_and_its_boundaries() -> None:
 def test_a_node_without_a_baseline_is_refused_by_the_decision_naming_the_node(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Where the node alone has no baseline, conversion's admission is the exploration's
+    """Where the node alone has no baseline, conversion's answer is the exploration's
     refusal, owned by the refusing Decision's key, the node in its details."""
     model = matmul_model()
     op = kernel_op(model, model.graph.node[0])
@@ -208,7 +209,7 @@ def test_a_node_without_a_baseline_is_refused_by_the_decision_naming_the_node(
         message="no case is viable",
     ):
         op.baselined()
-    refusals = op.admitted()
+    refusals = op.accepted()
     assert isinstance(refusals, tuple)
     ((code, owner, details),) = [(f.code, f.owner, dict(f.details)) for f in refusals]
     assert (code, owner, details) == ("decision-no-viable-case", "compute", {"node": "first"})

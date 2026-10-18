@@ -99,8 +99,10 @@ def whole_space(layers: int) -> Space:
     for name in net.channels:
         given: dict[str, Any] = {}
         for fact, value in net.wiring(name).facts.items():
-            if isinstance(value, (Interface, Fact)):
+            if isinstance(value, Interface):
                 value = getattr(declared[value.member], value.view)
+            elif isinstance(value, Fact):
+                value = getattr(declared[value.member], value.name)
             given[fact] = value
         channels[name] = Channel(**given)
     whole = composite(f"chain_{2 * layers}", {**declared, **channels})

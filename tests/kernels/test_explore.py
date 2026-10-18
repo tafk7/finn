@@ -18,8 +18,9 @@ from dataclasses import asdict, replace
 from typing import Any
 
 import pytest
+from qonnx.core.datatype import DataType
 from support import chain
-from support.helpers import FULL_DSP48E2, FULL_DSP58, Lanes, keyed
+from support.helpers import FULL_DSP48E2, FULL_DSP58, Lanes, choose, keyed, matmul_point
 from support.refusals import refused
 
 import finn.kernels.explore as explore_module
@@ -37,6 +38,7 @@ from finn.kernels.explore import (
     Rebaseline,
     Refused,
     Seam,
+    SizeFifos,
     Stated,
     TargetCycles,
     TargetThroughput,
@@ -363,8 +365,8 @@ def dsp58_matmul() -> tuple[Seam, Network]:
                 consumer=Interface("first", "x_end"),
             ),
             "w": wire(
-                tensor=Fact("first", "w_carried"),
-                contents=Fact("first", "w_stored"),
+                tensor=Fact("first", "carried_weights"),
+                contents=Fact("first", "stored_weights"),
                 consumer=Interface("first", "w_end"),
                 platform=FULL_DSP58,
             ),
@@ -518,7 +520,7 @@ def test_reopen_clears_what_the_engine_names_and_a_channel_waits_on_its_kernel()
     assert {key: [f.code for f in why] for key, why in direct.dropped.items()} == {
         depth: ["inapplicable"]
     }
-    assert depth not in direct.network.chosen(unchecked=True)
+    assert depth not in direct.network.chosen()
 
 
 def test_settle_keeps_each_prior_value_still_accepted_and_rebaselines_the_rest() -> None:
@@ -542,10 +544,11 @@ def test_settle_keeps_each_prior_value_still_accepted_and_rebaselines_the_rest()
     assert {key[0] for key in explorer.chosen(first)} == {"first", "activate"}
 
 
-def test_set_drops_a_stored_choice_the_change_makes_invalid_then_settles() -> None:
-    """Pumping on at SIMD 2, then SIMD replaced by 1: the engine refuses the change
-    beside the pumping choice; ``set`` drops it, named, and settling finds it forced off,
-    nothing to store."""
+def test_set_refuses_a_change_that_leaves_its_member_refused() -> None:
+    """Pumping on at SIMD 2, then SIMD replaced by 1: the engine commits it (the pumping
+    choice is still a value of its domain), and the member is refused: the rule that
+    pumping needs lanes leaves its core impossible, so ``set`` refuses the change, the
+    rule its cause, and nothing is dropped."""
     explorer, network = seam()
     base = explorer.baseline(network)
     pumped = explorer.set(
@@ -553,50 +556,60 @@ def test_set_drops_a_stored_choice_the_change_makes_invalid_then_settles() -> No
     )
     assert isinstance(pumped, Accepted)
     replaced = explorer.set(pumped.network, keyed({"first.compute.packed.simd": 1}))
-    assert isinstance(replaced, Accepted)
-    (pumping,) = [key for key in replaced.dropped if key[1].endswith("compute_pumping")]
-    assert "pumping requires SIMD >= 2" in said({pumping: replaced.dropped[pumping]})
-    values = chosen(explorer, replaced.network)
-    assert values["first.compute.packed.simd"] == 1
-    assert "first.compute.packed.compute_pumping" not in values
-    assert explorer.choices(replaced.network) == ()
+    assert isinstance(replaced, Refused)
+    ((key, (found,)),) = replaced.why.items()
+    assert (key, found.code) == (("first", "compute"), "decision-no-viable-case")
+    assert [(cause.owner, cause.code) for cause in found.causes] == [
+        ("compute.packed.pumping_has_lanes", "dotp-pumping")
+    ]
+    assert "pumping requires SIMD >= 2" in said(replaced.why)
     # A change of the change's own key that is not taken is refused.
     assert isinstance(explorer.set(base, keyed({"first.compute.packed.pe": 3})), Refused)
 
 
 def test_a_held_choice_a_change_would_drop_refuses_the_change() -> None:
-    """A held choice a change would drop refuses the change; one a change only leaves
-    waiting is kept unchecked, and the hold waits with it; one settling cannot bring back
-    is ``Unsettled``."""
+    """A held choice a change would drop refuses the change, naming it; one a change
+    leaves its member refused by a rule is refused by the rule, as any other; one settling
+    cannot bring back is ``Unsettled``."""
     explorer, network = seam()
+    base = explorer.baseline(network)
+    # The activations' adapter memory: a folding of four lanes a side needs no adapter,
+    # so the change drops its stored style; held, the change is refused.
+    style = ("x", "adapter.input_gen.input_gen.ram_style")
+    folding = keyed({"first.compute.packed.simd": 4, "first.compute.packed.pe": 4})
+    unheld = explorer.set(base, folding)
+    assert isinstance(unheld, Accepted) and list(unheld.dropped) == [style]
+    explorer.held[style] = "distributed"
+    dropped = explorer.set(base, folding)
+    assert isinstance(dropped, Refused)
+    ((key, (found,)),) = dropped.why.items()
+    assert (key, found.code, found.owner) == (
+        style,
+        "held",
+        "x.adapter.input_gen.input_gen.ram_style",
+    )
+    assert found.message.startswith("held to 'distributed', dropped by the change: ")
+    del explorer.held[style]
     pumped = explorer.set(
-        explorer.baseline(network),
-        keyed({"first.compute.packed.simd": 2, "first.compute.packed.compute_pumping": True}),
+        base, keyed({"first.compute.packed.simd": 2, "first.compute.packed.compute_pumping": True})
     )
     assert isinstance(pumped, Accepted)
     pumping = ("first", "compute.packed.compute_pumping")
     explorer.held[pumping] = True
-    dropped = explorer.set(pumped.network, keyed({"first.compute.packed.simd": 1}))
-    assert isinstance(dropped, Refused)
-    ((key, (found,)),) = dropped.why.items()
-    assert (key, found.code, found.owner) == (
-        pumping,
-        "held",
-        "first.compute.packed.compute_pumping",
-    )
-    assert found.message.startswith("held to True, dropped by the change: ")
-    assert "pumping requires SIMD >= 2" in found.message
+    # One lane: the change is refused by the rule pumping needs lanes, not by the hold.
+    ruled = explorer.set(pumped.network, keyed({"first.compute.packed.simd": 1}))
+    assert isinstance(ruled, Refused)
+    assert "pumping requires SIMD >= 2" in said(ruled.why)
+    assert not any(f.code == "held" for why in ruled.why.values() for f in why)
     # Not reached, it stays: SIMD 4 keeps pumping viable.
     kept = explorer.set(pumped.network, keyed({"first.compute.packed.simd": 4}))
     assert isinstance(kept, Accepted)
     assert explorer.chosen(kept.network)[pumping] is True
-    # SIMD reopened, the held pumping is kept unchecked, waiting on it: the hold waits with
-    # it, and settling takes the first SIMD that keeps it (one lane would drop it).
+    # SIMD reopened, the held pumping stays, its value checked by its domain alone; settling
+    # takes the first SIMD the rule allows with it (one lane would refuse the member).
     opened, reach = explorer.reopen(pumped.network, [("first", "compute.packed.simd")])
     assert reach == (("first", "compute.packed.simd"),)
-    assert [(key, item.value, item.blockers) for key, item in opened.unchecked()] == [
-        (pumping, True, ("compute.packed.simd",))
-    ]
+    assert opened.unchecked() == ()
     settled = explorer.settle(opened, {})
     assert explorer.chosen(settled)[pumping] is True
     assert explorer.chosen(settled)[("first", "compute.packed.simd")] == 2
@@ -759,6 +772,40 @@ def test_max_throughput_folds_each_budget_as_target_cycles_alone_asking_each_poi
         assert tried.reached == alone.cost(folded).bottleneck
         assert tried.stated == alone.resources(folded)
     assert searched < alone.attempts
+
+
+def test_a_member_refused_at_bind_refuses_the_cost_strategies_naming_why() -> None:
+    """A member refused at bind states no cycles (a refused Space's products refuse), nor
+    do the channels bound to its ends. Sizing the FIFOs raises ``cycles-unknown``, each
+    refused member named with its own findings, those findings the causes; the throughput
+    search, which reopens the folding first, raises the member's own refusal as its fold
+    finds it (no core possible, the weight port's rule the reason). Never a bare code. (A
+    member a change reaches is never refused: the seam refuses that change.)"""
+    unsigned = matmul_point(
+        m=3,
+        n=4,
+        k=4,
+        activation_dtype=DataType["INT3"],
+        weights_dtype=DataType["UINT3"],
+        platform=PART,
+    )
+    network = choose(unsigned, {"matmul.compute": "packed"})
+    with refused(
+        "cycles-unknown",
+        error=ExploreError,
+        message="needs every member's cycles: matmul: compute.packed.w.element_taken: dtype-family",
+    ) as caught:
+        SizeFifos().explore(Seam(PART), network)
+    assert {(cause.owner, cause.code) for cause in caught.finding.causes} == {
+        ("compute.packed.w.element_taken", "dtype-family")
+    }
+    with refused(
+        "decision-no-viable-case",
+        error=ExploreError,
+        owner="matmul.compute",
+        message="packed: compute.packed.w.element_taken: dtype-family",
+    ):
+        MaxThroughput({"dsp": 0.5}).explore(Seam(PART), network)
 
 
 def test_max_throughput_names_the_resource_that_binds_among_those_budgeted() -> None:

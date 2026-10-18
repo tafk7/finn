@@ -5,9 +5,9 @@
 
 A leaf (``LeafKernel``) binds one FinnLib module. It states its module, parameters,
 sources and resources (``required()``: a class that leaves one unmet is not placed),
-and its admission and ports, which are checked when the class is made; it places
-no kernel. Every input among its other pins is held or presented as a control bus
-(``pins_accounted``), and every port runs on its clock (``clocked``); both are
+and its ports, which are checked when the class is made; it places no kernel. Every
+input among its other pins is held or presented as a control bus (``pins_accounted``),
+and every port runs on its clock (``clocked``): constraints, counted in its validity,
 refused when the kernel is created, not when it is composed. Its ``module`` is the
 ``Leaf``. A kernel with children (``ComposedKernel``) states the interfaces it
 presents, each a view ``<name>_end``, and merges its members' netlists into one
@@ -22,7 +22,6 @@ from support.refusals import refused
 
 from finn.core.space import (
     Available,
-    ConstraintGroup,
     DefinitionError,
     Param,
     Rejected,
@@ -61,7 +60,6 @@ class Probe(LeafKernel):
 
     id = "test.probe"
     rtl_module = "probe"
-    admission = ConstraintGroup()
 
     tensor: Tensor = Param(required=False)
     hold_mode: bool = Param(default=True)
@@ -147,7 +145,6 @@ def test_a_leaf_that_leaves_a_required_member_unmet_is_not_placed() -> None:
     class Unsourced(LeafKernel):
         id = "test.unsourced"
         rtl_module = "probe"
-        admission = ConstraintGroup()
         x = AxiStreamPort(name="s_axis", endpoint=Endpoint.TARGET, sequence=Probe.x.sequence)
 
         @derived
@@ -190,20 +187,16 @@ def port() -> AxiStreamPort:
     return AxiStreamPort(name="s_axis", endpoint=Endpoint.TARGET, sequence=Probe.x.sequence)
 
 
-def test_a_leaf_states_its_admission_and_its_ports_and_places_no_kernel() -> None:
-    stated("Complete", admission=ConstraintGroup(), x=port())
-    with refused(
-        "leaf-admission-unstated", error=DefinitionError, message="Unadmitted states no admission"
-    ):
-        stated("Unadmitted", x=port())
+def test_a_leaf_states_its_ports_and_places_no_kernel() -> None:
+    stated("Complete", x=port())
     with refused("leaf-ports-unplaced", error=DefinitionError, message="Portless places no port"):
-        stated("Portless", admission=ConstraintGroup())
+        stated("Portless")
     with refused(
         "leaf-places-kernels",
         error=DefinitionError,
         message=r"Nesting places the kernels \['inner'\]",
     ):
-        stated("Nesting", admission=ConstraintGroup(), x=port(), inner=Probe(tensor=TENSOR))
+        stated("Nesting", x=port(), inner=Probe(tensor=TENSOR))
 
 
 def test_a_kernel_with_children_names_the_end_of_each_interface() -> None:

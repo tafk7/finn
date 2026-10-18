@@ -42,6 +42,8 @@ from .semantics import snapshot as snapshot_value
 if TYPE_CHECKING:
     from ._configuration import Space
     from .compiler import Model
+    from .domains import Domain
+    from .semantics import ValueSemantics
 
 Assessment: TypeAlias = ViewAssessment[object] | ConstraintAssessment
 
@@ -275,18 +277,23 @@ class Snapshot:
     found, in the order it found them, which forcing starts its own from where their
     verdicts still hold (``finn.core.space._forcing``). A
     successor's cache starts from what its base and its trial evaluated that the
-    change does not reach (a change reaches what it adds, removes or replaces, and
-    each open Decision whose forced value's verdict read one of those:
-    ``_touched``), and ``admissions`` holds the Decisions each assignment's admission
+    change does not touch (a change touches what it assigns, and each open Decision whose
+    forced answer differs in the successor: ``_TrialSnapshot``), and ``admissions`` holds
+    the Decisions each assignment's admission
     read, and ``admission_facts`` the formals, which a later trial reuses where the change
     does not reach them (``_TrialSnapshot``; a choice whose own check was read with its
     guard's cases assumed has none, and is checked again on every change). ``unchecked``
     holds the assignments whose own check cannot conclude yet (it reads a choice still open,
-    or an input not supplied): each
+    an input not supplied, or an input that does not apply): each
     is stored and read **unresolved** until a change makes its check succeed, and forcing never
     seeds it or reads it as a value (``_decision_frame``); a read of a Decision answers the
     value or unresolved, and what a verdict or an evaluation records of one is that answer
-    (``_forcing.observed``). ``answers`` holds what
+    (``_forcing.observed``). ``input_refused`` holds those of them whose own check reads an
+    input that is itself refused (a derived value refusing on its facts): a refusal
+    elsewhere never refuses a commit, so each is kept and never read as a value; a
+    configuration that forces reads it refused through that input, with the input's
+    findings, and a copy that does not force reads it unresolved, as any unchecked one, so
+    the refusal is blamed once, at the input. ``answers`` holds what
     inspection answered of it, by question and scope (``inspection``), where the answer
     shares its values. The cache is an exact ``dict``, **only added to**: an evaluation is
     given by ``setdefault``, and none is replaced or removed once held, or ``readers`` would
@@ -311,6 +318,7 @@ class Snapshot:
     admissions: Mapping[int, frozenset[int]] = field(default_factory=dict, repr=False)
     admission_facts: Mapping[int, frozenset[int]] = field(default_factory=dict, repr=False)
     unchecked: frozenset[int] = field(default_factory=frozenset)
+    input_refused: frozenset[int] = field(default_factory=frozenset)
     cache: dict[int, Evaluation] = field(default_factory=new_cache, init=False, repr=False)
     readers: Readers | None = field(default=None, init=False, repr=False)
     made: int = field(default=0, init=False, repr=False)
@@ -350,50 +358,47 @@ def changed_facts(base: Snapshot, parameters: Mapping[int, object]) -> frozenset
     return frozenset(changed)
 
 
-def _touched(
-    base: Snapshot,
-    candidates: Mapping[int, object],
-    facts: Collection[int] = (),
-    unchecked: Collection[int] = (),
-) -> list[int]:
-    """The Decisions a change from ``base`` to ``candidates``, and to other values of the
-    formals ``facts``, touches: those it adds, removes or replaces (not the identical
-    value), those ``base`` holds unchecked and those the change leaves unchecked
-    (``unchecked``: what a read of either answers may change with its check, not only
-    with its value), and the open ones its reach includes: every Decision open in both whose
-    forced value's verdict, in what ``base`` found, read a touched one or a changed
-    formal (to a fixed point), or has no verdict, or one that does not hold under the
-    base's final values (``Found.reach``). A Decision
-    open in both and not touched is **stable**: its verdict read nothing the change
-    touched, so it reads the same, forced to the same value, refused alike or open
-    alike, in the trial, in the successor and in the base. Where ``base``'s forced
-    Decisions were never found there is nothing to bound with, and every Decision open
-    in the base is touched, as a value it forces may differ."""
-    from ._forcing import Found  # noqa: PLC0415 - runtime/forcing cycle
-
+def _assigned(
+    base: Snapshot, candidates: Mapping[int, object], unchecked: Collection[int] = ()
+) -> set[int]:
+    """The Decisions a change from ``base`` to ``candidates`` assigns: those it adds,
+    removes or replaces (not the identical value), and those ``base`` holds unchecked and
+    those the change leaves unchecked (``unchecked``: what a read of either answers may
+    change with its check, not only with its value)."""
     assignments = base.assignments
     unsettled = base.unchecked.union(unchecked)
-    changed = {
+    return {
         index
         for index in base.linked.decisions
         if (index in assignments) != (index in candidates)
         or (index in candidates and assignments[index] is not candidates[index])
         or index in unsettled
     }
+
+
+def _reached(base: Snapshot, assigned: Collection[int], facts: Collection[int]) -> set[int] | None:
+    """The Decisions open in ``base`` and in the change that a change assigning ``assigned``,
+    and giving the formals ``facts`` other values, may move: every one whose forced value's
+    verdict, in what ``base`` found, read an assigned one or a changed formal (to a fixed
+    point), or has no verdict, or one that does not hold under the base's final values
+    (``Found.reach``). Any other Decision open in both is **stable** whatever the change
+    forces: its verdict read nothing the change assigns, so it reads the same, forced to the
+    same value, refused alike or open alike, in the base and in the successor. None where
+    ``base``'s forced Decisions were never found: there is nothing to bound with, and every
+    Decision open in the base may move."""
+    from ._forcing import Found  # noqa: PLC0415 - runtime/forcing cycle
+
     found = base.found
     if not isinstance(found, Found):
-        return [
-            index for index in base.linked.decisions if index not in assignments or index in changed
-        ]
-    reached = found.reach(base, changed, facts)
-    return [index for index in base.linked.decisions if index in changed or index in reached]
+        return None
+    return found.reach(base, assigned, facts).difference(assigned)
 
 
 def _stable(
     base: Snapshot, candidates: Mapping[int, object], touched: Collection[int]
 ) -> frozenset[int]:
     """The Decisions open in both ``base`` and the candidates that the change does not
-    touch (``_touched``)."""
+    touch (``_TrialSnapshot._touch``)."""
     excluded = frozenset(touched)
     return frozenset(
         index
@@ -462,35 +467,38 @@ class _TrialSnapshot(Snapshot):
     Every candidate, including retained assignments, is checked before publication,
     except a retained choice whose admission the change cannot reach (the first
     bullet), which keeps the admission the base recorded. A candidate's **own check**
-    (its domain and the requirements naming its value, on the stored value, with its
-    guard's reads) is true, refused or unresolved, and ``own`` gives it: true admits the
+    (its domain, on the stored value, with its guard's reads) is true, refused or
+    unresolved, and ``own`` gives it: true admits the
     candidate, so that it reads as its value; refused refuses the change; unresolved
-    (it reads a choice still open, or an input not supplied) keeps the candidate
-    **unchecked**: stored, and read unresolved. A candidate's own check is read whatever
-    its guard answers: where the guard is refused or waits, in the configuration with the
-    selector cases its guard holds under committed too (``assumed``), since what the check
-    reads in its own scope is under that guard as well. Which candidates are unchecked is given
-    to the trial (``unchecked``), since the configuration it would publish forces by
-    them: a change starts from none, and runs again with those its own checks found
-    unresolved until they are the same (``_changes``). The base contributes its model,
-    frozen facts and lock, its verdicts, and the values it forces, which the trial reads
-    for the Decisions it does not change and stable. A Decision the base does not force
-    reads as the configuration the trial would publish forces it (``successor``): found
-    once, and that configuration is the one published.
+    (it reads a choice still open, an input not supplied, or one that does not apply) keeps
+    the candidate **unchecked**: stored, and read unresolved. A candidate's own check is
+    read whatever its guard answers: where the guard is refused or waits, in the
+    configuration with the selector cases its guard holds under committed too
+    (``assumed``), since what the check reads in its own scope is under that guard as well.
+    Which candidates are unchecked is given to the trial (``unchecked``), since the
+    configuration it would publish forces by them: a change starts from none, and runs
+    again with those its own checks found unresolved until they are the same
+    (``_changes``). The base contributes its model, frozen facts and lock, its verdicts,
+    and the values it forces, which the trial reads for the Decisions it does not change
+    and stable. A Decision the base does not force reads as the configuration the trial
+    would publish forces it (``successor``): found once, and that configuration is the one
+    published.
 
     A trial may be over other values of the base's formals (``parameters``, as
     ``try_with_facts`` makes it): its facts are those, and the formals that differ from
     the base's are reached as a Decision is. Evaluations, admissions and verdicts that
     read one are left out (``changed_facts``, ``_reusable``, ``successor``), and every
-    open Decision whose verdict read one is touched (``_touched``). The base's forced
-    values may be of other facts, so a touched Decision reads as the successor forces
-    it; a stable one still as the base forces it, the two being equal.
+    open Decision whose verdict read one may move, and is touched where it does
+    (``_touch``). The base's forced values may be of other facts, so a touched Decision
+    reads as the successor forces it; a stable one still as the base forces it, the two
+    being equal.
 
-    What was evaluated is kept where the change cannot reach it. A change touches
-    what it adds, removes or replaces and the open Decisions whose forced values it
-    reaches (``_touched``); the other Decisions open in both are **stable**: each
-    reads the same in the trial, in the successor and in the base, because its
-    verdict read nothing the change touched.
+    What was evaluated is kept where the change does not touch it. A change touches
+    what it assigns (adds, removes or replaces, and the choices unchecked before or
+    after) and the open Decisions whose forced answer differs in the successor, which
+    it finds by forcing the successor first where it may move one (``_touch``); the
+    other Decisions open in both are **stable**: each reads the same in the trial, in
+    the successor and in the base, forced to the same value, refused alike or open alike.
 
     - A retained choice whose admission read no Decision the change touched, and
       only reused choices and stable Decisions (``_reusable``), is admitted
@@ -535,6 +543,7 @@ class _TrialSnapshot(Snapshot):
         "_own",
         "_assumed",
         "_read_assumed",
+        "_through",
     )
 
     _pending: dict[int, object]
@@ -548,6 +557,7 @@ class _TrialSnapshot(Snapshot):
     _own: dict[int, QueryResult[object]]
     _assumed: dict[frozenset[tuple[int, str]], _TrialSnapshot]
     _read_assumed: set[int]
+    _through: set[int]
 
     def __init__(
         self,
@@ -556,6 +566,8 @@ class _TrialSnapshot(Snapshot):
         parameters: Mapping[int, object] | None = None,
         *,
         unchecked: frozenset[int] = _NONE,
+        input_refused: frozenset[int] = _NONE,
+        publishes: bool = True,
     ) -> None:
         facts = _NONE if parameters is None else changed_facts(base, parameters)
         super().__init__(
@@ -565,9 +577,14 @@ class _TrialSnapshot(Snapshot):
             base.lock,
             base.forcing,
             unchecked=unchecked,
+            input_refused=input_refused,
         )
         candidates = MappingProxyType(dict(candidates))
-        touched = _touched(base, candidates, facts, unchecked)
+        object.__setattr__(self, "_base", base)
+        object.__setattr__(self, "_candidates", candidates)
+        object.__setattr__(self, "_changed", facts)
+        object.__setattr__(self, "_successor", None)
+        touched = self._touch(base, candidates, facts, publishes)
         stable = _stable(base, candidates, touched)
         reused = _reusable(base, candidates, touched, stable, facts)
         pending = {index: candidates[index] for index in reused}
@@ -584,17 +601,14 @@ class _TrialSnapshot(Snapshot):
             for index, read in reused.items()
         }
         inherit(self, base, [*held, *facts], replacing=admitted)
-        object.__setattr__(self, "_base", base)
-        object.__setattr__(self, "_successor", None)
         object.__setattr__(self, "_touches", touched)
         object.__setattr__(self, "_stable", stable)
-        object.__setattr__(self, "_changed", facts)
         object.__setattr__(self, "_own", {})
         object.__setattr__(self, "_assumed", {})
         object.__setattr__(self, "_read_assumed", set())
+        object.__setattr__(self, "_through", set())
         object.__setattr__(self, "assignments", MappingProxyType(pending))
         object.__setattr__(self, "_pending", pending)
-        object.__setattr__(self, "_candidates", candidates)
         object.__setattr__(self, "_published", False)
 
     def admit(self, node_index: int, value: object) -> None:
@@ -604,35 +618,97 @@ class _TrialSnapshot(Snapshot):
             raise RuntimeError("admission dependency order admitted a previously resolved decision")
         self._pending[node_index] = value
 
-    def successor(self) -> Snapshot:
-        """The configuration this trial would publish: every candidate committed."""
-        if self._successor is None:
-            from ._forcing import (  # noqa: PLC0415 - runtime/forcing cycle
-                Verdict,
-                carried,
-                inherited,
-            )
+    def _touch(
+        self,
+        base: Snapshot,
+        candidates: Mapping[int, object],
+        facts: frozenset[int],
+        publishes: bool,
+    ) -> list[int]:
+        """The Decisions this change touches: those it assigns (``_assigned``), and each
+        Decision open in both whose forced answer differs in the successor: forced to another
+        value, forced where it was open or open where it was forced, refused where it was
+        not, or refused with other findings (``_forcing.moved``). An evaluation reads an open
+        Decision as that answer, so one that read only Decisions untouched answers the same.
 
-            base = self._base
-            verdicts = inherited(base)
-            changed = self._changed
-            if changed:
-                # A verdict that read a formal with another value is found again.
-                verdicts = {
-                    index: verdict
-                    for index, verdict in verdicts.items()
-                    if not isinstance(verdict, Verdict) or changed.isdisjoint(verdict.facts)
-                }
-            successor = Snapshot(
-                self.model,
-                self.parameters,
-                self._candidates,
-                forcing=self.forcing,
-                verdicts=verdicts,
-                carried=carried(base),
-                unchecked=self.unchecked,
-            )
-            inherit(successor, base, [*self._touches, *changed])
+        Where the change may move a forced answer (``_reached``), the successor's forcing
+        runs first, to find which do: on the successor started, as before, from the base's
+        evaluations that read nothing the change may reach, seeded from the base's forced
+        values and kept only where that is a derivation of the plain rounds (``_forcing``).
+        The successor then keeps every evaluation of the base that read none of the touched
+        Decisions, with what its forcing evaluated, and holds the forced values found. The
+        rest of the reach is stable. Nothing is dropped from a verdict: each keeps every read
+        it records. Where none may move, the change touches what it assigns, and the successor
+        is forced when something asks. A trial that is never published (``assumed``: it reads
+        one candidate's own check) touches the whole reach instead, and forces its successor
+        only if it reads a Decision there. Where the base's forced Decisions were never found,
+        every Decision open in the base is touched; on a base that does not force, the reach."""
+        linked = base.linked
+        assigned = _assigned(base, candidates, self.unchecked)
+        reached = _reached(base, assigned, facts)
+        if reached is None:
+            return [
+                index
+                for index in linked.decisions
+                if index not in base.assignments or index in assigned
+            ]
+        if not reached or not base.forcing or not publishes:
+            return [index for index in linked.decisions if index in assigned or index in reached]
+        from ._forcing import forced, moved  # noqa: PLC0415 - runtime/forcing cycle
+
+        first = self._configuration()
+        inherit(first, base, [*assigned, *reached, *facts])
+        found = forced(first)
+        open_ = (
+            index
+            for index in linked.decisions
+            if index not in base.assignments and index not in candidates
+        )
+        touched = assigned | moved(linked, forced(base), found, open_)
+        successor = self._configuration()
+        inherit(successor, base, [*touched, *facts], replacing=fresh(first))
+        object.__setattr__(successor, "found", found)
+        object.__setattr__(self, "_successor", successor)
+        return [index for index in linked.decisions if index in touched]
+
+    def _configuration(self) -> Snapshot:
+        """The configuration this trial would publish, every candidate committed, with no
+        evaluation yet: it starts from its base's verdicts (but those that read a formal with
+        another value) and replays its base's forced values."""
+        from ._forcing import (  # noqa: PLC0415 - runtime/forcing cycle
+            Verdict,
+            carried,
+            inherited,
+        )
+
+        base = self._base
+        verdicts = inherited(base)
+        changed = self._changed
+        if changed:
+            # A verdict that read a formal with another value is found again.
+            verdicts = {
+                index: verdict
+                for index, verdict in verdicts.items()
+                if not isinstance(verdict, Verdict) or changed.isdisjoint(verdict.every_fact)
+            }
+        return Snapshot(
+            self.model,
+            self.parameters,
+            self._candidates,
+            forcing=self.forcing,
+            verdicts=verdicts,
+            carried=carried(base),
+            unchecked=self.unchecked,
+            input_refused=self.input_refused,
+        )
+
+    def successor(self) -> Snapshot:
+        """The configuration this trial would publish: every candidate committed. Where the
+        change found it first (``_touch``), that one; else started from its base's
+        evaluations that read nothing the change touches."""
+        if self._successor is None:
+            successor = self._configuration()
+            inherit(successor, self._base, [*self._touches, *self._changed])
             object.__setattr__(self, "_successor", successor)
         assert self._successor is not None
         return self._successor
@@ -683,9 +759,15 @@ class _TrialSnapshot(Snapshot):
     def own(self, index: int) -> QueryResult[object]:
         """The result of candidate ``index``'s own check in this trial, once it was read: true
         where it was admitted, the refusal where it was refused, unresolved where it cannot
-        conclude (``_candidate_frame``). A choice whose admission the trial reused was
-        admitted."""
+        conclude (``_candidate_frame``), and the input's refusal where it reads a refused
+        input (``through``). A choice whose admission the trial reused was admitted."""
         return self._own.get(index, Available(True))
+
+    def through(self) -> frozenset[int]:
+        """The candidates whose own check, read so far, reads an input that is itself
+        refused: none of them refuses the change; each is kept, refused through that input
+        (``Snapshot.input_refused``)."""
+        return frozenset(self._through)
 
     def assumed(self, node: Node) -> _TrialSnapshot | None:
         """The trial of this change with each selector case ``node``'s guard holds under
@@ -714,6 +796,8 @@ class _TrialSnapshot(Snapshot):
                 {**candidates, **committed},
                 self.parameters if self._changed else None,
                 unchecked=self.unchecked,
+                input_refused=self.input_refused,
+                publishes=False,
             )
             self._assumed[key] = trial
         return trial
@@ -806,43 +890,35 @@ def _guard_result(node: Node, answer: QueryResult[object]) -> NonValue | None:
 def _guard_assessment(node: Node, answer: NonValue) -> Assessment | None:
     if node.kind == "view":
         return assess_view(answer, owner=node.key, applicability=answer)
-    if node.kind == "constraint" or node.kind == "group":
+    if node.kind == "constraint":
         return ConstraintAssessment({node.key: answer}, answer)
+    if node.kind == "validity":
+        return ConstraintAssessment({}, answer)
     return None
 
 
-def _constraint_members(
-    snapshot: Snapshot, reference: int, answer: QueryResult[object]
-) -> Mapping[str, QueryResult[bool]]:
-    assessment = snapshot.cache[reference].assessment
-    if isinstance(assessment, ConstraintAssessment) and assessment.results:
-        return assessment.results
-    return {snapshot.linked.nodes[reference].key: cast(QueryResult[bool], answer)}
-
-
-def _obligation(
-    snapshot: Snapshot, reference: int, answer: QueryResult[object]
-) -> QueryResult[object]:
-    """An obliged view contributes only its acceptance."""
-    if snapshot.linked.nodes[reference].kind == "view" and isinstance(answer, Available):
-        return Available(True)
-    return answer
-
-
 def _present(node: Node, answers: list[QueryResult[object]]) -> QueryResult[object]:
-    """The single present source. A refused source refuses the answer. Otherwise, while
-    any source is unresolved the answer is unresolved too: a later commitment could
-    still make a second one present."""
+    """The single present source. Counting the sources is apart from choosing the value:
+    two known present ones (each answering a value) refuse at once, whatever else is
+    unknown. Otherwise a refused source refuses the answer, and while any source is
+    unresolved the answer is unresolved too: a later commitment could still make a second
+    one present."""
     active = [answer for answer in answers if not isinstance(answer, Inapplicable)]
-    blocked = _blocked([answer for answer in active if not isinstance(answer, Available)])
+    failures: list[QueryResult[object]] = [
+        answer for answer in active if not isinstance(answer, Available)
+    ]
+    known = len(active) - len(failures)
+    if known > 1:
+        failures.append(
+            reject(
+                "multiple-suppliers",
+                f"{known} sources are present; at most one may supply this value",
+                owner=node.owner,
+            )
+        )
+    blocked = _blocked(failures)
     if blocked is not None:
         return blocked
-    if len(active) > 1:
-        return reject(
-            "multiple-suppliers",
-            f"{len(active)} sources are present; at most one may supply this value",
-            owner=node.owner,
-        )
     if not active:
         return Unresolved(
             (
@@ -895,13 +971,19 @@ def _unchecked_answer(node: Node) -> Unresolved:
 
 
 def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
-    """A node's evaluation: inapplicable while its guard does not hold, else its kind's."""
+    """A node's evaluation: inapplicable while its guard does not hold, else its kind's.
+    A Space's validity under a guard that waits is still its pieces' AND: a placed Space
+    is not one piece, and each piece inside answers unknown under that guard (its own
+    frame reads the guard first, and the body is never evaluated), so a Space with no
+    pieces (only open choices and views) contributes nothing."""
     if isinstance(snapshot, _TrialSnapshot) and node.index in snapshot._candidates:
         return (yield from _candidate_frame(snapshot, node))
     if node.guard is not None:
         guard = cast(QueryResult[object], (yield node.guard))
         inactive = _guard_result(node, guard)
-        if inactive is not None:
+        if inactive is not None and not (
+            node.kind == "validity" and isinstance(inactive, Unresolved)
+        ):
             return Evaluation(inactive, assessment=_guard_assessment(node, inactive))
     return (yield from _FRAMES[node.kind](snapshot, node))
 
@@ -909,11 +991,12 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
 def _candidate_frame(snapshot: _TrialSnapshot, node: Node) -> _execution.Frame:
     """A trial candidate's evaluation, and its own check (``_TrialSnapshot.own``).
 
-    A choice's own check is its domain and the requirements naming its value, on the stored
-    value, read after its guard's reads. It is true, refused or unresolved, and the
-    configuration reads the choice as its value once it is true, and unresolved while it
-    cannot conclude (a candidate is read through its own check, never on its stored value,
-    so private admission keeps its protection). A guard is the configuration's, not the
+    A choice's own check is its domain, on the stored value, read after its guard's reads.
+    It is true, refused or unresolved, and the configuration reads the choice as its value
+    once it is true, and unresolved while it cannot conclude (a candidate is read through
+    its own check, never on its stored value, so private admission keeps its protection). A
+    constraint is no part of it: a constraint does not gate a commit, and the
+    configuration's validity reports it. A guard is the configuration's, not the
     choice's: a guard that waits leaves the choice waiting on it, and one that is refused is
     the configuration's refusal, which a change reports beside the choice's own check and
     never in its place. The own check is read whatever the guard answers, refused or
@@ -928,9 +1011,18 @@ def _candidate_frame(snapshot: _TrialSnapshot, node: Node) -> _execution.Frame:
     guard that waits, its own check false refuses it with its own finding (a commit is a
     check of the value against its domain where the choice exists, which a value that can
     never hold there fails at once), and true or unresolved keeps it unchecked, waiting on
-    its guard. An inapplicable guard refuses it."""
+    its guard. An inapplicable guard refuses it.
+
+    Only a domain that answers false for the value refuses it: a refusal elsewhere never
+    does, nor an input of the domain that does not apply (its own check waits on what
+    decides that the input applies, and the choice is kept unchecked). Where an input of
+    the domain is itself refused (a derived value refusing on its facts), whatever the
+    guard answers, the own check is that refusal and the choice is kept (``through``),
+    never read as a value: unresolved in this trial, and refused through the input in the
+    configuration published (``Snapshot.input_refused``)."""
     candidate = snapshot._candidates[node.index]
     inactive: NonValue | None = None
+    through = False
     if node.guard is not None:
         guard = cast(QueryResult[object], (yield node.guard))
         inactive = _guard_result(node, guard)
@@ -939,12 +1031,14 @@ def _candidate_frame(snapshot: _TrialSnapshot, node: Node) -> _execution.Frame:
         if assumed is not None:
             evaluate(assumed, node.index)
             own = assumed.own(node.index)
+            through = node.index in assumed._through
             snapshot._read_assumed.add(node.index)
         else:
-            checked = yield from _membership_frame(snapshot, node, candidate, check_guard=False)
-            own = checked.result
+            own, through = yield from _domain_check(snapshot, node, candidate)
         holds = isinstance(own, Available) and own.value is True
-        if isinstance(inactive, Unresolved):
+        if through:
+            pass  # kept, refused through its input
+        elif isinstance(inactive, Unresolved):
             if not isinstance(own, Rejected):
                 own = inactive
         elif inactive is not None and not holds and not isinstance(own, Unresolved):
@@ -954,6 +1048,9 @@ def _candidate_frame(snapshot: _TrialSnapshot, node: Node) -> _execution.Frame:
     else:
         own = inactive
     snapshot._own[node.index] = own
+    if through:
+        snapshot._through.add(node.index)
+        return Evaluation(_unchecked_answer(node))
     if isinstance(own, Available) and own.value is True:
         if node.index in snapshot.unchecked:
             return Evaluation(_unchecked_answer(node))
@@ -986,9 +1083,17 @@ def _const_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
 
 
 def _decision_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
-    yield from ()  # answers at once
+    """A Decision: its stored value, its forced value or refusal, or unassigned. A stored
+    choice whose own check reads a refused input (``Snapshot.input_refused``) reads, where
+    the configuration forces, refused through that input, with the input's findings."""
     if node.index in snapshot.assignments:
         if node.index in snapshot.unchecked:
+            if node.index in snapshot.input_refused and snapshot.forcing:
+                _, failure = yield from _arguments(
+                    snapshot.linked, node.domain_arguments, node.owner
+                )
+                if isinstance(failure, Rejected):
+                    return Evaluation(failure)
             return Evaluation(_unchecked_answer(node))
         return Evaluation(Available(snapshot.assignments[node.index]))
     found = _forced(snapshot, node.index)
@@ -1032,24 +1137,93 @@ def _select_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
 
 
 def _view_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
-    if node.output is None:
-        raise EvaluationError(node.owner, "view", "missing output reference")
+    """An active view (``_frame`` read its guard first: an inactive view never reads its
+    Space's validity): its output, then its Space's validity, combined by
+    ``assess_view``."""
+    if node.output is None or len(node.constraints) != 1:
+        raise EvaluationError(node.owner, "view", "missing output or validity reference")
     output = cast(QueryResult[object], (yield node.output))
-    constraints: dict[str, QueryResult[bool]] = {}
-    for reference in node.constraints:
-        answer = _obligation(snapshot, reference, cast(QueryResult[object], (yield reference)))
-        constraints.update(_constraint_members(snapshot, reference, answer))
-    view = assess_view(output, owner=node.key, constraints=constraints)
+    validity = cast(QueryResult[bool], (yield node.constraints[0]))
+    view = assess_view(
+        output,
+        owner=node.key,
+        validity=validity,
+        validity_owner=snapshot.linked.nodes[node.constraints[0]].key,
+        waiting=_waiting(snapshot, node.constraints[0]) if isinstance(validity, Rejected) else None,
+    )
     return Evaluation(view.accepted_result, assessment=view)
 
 
-def _group_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
+def _waiting(snapshot: Snapshot, index: int) -> dict[str, QueryResult[object]]:
+    """The pieces of the refused Space whose validity node is ``index`` that are still
+    unresolved, by key, its placed Spaces' with them: what readiness reports beside a
+    refusal, which hides them (false beats unknown)."""
+    nodes, found = snapshot.linked.nodes, {}
+    pending = [index]
+    while pending:
+        entry = snapshot.cache.get(pending.pop())
+        assessment = None if entry is None else entry.assessment
+        if not isinstance(assessment, ConstraintAssessment):
+            continue
+        for key, answer in assessment.results.items():
+            if isinstance(answer, Unresolved):
+                found[key] = cast(QueryResult[object], answer)
+            elif isinstance(answer, Rejected):
+                piece = snapshot.linked.keys[key]
+                if nodes[piece].kind == "validity":
+                    pending.append(piece)
+    return found
+
+
+def _stored(snapshot: Snapshot, index: int) -> bool:
+    """Whether a Decision holds a stored choice here (a trial's candidates are stored)."""
+    if isinstance(snapshot, _TrialSnapshot):
+        return index in snapshot._candidates
+    return index in snapshot.assignments
+
+
+def _piece(snapshot: Snapshot, piece: Node, answer: QueryResult[object]) -> QueryResult[bool]:
+    """A validity piece's answer as a check. A constraint and a placed Space's validity
+    answer as themselves. A Decision is its stored choice's own check: true once the
+    choice reads as its value, unresolved while unchecked, refused through a refused
+    guard or a refused input of its domain. An open Decision is a piece only where it
+    has no possible case (forcing refuses it, ``decision-no-viable-case``); otherwise,
+    forced or still to choose, it counts as true.
+
+    On forcing's copies (which do not force) an open Decision reads unassigned and a
+    stored one as its value or unresolved, so a Decision's piece is false there only
+    through its guard: a selector's verdict, which rests on its candidate's validity,
+    reads the guards and not the Decisions (``_forcing._refusal_roots``). That is checked
+    here, so a change that breaks it fails loudly."""
+    if piece.kind != "decision":
+        return cast(QueryResult[bool], answer)
+    if isinstance(answer, Available):
+        return Available(True)
+    if isinstance(answer, Rejected) and not snapshot.forcing:
+        guard = None if piece.guard is None else snapshot.cache.get(piece.guard)
+        if guard is None or not isinstance(guard.result, Rejected):
+            raise EvaluationError(
+                piece.owner,
+                "validity",
+                "a Decision's piece is refused on a copy that does not force, its guard not",
+            )
+    if _stored(snapshot, piece.index) or isinstance(answer, Rejected):
+        return cast(QueryResult[bool], answer)
+    return Available(True)
+
+
+def _validity_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
+    """A present Space's validity: Kleene's AND of its pieces (``Node.constraints``):
+    refused when one is false, else unresolved when one is unknown, else true. An
+    inactive piece (a constraint whose guard does not hold, a placed Space that is
+    absent) counts as true. The assessment holds each piece's answer, by key."""
+    nodes = snapshot.linked.nodes
     answers: dict[str, QueryResult[bool]] = {}
-    for reference in node.constraints:
-        answer = cast(QueryResult[object], (yield reference))
-        answers.update(_constraint_members(snapshot, reference, answer))
-    group = assess_constraints(answers)
-    return Evaluation(cast(QueryResult[object], group.result), assessment=group)
+    for index in node.constraints:
+        answer = cast(QueryResult[object], (yield index))
+        answers[nodes[index].key] = _piece(snapshot, nodes[index], answer)
+    assessment = assess_constraints(answers)
+    return Evaluation(cast(QueryResult[object], assessment.result), assessment=assessment)
 
 
 def _callback_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
@@ -1097,7 +1271,7 @@ _FRAMES: Mapping[NodeKind, Callable[[Snapshot, Node], _execution.Frame]] = {
     "guard": _forward_frame,
     "select": _select_frame,
     "view": _view_frame,
-    "group": _group_frame,
+    "validity": _validity_frame,
     "derived": _callback_frame,
     "constraint": _callback_frame,
 }
@@ -1124,9 +1298,28 @@ def _membership_frame(
         inactive = _guard_result(node, guard)
         if inactive is not None:
             return Evaluation(inactive)
+    result, _ = yield from _domain_check(snapshot, node, value)
+    return Evaluation(result)
+
+
+def _domain_check(
+    snapshot: Snapshot, node: Node, value: object
+) -> Generator[int | _execution.Call, object, tuple[QueryResult[object], bool]]:
+    """Whether a Decision's domain admits ``value``, and whether an input of the domain is
+    itself refused on its own (then the answer is that refusal, not the domain's): refused
+    by a derived value's or a view's body, and through no Decision that reads refused (a
+    choice its own check refuses, one with no possible case, one under a refused guard),
+    whose refusal is that choice's, answered as before. While an input does not apply (its
+    guard false) the check cannot conclude: unresolved, waiting on what decides that the
+    input applies (``absence_reads``)."""
     arguments, failure = yield from _arguments(snapshot.linked, node.domain_arguments, node.owner)
+    if isinstance(failure, Inapplicable):
+        return _inapplicable_input(snapshot, node), False
     if failure is not None:
-        return Evaluation(failure)
+        through = isinstance(failure, Rejected) and not _through_a_choice(
+            snapshot, node.domain_arguments
+        )
+        return failure, through
     if node.domain is None or node.semantics is None:
         raise EvaluationError(node.owner, "domain membership", "reference has no domain")
     candidate = _clone(node, value, owner=node.owner, role="domain candidate snapshot")
@@ -1139,9 +1332,87 @@ def _membership_frame(
     if isinstance(called, _execution._Halt):
         blocked = _blocked(list(called.results))
         assert blocked is not None
-        return Evaluation(blocked)
+        return blocked, False
     assert isinstance(called, _execution._Returned)
-    return Evaluation(cast(QueryResult[object], called.value))
+    return cast(QueryResult[object], called.value), False
+
+
+def _inapplicable_input(snapshot: Snapshot, node: Node) -> Unresolved:
+    """What a domain check answers while an input of the domain does not apply (its guard
+    false): unresolved, waiting on what decides that the input applies (``absence_reads``),
+    which a change may turn; each finding names the input it is about."""
+    nodes = snapshot.linked.nodes
+    found: dict[tuple[str, str], Finding] = {}
+    for argument in node.domain_arguments:
+        entry = snapshot.cache.get(argument.node)
+        if entry is None or not isinstance(entry.result, Inapplicable):
+            continue
+        source = nodes[argument.node].owner
+        for index in absence_reads(snapshot, argument.node) or (argument.node,):
+            owner = nodes[index].owner
+            found.setdefault(
+                (owner, source),
+                Finding(
+                    FindingKind.BLOCKER,
+                    "input-inapplicable",
+                    owner,
+                    "an input of the domain does not apply while this reads as it does",
+                    details=(("input", source),),
+                ),
+            )
+    return Unresolved(tuple(found[key] for key in sorted(found)))
+
+
+def absence_reads(snapshot: Snapshot, index: int) -> frozenset[int]:
+    """What decides that the node ``index``, read inapplicable in ``snapshot``, does not
+    apply: the Decisions and formals read by the guard that answers false, or the selector
+    whose case leaves the node out (a case scope's guard, or a member read through it),
+    found through what its evaluation read: an outer guard false makes the inner ones
+    inapplicable too, so the guard found is the outermost one that answers false. Empty
+    where the cache holds none of it."""
+    nodes, cache = snapshot.linked.nodes, snapshot.cache
+    found: set[int] = set()
+    seen: set[int] = set()
+    pending = [index]
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        entry = cache.get(current)
+        if entry is None:
+            continue
+        node = nodes[current]
+        if not isinstance(entry.result, Inapplicable):
+            continue
+        guard = cache.get(node.guard) if node.guard is not None else None
+        if guard is not None and isinstance(guard.result, Available):
+            if guard.result.value is False:
+                found.update(guard.decisions | guard.facts)
+                continue
+        if node.kind == "select" and node.selector is not None:
+            selector = cache.get(node.selector)
+            if selector is not None and isinstance(selector.result, Available):
+                found.add(node.selector)
+                continue
+        pending.extend(entry.dependencies)
+    return frozenset(found)
+
+
+def _through_a_choice(snapshot: Snapshot, arguments: tuple[Argument, ...]) -> bool:
+    """Whether a refused one of ``arguments`` (just read in ``snapshot``) is, or read, a
+    Decision that reads refused."""
+    nodes, cache = snapshot.linked.nodes, snapshot.cache
+    for argument in arguments:
+        entry = cache.get(argument.node)
+        if entry is None or not isinstance(entry.result, Rejected):
+            continue
+        own = (argument.node,) if nodes[argument.node].kind == "decision" else ()
+        for index in (*own, *entry.decisions):
+            read = cache.get(index)
+            if read is not None and isinstance(read.result, Rejected):
+                return True
+    return False
 
 
 def _enumeration_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
@@ -1177,23 +1448,26 @@ def _applicability(snapshot: Snapshot, node: Node) -> NonValue | None:
 
 
 def decision_state(snapshot: Snapshot, node_index: int) -> QueryResult[DecisionState[object]]:
+    """A Decision's state: the commitment, not the answer. Every kept commitment is
+    ``committed`` with its stored value, whatever a read of it answers: its value once
+    checked, unresolved while unchecked, refused through a refused guard or through a
+    refused input of its domain. An open Decision is unassigned where its guard holds,
+    and answers as its guard otherwise."""
     with snapshot.lock:
         node = snapshot.linked.nodes[node_index]
         if node.kind != "decision":
             raise EvaluationError(
                 node.owner, "decision state", "reference is not an owning decision"
             )
+        if node_index in snapshot.assignments:
+            value = _clone(
+                node, snapshot.assignments[node_index], owner=node.owner, role="decision state"
+            )
+            return Available(DecisionState(node.owner, "committed", value))
         inactive = _applicability(snapshot, node)
         if inactive is not None:
             return inactive
-        if node_index not in snapshot.assignments:
-            return Available(DecisionState(node.owner))
-        if node_index in snapshot.unchecked:
-            return _unchecked_answer(node)
-        value = _clone(
-            node, snapshot.assignments[node_index], owner=node.owner, role="decision state"
-        )
-        return Available(DecisionState(node.owner, "committed", value))
+        return Available(DecisionState(node.owner))
 
 
 def enumeration(snapshot: Snapshot, node_index: int) -> Evaluation:
@@ -1213,9 +1487,57 @@ def candidate_values(snapshot: Snapshot, node_index: int) -> QueryResult[tuple[o
     return cast(QueryResult[tuple[object, ...]], result)
 
 
+def _listed_frame(
+    snapshot: Snapshot, node: Node, candidates: tuple[object, ...]
+) -> _execution.Frame:
+    arguments, failure = yield from _arguments(snapshot.linked, node.domain_arguments, node.owner)
+    if failure is not None:
+        return Evaluation(failure)
+    assert node.domain is not None and node.semantics is not None
+    called = yield _execution.Call(
+        _listed_members,
+        (node.domain, candidates, arguments),
+        {"semantics": node.semantics, "owner": node.owner},
+        "domain membership",
+    )
+    if isinstance(called, _execution._Halt):
+        blocked = _blocked(list(called.results))
+        assert blocked is not None
+        return Evaluation(blocked)
+    assert isinstance(called, _execution._Returned)
+    return Evaluation(Available(called.value))
+
+
+def _listed_members(
+    domain: Domain[object],
+    candidates: tuple[object, ...],
+    arguments: Mapping[str, object],
+    *,
+    semantics: ValueSemantics[object],
+    owner: str,
+) -> tuple[QueryResult[bool], ...]:
+    """Membership of each of a domain's listed values, in one call."""
+    return tuple(
+        domain.membership(candidate, arguments, semantics=semantics, owner=owner)
+        for candidate in candidates
+    )
+
+
+def listed_members(
+    snapshot: Snapshot, node_index: int, candidates: tuple[object, ...]
+) -> Evaluation:
+    """Whether a Decision's domain admits each of its listed values ``candidates`` here
+    (``Available``: one ``QueryResult[bool]`` each), with what membership read."""
+    with snapshot.lock:
+        node = snapshot.linked.nodes[node_index]
+        if node.domain is None or node.semantics is None:
+            raise EvaluationError(node.owner, "domain membership", "reference has no domain")
+        return _execution.run(snapshot, node_index, _listed_frame(snapshot, node, candidates))
+
+
 def membership(snapshot: Snapshot, node_index: int, value: object) -> Evaluation:
-    """Whether a Decision's domain admits ``value`` here (its requirements too), with
-    the refusal's finding and what membership read."""
+    """Whether a Decision's domain admits ``value`` here, with the refusal's finding and
+    what membership read."""
     with snapshot.lock:
         node = snapshot.linked.nodes[node_index]
         frame = _membership_frame(snapshot, node, value, check_guard=False)
@@ -1231,24 +1553,19 @@ def copy_result(
         return answer
     with snapshot.lock:
         node = snapshot.linked.nodes[node_index]
-        if node.kind == "group" and type(answer.value) is bool:
+        if node.kind == "validity" and type(answer.value) is bool:
             # Aggregate verdicts are intrinsic immutable booleans; these
             # declarations need no separate user-owned value semantics.
             return answer
         return Available(_clone(node, answer.value, owner=node.owner, role="public value snapshot"))
 
 
-def _copy_readiness(
-    snapshot: Snapshot, assessment: ReadinessAssessment, own: str
-) -> ReadinessAssessment:
-    def copy(key: str, answer: QueryResult[object]) -> QueryResult[object]:
-        index = snapshot.linked.keys[key]
-        if key != own and snapshot.linked.nodes[index].kind == "view":
-            return answer  # an obliged view contributes only its Boolean acceptance
-        return copy_result(snapshot, index, answer)
-
+def _copy_readiness(snapshot: Snapshot, assessment: ReadinessAssessment) -> ReadinessAssessment:
     return ReadinessAssessment(
-        {key: copy(key, answer) for key, answer in assessment.results.items()},
+        {
+            key: copy_result(snapshot, snapshot.linked.keys[key], answer)
+            for key, answer in assessment.results.items()
+        },
         assessment.result,
     )
 
@@ -1271,8 +1588,8 @@ def copy_assessment(snapshot: Snapshot, node_index: int, assessment: Assessment)
         )
         return ViewAssessment(
             output,
-            _copy_readiness(snapshot, assessment.readiness, node.key),
-            assessment.constraints,
+            _copy_readiness(snapshot, assessment.readiness),
+            assessment.validity,
             accepted,
         )
 
@@ -1291,6 +1608,7 @@ __all__ = [
     "evaluate",
     "fresh",
     "inherit",
+    "listed_members",
     "membership",
     "new_cache",
     "reads",

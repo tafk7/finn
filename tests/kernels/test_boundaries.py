@@ -103,8 +103,8 @@ for memory in ("none", "memstream"):
             tensor=x_tensor, port="in0_V", consumer=Interface("matmul", "x_end"), platform=PLATFORM
         ),
         "w": wire(
-            tensor=Fact("matmul", "w_carried"),
-            contents=Fact("matmul", "w_stored"),
+            tensor=Fact("matmul", "carried_weights"),
+            contents=Fact("matmul", "stored_weights"),
             port="in1_V",
             consumer=Interface("matmul", "w_end"),
             platform=PLATFORM,

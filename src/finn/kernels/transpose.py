@@ -13,7 +13,6 @@ through the common lane count instead.
 from __future__ import annotations
 
 from finn.core.space import (
-    ConstraintGroup,
     Decision,
     Param,
     Rejected,
@@ -21,7 +20,6 @@ from finn.core.space import (
     derived,
     divisors_of,
     reject,
-    requiring,
 )
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import Tensor
@@ -35,7 +33,7 @@ from finn.kernels.utilization import (
     auto_unstated,
     memory,
     memory_styles,
-    uram_requirements,
+    uram_constraint,
 )
 from finn.platform.capabilities import Fabric, Platform, Resources
 
@@ -87,10 +85,11 @@ class TransposeKernel(LeafKernel):
 
     The pages' ``ram_style`` is its choice: the explicit styles, ordered by the bits both
     pages hold (``pages_bits``), then ``auto``, which states no resources
-    (``finn.kernels.utilization.memory_styles``); ``ultra`` requires the ``platform``'s
-    UltraRAM (the pages start empty, so no initial contents are asked of it).
-    Admission is the RTL's own limit: it counts its banks' two pages, ``2 I J``
-    elements, in 32 bits. A port reading fewer than two axes refuses itself.
+    (``finn.kernels.utilization.memory_styles``); ``ultra`` needs the ``platform``'s
+    UltraRAM, a constraint of the kernel (``uram-absent``; the pages start empty, so no
+    initial contents are asked of it). The RTL's own limit is a constraint too: it counts
+    its banks' two pages, ``2 I J`` elements, in 32 bits. A port reading fewer than two
+    axes refuses itself.
     """
 
     id = "finnlib.inner_shuffle"
@@ -115,9 +114,8 @@ class TransposeKernel(LeafKernel):
         """The bits both pages hold: ``2 I J`` elements."""
         return 2 * self.rows * self.cols * self.input_tensor.element.bits
 
-    ram_style: str = Decision(
-        domain=requiring(memory_styles(pages_bits), *uram_requirements(platform, ("ultra",)))
-    )
+    ram_style: str = Decision(domain=memory_styles(pages_bits))
+    uram_present = uram_constraint(platform, ram_style, ("ultra",))
 
     simd: int = Decision(domain=divisors_of(rows))
 
@@ -127,8 +125,6 @@ class TransposeKernel(LeafKernel):
         if 2 * self.rows * self.cols > 0xFFFFFFFF:
             return reject("transpose-depth", "two pages of I x J elements overflow 32 bits")
         return True
-
-    admission = ConstraintGroup(pages_supported)
 
     @derived
     def indices(self) -> tuple[Index, ...]:

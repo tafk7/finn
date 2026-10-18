@@ -17,7 +17,6 @@ from ._runtime import Snapshot
 from .compiler import Model
 from .declarations import (
     Constraint,
-    ConstraintGroup,
     Declaration,
     Param,
     ValueRef,
@@ -290,18 +289,18 @@ def inspect(point: Space, reference: View[T]) -> ViewAssessment[T]: ...
 
 
 @overload
-def inspect(point: Space, reference: Constraint | ConstraintGroup) -> ConstraintAssessment: ...
+def inspect(point: Space, reference: Constraint) -> ConstraintAssessment: ...
 
 
 def inspect(
     point: Space,
-    reference: View[T] | Constraint | ConstraintGroup,
+    reference: View[T] | Constraint,
 ) -> ViewAssessment[T] | ConstraintAssessment:
     _execution.driver_only("assessment inspection")
     current = state(point)
     index = current.model.resolve(point._scope, reference)
     node = current.linked.nodes[index]
-    if node.kind not in {"view", "constraint", "group"}:
+    if node.kind not in {"view", "constraint"}:
         raise RequestError(
             f"{node.key} is not a view or a constraint: inspect() assesses those; "
             "read or query() any other member"

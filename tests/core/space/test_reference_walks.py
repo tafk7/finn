@@ -87,41 +87,40 @@ def test_a_walk_is_the_same_for_the_same_seed() -> None:
 
 
 def test_a_kind_no_row_names_fails_the_walk_with_its_seed_step_and_description() -> None:
-    # Seed 1's description has a choice whose computed list is empty from the start.
-    assert walk(1, 3).failure is None
-    failure = walk(1, 3, kinds=expected_kinds() - {"empty-list"}).failure
+    # Seed 28's third step (the fact f0 set to 1) leaves two forced choices excluding each
+    # other: the model refuses c1 in a conflict, the engine forces it.
+    assert walk(28, 3).failure is None
+    failure = walk(28, 3, kinds=expected_kinds() - {"conflict"}).failure
     assert failure is not None
-    assert failure.startswith("seed 1, index path, step 0: a disagreement no row names")
-    assert "empty-list" in failure and "description:" in failure and "| engine" in failure
+    assert failure.startswith("seed 28, index path, step 2: a disagreement no row names")
+    assert "conflict" in failure and "description:" in failure and "| engine" in failure
 
 
 def test_a_case_trial_reading_a_kept_choice_is_told_and_fails_unexplained() -> None:
-    # Seed 7's third step: a choice of one of three cases committed under the open selector,
+    # Seed 7's first step: a choice of one of three cases committed under the open selector,
     # kept unchecked, that a rule of its case refuses. Its row explains it; without the row's
     # kind the walk fails there.
-    explained = walk(7, 3)
+    explained = walk(7, 1)
     assert explained.failure is None
     assert explained.kinds["trial-reads-unchecked"]
-    failure = walk(7, 3, kinds=expected_kinds() - {"trial-reads-unchecked"}).failure
+    failure = walk(7, 1, kinds=expected_kinds() - {"trial-reads-unchecked"}).failure
     assert failure is not None
-    assert failure.startswith("seed 7, index path, step 3: a disagreement no row names")
+    assert failure.startswith("seed 7, index path, step 1: a disagreement no row names")
     assert "trial-reads-unchecked" in failure and "the state of s" in failure
 
 
 def test_a_case_trial_reading_a_kept_choice_through_a_root_rule_is_told_as_the_same_kind() -> None:
     # Seed 12's eleventh step: a choice of one of three cases committed under the open
     # selector, kept unchecked, that a rule of the root refuses. The case's trial reads it as
-    # its value through that rule as through one of the case's own: the same row's kind, told
-    # ahead of the selector's case trial; without either kind the walk fails there.
+    # its value through that rule as through one of the case's own: the same row's kind;
+    # without it the walk fails there.
     explained = walk(12, 11)
     assert explained.failure is None
     assert explained.kinds["trial-reads-unchecked"]
-    failure = walk(
-        12, 11, kinds=expected_kinds() - {"trial-reads-unchecked", "selector-case-trial"}
-    ).failure
+    failure = walk(12, 11, kinds=expected_kinds() - {"trial-reads-unchecked"}).failure
     assert failure is not None
     assert failure.startswith("seed 12, index path, step 11: a disagreement no row names")
-    assert "trial-reads-unchecked, selector-case-trial" in failure
+    assert "trial-reads-unchecked" in failure
     assert "the state of s" in failure
 
 
@@ -157,7 +156,7 @@ def test_a_root_rule_refusing_a_kept_choice_of_a_case_is_told_as_a_trial_reading
     assert context.found["trial-reads-unchecked"] == {"core"}
     engine = StateForm("open", possible=("plain", "other", "wide"))
     kinds = classify([context], ("state", "core"), state_form(solution, "core"), engine)
-    assert kinds[:2] == ("trial-reads-unchecked", "selector-case-trial")
+    assert kinds == ("trial-reads-unchecked",)
 
 
 def test_a_value_case_making_a_kept_choice_present_is_told_as_a_trial_reading_it() -> None:
@@ -191,7 +190,7 @@ def test_a_value_case_making_a_kept_choice_present_is_told_as_a_trial_reading_it
     assert context.found["trial-reads-unchecked"] == {"n"}
     engine = StateForm("open", possible=(1, 2, 3))
     kinds = classify([context], ("state", "n"), state_form(solution, "n"), engine)
-    assert kinds[:2] == ("trial-reads-unchecked", "value-case-trial")
+    assert kinds == ("trial-reads-unchecked",)
 
 
 def test_an_open_choice_on_an_inner_selectors_other_case_under_a_refused_outer_is_told() -> None:
@@ -315,8 +314,8 @@ def test_a_walk_tells_only_kinds_a_row_names() -> None:
 
 
 def test_the_summary_names_the_kinds_no_walk_met() -> None:
-    tallies = [walk(1, 3)]
-    assert "empty-list" not in unmet(tallies)
+    tallies = [walk(28, 3)]
+    assert "conflict" not in unmet(tallies)
     assert "kinds a row names that no walk met: " + ", ".join(unmet(tallies)) in table(tallies)
 
 

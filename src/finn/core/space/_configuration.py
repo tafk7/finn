@@ -31,7 +31,6 @@ from typing import (
 
 from .declarations import (
     Constraint,
-    ConstraintGroup,
     Decision,
     Declaration,
     ValueRef,
@@ -203,8 +202,8 @@ class Space(metaclass=SpaceMeta):
     when: _When = _when_field(default=None, kw_only=True)
     _state: ClassVar[object]
     _scope: ClassVar[int]
-    # A key maps to one view.
-    exports: ClassVar[Mapping[ViewKey[object], Declaration]] = MappingProxyType({})
+    # A key maps to one view or derived value (a derived value is typed as its value).
+    exports: ClassVar[Mapping[ViewKey[Any], object]] = MappingProxyType({})
 
     def __set_name__(self, owner: type[object], name: str) -> None:
         path = declared_path(self)
@@ -311,7 +310,7 @@ class Space(metaclass=SpaceMeta):
 
     @overload
     def inspect(  # type: ignore[overload-overlap]
-        self, view: Constraint | ConstraintGroup
+        self, view: Constraint
     ) -> ConstraintAssessment: ...
 
     @overload
@@ -321,7 +320,7 @@ class Space(metaclass=SpaceMeta):
         """The assessment of a view or a constraint of this configuration.
 
         ``point.inspect(House.total)`` is the view's ``ViewAssessment``: its raw
-        output, readiness, obligation results and accepted result. A view of a
+        output, its Space's validity, readiness and accepted result. A view of a
         child is inspected on the child's configuration,
         ``point.kitchen.inspect(Room.cost)`` (typed by the view declaration),
         or through a path, ``point.inspect(House.kitchen.cost)`` (a reference
@@ -329,7 +328,7 @@ class Space(metaclass=SpaceMeta):
         """
         from .occurrence import inspect
 
-        return inspect(self, cast("View[Any] | Constraint | ConstraintGroup", view))
+        return inspect(self, cast("View[Any] | Constraint", view))
 
     @overload
     def field(self, reference: Decision[T] | DecisionHandle[T]) -> BoundDecision[T]: ...

@@ -19,7 +19,6 @@ from ._forcing import Forced, Open, Viable
 from .compiler import Model, compile_model
 from .declarations import (
     Constraint,
-    ConstraintGroup,
     Decision,
     ValueRef,
     View,
@@ -33,7 +32,10 @@ from .results import (
     Available,
     ConstraintAssessment,
     DecisionState,
+    Inapplicable,
     QueryResult,
+    Rejected,
+    Unresolved,
     ViewAssessment,
 )
 
@@ -288,7 +290,7 @@ def value_handle(
 @overload
 def value_handle(
     subject: Space | Model[S] | type[Space],
-    reference: Constraint | ConstraintGroup,
+    reference: Constraint,
 ) -> ValueHandle[bool]: ...
 
 
@@ -386,17 +388,81 @@ class _Copies:
         return copied
 
 
-def admission(candidate: Space) -> QueryResult[object] | None:
-    """A candidate's own refusal of its configuration: its ``admission`` member, if any.
+@dataclass(frozen=True, slots=True)
+class Piece:
+    """One piece of a Space's validity that is not true: its owner (the key of a
+    constraint, of a stored choice, or of an open Decision with no possible case; or the
+    name of a placed Space whose presence waits or is refused) and its answer:
+    ``Rejected`` (false, its findings the reasons) or ``Unresolved`` (unknown, its
+    findings what it waits on)."""
 
-    A group refuses as soon as one of its constraints does, even while another
-    still waits on an open choice: a core that cannot target the DSP is refused
-    before its folding factors are chosen.
-    """
-    _execution.driver_only("admission")
-    current = state(candidate)
-    scope = candidate._scope
-    return _answered(current, "admission", scope, lambda _: _forcing.admitted(current, scope)[0])
+    owner: str
+    result: Rejected | Unresolved
+
+
+@dataclass(frozen=True, slots=True)
+class Validity:
+    """A Space's validity: ``"valid"`` when every piece that counts is true, ``"refused"``
+    when one is false, ``"undecided"`` otherwise (Kleene's AND: false beats unknown,
+    unknown beats true). ``pieces`` are the false pieces of a refused Space, or the
+    unknown pieces of an undecided one, in key order, each from the Space or the placed
+    Space that owns it; ``result`` is the answer they combine to (``Available(True)``,
+    ``Rejected``, ``Unresolved``; ``Inapplicable`` for a Space that is absent, a
+    candidate not selected, which counts as valid)."""
+
+    status: Literal["valid", "refused", "undecided"]
+    pieces: tuple[Piece, ...]
+    result: QueryResult[bool]
+
+
+def _pieces(current: _runtime.Snapshot, index: int, wanted: type[object]) -> list[Piece]:
+    """The pieces of the validity node ``index`` (evaluated) whose answer is a ``wanted``,
+    a placed Space's own pieces in place of its validity."""
+    linked = current.linked
+    found: list[Piece] = []
+    entry = _runtime.evaluate(current, index)
+    assessment = entry.assessment
+    if not isinstance(assessment, ConstraintAssessment) or not assessment.results:
+        # The Space's presence waits or is refused: its guard's answer stands for it.
+        if isinstance(entry.result, (Rejected, Unresolved)) and isinstance(entry.result, wanted):
+            name = linked.scopes[linked.nodes[index].scope].name
+            found.append(Piece(name, entry.result))
+        return found
+    for key, answer in assessment.results.items():
+        piece = linked.keys[key]
+        if linked.nodes[piece].kind == "validity":
+            found.extend(_pieces(current, piece, wanted))
+        elif isinstance(answer, (Rejected, Unresolved)) and isinstance(answer, wanted):
+            found.append(Piece(key, answer))
+    return found
+
+
+def validity(point: Space) -> Validity:
+    """The validity of this configuration's Space (its root's is the configuration's):
+    every constraint of the Space and of each placed Space that is present (each unknown
+    while its presence waits), every stored choice's own check (an unchecked one is unknown;
+    one whose domain reads a refused input is false, refused through that input), and every
+    open Decision with no possible case (``decision-no-viable-case``, an empty list too). A
+    candidate that is not selected contributes nothing. Valid, refused naming the false
+    pieces, or undecided naming the unknown pieces and what each waits on (``Validity``)."""
+    _execution.driver_only("validity")
+    current = state(point)
+    scope = point._scope
+
+    def compute(_: _Copies) -> Validity:
+        result, index = _forcing.validity(current, scope)
+        answer = cast(QueryResult[bool], result)
+        if isinstance(answer, Rejected):
+            return Validity("refused", _ordered(_pieces(current, index, Rejected)), answer)
+        if isinstance(answer, Unresolved):
+            return Validity("undecided", _ordered(_pieces(current, index, Unresolved)), answer)
+        return Validity("valid", (), answer)
+
+    return _answered(current, "validity", scope, compute)
+
+
+def _ordered(pieces: list[Piece]) -> tuple[Piece, ...]:
+    return tuple(sorted(pieces, key=lambda piece: piece.owner))
 
 
 def forced(point: Space) -> tuple[Forced, ...]:
@@ -456,7 +522,9 @@ def viable(point: Space) -> tuple[Viable, ...]:
 class Unchecked:
     """A stored choice whose own check cannot conclude yet, for inspection: its key, the
     value stored, and what it waits on: the keys of the choices still open (or unchecked
-    themselves) and of the inputs not supplied that its check, and its guard, read. A read
+    themselves) and of the inputs not supplied that its check, and its guard, read, and,
+    for an input of its domain that does not apply, of what decides that it applies (the
+    choices and inputs its guard reads, or the selector whose case leaves it out). A read
     of the choice answers unresolved until a change makes its check succeed; a change then
     checks it again, and refuses it if the check fails."""
 
@@ -469,7 +537,8 @@ def unchecked(point: Space) -> tuple[Unchecked, ...]:
     """The choices below this scope that are stored and unchecked (see ``Unchecked``), by
     key. A configuration that holds one is not complete: a choice kept unchecked is a
     commitment with pending evidence, not an accepted value, and what generates hardware
-    from a configuration is to refuse it."""
+    from a configuration is to refuse it. A choice kept whose domain reads a refused input
+    is not listed: no commitment settles it, and it reads refused through that input."""
     _execution.driver_only("unchecked inspection")
     current = state(point)
     linked = current.linked
@@ -477,23 +546,28 @@ def unchecked(point: Space) -> tuple[Unchecked, ...]:
 
     def blockers(index: int) -> tuple[str, ...]:
         node = linked.nodes[index]
-        entries = [_runtime.membership(current, index, current.assignments[index])]
+        membership = _runtime.membership(current, index, current.assignments[index])
+        entries = [membership]
         if node.guard is not None:
             entries.append(_runtime.evaluate(current, node.guard))
         read = {item for entry in entries for item in (*entry.decisions, *entry.facts)}
-        return tuple(
-            sorted(
-                linked.nodes[item].key
-                for item in read
-                if not isinstance(_runtime.evaluate(current, item).result, Available)
-            )
-        )
+        waits = {
+            item
+            for item in read
+            if not isinstance(_runtime.evaluate(current, item).result, Available)
+        }
+        # An input of the domain that does not apply: the check waits on what decides
+        # that it applies (its guard's reads, or the selector leaving it out), known or not.
+        for argument in node.domain_arguments:
+            if isinstance(_runtime.evaluate(current, argument.node).result, Inapplicable):
+                waits.update(_runtime.absence_reads(current, argument.node) or (argument.node,))
+        return tuple(sorted(linked.nodes[item].key for item in waits))
 
     def compute(copy: _Copies) -> tuple[Unchecked, ...]:
         return tuple(
             Unchecked(decision_key(linked, index), copy(index, current.assignments[index]), found)
             for index in sorted(current.unchecked, key=lambda item: linked.nodes[item].key)
-            if linked.nodes[index].scope in included
+            if linked.nodes[index].scope in included and index not in current.input_refused
             for found in (blockers(index),)
         )
 
@@ -535,7 +609,7 @@ def explain(point: Space, reference: ValueRef[T] | View[T]) -> QueryEvidence[T]:
 @overload
 def explain(
     point: Space,
-    reference: Constraint | ConstraintGroup,
+    reference: Constraint,
 ) -> QueryEvidence[bool]: ...
 
 
@@ -618,10 +692,11 @@ __all__ = [
     "NodeInfo",
     "ModelStatistics",
     "Open",
+    "Piece",
     "QueryEvidence",
     "Unchecked",
+    "Validity",
     "Viable",
-    "admission",
     "candidate",
     "choices",
     "decision_handle",
@@ -633,6 +708,7 @@ __all__ = [
     "open",
     "statistics",
     "unchecked",
+    "validity",
     "value_handle",
     "viable",
 ]

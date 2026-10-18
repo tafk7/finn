@@ -6,13 +6,13 @@ its KernelOps (``finn.custom_op.kernels.network``) with the ends the row of the 
 target's shell offers (``finn.platform.shells.shell_row``) on its boundary channels, and
 the shell as functions over it, over its module and its channels' end contracts.
 
-- **admission** (``admission_refusal``, by the row's ``finn.platform.shells.budgets``):
+- **budgets** (``budget_refusal``, by the row's ``finn.platform.shells.budgets``):
   the AXI-Lite buses the module presents and its ends present (each end's contract,
   ``END``) within the row's ``control_budget``, and the AXI memory ports the module
   initiates within its ``memory_ports``, each refused as ``interface-budget-exceeded``;
   a module that takes an aligned doubled clock needs a row that supplies one
   (``clk2x``), refused as ``clock-unavailable``. The ``ip`` row bounds neither count.
-  Of the configured module, so a network is admitted once it is decided;
+  Of the configured module, so a network is within them once it is decided;
 - **resources** (``shell_resources``; ``InShell.own_resources``, which the seam reads):
   the sum of its members' own statements (``Partition.own_resources``), each end's (its
   contract's) and its row's static region's, at the memory ports and AXI-Lite buses it
@@ -155,10 +155,10 @@ def _end_contracts(network: InShell) -> QueryResult[tuple[tuple[str, EndContract
     return Available(tuple(found))
 
 
-def admission_refusal(network: InShell) -> tuple[Finding, ...]:
+def budget_refusal(network: InShell) -> tuple[Finding, ...]:
     """Why the shell refuses ``network`` (its ``budgets``, of its module's ``bus_counts``
-    and its ends' AXI-Lite buses): its findings, none where it is admitted or not decided
-    far enough to say."""
+    and its ends' AXI-Lite buses): its findings, none where it is within them or not
+    decided far enough to say."""
     buses = _buses(network)
     contracts = _end_contracts(network)
     if not isinstance(buses, Available) or not isinstance(contracts, Available):
@@ -208,7 +208,7 @@ def _resources(network: InShell) -> QueryResult[ShellResources]:
 @dataclass(frozen=True)
 class Configured:
     """A partition's network as emission builds it (``configured_network``): every choice
-    stored, none open or unchecked, admitted by its shell; its ``module`` and its
+    stored, none open or unchecked, within its shell's budgets; its ``module`` and its
     ``cycles`` a frame, its slowest member's."""
 
     network: InShell
@@ -250,8 +250,8 @@ def configured_network(
     step_size_fifos or step_placeholder_choices"), any other one never baselined ("not
     created: BaselineChoices"); a choice kept unchecked, each by name with its stored value
     and what it waits on (one error names the open and the unchecked together, a finding
-    each: ``choices-open``, ``choices-unchecked``); a network the shell does not admit
-    (``admission_refusal``), or whose module or cycles its members refuse; or graph inputs
+    each: ``choices-open``, ``choices-unchecked``); a network over the shell's budgets
+    (``budget_refusal``), or whose module or cycles its members refuse; or graph inputs
     and outputs out of port order refuse, named. It only binds: it does not check the
     FIFOs against their streams (``verify_partition`` does), so a simulation can run a
     FIFO the model calls too small."""
@@ -322,12 +322,12 @@ def configured_network(
                 for code, text, keys in choices
             ),
         )
-    unadmitted = admission_refusal(bound)
-    if unadmitted:
+    over_budget = budget_refusal(bound)
+    if over_budget:
         raise KernelOpError(
             f"{label}: refused by the {bound.row.shell!r} shell: "
-            + "; ".join(map(str, unadmitted)),
-            findings=unadmitted,
+            + "; ".join(map(str, over_budget)),
+            findings=over_budget,
         )
     module = bound.module_of()
     cycles = {name: bound.query(name, CYCLES) for name in bound.members}
@@ -441,8 +441,8 @@ __all__ = [
     "Configured",
     "InShell",
     "ShellResources",
-    "admission_refusal",
     "baseline_choices",
+    "budget_refusal",
     "configured_network",
     "in_shell",
     "refuse_unverified",

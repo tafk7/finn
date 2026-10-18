@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """Two cores sharing a ``width``, the helpers that commit choices on a point and read its
-forced ones, and Spaces whose forced Decisions read each other (``Exclusive``, ``Mutual``,
-``Gated``), which the forcing tests and the bounded change's walks share."""
+forced ones, Spaces whose forced Decisions read each other (``Exclusive``, ``Mutual``,
+``Gated``), and a chain whose changes reach far and move few forced answers (``chain``),
+which the forcing tests, the successor's cache tests and the bounded change's walks share."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from finn.core.space import (
-    ConstraintGroup,
     Decision,
     Param,
     Rejected,
@@ -33,8 +33,6 @@ class Packed(Space):
             return reject("packed-width", "the packed core takes at most 64 lanes")
         return True
 
-    admission = ConstraintGroup(fits)
-
 
 class Stub(Space):
     width: int = Param()
@@ -45,8 +43,6 @@ class Stub(Space):
         if self.width % 2:
             return reject("stub-width", "the stub core takes an even width")
         return True
-
-    admission = ConstraintGroup(even)
 
 
 CORES: dict[str, type[Space] | Space] = {"packed": Packed, "stub": Stub}
@@ -72,8 +68,6 @@ class Never(Space):
     def never(self) -> bool | Rejected:
         return reject("never-viable", "this case is never viable")
 
-    admission = ConstraintGroup(never)
-
 
 class Unless(Space):
     """Refuses while its peer (a Boolean about another Decision) holds."""
@@ -85,8 +79,6 @@ class Unless(Space):
         if self.peer:
             return reject("peer-holds", "this case is not viable beside its peer")
         return True
-
-    admission = ConstraintGroup(alone)
 
 
 class Exclusive(Space):
@@ -125,11 +117,13 @@ class Mutual(Space):
 
 class Gated(Space):
     """``x`` is forced while ``y`` is open, and its verdict reads ``y`` open. A change to
-    ``gate`` forces ``y`` too, which ``x``'s verdict then did not see."""
+    ``gate`` forces ``y`` too, which ``x``'s verdict then did not see. ``x``'s case reads
+    ``y`` and then ``gate``, so while ``gate`` is open no case of ``y`` refuses it, and
+    ``y`` stays open."""
 
     @derived
     def y_is_a(self) -> bool:
-        return isinstance(self.y, Unless)
+        return isinstance(self.y, Unless) and self.gate == 2
 
     @derived
     def gate_shut(self) -> bool:
@@ -138,3 +132,44 @@ class Gated(Space):
     x: Unless | Never = Decision({"a": Unless, "b": Never}, peer=y_is_a)
     gate: int = Decision(values=(1, 2))
     y: Unless | Free = Decision({"a": Unless, "b": Free}, peer=gate_shut)
+
+
+class Stage(Space):
+    """A stage of a chain, one or two wide."""
+
+    size: int = Decision(values=(1, 2))
+
+
+class Hop(Space):
+    """Between two stages: two wide stages side by side are refused, and its depth is the
+    upstream stage's size. Its constraints read both stages' sizes, so a stage's verdict
+    reads its neighbours' and theirs read theirs: a change to one stage reaches every open
+    Decision of the chain, and moves the forced answers next to it only."""
+
+    up: int = Param()
+    down: int = Param()
+    depth: int = Decision(values=(1, 2))
+
+    @constraint
+    def narrow(self) -> bool | Rejected:
+        if self.up == 2 and self.down == 2:
+            return reject("hop-wide", "two wide stages side by side")
+        return True
+
+    @constraint
+    def deep(self) -> bool | Rejected:
+        if self.depth != self.up:
+            return reject("hop-depth", "the depth is the upstream stage's size")
+        return True
+
+
+def chain(length: int, *, stages_first: bool = True) -> type[Space]:
+    """A chain of ``length`` stages (``s0``, ``s1``, ...) and a hop between each two
+    (``h0`` between ``s0`` and ``s1``, ...), the stages declared first or the hops."""
+    stages = {f"s{i}": Stage() for i in range(length)}
+    hops = {
+        f"h{i}": Hop(up=stages[f"s{i}"].size, down=stages[f"s{i + 1}"].size)
+        for i in range(length - 1)
+    }
+    members = {**stages, **hops} if stages_first else {**hops, **stages}
+    return type("Chain", (Space,), {"__module__": __name__, **members})

@@ -13,6 +13,7 @@ from support.helpers import (
     built,
     choose,
     exact_result_dtype,
+    keyed,
     labels,
     matmul_assembly,
     matmul_point,
@@ -28,7 +29,6 @@ from finn.core.space import (
     DefinitionError,
     Rejected,
     Unresolved,
-    View,
     constraint,
     design_space,
     inspection,
@@ -38,6 +38,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
+from finn.kernels.configure import commit
 from finn.kernels.dotp import DotpAxiKernel, PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
 
@@ -234,6 +235,81 @@ def test_a_folding_factor_under_an_open_core_is_refused_by_its_domain_or_waits()
         )
 
 
+#: Known weights (K, N) = (4, 4) over [-3, 3]: INT3 values, which INT2 does not hold.
+KNOWN = ((1, -2, 3, 0), (2, 1, -1, 1), (0, 3, -2, 1), (1, 1, 1, -3))
+PACKED = {"compute": "packed", "compute.packed.pe": 2}
+FOLDED = {**PACKED, "compute.packed.simd": 2, "compute.packed.compute_pumping": False}
+
+
+def validity_of(point):
+    """The point's validity status, and each piece that is not true with its codes."""
+    found = inspection.validity(point)
+    return found.status, [
+        (piece.owner, {finding.code for finding in piece.result.findings}) for piece in found.pieces
+    ]
+
+
+@pytest.mark.parametrize(
+    ("weights", "choices", "status", "pieces"),
+    (
+        ("INT4", FOLDED, "valid", []),
+        ("streamed", FOLDED, "valid", []),
+        # The selected core's own rule.
+        (
+            "INT4",
+            {**PACKED, "compute.packed.simd": 1, "compute.packed.compute_pumping": True},
+            "refused",
+            [("compute.packed.pumping_has_lanes", {"dotp-pumping"})],
+        ),
+        # MatMul's rule on the tensor it carries; no core reads that tensor, so none is
+        # possible, and the selector's refusal stands for each core.
+        (
+            "INT2",
+            {},
+            "refused",
+            [
+                ("carried", {"dtype-storage"}),
+                ("compute", {"decision-no-viable-case"}),
+                ("compute.int8_dsp58", {"decision-no-viable-case"}),
+                ("compute.packed", {"decision-no-viable-case"}),
+            ],
+        ),
+        (
+            "INT4",
+            PACKED,
+            "undecided",
+            [
+                ("compute.packed.clocked", {"decision-unassigned"}),
+                ("compute.packed.pumping_has_lanes", {"decision-unassigned"}),
+                ("compute.packed.stream_widths_supported", {"decision-unassigned"}),
+            ],
+        ),
+    ),
+)
+def test_matmul_s_rules_and_its_cores_read_the_values_its_views_present(
+    weights, choices, status, pieces
+):
+    """``carried`` reads the tensors MatMul requires and carries as values, and its cores
+    read the carried and stored weights as values through their formals (``w_tensor``,
+    ``result_range``), never MatMul's views: valid, refused and undecided each answer,
+    with no dependency cycle. The views present the same values."""
+    if weights == "streamed":
+        facts = dict(w_tensor=int4((4, 4)))
+    else:
+        facts = dict(w_contents=KNOWN, weights_dtype=DataType[weights])
+    point = design_space(MatMulKernel(platform=FULL_DSP48E2, x_tensor=int4((2, 4)), **facts))
+    point = commit(point, choices) if choices else point
+    assert validity_of(point) == (status, pieces)
+    if status != "refused":
+        assert point.w_carried == point.carried_weights == point.compute.w.tensor
+        assert point.activation_tensor == point.required_activations
+        assert point.weight_tensor == point.required_weights
+    if weights == "INT4" and status != "refused":
+        assert point.w_stored == point.stored_weights
+        # Its columns over INT4 activations [-8, 7] (``column_range``): the stored values.
+        assert point.result_range == (-54, 52)
+
+
 def test_weights_that_are_not_integers_are_unrecognized_as_the_weights_value() -> None:
     with refused("literal-unrecognized", error=DefinitionError, message="integer tensor"):
         assembly(weight_delivery=WeightDelivery.MEMSTREAM, weights=[[0.5] * 4] * 4)
@@ -265,7 +341,7 @@ def test_the_core_is_forced_and_owns_its_folding_factors():
     )
     matmul = point.member("matmul")
     assert matmul.result_type == DataType["INT8"]
-    assert matmul.inspect(MatMulKernel.admission).result == Available(True)
+    assert inspection.validity(matmul).status == "valid"
     assert matmul.compute.y.element.dtype == matmul.result_type
     _ = matmul.compute.module
     assert matmul.compute.y.presented.form.beats == 4
@@ -275,14 +351,17 @@ def test_the_core_is_forced_and_owns_its_folding_factors():
     module = built(point, "matmul")
     assert labels(module) == ["x.adapter.input_gen.input_gen", "matmul.compute.packed"]
     assert not hasattr(MatMulKernel, "contract") and not hasattr(MatMulKernel, "pe")
-    # Pumping with one SIMD lane is refused where its case is declared: with SIMD 1 it
-    # is forced off, and committing it is refused, so the core stays forced.
+    # Pumping with one SIMD lane is not possible: with SIMD 1 it is forced off, and the
+    # change committing it is refused, its core refused by the rule, so the core stays
+    # forced.
     one = choose(base, {"matmul.compute.packed.pe": 2, "matmul.compute.packed.simd": 1})
     forced = one.forced(("matmul",))
     assert forced[("matmul", "compute")] == "packed"
     assert forced[("matmul", "compute.packed.compute_pumping")] is False
-    with pytest.raises(ValueError, match="dotp-pumping"):
-        choose(one, {"matmul.compute.packed.compute_pumping": True})
+    pumped = one.trial(keyed({"matmul.compute.packed.compute_pumping": True}))
+    assert not pumped.accepted
+    found = [finding for why in pumped.refused.values() for finding in why]
+    assert "dotp-pumping" in {f.code for f in found} | {c.code for f in found for c in f.causes}
 
 
 @pytest.mark.parametrize("delivery", tuple(WeightDelivery))
@@ -307,15 +386,11 @@ def test_build_is_complete_and_initializer_changes_identity(tmp_path, delivery):
         assert emitted.entry_point != renamed.entry_point
 
 
-def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypatch):
+def test_matmul_honors_its_cores_rules_not_just_its_raw_module(monkeypatch):
     class RestrictedDotp(PackedDotpKernel):
         @constraint
         def view_only_rule(self) -> bool | Rejected:
-            return reject(
-                "test-view-only", "this physical View refuses the selected implementation"
-            )
-
-        module = View(PackedDotpKernel.built, requires=(PackedDotpKernel.admission, view_only_rule))
+            return reject("test-view-only", "this rule refuses the selected implementation")
 
     class RestrictedMatMul(MatMulKernel):
         # A compute Decision whose one candidate is the restricted core, on the
@@ -327,7 +402,7 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
             reshape_activations=MatMulKernel.dense_view,
             result_range=MatMulKernel.result_range,
             x_tensor=MatMulKernel.x_tensor,
-            w_tensor=MatMulKernel.w_carried,
+            w_tensor=MatMulKernel.carried_weights,
         )
 
     # Substitute a fully authored Space class, without mutating declarations.
@@ -342,22 +417,22 @@ def test_matmul_honors_the_child_physical_view_not_just_its_raw_module(monkeypat
             "matmul.compute.packed.reducer": "tree",
         },
     )
-    point = choose(
-        point,
-        {
-            "x.adapter": "input_gen",
-            "x.adapter.input_gen.input_gen.ram_style": "auto",
-            "x.transport": "direct",
-            "w.transport": "direct",
-            "y.transport": "direct",
-        },
-    )
-    compute = point.member("matmul").compute
+    # The core's rule counts toward its validity and MatMul's: the core's module, a
+    # product, refuses with it, and so do MatMul's ends, so its channels wait unbound,
+    # each naming the rule.
+    matmul = point.member("matmul")
+    assert inspection.validity(matmul).status == "refused"
+    assert [piece.owner for piece in inspection.validity(matmul).pieces] == [
+        "compute.packed.view_only_rule"
+    ]
+    compute = matmul.compute
     assert isinstance(compute.query(DotpAxiKernel.codegen), Available)
     assert isinstance(compute.inspect(DotpAxiKernel.module).accepted_result, Rejected)
     refused = module_of(point, "matmul")
     assert isinstance(refused, Rejected)
     assert "test-view-only" in {finding.code for finding in refused.findings}
+    unbound = point.unbound("x")
+    assert unbound is not None and "test-view-only" in {f.code for f in unbound.result.findings}
     # The convenience entry point takes the same accepted-view path.
     with pytest.raises(ValueError, match="test-view-only"):
         assembly()

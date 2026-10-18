@@ -157,13 +157,13 @@ def free_side(form: Traversal) -> StreamContract:
 def test_an_iodma_refuses_a_free_side_that_is_not_row_major() -> None:
     """The end moves a flat buffer in order, which the driver fills row-major: a free side
     in another order (a (4, 6) matrix in 2 x 3 tiles) is refused by name, a row-major
-    one in any lanes admitted."""
+    one in any lanes valid."""
     offers = (iodma_hls(128),)
     for form in (vector_major((4, 6), 3), vector_major((1, 784), 4), tile(4, 6, 1, 6)):
-        admitted = inspection.admission(design_space(IodmaEnd(offers=offers, side=free_side(form))))
-        assert admitted == Available(True)
+        valid = inspection.validity(design_space(IodmaEnd(offers=offers, side=free_side(form))))
+        assert valid.status == "valid"
     tiled = design_space(IodmaEnd(offers=offers, side=free_side(tile(4, 6, 2, 3))))
-    refused = inspection.admission(tiled)
+    refused = inspection.validity(tiled).result
     assert isinstance(refused, Rejected)
     ((code, message),) = [(finding.code, finding.message) for finding in refused.findings]
     assert code == "end-order"
@@ -179,7 +179,7 @@ def test_an_iodma_refuses_a_free_side_that_repeats_its_pass() -> None:
     until repetition by the host or the end is designed (SZ11 (f))."""
     offers = (iodma_hls(128),)
     repeated = free_side(vector_major((4, 6), 3).repeated(3))
-    refused = inspection.admission(design_space(IodmaEnd(offers=offers, side=repeated)))
+    refused = inspection.validity(design_space(IodmaEnd(offers=offers, side=repeated))).result
     assert isinstance(refused, Rejected)
     ((code, message),) = [(finding.code, finding.message) for finding in refused.findings]
     assert code == "end-repetition"

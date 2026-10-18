@@ -18,13 +18,14 @@ from support.kernel_specs.base import placed
 from support.kernel_specs.thresholding import tensor
 from support.kernel_specs.transpose import MATRICES, transpose
 
-from finn.core.space import Rejected, Space
+from finn.core.space import Rejected, Space, design_space, inspection
 from finn.dataflow.plan import Step, plan
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.harness.points import rejected
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.channels import Channel
 from finn.kernels.network import dotted
+from finn.kernels.transpose import TransposeKernel
 
 SIMDS = [factors["simd"] for factors in transpose()["factors"]]
 BATCHES, ROWS, COLS = MATRICES
@@ -106,7 +107,7 @@ def test_a_tensor_of_one_axis_is_no_matrix() -> None:
     assert rejected(kernel) == {"kernel-extents"}
 
 
-def test_it_admits_the_two_pages_its_rtl_counts_and_no_more() -> None:
+def test_it_holds_the_two_pages_its_rtl_counts_and_no_more() -> None:
     """``2 I J`` elements in 32 bits: 2**15 x 2**16 is one element too many."""
     assert not rejected(_transpose(2))
     case = {
@@ -123,3 +124,19 @@ def test_its_ultra_pages_need_ultraram_but_no_initial_contents() -> None:
     platform = replace(FULL_DSP48E2, uram_init=False)
     kernel: Any = placed(transpose(), {"simd": 2, "ram_style": "ultra"}, platform=platform)
     assert dict(kernel.module.parameters)["RAM_STYLE"] == '"ultra"'
+
+
+def test_ultra_pages_without_ultraram_are_accepted_and_the_configuration_is_refused() -> None:
+    """``ram_style`` is a type check, so ``ultra`` commits; the kernel's ``uram-absent``
+    constraint refuses the configuration, where the platform has no UltraRAM."""
+    for uram, status in ((True, "valid"), (False, "refused")):
+        platform = replace(FULL_DSP48E2, uram=uram)
+        point = design_space(
+            TransposeKernel(input_tensor=tensor(MATRICES, "INT4"), platform=platform)
+        )
+        handle = point.field(TransposeKernel.ram_style).reference
+        assert point.try_with_choices({handle: "ultra"}).accepted
+        found = inspection.validity(point.with_choices(simd=2, ram_style="ultra"))
+        assert found.status == status
+        refusals = {f.code for piece in found.pieces for f in getattr(piece.result, "findings", ())}
+        assert refusals == (set() if uram else {"uram-absent"})

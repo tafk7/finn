@@ -13,9 +13,9 @@ implementation may round its storage up and forces a shift FIFO for shallow
 depths. The RTL's ``auto`` selects by depth and word width: a shift register up
 to 64 words narrower than 12 bits, LUTRAM up to 257 words, block RAM up to 2028,
 then UltraRAM. Reset is synchronous, active-high, and discards pending words.
-``ultra`` requires the ``platform``'s UltraRAM; the FIFO starts empty, so no
-initial contents are asked of it. ``auto`` never takes UltraRAM the platform
-lacks: where the RTL's own selection would, the kernel gives it ``block``.
+``ultra`` needs the ``platform``'s UltraRAM, a constraint of the FIFO (``uram-absent``); the
+FIFO starts empty, so no initial contents are asked of it. ``auto`` never takes UltraRAM the
+platform lacks: where the RTL's own selection would, the kernel gives it ``block``.
 
 The FIFO's ``auto`` is FinnLib's selection, not Vivado's: it is its first case, and its
 statement is the storage the RTL selects, exact. One part is Vivado's: a decomposed
@@ -28,14 +28,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from finn.core.space import (
-    ConstraintGroup,
     Decision,
     Param,
     Rejected,
+    View,
     constraint,
     derived,
     reject,
-    view,
 )
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
@@ -43,7 +42,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, LeafKernel, interface
 from finn.kernels.port import native_stream
-from finn.kernels.utilization import RESOURCES_SEMANTICS, lutram, memory, uram_requirements
+from finn.kernels.utilization import RESOURCES_SEMANTICS, lutram, memory, uram_constraint
 from finn.platform.capabilities import Fabric, Platform, Resources
 
 
@@ -178,6 +177,16 @@ def fifo_resources(depth: int, data_width: int, ram_style: str, *, fabric: Fabri
     return storage + Resources(lut=54, ff=bits + 2 * counter)
 
 
+def _geometry_supported(bits: int, depth: int) -> bool:
+    """Whether the native FIFO takes DATA_WIDTH ``bits`` and DEPTH ``depth``: a positive
+    word, two words at least, each within an unsigned int."""
+    return bits >= 1 and depth >= 2 and max(bits, depth) <= 0xFFFFFFFF
+
+
+#: The finding of a geometry the native FIFO does not take (``_geometry_supported``).
+_GEOMETRY = ("fifo-geometry", "word_bits must be positive and depth at least two")
+
+
 def _given(depth: int, bits: int, style: str, uram: bool) -> str:
     """The RAM_STYLE the RTL is given for ``style``: block RAM where ``auto`` would
     resolve to UltraRAM a platform without it lacks."""
@@ -236,16 +245,14 @@ class FifoKernel(LeafKernel):
 
     @constraint
     def geometry_supported(self) -> bool | Rejected:
-        bits = self.word_bits
-        depth = self.depth
-        if bits < 1 or depth < 2 or max(bits, depth) > 0xFFFFFFFF:
-            return reject("fifo-geometry", "word_bits must be positive and depth at least two")
+        if not _geometry_supported(self.word_bits, self.depth):
+            return reject(*_GEOMETRY)
         return True
 
     ram_style: str = Decision(
         values=("auto", "shift", "distributed", "block", "ultra"),
-        requires=uram_requirements(platform, ("ultra",)),
     )
+    uram_present = uram_constraint(platform, ram_style, ("ultra",))
 
     @derived
     def rtl_ram_style(self) -> str:
@@ -253,20 +260,26 @@ class FifoKernel(LeafKernel):
         resolve to UltraRAM the platform lacks, which is block RAM."""
         return _given(self.depth, self.word_bits, self.ram_style, self.platform.uram)
 
-    @view(requires=(geometry_supported,))
-    def storage(self) -> FifoStorage | Rejected:
+    @derived
+    def planned_storage(self) -> FifoStorage | Rejected:
+        """The storage the native RTL selects (``fifo_storage``), of a geometry it takes:
+        refused, as ``geometry_supported`` is, for one it does not."""
+        if not _geometry_supported(self.word_bits, self.depth):
+            return reject(*_GEOMETRY)
         found = fifo_storage(self.depth, self.word_bits, self.rtl_ram_style)
         if found is None:
             return reject("fifo-capacity", "native memory size overflows unsigned int")
         return found
 
+    # The storage, the product its holder reads; its rule reads the value.
+    storage = View(planned_storage)
+
     @constraint
     def capacity_supported(self) -> bool | Rejected:
-        """The native memory the storage decomposes into is addressable."""
-        _ = self.storage
+        """The native memory the storage decomposes into is addressable: refused, too,
+        with the geometry its storage is planned for, when that is refused."""
+        _ = self.planned_storage
         return True
-
-    admission = ConstraintGroup(geometry_supported, capacity_supported)
 
     @derived
     def clocking(self) -> Clocking:

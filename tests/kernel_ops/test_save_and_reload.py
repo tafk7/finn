@@ -17,6 +17,9 @@ network is bound again from the graph (``network``):
 - **refused by a changed fact** (its own check false): dropped as stale, with a finding
   naming the value (and, for a value outside its domain, the values the Decision could take
   now), and saving clears it (here);
+- **its own check true, a rule a changed fact makes false**: kept, committed, the
+  configuration refused naming the rule; saving writes it, and bound again it is kept as
+  it was (here);
 - **left unknown by a changed fact**: kept, not stale: a node's choice unchecked, a
   channel whose ends wait holding its choices (here);
 - **a key the network does not have**: a node's attribute no choice declares refuses the
@@ -180,13 +183,16 @@ def test_a_node_choice_a_changed_fact_refuses_is_dropped_with_candidates_and_cle
     assert again.chosen() == {("first", name): value for name, value in kept.items()}
 
 
-def test_a_channel_choice_a_changed_fact_refuses_is_dropped_and_cleared() -> None:
+# -- a fact changed: its own check true, a rule false ----------------------------------------
+
+
+def test_a_channel_choice_a_rule_a_changed_fact_makes_false_is_kept_and_saved() -> None:
     """The weights' memory stored as ``ultra`` on a part with UltraRAM, the model then built
-    for one without (the memory's domain requires UltraRAM for ``ultra``). Bound again, the
-    network drops it as stale, its finding naming the value stored (``uram-absent``: no
-    candidates, which a finding gives only for a value outside its domain's values).
-    Saving clears it from the tensor and keeps the channel's transport; bound again,
-    nothing is stale and the memory is open."""
+    for one without. Whether the part has UltraRAM is a rule of the memory's, not its
+    domain: the choice's own check holds, so the network keeps it, committed, under its
+    source's guard, which the rule leaves with no possible case (the configuration refused,
+    ``uram-absent`` among the reasons). Nothing is stale; saving writes the stored ``ultra``
+    beside the transport, and bound again the network holds the same."""
     model = retarget(matmul_model(), VERSAL)
     configured(
         model, {"first": FOLDING, "w": {**WEIGHT_SOURCE, "source.memstream.ram_style": "ultra"}}
@@ -194,14 +200,22 @@ def test_a_channel_choice_a_changed_fact_refuses_is_dropped_and_cleared() -> Non
     model = retarget(model, TARGET)
     first = bound(model)
     key = "source.memstream.ram_style"
-    assert stale(first) == {f"w.{key}": [("uram-absent", key, {"value": "ultra"})]}
-    assert first.unchecked() == ()
-    assert persist(model, first)["w"] == {"transport": "direct"}
-    assert channel_choices(model, "w") == {"transport": "direct"}
+    stored = {("w", key): "ultra", ("w", "transport"): "direct"}
+    assert not first.stale and first.unchecked() == ()
+    assert first.chosen(["w"]) == stored
+    validity = inspection.validity(first.member("w"))
+    assert validity.status == "refused"
+    assert {
+        (found.code, found.owner, "uram-absent" in found.message)
+        for piece in validity.pieces
+        for found in piece.result.findings
+    } == {("decision-no-viable-case", "source", True)}
+    assert persist(model, first)["w"] == {key: "ultra", "transport": "direct"}
+    assert channel_choices(model, "w") == {key: "ultra", "transport": "direct"}
     again = bound(model)
     assert not again.stale and again.unchecked() == ()
-    assert ("w", key) in again.undecided()
-    assert again.chosen(["w"]) == {("w", "transport"): "direct"}
+    assert again.chosen(["w"]) == stored
+    assert inspection.validity(again.member("w")) == validity
 
 
 # -- a fact changed: the choice's own check unknown ----------------------------------------
@@ -219,8 +233,10 @@ def folded_then_moved_to_dsp58() -> ModelWrapper:
 def test_a_node_choice_a_changed_fact_leaves_unknown_is_kept_unchecked() -> None:
     """On DSP58 ``compute`` is open, so the folding stored under ``packed`` waits on it: each
     key is kept unchecked, its stored value and ``compute`` named, not stale, and
-    ``compute`` is the one open choice. Saving writes each by its stored value; bound
-    again, the node holds them unchecked, waiting on the same ``compute``."""
+    ``compute`` is the one open choice. Each is committed all the same (a kept commitment
+    reads as committed, whatever its read answers), so the network's choices list it.
+    Saving writes each by its stored value; bound again, the node holds them unchecked,
+    waiting on the same ``compute``."""
     model = folded_then_moved_to_dsp58()
     waiting = tuple(
         (("first", key), inspection.Unchecked(key, value, ("compute",)))
@@ -229,14 +245,14 @@ def test_a_node_choice_a_changed_fact_leaves_unknown_is_kept_unchecked() -> None
     first = bound(model)
     assert not first.stale
     assert first.unchecked() == waiting
-    assert first.chosen(["first"]) == {}
+    assert first.chosen(["first"]) == {("first", key): value for key, value in SAVED.items()}
     assert first.undecided() == (("first", "compute"),)
     assert persist(model, first)["first"] == SAVED
     again = bound(model)
     assert not again.stale
     assert again.unchecked() == waiting
     assert inspection.unchecked(again.member("first")) == tuple(item for _, item in waiting)
-    assert again.chosen(["first"], unchecked=True) == first.chosen(["first"], unchecked=True)
+    assert again.chosen(["first"]) == first.chosen(["first"])
 
 
 def test_a_channel_whose_ends_a_changed_fact_leaves_unknown_holds_its_choices() -> None:

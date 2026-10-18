@@ -116,11 +116,11 @@ def test_value_and_function_views_are_distinct_declarations_with_same_type() -> 
         def supported(*, value: int) -> bool:
             raise AssertionError("must not run")
 
-        @view(requires=(supported,))
+        @view
         def function(*, value: int) -> int:
             raise AssertionError("must not run")
 
-        detached = View(value, requires=(supported,))
+        detached = View(value)
 
     collected = collect_space(Example)
     assert collected.functions["function"].semantics.type_token is int
@@ -130,8 +130,8 @@ def test_value_and_function_views_are_distinct_declarations_with_same_type() -> 
 
 
 def test_node_member_alias_and_typed_view_exports() -> None:
-    # Exports are ViewKeys to views only. A value export is refused as the wrong
-    # kind; the value is exported through a View.
+    # Exports are ViewKeys to views and derived values. A formal is refused as the
+    # wrong kind; it is exported through a View or a derived value.
     width = ViewKey("width", int)
     physical = ViewKey("physical", int)
 
@@ -147,7 +147,7 @@ def test_node_member_alias_and_typed_view_exports() -> None:
 
     class ValueExport(Space):
         extent: int = Param()
-        exports = {width: extent}  # type: ignore[dict-item]
+        exports = {width: extent}
 
     with refused(
         "export-kind-invalid", error=DefinitionError, message="export width has the wrong kind"
@@ -541,7 +541,7 @@ def test_guards_are_collected_separately_and_respect_inherited_overrides() -> No
         def authored(*, selected: int) -> int:
             raise AssertionError("must not execute")
 
-        physical = View(result, requires=(support,), when=enabled)
+        physical = View(result, when=enabled)
         child = Child(value=1, when=enabled)
         # A singleton structural choice is an ordinary Decision over nodes.
         implementation: Child = Decision({"only": Child(value=1)}, when=enabled)

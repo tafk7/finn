@@ -104,7 +104,7 @@ def test_nonvalue_cleanup_preserves_primary_and_outer_cleanup(kind: str, warm: b
         def refuses(self) -> bool:
             return False
 
-        @view(requires=(refuses,))
+        @view
         def rejected(self) -> int:
             return 2
 

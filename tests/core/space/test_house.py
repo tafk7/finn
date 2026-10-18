@@ -83,14 +83,18 @@ def test_the_relation_and_the_budget_own_their_refusals() -> None:
         }
     )
     refused = point.inspect(House.total)
-    results = refused.constraints.results
+    assert isinstance(refused.output_result, Available)
+    validity = inspection.validity(point)
+    assert validity.status == "refused"
+    results = {piece.owner: piece.result for piece in validity.pieces}
+    assert set(results) == {"matched", "within_budget"}
     assert codes(results["matched"]) == {"mismatch"}
     assert "kitchen.finish=1, dining.finish=3" in {
         finding.message
         for finding in refused.accepted_result.findings  # type: ignore[union-attr]
     }
     assert codes(results["within_budget"]) == {"over-budget"}
-    assert isinstance(results["garage.cost"], Available)
+    assert isinstance(point.query(House.garage.cost), Available)
 
 
 def test_the_garage_is_present_only_when_wanted() -> None:

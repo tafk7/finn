@@ -33,7 +33,7 @@ def test_settled_values_and_acceptance_survive_unrelated_added_choices() -> None
         def supported(self) -> bool:
             return self.lanes <= self.extent
 
-        @view(requires=(supported,))
+        @view
         def physical(self) -> int:
             return self.cycles
 

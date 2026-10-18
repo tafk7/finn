@@ -8,7 +8,7 @@ into DSP48E1, DSP48E2 or DSP58 slices) and ``Int8Dsp58DotpKernel`` (``dotp_8sx9_
 the INT8 mode of DSP58). A parent chooses between them with a Decision over kernels.
 ``DotpAxiKernel`` is their shared declaration, which cannot be placed: each core states
 its ``sources``, ``resource_use``, ``accumulator``, the ``activations`` it takes,
-``narrow_weights``, its ``reducer`` and its admission (``core_supported``,
+``narrow_weights``, its ``reducer`` and its constraints (``core_supported``,
 ``accumulator_width_supported``), beside dotp_axi's own (``stream_widths_supported``).
 
 dotp computes ``Y[m, n] = sum_k X * W`` in the ``form`` (``finn.dataflow.gemm``) its
@@ -45,7 +45,6 @@ from qonnx.core.ranges import TensorRange
 
 from finn.core.space import (
     Constraint,
-    ConstraintGroup,
     Decision,
     Param,
     Rejected,
@@ -54,7 +53,6 @@ from finn.core.space import (
     divisors_of,
     reject,
     required,
-    requires,
 )
 from finn.dataflow.datatypes import (
     DatatypeError,
@@ -141,7 +139,7 @@ class DotpAxiKernel(LeafKernel):
     further one, against half the period when compute is pumped. Only the INT8
     core reads SEGMENTLEN. Pumped compute takes a phase-aligned 2x clock
     (``ap_clk2x``), which its module states; whether the shell supplies one is the
-    shell's admission (``clock-unavailable``), not a capability of the platform.
+    shell's answer (``clock-unavailable``), not a capability of the platform.
     The DSP block is the ``platform``'s (``dsp``): a platform that states none is
     refused (``dotp-dsp``).
     """
@@ -159,7 +157,7 @@ class DotpAxiKernel(LeafKernel):
     reducer = required(str)
     core_supported = required(Constraint)
     accumulator_width_supported = required(Constraint)
-    # Each core's admission: its two constraints and ``stream_widths_supported``.
+    # Each core's constraints: these two, beside ``stream_widths_supported``.
 
     form: Form = Param(default=Form.DENSE)
     reshape_activations: bool = Param(default=False)
@@ -239,12 +237,15 @@ class DotpAxiKernel(LeafKernel):
         """Whether pumping has SIMD lanes to split over the doubled clock: SIMD >= 2."""
         return self.simd >= 2
 
-    # Pumping needs lanes to split (SIMD before it in rank, so a configuration with
-    # SIMD 1 does not offer it), and a doubled clock, which the shell admits.
-    compute_pumping: bool = Decision(
-        values=(False, True),
-        requires=(requires(pumpable, "dotp-pumping: pumping requires SIMD >= 2", cases=(True,)),),
-    )
+    # Pumping needs lanes to split (``pumping_has_lanes``, so SIMD 1 does not offer it),
+    # and a doubled clock, which the shell supplies.
+    compute_pumping: bool = Decision(values=(False, True))
+
+    @constraint
+    def pumping_has_lanes(self) -> bool | Rejected:
+        if self.compute_pumping and not self.pumpable:
+            return reject("dotp-pumping", "pumping requires SIMD >= 2")
+        return True
 
     @derived
     def reduced(self) -> tuple[Index, ...]:
@@ -546,10 +547,6 @@ class PackedDotpKernel(DotpAxiKernel):
             )
         return True
 
-    admission = ConstraintGroup(
-        core_supported, accumulator_width_supported, DotpAxiKernel.stream_widths_supported
-    )
-
     @derived
     def activations(self) -> Integer:
         return Integer(min_bits=2)
@@ -639,10 +636,6 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
                 values={"actual_bits": bits, "maximum_bits": 58},
             )
         return True
-
-    admission = ConstraintGroup(
-        core_supported, accumulator_width_supported, DotpAxiKernel.stream_widths_supported
-    )
 
     @derived
     def activations(self) -> Integer:

@@ -6,9 +6,9 @@
 It computes ``thresholds(x @ W1) @ W2``. Each MatMul reads its tensors and presents
 its ends on the network's channels; each channel takes its ends from its kernels
 (``Interface``), and the tensor of a MatMul's results is the MatMul's statement of them
-(``y_tensor``), read before it is placed. The weights are given to each MatMul
+(``result_tensor``), read before it is placed. The weights are given to each MatMul
 (``w_contents``): each weight channel carries what its MatMul states for it, its
-contents (``w_stored``) and its tensor over their range (``w_carried``). ``chain()``
+contents (``stored_weights``) and its tensor over their range (``carried_weights``). ``chain()``
 is the Chain configured as the kernel tests, the KernelOp partition tests and the
 XSim harness use it; its module is named ``finn_chain`` (``STEM``).
 """
@@ -67,7 +67,7 @@ def matmul(weights: Any, x_tensor: Any) -> MatMulKernel:
 
 def result(weights: Any, x_tensor: Any) -> Tensor:
     """The tensor of a MatMul's results: its statement, which reads its facts and weights."""
-    found: Tensor = design_space(matmul(weights, x_tensor)).y_tensor
+    found: Tensor = design_space(matmul(weights, x_tensor)).result_tensor
     return found
 
 
@@ -97,8 +97,8 @@ def members(hidden: Tensor = HIDDEN_TENSOR) -> dict[str, Space | Wire]:
                 consumer=Interface("first", "x_end"),
             ),
             "w1": wire(
-                tensor=Fact("first", "w_carried"),
-                contents=Fact("first", "w_stored"),
+                tensor=Fact("first", "carried_weights"),
+                contents=Fact("first", "stored_weights"),
                 consumer=Interface("first", "w_end"),
                 platform=platform,
             ),
@@ -115,8 +115,8 @@ def members(hidden: Tensor = HIDDEN_TENSOR) -> dict[str, Space | Wire]:
                 platform=platform,
             ),
             "w2": wire(
-                tensor=Fact("second", "w_carried"),
-                contents=Fact("second", "w_stored"),
+                tensor=Fact("second", "carried_weights"),
+                contents=Fact("second", "stored_weights"),
                 consumer=Interface("second", "w_end"),
                 platform=platform,
             ),

@@ -59,7 +59,7 @@ selected (by position), the name and the channel choices given. A refusal is nev
 In the verifying mode a hit is bound again with no cache open and compared.
 
 A partition's resources (``Partition.own_resources``) are its members'. The shell's
-admission and resources over a network (its members', its ends' and its static region's),
+budgets and resources over a network (its members', its ends' and its static region's),
 and the body's choices given their baselines (``baseline_choices``) on the network in its
 shell, are ``finn.custom_op.kernels.shell``'s.
 """
@@ -682,7 +682,7 @@ def persist(
     Returns what each owner now holds, by graph name."""
     names = [name for name in network.members if owners is None or name in owners]
     held_by: dict[str, dict[str, object]] = {name: {} for name in names}
-    for (owner, key), value in network.chosen(names, unchecked=True).items():
+    for (owner, key), value in network.chosen(names).items():
         held_by[owner][key] = value
     refuse_outside_body(
         model, [name for name, values in held_by.items() if values and name not in network.kernels]

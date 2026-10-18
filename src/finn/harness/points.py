@@ -23,8 +23,9 @@ FIFO's depth: ``inspection.open``) are not walked; a strategy chooses them
 
 The refused side: ``refused_cases`` lists, at a point, each case of an open or
 forced Decision that the configuration refuses, with the codes of the findings
-that refuse it (``refusal``); ``rejected`` reads a kernel's own refusal of its
-facts (its ``admission``). A spec states what its kernel must refuse; the tests
+that refuse it; ``refusal`` the codes that refuse committing choices, or the
+configuration they make (its validity); ``rejected`` reads a kernel's own refusal of
+its facts (its validity). A spec states what its kernel must refuse; the tests
 compare.
 """
 
@@ -36,8 +37,9 @@ from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from typing import TypeVar
 
-from finn.core.space import Available, Rejected, Space, inspection
+from finn.core.space import Available, Space, inspection
 from finn.kernels.configure import commit
+from finn.kernels.configure import refusal as refusal_of
 
 S = TypeVar("S", bound=Space)
 
@@ -116,14 +118,16 @@ class Refused:
 
 def refusal(point: Space, choices: Mapping[str, object]) -> frozenset[str]:
     """The codes of the findings that refuse committing ``choices`` on ``point``, by
-    decision key, together; empty when they are accepted."""
+    decision key, together; where the commit is accepted, those that refuse the
+    configuration it makes (``rejected``: a constraint never refuses a commit); empty
+    when neither is refused."""
     handles = {item.key: item.reference for item in inspection.decisions(point)}
     unknown = sorted(set(choices) - set(handles))
     if unknown:
         raise KeyError(f"{type(point).__name__} has no Decisions {unknown}")
     report = point.try_with_choices({handles[key]: value for key, value in choices.items()})
     if report.accepted:
-        return frozenset()
+        return rejected(report.instance)
     return frozenset(
         finding.code
         for outcome in report.outcomes
@@ -140,8 +144,9 @@ _FINDING = re.compile(r"(?:^|; )[\w.\[\]]+: ([a-z][a-z0-9-]*): ")
 def refused_cases(point: Space, pattern: str = "*") -> tuple[Refused, ...]:
     """Each case of an open or forced Decision of ``point`` matching ``pattern`` that the
     configuration does not leave viable, with the codes of the findings that refuse it,
-    as forcing states them: a value refused by the Decision's requirements, a candidate
-    by its own admission (which committing it alone does not evaluate)."""
+    as forcing states them: a value refused by its domain or by a constraint that reads
+    the Decision, a candidate by its own validity (which committing it alone does not
+    evaluate)."""
     values = {item.key: item.reference for item in inspection.decisions(point) if not item.selector}
     listed = [(item.key, item.refused) for item in inspection.viable(point)]
     listed += [(item.key, item.refused) for item in inspection.forced(point)]
@@ -169,12 +174,8 @@ def _cases(point: Space, decision: object) -> dict[str, object]:
 
 def rejected(kernel: Space) -> frozenset[str]:
     """The codes of the findings by which ``kernel`` refuses its own configuration (its
-    ``admission``), as far as it is decided; empty when it admits it, or waits on a
-    choice to decide."""
-    found = inspection.admission(kernel)
-    if not isinstance(found, Rejected):
-        return frozenset()  # admitted, or waiting on an open choice
-    return frozenset(finding.code for finding in found.findings)
+    validity's false pieces); empty when it is valid, or undecided."""
+    return frozenset(finding.code for finding in refusal_of(inspection.validity(kernel)))
 
 
 __all__ = ["Covering", "Refused", "Target", "covering", "refused_cases", "refusal", "rejected"]

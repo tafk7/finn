@@ -12,12 +12,21 @@ from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2, THRESHOLDS, controlled, threshold_base
 from support.refusals import refused
 
-from finn.core.space import Available, DefinitionError, Rejected, Unresolved
+from finn.core.space import (
+    Available,
+    DefinitionError,
+    Rejected,
+    Unresolved,
+    design_space,
+    inspection,
+)
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.artifacts.abi import Bus
+from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.network import Interface, Network, wire
-from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.port import AxiStreamPort
+from finn.kernels.thresholding import ThresholdingAxiKernel, c
+from finn.kernels.values.domains import Integer
 from finn.kernels.values.semantics import IntegerTensor, IntegerTensorValue, integer_shape
 
 AUTO_MEMORY: dict[str, object] = {"ram_style": "auto", "ultra_stages": 0}
@@ -146,6 +155,53 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
     for pe in (0, 3, 4, 5):
         assert not threshold_base().try_with_choices(pe=pe).accepted
     assert threshold_base().try_with_choices(pe=2).accepted
+
+
+class NarrowInput(ThresholdingAxiKernel):
+    """A thresholding whose input port takes only elements of up to 4 bits."""
+
+    input = AxiStreamPort(
+        name="s_axis",
+        endpoint=Endpoint.TARGET,
+        tensor=ThresholdingAxiKernel.input_tensor,
+        schedule=ThresholdingAxiKernel.schedule,
+        index=ThresholdingAxiKernel.indices,
+        lanes=(c,),
+        admits=Integer(max_bits=4),
+    )
+
+
+def test_a_refused_input_port_leaves_its_kernels_domains_and_refuses_its_products() -> None:
+    """The port's refusal (``element_taken``) stands in its kernel's validity: its
+    extents read the port's access as a value, so PE keeps its candidates, while the
+    kernel's module and cycles refuse with it."""
+
+    def narrow(dtype: str) -> NarrowInput:
+        return design_space(
+            NarrowInput(
+                input_tensor=Tensor((1, 2), ScalarEncoding(resolve_qonnx_datatype_name(dtype))),
+                threshold_dtype=resolve_qonnx_datatype_name("INT5"),
+                thresholds=THRESHOLDS,
+                bias=-1,
+                platform=FULL_DSP48E2,
+            )
+        )
+
+    taken = narrow("INT4")
+    assert inspection.validity(taken).status != "refused"
+    point = narrow("INT8")
+    assert point.field(ThresholdingAxiKernel.pe).candidates() == Available((1, 2))
+    validity = inspection.validity(point)
+    assert validity.status == "refused"
+    assert [piece.owner for piece in validity.pieces] == ["input.element_taken"]
+    # A commit is accepted all the same (a refusal elsewhere never refuses a commit).
+    committed = point.try_with_choices(pe=1)
+    assert committed.accepted
+    assert [piece.owner for piece in inspection.validity(committed.instance).pieces] == [
+        "input.element_taken"
+    ]
+    for product in (ThresholdingAxiKernel.module, ThresholdingAxiKernel.cycles):
+        assert isinstance(committed.instance.query(product), Rejected)
 
 
 def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:

@@ -44,7 +44,7 @@ class Room(Space):
             return reject("too-large", f"area {self.area} exceeds 20")
         return True
 
-    @view(requires=(fits,))
+    @view
     def cost(self) -> int:
         return self.area * self.finish
 

@@ -4,7 +4,9 @@
 cores and links it is built from.
 
 Each ``Unit`` selects between two cores (``Packed``, ``Stub``) and its output width follows
-the selected core's choice; a ``Link`` between units reads whether the upstream core is packed;
+the selected core's choice; a ``Link`` between units reads whether the upstream core is packed,
+through a constraint on its ``burst`` (which forcing tries each case against) and through the
+domain of its ``beat`` (whose own check waits while the upstream core is open);
 a ``Probe`` and a ``Meter`` close the chain with a Decision read through ``present`` and
 ``supplied``. Its verdicts and evaluations read **forced** Decisions, which move when a
 neighbour's choice moves: the Space the bounded change's walks
@@ -17,16 +19,16 @@ Engine-only: this module imports ``finn.core.space`` and nothing of FINN.
 from __future__ import annotations
 
 from finn.core.space import (
-    ConstraintGroup,
     Decision,
+    Domain,
     Param,
     Rejected,
     Space,
     constraint,
     derived,
     divisors_of,
+    domain,
     reject,
-    requires,
     supplied,
     view,
 )
@@ -44,8 +46,6 @@ class Packed(Space):
             return reject("packed-width", "the packed core takes at most 64 lanes")
         return True
 
-    admission = ConstraintGroup(fits)
-
 
 class Stub(Space):
     """Refuses an odd width."""
@@ -58,8 +58,6 @@ class Stub(Space):
         if self.width % 2:
             return reject("stub-width", "the stub core takes an even width")
         return True
-
-    admission = ConstraintGroup(even)
 
 
 CORES: dict[str, type[Space] | Space] = {"packed": Packed, "stub": Stub}
@@ -102,7 +100,18 @@ class Gearbox(Space):
             return reject("gearbox-source", "the gearbox takes a packed core's stream")
         return True
 
-    admission = ConstraintGroup(fed)
+
+def beats(packed: object) -> Domain[int]:
+    """One beat, or two from a packed core: a domain over whether the upstream core is
+    packed, so a beat's own check waits while that core is open."""
+
+    def accepts(*, candidate: int, packed: bool) -> bool:
+        return candidate == 1 or (packed and candidate == 2)
+
+    def candidates(*, packed: bool) -> tuple[int, ...]:
+        return (1, 2) if packed else (1,)
+
+    return domain(accepts=accepts, candidates=candidates, packed=packed)
 
 
 class Link(Space):
@@ -113,12 +122,14 @@ class Link(Space):
     adapter: Direct | Gearbox = Decision(
         {"direct": Direct, "gearbox": Gearbox}, width=width, upstream_packed=upstream_packed
     )
-    burst: int = Decision(
-        values=(1, 2, 4),
-        requires=(
-            requires(upstream_packed, "burst-source: bursts need a packed core", cases=(2, 4)),
-        ),
-    )
+    burst: int = Decision(values=(1, 2, 4))
+    beat: int = Decision(domain=beats(upstream_packed))
+
+    @constraint
+    def bursts(self) -> bool | Rejected:
+        if self.burst in (2, 4) and not self.upstream_packed:
+            return reject("burst-source", "bursts need a packed core")
+        return True
 
     @derived
     def out(self) -> int:

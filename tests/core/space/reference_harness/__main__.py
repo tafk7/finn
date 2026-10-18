@@ -4,7 +4,7 @@
 """From ``tests``: ``python -m core.space.reference_harness`` prints the acceptance matrix as
 a markdown table; ``python -m core.space.reference_harness walks --seeds 0-99 --steps 40``
 runs the seeded walks (both index paths unless ``--paths`` says otherwise) and prints their
-summary, then each failed walk whole; ``--without "lane 1"`` expects only the kinds of the
+summary, then each failed walk whole; ``--without "lane 2"`` expects only the kinds of the
 rows the other milestones keep (a milestone's engine walked as if it had removed its rows). It
 exits 1 when a walk failed."""
 
@@ -25,7 +25,7 @@ def main(argv: list[str]) -> int:
     walks.add_argument(
         "--without",
         default="",
-        help='milestones whose rows are taken as removed, comma-separated ("lane 1")',
+        help='milestones whose rows are taken as removed, comma-separated ("lane 2")',
     )
     arguments = parser.parse_args(argv)
     if arguments.command != "walks":

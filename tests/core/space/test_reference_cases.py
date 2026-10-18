@@ -327,7 +327,6 @@ def test_a_choice_under_an_unknown_guard_is_open_waiting_on_it() -> None:
     GUARDS.start({"budget": 5}).check_state("extra.size")
 
 
-@expected("value-case-trial")
 def test_a_guards_choice_takes_no_case_that_makes_a_rule_under_it_false() -> None:
     # At a budget of 5 ``costly``'s rule is false wherever it applies, and it applies when
     # ``want`` is false: so ``want`` has one possible case, and it is forced.
@@ -358,12 +357,10 @@ DOMAINS = Case(
 EMPTY = Case("an empty domain", Space((), Scope("", choices=(Choice("z", listed()),))))
 
 
-@expected("listed-value-not-member-possible")
 def test_a_listed_value_the_domain_rejects_is_not_possible() -> None:
     DOMAINS.start({"n": 6}).check_possible("x")
 
 
-@expected("listed-value-not-member-forced")
 def test_a_listed_value_the_domain_rejects_leaves_the_other_forced() -> None:
     DOMAINS.start({"n": 6}).check_state("y")
 
@@ -380,17 +377,14 @@ def test_a_value_outside_a_membership_only_domain_is_refused_at_commit() -> None
     DOMAINS.start({"n": 6}).check_change(Change(commit={"w": 1}))
 
 
-@expected("empty-list-choice")
 def test_an_empty_list_refuses_its_choice() -> None:
     EMPTY.start().check_state("z")
 
 
-@expected("empty-computed-list-choice")
 def test_an_empty_computed_list_refuses_its_choice() -> None:
     DOMAINS.start({"n": 0}).check_state("d")
 
 
-@expected("empty-list-validity")
 def test_an_empty_list_refuses_the_configuration() -> None:
     EMPTY.start().check_validity()
 
@@ -725,13 +719,11 @@ def test_a_derived_value_that_refuses_reads_refused_with_its_code() -> None:
     REFUSED_INPUT.start({"w": 7}).check_answer("width")
 
 
-@expected("refused-input-commit")
 def test_a_commit_whose_domain_input_is_refused_is_accepted() -> None:
     # Nothing is waited on: no commitment can settle a refusal on the facts.
     REFUSED_INPUT.start({"w": 7}).check_change(Change(commit={"lanes": 1}))
 
 
-@expected("refused-input-new-facts")
 def test_new_facts_that_refuse_a_kept_choices_domain_input_are_accepted() -> None:
     REFUSED_INPUT.start({"w": 8}, {"lanes": 4}).check_change(Change(facts={"w": 7}))
 
@@ -744,18 +736,15 @@ def committed_over_odd_width() -> Pair:
     return pair
 
 
-@expected("refused-input-state")
 def test_a_choice_whose_domain_input_is_refused_reads_refused_through_it() -> None:
     # Kept, never read as a value: refused with the input's own finding.
     committed_over_odd_width().check_state("lanes")
 
 
-@expected("refused-input-answer")
 def test_a_choice_whose_domain_input_is_refused_is_queried_refused_through_it() -> None:
     committed_over_odd_width().check_answer("lanes")
 
 
-@expected("refused-input-validity")
 def test_a_choice_whose_domain_input_is_refused_refuses_the_configuration_through_it() -> None:
     # Blamed once, at the input: the one false piece's reason is ``width``'s refusal.
     committed_over_odd_width().check_validity()
@@ -897,18 +886,15 @@ INAPPLICABLE_INPUT = Case(
 )
 
 
-@expected("inapplicable-input-commit")
 def test_a_commit_whose_domain_input_does_not_apply_is_kept_unchecked() -> None:
     INAPPLICABLE_INPUT.start({"on": False, "n": 4}).check_change(Change(commit={"lanes": 2}))
 
 
-@expected("inapplicable-input-new-facts")
 def test_new_facts_under_which_a_kept_choices_domain_input_does_not_apply_keep_it() -> None:
     point = INAPPLICABLE_INPUT.start({"on": True, "n": 4}, {"lanes": 2})
     point.check_change(Change(facts={"on": False}))
 
 
-@expected("inapplicable-input-state")
 def test_a_choice_whose_domain_input_does_not_apply_waits_on_it() -> None:
     pair = INAPPLICABLE_INPUT.start({"on": False, "n": 4}).check_change(Change(commit={"lanes": 2}))
     assert pair is not None  # asked once both sides accept the commit
@@ -998,7 +984,6 @@ def test_a_choice_kept_inside_its_domain_with_its_guard_forced_is_readable() -> 
     kept_at_four().check_state(PE)
 
 
-@expected("guard-first-new-facts")
 def test_new_facts_refusing_a_kept_choices_guard_and_its_input_are_accepted() -> None:
     # Admitted under the refused guard: nothing is kept unchecked.
     kept_at_four().check_change(Change(facts={"width": 99, "w": 7}))
@@ -1012,24 +997,20 @@ def guard_and_input_refused() -> Pair:
     return pair
 
 
-@expected("guard-first-state")
 def test_a_kept_choice_under_a_refused_guard_and_input_reads_refused_through_the_guard() -> None:
     # The guard's reasons only: the refused input is not one of them while the guard refuses.
     guard_and_input_refused().check_state(PE)
 
 
-@expected("guard-first-answer")
 def test_a_kept_choice_under_a_refused_guard_and_input_is_queried_refused_through_it() -> None:
     guard_and_input_refused().check_answer(PE)
 
 
-@expected("guard-first-validity")
 def test_a_kept_choice_under_a_refused_guard_and_input_adds_nothing_to_validity() -> None:
     # Blamed at the guard once: the one false piece is the selector's.
     guard_and_input_refused().check_validity()
 
 
-@expected("guard-first-back")
 def test_a_kept_choice_back_under_its_guard_and_an_even_input_is_readable() -> None:
     guard_and_input_refused().step(Change(facts={"width": 9, "w": 8})).check_state(PE)
 
@@ -1042,6 +1023,5 @@ def guard_holding_input_refused() -> Pair:
     return pair
 
 
-@expected("guard-first-holding-guard")
 def test_a_kept_choice_under_a_holding_guard_reads_refused_through_its_input() -> None:
     guard_holding_input_refused().check_state(PE)

@@ -30,9 +30,10 @@ an index with several.
 driven by role, and tied low when unpumped. The style's cases are the explicit
 ones, ordered by the bits the table holds (``table_bits``, which no folding moves,
 so the style is chosen before, with or after the folding), then ``auto``, which
-states no resources (``finn.kernels.utilization.memory_styles``). ``ultra`` states
-what it needs of the ``platform``: UltraRAM that takes initial contents (on Zynq
-UltraScale+ an initialized UltraRAM is built as block RAM). A pumped memory takes the
+states no resources (``finn.kernels.utilization.memory_styles``). ``ultra`` needs
+UltraRAM of the ``platform`` that takes initial contents, two constraints of the kernel
+(``uram-absent``, ``uram-init``; on Zynq UltraScale+ an initialized UltraRAM is built as
+block RAM). A pumped memory takes the
 doubled clock, which its module states and the shell admits (``clock-unavailable``).
 """
 
@@ -44,14 +45,12 @@ from math import ceil, prod
 from qonnx.core.ranges import TensorRange
 
 from finn.core.space import (
-    ConstraintGroup,
     Decision,
     Param,
     Rejected,
     constraint,
     derived,
     reject,
-    requiring,
 )
 from finn.dataflow.datatypes import (
     QONNXDataType,
@@ -83,7 +82,8 @@ from finn.kernels.utilization import (
     auto_unstated,
     memory,
     memory_styles,
-    uram_requirements,
+    uram_constraint,
+    uram_init_constraint,
 )
 from finn.kernels.values.domains import Integer, admit_element, set_index_dtype
 from finn.kernels.values.semantics import (
@@ -147,11 +147,9 @@ class MemStreamKernel(LeafKernel):
             return reject("memstream-values", "contents must be an integer tensor")
         return prod(shape) * qonnx_datatype_width(self.dtype)
 
-    ram_style: str = Decision(
-        domain=requiring(
-            memory_styles(table_bits), *uram_requirements(platform, ("ultra",), init=True)
-        )
-    )
+    ram_style: str = Decision(domain=memory_styles(table_bits))
+    uram_present = uram_constraint(platform, ram_style, ("ultra",))
+    uram_init_taken = uram_init_constraint(platform, ram_style, ("ultra",))
     # A pumped memory takes a doubled clock, which the shell admits.
     pumped_memory: bool = Decision(values=(False, True))
 
@@ -216,8 +214,6 @@ class MemStreamKernel(LeafKernel):
         if len(self.set_tensor.shape) != 1:
             return reject("memstream-set-channel", "the set channel carries a vector of indices")
         return True
-
-    admission = ConstraintGroup(geometry_supported, selected)
 
     @derived(semantics=INTEGER_VECTOR)
     def image(self) -> IntegerVector | Rejected:

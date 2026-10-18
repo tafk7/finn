@@ -172,7 +172,7 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
 
     pins = derived(plain_pins)
     admitted = constraint(narrow)
-    ports = View(pins, requires=(admitted,))
+    ports = View(pins)
     key = ViewKey("ports", Pins)
     word = composite(
         "IntegerWord",

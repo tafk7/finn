@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from math import lcm
 
-from finn.core.space import ConstraintGroup, Param, derived
+from finn.core.space import Param, derived
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Endpoint
@@ -91,8 +91,7 @@ class VpcKernel(LeafKernel):
         return lanes
 
     # Its lanes and element come from its ports, positive by construction: the RTL
-    # refuses nothing they present.
-    admission = ConstraintGroup()
+    # refuses nothing they present, so it states no constraint of its own.
 
     @derived
     def clocking(self) -> Clocking:
