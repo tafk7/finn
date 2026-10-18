@@ -1068,11 +1068,25 @@ def _piece(snapshot: Snapshot, piece: Node, answer: QueryResult[object]) -> Quer
     choice reads as its value, unresolved while unchecked, refused through a refused
     guard. An open Decision is a piece only where it has no possible case (forcing
     refuses it, ``decision-no-viable-case``); otherwise, forced or still to choose,
-    it counts as true."""
+    it counts as true.
+
+    On forcing's copies (which do not force) an open Decision reads unassigned and a
+    stored one as its value or unresolved, so a Decision's piece is false there only
+    through its guard: a selector's verdict, which rests on its candidate's validity,
+    reads the guards and not the Decisions (``_forcing._refusal_roots``). That is checked
+    here, so a change that breaks it fails loudly."""
     if piece.kind != "decision":
         return cast(QueryResult[bool], answer)
     if isinstance(answer, Available):
         return Available(True)
+    if isinstance(answer, Rejected) and not snapshot.forcing:
+        guard = None if piece.guard is None else snapshot.cache.get(piece.guard)
+        if guard is None or not isinstance(guard.result, Rejected):
+            raise EvaluationError(
+                piece.owner,
+                "validity",
+                "a Decision's piece is refused on a copy that does not force, its guard not",
+            )
     if _stored(snapshot, piece.index) or isinstance(answer, Rejected):
         return cast(QueryResult[bool], answer)
     return Available(True)

@@ -58,10 +58,10 @@ final check and a change's reach read.
 
 A selector's verdict rests on its candidates' validity, read on copies where an open
 Decision reads as unassigned and a stored one as its value: there a Decision's piece
-refuses only through its guard, so the verdict records the reads of the constraints,
-the guards and the placed Spaces' validity, not the Decisions inside the candidate
-(``_refusal_roots``), and a choice committed inside a candidate does not reach it unless
-a constraint reading the selector reads it.
+refuses only through its guard (``_runtime._piece`` checks it), so the verdict records
+the reads of the constraints, the guards and the placed Spaces' validity, not the
+Decisions inside the candidate (``_refusal_roots``), and a choice committed inside a
+candidate does not reach it unless a constraint reading the selector reads it.
 """
 
 from __future__ import annotations

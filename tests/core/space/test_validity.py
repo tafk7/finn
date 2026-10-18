@@ -695,3 +695,27 @@ def test_an_ancestors_constraint_forces_its_own_selector_and_a_choice_two_spaces
     assert forced(commit(shallow, {"transport.queue.storage.style": "lut"})) == {
         "transport": "queue"
     }
+
+
+class Choosing(Space):
+    width: int = Param()
+    compute: Plain | Core = Decision({"plain": Plain, "core": Core}, width=width)
+
+
+def test_a_decision_refused_on_forcings_copies_but_through_its_guard_fails_loudly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A selector's verdict reads its candidate's validity on copies that do not force, and
+    # rests on the guards there, not on the Decisions: a Decision's piece is false there
+    # only through its guard. An engine that broke that would raise, not answer.
+    assert forced(design_space(Choosing(width=4))) == {}
+    original = _runtime._forced
+
+    def refusing(snapshot: _runtime.Snapshot, index: int) -> Any:
+        if not snapshot.forcing and snapshot.linked.nodes[index].key == "compute.core.lanes":
+            return reject("broken", "refused on a copy that does not force")
+        return original(snapshot, index)
+
+    monkeypatch.setattr(_runtime, "_forced", refusing)
+    with pytest.raises(EvaluationError, match="its guard not"):
+        forced(design_space(Choosing(width=4)))
