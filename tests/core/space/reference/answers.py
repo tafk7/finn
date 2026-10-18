@@ -174,8 +174,8 @@ class Check:
 
     ``verdict`` is ``None`` when the choice is inactive (its scope is not present).
     Membership is evaluated whatever the presence: a value outside its domain is
-    false even under an unknown or refused guard; a value inside it under an
-    unknown guard is unknown, waiting on the guard.
+    false even under an unknown or refused guard; a value inside it is unknown under
+    an unknown guard, waiting on the guard, and true under a refused one.
     """
 
     verdict: Verdict | None
@@ -196,6 +196,20 @@ class Readable:
     takes part in; it keeps its value while its own check holds."""
 
     value: Any
+    conflict: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class GuardRefused:
+    """Committed, its own check true, under a refused guard (a selector refused by
+    forcing or by its own check): admitted, never unchecked, a change keeping it is
+    accepted. Where its guard holds (a trial assuming its case) it reads as its value;
+    in the published configuration it reads as refused through its guard, with the
+    guard's reasons in ``reasons``. ``conflict`` lists the other participants of a
+    conflict it takes part in, as for :class:`Readable`."""
+
+    value: Any
+    reasons: tuple[Reason, ...]
     conflict: tuple[str, ...] = ()
 
 
@@ -253,7 +267,7 @@ class Inactive:
     value: Any = None
 
 
-ChoiceState = Readable | Unchecked | Forced | Open | RefusedChoice | Inactive
+ChoiceState = Readable | GuardRefused | Unchecked | Forced | Open | RefusedChoice | Inactive
 
 
 @dataclass(frozen=True)

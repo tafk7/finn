@@ -11,6 +11,8 @@ these tests are what the oracle is held to.
 from __future__ import annotations
 
 import itertools
+import random
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -27,12 +29,14 @@ from core.space.reference import (
     DefinitionError,
     Derived,
     Forced,
+    GuardRefused,
     Inactive,
     Inapplicable,
     Known,
     Open,
     PieceKind,
     Readable,
+    Reads,
     Reason,
     ReasonKind,
     Refuse,
@@ -54,6 +58,7 @@ from core.space.reference import (
     listed,
     membership,
 )
+from core.space.reference.model import same
 
 T, F, U = Verdict.TRUE, Verdict.FALSE, Verdict.UNKNOWN
 
@@ -156,13 +161,146 @@ def test_a_value_outside_its_domain_keeps_its_own_reason_under_a_refused_selecto
     }
 
 
-def test_a_value_inside_its_domain_under_a_refused_selector_is_kept_unchecked() -> None:
+def test_a_value_inside_its_domain_under_a_refused_selector_is_admitted() -> None:
+    """A refused selector gains no case without a revision, so the choice under it is
+    not left waiting: its own check holds, the change is accepted, and published it
+    reads refused through its guard, the selector's own piece refusing the Space."""
+
     result = accepted(change(Configuration(refused_selector()), Change(commit={"mode.a.p": 2})))
-    assert result.unchecked == ("mode.a.p",)
+    assert result.unchecked == ()
     assert result.validity.verdict is F
     solution = result.configuration.solve()
-    assert solution.state("mode.a.p") == Unchecked(2, ("mode",))
-    assert solution.own_check("mode.a.p") == Check(U, waits=("mode",))
+    through_guard = (
+        Reason(ReasonKind.INPUT_REFUSED, "mode.a.p", "mode.a", related=("mode",)),
+        Reason(ReasonKind.NO_POSSIBLE_VALUE, "mode", ""),
+    )
+    assert solution.own_check("mode.a.p") == Check(T)
+    assert solution.state("mode.a.p") == GuardRefused(2, through_guard)
+    assert solution.read("mode.a.p") == Refused(through_guard)
+
+
+def three_guards() -> Space:
+    """``mode.a`` holds ``p`` with a rule and a view; root rules allow each case by a fact."""
+
+    a = Scope(
+        "a",
+        choices=(Choice("p", listed(1, 2)),),
+        constraints=(Constraint("small", ("mode.a.p",), lambda r: r["mode.a.p"] < 2, "too-big"),),
+        views=(View("shown", ("mode.a.p",), lambda r: r["mode.a.p"]),),
+    )
+    return Space(
+        ("a_ok", "b_ok"),
+        Scope(
+            "",
+            selectors=(Selector("mode", (a, Scope("b"))),),
+            constraints=(
+                Constraint(
+                    "a_allowed", ("mode", "a_ok"), lambda r: r["mode"] != "a" or r["a_ok"], "no-a"
+                ),
+                Constraint(
+                    "b_allowed", ("mode", "b_ok"), lambda r: r["mode"] != "b" or r["b_ok"], "no-b"
+                ),
+            ),
+        ),
+    )
+
+
+def test_three_guard_states_side_by_side() -> None:
+    """False: inactive. Unknown: unchecked, waiting. Refused: admitted; the scope's rule
+    and view are not evaluated, read refused when published, and add no false piece."""
+
+    false_guard = solve_at(
+        three_guards(), {"mode": "b", "mode.a.p": 1}, {"a_ok": True, "b_ok": True}
+    )
+    assert false_guard.state("mode.a.p") == Inactive(True, 1)
+    assert false_guard.piece("mode.a.small").applies is False
+    assert false_guard.view("mode.a.shown") == Inapplicable()
+
+    unknown_guard = solve_at(three_guards(), {"mode.a.p": 1})
+    assert unknown_guard.state("mode.a.p") == Unchecked(1, ("mode",))
+    small = unknown_guard.piece("mode.a.small")
+    assert (small.verdict, small.waits) == (U, ("mode",))
+    assert unknown_guard.view("mode.a.shown") == Unresolved(("mode",))
+    assert unknown_guard.validity().verdict is U
+
+    refused_guard = solve_at(three_guards(), {"mode.a.p": 1}, {"a_ok": False, "b_ok": False})
+    mode_refused = Reason(ReasonKind.NO_POSSIBLE_VALUE, "mode", "")
+    assert isinstance(refused_guard.state("mode"), RefusedChoice)
+    assert refused_guard.own_check("mode.a.p") == Check(T)
+    assert refused_guard.state("mode.a.p") == GuardRefused(
+        1, (Reason(ReasonKind.INPUT_REFUSED, "mode.a.p", "mode.a", related=("mode",)), mode_refused)
+    )
+    small = refused_guard.piece("mode.a.small")
+    assert small.verdict is F
+    assert small.reasons == (
+        Reason(ReasonKind.INPUT_REFUSED, "mode.a.small", "mode.a", related=("mode",)),
+        mode_refused,
+    )
+    assert refused_guard.view("mode.a.shown") == Refused(
+        (
+            Reason(ReasonKind.INPUT_REFUSED, "mode.a.shown", "mode.a", related=("mode",)),
+            mode_refused,
+        )
+    )
+    validity = refused_guard.validity()
+    assert validity.verdict is F
+    assert "mode.a.small" not in {piece.subject for piece in validity.false}
+    assert (PieceKind.NO_POSSIBLE_VALUE, "mode") in false_kinds(refused_guard)
+
+
+def test_a_choice_under_a_refused_guard_reads_as_its_value_where_its_guard_holds() -> None:
+    """``p = 2`` is read in the trial assuming ``mode = a``: the scope's own rule refuses
+    the case, so ``mode`` has no possible case, naming ``p``; ``p`` is admitted."""
+
+    solution = solve_at(three_guards(), {"mode.a.p": 2}, {"a_ok": True, "b_ok": False})
+    assert solution.state("mode") == RefusedChoice(
+        (
+            Reason(ReasonKind.CONFLICT, "mode", "", related=("mode.a.p",)),
+            Reason(ReasonKind.NO_POSSIBLE_VALUE, "mode", ""),
+        ),
+        cases=(
+            ("a", (constraint_reason("mode.a.small", "too-big", "mode.a"),)),
+            ("b", (constraint_reason("b_allowed", "no-b"),)),
+        ),
+        peers=("mode.a.p",),
+    )
+    state = solution.state("mode.a.p")
+    assert isinstance(state, GuardRefused)
+    assert (state.value, state.conflict) == (2, ("mode",))
+
+
+def test_a_selector_refused_by_a_conflict_is_a_refused_guard() -> None:
+    """``x`` and the one-case ``mode`` are both forced and exclude each other: both are
+    refused, and ``mode``'s case is a refused guard for the choice committed in it."""
+
+    space = Space(
+        (),
+        Scope(
+            "",
+            choices=(Choice("x", listed(1)),),
+            selectors=(Selector("mode", (Scope("a", choices=(Choice("p", listed(1, 2)),)),)),),
+            constraints=(
+                Constraint(
+                    "exclusive",
+                    ("x", "mode"),
+                    lambda r: not (r["x"] == 1 and r["mode"] == "a"),
+                    "both",
+                ),
+            ),
+        ),
+    )
+    result = accepted(change(Configuration(space), Change(commit={"mode.a.p": 1})))
+    assert result.unchecked == ()
+    solution = result.configuration.solve()
+    assert solution.conflicts() == (Conflict("", ("mode", "x"), ("mode", "x"), ()),)
+    assert solution.own_check("mode.a.p") == Check(T)
+    assert solution.state("mode.a.p") == GuardRefused(
+        1,
+        (
+            Reason(ReasonKind.CONFLICT, "mode", "", related=("x",)),
+            Reason(ReasonKind.INPUT_REFUSED, "mode.a.p", "mode.a", related=("mode",)),
+        ),
+    )
 
 
 # --- guards -----------------------------------------------------------------------------
@@ -521,7 +659,7 @@ def test_a_value_forced_from_a_withdrawn_one_is_withdrawn_too() -> None:
     assert solution.state("w") == Open((1, 2))
 
 
-# --- the trial reads the configuration the change would publish -------------------------
+# --- own checks in trials, and the configuration the change would publish ---------------
 
 
 def divisor_of_forced() -> Space:
@@ -539,16 +677,70 @@ def divisor_of_forced() -> Space:
     )
 
 
-def test_a_retained_choice_false_against_the_published_forced_value_refuses_the_change() -> None:
+def test_a_case_that_refuses_a_retained_choice_is_not_possible() -> None:
+    """``w``'s only case would make ``c``'s own check false: ``w`` has no possible case,
+    naming ``c``; ``c`` waits on it, unchecked; the change is accepted and the
+    configuration reads refused."""
+
     base = Configuration(divisor_of_forced(), {"n": 8}, {"c": 4})
     solution = base.solve()
     assert solution.state("w") == Forced(8, ())
     assert solution.state("c") == Readable(4)
-    result = rejected(change(base, Change(facts={"n": 6})))
+    result = accepted(change(base, Change(facts={"n": 6})))
+    assert result.unchecked == ("c",)
+    assert result.validity.verdict is F
+    after = result.configuration.solve()
+    assert after.state("c") == Unchecked(4, ("w",))
+    assert after.state("w") == RefusedChoice(
+        (
+            Reason(ReasonKind.CONFLICT, "w", "", related=("c",)),
+            Reason(ReasonKind.NO_POSSIBLE_VALUE, "w", ""),
+        ),
+        cases=((6, (Reason(ReasonKind.OUTSIDE_DOMAIN, "c", ""),)),),
+        peers=("c",),
+    )
+    assert accepted(change(base, Change(facts={"n": 12}))).unchecked == ()
+
+
+def test_forcing_never_chooses_a_value_that_would_refuse_a_retained_choice() -> None:
+    """A stored choice whose domain reads an open choice is unchecked until the open
+    choice is forced; forcing skips the case under which the check would be false."""
+
+    space = Space(
+        (),
+        Scope(
+            "",
+            choices=(
+                Choice("w", listed(6, 8)),
+                Choice("c", membership(lambda v, r: r["w"] % v == 0, ("w",))),
+            ),
+        ),
+    )
+    solution = solve(space, c=4)
+    assert solution.state("w") == Forced(8, ((6, (Reason(ReasonKind.OUTSIDE_DOMAIN, "c", ""),)),))
+    assert solution.state("c") == Readable(4)
+    assert solve(space, c=5).state("c") == Unchecked(5, ("w",))
+
+
+def test_a_retained_choice_false_in_the_published_configuration_refuses_the_change() -> None:
+    """``c``'s own check reads the committed ``a``: replacing ``a`` is type-checked
+    against the configuration it would publish, where ``c`` no longer divides ``a``."""
+
+    space = Space(
+        (),
+        Scope(
+            "",
+            choices=(
+                Choice("a", listed(6, 8)),
+                Choice("c", membership(lambda v, r: r["a"] % v == 0, ("a",))),
+            ),
+        ),
+    )
+    base = Configuration(space, {}, {"a": 8, "c": 4})
+    result = rejected(change(base, Change(commit={"a": 6})))
     assert result.refusals == (
         ChangeRefusal("c", "reached", (Reason(ReasonKind.OUTSIDE_DOMAIN, "c", ""),)),
     )
-    assert accepted(change(base, Change(facts={"n": 12}))).unchecked == ()
 
 
 def test_a_retained_choice_whose_check_waits_is_kept_unchecked() -> None:
@@ -821,13 +1013,25 @@ def test_validity_counts_a_rule_three_deep() -> None:
 def test_a_choice_three_deep_keeps_its_value_in_a_conflict_with_the_forced_selectors() -> None:
     """``pe = 4`` with width 6 refuses ``packed``; ``serial`` is refused by its fact, so
     ``compute`` has no possible case, and ``kernel`` was forced to ``inner`` only because
-    ``plain`` is refused. The conflict refuses the two selectors and keeps ``pe``."""
+    ``plain`` is refused. The conflict refuses the two selectors and keeps ``pe``: its
+    own check holds, it is never unchecked, and published it reads refused through its
+    guards."""
 
     solution = solve(nested(), {"plain_ok": False, "serial_ok": False, "width": 6}, **{PE: 4})
     assert solution.conflicts() == (
         Conflict("", ("kernel", COMPUTE, PE), ("kernel", COMPUTE), (PE,)),
     )
-    assert solution.state(PE) == Readable(4, conflict=("kernel", COMPUTE))
+    assert solution.own_check(PE) == Check(T)
+    state = solution.state(PE)
+    assert isinstance(state, GuardRefused)
+    assert (state.value, state.conflict) == (4, ("kernel", COMPUTE))
+    assert (
+        Reason(
+            ReasonKind.INPUT_REFUSED, PE, "kernel.inner.compute.packed", related=("kernel", COMPUTE)
+        )
+        in state.reasons
+    )
+    assert solution.unchecked() == ()
     assert solution.forced() == {}
     assert solution.validity().verdict is F
 
@@ -890,3 +1094,137 @@ def test_a_parent_rule_over_the_capabilities_makes_the_case_impossible() -> None
         "other", (("native", (constraint_reason("native_needs_core", "no-core"),)),)
     )
     assert solution.state("native_impl.compute") == Inactive()
+
+
+# --- refinement: commits only, no answer moves down the information order ----------------
+
+
+def relate(relation: Callable[[int, int], bool], left: str, right: str) -> Callable[[Reads], bool]:
+    return lambda r: relation(r[left], r[right])
+
+
+def random_space(rng: random.Random) -> tuple[Space, list[tuple[str, Any]]]:
+    """Three value choices with small lists, a selector whose case holds a choice and a
+    rule reading a root choice, and one to three random rules over the root choices."""
+
+    names = ("a", "b", "c")
+    choices = tuple(
+        Choice(name, listed(*sorted(rng.sample((0, 1, 2), rng.randint(1, 3))))) for name in names
+    )
+    relations: dict[str, Callable[[int, int], bool]] = {
+        "le": lambda x, y: x <= y,
+        "lt": lambda x, y: x < y,
+        "ne": lambda x, y: x != y,
+        "sum": lambda x, y: x + y <= 2,
+    }
+    rules = []
+    for index in range(rng.randint(1, 3)):
+        left, right = rng.sample(names, 2)
+        relation = relations[rng.choice(sorted(relations))]
+        rules.append(
+            Constraint(
+                f"rule{index}",
+                (left, right),
+                relate(relation, left, right),
+                f"code{index}",
+            )
+        )
+    on = Scope(
+        "on",
+        choices=(Choice("q", listed(0, 1)),),
+        constraints=(
+            Constraint("inner", ("mode.on.q", "a"), lambda r: r["mode.on.q"] <= r["a"], "inner"),
+        ),
+    )
+    space = Space(
+        (),
+        Scope(
+            "",
+            choices=choices,
+            selectors=(Selector("mode", (on, Scope("off"))),),
+            constraints=tuple(rules),
+        ),
+    )
+    commits = [(choice.name, value) for choice in choices for value in choice.domain.values or ()]
+    commits += [("mode", "on"), ("mode", "off"), ("mode.on.q", 0), ("mode.on.q", 1)]
+    return space, commits
+
+
+def refinement_violations(before: Solution, after: Solution, committed: str) -> list[str]:
+    """What moved down the information order from ``before`` to ``after``, where
+    ``after`` adds one commitment, ``committed``.
+
+    The property: a refused configuration stays refused; a valid one never becomes
+    undecided; a readable choice (or one admitted under a refused guard) becomes
+    unchecked only in a refused configuration; a forced value stays forced or becomes
+    refused; and, stricter than that, an open choice refused stays refused unless the
+    configuration reads refused. Exceptions the semantics allow:
+
+    - committing a case that was not possible (a value other than a choice's forced
+      one, a case its trial refused, or any case of a choice with no possible case):
+      the configuration must read refused, and what followed from the old evidence may
+      move (a choice forced through it, or refused through it, reads open again);
+    - inside a refused configuration, a choice refused through a forced value's
+      evidence may read open again once that forced value is itself refused (a refusal
+      is blamed once, and a refused choice reads unresolved to the others' trials).
+    """
+
+    found = []
+    was, now = before.validity().verdict, after.validity().verdict
+    prior = before.state(committed)
+    value = after.configuration.stored[committed]
+    impossible = (
+        (isinstance(prior, Forced) and not same(prior.value, value))
+        or isinstance(prior, RefusedChoice)
+        or (isinstance(prior, Open) and any(same(case, value) for case, _ in prior.impossible))
+    )
+    if impossible:
+        # a case that was not possible: the configuration reads refused, and what
+        # followed from the forced value may move
+        return [] if now is F else [f"{committed}: an impossible case left {now}"]
+    if was is F and now is not F:
+        found.append(f"validity {was} -> {now}")
+    if was is T and now is U:
+        found.append("validity settled -> undecided")
+    for name, old in before.states().items():
+        new = after.state(name)
+        if (
+            isinstance(old, (Readable, GuardRefused))
+            and isinstance(new, Unchecked)
+            and now is not F
+        ):
+            found.append(f"{name}: readable -> unchecked")
+        if isinstance(old, Forced):
+            if name == committed:
+                continue
+            if isinstance(new, Forced) and new.value == old.value:
+                continue  # its reasons may grow: they are observed, not minimal
+            if isinstance(new, RefusedChoice) and not new.stored:
+                continue
+            found.append(f"{name}: forced {old.value} -> {new}")
+        if isinstance(old, RefusedChoice) and not old.stored and name != committed:
+            if not isinstance(new, RefusedChoice) and now is not F:
+                found.append(f"{name}: refused -> {new}")
+    return found
+
+
+def test_refinement_moves_no_answer_down_the_information_order() -> None:
+    """Commits only (no replace, clear or fact change), over small random Spaces from a
+    fixed seed; the property and its exceptions are :func:`refinement_violations`."""
+
+    rng = random.Random(20261017)
+    for _ in range(60):
+        space, commits = random_space(rng)
+        configuration = Configuration(space)
+        before = configuration.solve()
+        for _ in range(4):
+            name, value = rng.choice(commits)
+            if name in configuration.stored:
+                continue
+            result = change(configuration, Change(commit={name: value}))
+            if isinstance(result, Rejected):
+                continue
+            after = result.configuration.solve()
+            violations = refinement_violations(before, after, name)
+            assert not violations, (configuration.stored, name, value, violations)
+            configuration, before = result.configuration, after
