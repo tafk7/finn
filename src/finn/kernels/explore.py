@@ -124,7 +124,9 @@ class Composition(Protocol):
 
     def forced(self, names: Iterable[str] | None = None) -> Mapping[Key, object]: ...
 
-    def chosen(self, names: Iterable[str] | None = None) -> Mapping[Key, object]: ...
+    def chosen(
+        self, names: Iterable[str] | None = None, *, unchecked: bool = False
+    ) -> Mapping[Key, object]: ...
 
     def admission(self, name: str) -> tuple[Finding, ...]: ...
 
@@ -439,8 +441,9 @@ class Seam:
         ``admission``, as far as it is decided). It is otherwise committed, and what it
         makes stale is dropped: a stored choice of a kernel the engine refuses beside it,
         or a channel's that replay refuses once the kernel's ends change
-        (``Network.trial``). Each one dropped is named with why (``Accepted.dropped``) and
-        settled again. A held choice is never dropped: the change is refused, naming it.
+        (``Network.trial``), one kept unchecked as any other. Each one dropped is named with
+        why (``Accepted.dropped``) and settled again. A held choice is never dropped: the
+        change is refused, naming it.
         """
         self.attempts += 1
         changes = self._typed(network, changes)
@@ -453,7 +456,7 @@ class Seam:
             trial: Trial[S] = network.trial(changes, sorted(clear))
             if trial.accepted:
                 break
-            stored = network.chosen({key[0] for key in trial.refused})
+            stored = network.chosen({key[0] for key in trial.refused}, unchecked=True)
             dependents = {key for key in trial.refused if key in stored and key not in changes}
             if not dependents or set(trial.refused) - dependents or dependents <= clear:
                 return Refused(trial.refused)
@@ -524,8 +527,11 @@ class Seam:
     def reopen(self, network: S, keys: Iterable[Key]) -> tuple[S, tuple[Key, ...]]:
         """``network`` with the stored ``keys`` cleared, and every key cleared: where the
         engine refuses the clear because a stored choice reads one of them (it would be
-        left unresolved, refused or inapplicable), that choice is cleared too, and the
-        clear tried again; a channel replay refuses after it is cleared too. A held key in
+        left refused or inapplicable), that choice is cleared too, and the clear tried
+        again; a channel replay refuses after it is cleared too. A stored choice the clear
+        only leaves waiting on them (one under a selector cleared, or whose own check reads
+        a choice cleared) is not in the reach: the engine keeps it unchecked, and checks it
+        again once what it waits on is chosen. A held key in
         the reach is cleared, for ``settle`` to bring back. A refusal that names no stored
         choice is an ``ExploreError``."""
         stored = network.chosen()
@@ -624,10 +630,11 @@ class Seam:
 
     def _check_held(self, network: Composition) -> None:
         """``Unsettled`` for the first held key ``network`` does not hold at its value (one
-        a change left forced to another value, or inapplicable)."""
+        a change left forced to another value, or inapplicable). One kept unchecked at its
+        value holds: a hold waits with its choice."""
         if not self.held:
             return
-        values = network.chosen()
+        values = network.chosen(unchecked=True)
         forced: Mapping[Key, object] | None = None
         for key, value in self.held.items():
             if values.get(key, _ABSENT) == value:

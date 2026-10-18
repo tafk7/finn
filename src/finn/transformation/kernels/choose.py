@@ -406,7 +406,8 @@ def _held_values(
     does not take is refused, by name, never dropped and given its baseline: an owner that
     is no member of the network (``held-owner-unknown``), or a key the bound network states
     no value for, because replay refused the stored one or it is gone (``held-not-taken``;
-    replay's findings are its causes)."""
+    replay's findings are its causes). A key kept unchecked is stated, by its stored value:
+    its hold waits with it."""
     members = set(network.members)
     kernels = set(network.kernels)
     values: dict[Key, object] = {}
@@ -466,7 +467,9 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     bound = in_shell(model, nodes)
     seam = Seam(read_target(model).platform)
     network = bound
-    saved = seam.chosen(network)
+    # What the body states: its committed choices and those kept unchecked (a commitment
+    # whose check waits, which a hold may sit on).
+    saved = network.chosen(unchecked=True)
     # The body's mark names the keys held; their values are the ones the network states.
     seam.held.update(_held_values(network, saved, held_keys(model)))
     # A choice the body leaves open takes its baseline before the strategy runs; a hold

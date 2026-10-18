@@ -623,9 +623,10 @@ def int8_matmul() -> ModelWrapper:
 
 def test_a_retarget_drops_the_stale_folding_explores_it_again_and_clears_it() -> None:
     """An INT8 MatMul explored on Ultra96 (DSP48E2: the packed core forced, its folding
-    saved nested under it), retargeted to a VCK190 (DSP58: the core open, so the nested
-    keys inapplicable): replay drops them with why, exploring chooses the core and its
-    folding again, and saving clears the stale attributes."""
+    saved nested under it), retargeted to a VCK190 (DSP58: the core open): the folding
+    waits on the core, kept unchecked, not stale. A core that does not hold it drops it,
+    named with why; exploring chooses the core and its folding again, and saving clears the
+    stale attributes."""
     model = int8_matmul()
     explore_kernel_choices(model, Ranked(Lanes()))
     saved = kernel_op(model, model.graph.node[0]).choices()
@@ -633,14 +634,47 @@ def test_a_retarget_drops_the_stale_folding_explores_it_again_and_clears_it() ->
     write_target(model, VCK190)
     model = model.transform(InferKernelTensors())
     bound = network(model, model.graph.node)
-    assert "first.compute.packed.pe" in bound.stale
+    folding = {("first", key): value for key, value in saved.items()}
+    assert not bound.stale
+    assert {key: (item.value, item.blockers) for key, item in bound.unchecked()} == {
+        key: (value, ("compute",)) for key, value in folding.items()
+    }
     assert ("first", "compute") in {key for key, _ in bound.viable()}
-    explored = explore_kernel_choices(model, Ranked(Lanes()))
-    assert "first.compute.packed.pe" in explored.report["dropped"]
+    # The core settled on the other case, the folding under the first is dropped with why.
+    elsewhere = Seam(VCK190.platform).set(bound, {("first", "compute"): "int8_dsp58"})
+    assert isinstance(elsewhere, Accepted)
+    assert {key: [f.code for f in why] for key, why in elsewhere.dropped.items()} == {
+        key: ["inapplicable"] for key in folding
+    }
+    # Explored, the core is set, its folding chosen again, the packed one's attributes gone.
+    explore_kernel_choices(model, Hold({"first": {"compute": "int8_dsp58"}}))
     held = kernel_op(model, model.graph.node[0]).choices()
-    assert "compute" in held
+    assert held["compute"] == "int8_dsp58" and "compute.int8_dsp58.pe" in held
+    assert not any(key.startswith("compute.packed.") for key in held)
     again = network(model, model.graph.node)
-    assert not again.stale and again.viable() == ()
+    assert not again.stale and again.viable() == () and not again.unchecked()
+
+
+def test_a_hold_on_a_folding_a_retarget_leaves_waiting_waits_with_it() -> None:
+    """The INT8 MatMul's folding held, then retargeted to a VCK190: the held PE is kept
+    unchecked, waiting on the core, and the hold waits with it (not ``held-not-taken``).
+    Exploring takes the core's baseline, under which the folding is checked: the body's
+    values are kept, by the body, and only the core is baselined."""
+    model = int8_matmul()
+    explore_kernel_choices(model, Ranked(Lanes()))
+    saved = kernel_op(model, model.graph.node[0]).choices()
+    model.set(HELD, {"first": ["compute.packed.pe"]})
+    write_target(model, VCK190)
+    model = model.transform(InferKernelTensors())
+    explored = explore_kernel_choices(model, Ranked(Lanes()))
+    assert explored.report["held"] == {"first": {"compute.packed.pe": saved["compute.packed.pe"]}}
+    assert explored.report["baselined"] == ["first.compute"]
+    assert {key: row["by"] for key, row in explored.report["choices"]["first"].items()} == {
+        "compute": "baseline",
+        **{key: "saved" for key in saved},
+    }
+    assert kernel_op(model, model.graph.node[0]).choices() == {"compute": "packed", **saved}
+    assert model.get(HELD) == {"first": ["compute.packed.pe"]}
 
 
 @pytest.mark.slow
