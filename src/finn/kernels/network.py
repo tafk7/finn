@@ -648,11 +648,25 @@ class Network:
     def undecided(self) -> tuple[Key, ...]:
         """Every applicable Decision neither committed nor forced, by key, ranked: the
         open choices with cases, then those known by membership only, and those whose
-        cases wait on another choice (``configure.undecided``)."""
+        cases wait on another choice (``configure.undecided``). A choice stored but kept
+        unchecked is not open (``unchecked``)."""
         return tuple(
             (name, key)
             for name, point in self._bound_members(None)
             for key in self._answer(name, "undecided", lambda at: tuple(undecided(at, "*")))
+        )
+
+    def unchecked(self) -> tuple[tuple[Key, inspection.Unchecked], ...]:
+        """Every choice stored and kept unchecked (its own check cannot conclude yet), by
+        key, ranked: each bound member's ``inspection.unchecked``, its stored value and what
+        it waits on, keys of that member's own. Apart from ``undecided``, which counts only
+        the open choices: an unchecked choice is stored, and committing it again changes
+        nothing. A network that holds one is not complete (generation refuses it); an
+        unbound channel's stored choices wait with its read (``unbound``)."""
+        return tuple(
+            ((name, item.key), item)
+            for name, point in self._bound_members(None)
+            for item in self._answer(name, "unchecked", inspection.unchecked)
         )
 
     def admission(self, name: str) -> tuple[Finding, ...]:

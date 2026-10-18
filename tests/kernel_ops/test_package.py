@@ -39,7 +39,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
 from finn.core.space import inspection
 from finn.custom_op.kernels.network import persist
-from finn.custom_op.kernels.shell import configured_network, in_shell
+from finn.custom_op.kernels.shell import InShell, configured_network, in_shell
 from finn.kernels.artifacts import build
 from finn.kernels.configure import undecided
 from finn.toolchain.launcher import (
@@ -94,22 +94,22 @@ def test_a_choice_never_created_refuses_packaging_and_is_named() -> None:
     assert (module.fragment, module.abi) == (reference.fragment, reference.abi)
 
 
-def test_an_unchecked_choice_is_refused_through_the_open_choice_it_waits_on() -> None:
+def test_an_unchecked_choice_is_refused_by_name_beside_the_open_choice_it_waits_on() -> None:
     """A choice stored while the choice its check reads is open is kept unchecked (the
     engine's rule: read unresolved, listed by ``inspection.unchecked``): the thresholding's
-    ``block_stages`` with its ``ram_style`` cleared. Emission refuses the network, and the
-    refusal is ``choices-open`` (``KernelOpError``), naming ``activate.ram_style``, the open
-    choice. It does not name the unchecked ``block_stages``: ``undecided``, which the
-    refusal reads, counts only the open Decisions, and an unchecked choice passes it. The
-    network is refused only because every unchecked choice waits on an open one, so none
-    passes on its own; the follow-up is that an unchecked choice should be refused by name,
-    like an open one."""
+    ``block_stages`` with its ``ram_style`` cleared. Emission demands a buildable point, so
+    it refuses both by name, in one ``KernelOpError``: ``choices-open`` names
+    ``activate.ram_style``, and ``choices-unchecked`` names ``activate.block_stages``, its
+    stored value and what it waits on. ``undecided`` still counts only the open one."""
     model = kernel_model()
     choose_memories(model)
     write_raw(model, "activate", "ram_style", None)
-    point = in_shell(model, model.graph.node).member("activate")
-    assert inspection.unchecked(point) == (inspection.Unchecked("block_stages", 0, ("ram_style",)),)
+    bound = in_shell(model, model.graph.node)
+    point = bound.member("activate")
+    waiting = inspection.Unchecked("block_stages", 0, ("ram_style",))
+    assert inspection.unchecked(point) == (waiting,)
     assert undecided(point, "*") == ["ram_style"]  # the open one; the unchecked is not counted
+    assert bound.unchecked() == ((("activate", "block_stages"), waiting),)
     with refused(
         "choices-open",
         error=KernelOpError,
@@ -119,7 +119,41 @@ def test_an_unchecked_choice_is_refused_through_the_open_choice_it_waits_on() ->
         message=r"open choices, refused at emission: activate\.ram_style \(not created",
     ) as left:
         configured_network(model, "sdp_1")
-    assert "block_stages" not in str(left.error)
+    with refused(
+        "choices-unchecked",
+        error=KernelOpError,
+        owner="configured_network",
+        node="sdp_1",
+        keys=("activate.block_stages",),
+        message=r"unchecked choices, refused at emission: activate\.block_stages = 0"
+        r" \(waits on activate\.ram_style\)",
+    ):
+        raise left.error
+    assert cast(KernelOpError, left.error).keys == ("activate.ram_style", "activate.block_stages")
+
+
+def test_an_unchecked_choice_alone_refuses_emission_by_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Emission refuses a network whose only incomplete choice is one kept unchecked, by
+    name (``choices-unchecked``), as it refuses an open one. No real kernel keeps a choice
+    unchecked without an open choice it waits on, so a double of the network's
+    ``undecided`` hides the open ``ram_style`` that ``block_stages`` waits on: what is left
+    for emission to refuse is the unchecked choice."""
+    model = kernel_model()
+    choose_memories(model)
+    write_raw(model, "activate", "ram_style", None)
+    monkeypatch.setattr(InShell, "undecided", lambda self: ())
+    with refused(
+        "choices-unchecked",
+        error=KernelOpError,
+        owner="configured_network",
+        node="sdp_1",
+        keys=("activate.block_stages",),
+        message=r"activate\.block_stages = 0 \(waits on activate\.ram_style\)",
+    ) as left:
+        configured_network(model, "sdp_1")
+    assert [finding.code for finding in left.error.findings] == ["choices-unchecked"]
 
 
 def test_an_unchecked_choice_is_saved_and_replayed_as_unchecked() -> None:
