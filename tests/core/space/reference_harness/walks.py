@@ -426,6 +426,7 @@ PRIORITY = (
     "own-reason-forcing",
     "inactive-under-refused-selector",
     "trial-reads-unchecked",
+    "trial-reads-waiting",
     "view-of-refused-space",
     "empty-list",
     "listed-not-member",
@@ -1010,21 +1011,38 @@ class _Walk:
         form: ChangeForm,
     ) -> dict[str, set[str]]:
         """What only a change's verdict shows: a named value outside its domain the model
-        refuses with its own reason (:func:`_own_reason`); a retained choice the model
-        reaches as inactive under a refused selector."""
+        refuses with its own reason (:func:`_own_reason`), and the choices the engine
+        reaches beyond the model's refusals, forcing having read that value; a retained
+        choice the model reaches as inactive under a refused selector; a choice the model
+        keeps unchecked that the engine refuses as inactive (``trial-reads-waiting``)."""
         found: dict[str, set[str]] = {}
         engine = {refusal.choice: refusal for refusal in form.refusals}
         if isinstance(result, model.Rejected):
+            refused = {refusal.choice for refusal in result.refusals}
             for refusal in result.refusals:
                 choice = refusal.choice
                 if refusal.kind == "named" and outside(solution, choice, published.stored[choice]):
                     kind = _own_reason(base, solution, choice, engine.get(choice))
                     if kind:
                         found.setdefault(kind, set()).add(choice)
+                    beyond = {
+                        other
+                        for other, item in engine.items()
+                        if other not in refused
+                        and item.kind == "reached"
+                        and item.codes == {("inactive", other)}
+                    }
+                    if beyond:
+                        found.setdefault("own-reason-forcing", set()).update({choice, *beyond})
                 elif refusal.kind == "reached" and _under_refused(
                     solution, self.index.choices[choice].scope
                 ):
                     found.setdefault("inactive-under-refused-selector", set()).add(choice)
+        for choice, item in engine.items():
+            if ("inactive", choice) in item.codes and isinstance(
+                solution.state(choice), model.Unchecked
+            ):
+                found.setdefault("trial-reads-waiting", set()).add(choice)
         return found
 
     # -- drawing

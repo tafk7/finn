@@ -71,12 +71,25 @@ def test_a_case_trial_reading_a_kept_choice_is_told_and_fails_unexplained() -> N
     # Seed 7's third step: a choice of one of three cases committed under the open selector,
     # kept unchecked, that a rule of its case refuses. Its row explains it; without the row's
     # kind the walk fails there.
-    assert walk(7, 3).failure is None
-    assert walk(7, 3).kinds["trial-reads-unchecked"]
+    explained = walk(7, 3)
+    assert explained.failure is None
+    assert explained.kinds["trial-reads-unchecked"]
     failure = walk(7, 3, kinds=expected_kinds() - {"trial-reads-unchecked"}).failure
     assert failure is not None
     assert failure.startswith("seed 7, index path, step 3: a disagreement no row names")
     assert "trial-reads-unchecked" in failure and "the state of s" in failure
+
+
+def test_a_case_trial_reading_a_choice_waiting_on_a_fact_is_told_and_fails_unexplained() -> None:
+    # Seed 46's step 24: the engine refuses as inactive choices of a case the model keeps
+    # unchecked, waiting on a fact.
+    explained = walk(46, 24)
+    assert explained.failure is None
+    assert explained.kinds["trial-reads-waiting"]
+    failure = walk(46, 24, kinds=expected_kinds() - {"trial-reads-waiting"}).failure
+    assert failure is not None
+    assert failure.startswith("seed 46, index path, step 24: a disagreement no row names")
+    assert "trial-reads-waiting" in failure
 
 
 def test_a_walk_tells_only_kinds_a_row_names() -> None:

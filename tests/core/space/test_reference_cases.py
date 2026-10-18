@@ -594,3 +594,61 @@ def test_a_case_whose_rule_refuses_a_kept_choice_of_it_is_not_possible() -> None
 
 def test_a_choice_its_cases_rule_refuses_leaves_the_configuration_undecided() -> None:
     committed_wide().check_validity()
+
+
+# A choice of a case whose domain is computed from a fact not given yet: committed under the
+# open selector it waits on the fact as well as on its presence, so no trial reads it as its
+# value, and a rule of its case reading it stays unknown there (met by the seeded walks).
+
+
+def waiting_cases(*names: str) -> Case:
+    return Case(
+        f"a case's trial and a choice of the case waiting on a fact, cases {', '.join(names)}",
+        Space(
+            ("width",),
+            Scope(
+                "",
+                choices=(Choice("lanes", listed(1, 2, 3)),),
+                selectors=(
+                    Selector(
+                        "core",
+                        (
+                            *(Scope(name) for name in names),
+                            Scope(
+                                "wide",
+                                choices=(
+                                    Choice(
+                                        "pe",
+                                        computed(lambda read: divisors(read["width"]), ("width",)),
+                                    ),
+                                ),
+                                constraints=(
+                                    Constraint(
+                                        "enough",
+                                        ("lanes", "core.wide.pe"),
+                                        lambda read: read["lanes"] <= read["core.wide.pe"],
+                                        "too-few-pe",
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+WAITING_TWO = waiting_cases("plain")
+WAITING_THREE = waiting_cases("plain", "other")
+
+
+@expected("case-trial-reads-waiting")
+def test_a_choice_waiting_on_a_fact_under_two_cases_is_kept_unchecked() -> None:
+    # ``pe`` of 1 waits on the width and on ``core``: ``enough`` (3 lanes need 3) is unknown
+    # in the trial of ``wide``, so both cases stay possible and the commit is accepted.
+    WAITING_TWO.start({}, {"lanes": 3}).check_change(Change(commit={"core.wide.pe": 1}))
+
+
+def test_a_choice_waiting_on_a_fact_under_three_cases_is_kept_unchecked() -> None:
+    WAITING_THREE.start({}, {"lanes": 3}).check_change(Change(commit={"core.wide.pe": 1}))

@@ -338,6 +338,18 @@ ROWS: tuple[Row, ...] = (
         "it forces the other one, as the model does",
     ),
     Row(
+        "case-trial-reads-waiting",
+        "lane 2",
+        "a case's trial never reads as its value a stored choice of the case whose own check "
+        "waits on more than its presence (a fact not given), so a commit of it under a "
+        "two-case selector is accepted and kept unchecked, not refused as inactive",
+        f"{_CASES}::test_a_choice_waiting_on_a_fact_under_two_cases_is_kept_unchecked",
+        "trial-reads-waiting",
+        "unclassified, placed beside case-trial-reads-unchecked: the engine's trial reads the "
+        "value, refuses the case and forces the other; with three cases it lists the case, "
+        "as the model does",
+    ),
+    Row(
         "nested-conflict-choice",
         "lane 2",
         "a committed choice in a conflict keeps its value, read refused through both selectors "
