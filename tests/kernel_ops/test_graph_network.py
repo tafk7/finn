@@ -362,7 +362,11 @@ def test_a_kernel_choice_the_network_refuses_is_dropped_named_and_cleared_by_per
     write_raw(model, "first", "compute.packed.pe", 3)
     bound = network(model, model.graph.node, name="chain")
     assert list(bound.stale) == ["first.compute.packed.pe"]
-    assert [f.code for f in bound.stale["first.compute.packed.pe"]] == ["domain-membership"]
+    # Its own domain refuses 3, and its selector, left with no viable case, stands beside it.
+    assert {(f.code, f.owner) for f in bound.stale["first.compute.packed.pe"]} == {
+        ("domain-membership", "compute.packed.pe"),
+        ("decision-no-viable-case", "compute"),
+    }
     assert bound.member("first").compute.simd == 2
     # Its pe is open again; once chosen, the node holds the new value, nothing stale.
     persist(model, choose(bound, {"first.compute.packed.pe": 2}))
@@ -372,19 +376,21 @@ def test_a_kernel_choice_the_network_refuses_is_dropped_named_and_cleared_by_per
 
 def test_a_stale_choice_keeps_the_kernel_s_finding_naming_its_value_and_candidates() -> None:
     """The misfolded MatMul (``pe`` 3, written raw): the network keeps, per key, the
-    finding the kernel gave (its code and owner), with the value stored and the values the
-    decision could take now (its viable cases), and its message names them."""
+    findings the kernel gave (each code and owner): the key's own, with the value stored and
+    the values the decision could take now (its viable cases), its message naming them, and
+    its selector's beside it."""
     model = kernel_model()
     write_raw(model, "first", "compute.packed.simd", 2)
     write_raw(model, "first", "compute.packed.pe", 3)
     bound = network(model, model.graph.node, name="chain")
-    ((key, (found,)),) = bound.stale.items()
+    ((key, findings),) = bound.stale.items()
     assert key == "first.compute.packed.pe"
-    assert (found.kind, found.code, found.owner) == (
-        FindingKind.REJECTION,
-        "domain-membership",
-        "compute.packed.pe",
-    )
+    # The selector's finding (``compute`` left with no viable case) stands beside its own.
+    assert {(f.kind, f.code, f.owner) for f in findings} == {
+        (FindingKind.REJECTION, "domain-membership", "compute.packed.pe"),
+        (FindingKind.REJECTION, "decision-no-viable-case", "compute"),
+    }
+    (found,) = [f for f in findings if f.code == "domain-membership"]
     ((_, viable),) = [
         item for item in bound.viable(["first"]) if item[0] == ("first", "compute.packed.pe")
     ]
@@ -395,7 +401,7 @@ def test_a_stale_choice_keeps_the_kernel_s_finding_naming_its_value_and_candidat
 
 def test_a_stale_choice_is_refused_naming_its_key_once() -> None:
     """The refusal of the shell's network prints the key once, with the value stored and the
-    values it could take, and carries the kernel's finding as its cause."""
+    values it could take, and carries the kernel's findings as its causes."""
     model = kernel_model()
     write_raw(model, "first", "compute.packed.simd", 2)
     write_raw(model, "first", "compute.packed.pe", 3)
@@ -408,10 +414,13 @@ def test_a_stale_choice_is_refused_naming_its_key_once() -> None:
     ) as stale:
         shell.configured_network(model, "label")
     assert str(stale.error).count("compute.packed.pe") == 1
-    assert "first.compute.packed.pe = 3: not one of 1, 2, 4" in str(stale.error)
-    assert [(cause.code, cause.owner) for cause in stale.finding.causes] == [
-        ("domain-membership", "compute.packed.pe")
-    ]
+    assert "first.compute.packed.pe = 3: " in str(stale.error)
+    assert "not one of 1, 2, 4 (domain-membership)" in str(stale.error)
+    # The selector's finding (``compute`` left with no viable case) stands beside its own.
+    assert {(cause.code, cause.owner) for cause in stale.finding.causes} == {
+        ("domain-membership", "compute.packed.pe"),
+        ("decision-no-viable-case", "compute"),
+    }
 
 
 def test_persist_clears_what_the_network_does_not_hold() -> None:

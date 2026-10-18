@@ -217,7 +217,11 @@ def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
     # ends wait on the reopened pe, and its stored memory is replayed once the baseline
     # chooses one, where it still applies.
     assert sorted(baselining.dropped) == ["first.compute.packed.pe"]
-    assert [f.code for f in baselining.dropped["first.compute.packed.pe"]] == ["domain-membership"]
+    # Its own domain refuses 3, and its selector, left with no viable case, stands beside it.
+    assert {(f.code, f.owner) for f in baselining.dropped["first.compute.packed.pe"]} == {
+        ("domain-membership", "compute.packed.pe"),
+        ("decision-no-viable-case", "compute"),
+    }
     first = kernel_op(model, model.graph.node[0])
     assert first.choices() == {
         **nodes["first"],

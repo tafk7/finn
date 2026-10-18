@@ -467,7 +467,7 @@ def test_a_held_key_the_bound_network_does_not_state_is_refused_by_name() -> Non
     """The mark holds ``first``'s PE, but the node's attribute states a value its facts
     refuse (written past the writer, standing for a graph FINN did not write): replay
     drops it at bind, and the exploration is refused, naming the node and the key, the
-    replay's finding its cause. The held value is not dropped and re-baselined."""
+    replay's findings its causes. The held value is not dropped and re-baselined."""
     model = explored_at_baseline()
     write_raw(model, "first", "compute.packed.simd", 2)
     write_raw(model, "first", "compute.packed.pe", 3)
@@ -482,8 +482,12 @@ def test_a_held_key_the_bound_network_does_not_state_is_refused_by_name() -> Non
         keys=("compute.packed.pe",),
     ) as caught:
         explore_kernel_choices(model)
-    (cause,) = caught.finding.causes
-    assert cause.code == "domain-membership"
+    # The replay's own finding, with the selector's (``compute`` left with no viable case)
+    # beside it.
+    assert {(cause.code, cause.owner) for cause in caught.finding.causes} == {
+        ("domain-membership", "compute.packed.pe"),
+        ("decision-no-viable-case", "compute"),
+    }
     assert isinstance(caught.error, KernelOpError)
     assert caught.error.keys == ("first.compute.packed.pe",)
     assert model.get(HELD) == {"first": ["compute.packed.pe", "compute.packed.simd"]}

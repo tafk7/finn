@@ -129,7 +129,11 @@ def test_stored_choices_are_replayed_as_each_member_binds() -> None:
     assert replayed.chosen() == stored and not replayed.dropped
     stale = Network(chain.members(), stored={**stored, ("first", "compute.packed.pe"): 3})
     assert list(stale.dropped) == [("first", "compute.packed.pe")]
-    assert {f.code for f in stale.dropped[("first", "compute.packed.pe")]} == {"domain-membership"}
+    # Its own domain refuses 3, and its selector, left with no viable case, stands beside it.
+    assert {(f.code, f.owner) for f in stale.dropped[("first", "compute.packed.pe")]} == {
+        ("domain-membership", "compute.packed.pe"),
+        ("decision-no-viable-case", "compute"),
+    }
     waiting = Network(chain.members(), stored={("x", "transport"): "direct"})
     held = waiting.unbound("x")
     assert held is not None and held.stored == {"transport": "direct"}
