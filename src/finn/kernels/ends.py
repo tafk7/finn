@@ -34,7 +34,7 @@ stream side, the free side's contract:
   cycles a call with a converter, 13 without; the call ends two converter words
   before the stream runs dry, or once its last word left);
 - it presents one AXI-Lite bus to the shell's processor (its ``s_axi_control``),
-  which the shell's admission counts against the shell's budget beside the
+  which the shell's budget check counts against its budget beside the
   partition's (``END``, ``EndContract.control_buses``);
 - the memory latency ``L`` is **excluded**: the shell does not know it, and each call
   adds it (``MEMORY_LATENCY``, what the exploration report states). A frame a call is
@@ -66,7 +66,6 @@ from dataclasses import dataclass
 from math import ceil, gcd, lcm
 
 from finn.core.space import (
-    ConstraintGroup,
     Param,
     Rejected,
     Space,
@@ -93,7 +92,7 @@ MEMORY_LATENCY = "memory latency: unmeasured; each call adds L"
 
 END = ViewKey("end", default_semantics(tuple))
 """A boundary channel's end, as its contract (``EndContract``): one, or none without an
-end. The shell's admission counts their AXI-Lite buses, and it sums their
+end. The shell's budget check counts their AXI-Lite buses, and it sums their
 resources and counts their memory ports."""
 
 NO_CONVERTER, DIVISIBLE, LCM = "none", "divisible", "lcm"
@@ -288,9 +287,6 @@ class IodmaEnd(Space):
             )
         return True
 
-    # The candidate's refusal, which the end Decision's viability reads.
-    admission = ConstraintGroup(offered, single_pass, row_major)
-
     @derived
     def contract(self) -> EndContract:
         """Its facts on ``side``, sized by its offer (see the module docstring)."""
@@ -327,7 +323,7 @@ class IodmaEnd(Space):
         contract: EndContract = self.contract
         return contract.cycles
 
-    # Cost, not validity: read apart from its admission.
+    # Cost, not validity: read apart from its constraints.
     cycles = View(frame_cycles)
 
     exports = {CYCLES: cycles}

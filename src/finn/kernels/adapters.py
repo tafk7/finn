@@ -56,7 +56,6 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from finn.core.space import (
-    ConstraintGroup,
     Param,
     Rejected,
     composite,
@@ -208,9 +207,6 @@ class StreamAdapter(ComposedKernel):
             )
         return True
 
-    # The kernels' convention for a refusal (``finn.core.space.inspection.admission``).
-    admission = ConstraintGroup(realizes)
-
     def _named(self, name: str) -> RealizedStage | Rejected:
         realization: tuple[RealizedStage, ...] = self.realization
         kinds = [stage.kind for stage in realization]
@@ -227,7 +223,7 @@ class StreamAdapter(ComposedKernel):
     vpc_arriving = _side("vpc", "source")
     vpc_leaving = _side("vpc", "sink")
 
-    @view(requires=(realizes,))
+    @view
     def stages(self) -> tuple[Stage, ...]:
         """Each child's module and its ports' contracts, labelled below the adapter
         Decision: its candidate (the chain), then the stage."""

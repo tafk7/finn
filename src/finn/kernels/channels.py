@@ -29,7 +29,7 @@ what its inner end presents, by one rule: an input without the replay or window 
 receiver realizes (``unreplayed``), an output as produced, neither with markers. Where a
 shell offers ends (``end_offer``, ``finn.kernels.ends``), the ``end`` Decision places one
 on that free side; it binds no RTL in the module and exports its contract (``END``) for
-the shell's admission and resources.
+the shell's budget check and resources.
 
 A channel whose tensor has a known value (``contents``) has a ``source`` (``SOURCES``: a
 memory) as its only producer (``channel-users``), storing one period in the order its
@@ -48,7 +48,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
 from finn.core.space import (
-    ConstraintGroup,
     Decision,
     Param,
     Rejected,
@@ -199,9 +198,6 @@ class ChannelFifo(ComposedKernel):
                 "what arrives carries markers, and a FIFO carries data words only",
             )
         return True
-
-    # The candidate's refusal, which the transport Decision's viability reads.
-    admission = ConstraintGroup(carries_data)
 
     @view
     def stages(self) -> tuple[Stage, ...]:
@@ -573,8 +569,6 @@ class Channel(ComposedKernel):
             return reject("channel-link", str(error))
         return tuple(links)
 
-    admission = ConstraintGroup(well_formed, realizable, compatible)
-
     @derived
     def fragment(self) -> Fragment | Rejected:
         """Its members' netlists under their nodes, in the order the stream runs through
@@ -597,7 +591,7 @@ class Channel(ComposedKernel):
         states none, and a channel of wires takes none of its own."""
         return max((item.value for item in self.member_cycles), default=0)
 
-    @view(requires=(well_formed, realizable, compatible))
+    @view
     def boundary_bus(self) -> tuple[Bus, ...]:
         """The AXIS bus the module presents for it, when one side has no end."""
         ends = self.endpoints
