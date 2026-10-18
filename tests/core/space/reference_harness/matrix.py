@@ -312,7 +312,8 @@ ROWS: tuple[Row, ...] = (
         "trial-reads-unchecked",
         "classified beside the two-cores row (outside-domain-forcing): the engine lists the "
         "case as possible (more than the model, never a wrong forced value); with two cases "
-        "it forces the other one, as the model does",
+        "it forces the other one, as the model does; a walk meets it through a rule of the "
+        "root reading the case's choice too",
     ),
     Row(
         "case-trial-reads-waiting",

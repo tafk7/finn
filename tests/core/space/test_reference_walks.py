@@ -20,11 +20,26 @@ import random
 
 import pytest
 
+from core.space.reference import (
+    Choice,
+    Configuration,
+    Constraint,
+    Scope,
+    Selector,
+    Space,
+    Unchecked,
+    listed,
+)
+from core.space.reference_harness import MILESTONES, ROWS
+from core.space.reference_harness.compare import state_form
 from core.space.reference_harness.forms import AnswerForm, Form, StateForm, ValidityForm
 from core.space.reference_harness.walks import (
     PRIORITY,
+    Context,
     Question,
+    Reach,
     added_unknown,
+    classify,
     expected_kinds,
     generate,
     moved_down,
@@ -80,6 +95,58 @@ def test_a_case_trial_reading_a_kept_choice_is_told_and_fails_unexplained() -> N
     assert "trial-reads-unchecked" in failure and "the state of s" in failure
 
 
+def test_a_case_trial_reading_a_kept_choice_through_a_root_rule_is_told_as_the_same_kind() -> None:
+    # Seed 12's eleventh step: a choice of one of three cases committed under the open
+    # selector, kept unchecked, that a rule of the root refuses. The case's trial reads it as
+    # its value through that rule as through one of the case's own: the same row's kind, told
+    # ahead of the selector's case trial; without either kind the walk fails there.
+    explained = walk(12, 11)
+    assert explained.failure is None
+    assert explained.kinds["trial-reads-unchecked"]
+    failure = walk(
+        12, 11, kinds=expected_kinds() - {"trial-reads-unchecked", "selector-case-trial"}
+    ).failure
+    assert failure is not None
+    assert failure.startswith("seed 12, index path, step 11: a disagreement no row names")
+    assert "trial-reads-unchecked, selector-case-trial" in failure
+    assert "the state of s" in failure
+
+
+def test_a_root_rule_refusing_a_kept_choice_of_a_case_is_told_as_a_trial_reading_it() -> None:
+    space = Space(
+        ("limit",),
+        Scope(
+            "",
+            selectors=(
+                Selector(
+                    "core",
+                    (
+                        Scope("plain"),
+                        Scope("other"),
+                        Scope("wide", choices=(Choice("lanes", listed(1, 2)),)),
+                    ),
+                ),
+            ),
+            constraints=(
+                Constraint(
+                    "small",
+                    ("core.wide.lanes", "limit"),
+                    lambda read: read["core.wide.lanes"] <= read["limit"],
+                    "too-many-lanes",
+                ),
+            ),
+        ),
+    )
+    solution = Configuration(space, {"limit": 1}, {"core.wide.lanes": 2}).solve()
+    assert isinstance(solution.state("core.wide.lanes"), Unchecked)
+    assert solution.possible("core") == ("plain", "other")
+    context = Context(solution, Reach(solution.index))
+    assert context.found["trial-reads-unchecked"] == {"core"}
+    engine = StateForm("open", possible=("plain", "other", "wide"))
+    kinds = classify([context], ("state", "core"), state_form(solution, "core"), engine)
+    assert kinds[:2] == ("trial-reads-unchecked", "selector-case-trial")
+
+
 def test_a_case_trial_reading_a_choice_waiting_on_a_fact_is_told_and_fails_unexplained() -> None:
     # Seed 46's step 24: the engine refuses as inactive choices of a case the model keeps
     # unchecked, waiting on a fact.
@@ -90,6 +157,17 @@ def test_a_case_trial_reading_a_choice_waiting_on_a_fact_is_told_and_fails_unexp
     assert failure is not None
     assert failure.startswith("seed 46, index path, step 24: a disagreement no row names")
     assert "trial-reads-waiting" in failure
+
+
+def test_the_kinds_expected_without_a_milestones_rows_are_the_other_rows_kinds() -> None:
+    # A milestone's engine is walked as if it had removed its rows: only the others' kinds.
+    for milestone in MILESTONES:
+        kept = {row.kind for row in ROWS if row.kind and row.milestone != milestone}
+        assert expected_kinds((milestone,)) == kept
+    assert expected_kinds(()) == {row.kind for row in ROWS if row.kind}
+    assert expected_kinds(MILESTONES) == frozenset()
+    with pytest.raises(ValueError, match="no such milestone"):
+        expected_kinds(("lane 9",))
 
 
 def test_a_walk_tells_only_kinds_a_row_names() -> None:

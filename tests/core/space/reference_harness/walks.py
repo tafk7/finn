@@ -66,7 +66,7 @@ from .compare import (
 )
 from .engine import Engine, NotTranslatable, Point, build
 from .forms import AnswerForm, ChangeForm, Form, Refusal, RuleForm, StateForm, ValidityForm
-from .matrix import ROWS
+from .matrix import MILESTONES, ROWS
 
 # --- the generator --------------------------------------------------------------------------------
 
@@ -436,9 +436,14 @@ PRIORITY = (
 )
 
 
-def expected_kinds() -> frozenset[str]:
-    """The kinds the matrix's rows still name."""
-    return frozenset(row.kind for row in ROWS if row.kind)
+def expected_kinds(without: Iterable[str] = ()) -> frozenset[str]:
+    """The kinds the matrix's rows still name; ``without``: as if the rows of those
+    milestones were removed (a milestone's engine walked before it removes them)."""
+    removed = set(without)
+    unknown = removed - set(MILESTONES)
+    if unknown:
+        raise ValueError(f"no such milestone: {', '.join(sorted(unknown))}")
+    return frozenset(row.kind for row in ROWS if row.kind and row.milestone not in removed)
 
 
 class Reach:
@@ -594,7 +599,7 @@ def mechanisms(solution: model.Solution, engine_refused: bool | None = None) -> 
                 kind = _case_kind(index, path, case, reason)
                 if kind:
                     add(kind, path)
-                elif _reads_unchecked(solution, path, case, reason):
+                if _reads_unchecked(solution, path, case, reason):
                     add("trial-reads-unchecked", path)
     for conflict in solution.conflicts():
         add("conflict", *conflict.participants)
@@ -631,16 +636,17 @@ def _case_kind(index: model.Index, choice: str, case: object, reason: model.Reas
 def _reads_unchecked(
     solution: model.Solution, selector: str, case: object, reason: model.Reason
 ) -> bool:
-    """Whether a selector's case was refused by a rule of the case's own Space reading a
-    stored choice of the case kept unchecked: the case's trial settles the presence the
-    choice waits on, so it reads the choice as its value (``trial-reads-unchecked``)."""
+    """Whether a selector's case was refused by a rule reading a stored choice of the case
+    kept unchecked: the case's trial settles the presence the choice waits on, so it reads
+    the choice as its value (``trial-reads-unchecked``). The rule may be the case's own or
+    one outside it (a rule of the root reading the case's choice): the same trial reads the
+    same value. Where the rule is outside the case, the case's trial against it is also
+    ``selector-case-trial`` (:func:`_case_kind`); both are told, the more specific first."""
     index = solution.index
     if index.choices[selector].cases is None or reason.subject not in index.constraints:
         return False
-    rule, owner = index.constraints[reason.subject]
+    rule, _ = index.constraints[reason.subject]
     scope = _join(selector, str(case))
-    if owner != scope:
-        return False
     return any(
         read in index.choices
         and index.within(index.choices[read].scope, scope)
