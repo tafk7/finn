@@ -952,12 +952,12 @@ def _candidate_frame(snapshot: _TrialSnapshot, node: Node) -> _execution.Frame:
     its guard. An inapplicable guard refuses it.
 
     Only a domain that answers false for the value refuses it: a refusal elsewhere never
-    does, nor an input of the domain that does not apply (its own check waits on that
-    input, and the choice is kept unchecked). Where an input of the domain is itself
-    refused (a derived value refusing on its facts), whatever the guard answers, the own
-    check is that refusal and the choice is kept (``through``), never read as a value:
-    unresolved in this trial, and refused through the input in the configuration published
-    (``Snapshot.input_refused``)."""
+    does, nor an input of the domain that does not apply (its own check waits on what
+    decides that the input applies, and the choice is kept unchecked). Where an input of
+    the domain is itself refused (a derived value refusing on its facts), whatever the
+    guard answers, the own check is that refusal and the choice is kept (``through``),
+    never read as a value: unresolved in this trial, and refused through the input in the
+    configuration published (``Snapshot.input_refused``)."""
     candidate = snapshot._candidates[node.index]
     inactive: NonValue | None = None
     through = False
@@ -1248,7 +1248,8 @@ def _domain_check(
     by a derived value's or a view's body, and through no Decision that reads refused (a
     choice its own check refuses, one with no possible case, one under a refused guard),
     whose refusal is that choice's, answered as before. While an input does not apply (its
-    guard false) the check cannot conclude: unresolved, waiting on that input."""
+    guard false) the check cannot conclude: unresolved, waiting on what decides that the
+    input applies (``absence_reads``)."""
     arguments, failure = yield from _arguments(snapshot.linked, node.domain_arguments, node.owner)
     if isinstance(failure, Inapplicable):
         return _inapplicable_input(snapshot, node), False
@@ -1276,20 +1277,64 @@ def _domain_check(
 
 def _inapplicable_input(snapshot: Snapshot, node: Node) -> Unresolved:
     """What a domain check answers while an input of the domain does not apply (its guard
-    false): unresolved, waiting on that input, which a change may make apply."""
-    found: list[Finding] = []
+    false): unresolved, waiting on what decides that the input applies (``absence_reads``),
+    which a change may turn; each finding names the input it is about."""
+    nodes = snapshot.linked.nodes
+    found: dict[tuple[str, str], Finding] = {}
     for argument in node.domain_arguments:
         entry = snapshot.cache.get(argument.node)
-        if entry is not None and isinstance(entry.result, Inapplicable):
-            found.append(
+        if entry is None or not isinstance(entry.result, Inapplicable):
+            continue
+        source = nodes[argument.node].owner
+        for index in absence_reads(snapshot, argument.node) or (argument.node,):
+            owner = nodes[index].owner
+            found.setdefault(
+                (owner, source),
                 Finding(
                     FindingKind.BLOCKER,
                     "input-inapplicable",
-                    snapshot.linked.nodes[argument.node].owner,
-                    "the domain's input does not apply here",
-                )
+                    owner,
+                    "an input of the domain does not apply while this reads as it does",
+                    details=(("input", source),),
+                ),
             )
-    return Unresolved(tuple(found))
+    return Unresolved(tuple(found[key] for key in sorted(found)))
+
+
+def absence_reads(snapshot: Snapshot, index: int) -> frozenset[int]:
+    """What decides that the node ``index``, read inapplicable in ``snapshot``, does not
+    apply: the Decisions and formals read by the guard that answers false, or the selector
+    whose case leaves the node out (a case scope's guard, or a member read through it),
+    found through what its evaluation read: an outer guard false makes the inner ones
+    inapplicable too, so the guard found is the outermost one that answers false. Empty
+    where the cache holds none of it."""
+    nodes, cache = snapshot.linked.nodes, snapshot.cache
+    found: set[int] = set()
+    seen: set[int] = set()
+    pending = [index]
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        entry = cache.get(current)
+        if entry is None:
+            continue
+        node = nodes[current]
+        if not isinstance(entry.result, Inapplicable):
+            continue
+        guard = cache.get(node.guard) if node.guard is not None else None
+        if guard is not None and isinstance(guard.result, Available):
+            if guard.result.value is False:
+                found.update(guard.decisions | guard.facts)
+                continue
+        if node.kind == "select" and node.selector is not None:
+            selector = cache.get(node.selector)
+            if selector is not None and isinstance(selector.result, Available):
+                found.add(node.selector)
+                continue
+        pending.extend(entry.dependencies)
+    return frozenset(found)
 
 
 def _through_a_choice(snapshot: Snapshot, arguments: tuple[Argument, ...]) -> bool:

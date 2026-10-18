@@ -522,10 +522,11 @@ def viable(point: Space) -> tuple[Viable, ...]:
 class Unchecked:
     """A stored choice whose own check cannot conclude yet, for inspection: its key, the
     value stored, and what it waits on: the keys of the choices still open (or unchecked
-    themselves) and of the inputs not supplied that its check, and its guard, read, and of
-    its domain's inputs that do not apply. A read of the choice answers unresolved until a
-    change makes its check succeed; a change then checks it again, and refuses it if the
-    check fails."""
+    themselves) and of the inputs not supplied that its check, and its guard, read, and,
+    for an input of its domain that does not apply, of what decides that it applies (the
+    choices and inputs its guard reads, or the selector whose case leaves it out). A read
+    of the choice answers unresolved until a change makes its check succeed; a change then
+    checks it again, and refuses it if the check fails."""
 
     key: str
     value: object
@@ -550,19 +551,17 @@ def unchecked(point: Space) -> tuple[Unchecked, ...]:
         if node.guard is not None:
             entries.append(_runtime.evaluate(current, node.guard))
         read = {item for entry in entries for item in (*entry.decisions, *entry.facts)}
-        # An input of the domain that does not apply: the check waits on it applying.
-        read.update(
+        waits = {
             item
-            for item in membership.dependencies
-            if isinstance(_runtime.evaluate(current, item).result, Inapplicable)
-        )
-        return tuple(
-            sorted(
-                linked.nodes[item].key
-                for item in read
-                if not isinstance(_runtime.evaluate(current, item).result, Available)
-            )
-        )
+            for item in read
+            if not isinstance(_runtime.evaluate(current, item).result, Available)
+        }
+        # An input of the domain that does not apply: the check waits on what decides
+        # that it applies (its guard's reads, or the selector leaving it out), known or not.
+        for argument in node.domain_arguments:
+            if isinstance(_runtime.evaluate(current, argument.node).result, Inapplicable):
+                waits.update(_runtime.absence_reads(current, argument.node) or (argument.node,))
+        return tuple(sorted(linked.nodes[item].key for item in waits))
 
     def compute(copy: _Copies) -> tuple[Unchecked, ...]:
         return tuple(

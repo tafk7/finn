@@ -1039,7 +1039,11 @@ class Banks(Space):
     )
 
 
-def test_a_commit_whose_domain_input_does_not_apply_is_kept_unchecked_waiting_on_it() -> None:
+def test_a_commit_whose_domain_input_does_not_apply_is_kept_unchecked_waiting_on_its_guard() -> (
+    None
+):
+    """The choice waits on what decides that its input applies (``wide``, the input's guard
+    reads it), not on the input."""
     narrow = commit(design_space(Banks()), {"wide": False})
     assert isinstance(narrow.query(Banks.width), Inapplicable)
     report = narrow.try_with_choices({Banks.lanes: 3})
@@ -1047,10 +1051,12 @@ def test_a_commit_whose_domain_input_does_not_apply_is_kept_unchecked_waiting_on
     (outcome,) = report.outcomes
     assert outcome.status == "changed" and outcome.unchecked
     assert isinstance(outcome.result, Unresolved)
-    assert {(f.code, f.owner) for f in outcome.result.findings} == {("input-inapplicable", "width")}
+    assert [(f.code, f.owner, f.details) for f in outcome.result.findings] == [
+        ("input-inapplicable", "wide", (("input", "width"),))
+    ]
     point = report.instance
     assert isinstance(point.query(Banks.lanes), Unresolved)
-    assert inspection.unchecked(point) == (inspection.Unchecked("lanes", 3, ("width",)),)
+    assert inspection.unchecked(point) == (inspection.Unchecked("lanes", 3, ("wide",)),)
     assert inspection.validity(point).status == "undecided"
     assert point.field(Banks.lanes).state == Available(DecisionState("lanes", "committed", 3))
     # The input applying, the choice is checked: a value its domain admits reads as itself,
@@ -1061,3 +1067,42 @@ def test_a_commit_whose_domain_input_does_not_apply_is_kept_unchecked_waiting_on
     assert [(o.owner, o.status) for o in refused.outcomes if o.status == "refused"] == [
         ("lanes", "refused")
     ]
+
+
+class Spanned(Space):
+    @derived
+    def span(self) -> int:
+        return 8
+
+
+class Shallow(Space):
+    pass
+
+
+class Banked(Space):
+    """A choice whose domain reads ``span``, a value of the selector's ``spanned`` case."""
+
+    mode: Spanned | Shallow = Decision({"spanned": Spanned, "shallow": Shallow})
+    lanes: int = Decision(
+        domain=domain(
+            accepts=lambda *, candidate, span: span % candidate == 0,
+            candidates=lambda *, span: tuple(d for d in (1, 2, 4, 8) if span % d == 0),
+            span=cast(Any, mode)["spanned"].span,
+        )
+    )
+
+
+def test_a_commit_whose_domain_input_another_case_leaves_out_waits_on_the_selector() -> None:
+    shallow = commit(design_space(Banked()), {"mode": "shallow"})
+    report = shallow.try_with_choices({Banked.lanes: 3})
+    assert report.accepted
+    (outcome,) = report.outcomes
+    assert outcome.unchecked and isinstance(outcome.result, Unresolved)
+    assert [(f.code, f.owner, f.details) for f in outcome.result.findings] == [
+        ("input-inapplicable", "mode", (("input", "mode.spanned.span"),))
+    ]
+    point = report.instance
+    assert inspection.unchecked(point) == (inspection.Unchecked("lanes", 3, ("mode",)),)
+    # The case that holds the input selected, the choice is checked, and 3 does not divide 8.
+    assert not point.try_with_choices({Banked.mode: "spanned"}).accepted
+    assert point.try_with_choices({Banked.mode: "spanned", Banked.lanes: 2}).instance.lanes == 2
