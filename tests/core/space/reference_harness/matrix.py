@@ -17,9 +17,10 @@ table.
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from types import ModuleType
+from pathlib import Path
 from typing import TypeVar
 
 import pytest
@@ -404,8 +405,6 @@ ROWS: tuple[Row, ...] = (
 BY_ID = {row.id: row for row in ROWS}
 
 #: each row's witnesses, as the test modules mark them on import
-USED: dict[str, list[str]] = {}
-
 F = TypeVar("F", bound=Callable[..., object])
 
 
@@ -415,7 +414,6 @@ def expected(row_id: str) -> Callable[[F], F]:
     row = BY_ID[row_id]
 
     def mark(test: F) -> F:
-        USED.setdefault(row_id, []).append(f"{_module(test)}::{test.__name__}")
         reason = f"{row.milestone}: {row.change}" + (f" ({row.note})" if row.note else "")
         marked: F = pytest.mark.xfail(strict=True, raises=Disagreement, reason=reason)(test)
         return marked
@@ -423,29 +421,45 @@ def expected(row_id: str) -> Callable[[F], F]:
     return mark
 
 
-def _module(test: Callable[..., object]) -> str:
-    return test.__module__.rsplit(".", 1)[-1]
+def _witnesses(path: Path) -> tuple[dict[str, list[str]], list[str]]:
+    """From one case module's source, never imported: each row id its ``@expected`` tests
+    witness, and every test marked as an expected failure in any other way."""
+    module = path.stem
+    witnessed: dict[str, list[str]] = {}
+    unmarked: list[str] = []
+    for node in ast.walk(ast.parse(path.read_text())):
+        if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
+            continue
+        for decorator in node.decorator_list:
+            call = decorator if isinstance(decorator, ast.Call) else None
+            target = call.func if call is not None else decorator
+            if isinstance(target, ast.Name) and target.id == "expected" and call is not None:
+                argument = call.args[0]
+                assert isinstance(argument, ast.Constant) and isinstance(argument.value, str)
+                witnessed.setdefault(argument.value, []).append(f"{module}::{node.name}")
+            elif "xfail" in ast.unparse(target):
+                unmarked.append(f"{module}::{node.name}")
+    return witnessed, unmarked
 
 
-def problems(modules: Iterable[ModuleType]) -> list[str]:
-    """What breaks the matrix's rules: a row without exactly one witness, or with another
-    than it names; an expected failure without a row."""
+def problems(paths: Iterable[Path]) -> list[str]:
+    """What breaks the matrix's rules, read from the case modules' sources (a test module
+    never imports another): a row without exactly one witness, or with another than it
+    names; an expected failure marked otherwise than by its row."""
     found: list[str] = []
+    witnessed: dict[str, list[str]] = {}
+    for path in sorted(paths):
+        rows, unmarked = _witnesses(path)
+        for row_id, tests in rows.items():
+            witnessed.setdefault(row_id, []).extend(tests)
+        found.extend(f"{test}: an expected failure with no row" for test in unmarked)
+    for row_id in sorted(set(witnessed) - set(BY_ID)):
+        found.append(f"{row_id}: witnessed by {witnessed[row_id]}, but no such row")
     for row in ROWS:
         if row.milestone not in MILESTONES[1:]:
             found.append(f"{row.id}: milestone {row.milestone!r} is not a later milestone")
-        witnesses = USED.get(row.id, [])
-        if witnesses != [row.witness]:
-            found.append(f"{row.id}: witnessed by {witnesses}, names {row.witness}")
-    witnessed = {witness for witnesses in USED.values() for witness in witnesses}
-    for module in modules:
-        for name, test in sorted(vars(module).items()):
-            if not name.startswith("test_") or not callable(test):
-                continue
-            marks = getattr(test, "pytestmark", [])
-            if any(mark.name == "xfail" for mark in marks):
-                if f"{_module(test)}::{name}" not in witnessed:
-                    found.append(f"{_module(test)}::{name}: an expected failure with no row")
+        if witnessed.get(row.id, []) != [row.witness]:
+            found.append(f"{row.id}: witnessed by {witnessed.get(row.id, [])}, names {row.witness}")
     return found
 
 

@@ -225,6 +225,10 @@ class Case:
     """A description built in the model and in the engine (spelled as ``spelling`` says)."""
 
     def __init__(self, name: str, description: reference.Space, spelling: Spelling | None = None):
+        if description.trials_count_retained_checks:
+            # The matrix is built on the model's default trial reach; a case on the other
+            # reading would compare an answer no row accounts for.
+            raise ValueError(f"{name}: a case compares the model's default trial reach only")
         self.name = name
         self.description = description
         self.engine: Engine = build(description, spelling)

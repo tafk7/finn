@@ -16,12 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from core.space import (
-    reference,
-    test_reference_cases,
-    test_reference_rules,
-    test_reference_scopes,
-)
+from core.space import reference
 from core.space.reference import Change, Choice, Scope, Selector, Space, listed
 from core.space.reference_harness import (
     MILESTONES,
@@ -65,9 +60,24 @@ def test_the_model_imports_the_standard_library_only() -> None:
     assert all(level <= 1 for path in modules for _, _, level in imported(path))
 
 
+CASE_MODULES = tuple(
+    Path(__file__).with_name(f"test_reference_{name}.py") for name in ("cases", "rules", "scopes")
+)
+
+
 def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() -> None:
-    assert ROWS
-    assert not problems([test_reference_cases, test_reference_rules, test_reference_scopes])
+    assert ROWS and all(path.exists() for path in CASE_MODULES)
+    assert not problems(CASE_MODULES)
+
+
+def test_the_matrix_check_finds_a_row_without_its_witness(tmp_path: Path) -> None:
+    """A check that has never rejected anything is a check nobody has tested."""
+    witness = ROWS[0].witness.split("::")[1]
+    elsewhere = tmp_path / "test_reference_cases.py"
+    elsewhere.write_text(f"@pytest.mark.xfail(strict=True)\ndef {witness}() -> None: ...\n")
+    found = problems([elsewhere])
+    assert f"test_reference_cases::{witness}: an expected failure with no row" in found
+    assert any(item.startswith(f"{ROWS[0].id}: witnessed by []") for item in found)
 
 
 def test_the_matrix_is_built_on_the_models_default_trial_reach() -> None:
@@ -77,12 +87,10 @@ def test_the_matrix_is_built_on_the_models_default_trial_reach() -> None:
     # rows with them.
     defaults = {item.name: item.default for item in dataclasses.fields(Space)}
     assert defaults["trials_count_retained_checks"] is False
-    modules = (test_reference_cases, test_reference_rules, test_reference_scopes)
-    cases = [value for module in modules for value in vars(module).values()]
-    descriptions = [case.description for case in cases if isinstance(case, Case)]
-    descriptions.append(generate(random.Random(0))[0].description)
-    assert len(descriptions) > 10
-    assert not any(item.trials_count_retained_checks for item in descriptions)
+    assert not generate(random.Random(0))[0].description.trials_count_retained_checks
+    other = dataclasses.replace(Space((), Scope("")), trials_count_retained_checks=True)
+    with pytest.raises(ValueError, match="default trial reach"):
+        Case("the other reading", other)
 
 
 def test_the_matrix_prints_as_a_markdown_table_in_milestone_order() -> None:
