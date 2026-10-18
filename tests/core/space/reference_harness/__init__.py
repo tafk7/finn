@@ -8,7 +8,8 @@ package imports both. :mod:`.engine` builds a model description as an engine Spa
 it the model's questions (everything that depends on how the engine is authored or asked
 at this commit is there); :mod:`.compare` puts the model's answers in the same form
 (:mod:`.forms`) and compares them; :mod:`.matrix` records every disagreement expected at
-this commit by the milestone that removes it.
+this commit by the milestone that removes it; :mod:`.walks` compares the two over seeded
+random walks, expecting only the disagreements whose kind a row still names.
 
     CASE = Case("a toy", Space(("wide",), Scope("", choices=(Choice("x", listed(1, 2)),))))
     pair = CASE.start(facts={"wide": True})

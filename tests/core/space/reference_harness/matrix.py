@@ -80,6 +80,14 @@ ROWS: tuple[Row, ...] = (
         "commit-under-refused-selector",
     ),
     Row(
+        "commit-waits-on-fact",
+        "lane 0",
+        "a choice committed while its domain waits on a fact not given yet is accepted and kept "
+        "unchecked, waiting on the fact, not refused",
+        f"{_CASES}::test_a_choice_committed_while_its_domain_waits_on_a_fact_is_kept_unchecked",
+        "commit-waits",
+    ),
+    Row(
         "outside-domain-under-open-selector",
         "lane 0",
         "a value outside its domain under a selector still open is refused at its own commit "

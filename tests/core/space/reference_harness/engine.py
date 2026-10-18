@@ -782,7 +782,9 @@ class Point:
                 unknown = True
                 blockers |= state.blockers
         if false:
-            return ValidityForm("refused", frozenset(false), frozenset(blockers))
+            # what unknown pieces wait on is compared for an undecided verdict only, as the
+            # model's answer is put in the form (``compare.validity_form``)
+            return ValidityForm("refused", frozenset(false))
         if unknown:
             return ValidityForm("undecided", blockers=frozenset(blockers))
         return ValidityForm("valid")

@@ -422,3 +422,23 @@ def test_new_facts_that_open_a_selector_keep_a_choice_under_it_unchecked() -> No
     # At 12 both cores are possible: the selector is open, and ``pe`` (3 divides 12) waits.
     point = TYPED.start({"width": 9}, {"compute.packed.pe": 3})
     point.check_change(Change(facts={"width": 12}))
+
+
+# A domain computed from a fact the configuration does not give yet (met by the seeded walks):
+# a value committed to it waits on the fact, as one under an open selector waits on the selector.
+
+WAITING = Case(
+    "a domain waiting on a fact",
+    Space(
+        ("width",),
+        Scope(
+            "",
+            choices=(Choice("pe", computed(lambda read: divisors(read["width"]), ("width",))),),
+        ),
+    ),
+)
+
+
+@expected("commit-waits-on-fact")
+def test_a_choice_committed_while_its_domain_waits_on_a_fact_is_kept_unchecked() -> None:
+    WAITING.start().check_change(Change(commit={"pe": 3}))
