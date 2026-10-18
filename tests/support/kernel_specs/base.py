@@ -27,9 +27,9 @@ class Probe:
     """A point the kernel must refuse, offline, and the finding codes it is refused with.
 
     ``build`` binds the point. Without ``choices`` it is the kernel itself, refused by
-    its own ``admission`` on its facts (``finn.harness.points.rejected``); with them it
-    is any point, and committing ``choices`` (by decision key) is what it refuses
-    (``finn.harness.points.refusal``)."""
+    its own validity on its facts (``finn.harness.points.rejected``); with them it is any
+    point, and committing ``choices`` (by decision key), or the configuration they make,
+    is what it refuses (``finn.harness.points.refusal``)."""
 
     label: str
     build: Callable[[], Space]

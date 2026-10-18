@@ -224,9 +224,10 @@ def test_a_producer_s_lane_order_is_wires():
     assert classify(window_fastest, finnlib).adaptation is Adaptation.LANE_PERMUTATION
 
 
-def test_one_kernel_refusal_reaches_only_its_own_stream():
-    # Unsigned weights are refused by dotp's weight port. The
-    # activations and the results are untouched.
+def test_one_kernel_refusal_reaches_every_stream_on_its_ends():
+    # Unsigned weights are refused by dotp's weight port, so the core and MatMul are
+    # refused, and every end MatMul presents with them (an end is a product): each
+    # channel waits unbound, refused naming the weight port's rule.
     point = choose(
         matmul_point(
             m=3,
@@ -244,11 +245,10 @@ def test_one_kernel_refusal_reaches_only_its_own_stream():
             "matmul.compute.packed.reducer": "tree",
         },
     )
-    point = with_direct_transports(with_adapter_memories(point))
-    assert isinstance(point.query("x", NETLIST), Available)
-    assert isinstance(point.query("y", NETLIST), Available)
-    # The refused end leaves its channel unbound, refused with it.
-    assert codes(point.query("w", NETLIST)) == {"dtype-family"}
+    for name in ("x", "w", "y"):
+        refused = point.query(name, NETLIST)
+        assert codes(refused) == {"dtype-family"}
+        assert {finding.owner for finding in refused.findings} == {"compute.packed.w.element_taken"}
 
 
 def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4", pe: int | None = 2) -> Any:

@@ -11,7 +11,15 @@ import pytest
 from support.helpers import eltwise, module_of
 from support.kernel_specs.eltwise import computed
 
-from finn.core.space import Available, Param, Rejected, Space, Unresolved, design_space
+from finn.core.space import (
+    Available,
+    Param,
+    Rejected,
+    Space,
+    Unresolved,
+    design_space,
+    inspection,
+)
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Signal
@@ -102,9 +110,12 @@ def test_eltwise_result_is_known_while_an_optional_parent_platform_is_unset() ->
 
     point = design_space(OptionalPlatform()).with_choices({OptionalPlatform.arithmetic.pe: 2})
     assert point.arithmetic.result_dtype.name == "INT4"
+    # Its validity waits on the platform; its module, a product, answers meanwhile.
+    assert inspection.validity(point.arithmetic).status == "undecided"
     assessment = point.arithmetic.inspect(EltwiseKernel.module)
     assert isinstance(assessment.output_result, Available)
-    assert isinstance(assessment.accepted_result, Unresolved)
+    assert isinstance(assessment.validity, Unresolved)
+    assert assessment.accepted_result == assessment.output_result
 
 
 def test_the_reference_computes_each_operation_with_its_operand_in_turn() -> None:

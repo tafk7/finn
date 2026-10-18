@@ -5,7 +5,7 @@
 
 - its lean covering points (``finn.harness.points.covering``, decision KT10) reach
   every case of each of its Decisions and each ordered domain's extremes, and each
-  is a point its kernel admits whose module builds (its adapters' memories chosen);
+  is a point its kernel finds valid whose module builds (its adapters' memories chosen);
 - the cases its design space refuses where they are drawn from are exactly those the
   spec states, each with its finding codes; and every probe is refused with its codes;
 - what it gathers is there: its conformance cases (one spec each), the sweeps' case
@@ -63,7 +63,7 @@ def _covering(base: Any) -> Covering:
 
 
 @pytest.mark.parametrize("name", sorted(BY_NAME))
-def test_the_covering_points_reach_every_case_and_are_admitted(name: str) -> None:
+def test_the_covering_points_reach_every_case_and_are_valid(name: str) -> None:
     spec = BY_NAME[name]
     base = _base(spec)
     found = _covering(base)

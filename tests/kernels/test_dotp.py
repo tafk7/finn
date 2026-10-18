@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Physical dotp on the Kernel protocol: three ports, its own folding factors, one admission.
+"""Physical dotp on the Kernel protocol: three ports, its own folding factors, one validity.
 
 Each compute core is its own kernel over the shared ``DotpAxiKernel``
 declaration; most cases exercise the packed core, which every DSP target has.
@@ -191,8 +191,8 @@ def test_dsp48_carries_the_segment_length_the_rtl_ignores():
     ],
 )
 def test_physical_view_reports_each_refusal_once(updates, code):
-    # An encoding a port refuses is that port's finding; the admission group
-    # adds only the DSP's own bounds, so no node reports a cause twice.
+    # An encoding a port refuses is that port's finding; the core's own rules add
+    # only the DSP's own bounds, so no node reports a cause twice.
     physical = kernel(**updates).inspect(DotpAxiKernel.module)
     refused = physical.accepted_result
     assert isinstance(refused, Rejected), refused
@@ -233,37 +233,41 @@ def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
     assert codes(physical.accepted_result) == {"dotp-accumulator-width"}
 
 
+def validity_of(point):
+    """The point's validity status, and each piece that is not true with its codes."""
+    found = inspection.validity(point)
+    return found.status, [
+        (piece.owner, {finding.code for finding in piece.result.findings}) for piece in found.pieces
+    ]
+
+
 def test_pumping_needs_lanes_to_split_and_is_not_offered_with_one():
-    """Pumping splits SIMD lanes over the doubled clock: with SIMD 1 its case is refused
-    where it is declared, so the Decision is forced, never a dead end. Committed before
-    SIMD, it is kept unchecked, waiting on SIMD, and checked once SIMD is committed."""
+    """Pumping splits SIMD lanes over the doubled clock (``pumping_has_lanes``): with SIMD 1
+    its case is not possible, so the Decision is forced, never a dead end. Committed, it
+    is checked against its own domain alone; the rule is the configuration's, refused
+    with SIMD 1 and undecided while SIMD is open."""
     one = kernel(simd=1, compute_pumping=None, outputs=2, reduction=4)
     (forced,) = [item for item in inspection.forced(one) if item.key == "compute_pumping"]
     assert forced.value is False and "dotp-pumping" in forced.refused["True"]
-    with pytest.raises(ValueError, match="dotp-pumping"):
-        kernel(simd=1, compute_pumping=True, reduction=4)
+    pumped = kernel(simd=1, compute_pumping=True, reduction=4)
+    assert validity_of(pumped) == ("refused", [("pumping_has_lanes", {"dotp-pumping"})])
     two = kernel(simd=2, compute_pumping=None, outputs=2, reduction=4)
     (viable,) = [item for item in inspection.viable(two) if item.key == "compute_pumping"]
     assert viable.cases == (False, True)
-    # Commit order does not matter: its cases read SIMD, so pumping committed first is kept,
-    # unchecked, waiting on SIMD; it reads unresolved until SIMD is committed.
+    # Commit order does not matter: pumping committed before SIMD is its value at once,
+    # and the rule reading both waits on SIMD.
     waiting = kernel(simd=None, compute_pumping=None, outputs=2, reduction=4)
     early = waiting.try_with_choices(compute_pumping=True)
-    assert early.accepted
-    assert [(o.owner, o.status, o.unchecked) for o in early.outcomes] == [
-        ("compute_pumping", "changed", True)
-    ]
-    assert inspection.unchecked(early.instance) == (
-        inspection.Unchecked("compute_pumping", True, ("simd",)),
-    )
-    assert isinstance(early.instance.query(PackedDotpKernel.compute_pumping), Unresolved)
-    # Then checked: refused where one lane cannot split, its value where lanes can.
+    assert early.accepted and inspection.unchecked(early.instance) == ()
+    assert early.instance.query(PackedDotpKernel.compute_pumping) == Available(True)
+    status, pieces = validity_of(early.instance)
+    assert status == "undecided" and ("pumping_has_lanes", {"decision-unassigned"}) in pieces
+    # Then the configuration: refused where one lane cannot split, valid where lanes can.
     split = early.instance.try_with_choices(simd=1)
-    assert not split.accepted
-    (refusal,) = [o for o in split.outcomes if o.owner == "compute_pumping"]
-    assert refusal.status == "refused" and codes(refusal.result) == {"dotp-pumping"}
+    assert split.accepted
+    assert validity_of(split.instance) == ("refused", [("pumping_has_lanes", {"dotp-pumping"})])
     lanes = early.instance.try_with_choices(simd=2)
-    assert lanes.accepted and inspection.unchecked(lanes.instance) == ()
+    assert lanes.accepted and validity_of(lanes.instance) == ("valid", [])
     assert lanes.instance.query(PackedDotpKernel.compute_pumping) == Available(True)
 
 
@@ -319,7 +323,7 @@ def test_the_core_refuses_before_its_folding_factors_are_chosen():
     # The module waits on the folding factors; the refusal is already known.
     module = point.inspect(DotpAxiKernel.module).accepted_result
     assert not isinstance(module, Available)
-    # Folding factors left open leave an admissible core unresolved, not refused (with
+    # Folding factors left open leave a core its facts allow unresolved, not refused (with
     # extents of 1 every factor would be forced).
     open_factors = kernel(pe=None, simd=None, compute_pumping=None, outputs=2, reduction=4)
     assert isinstance(open_factors.inspect(type(open_factors).core_supported).result, Available)

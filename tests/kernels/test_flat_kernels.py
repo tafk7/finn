@@ -30,6 +30,7 @@ from finn.core.space import (
     DefinitionError,
     Rejected,
     design_space,
+    inspection,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.harness.toolchain import finnlib_root
@@ -74,18 +75,23 @@ def generator(**changes):
     ((FifoKernel, fifo_facts()), (InputGeneratorKernel, generator_facts())),
 )
 def test_an_ultra_memory_needs_the_platforms_ultraram(space_type, facts):
+    # The style is committed (its domain holds it); the rule on the platform refuses the
+    # configuration.
     without = design_space(space_type(**facts, platform=replace(FULL_DSP48E2, uram=False)))
     report = without.try_with_choices(ram_style="ultra")
-    assert not report.accepted
-    (outcome,) = report.outcomes
-    assert {finding.code for finding in outcome.result.findings} == {"uram-absent"}
+    assert report.accepted
+    validity = inspection.validity(report.instance)
+    assert validity.status == "refused"
+    assert [
+        (piece.owner, {finding.code for finding in piece.result.findings})
+        for piece in validity.pieces
+    ] == [("uram_present", {"uram-absent"})]
     # The memory starts empty: UltraRAM that takes no initial contents is enough.
     platform = replace(FULL_DSP48E2, uram_init=False)
-    assert (
-        design_space(space_type(**facts, platform=platform))
-        .try_with_choices(ram_style="ultra")
-        .accepted
+    report = design_space(space_type(**facts, platform=platform)).try_with_choices(
+        ram_style="ultra"
     )
+    assert report.accepted and inspection.validity(report.instance).status != "refused"
 
 
 def operand(dtype, shape=(1, 4)):

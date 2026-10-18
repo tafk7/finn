@@ -122,8 +122,8 @@ def stored(platform: Platform) -> Network:
                 platform=platform,
             ),
             "w": wire(
-                tensor=Fact("matmul", "w_carried"),
-                contents=Fact("matmul", "w_stored"),
+                tensor=Fact("matmul", "carried_weights"),
+                contents=Fact("matmul", "stored_weights"),
                 consumer=Interface("matmul", "w_end"),
                 platform=platform,
             ),
@@ -225,11 +225,15 @@ def test_the_stored_memory_needs_its_own_choices_and_refuses_bad_weights():
     # Weights outside their type are refused where MatMul states their range on the
     # weight channel's tensor; the channel, which carries it, is refused with it.
     outside = base(weights=((4,) * 4,) * 4)
-    refused = outside.member("matmul").query(MatMulKernel.w_carried)
+    refused = outside.member("matmul").query(MatMulKernel.carried_weights)
     assert isinstance(refused, Rejected)
     assert codes(refused) == {"dtype-storage"}
-    assert owners(refused) == {"w_carried"}
+    assert owners(refused) == {"carried_weights"}
     assert codes(outside.query("w", NETLIST)) == {"dtype-storage"}
+    # The view presenting it is a product: refused with MatMul, whose cores read the
+    # refused value, so no core is possible either.
+    presented = outside.member("matmul").query(MatMulKernel.w_carried)
+    assert codes(presented) == {"dtype-storage", "decision-no-viable-case"}
     # A shape error is refused by MatMul: its K is its activations', not the weights'.
     wrong = base(weights=((0,),)).member("matmul").query(MatMulKernel.carried)
     assert isinstance(wrong, Rejected) and codes(wrong) == {"matmul-tensor"}
@@ -286,7 +290,7 @@ def test_the_cores_do_not_wait_on_the_source():
     compute = point.member("matmul").compute
     assert isinstance(compute.inspect(DotpAxiKernel.module).accepted_result, Available)
     assert compute.parameters["NARROW_WEIGHTS"] == 0  # the weights hold -4
-    assert compute.inspect(DotpAxiKernel.admission).result == Available(True)
+    assert inspection.validity(compute).status == "valid"
     folding = choose(base(weights=WEIGHTS), {"matmul.compute": "packed"})
     folding = choose(folding, {"matmul.compute.packed.simd": 4})
     # Folding refusals come before a PE or a memory style is chosen.
@@ -341,8 +345,8 @@ def test_a_non_viable_source_is_refused_and_committed_is_refused_by_its_candidat
         {
             **{name: stored(FULL_DSP48E2).wiring(name) for name in ("x", "y")},
             "w": wire(
-                tensor=Fact("matmul", "w_carried"),
-                contents=Fact("matmul", "w_stored"),
+                tensor=Fact("matmul", "carried_weights"),
+                contents=Fact("matmul", "stored_weights"),
                 sets=2,
                 consumer=Interface("matmul", "w_end"),
                 platform=FULL_DSP48E2,
@@ -359,9 +363,9 @@ def test_a_non_viable_source_is_refused_and_committed_is_refused_by_its_candidat
     assert isinstance(answer, Rejected) and codes(answer) == {"decision-no-viable-case"}
     assert "memstream-set-channel" in answer.findings[0].message
     # Committed on purpose, the case is accepted (committing never checks a kernel
-    # case's admission), and the candidate then refuses the configuration.
+    # case's validity), and the candidate then refuses the configuration.
     chosen = commit(w, {"source": "memstream"})
-    refusal = inspection.admission(chosen.source)
+    refusal = inspection.validity(chosen.source).result
     assert isinstance(refusal, Rejected) and "memstream-set-channel" in codes(refusal)
 
 
@@ -378,10 +382,13 @@ def test_the_platform_narrows_the_source_memory(platform, refused):
     trial = point.trial(keyed({"w.source.memstream.ram_style": "ultra"}))
     assert trial.accepted == (not refused)
     if refused:
+        # The style is committed (its domain holds it), and the memory then refuses the
+        # platform: the channel's source has no possible case, the memory's rule its cause.
         (why,) = trial.refused.values()
-        assert {finding.code for finding in why} == refused
+        assert {finding.code for finding in why} == {"decision-no-viable-case"}
+        assert {cause.code for finding in why for cause in finding.causes} == refused
     # The platform does not narrow pumping: the doubled clock is the shell's, which
-    # its root admits.
+    # its root supplies.
     assert ("w", "source.memstream.pumped_memory") not in point.forced()
 
 

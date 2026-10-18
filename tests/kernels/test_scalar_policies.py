@@ -18,6 +18,9 @@ def test_an_encoding_a_kernel_does_not_take_is_refused():
 
 def test_threshold_type_refusal_precedes_unrelated_configuration_choices():
     base = threshold_base(input_dtype="BIPOLAR")
+    validity = inspection.validity(base)
+    assert validity.status == "refused"
+    assert "types_supported" in {piece.owner for piece in validity.pieces}
     assessment = base.inspect(ThresholdingAxiKernel.module)
-    assert isinstance(assessment.constraints.results["types_supported"], Rejected)
+    assert isinstance(assessment.validity, Rejected)
     assert isinstance(assessment.accepted_result, Rejected)

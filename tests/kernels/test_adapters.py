@@ -140,7 +140,7 @@ def test_exactly_one_candidate_a_side_carries_out_each_plan():
     # Every other candidate refuses its side's plan.
     assert all("adapter-plan" in why for why in forced["x.adapter"].refused.values())
     chosen = commit(x, {"adapter": "input_gen_vpc"})
-    refused = inspection.admission(chosen.adapter)
+    refused = inspection.validity(chosen.adapter).result
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"adapter-plan"}
 
@@ -181,7 +181,7 @@ def test_a_fifo_refuses_what_carries_markers():
     carried = ChannelFifo(
         tensor=Tensor((ROWS, CHANNELS), ELEMENT), arriving=framed, platform=FULL_DSP48E2
     )
-    refused = inspection.admission(design_space(carried))
+    refused = inspection.validity(design_space(carried)).result
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"fifo-markers"}
     # A marker closing every beat is tied high after the FIFO, not carried.
@@ -190,7 +190,7 @@ def test_a_fifo_refuses_what_carries_markers():
     tied = ChannelFifo(
         tensor=Tensor((ROWS, CHANNELS), ELEMENT), arriving=every, platform=FULL_DSP48E2
     )
-    assert not isinstance(inspection.admission(design_space(tied)), Rejected)
+    assert inspection.validity(design_space(tied)).status != "refused"
 
 
 def validity_of(point):

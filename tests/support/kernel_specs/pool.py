@@ -79,7 +79,8 @@ SPEC = KernelSpec(
                 {**pool(), "outputs": {"output_channel": Tensor((2, 3, 6), INT4)}},
                 window=(0, 2),
             ),
-            frozenset({"pool-geometry"}),
+            # Its output port's element reads the extents, refused at their source.
+            frozenset({"pool-geometry", "kernel-extents"}),
         ),
     ),
     unit=("tests/kernels/test_pool.py",),
