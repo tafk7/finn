@@ -54,9 +54,11 @@ INT8-typed ternary weights are ``INT2``); without known weights, ``w_carried``
 is ``w_tensor``. Its network binds the weight channel's ``tensor`` and
 ``contents`` to them. With several weight sets the contents hold one operand a
 set, and the channel's ``sets`` and ``index_tensor`` select one per row. Each
-core reads its weights from ``w_carried``: its weight width, and the packed
-core's ``NARROW_WEIGHTS``. A dense realization of a depthwise operation reads
-block-diagonal weights, so it needs known weights (``matmul-realization``).
+core reads its weights as ``w_carried`` presents them, the value
+``carried_weights`` (a rule reads values; a view is a product for its holder):
+its weight width, and the packed core's ``NARROW_WEIGHTS``. A dense realization
+of a depthwise operation reads block-diagonal weights, so it needs known weights
+(``matmul-realization``).
 
 The result's range is derived from the weights and the activations' range (their
 tensor's element: their datatype's, or the narrower range their producer states,
@@ -90,6 +92,7 @@ from finn.core.space import (
     Decision,
     Param,
     Rejected,
+    View,
     constraint,
     derived,
     reject,
@@ -330,7 +333,7 @@ class MatMulKernel(ComposedKernel):
         datatype's, or the narrower one its producer states."""
         try:
             if self.stored:
-                return column_range(self.x_tensor.element, self.w_stored)
+                return column_range(self.x_tensor.element, self.stored_weights)
             return datatype_range(self.k, self.x_tensor.element, self.w_tensor.element)
         except ValueError as error:
             return reject("matmul-arithmetic", str(error))
@@ -382,8 +385,8 @@ class MatMulKernel(ComposedKernel):
         except ValueError as error:
             return reject("matmul-extents", str(error))
 
-    @view
-    def activation_tensor(self) -> Tensor | Rejected:
+    @derived
+    def required_activations(self) -> Tensor | Rejected:
         """(M, K), or (M, K, N) depthwise, however the datapath reads it; through a window,
         the image's (H * W, C) rows. What it requires of the activations' tensor: its
         element count and last axis (``carried``)."""
@@ -395,11 +398,15 @@ class MatMulKernel(ComposedKernel):
             shape = (self.m, self.k, self.n) if self.depthwise else (self.m, self.k)
         return self._tensor(shape, self.activation_dtype)
 
-    @view
-    def weight_tensor(self) -> Tensor | Rejected:
+    @derived
+    def required_weights(self) -> Tensor | Rejected:
         """(K, N) as the datapath reads it, in the weights' datatype: the weights' values
         must be values of it, in whatever encoding their owner states."""
         return self._tensor((self.datapath_k, self.n), self.weights_type)
+
+    # The products its holder reads; ``carried`` reads the values they present.
+    activation_tensor = View(required_activations)
+    weight_tensor = View(required_weights)
 
     @derived
     def leading(self) -> tuple[int, ...]:
@@ -426,34 +433,39 @@ class MatMulKernel(ComposedKernel):
         """Whether its weights are placed: known, or a weight tensor given."""
         return self.stored or self.present(MatMulKernel.w_tensor)
 
-    @view(when=stored, semantics=INTEGER_TENSOR)
-    def w_stored(self) -> IntegerTensor:
+    @derived(when=stored, semantics=INTEGER_TENSOR)
+    def stored_weights(self) -> IntegerTensor:
         """The known weights as the datapath reads them, which the weight channel's source
         stores: block-diagonal when a depthwise operation is realized densely."""
         weights = self.w_contents
         return block_diagonal(weights) if self.dense_view else weights
 
-    @view(when=weighted)
-    def w_carried(self) -> Tensor | Rejected:
+    @derived(when=weighted)
+    def carried_weights(self) -> Tensor | Rejected:
         """The tensor the weight channel carries, which the cores read: with known weights,
         a set of the stored values, ``(K, N)``, over their range, narrowed to it
         (``stored_element``); otherwise ``w_tensor``."""
         if not self.stored:
             tensor: Tensor = self.w_tensor
             return tensor
-        stored = integer_shape(self.w_stored)
+        stored = integer_shape(self.stored_weights)
         if not stored or len(stored) < 2:
             return reject("matmul-tensor", f"known weights are (K, N) a set, not {stored}")
         dtype, shape = self.weights_type, stored[-2:]
         if not is_ordinary_integer(dtype):
             return Tensor(shape, ScalarEncoding(dtype))
-        least, greatest = integer_range(self.w_stored)
+        least, greatest = integer_range(self.stored_weights)
         low, high = ordinary_integer_bounds(dtype)
         if not low <= least <= greatest <= high:
             return reject(
                 "dtype-storage", f"every weight must be an integer admitted by {dtype.name}"
             )
         return Tensor(shape, stored_element(dtype, (least, greatest)))
+
+    # What the weight channel's source stores and what it carries, the products its
+    # network reads (``Fact(member, "w_carried")``); the cores read the values.
+    w_stored = View(stored_weights, when=stored)
+    w_carried = View(carried_weights, when=weighted)
 
     @constraint
     def carried(self) -> bool | Rejected:
@@ -466,9 +478,10 @@ class MatMulKernel(ComposedKernel):
         ]
         if self.weighted:
             weights = "w_carried" if self.stored else "w_tensor"
-            given.append((weights, self.w_carried, "weight_tensor", True))
+            given.append((weights, self.carried_weights, "weight_tensor", True))
         for name, supplied_, tensor, whole in given:
-            derived_ = getattr(self, tensor)
+            # The weights are read whole, the activations by their count and last axis.
+            derived_ = self.required_weights if whole else self.required_activations
             fits = (
                 supplied_.shape == derived_.shape
                 if whole
@@ -494,7 +507,7 @@ class MatMulKernel(ComposedKernel):
         result_range=result_range,
         platform=platform,
         x_tensor=x_tensor,
-        w_tensor=w_carried,
+        w_tensor=carried_weights,
     )
     compute_case = selected(compute)
 
