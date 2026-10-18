@@ -431,25 +431,24 @@ ROWS: tuple[Row, ...] = (
     ),
     Row(
         "inapplicable-input-commit",
-        "lane 2",
+        "lane 1",
         "a domain input that does not apply leaves the own check unknown: the commit is "
         "accepted and the choice kept unchecked, waiting on the input, not refused as inactive",
         f"{_CASES}::test_a_commit_whose_domain_input_does_not_apply_is_kept_unchecked",
-        note="the engine refuses the commit as inactive; lane 1 may take it, if it is one branch",
+        note="the engine refuses the commit as inactive",
     ),
     Row(
         "inapplicable-input-new-facts",
-        "lane 2",
+        "lane 1",
         "a domain input that does not apply leaves the own check unknown: new facts under "
         "which a kept choice's domain input does not apply are accepted, the choice kept "
         "unchecked",
         f"{_CASES}::test_new_facts_under_which_a_kept_choices_domain_input_does_not_apply_keep_it",
-        note="the engine refuses the change, reaching the kept choice as inactive; lane 1 may "
-        "take it, if it is one branch",
+        note="the engine refuses the change, reaching the kept choice as inactive",
     ),
     Row(
         "inapplicable-input-state",
-        "lane 2",
+        "lane 1",
         "a domain input that does not apply leaves the own check unknown: the kept choice is "
         "unchecked, waiting on the input",
         f"{_CASES}::test_a_choice_whose_domain_input_does_not_apply_waits_on_it",
