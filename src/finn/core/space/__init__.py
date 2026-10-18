@@ -11,7 +11,6 @@ from .compiler import Model, design_space
 from .declarations import (
     Const,
     Constraint,
-    ConstraintGroup,
     Decision,
     Derived,
     Members,
@@ -25,7 +24,7 @@ from .declarations import (
     supplied,
     view,
 )
-from .domains import Domain, Requirement, divisors_of, domain, requires, requiring
+from .domains import Domain, divisors_of, domain
 from .edits import Change, ChangeOutcome, ChangeRequest, ConfigurationResult
 from .errors import (
     ConfigurationError,
@@ -66,7 +65,6 @@ __all__ = [
     "supplied",
     "Derived",
     "Constraint",
-    "ConstraintGroup",
     "View",
     # Graph primitives
     "Members",
@@ -84,9 +82,6 @@ __all__ = [
     "Domain",
     "domain",
     "divisors_of",
-    "Requirement",
-    "requires",
-    "requiring",
     "ValueSemantics",
     "default_semantics",
     # Results and assessments

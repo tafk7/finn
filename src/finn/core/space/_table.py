@@ -49,6 +49,8 @@ class ScopeDraft:
     choices: dict[object, int] = field(default_factory=dict)
     # The value inputs nothing supplies here: a guard on their supply never holds.
     unsupplied: set[str] = field(default_factory=set)
+    # The node answering this Space's validity, reserved with the scope.
+    validity: int | None = None
 
     def freeze(self) -> Scope:
         return Scope(
@@ -63,6 +65,7 @@ class ScopeDraft:
             self.guard,
             self.choices,
             self.record,
+            self.validity,
         )
 
 

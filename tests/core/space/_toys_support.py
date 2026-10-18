@@ -94,6 +94,7 @@ class House(Space):
             return reject("over-budget", f"{sum(spent.values())} exceeds {self.budget}")
         return True
 
-    @view(requires=(costs, within_budget, matched))
+    @view
     def total(self) -> int:
+        """Refused with the house: its relation and its budget are the house's constraints."""
         return sum(member.value for member in self.costs)

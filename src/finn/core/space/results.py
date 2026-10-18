@@ -21,10 +21,11 @@ T = TypeVar("T")
 def merged_findings(answers: Iterable[NonValue]) -> tuple[Finding, ...]:
     """The findings of several answers, each identical finding once.
 
-    One reason can reach a merge by two routes: a view that reads a value and
-    also requires it, or a computation that reads two aliases of one blocked
-    value. Findings are frozen values, so the same reason compares equal and is
-    kept once; findings that differ in anything, owner included, are all kept.
+    One reason can reach a merge by two routes: a view whose output and whose
+    Space's validity both read a refused value, or a computation that reads two
+    aliases of one blocked value. Findings are frozen values, so the same reason
+    compares equal and is kept once; findings that differ in anything, owner
+    included, are all kept.
     """
 
     return tuple(dict.fromkeys(finding for answer in answers for finding in answer.findings))
@@ -206,9 +207,14 @@ def assess_constraints(answers: Mapping[str, QueryResult[bool]]) -> ConstraintAs
 
 @dataclass(frozen=True, slots=True)
 class ViewAssessment(Generic[T]):
+    """A view's answer and what it was made of: its raw output, its Space's validity
+    (``Inapplicable`` where the view is inactive and its validity was never read),
+    readiness (a diagnostic: whether the output or the validity is still unresolved)
+    and the accepted result (``assess_view``)."""
+
     output_result: QueryResult[T]
     readiness: ReadinessAssessment
-    constraints: ConstraintAssessment
+    validity: QueryResult[bool]
     accepted_result: QueryResult[T]
 
     def require_value(self) -> T:
@@ -231,41 +237,44 @@ def assess_view(
     output_result: QueryResult[T],
     *,
     owner: str,
-    constraints: Mapping[str, QueryResult[bool]] | None = None,
+    validity: QueryResult[bool] = Available(True),
+    validity_owner: str = "$validity",
+    waiting: Mapping[str, QueryResult[object]] | None = None,
     applicability: QueryResult[bool] = Available(True),
 ) -> ViewAssessment[T]:
-    """Reduce raw output and obligations identically for every view form.
+    """Reduce a view's raw output and its Space's validity identically for every view form.
 
-    Evaluators must resolve applicability before requesting the other answers.
-    The reducer also preserves that precedence when given existing answers.
+    In order: inapplicable while the view is inactive (``applicability``; the
+    evaluator then reads neither its output nor its Space's validity); refused when its
+    output or its Space is refused, whatever else waits; unresolved when its output is
+    (an undecided Space leaves the view answering); else its output. Readiness is a
+    diagnostic: whether the output, or anything the Space counts, is still unresolved
+    (the Space's validity, keyed ``validity_owner``, and the pieces still unresolved in
+    a refused Space, ``waiting``, by key), which does not decide refusal.
     """
 
-    constraint_results = assess_constraints(constraints if constraints is not None else {})
+    if not isinstance(applicability, Available) or applicability.value is False:
+        inactive: QueryResult[T] = (
+            applicability if not isinstance(applicability, Available) else Inapplicable()
+        )
+        readiness = ReadinessAssessment(
+            {owner: cast(QueryResult[object], inactive)}, Available(True)
+        )
+        return ViewAssessment(output_result, readiness, Inapplicable(), inactive)
     required = {
-        name: cast(QueryResult[object], answer)
-        for name, answer in constraint_results.results.items()
+        owner: cast(QueryResult[object], output_result),
+        validity_owner: cast(QueryResult[object], validity),
+        **(waiting or {}),
     }
-    # The compiler owns the names and rejects member collisions. The raw view
-    # output is always included even when no extra readiness was requested.
-    required[owner] = cast(QueryResult[object], output_result)
     unresolved = _unresolved(required.values())
     readiness = ReadinessAssessment(
         required, unresolved if unresolved is not None else Available(True)
     )
-    accepted: QueryResult[T]
-    if not isinstance(applicability, Available):
-        accepted = applicability
-    elif applicability.value is False:
-        accepted = Inapplicable()
-    else:
-        refusal = _rejected(required.values())
-        if refusal is not None:
-            accepted = refusal
-        elif isinstance(readiness.result, Unresolved):
-            accepted = readiness.result
-        else:
-            accepted = output_result
-    return ViewAssessment(output_result, readiness, constraint_results, accepted)
+    refusal = _rejected(
+        (cast(QueryResult[object], output_result), cast(QueryResult[object], validity))
+    )
+    accepted: QueryResult[T] = refusal if refusal is not None else output_result
+    return ViewAssessment(output_result, readiness, validity, accepted)
 
 
 __all__ = [

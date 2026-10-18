@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Any
 
 from finn.core.space import (
-    ConstraintGroup,
     Decision,
     Param,
     Rejected,
@@ -33,8 +32,6 @@ class Packed(Space):
             return reject("packed-width", "the packed core takes at most 64 lanes")
         return True
 
-    admission = ConstraintGroup(fits)
-
 
 class Stub(Space):
     width: int = Param()
@@ -45,8 +42,6 @@ class Stub(Space):
         if self.width % 2:
             return reject("stub-width", "the stub core takes an even width")
         return True
-
-    admission = ConstraintGroup(even)
 
 
 CORES: dict[str, type[Space] | Space] = {"packed": Packed, "stub": Stub}
@@ -72,8 +67,6 @@ class Never(Space):
     def never(self) -> bool | Rejected:
         return reject("never-viable", "this case is never viable")
 
-    admission = ConstraintGroup(never)
-
 
 class Unless(Space):
     """Refuses while its peer (a Boolean about another Decision) holds."""
@@ -85,8 +78,6 @@ class Unless(Space):
         if self.peer:
             return reject("peer-holds", "this case is not viable beside its peer")
         return True
-
-    admission = ConstraintGroup(alone)
 
 
 class Exclusive(Space):

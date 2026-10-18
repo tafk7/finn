@@ -6,7 +6,7 @@
 A supplied formal becomes its binding (a literal, or an alias of what it
 references); a Space class's own member becomes its kind's payload: a formal's
 requirement, a constant, a Decision's domain and its arguments, a callback with
-its arguments, a view's output and obligations, and ``Members`` entries. Guards
+its arguments, a view's output and its Space's validity, and ``Members`` entries. Guards
 and integer expressions are linked after every member, references resolving
 through ``_names``.
 """
@@ -14,7 +14,7 @@ through ``_names``.
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any, cast
 
@@ -28,7 +28,6 @@ from .declarations import (
     ChoiceMemberRef,
     Const,
     Constraint,
-    ConstraintGroup,
     Decision,
     Declaration,
     Derived,
@@ -40,7 +39,7 @@ from .declarations import (
     View,
     ViewKey,
 )
-from .domains import Domain, requirement_argument
+from .domains import Domain
 from .errors import DefinitionError
 from .expressions import INTEGER_SEMANTICS, Expr, evaluator
 from .ir import Argument, Node
@@ -169,54 +168,6 @@ class _Lowering:
             self.table.argument_checks.append((dependency, target, owner))
         return tuple(arguments)
 
-    def obligations(
-        self,
-        scope: int,
-        sources: Iterable[object],
-        allowed: tuple[type[object], ...],
-        *,
-        owner: str,
-    ) -> tuple[int, ...]:
-        result: list[int] = []
-        seen: set[int] = set()
-        for source in sources:
-            if not isinstance(source, allowed):
-                raise DefinitionError.broken(
-                    "obligation-unsupported",
-                    _OWNER,
-                    f"{owner}: unsupported obligation declaration",
-                    declaration=owner,
-                )
-            if isinstance(source, Members):
-                # A Members group obliges each member's acceptance separately.
-                indices = [
-                    target
-                    for *_, target in self.names.members_candidates(
-                        scope, cast(ViewKey[object], source.key)
-                    )
-                ]
-            else:
-                indices = [self.names.reference(scope, source, owner=owner)]
-                if self.table.nodes[indices[0]].kind not in {"view", "constraint", "group"}:
-                    raise DefinitionError.broken(
-                        "view-obligation-invalid",
-                        _OWNER,
-                        f"{owner}: a view may require only constraints, groups, views, "
-                        "references to views and Members",
-                        declaration=owner,
-                    )
-            for index in indices:
-                if index in seen:
-                    raise DefinitionError.broken(
-                        "obligation-duplicate",
-                        _OWNER,
-                        f"{owner}: duplicate obligation",
-                        declaration=owner,
-                    )
-                result.append(index)
-                seen.add(index)
-        return tuple(result)
-
     def domain(
         self,
         scope: int,
@@ -245,20 +196,6 @@ class _Lowering:
                 )
             arguments.append(Argument(name, self.names.reference(scope, source, owner=owner)))
         supplied = dict.fromkeys(argument.name for argument in arguments)
-        for position, requirement in enumerate(domain.requirements):
-            if not isinstance(requirement.fact, ValueRef):
-                raise DefinitionError.broken(
-                    "requirement-fact-not-value",
-                    _OWNER,
-                    f"{owner}: requirement {requirement.code}'s fact must be a value reference",
-                    declaration=owner,
-                )
-            arguments.append(
-                Argument(
-                    requirement_argument(position),
-                    self.names.reference(scope, requirement.fact, owner=owner),
-                )
-            )
         for role, function, values in (
             ("membership", domain.accepts, {"candidate": None, **supplied}),
             ("enumeration", domain.candidates, supplied),
@@ -387,21 +324,10 @@ class _Lowering:
             return self.callback(node, scope.effective.functions[task.name])
         if isinstance(declaration, Supplied):
             return {"function": _supply(declaration.formal), "call_style": "self"}
-        if isinstance(declaration, ConstraintGroup):
-            return {
-                "constraints": self.obligations(
-                    scope.index, declaration.constraints, (Constraint,), owner=node.key
-                )
-            }
         if isinstance(declaration, View):
             return {
                 "output": self.view_output(node, guard, declaration, task.name),
-                "constraints": self.obligations(
-                    scope.index,
-                    declaration.requires,
-                    (Constraint, ConstraintGroup, View, ValueRef, Members),
-                    owner=node.key,
-                ),
+                "constraints": (cast(int, self.table.drafts[node.scope].validity),),
             }
         if isinstance(declaration, Members):
             entries = self.names.members_candidates(

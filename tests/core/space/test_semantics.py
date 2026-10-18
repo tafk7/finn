@@ -149,12 +149,11 @@ def test_a_refused_constraint_beside_an_unresolved_one_refuses_the_group() -> No
 
 def test_readiness_tracks_unresolved_results_without_erasing_refusal() -> None:
     refused = reject("no", "unsupported", owner="support")
-    waiting: ViewAssessment[int] = assess_view(
-        blocker(), owner="physical", constraints={"support": refused}
-    )
+    waiting: ViewAssessment[int] = assess_view(blocker(), owner="physical", validity=refused)
     assert waiting.readiness.ready is None
-    assert waiting.constraints.result == refused
-    final = assess_view(Available(1), owner="physical", constraints={"support": refused})
+    assert waiting.validity == refused
+    assert waiting.accepted_result == refused
+    final = assess_view(Available(1), owner="physical", validity=refused)
     assert final.readiness.ready is True
     assert final.accepted_result == refused
 
@@ -162,20 +161,20 @@ def test_readiness_tracks_unresolved_results_without_erasing_refusal() -> None:
 def test_view_reducer_obeys_readiness_output_and_refusal_precedence() -> None:
     raw: QueryResult[int] = Available(4)
     refused = reject("geometry", "too wide", owner="width")
-    waiting = assess_view(raw, owner="physical", constraints={"lanes": blocker(), "width": refused})
+    # A refused Space refuses the view whatever waits; readiness still names what waits.
+    waiting = assess_view(raw, owner="physical", validity=refused, waiting={"lanes": blocker()})
     assert waiting.output_result == raw
     assert waiting.accepted_result == refused
     assert waiting.readiness.ready is None
-    assert waiting.constraints.refused == ("width",)
-    inactive: ViewAssessment[int] = assess_view(
-        Inapplicable(), owner="physical", constraints={"width": refused}
-    )
+    assert waiting.readiness.results["lanes"] == blocker()
+    inactive: ViewAssessment[int] = assess_view(Inapplicable(), owner="physical", validity=refused)
     assert inactive.accepted_result == refused
-    absent: ViewAssessment[int] = assess_view(
-        Inapplicable(), owner="physical", constraints={"lanes": blocker()}
-    )
-    assert isinstance(absent.accepted_result, Unresolved)
-    denied = assess_view(raw, owner="physical", constraints={"width": refused})
+    # An undecided Space leaves the view answering its output.
+    absent: ViewAssessment[int] = assess_view(Inapplicable(), owner="physical", validity=blocker())
+    assert isinstance(absent.accepted_result, Inapplicable)
+    undecided = assess_view(raw, owner="physical", validity=blocker())
+    assert undecided.accepted_result == raw and undecided.readiness.ready is None
+    denied = assess_view(raw, owner="physical", validity=refused)
     assert denied.accepted_result == refused
     accepted = assess_view(raw, owner="physical")
     assert accepted.readiness.ready is True

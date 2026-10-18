@@ -247,10 +247,11 @@ def test_shared_expression_prefix_is_not_duplicated_across_consumers() -> None:
     small_type, large_type = shared_consumers(2), shared_consumers(40)
     small_counts = inspection.statistics(small_type)
     large_counts = inspection.statistics(large_type)
-    # Only the additional public view declarations and their output edges grow;
-    # the entire 200-operation anonymous prefix stays shared across consumers.
+    # Only the additional public view declarations and their two edges each (the output
+    # and the Space's validity) grow; the entire 200-operation anonymous prefix stays
+    # shared across consumers.
     assert large_counts.nodes - small_counts.nodes == 38
-    assert large_counts.potential_edges - small_counts.potential_edges == 38
+    assert large_counts.potential_edges - small_counts.potential_edges == 2 * 38
     first = cast(View[int], getattr(large_type, "consumer0"))
     last = cast(View[int], getattr(large_type, "consumer39"))
     point = design_space(large_type(source=2))

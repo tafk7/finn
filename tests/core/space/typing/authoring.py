@@ -112,7 +112,7 @@ class House(Space):
         assert_type(self.kitchen.finish, int)
         return self.kitchen.finish == self.dining.finish
 
-    @view(requires=(costs, matched, kitchen.cost))
+    @view
     def total(self) -> int:
         assert_type(self.kitchen, Room)
         assert_type(self.kitchen.finish, int)
@@ -145,11 +145,11 @@ class Fifo(Space):
     def capacity(self) -> int:
         return self.word_bits * self.depth
 
-    @view(requires=(supported,))
+    @view
     def physical(self) -> int:
         return self.capacity + len(self.ram_style)
 
-    detached = View(capacity, requires=(supported,))
+    detached = View(capacity)
 
 
 class Eltwise(Space):
@@ -178,7 +178,7 @@ class GuardedAssembly(Space):
     def supported(*, slots: int) -> bool:
         return slots > 0
 
-    physical = View(value, requires=(supported,), when=enabled)
+    physical = View(value, when=enabled)
 
 
 def check(point: Fifo, house: House, eltwise: Eltwise) -> None:
@@ -281,13 +281,13 @@ class Wing(Space):
     study = Room(area=dining.cost)
     assert_type(kitchen.cost, int)
 
-    @view(requires=(kitchen.cost, dining.cost))  # view references as obligations
+    @view
     def total(self) -> int:
         assert_type(self.kitchen.cost, int)  # inside a method: the accepted value
         assert_type(self.hall.cost, int)
         return self.kitchen.cost + self.dining.cost
 
-    checked = View(kitchen.cost, requires=(dining.cost, total))
+    checked = View(kitchen.cost)
     assert_type(checked, View[int])
 
 

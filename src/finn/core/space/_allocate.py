@@ -7,9 +7,11 @@ The root scope is the Space class's own, its formals runtime inputs; scopes are
 then walked breadth-first. A child node and a Decision over nodes' candidates
 each place a scope. Each member gets its node, bound by what the body that
 declared the node supplied for it (a formal only), and the task that lowers it.
-A named shared Decision then gets one owning node. Afterwards scope identities
-and membership maps are fixed (``Table.scopes``); later phases replace node
-payloads only.
+A named shared Decision then gets one owning node. Every scope has a validity
+node, whose pieces are given once every scope is placed: the scope's
+constraints, its Decisions (their own checks) and its placed scopes' validity.
+Afterwards scope identities and membership maps are fixed (``Table.scopes``);
+later phases replace node payloads only.
 """
 
 from __future__ import annotations
@@ -41,7 +43,6 @@ from .declarations import (
     ChoiceMemberRef,
     Const,
     Constraint,
-    ConstraintGroup,
     Decision,
     Declaration,
     Derived,
@@ -94,8 +95,6 @@ def _declared_kind(declaration: Declaration) -> NodeKind | None:
         return "constraint"
     if isinstance(declaration, View):
         return "view"
-    if isinstance(declaration, ConstraintGroup):
-        return "group"
     if isinstance(declaration, (MemberRef, ChoiceMemberRef, CaseRef)):
         return "alias"
     if isinstance(declaration, Members):
@@ -196,6 +195,10 @@ class _Allocation:
                 draft.members[declaration] = draft.named_members[member_name]
         for export, declaration in draft.effective.exports.items():
             draft.members[export] = draft.members[declaration]
+        key = member_key(name, "$validity")
+        draft.validity = self.table.reserve(
+            index, key, "validity", BOOL, guard=guard, source_owner=key
+        )
         return index
 
     def member(self, draft: ScopeDraft, member_name: str, declaration: Declaration) -> None:
@@ -418,7 +421,7 @@ class _Allocation:
             if child is None:
                 continue
             for member, index in self.table.drafts[child].named_members.items():
-                if self.table.nodes[index].kind not in {"constraint", "group"}:
+                if self.table.nodes[index].kind != "constraint":
                     found.setdefault(member, []).append((case, index))
         for member, alternatives in found.items():
             if len(alternatives) < 2:
@@ -462,9 +465,26 @@ class _Allocation:
         if self.missing:
             raise DefinitionError.broken("formal-unsupplied", _OWNER, "; ".join(self.missing))
         self.own_named_decisions()
+        self.validity_pieces()
         # All occurrence identities and membership maps are now stable. Later
         # phases replace node payloads, never scope identities.
         self.table.scopes = tuple(draft.freeze() for draft in self.table.drafts)
+
+    def validity_pieces(self) -> None:
+        """Each scope's validity pieces: its constraints and its Decisions (their own
+        checks), in node order, then each scope it places (its validity), in placement
+        order: a child node, or a candidate of a Decision over nodes."""
+        nodes, drafts = self.table.nodes, self.table.drafts
+        own: dict[int, list[int]] = {draft.index: [] for draft in drafts}
+        for node in nodes:
+            if node.kind in ("constraint", "decision"):
+                own[node.scope].append(node.index)
+        for draft in drafts:
+            if draft.parent is not None:
+                own[draft.parent].append(cast(int, draft.validity))
+        for draft in drafts:
+            index = cast(int, draft.validity)
+            nodes[index] = replace(nodes[index], constraints=tuple(own[draft.index]))
 
     def own_named_decisions(self) -> None:
         """A named Decision that is not a class attribute is one decision.

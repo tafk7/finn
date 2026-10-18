@@ -6,7 +6,9 @@ Every supplied choice, and every retained choice the change can reach, is checke
 again before publication; a retained choice whose admission read nothing the change
 reaches keeps the admission its base recorded (``_runtime._TrialSnapshot``).
 Requests are checked as a batch, and a trial reads the forced values of the configuration
-it would publish. A choice whose own check is false refuses the batch. One whose own
+it would publish. A choice's own check is its domain alone: a constraint never refuses a
+change, and the configuration it publishes reports its validity (``inspection.validity``).
+A choice whose own check is false refuses the batch. One whose own
 check cannot conclude (it reads a choice still open, or an input not supplied) is kept
 **unchecked**: stored, read unresolved, and reported. Which choices are unchecked also
 decides what the configuration forces, so the batch is checked again with the choices

@@ -28,11 +28,12 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
+    constraint,
     derived,
     design_space,
     domain,
     inspection,
-    requires,
+    reject,
 )
 
 # Each test runs with the readers index used for every cache, then for none: the same answers.
@@ -101,22 +102,28 @@ def test_forcing_keeps_its_evaluations_on_the_configuration_except_a_refused_rea
             derivations.append(self.lanes)
             return self.lanes
 
-        # Its requirement reads ``width``: forcing's copy derives it, before the cases.
-        wide: bool = Decision(
-            values=(False, True),
-            requires=(requires(width, "width-absent: no lanes", cases=(True,)),),
-        )
+        # Its constraint reads ``width`` first: forcing's copy derives it, before the cases.
+        wide: bool = Decision(values=(False, True))
         compute: Packed | Stub = Decision(CORES, width=width)
 
         @derived
         def kind(self) -> str:
             return type(self.compute).__name__
 
-        # Its requirement reads ``kind``: forcing's copy evaluates it, ``compute`` open.
-        typed: bool = Decision(
-            values=(False, True),
-            requires=(requires(kind, "kind-absent: no core", cases=(True,)),),
-        )
+        # Its constraint reads ``kind`` first: forcing's copy evaluates it, ``compute`` open.
+        typed: bool = Decision(values=(False, True))
+
+        @constraint
+        def lanes_present(self) -> bool | Rejected:
+            if not self.width and self.wide:
+                return reject("width-absent", "no lanes")
+            return True
+
+        @constraint
+        def core_known(self) -> bool | Rejected:
+            if not self.kind and self.typed:
+                return reject("kind-absent", "no core")
+            return True
 
     point = design_space(Shared(lanes=128))
     assert forced(point) == {"compute": "stub"}

@@ -27,7 +27,6 @@ from core.space._choices_support import replay
 from core.space._toys_support import House
 from finn.core.space import (
     Available,
-    ConstraintGroup,
     Decision,
     Inapplicable,
     Param,
@@ -209,11 +208,11 @@ def test_a_retained_choice_waits_on_a_selector_the_change_opened() -> None:
     """A choice whose own check cannot conclude is kept unchecked: stored, read unresolved,
     and reported with what it waits on, as a new commit of it is.
 
-    The chain from nothing, Pipeline seed 6, step 23 (reduced to the sequence below).
-    The second link's burst is committed while the second unit's core is forced (the
-    first unit's pe leaves its width odd, which refuses the stub), and clearing that
-    core is accepted. The last change moves the first unit's pe to an even width, which
-    un-forces the core: the burst stays, and its own check now waits on the core
+    The chain from nothing (reduced to the sequence below). The second link's beat is
+    committed while the second unit's core is forced (the first unit's pe leaves its width
+    odd, which refuses the stub), and clearing that core is accepted. The beat's domain
+    reads whether that core is packed. The last change moves the first unit's pe to an even
+    width, which un-forces the core: the beat stays, and its own check now waits on the core
     (``Unresolved``, decision unassigned), not refused. It is kept unchecked: reads of
     it answer unresolved and its stored value is visible through ``inspection.unchecked``
     with the core as its blocker, the change's report says so, and a configuration of the
@@ -226,7 +225,7 @@ def test_a_retained_choice_waits_on_a_selector_the_change_opened() -> None:
         ({"u0.compute": "packed"}, ()),
         ({"u0.compute.packed.pe": 5}, ()),
         ({}, ("u1.compute",)),
-        ({"l1.burst": 1}, ()),
+        ({"l1.beat": 1}, ()),
     ]
     for values, clears in steps:
         changes = [point.field(owned[key]).clear() for key in clears]
@@ -239,12 +238,12 @@ def test_a_retained_choice_waits_on_a_selector_the_change_opened() -> None:
     # The report: the choice the change named is as it was, and the one it left unchecked is said.
     assert [(o.owner, o.status, o.requested, o.unchecked) for o in last.outcomes] == [
         ("u0.compute.packed.pe", "changed", True, False),
-        ("l1.burst", "unchanged", False, True),
+        ("l1.beat", "unchanged", False, True),
     ]
     point = last.instance
-    burst = owned["l1.burst"]
+    beat = owned["l1.beat"]
     current = occurrence.state(point)
-    index = next(i for i, node in enumerate(current.linked.nodes) if node.key == "l1.burst")
+    index = next(i for i, node in enumerate(current.linked.nodes) if node.key == "l1.beat")
     assert current.assignments[index] == 1 and current.unchecked == {index}
     answer = runtime.membership(current, index, 1).result
     assert isinstance(answer, Unresolved), answer
@@ -252,23 +251,21 @@ def test_a_retained_choice_waits_on_a_selector_the_change_opened() -> None:
     assert {finding.code for finding in answer.findings} == {"decision-unassigned"}
     assert answer == runtime.membership(occurrence.state(fresh(point)), index, 1).result
     # Reads answer unresolved; the stored value and what it waits on are inspection's.
-    assert isinstance(point.query(burst), Unresolved)
-    assert isinstance(point.field(burst).state, Unresolved)
-    assert inspection.unchecked(point) == (inspection.Unchecked("l1.burst", 1, ("u1.compute",)),)
+    assert isinstance(point.query(beat), Unresolved)
+    assert isinstance(point.field(beat).state, Unresolved)
+    assert inspection.unchecked(point) == (inspection.Unchecked("l1.beat", 1, ("u1.compute",)),)
     assert inspection.unchecked(fresh(point)) == inspection.unchecked(point)
     # A new commit of the same value, with the choice cleared first, is kept unchecked too.
-    cleared = point.try_with_choices({}, point.field(burst).clear())
+    cleared = point.try_with_choices({}, point.field(beat).clear())
     assert cleared.accepted and inspection.unchecked(cleared.instance) == ()
-    again = cleared.instance.try_with_choices({burst: 1})
+    again = cleared.instance.try_with_choices({beat: 1})
     assert again.accepted
-    assert [(o.owner, o.unchecked, o.result) for o in again.outcomes] == [
-        ("l1.burst", True, answer)
-    ]
+    assert [(o.owner, o.unchecked, o.result) for o in again.outcomes] == [("l1.beat", True, answer)]
     assert inspection.unchecked(again.instance) == inspection.unchecked(point)
     # Once the core it waits on is committed, its check succeeds and it reads as its value.
     settled = again.instance.try_with_choices({owned["u1.compute"]: "packed"})
     assert settled.accepted and inspection.unchecked(settled.instance) == ()
-    assert settled.instance.query(burst) == Available(1)
+    assert settled.instance.query(beat) == Available(1)
 
 
 # -- presence reads the Decisions of the guards it reads ------------------------------------
@@ -320,8 +317,6 @@ class Wide(Space):
     def fits(self) -> bool | Rejected:
         return True if self.width <= 4 else reject("too-wide", "the core takes widths up to 4")
 
-    admission = ConstraintGroup(fits)
-
 
 class Never(Space):
     """A core that is always refused."""
@@ -331,8 +326,6 @@ class Never(Space):
     @constraint
     def refused(self) -> bool | Rejected:
         return reject("never", "this core is always refused")
-
-    admission = ConstraintGroup(refused)
 
 
 class Gauge(Space):

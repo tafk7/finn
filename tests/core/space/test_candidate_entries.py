@@ -11,7 +11,7 @@ narrows it by a Decision over keys, keeping the declared candidates.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from support.refusals import refused
@@ -21,12 +21,10 @@ from core.space._collapse_support import answers, open_space
 from finn.core.space import (
     Available,
     ConfigurationError,
-    ConstraintGroup,
     Decision,
     DefinitionError,
     Inapplicable,
     Param,
-    QueryResult,
     Rejected,
     Space,
     View,
@@ -72,8 +70,6 @@ class PackedCore(ProtoKernel):
             return reject("packed-width", "the packed core takes at most 64 lanes")
         return True
 
-    admission = ConstraintGroup(fits)
-
 
 class StubCore(ProtoKernel):
     rows: int = Decision(values=(1, 2, 4))
@@ -91,8 +87,6 @@ class StubCore(ProtoKernel):
         if self.width % 2:
             return reject("stub-width", "the stub core takes an even width")
         return True
-
-    admission = ConstraintGroup(even)
 
 
 class WideCore(ProtoKernel):
@@ -154,13 +148,6 @@ def keys(point: Any) -> list[str]:
 def commit(point: S, choices: dict[str, object]) -> S:
     owned = {item.key: item.reference for item in inspection.decisions(point)}
     return point.with_choices({owned[key]: value for key, value in choices.items()})
-
-
-def admission(candidate: Space) -> QueryResult[object] | None:
-    group = getattr(type(candidate), "admission", None)
-    if not isinstance(group, ConstraintGroup):
-        return None
-    return cast("QueryResult[object]", candidate.inspect(group).result)
 
 
 # -- entries and shared bindings -------------------------------------------------------
@@ -436,7 +423,7 @@ def forced(point: Any) -> dict[str, object]:
     return {item.key: item.value for item in inspection.forced(point)}
 
 
-def test_the_candidates_admissions_force_one_case_and_leave_several_open() -> None:
+def test_the_candidates_validity_forces_one_case_and_leaves_several_open() -> None:
     assert forced(design_space(Unit(width=128))) == {"compute": "stub"}
     assert forced(design_space(Unit(width=7))) == {"compute": "packed"}
     assert forced(design_space(Unit(width=8))) == {}

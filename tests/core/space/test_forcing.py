@@ -3,9 +3,10 @@
 """Forced Decisions: an open Decision with one viable case reads as that case.
 
 Two cores share a ``width``: ``packed`` refuses more than 64 lanes, ``stub`` an
-odd width, each through its ``admission``. A value Decision's cases state
-requirements over a capability record. Forced values are derived at read time
-and never stored; a successor reuses the verdicts its change does not reach.
+odd width, each through a constraint, which counts toward the candidate's validity. A
+value Decision's cases are tried against the constraints that read it, here over a
+capability record. Forced values are derived at read time and never stored; a successor
+reuses the verdicts its change does not reach.
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from support.refusals import refused
 from support.space_cores import (
     CORES,
     Exclusive,
@@ -30,9 +30,7 @@ from support.space_walk import fresh
 from core.space._choices_support import committed
 from finn.core.space import (
     Available,
-    ConstraintGroup,
     Decision,
-    DefinitionError,
     Param,
     Rejected,
     Space,
@@ -46,8 +44,6 @@ from finn.core.space import (
     inspection,
     occurrence,
     reject,
-    requires,
-    requiring,
 )
 
 # Each test runs with the readers index used for every cache, then for none: the same answers.
@@ -75,7 +71,7 @@ def test_inspection_answers_are_read_once_per_configuration_and_model() -> None:
     point = design_space(Unit(width=128))
     assert inspection.forced(point) is inspection.forced(point)
     assert inspection.viable(point) is inspection.viable(point)
-    assert inspection.admission(point.compute) is inspection.admission(point.compute)
+    assert inspection.validity(point.compute) is inspection.validity(point.compute)
     assert inspection.decisions(point) is inspection.decisions(Unit)
     other = design_space(Unit(width=8))
     assert inspection.forced(other) == () and inspection.forced(point) != ()
@@ -126,7 +122,7 @@ def commit_handles(point: Any, choices: dict[str, object]) -> dict[Any, object]:
     return {owned[key]: value for key, value in choices.items()}
 
 
-def test_an_admission_waiting_on_an_open_choice_does_not_refuse() -> None:
+def test_a_validity_waiting_on_an_open_choice_does_not_refuse() -> None:
     class Waiting(Space):
         width: int = Param()
         pe: int = Decision(values=(1, 2, 8))
@@ -137,8 +133,6 @@ def test_an_admission_waiting_on_an_open_choice_does_not_refuse() -> None:
                 return reject("waiting-pe", "at most 4 lanes a cycle")
             return True
 
-        admission = ConstraintGroup(small)
-
     class Root(Space):
         width: int = Param()
         entries: dict[str, type[Space] | Space] = {"waiting": Waiting, "stub": Stub}
@@ -147,10 +141,13 @@ def test_an_admission_waiting_on_an_open_choice_does_not_refuse() -> None:
     point = design_space(Root(width=7))  # odd: stub refuses; waiting waits on its pe
     assert forced(point) == {"compute": "waiting"}
     candidate = inspection.candidate(point, Root.compute, "waiting")
-    assert candidate is not None and isinstance(inspection.admission(candidate), Unresolved)
+    assert candidate is not None
+    validity = inspection.validity(candidate)
+    assert validity.status == "undecided" and isinstance(validity.result, Unresolved)
+    assert [piece.owner for piece in validity.pieces] == ["compute.waiting.small"]
 
 
-def test_an_admission_refused_beside_one_waiting_refuses() -> None:
+def test_a_validity_refused_beside_a_piece_waiting_refuses() -> None:
     class Both(Space):
         width: int = Param()
         pe: int = Decision(values=(1, 2))
@@ -162,8 +159,6 @@ def test_an_admission_refused_beside_one_waiting_refuses() -> None:
         @constraint
         def never() -> bool:
             return False
-
-        admission = ConstraintGroup(waits, never)
 
     class Root(Space):
         width: int = Param()
@@ -210,22 +205,25 @@ class Capabilities:
 
 class Memory(Space):
     capabilities: Capabilities = Param(default=Capabilities())
-    # A value formal projects its value's attributes in the class body.
-    style: str = Decision(
-        values=("auto", "fast"),
-        requires=(
-            requires(capabilities.fast, "fast-absent: no fast memory here", cases=("fast",)),
-        ),
-    )
-    writable: bool = Decision(
-        domain=requiring(
-            (False, True),
-            requires(capabilities.ports, "port-absent: no port to write through", cases=(True,)),
-        )
-    )
+    style: str = Decision(values=("auto", "fast"))
+    writable: bool = Decision(values=(False, True))
+
+    @constraint
+    def fast_present(self) -> bool | Rejected:
+        if self.style == "fast" and not self.capabilities.fast:
+            return reject("fast-absent", "no fast memory here")
+        return True
+
+    @constraint
+    def port_present(self) -> bool | Rejected:
+        if self.writable and not self.capabilities.ports:
+            return reject("port-absent", "no port to write through")
+        return True
 
 
-def test_a_value_case_whose_requirement_fails_is_refused_at_commit_and_not_viable() -> None:
+def test_a_case_a_constraint_refuses_is_not_viable_and_its_commit_refuses_the_configuration() -> (
+    None
+):
     open_ = design_space(Memory())
     assert forced(open_) == {}
     assert commit(open_, {"style": "fast"}).style == "fast"
@@ -234,18 +232,19 @@ def test_a_value_case_whose_requirement_fails_is_refused_at_commit_and_not_viabl
     reasons = {item.key: dict(item.refused) for item in inspection.forced(point)}
     assert set(reasons["style"]) == {"'fast'"} and "fast-absent" in reasons["style"]["'fast'"]
     assert "port-absent" in reasons["writable"]["True"]
+    # A commit checks the choice's own values: the constraint does not gate it. The
+    # configuration reads refused, naming the constraint.
     report = point.try_with_choices({Memory.style: "fast"})
-    assert not report.accepted
+    assert report.accepted
     (outcome,) = report.outcomes
-    assert isinstance(outcome.result, Rejected)
-    assert [finding.code for finding in outcome.result.findings] == ["fast-absent"]
+    assert outcome.result == Available(True)
+    validity = inspection.validity(report.instance)
+    assert validity.status == "refused"
+    assert [
+        (piece.owner, [f.code for f in piece.result.findings]) for piece in validity.pieces
+    ] == [("fast_present", ["fast-absent"])]
     # Enumeration stays the declared cases: the domain does not move with the facts.
     assert point.field(Memory.style).candidates() == Available(("auto", "fast"))
-
-
-def test_a_requirement_is_written_code_colon_message() -> None:
-    with refused("requirement-finding-malformed", error=DefinitionError, message="code: message"):
-        requires(Memory.capabilities, "no code here")
 
 
 def test_adding_a_choice_never_switches_a_forced_case() -> None:
@@ -262,15 +261,14 @@ def test_adding_a_choice_never_switches_a_forced_case() -> None:
                 return reject("limited", "the limit leaves no lane")
             return True
 
-        admission = ConstraintGroup(within)
-
     class Root(Space):
         width: int = Param()
         entries: dict[str, type[Space] | Space] = {"limited": Limited, "stub": Stub}
         compute: Limited | Stub = Decision(entries, width=width)
 
     base = design_space(Root(width=7))
-    assert forced(base) == {"compute": "limited"}
+    # The limit's constraint refuses 1, so 8 is forced too.
+    assert forced(base) == {"compute": "limited", "compute.limited.limit": 8}
     for limit in (1, 8):
         point = commit(base, {"compute.limited.limit": limit})
         answer = point.query(Root.compute)
@@ -298,17 +296,16 @@ def test_a_successor_finds_again_the_verdict_its_change_reaches_and_no_other(
                 return reject("limited", "the limit leaves no lane")
             return True
 
-        admission = ConstraintGroup(within)
-
     class Two(Space):
         width: int = Param()
         entries: dict[str, type[Space] | Space] = {"limited": Limited, "stub": Stub}
         left: Limited | Stub = Decision(entries, width=width)
         right: Packed | Stub = Decision(CORES, width=width)
 
-    # An odd width refuses the stub core, so both are forced; left's verdict reads its limit.
+    # An odd width refuses the stub core, so both are forced; left's verdict reads its limit,
+    # which its constraint forces to 8.
     base = design_space(Two(width=7))
-    assert forced(base) == {"left": "limited", "right": "packed"}
+    assert forced(base) == {"left": "limited", "right": "packed", "left.limited.limit": 8}
     found: list[str] = []
     verdict = _forcing._verdict
 
@@ -318,7 +315,7 @@ def test_a_successor_finds_again_the_verdict_its_change_reaches_and_no_other(
 
     monkeypatch.setattr(_forcing, "_verdict", counted)
     unreached = commit(base, {"right.packed.pe": 7})
-    assert forced(unreached) == {"left": "limited", "right": "packed"}
+    assert forced(unreached) == {"left": "limited", "right": "packed", "left.limited.limit": 8}
     assert "left" not in found and "right" not in found
     reached = commit(base, {"left.limited.limit": 8})
     assert forced(reached) == {"left": "limited", "right": "packed"}
@@ -336,8 +333,6 @@ class Limited(Space):
             return reject("limited", "the limit leaves no lane")
         return True
 
-    admission = ConstraintGroup(within)
-
 
 class Hop(Space):
     """An odd width forces the limited core; ``burst`` then reads that forced selector,
@@ -350,11 +345,14 @@ class Hop(Space):
     def stubbed(self) -> bool:
         return isinstance(self.compute, Stub)
 
-    burst: int = Decision(
-        values=(1, 2),
-        requires=(requires(stubbed, "burst-source: bursts need the stub core", cases=(2,)),),
-    )
+    burst: int = Decision(values=(1, 2))
     compute: Limited | Stub = Decision(entries, width=width)
+
+    @constraint
+    def bursts(self) -> bool | Rejected:
+        if self.burst == 2 and not self.stubbed:
+            return reject("burst-source", "bursts need the stub core")
+        return True
 
 
 class Other(Space):
@@ -406,7 +404,14 @@ def test_a_successor_finds_the_same_forced_values_whichever_order_the_members_ar
     monkeypatch: pytest.MonkeyPatch, space: Any
 ) -> None:
     base = design_space(space(width=7))
-    want = {"a.compute": "limited", "b.compute": "limited", "a.burst": 1, "b.burst": 1}
+    want = {
+        "a.compute": "limited",
+        "b.compute": "limited",
+        "a.burst": 1,
+        "b.burst": 1,
+        "a.compute.limited.limit": 8,
+        "b.compute.limited.limit": 8,
+    }
     assert forced(base) == want
     found = verdicts_found(monkeypatch)
     runs = rounds_run(monkeypatch)
@@ -420,10 +425,13 @@ def test_a_successor_finds_the_same_forced_values_whichever_order_the_members_ar
     # again, and nothing of b's.
     found.clear()
     reached = commit(base, {"a.compute.limited.limit": 8})
-    assert forced(reached) == want
+    committed_limit = {
+        key: value for key, value in want.items() if key != "a.compute.limited.limit"
+    }
+    assert forced(reached) == committed_limit
     assert {"a.compute", "a.burst"} <= set(found)
     assert not any(key.startswith("b.") for key in found)
-    assert forced(fresh(reached)) == want
+    assert forced(fresh(reached)) == committed_limit
     # A positive control: without seeds the unreached change finds them again.
     monkeypatch.setattr(_forcing, "_replay", lambda *_: {})
     found.clear()
@@ -468,7 +476,7 @@ def test_seeds_that_hold_only_given_each_other_are_not_seeded() -> None:
         assert _forcing.forced(successor).values == {}
 
 
-def test_a_seeded_value_whose_verdict_stops_holding_under_a_value_found_later_falls_back(
+def test_a_seeded_value_whose_verdict_stops_holding_under_a_value_found_later_is_settled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     base = design_space(Gated())
@@ -476,8 +484,15 @@ def test_a_seeded_value_whose_verdict_stops_holding_under_a_value_found_later_fa
     runs = rounds_run(monkeypatch)
     point = commit(base, {"gate": 2})
     assert forced(point) == {"x": "a", "y": "b"}
-    # x was seeded, y found in the rounds, and x's verdict read y open: the seeds were dropped.
-    assert runs == [True, False]
+    # x was seeded, y found in the rounds, and x's verdict read y open: x's verdict is found
+    # again under the final values, with x open, and still forces a, so the seeds stand.
+    assert runs == [True]
+    state = occurrence.state(point)
+    x, y = state.linked.keys["x"], state.linked.keys["y"]
+    verdict = _forcing.forced(state).verdicts[x]
+    assert verdict.reads[y] is _forcing.OPEN
+    assert verdict.settled is not None and verdict.settled.cases == ("a",)
+    assert verdict.settled.reads[y] == "b"
     want = fresh(point)
     assert forced(want) == {"x": "a", "y": "b"}
     assert inspection.viable(point) == inspection.viable(want)
@@ -497,12 +512,15 @@ def test_a_cases_trial_keeps_what_the_case_does_not_reach() -> None:
             derivations.append(self.lanes)
             return self.lanes
 
-        # Read first, on the configuration itself: the requirement's fact is ``width``.
-        wide: bool = Decision(
-            values=(False, True),
-            requires=(requires(width, "width-absent: no lanes", cases=(True,)),),
-        )
+        # Read first, on the configuration itself: the constraint on ``wide`` reads ``width``.
+        wide: bool = Decision(values=(False, True))
         compute: Packed | Stub = Decision(CORES, width=width)
+
+        @constraint
+        def lanes_present(self) -> bool | Rejected:
+            if not self.width and self.wide:
+                return reject("width-absent", "no lanes")
+            return True
 
     point = design_space(Shared(lanes=128))
     assert forced(point) == {"compute": "stub"}

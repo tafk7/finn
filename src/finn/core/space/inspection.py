@@ -19,7 +19,6 @@ from ._forcing import Forced, Open, Viable
 from .compiler import Model, compile_model
 from .declarations import (
     Constraint,
-    ConstraintGroup,
     Decision,
     ValueRef,
     View,
@@ -34,6 +33,8 @@ from .results import (
     ConstraintAssessment,
     DecisionState,
     QueryResult,
+    Rejected,
+    Unresolved,
     ViewAssessment,
 )
 
@@ -288,7 +289,7 @@ def value_handle(
 @overload
 def value_handle(
     subject: Space | Model[S] | type[Space],
-    reference: Constraint | ConstraintGroup,
+    reference: Constraint,
 ) -> ValueHandle[bool]: ...
 
 
@@ -386,17 +387,80 @@ class _Copies:
         return copied
 
 
-def admission(candidate: Space) -> QueryResult[object] | None:
-    """A candidate's own refusal of its configuration: its ``admission`` member, if any.
+@dataclass(frozen=True, slots=True)
+class Piece:
+    """One piece of a Space's validity that is not true: its owner (the key of a
+    constraint, of a stored choice, or of an open Decision with no possible case; or the
+    name of a placed Space whose presence waits or is refused) and its answer:
+    ``Rejected`` (false, its findings the reasons) or ``Unresolved`` (unknown, its
+    findings what it waits on)."""
 
-    A group refuses as soon as one of its constraints does, even while another
-    still waits on an open choice: a core that cannot target the DSP is refused
-    before its folding factors are chosen.
-    """
-    _execution.driver_only("admission")
-    current = state(candidate)
-    scope = candidate._scope
-    return _answered(current, "admission", scope, lambda _: _forcing.admitted(current, scope)[0])
+    owner: str
+    result: Rejected | Unresolved
+
+
+@dataclass(frozen=True, slots=True)
+class Validity:
+    """A Space's validity: ``"valid"`` when every piece that counts is true, ``"refused"``
+    when one is false, ``"undecided"`` otherwise (Kleene's AND: false beats unknown,
+    unknown beats true). ``pieces`` are the false pieces of a refused Space, or the
+    unknown pieces of an undecided one, in key order, each from the Space or the placed
+    Space that owns it; ``result`` is the answer they combine to (``Available(True)``,
+    ``Rejected``, ``Unresolved``; ``Inapplicable`` for a Space that is absent, a
+    candidate not selected, which counts as valid)."""
+
+    status: Literal["valid", "refused", "undecided"]
+    pieces: tuple[Piece, ...]
+    result: QueryResult[bool]
+
+
+def _pieces(current: _runtime.Snapshot, index: int, wanted: type[object]) -> list[Piece]:
+    """The pieces of the validity node ``index`` (evaluated) whose answer is a ``wanted``,
+    a placed Space's own pieces in place of its validity."""
+    linked = current.linked
+    found: list[Piece] = []
+    entry = _runtime.evaluate(current, index)
+    assessment = entry.assessment
+    if not isinstance(assessment, ConstraintAssessment) or not assessment.results:
+        # The Space's presence waits or is refused: its guard's answer stands for it.
+        if isinstance(entry.result, (Rejected, Unresolved)) and isinstance(entry.result, wanted):
+            name = linked.scopes[linked.nodes[index].scope].name
+            found.append(Piece(name, entry.result))
+        return found
+    for key, answer in assessment.results.items():
+        piece = linked.keys[key]
+        if linked.nodes[piece].kind == "validity":
+            found.extend(_pieces(current, piece, wanted))
+        elif isinstance(answer, (Rejected, Unresolved)) and isinstance(answer, wanted):
+            found.append(Piece(key, answer))
+    return found
+
+
+def validity(point: Space) -> Validity:
+    """The validity of this configuration's Space (its root's is the configuration's):
+    every constraint of the Space and of each placed Space that is present, every stored
+    choice's own check (an unchecked one is unknown), and every open Decision with no
+    possible case (``decision-no-viable-case``). A candidate that is not selected
+    contributes nothing. Valid, refused naming the false pieces, or undecided naming the
+    unknown pieces and what each waits on (``Validity``)."""
+    _execution.driver_only("validity")
+    current = state(point)
+    scope = point._scope
+
+    def compute(_: _Copies) -> Validity:
+        result, index = _forcing.validity(current, scope)
+        answer = cast(QueryResult[bool], result)
+        if isinstance(answer, Rejected):
+            return Validity("refused", _ordered(_pieces(current, index, Rejected)), answer)
+        if isinstance(answer, Unresolved):
+            return Validity("undecided", _ordered(_pieces(current, index, Unresolved)), answer)
+        return Validity("valid", (), answer)
+
+    return _answered(current, "validity", scope, compute)
+
+
+def _ordered(pieces: list[Piece]) -> tuple[Piece, ...]:
+    return tuple(sorted(pieces, key=lambda piece: piece.owner))
 
 
 def forced(point: Space) -> tuple[Forced, ...]:
@@ -535,7 +599,7 @@ def explain(point: Space, reference: ValueRef[T] | View[T]) -> QueryEvidence[T]:
 @overload
 def explain(
     point: Space,
-    reference: Constraint | ConstraintGroup,
+    reference: Constraint,
 ) -> QueryEvidence[bool]: ...
 
 
@@ -618,10 +682,11 @@ __all__ = [
     "NodeInfo",
     "ModelStatistics",
     "Open",
+    "Piece",
     "QueryEvidence",
     "Unchecked",
+    "Validity",
     "Viable",
-    "admission",
     "candidate",
     "choices",
     "decision_handle",
@@ -633,6 +698,7 @@ __all__ = [
     "open",
     "statistics",
     "unchecked",
+    "validity",
     "value_handle",
     "viable",
 ]

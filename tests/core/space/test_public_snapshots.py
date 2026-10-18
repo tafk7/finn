@@ -10,7 +10,6 @@ import pytest
 from finn.core.space import (
     Available,
     Const,
-    ConstraintGroup,
     Decision,
     Param,
     Rejected,
@@ -21,6 +20,7 @@ from finn.core.space import (
     constraint,
     derived,
     design_space,
+    inspection,
     view,
 )
 from finn.core.space.errors import EvaluationError
@@ -136,7 +136,7 @@ def test_public_snapshot_failure_retains_declaration_role_and_cause() -> None:
     assert isinstance(assessment_error.value.__cause__, RuntimeError)
 
 
-def test_grouped_view_obligations_keep_refusals_visible_while_waiting() -> None:
+def test_a_view_of_a_refused_space_refuses_and_keeps_what_waits_visible() -> None:
     class Grouped(Space):
         output = Const(4)
         lanes: int = Decision(values=(1, 2))
@@ -149,34 +149,35 @@ def test_grouped_view_obligations_keep_refusals_visible_while_waiting() -> None:
         def pending(*, lanes: int) -> bool:
             return lanes > 0
 
-        support = ConstraintGroup(refused, pending)
-        physical = View(output, requires=(support,))
+        physical = View(output)
 
     point = design_space(Grouped())
-    grouped = point.inspect(Grouped.support)
     for _ in range(2):
         assessment = point.inspect(Grouped.physical)
+        assert assessment.output_result == Available(4)
         assert isinstance(assessment.accepted_result, Rejected)
-        assert assessment.constraints.refused == ("refused",)
-        assert assessment.constraints.results == grouped.results
-        refused = assessment.constraints.results["refused"]
-        assert isinstance(refused, Rejected)
-        assert refused.findings[0].owner == "refused"
-        assert isinstance(assessment.constraints.results["pending"], Unresolved)
+        assert isinstance(assessment.validity, Rejected)
+        assert [finding.owner for finding in assessment.validity.findings] == ["refused"]
+        assert assessment.accepted_result == assessment.validity
+        # Readiness, a diagnostic, names what the refused Space still waits on.
         readiness = assessment.readiness
         assert readiness.ready is None
-        assert isinstance(readiness.results["refused"], Rejected)
+        assert isinstance(readiness.results["$validity"], Rejected)
+        assert isinstance(readiness.results["pending"], Unresolved)
+    validity = inspection.validity(point)
+    assert validity.status == "refused"
+    assert [piece.owner for piece in validity.pieces] == ["refused"]
     committed = point.with_choices(lanes=1)
     assert isinstance(committed.inspect(Grouped.physical).accepted_result, Rejected)
     assert committed.inspect(Grouped.physical).readiness.ready is True
 
 
-def test_empty_named_obligations_can_be_assessed_without_value_semantics() -> None:
+def test_a_view_of_a_space_with_no_pieces_reads_its_output() -> None:
     class Empty(Space):
         output = Const(4)
-        group = ConstraintGroup()
-        physical = View(output, requires=(group,))
+        physical = View(output)
 
     point = design_space(Empty())
     assert point.physical == 4
     assert point.inspect(Empty.physical).readiness.ready is True
+    assert inspection.validity(point) == inspection.Validity("valid", (), Available(True))

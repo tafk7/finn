@@ -30,7 +30,7 @@ NodeKind = Literal[
     "alias",
     "guard",
     "select",
-    "group",
+    "validity",
     "present",
     "members",
 ]
@@ -61,6 +61,9 @@ class Node:
     domain: Domain[object] | None = None
     domain_arguments: tuple[Argument, ...] = ()
     output: int | None = None
+    # A view: its Space's validity node. A validity node: its pieces, in order: the
+    # Space's constraints, its stored choices' own checks (its Decisions), and its
+    # placed Spaces' validity nodes.
     constraints: tuple[int, ...] = ()
     alternatives: tuple[tuple[str, int], ...] = ()
     selector: int | None = None
@@ -112,6 +115,8 @@ class Scope:
     choices: Mapping[object, int] = field(default_factory=dict)
     # The node declaration instantiated here (None for a Space class compiled alone).
     record: object = None
+    # The node answering this Space's validity (``kind == "validity"``).
+    validity: int | None = None
 
     def __post_init__(self) -> None:
         for attr in (

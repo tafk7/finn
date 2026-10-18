@@ -3,11 +3,11 @@
 
 """Decision membership and optional enumeration with explicit dependencies.
 
-A domain's cases may state requirements (``requires``, ``requiring``): facts a
-case needs, each refused with its own named finding. Membership is the base's
-and then every applicable requirement; enumeration stays the declared cases,
-so the domain does not move with the facts. A case whose requirement fails is
-not viable, which forcing reads (``finn.core.space._forcing``).
+A domain states a Decision's values and nothing else: its membership and its
+enumeration read only the domain's own inputs, and a choice's own check is its
+domain alone. A rule linking a value to anything else (``ultra`` needs UltraRAM)
+is a constraint of the Space that owns the choice, which forcing reads for each
+case (``finn.core.space._forcing``).
 
 A domain is **ordered** when its cases have an order by construction, which its
 enumeration follows: the divisors of an extent ascending, an integer range. A
@@ -49,40 +49,14 @@ def _contains(values: tuple[T, ...], candidate: T, semantics: ValueSemantics[T])
 
 
 @dataclass(frozen=True, slots=True)
-class Requirement:
-    """A fact some cases of a value Decision need: ``fact`` (a reference, truthy when
-    it holds) for the cases it applies to (``cases``: values, a predicate over the
-    case, or None for every case), refused as ``code: message``."""
-
-    fact: object
-    code: str
-    message: str
-    cases: tuple[object, ...] | Callable[[object], bool] | None = None
-
-    def applies(self, candidate: object) -> bool:
-        if self.cases is None:
-            return True
-        if callable(self.cases):
-            return bool(self.cases(candidate))
-        return candidate in self.cases
-
-
-def requirement_argument(index: int) -> str:
-    """The linked argument name of a domain's ``index``-th requirement's fact (never an
-    identifier, so never a dependency's name)."""
-    return f"requires[{index}]"
-
-
-@dataclass(frozen=True, slots=True)
 class Domain(Generic[T]):
     """A membership callback and optional enumeration over declared inputs.
 
     Dependency objects are author declarations until compilation links them.
     Neither constructing nor binding a domain invokes its callbacks. Enumeration
     is advisory: every assignment goes through membership independently.
-    ``requirements`` refuse the cases they apply to when their fact does not
-    hold; their facts are linked beside the dependencies. ``ordered`` states that
-    the cases have an order by construction, which the enumeration follows.
+    ``ordered`` states that the cases have an order by construction, which the
+    enumeration follows.
     """
 
     dependencies: tuple[tuple[str, object], ...]
@@ -90,7 +64,6 @@ class Domain(Generic[T]):
     candidates: Callable[..., Iterable[T] | QueryResult[Iterable[T]]] | None = None
     value_semantics: ValueSemantics[T] | None = None
     _finite_values: tuple[T, ...] | None = None
-    requirements: tuple[Requirement, ...] = ()
     ordered: bool = False
 
     def __post_init__(self) -> None:
@@ -128,13 +101,8 @@ class Domain(Generic[T]):
                 "domain and decision have incompatible value semantics",
             )
         if self._finite_values is not None:
-            bound = finite(self._finite_values, semantics, ordered=self.ordered)
-            return replace(bound, requirements=self.requirements)
+            return finite(self._finite_values, semantics, ordered=self.ordered)
         return replace(self, value_semantics=semantics)
-
-    def _own(self, dependency_values: Mapping[str, object]) -> dict[str, object]:
-        """The callbacks' arguments: the dependencies, without the requirements' facts."""
-        return {name: dependency_values[name] for name, _ in self.dependencies}
 
     def membership(
         self,
@@ -154,7 +122,7 @@ class Domain(Generic[T]):
                     self._finite_values, candidate, semantics
                 )
             else:
-                result = self.accepts(candidate=candidate, **self._own(dependency_values))
+                result = self.accepts(candidate=candidate, **dependency_values)
             if type(result) is bool:
                 result = Available(result)
             if not isinstance(result, (Available, Inapplicable, Rejected, Unresolved)):
@@ -166,12 +134,6 @@ class Domain(Generic[T]):
                     return reject(
                         "domain-membership", "candidate is outside the domain", owner=owner
                     )
-                for index, item in enumerate(self.requirements):
-                    if (
-                        item.applies(candidate)
-                        and not dependency_values[requirement_argument(index)]
-                    ):
-                        return reject(item.code, f"{candidate!r}: {item.message}", owner=owner)
             return owned_result(result, owner)
         except (EvaluationError, ValueUnavailableError):
             raise
@@ -190,7 +152,7 @@ class Domain(Generic[T]):
         if self.candidates is None:
             return Inapplicable()
         try:
-            result = self.candidates(**self._own(dependency_values))
+            result = self.candidates(**dependency_values)
             if isinstance(result, (Inapplicable, Rejected, Unresolved)):
                 return owned_result(result, owner)
             values = result.value if isinstance(result, Available) else result
@@ -275,46 +237,9 @@ def divisors_of(extent: object) -> Domain[int]:
     )
 
 
-def requires(
-    fact: object,
-    finding: str,
-    *,
-    cases: tuple[object, ...] | Callable[[object], bool] | None = None,
-) -> Requirement:
-    """A requirement of a value Decision's cases: ``fact`` must hold, or the case is
-    refused with ``finding``, written ``"code: message"``
-    (``requires(platform.uram, "uram-absent: the platform has no UltraRAM",
-    cases=("ultra",))``)."""
-    code, _, message = finding.partition(":")
-    if not code.strip() or not message.strip():
-        raise DefinitionError.broken(
-            "requirement-finding-malformed",
-            _OWNER,
-            "a requirement's finding is written 'code: message'",
-        )
-    return Requirement(fact, code.strip(), message.strip(), cases)
-
-
-def requiring(
-    base: Iterable[T] | Domain[T],
-    *requirements: Requirement,
-    semantics: ValueSemantics[T] | None = None,
-) -> Domain[T]:
-    """``base`` (a domain, or values) whose cases state ``requirements``.
-
-    ``Decision(values=..., requires=(...))`` writes the same.
-    """
-    domain_ = base if isinstance(base, Domain) else finite(base, semantics)
-    return replace(domain_, requirements=(*domain_.requirements, *requirements))
-
-
 __all__ = [
     "Domain",
-    "Requirement",
     "divisors_of",
     "domain",
     "finite",
-    "requirement_argument",
-    "requires",
-    "requiring",
 ]

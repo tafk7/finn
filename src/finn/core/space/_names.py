@@ -6,8 +6,8 @@
 A member, a path of records (``kitchen.area``), a Decision over nodes' case or
 member (``heating.kw``), a projection (``spec.payload_bits``) and an integer
 expression each resolve to one node; those that need one get it reserved here, once per scope
-and source. ``members_candidates`` lists the views ``Members`` reads, named as
-the reading scope sees them.
+and source. ``members_candidates`` lists the exports ``Members`` reads (views and derived
+values), named as the reading scope sees them.
 """
 
 from __future__ import annotations
@@ -55,14 +55,14 @@ class Names:
         self.placed_scopes: dict[int, tuple[int, ...]] = {}
 
     def members_candidates(self, scope: int, key: ViewKey[object]) -> list[tuple[str, str, int]]:
-        """Each child node's export of ``key``: (its name, the key's name, view)."""
+        """Each child node's export of ``key``: (its name, the key's name, its node)."""
 
         result: list[tuple[str, str, int]] = []
         for child in self.placed(scope):
             name = self.table.local_name(scope, child)
             target = self.table.drafts[child].members.get(key)
             if target is not None:
-                self.check_view(child, key, target)
+                self.check_export(child, key, target)
                 result.append((name, key.name, target))
         return result
 
@@ -82,12 +82,13 @@ class Names:
         placed = self.placed_scopes[scope] = tuple(children)
         return placed
 
-    def check_view(self, scope: int, key: ViewKey[object], target: int) -> None:
-        if self.table.nodes[target].kind != "view":
+    def check_export(self, scope: int, key: ViewKey[object], target: int) -> None:
+        if self.table.nodes[target].kind not in ("view", "derived"):
             raise DefinitionError.broken(
-                "member-not-view",
+                "member-not-export",
                 _OWNER,
-                f"{self.table.drafts[scope].name or '<root>'}: member {key.name} must be a view",
+                f"{self.table.drafts[scope].name or '<root>'}: member {key.name} must be a view "
+                "or a derived value",
                 declaration=self.table.drafts[scope].name or "<root>",
             )
 

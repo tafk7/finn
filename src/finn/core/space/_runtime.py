@@ -462,8 +462,8 @@ class _TrialSnapshot(Snapshot):
     Every candidate, including retained assignments, is checked before publication,
     except a retained choice whose admission the change cannot reach (the first
     bullet), which keeps the admission the base recorded. A candidate's **own check**
-    (its domain and the requirements naming its value, on the stored value, with its
-    guard's reads) is true, refused or unresolved, and ``own`` gives it: true admits the
+    (its domain, on the stored value, with its guard's reads) is true, refused or
+    unresolved, and ``own`` gives it: true admits the
     candidate, so that it reads as its value; refused refuses the change; unresolved
     (it reads a choice still open, or an input not supplied) keeps the candidate
     **unchecked**: stored, and read unresolved. A candidate's own check is read whatever
@@ -621,7 +621,7 @@ class _TrialSnapshot(Snapshot):
                 verdicts = {
                     index: verdict
                     for index, verdict in verdicts.items()
-                    if not isinstance(verdict, Verdict) or changed.isdisjoint(verdict.facts)
+                    if not isinstance(verdict, Verdict) or changed.isdisjoint(verdict.every_fact)
                 }
             successor = Snapshot(
                 self.model,
@@ -806,27 +806,11 @@ def _guard_result(node: Node, answer: QueryResult[object]) -> NonValue | None:
 def _guard_assessment(node: Node, answer: NonValue) -> Assessment | None:
     if node.kind == "view":
         return assess_view(answer, owner=node.key, applicability=answer)
-    if node.kind == "constraint" or node.kind == "group":
+    if node.kind == "constraint":
         return ConstraintAssessment({node.key: answer}, answer)
+    if node.kind == "validity":
+        return ConstraintAssessment({}, answer)
     return None
-
-
-def _constraint_members(
-    snapshot: Snapshot, reference: int, answer: QueryResult[object]
-) -> Mapping[str, QueryResult[bool]]:
-    assessment = snapshot.cache[reference].assessment
-    if isinstance(assessment, ConstraintAssessment) and assessment.results:
-        return assessment.results
-    return {snapshot.linked.nodes[reference].key: cast(QueryResult[bool], answer)}
-
-
-def _obligation(
-    snapshot: Snapshot, reference: int, answer: QueryResult[object]
-) -> QueryResult[object]:
-    """An obliged view contributes only its acceptance."""
-    if snapshot.linked.nodes[reference].kind == "view" and isinstance(answer, Available):
-        return Available(True)
-    return answer
 
 
 def _present(node: Node, answers: list[QueryResult[object]]) -> QueryResult[object]:
@@ -909,11 +893,12 @@ def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
 def _candidate_frame(snapshot: _TrialSnapshot, node: Node) -> _execution.Frame:
     """A trial candidate's evaluation, and its own check (``_TrialSnapshot.own``).
 
-    A choice's own check is its domain and the requirements naming its value, on the stored
-    value, read after its guard's reads. It is true, refused or unresolved, and the
-    configuration reads the choice as its value once it is true, and unresolved while it
-    cannot conclude (a candidate is read through its own check, never on its stored value,
-    so private admission keeps its protection). A guard is the configuration's, not the
+    A choice's own check is its domain, on the stored value, read after its guard's reads.
+    It is true, refused or unresolved, and the configuration reads the choice as its value
+    once it is true, and unresolved while it cannot conclude (a candidate is read through
+    its own check, never on its stored value, so private admission keeps its protection). A
+    constraint is no part of it: a constraint does not gate a commit, and the
+    configuration's validity reports it. A guard is the configuration's, not the
     choice's: a guard that waits leaves the choice waiting on it, and one that is refused is
     the configuration's refusal, which a change reports beside the choice's own check and
     never in its place. The own check is read whatever the guard answers, refused or
@@ -1032,24 +1017,79 @@ def _select_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
 
 
 def _view_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
-    if node.output is None:
-        raise EvaluationError(node.owner, "view", "missing output reference")
+    """An active view (``_frame`` read its guard first: an inactive view never reads its
+    Space's validity): its output, then its Space's validity, combined by
+    ``assess_view``."""
+    if node.output is None or len(node.constraints) != 1:
+        raise EvaluationError(node.owner, "view", "missing output or validity reference")
     output = cast(QueryResult[object], (yield node.output))
-    constraints: dict[str, QueryResult[bool]] = {}
-    for reference in node.constraints:
-        answer = _obligation(snapshot, reference, cast(QueryResult[object], (yield reference)))
-        constraints.update(_constraint_members(snapshot, reference, answer))
-    view = assess_view(output, owner=node.key, constraints=constraints)
+    validity = cast(QueryResult[bool], (yield node.constraints[0]))
+    view = assess_view(
+        output,
+        owner=node.key,
+        validity=validity,
+        validity_owner=snapshot.linked.nodes[node.constraints[0]].key,
+        waiting=_waiting(snapshot, node.constraints[0]) if isinstance(validity, Rejected) else None,
+    )
     return Evaluation(view.accepted_result, assessment=view)
 
 
-def _group_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
+def _waiting(snapshot: Snapshot, index: int) -> dict[str, QueryResult[object]]:
+    """The pieces of the refused Space whose validity node is ``index`` that are still
+    unresolved, by key, its placed Spaces' with them: what readiness reports beside a
+    refusal, which hides them (false beats unknown)."""
+    nodes, found = snapshot.linked.nodes, {}
+    pending = [index]
+    while pending:
+        entry = snapshot.cache.get(pending.pop())
+        assessment = None if entry is None else entry.assessment
+        if not isinstance(assessment, ConstraintAssessment):
+            continue
+        for key, answer in assessment.results.items():
+            if isinstance(answer, Unresolved):
+                found[key] = cast(QueryResult[object], answer)
+            elif isinstance(answer, Rejected):
+                piece = snapshot.linked.keys[key]
+                if nodes[piece].kind == "validity":
+                    pending.append(piece)
+    return found
+
+
+def _stored(snapshot: Snapshot, index: int) -> bool:
+    """Whether a Decision holds a stored choice here (a trial's candidates are stored)."""
+    if isinstance(snapshot, _TrialSnapshot):
+        return index in snapshot._candidates
+    return index in snapshot.assignments
+
+
+def _piece(snapshot: Snapshot, piece: Node, answer: QueryResult[object]) -> QueryResult[bool]:
+    """A validity piece's answer as a check. A constraint and a placed Space's validity
+    answer as themselves. A Decision is its stored choice's own check: true once the
+    choice reads as its value, unresolved while unchecked, refused through a refused
+    guard. An open Decision is a piece only where it has no possible case (forcing
+    refuses it, ``decision-no-viable-case``); otherwise, forced or still to choose,
+    it counts as true."""
+    if piece.kind != "decision":
+        return cast(QueryResult[bool], answer)
+    if isinstance(answer, Available):
+        return Available(True)
+    if _stored(snapshot, piece.index) or isinstance(answer, Rejected):
+        return cast(QueryResult[bool], answer)
+    return Available(True)
+
+
+def _validity_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
+    """A present Space's validity: Kleene's AND of its pieces (``Node.constraints``):
+    refused when one is false, else unresolved when one is unknown, else true. An
+    inactive piece (a constraint whose guard does not hold, a placed Space that is
+    absent) counts as true. The assessment holds each piece's answer, by key."""
+    nodes = snapshot.linked.nodes
     answers: dict[str, QueryResult[bool]] = {}
-    for reference in node.constraints:
-        answer = cast(QueryResult[object], (yield reference))
-        answers.update(_constraint_members(snapshot, reference, answer))
-    group = assess_constraints(answers)
-    return Evaluation(cast(QueryResult[object], group.result), assessment=group)
+    for index in node.constraints:
+        answer = cast(QueryResult[object], (yield index))
+        answers[nodes[index].key] = _piece(snapshot, nodes[index], answer)
+    assessment = assess_constraints(answers)
+    return Evaluation(cast(QueryResult[object], assessment.result), assessment=assessment)
 
 
 def _callback_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
@@ -1097,7 +1137,7 @@ _FRAMES: Mapping[NodeKind, Callable[[Snapshot, Node], _execution.Frame]] = {
     "guard": _forward_frame,
     "select": _select_frame,
     "view": _view_frame,
-    "group": _group_frame,
+    "validity": _validity_frame,
     "derived": _callback_frame,
     "constraint": _callback_frame,
 }
@@ -1214,8 +1254,8 @@ def candidate_values(snapshot: Snapshot, node_index: int) -> QueryResult[tuple[o
 
 
 def membership(snapshot: Snapshot, node_index: int, value: object) -> Evaluation:
-    """Whether a Decision's domain admits ``value`` here (its requirements too), with
-    the refusal's finding and what membership read."""
+    """Whether a Decision's domain admits ``value`` here, with the refusal's finding and
+    what membership read."""
     with snapshot.lock:
         node = snapshot.linked.nodes[node_index]
         frame = _membership_frame(snapshot, node, value, check_guard=False)
@@ -1231,24 +1271,19 @@ def copy_result(
         return answer
     with snapshot.lock:
         node = snapshot.linked.nodes[node_index]
-        if node.kind == "group" and type(answer.value) is bool:
+        if node.kind == "validity" and type(answer.value) is bool:
             # Aggregate verdicts are intrinsic immutable booleans; these
             # declarations need no separate user-owned value semantics.
             return answer
         return Available(_clone(node, answer.value, owner=node.owner, role="public value snapshot"))
 
 
-def _copy_readiness(
-    snapshot: Snapshot, assessment: ReadinessAssessment, own: str
-) -> ReadinessAssessment:
-    def copy(key: str, answer: QueryResult[object]) -> QueryResult[object]:
-        index = snapshot.linked.keys[key]
-        if key != own and snapshot.linked.nodes[index].kind == "view":
-            return answer  # an obliged view contributes only its Boolean acceptance
-        return copy_result(snapshot, index, answer)
-
+def _copy_readiness(snapshot: Snapshot, assessment: ReadinessAssessment) -> ReadinessAssessment:
     return ReadinessAssessment(
-        {key: copy(key, answer) for key, answer in assessment.results.items()},
+        {
+            key: copy_result(snapshot, snapshot.linked.keys[key], answer)
+            for key, answer in assessment.results.items()
+        },
         assessment.result,
     )
 
@@ -1271,8 +1306,8 @@ def copy_assessment(snapshot: Snapshot, node_index: int, assessment: Assessment)
         )
         return ViewAssessment(
             output,
-            _copy_readiness(snapshot, assessment.readiness, node.key),
-            assessment.constraints,
+            _copy_readiness(snapshot, assessment.readiness),
+            assessment.validity,
             accepted,
         )
 

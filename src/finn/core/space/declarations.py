@@ -38,7 +38,7 @@ from typing import (
     overload,
 )
 
-from .domains import Domain, Requirement, finite, requiring
+from .domains import Domain, finite
 from .errors import DefinitionError, ReferenceUseError
 from .graph import Located
 from .results import NonValue, QueryResult, marked_value_type
@@ -542,10 +542,10 @@ class Decision(ValueDecl[T], Generic[T]):
     bindings only that candidate takes; the keyword arguments are shared
     bindings, supplied to every candidate, each of which must declare them.
     ``optional=True`` adds a ``None`` candidate keyed ``"none"``, which places
-    nothing. ``requires=`` states what a value Decision's cases need
-    (``requires(platform.uram, "uram-absent: ...", cases=("ultra",))``): a case
-    whose fact does not hold is refused with that finding, at a commitment and
-    when forcing reads its viability. ``ordered=True`` states that listed values
+    nothing. A Decision's values are its domain, and its domain is its own
+    check: a rule linking a value to anything else (``ultra`` needs UltraRAM)
+    is a ``@constraint`` of the Space that owns the choice, which forcing reads
+    for each case. ``ordered=True`` states that listed values
     are in an order (a domain states its own, ``divisors_of``); otherwise they
     are unordered. ``required=True`` marks a choice with no safe default: a flow
     that sets each choice to its first case leaves this one open. It changes
@@ -595,7 +595,6 @@ class Decision(ValueDecl[T], Generic[T]):
         *,
         values: Iterable[T],
         semantics: ValueSemantics[T] | None = None,
-        requires: Iterable[Requirement] = (),
         when: Guard = None,
         name: str | None = None,
         ordered: bool = False,
@@ -609,7 +608,6 @@ class Decision(ValueDecl[T], Generic[T]):
         *,
         domain: Domain[T],
         semantics: ValueSemantics[T] | None = None,
-        requires: Iterable[Requirement] = (),
         when: Guard = None,
         name: str | None = None,
         required: bool = False,
@@ -623,7 +621,6 @@ class Decision(ValueDecl[T], Generic[T]):
         domain: object = None,
         values: object = None,
         semantics: object = None,
-        requires: object = None,
         when: object = None,
         name: object = None,
         optional: object = False,
@@ -644,7 +641,6 @@ class Decision(ValueDecl[T], Generic[T]):
                     ("domain", domain),
                     ("values", values),
                     ("semantics", semantics),
-                    ("requires", requires),
                     ("name", name),
                     ("ordered", ordered),
                 )
@@ -710,15 +706,6 @@ class Decision(ValueDecl[T], Generic[T]):
             if domain is not None
             else finite(cast(Iterable[object], values), explicit, ordered=ordered is True)
         )
-        if requires is not None:
-            stated = tuple(cast(Iterable[object], requires))
-            if not all(isinstance(item, Requirement) for item in stated):
-                raise DefinitionError.broken(
-                    "requires-invalid",
-                    _OWNER,
-                    "requires= takes requirements, as built by requires()",
-                )
-            instance.domain = requiring(instance.domain, *cast(tuple[Requirement, ...], stated))
         instance.sites = []
         instance.required = required
         if name is not None:
@@ -924,6 +911,13 @@ class _MemberOfNode:
 
 
 class Constraint(_MemberOfNode, Declaration):
+    """A rule of its Space: true, false (refused, with its findings) or unknown. Every
+    constraint of a present Space counts toward the Space's validity
+    (``inspection.validity``); a constraint whose ``when=`` does not hold counts as
+    true. A constraint reads values (formals, choices, derived values, a child's
+    value export), never a view of its own Space or of an ancestor: that view's
+    answer reads this constraint, a dependency cycle."""
+
     def __init__(
         self,
         function: Callable[..., bool | QueryResult[bool]],
@@ -967,61 +961,40 @@ def constraint(
     return _ConstraintDecorator(aliases, when)
 
 
-class ConstraintGroup(_MemberOfNode, Declaration):
-    def __init__(self, *constraints: Constraint) -> None:
-        self.constraints = constraints
-
-
-# What a view may require: constraints, groups, other views (their acceptance),
-# references to views or constraints through a node, and Members groups (each
-# member's acceptance). A reference through a node (``kitchen.cost``) is typed
-# as the value it stands for, so statically an obligation is any object; the
-# linker refuses anything else with a DefinitionError.
-Obligation: TypeAlias = object
-
-
 class View(Declaration, Generic[T]):
-    """One assessment declaration for either a value or an authored function.
+    """A product of its Space, from either a value or an authored function.
 
     A view reads as its **accepted** value, like every member typed as its
     value: on a configuration ``point.total`` is the accepted value (a view
     that is not accepted raises ``ValueUnavailableError`` carrying its result,
     and inside a method the read blocks like any other); on a node declaration
     ``kitchen.cost`` is a reference to that accepted value, typed ``T``, which
-    supplies a formal or joins ``requires=`` (where it
-    contributes only its acceptance). Class access, ``House.total``, is the
-    declaration itself: pass it to ``point.inspect`` for the assessment and to
-    ``point.query`` for the accepted result.
+    supplies a formal. Class access, ``House.total``, is the declaration itself:
+    pass it to ``point.inspect`` for the assessment and to ``point.query`` for
+    the accepted result.
+
+    A view's accepted result is, in order: inapplicable while its guard
+    (``when=``) does not hold, and then its Space's validity is never read; refused
+    when its output is refused or its Space is refused (``inspection.validity``),
+    whatever else waits; unresolved when its output is; else its output. A view
+    answers while its Space is undecided. A rule that matters for one product
+    only refuses in the view's body. A constraint of the view's Space (or of an
+    ancestor) reading the view closes a dependency cycle: rules read values.
     """
 
     @overload
-    def __init__(
-        self,
-        source: ValueRef[T] | View[T],
-        *,
-        requires: Sequence[Obligation] = (),
-        when: Guard = None,
-    ) -> None: ...
+    def __init__(self, source: ValueRef[T] | View[T], *, when: Guard = None) -> None: ...
 
     @overload
-    def __init__(
-        self, source: T, *, requires: Sequence[Obligation] = (), when: Guard = None
-    ) -> None: ...
+    def __init__(self, source: T, *, when: Guard = None) -> None: ...
 
-    def __init__(
-        self,
-        source: object,
-        *,
-        requires: Sequence[Obligation] = (),
-        when: Guard = None,
-    ) -> None:
+    def __init__(self, source: object, *, when: Guard = None) -> None:
         self.source: object | None = source
         self.function: Callable[..., T | QueryResult[T]] | None = None
         self.aliases: Mapping[str, object] = MappingProxyType({})
         self.semantics: ValueSemantics[T] | None = cast(
             "ValueSemantics[T] | None", getattr(source, "semantics", None)
         )
-        self.requires = tuple(requires)
         self.when = guard(when)
 
     @classmethod
@@ -1031,7 +1004,6 @@ class View(Declaration, Generic[T]):
         *,
         semantics: ValueSemantics[T] | None,
         aliases: Mapping[str, object],
-        requires: Sequence[Obligation],
         when: Guard = None,
     ) -> View[T]:
         result = cls.__new__(cls)
@@ -1039,7 +1011,6 @@ class View(Declaration, Generic[T]):
         result.function = function
         result.aliases = MappingProxyType(dict(aliases))
         result.semantics = semantics
-        result.requires = tuple(requires)
         result.when = guard(when)
         return result
 
@@ -1061,19 +1032,11 @@ class View(Declaration, Generic[T]):
 
 
 class _ViewDecorator:
-    def __init__(
-        self, aliases: Mapping[str, object], requires: Sequence[Obligation], when: Guard
-    ) -> None:
-        self.aliases, self.requires, self.when = aliases, requires, when
+    def __init__(self, aliases: Mapping[str, object], when: Guard) -> None:
+        self.aliases, self.when = aliases, when
 
     def __call__(self, function: Callable[..., T | NonValue]) -> View[T]:
-        return View.from_function(
-            function,
-            semantics=None,
-            aliases=self.aliases,
-            requires=self.requires,
-            when=self.when,
-        )
+        return View.from_function(function, semantics=None, aliases=self.aliases, when=self.when)
 
 
 class _SemanticViewDecorator(Generic[T]):
@@ -1085,7 +1048,6 @@ class _SemanticViewDecorator(Generic[T]):
             function,
             semantics=self.semantics,
             aliases=self.decorator.aliases,
-            requires=self.decorator.requires,
             when=self.decorator.when,
         )
 
@@ -1099,7 +1061,6 @@ def view(
     *,
     semantics: ValueSemantics[T],
     when: ValueRef[bool] | bool | None = None,
-    requires: Sequence[Obligation] = (),
     **aliases: object,
 ) -> _SemanticViewDecorator[T]: ...
 
@@ -1109,7 +1070,6 @@ def view(
     *,
     semantics: None = None,
     when: ValueRef[bool] | bool | None = None,
-    requires: Sequence[Obligation] = (),
     **aliases: object,
 ) -> _ViewDecorator: ...
 
@@ -1120,10 +1080,9 @@ def view(
     *,
     semantics: object = None,
     when: Guard = None,
-    requires: Sequence[Obligation] = (),
     **aliases: object,
 ) -> object:
-    decorator = _ViewDecorator(aliases, requires, when)
+    decorator = _ViewDecorator(aliases, when)
     if function is not None:
         return decorator(function)
     if semantics is not None:
@@ -1136,7 +1095,11 @@ def view(
 
 
 class ViewKey(Generic[T_co]):
-    """A typed export contract independent of a concrete Space class: see ``Members``."""
+    """A typed export contract independent of a concrete Space class: see ``Members``.
+
+    A Space class's ``exports`` maps a key to a view (a product, read as its
+    accepted value) or to a derived value (read as the value, whatever the
+    exporting Space's validity)."""
 
     def __init__(self, name: str, value_type: type[T_co] | ValueSemantics[T_co]) -> None:
         self.name, self.semantics = local_name(name, "export name"), semantics_for(value_type)
@@ -1482,9 +1445,12 @@ def supplied(formal: object) -> bool:
 
 class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
     """Every present child node exporting ``key``, as ``Located`` values in
-    declaration order; as an obligation, each member's acceptance counts.
+    declaration order.
 
     Each entry is ``Located(node=<child name>, member=<key name>, value=<export>)``.
+    A view export answers its accepted value (refused with its Space); a value
+    export (a derived value) answers its value. One refused entry refuses the
+    whole, else one unresolved leaves it unresolved.
     """
 
     def __init__(self, key: ViewKey[T]) -> None:
@@ -1501,7 +1467,6 @@ __all__ = [
     "ChoiceMemberRef",
     "Const",
     "Constraint",
-    "ConstraintGroup",
     "Decision",
     "Declaration",
     "Derived",

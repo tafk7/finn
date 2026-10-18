@@ -48,7 +48,7 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
         def supported(*, width: int) -> bool:
             return width > 0
 
-        physical = View(complete, requires=(supported,))
+        physical = View(complete)
         # Exports are views only: the width is exported as a view.
         exported_width = View(width)
         exports = {WIDTH: exported_width, PHYSICAL: physical}
@@ -60,7 +60,7 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
         def supported() -> bool:
             return False
 
-        physical = View(width, requires=(supported,))
+        physical = View(width)
         exported_width = View(width)
         exports = {WIDTH: exported_width, PHYSICAL: physical}
 
