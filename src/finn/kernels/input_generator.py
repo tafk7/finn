@@ -24,8 +24,9 @@ gives it the two sides of its step of the channel's plan. Its cycles are its por
 beats, as every leaf's, and its buffering its buffer, ``BUF_SIZE`` input words.
 Its buffer's ``ram_style`` is its choice: the explicit styles, ordered by the most the
 buffer can hold (``frame_bits``, a frame), then ``auto``, which states no resources
-(``finn.kernels.utilization.memory_styles``); ``ultra`` requires the ``platform``'s
-UltraRAM. The buffer starts empty, so no initial contents are asked of it.
+(``finn.kernels.utilization.memory_styles``); ``ultra`` needs the ``platform``'s
+UltraRAM, a constraint of the kernel (``uram-absent``). The buffer starts empty, so no initial
+contents are asked of it.
 
 What the buffer does is read from the RTL, not copied:
 ``nest_geometry`` elaborates FinnLib's ``input_gen.sv`` with slang at a nest's
@@ -53,14 +54,12 @@ from pathlib import Path
 from finn import resources
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.space import (
-    ConstraintGroup,
     Decision,
     Param,
     Rejected,
     constraint,
     derived,
     reject,
-    requiring,
 )
 from finn.dataflow.plan import Unrealizable
 from finn.dataflow.tensor import Tensor
@@ -76,7 +75,7 @@ from finn.kernels.utilization import (
     auto_unstated,
     memory,
     memory_styles,
-    uram_requirements,
+    uram_constraint,
 )
 from finn.kernels.values.semantics import INTEGER_VECTOR, IntegerVector
 from finn.platform.capabilities import Fabric, Platform, Resources
@@ -261,17 +260,14 @@ class InputGeneratorKernel(LeafKernel):
             )
         return True
 
-    admission = ConstraintGroup(traversal_supported)
-
     @derived
     def frame_bits(self) -> int:
         """The most the buffer can hold: a frame's words. Its order reads no ``BUF_SIZE``,
         which the RTL elaborates and which may be declined (its statement only)."""
         return self.frame_words * self.word_bits
 
-    ram_style: str = Decision(
-        domain=requiring(memory_styles(frame_bits), *uram_requirements(platform, ("ultra",)))
-    )
+    ram_style: str = Decision(domain=memory_styles(frame_bits))
+    uram_present = uram_constraint(platform, ram_style, ("ultra",))
 
     @derived
     def buffer_words(self) -> int | Rejected:

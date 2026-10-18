@@ -13,9 +13,9 @@ implementation may round its storage up and forces a shift FIFO for shallow
 depths. The RTL's ``auto`` selects by depth and word width: a shift register up
 to 64 words narrower than 12 bits, LUTRAM up to 257 words, block RAM up to 2028,
 then UltraRAM. Reset is synchronous, active-high, and discards pending words.
-``ultra`` requires the ``platform``'s UltraRAM; the FIFO starts empty, so no
-initial contents are asked of it. ``auto`` never takes UltraRAM the platform
-lacks: where the RTL's own selection would, the kernel gives it ``block``.
+``ultra`` needs the ``platform``'s UltraRAM, a constraint of the FIFO (``uram-absent``); the
+FIFO starts empty, so no initial contents are asked of it. ``auto`` never takes UltraRAM the
+platform lacks: where the RTL's own selection would, the kernel gives it ``block``.
 
 The FIFO's ``auto`` is FinnLib's selection, not Vivado's: it is its first case, and its
 statement is the storage the RTL selects, exact. One part is Vivado's: a decomposed
@@ -28,7 +28,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from finn.core.space import (
-    ConstraintGroup,
     Decision,
     Param,
     Rejected,
@@ -43,7 +42,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, Clocking, LeafKernel, interface
 from finn.kernels.port import native_stream
-from finn.kernels.utilization import RESOURCES_SEMANTICS, lutram, memory, uram_requirements
+from finn.kernels.utilization import RESOURCES_SEMANTICS, lutram, memory, uram_constraint
 from finn.platform.capabilities import Fabric, Platform, Resources
 
 
@@ -244,8 +243,8 @@ class FifoKernel(LeafKernel):
 
     ram_style: str = Decision(
         values=("auto", "shift", "distributed", "block", "ultra"),
-        requires=uram_requirements(platform, ("ultra",)),
     )
+    uram_present = uram_constraint(platform, ram_style, ("ultra",))
 
     @derived
     def rtl_ram_style(self) -> str:
@@ -253,7 +252,7 @@ class FifoKernel(LeafKernel):
         resolve to UltraRAM the platform lacks, which is block RAM."""
         return _given(self.depth, self.word_bits, self.ram_style, self.platform.uram)
 
-    @view(requires=(geometry_supported,))
+    @view
     def storage(self) -> FifoStorage | Rejected:
         found = fifo_storage(self.depth, self.word_bits, self.rtl_ram_style)
         if found is None:
@@ -265,8 +264,6 @@ class FifoKernel(LeafKernel):
         """The native memory the storage decomposes into is addressable."""
         _ = self.storage
         return True
-
-    admission = ConstraintGroup(geometry_supported, capacity_supported)
 
     @derived
     def clocking(self) -> Clocking:
