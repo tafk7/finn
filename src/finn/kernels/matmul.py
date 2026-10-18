@@ -87,14 +87,12 @@ from math import prod
 from qonnx.core.ranges import TensorRange
 
 from finn.core.space import (
-    ConstraintGroup,
     Decision,
     Param,
     Rejected,
     constraint,
     derived,
     reject,
-    requires,
     selected,
     supplied,
     view,
@@ -294,18 +292,17 @@ class MatMulKernel(ComposedKernel):
 
     # A depthwise operation runs natively (one channel per PE lane, a core that reads
     # it) or on the dense datapath with block-diagonal weights, on any core.
-    realization: str = Decision(
-        values=("native", "dense"),
-        when=depthwise,
-        requires=(
-            requires(
-                reads_depthwise,
-                "matmul-native: no core reads these depthwise operands natively "
+    realization: str = Decision(values=("native", "dense"), when=depthwise)
+
+    @constraint(when=depthwise)
+    def native_readable(self) -> bool | Rejected:
+        if self.realization == "native" and not self.reads_depthwise:
+            return reject(
+                "matmul-native",
+                "no core reads these depthwise operands natively "
                 "(the INT8 DSP58 core alone does, within its bounds)",
-                cases=("native",),
-            ),
-        ),
-    )
+            )
+        return True
 
     @derived
     def datapath(self) -> Form:
@@ -528,8 +525,6 @@ class MatMulKernel(ComposedKernel):
                 "a dense realization reads block-diagonal weights, so it needs known weights",
             )
         return True
-
-    admission = ConstraintGroup(extents_supported, realization_supported, carried)
 
 
 __all__ = [
