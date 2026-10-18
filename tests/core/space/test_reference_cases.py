@@ -12,6 +12,9 @@ commit is a strict expected failure, the witness of its row in the acceptance ma
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 import pytest
 
 from core.space.reference import (
@@ -19,6 +22,7 @@ from core.space.reference import (
     Choice,
     Constraint,
     Derived,
+    Refuse,
     Scope,
     Selector,
     Space,
@@ -652,3 +656,99 @@ def test_a_choice_waiting_on_a_fact_under_two_cases_is_kept_unchecked() -> None:
 
 def test_a_choice_waiting_on_a_fact_under_three_cases_is_kept_unchecked() -> None:
     WAITING_THREE.start({}, {"lanes": 3}).check_change(Change(commit={"core.wide.pe": 1}))
+
+
+# A domain reading a derived value that refuses on its facts: ``width`` refuses an odd ``w``
+# (``bad-width``), and ``lanes``'s domain is the divisors of ``width`` among 1, 2, 4 and 8.
+# Only membership refuses a value, so a refused input of the domain never refuses a commit:
+# the choice is kept, never read as a value, and the configuration is refused through the
+# input, blamed there once. A fact not given leaves the choice waiting on it.
+
+
+def even_width(read: Mapping[str, Any]) -> object:
+    return Refuse("bad-width") if read["w"] % 2 else read["w"]
+
+
+REFUSED_INPUT = Case(
+    "a domain reading a derived value that refuses",
+    Space(
+        ("w",),
+        Scope(
+            "",
+            choices=(
+                Choice(
+                    "lanes",
+                    computed(
+                        lambda read: tuple(d for d in (1, 2, 4, 8) if read["width"] % d == 0),
+                        ("width",),
+                    ),
+                ),
+            ),
+            derived=(Derived("width", ("w",), even_width),),
+        ),
+    ),
+)
+
+
+def test_a_derived_value_that_refuses_reads_refused_with_its_code() -> None:
+    REFUSED_INPUT.start({"w": 7}).check_answer("width")
+
+
+@expected("refused-input-commit")
+def test_a_commit_whose_domain_input_is_refused_is_accepted() -> None:
+    # Nothing is waited on: no commitment can settle a refusal on the facts.
+    REFUSED_INPUT.start({"w": 7}).check_change(Change(commit={"lanes": 1}))
+
+
+@expected("refused-input-new-facts")
+def test_new_facts_that_refuse_a_kept_choices_domain_input_are_accepted() -> None:
+    REFUSED_INPUT.start({"w": 8}, {"lanes": 4}).check_change(Change(facts={"w": 7}))
+
+
+def committed_over_odd_width() -> Pair:
+    """``lanes`` committed at 1 over an odd width, the commit compared on the way (the
+    questions below are asked once both sides accept it)."""
+    pair = REFUSED_INPUT.start({"w": 7}).check_change(Change(commit={"lanes": 1}))
+    assert pair is not None
+    return pair
+
+
+@expected("refused-input-state")
+def test_a_choice_whose_domain_input_is_refused_reads_refused_through_it() -> None:
+    # Kept, never read as a value: refused with the input's own finding.
+    committed_over_odd_width().check_state("lanes")
+
+
+@expected("refused-input-answer")
+def test_a_choice_whose_domain_input_is_refused_is_queried_refused_through_it() -> None:
+    committed_over_odd_width().check_answer("lanes")
+
+
+@expected("refused-input-validity")
+def test_a_choice_whose_domain_input_is_refused_refuses_the_configuration_through_it() -> None:
+    # Blamed once, at the input: the one false piece's reason is ``width``'s refusal.
+    committed_over_odd_width().check_validity()
+
+
+def test_a_commit_inside_a_domain_over_an_even_width_is_accepted() -> None:
+    REFUSED_INPUT.start({"w": 8}).check_change(Change(commit={"lanes": 4}))
+
+
+def test_a_commit_outside_a_domain_over_an_even_width_is_refused() -> None:
+    REFUSED_INPUT.start({"w": 8}).check_change(Change(commit={"lanes": 3}))
+
+
+def test_a_choice_inside_a_domain_over_an_even_width_is_readable() -> None:
+    REFUSED_INPUT.start({"w": 8}, {"lanes": 4}).check_state("lanes")
+
+
+def test_a_choice_inside_a_domain_over_an_even_width_leaves_the_configuration_valid() -> None:
+    REFUSED_INPUT.start({"w": 8}, {"lanes": 4}).check_validity()
+
+
+def test_a_commit_whose_domain_input_waits_on_a_fact_is_kept_unchecked() -> None:
+    REFUSED_INPUT.start().check_change(Change(commit={"lanes": 1}))
+
+
+def test_a_choice_whose_domain_input_waits_on_a_fact_waits_on_it() -> None:
+    REFUSED_INPUT.start({}, {"lanes": 1}).check_state("lanes")

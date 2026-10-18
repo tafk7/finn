@@ -44,15 +44,24 @@ from .forms import (
     ValidityForm,
 )
 
-#: the model's reason kinds as the engine's finding codes. A rule's and a view body's
-#: reasons carry their own code; a refused input and a refused Space are expanded to the
-#: reasons that refuse them (the engine carries those findings, not one of its own).
+#: the model's reason kinds as the engine's finding codes. A rule's, a view body's and a
+#: derived value's reasons carry their own code (the engine's rejection by that code); a
+#: refused input and a refused Space are expanded to the reasons that refuse them (the
+#: engine carries those findings, not one of its own).
 CODES: Mapping[reference.ReasonKind, str] = {
     reference.ReasonKind.OUTSIDE_DOMAIN: "domain-membership",
     reference.ReasonKind.NO_POSSIBLE_VALUE: "decision-no-viable-case",
     reference.ReasonKind.INACTIVE: "inactive",
     reference.ReasonKind.CONFLICT: "decision-conflict",
 }
+
+
+#: the reason kinds that carry their own code, the code of the engine's rejection
+_OWN_CODE = (
+    reference.ReasonKind.CONSTRAINT,
+    reference.ReasonKind.VIEW_BODY,
+    reference.ReasonKind.DERIVED_BODY,
+)
 
 
 class Disagreement(AssertionError):
@@ -99,7 +108,7 @@ def _same(left: object, right: object) -> bool:
 def _codes(solution: reference.Solution, reasons: Iterable[reference.Reason]) -> frozenset[Code]:
     found: set[Code] = set()
     for reason in reasons:
-        if reason.kind in (reference.ReasonKind.CONSTRAINT, reference.ReasonKind.VIEW_BODY):
+        if reason.kind in _OWN_CODE:
             found.add((reason.code, reason.subject))
         elif reason.kind is reference.ReasonKind.INPUT_REFUSED:
             for path in reason.related:
@@ -131,6 +140,10 @@ def state_form(solution: reference.Solution, path: str) -> StateForm:
     if isinstance(state, reference.GuardRefused):
         # admitted (its own check holds), but published it reads refused through its
         # guard: the engine's refused state, through the selector's no-possible-case
+        return StateForm("refused", codes=_codes(solution, state.reasons))
+    if isinstance(state, reference.InputRefused):
+        # kept, never read as a value; published it reads refused through the domain's
+        # refused input: the engine's refused state, with the input's findings
         return StateForm("refused", codes=_codes(solution, state.reasons))
     if isinstance(state, reference.Unchecked):
         return StateForm("unchecked", state.value, blockers=frozenset(state.waits))

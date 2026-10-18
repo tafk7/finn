@@ -23,11 +23,11 @@ from core.space.reference import (
     Scope,
     Selector,
     Space,
+    computed,
     listed,
 )
 from core.space.reference_harness import (
     Case,
-    Membership,
     Pair,
     Requirement,
     Spelling,
@@ -49,8 +49,10 @@ def reach(pair: Pair, edit: Change) -> Pair:
 
 # -- 5. a linking rule as a constraint -------------------------------------------------------------
 #
-# ``b <= a``, over two choices of one Space. Spelled as the model reads it (a constraint of
-# the Space, in its admission group today) and as a domain of ``b`` reading ``a``.
+# ``b <= a``, over two choices of one Space: a constraint of the Space (in its admission group
+# today). Beside it, the same bound as ``b``'s domain, computed from ``a``: not a rule but
+# ``b``'s type check, its own check (unchecked while ``a`` is open, false refusing a named
+# commit or a reached retained ``b``).
 
 LINKED_SPACE = Space(
     (),
@@ -64,7 +66,20 @@ LINKED_SPACE = Space(
 )
 LINKED = Case("a linking rule", LINKED_SPACE)
 LINKED_DOMAIN = Case(
-    "a linking rule in a domain", LINKED_SPACE, Spelling(rules={"linked": Membership("b")})
+    "a domain reading another choice",
+    Space(
+        (),
+        Scope(
+            "",
+            choices=(
+                Choice("a", listed(1, 2, 3)),
+                Choice(
+                    "b",
+                    computed(lambda read: tuple(v for v in (1, 2, 3) if v <= read["a"]), ("a",)),
+                ),
+            ),
+        ),
+    ),
 )
 
 
@@ -86,20 +101,17 @@ def test_a_linking_rule_forces_the_open_choice() -> None:
     LINKED.start({}, {"a": 1}).check_state("b")
 
 
-@expected("linked-domain-commit-first")
-def test_a_linking_rule_in_a_domain_takes_a_commit_before_the_choice_it_reads() -> None:
+def test_a_domain_reading_another_choice_takes_a_commit_before_the_choice_it_reads() -> None:
     LINKED_DOMAIN.start().check_change(Change(commit={"b": 2}))
 
 
-@expected("linked-domain-commit")
-def test_a_linking_rule_in_a_domain_never_refuses_a_commit() -> None:
-    # Reached in the order the engine admits today: ``a`` first.
-    point = LINKED_DOMAIN.start({}, {"a": 3}).step(Change(commit={"b": 2}))
-    point.check_change(Change(commit={"a": 1}))
+def test_a_domain_reading_another_choice_refuses_a_commit_that_puts_a_kept_choice_outside() -> None:
+    # ``b`` of 2 is kept unchecked while ``a`` is open; ``a`` of 1 leaves 2 outside ``b``'s
+    # domain: the change is refused, reaching ``b``.
+    LINKED_DOMAIN.start({}, {"b": 2}).check_change(Change(commit={"a": 1}))
 
 
-@expected("linked-domain-forced")
-def test_a_linking_rule_in_a_domain_forces_the_open_choice() -> None:
+def test_a_domain_reading_another_choice_forces_its_one_value_left() -> None:
     LINKED_DOMAIN.start({}, {"a": 1}).check_state("b")
 
 

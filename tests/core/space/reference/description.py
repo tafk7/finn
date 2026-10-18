@@ -12,7 +12,9 @@ A description is a tree of scopes. Each scope holds:
   until something commits it.
 - **selectors**: a choice whose cases are named child scopes; only the selected case
   is present. Its value is the case's name.
-- **derived** values: a function of declared reads.
+- **derived** values: a function of declared reads, which returns a value or a
+  :class:`Refuse` with its code (the derived value then reads refused, and every reader
+  of it receives a refused input).
 - **views**: products; a body over declared reads that returns a value or a
   :class:`Refuse` with its code.
 - **constraints**: a predicate over declared reads, owned by the scope declaring it,

@@ -33,6 +33,7 @@ from core.space.reference import (
     GuardRefused,
     Inactive,
     Inapplicable,
+    InputRefused,
     Known,
     NonConvergence,
     Open,
@@ -993,6 +994,121 @@ def test_a_retained_choice_whose_check_waits_is_kept_unchecked() -> None:
     assert result.configuration.solve().state("c") == Unchecked(4, ("w",))
 
 
+# --- a derived value that refuses, and an own check reading it --------------------------
+
+
+def even_width(r: Reads) -> Any:
+    return Refuse("bad-width") if r["w"] % 2 else r["w"]
+
+
+def width_read() -> Space:
+    return Space(
+        ("w",),
+        Scope(
+            "",
+            derived=(Derived("width", ("w",), even_width),),
+            constraints=(Constraint("fits", ("width",), lambda r: r["width"] <= 8, "too-wide"),),
+            views=(View("shown", ("width",), lambda r: r["width"]),),
+        ),
+    )
+
+
+def test_a_derived_value_may_refuse_and_its_readers_receive_a_refused_input() -> None:
+    bad = Reason(ReasonKind.DERIVED_BODY, "width", "", "bad-width")
+    odd = solve(width_read(), {"w": 3})
+    assert odd.read("width") == Refused((bad,))
+    fits = odd.piece("fits")
+    assert (fits.verdict, fits.reasons) == (
+        F,
+        (Reason(ReasonKind.INPUT_REFUSED, "fits", "", "too-wide", ("width",)),),
+    )
+    assert odd.view("shown") == Refused(
+        (
+            Reason(ReasonKind.INPUT_REFUSED, "shown", "", related=("width",)),
+            Reason(ReasonKind.SPACE_REFUSED, "shown", ""),
+        )
+    )
+    even = solve(width_read(), {"w": 4})
+    assert even.read("width") == Known(4)
+    assert even.validity().verdict is T
+
+
+def lanes_over_width(reach: bool = False) -> Space:
+    """``lanes``'s domain is the divisors of the derived ``width``, which refuses an odd
+    fact ``w``; ``k`` is an open choice the domain also reads."""
+
+    return Space(
+        ("w",),
+        Scope(
+            "",
+            choices=(
+                Choice(
+                    "lanes",
+                    computed(
+                        lambda r: tuple(d for d in (1, 2, 4, 8) if r["width"] % (d * r["k"]) == 0),
+                        ("width", "k"),
+                    ),
+                ),
+                Choice("k", listed(1, 2)),
+            ),
+            derived=(Derived("width", ("w",), even_width),),
+        ),
+        trials_count_retained_checks=reach,
+    )
+
+
+THROUGH_WIDTH = (
+    Reason(ReasonKind.DERIVED_BODY, "width", "", "bad-width"),
+    Reason(ReasonKind.INPUT_REFUSED, "lanes", "", related=("width",)),
+)
+
+
+def test_an_own_check_reading_an_input_refused_on_facts_is_refused_through_it() -> None:
+    """At an odd width the commit is accepted; ``lanes`` is kept, never read as a value
+    and not waiting; the configuration reads refused, blamed once, at ``width``."""
+
+    result = accepted(
+        change(Configuration(lanes_over_width(), {"w": 7}), Change(commit={"lanes": 1}))
+    )
+    assert result.unchecked == ()
+    assert result.validity.verdict is F
+    assert [(p.kind, p.subject, p.reasons) for p in result.validity.false] == [
+        (PieceKind.OWN_CHECK, "lanes", THROUGH_WIDTH)
+    ]
+    solution = result.configuration.solve()
+    assert solution.state("lanes") == InputRefused(1, THROUGH_WIDTH)
+    assert solution.own_check("lanes") == Check(U, THROUGH_WIDTH, refused_input=True)
+    assert solution.read("lanes") == Refused(THROUGH_WIDTH)
+
+
+def test_an_own_check_reading_an_even_width_is_the_ordinary_answer() -> None:
+    base = Configuration(lanes_over_width(), {"w": 8}, {"k": 1})
+    readable = accepted(change(base, Change(commit={"lanes": 4})))
+    assert readable.configuration.solve().state("lanes") == Readable(4)
+    assert readable.validity.verdict is T
+    assert rejected(change(base, Change(commit={"lanes": 3}))).refusals == (
+        ChangeRefusal("lanes", "named", (Reason(ReasonKind.OUTSIDE_DOMAIN, "lanes", ""),)),
+    )
+
+
+def test_an_own_check_reading_a_derived_value_whose_fact_is_absent_waits_on_it() -> None:
+    result = accepted(
+        change(Configuration(lanes_over_width(), {}, {"k": 1}), Change(commit={"lanes": 1}))
+    )
+    assert result.unchecked == ("lanes",)
+    assert result.configuration.solve().state("lanes") == Unchecked(1, ("w",))
+
+
+@pytest.mark.parametrize("reach", [False, True], ids=["default", "reaching"])
+def test_a_check_refused_through_its_input_is_blamed_once_inside_trials(reach: bool) -> None:
+    """``k``'s trials see ``lanes``'s check as unknown, so neither case of ``k`` is refused
+    through it, with the trial's reach on or off."""
+
+    solution = solve(lanes_over_width(reach), {"w": 7}, lanes=1)
+    assert solution.state("k") == Open((1, 2))
+    assert [p.subject for p in solution.validity().false] == ["lanes"]
+
+
 # --- views and validity -----------------------------------------------------------------
 
 
@@ -1380,19 +1496,22 @@ def random_space(rng: random.Random, reach: bool) -> tuple[Space, list[tuple[str
         ),
     )
     below = Choice("d", membership(lambda v, r: v <= r["b"], ("b",)))
+    gated = Choice("e", membership(lambda v, r: v <= r["gate"], ("gate",)))
+    gate = Derived("gate", ("c",), lambda r: Refuse("one") if r["c"] == 1 else r["c"])
     space = Space(
         (),
         Scope(
             "",
-            choices=(*choices, below),
+            choices=(*choices, below, gated),
             selectors=(Selector("mode", (on, Scope("off"))),),
+            derived=(gate,),
             constraints=tuple(rules),
         ),
         trials_count_retained_checks=reach,
     )
     commits = [(choice.name, value) for choice in choices for value in choice.domain.values or ()]
     commits += [("mode", "on"), ("mode", "off"), ("mode.on.q", 0), ("mode.on.q", 1)]
-    commits += [("d", 0), ("d", 1), ("d", 2)]
+    commits += [("d", 0), ("d", 1), ("d", 2), ("e", 0), ("e", 2)]
     return space, commits
 
 

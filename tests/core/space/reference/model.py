@@ -162,10 +162,18 @@ Readings chosen where the semantics leave room
       refused for having no case. Under an unknown guard it is open, its possible cases
       those whose own membership is not false; under a refused guard it reads refused
       through the guard.
-   g. *Inputs of an own check that are refused or do not apply* make the check
-      unknown, never false: only membership refuses a value. A ``when`` guard reading
-      a refused choice directly is a refused guard; reading one through a derived
-      value, an unknown guard.
+   g. *An own check whose domain input is refused, or does not apply.* Only
+      membership refuses a value, so neither refuses the commit. An input refused on
+      facts (a derived value or a view refusing; not by forcing) gets the refused
+      guard's treatment: the choice is kept, never read as a value, and not listed as
+      waiting, since no commitment can settle it; inside trials, forcing's final check
+      and other own checks its piece is unknown, so the refusal is blamed once, at the
+      input; published, its piece is false, refused through the input with the input's
+      own reasons, so the configuration reads refused. An input refused by forcing reads
+      unresolved there, as in (c); a fact not supplied, or an input that does not
+      apply, leaves the check unknown, waiting. A ``when`` guard reading a refused
+      choice directly is a refused guard; reading one through a derived value, an
+      unknown guard.
 """
 
 from __future__ import annotations
@@ -185,6 +193,7 @@ from .answers import (
     GuardRefused,
     Inactive,
     Inapplicable,
+    InputRefused,
     Known,
     Open,
     Piece,
@@ -431,7 +440,7 @@ class _Evaluation:
             return self.refused[choice]
         if choice in self.stored:
             check = self.check(choice, self.stored[choice])
-            if check.verdict is Verdict.FALSE:
+            if check.verdict is Verdict.FALSE or check.refused_input:
                 return check.reasons
         return None
 
@@ -575,7 +584,10 @@ class _Evaluation:
             inputs = self.inputs(derived.reads, published)
             if inputs.values is None:
                 return self._blocked(path, scope, inputs)
-            return Known(derived.compute(inputs.values))
+            output = derived.compute(inputs.values)
+            if isinstance(output, Refuse):
+                return Refused((Reason(ReasonKind.DERIVED_BODY, path, scope, code=output.code),))
+            return Known(output)
         return self._view(path, scope, published)
 
     @staticmethod
@@ -624,8 +636,12 @@ class _Evaluation:
             # a guard false on known information: the key does not exist here, and its
             # own check is not evaluated
             return Check(None)
-        member, found = self.membership(choice, value, promote=True)
+        member, found, through = self.membership(choice, value, promote=True)
         waits = set(found)
+        if through:
+            # an input refused on facts: no commitment can settle it; unknown inside,
+            # refused through the input when published (the commit still accepted)
+            return Check(Verdict.UNKNOWN, through, refused_input=True)
         if member is Verdict.FALSE:
             # its own reason only, under an unknown or refused guard too
             return Check(Verdict.FALSE, (Reason(ReasonKind.OUTSIDE_DOMAIN, choice, info.scope),))
@@ -637,11 +653,15 @@ class _Evaluation:
         # without a revision, so the choice is checked on its value alone
         return Check(Verdict.TRUE)
 
-    def membership(self, choice: str, value: Any, promote: bool) -> tuple[Verdict, frozenset[str]]:
-        """Whether ``value`` is one of ``choice``'s domain's values, and what an unknown
-        answer waits on. The type check: evaluated in the world assuming its guard's
-        cases when its scope is not present (``promote`` reading there, as their values,
-        the stored choices whose presence that world settles)."""
+    def membership(
+        self, choice: str, value: Any, promote: bool
+    ) -> tuple[Verdict, frozenset[str], tuple[Reason, ...]]:
+        """Whether ``value`` is one of ``choice``'s domain's values, what an unknown
+        answer waits on, and, when an input of the domain is refused (other than by
+        forcing, which reads unresolved here), why: the input-refused reason with the
+        input's own. The type check: evaluated in the world assuming its guard's cases
+        when its scope is not present (``promote`` reading there, as their values, the
+        stored choices whose presence that world settles)."""
 
         info = self.index.choices[choice]
         domain = info.domain
@@ -650,8 +670,17 @@ class _Evaluation:
             reader = self.world(self._guard_cases(info.scope), promote)
         inputs = reader.inputs(domain.reads, published=False)
         if inputs.values is None:
-            waits = inputs.waits | set(inputs.refused) | set(inputs.inapplicable)
-            return Verdict.UNKNOWN, frozenset(waits)
+            if inputs.refused:
+                reasons = [
+                    Reason(ReasonKind.INPUT_REFUSED, choice, info.scope, related=inputs.refused)
+                ]
+                for path in inputs.refused:
+                    answer = reader.read(path, published=False)
+                    if isinstance(answer, Refused):
+                        reasons.extend(answer.reasons)
+                return Verdict.UNKNOWN, frozenset(), sorted_reasons(reasons)
+            waits = inputs.waits | set(inputs.inapplicable)
+            return Verdict.UNKNOWN, frozenset(waits), ()
         if domain.values is not None:
             held = _contains(domain.values, value)
         elif domain.enumerate is not None:
@@ -660,7 +689,7 @@ class _Evaluation:
             held = True
         if held and domain.member is not None:
             held = bool(domain.member(value, inputs.values))
-        return (Verdict.TRUE if held else Verdict.FALSE), frozenset()
+        return (Verdict.TRUE if held else Verdict.FALSE), frozenset(), ()
 
     def world(self, assumed: Mapping[str, Any], promote: bool = True) -> _Evaluation:
         """This state with ``assumed`` values (a trial's case, or a guard's cases).
@@ -717,6 +746,13 @@ class _Evaluation:
             # an absent scope contributes nothing, its stored values included (one
             # outside its domain is still refused with its own reason by a change)
             return Piece(PieceKind.OWN_CHECK, scope, choice, Verdict.TRUE, applies=False)
+        if check.refused_input:
+            if self.published:
+                return Piece(PieceKind.OWN_CHECK, scope, choice, Verdict.FALSE, True, check.reasons)
+            refused = tuple(r for reason in check.reasons for r in reason.related)
+            return Piece(
+                PieceKind.OWN_CHECK, scope, choice, Verdict.UNKNOWN, waits=tuple(sorted(refused))
+            )
         return Piece(
             PieceKind.OWN_CHECK, scope, choice, check.verdict, True, check.reasons, check.waits
         )
@@ -1171,6 +1207,8 @@ class Solution:
                     assert isinstance(answer, Refused)
                     return GuardRefused(value, answer.reasons, self._peers.get(choice, ()))
                 return Readable(value, self._peers.get(choice, ()))
+            if check.refused_input:
+                return InputRefused(value, check.reasons)
             if check.verdict is Verdict.UNKNOWN:
                 return Unchecked(value, check.waits)
             return RefusedChoice(check.reasons, True, value)
@@ -1246,7 +1284,7 @@ class Solution:
         return tuple(
             name
             for name, check in sorted(self._settled.checks.items())
-            if check.verdict is Verdict.UNKNOWN
+            if check.verdict is Verdict.UNKNOWN and not check.refused_input
         )
 
     def conflicts(self) -> tuple[Conflict, ...]:

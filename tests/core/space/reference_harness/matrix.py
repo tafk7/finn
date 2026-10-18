@@ -127,30 +127,6 @@ ROWS: tuple[Row, ...] = (
         "value-case-trial",
     ),
     Row(
-        "linked-domain-commit-first",
-        "lane 1",
-        "a linking rule is a constraint, not a domain reading another choice: a commit before "
-        "the choice it reads is accepted",
-        f"{_RULES}::test_a_linking_rule_in_a_domain_takes_a_commit_before_the_choice_it_reads",
-        "linking-in-domain",
-    ),
-    Row(
-        "linked-domain-commit",
-        "lane 1",
-        "a linking rule is a constraint, not a domain reading another choice: a commit it makes "
-        "false is accepted, the configuration refused naming the rule",
-        f"{_RULES}::test_a_linking_rule_in_a_domain_never_refuses_a_commit",
-        "linking-in-domain",
-    ),
-    Row(
-        "linked-domain-forced",
-        "lane 1",
-        "a linking rule is a constraint, not a domain reading another choice: the one case it "
-        "leaves is forced",
-        f"{_RULES}::test_a_linking_rule_in_a_domain_forces_the_open_choice",
-        "linking-in-domain",
-    ),
-    Row(
         "requirement-unknown-fact",
         "lane 1",
         "an unknown fact blocks only the cases a constraint reads it for, so a choice whose "
@@ -384,6 +360,48 @@ ROWS: tuple[Row, ...] = (
         f"{_SCOPES}::test_a_conflict_with_a_choice_three_deep_refuses_the_configuration",
         "conflict",
     ),
+    # -- a domain reading a derived value that refuses on its facts
+    Row(
+        "refused-input-commit",
+        "lane 1",
+        "a refusal elsewhere never refuses a commit: a choice whose domain input refuses is "
+        "kept and the configuration refused through the input",
+        f"{_CASES}::test_a_commit_whose_domain_input_is_refused_is_accepted",
+        note="the engine refuses the commit, the choice carrying the input's refusal",
+    ),
+    Row(
+        "refused-input-new-facts",
+        "lane 1",
+        "a refusal elsewhere never refuses a commit: new facts that refuse a kept choice's "
+        "domain input are accepted, the choice kept and the configuration refused through the "
+        "input",
+        f"{_CASES}::test_new_facts_that_refuse_a_kept_choices_domain_input_are_accepted",
+        note="the engine refuses the change, reaching the kept choice with the input's refusal",
+    ),
+    Row(
+        "refused-input-state",
+        "lane 1",
+        "a refusal elsewhere never refuses a commit: the kept choice whose domain input "
+        "refuses reads refused through the input",
+        f"{_CASES}::test_a_choice_whose_domain_input_is_refused_reads_refused_through_it",
+        note="asked once the commit is accepted; the engine refuses the commit",
+    ),
+    Row(
+        "refused-input-answer",
+        "lane 1",
+        "a refusal elsewhere never refuses a commit: the kept choice whose domain input "
+        "refuses is queried refused through the input",
+        f"{_CASES}::test_a_choice_whose_domain_input_is_refused_is_queried_refused_through_it",
+        note="asked once the commit is accepted; the engine refuses the commit",
+    ),
+    Row(
+        "refused-input-validity",
+        "lane 1",
+        "a refusal elsewhere never refuses a commit: a kept choice whose domain input refuses "
+        "refuses the configuration through the input, blamed there once",
+        f"{_CASES}::test_a_choice_whose_domain_input_is_refused_refuses_the_configuration_through_it",
+        note="asked once the commit is accepted; the engine refuses the commit",
+    ),
     Row(
         "look-ahead-parent-rule",
         "lane 1",
@@ -404,7 +422,7 @@ ROWS: tuple[Row, ...] = (
 
 BY_ID = {row.id: row for row in ROWS}
 
-#: each row's witnesses, as the test modules mark them on import
+#: a test function, returned marked as it was given
 F = TypeVar("F", bound=Callable[..., object])
 
 
