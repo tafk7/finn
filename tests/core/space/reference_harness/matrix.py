@@ -127,30 +127,6 @@ ROWS: tuple[Row, ...] = (
         "value-case-trial",
     ),
     Row(
-        "linked-domain-commit-first",
-        "lane 1",
-        "a linking rule is a constraint, not a domain reading another choice: a commit before "
-        "the choice it reads is accepted",
-        f"{_RULES}::test_a_linking_rule_in_a_domain_takes_a_commit_before_the_choice_it_reads",
-        "linking-in-domain",
-    ),
-    Row(
-        "linked-domain-commit",
-        "lane 1",
-        "a linking rule is a constraint, not a domain reading another choice: a commit it makes "
-        "false is accepted, the configuration refused naming the rule",
-        f"{_RULES}::test_a_linking_rule_in_a_domain_never_refuses_a_commit",
-        "linking-in-domain",
-    ),
-    Row(
-        "linked-domain-forced",
-        "lane 1",
-        "a linking rule is a constraint, not a domain reading another choice: the one case it "
-        "leaves is forced",
-        f"{_RULES}::test_a_linking_rule_in_a_domain_forces_the_open_choice",
-        "linking-in-domain",
-    ),
-    Row(
         "requirement-unknown-fact",
         "lane 1",
         "an unknown fact blocks only the cases a constraint reads it for, so a choice whose "
