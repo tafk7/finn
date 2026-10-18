@@ -479,7 +479,9 @@ def test_the_baseline_takes_each_open_choice_s_first_viable_case_and_leaves_requ
 def test_reopen_clears_what_the_engine_names_and_a_channel_waits_on_its_kernel() -> None:
     """Clearing a MatMul's folding leaves its channels' ends open: they wait, their
     stored choices with them, and come back when the folding does. Within a member, what
-    the engine names is cleared too. Nothing outside the reach is touched."""
+    the engine names is cleared too; a choice the clear only leaves waiting is kept
+    unchecked, and dropped with why if what it waits on settles against it. Nothing
+    outside the reach is touched."""
     explorer, network = seam()
     base = explorer.baseline(network)
     opened, reach = explorer.reopen(base, [("first", "compute.packed.pe")])
@@ -495,13 +497,28 @@ def test_reopen_clears_what_the_engine_names_and_a_channel_waits_on_its_kernel()
     assert explorer.chosen(again.network) == explorer.chosen(base)
     # A key not stored is nothing to reopen.
     assert explorer.reopen(network, [("first", "compute.packed.pe")]) == (network, ())
-    # A selector's nested choices are the engine's to name too.
+    # A selector's nested choice waits on its presence: the engine keeps it unchecked, so
+    # it is not in the reach.
     sized = explorer.set(
         base, keyed({"hidden.transport": "fifo", "hidden.transport.fifo.buffer.depth": 16})
     )
     assert isinstance(sized, Accepted)
-    _, reach = explorer.reopen(sized.network, [("hidden", "transport")])
-    assert ("hidden", "transport.fifo.buffer.depth") in reach
+    depth = ("hidden", "transport.fifo.buffer.depth")
+    waiting, reach = explorer.reopen(sized.network, [("hidden", "transport")])
+    assert reach == (("hidden", "transport"),)
+    assert [(key, item.value, item.blockers) for key, item in waiting.unchecked()] == [
+        (depth, 16, ("transport",))
+    ]
+    # The FIFO again, it is checked and kept; another transport drops it, named with why.
+    fifo = explorer.set(waiting, keyed({"hidden.transport": "fifo"}))
+    assert isinstance(fifo, Accepted) and not fifo.dropped
+    assert explorer.chosen(fifo.network)[depth] == 16 and not fifo.network.unchecked()
+    direct = explorer.set(waiting, keyed({"hidden.transport": "direct"}))
+    assert isinstance(direct, Accepted)
+    assert {key: [f.code for f in why] for key, why in direct.dropped.items()} == {
+        depth: ["inapplicable"]
+    }
+    assert depth not in direct.network.chosen(unchecked=True)
 
 
 def test_settle_keeps_each_prior_value_still_accepted_and_rebaselines_the_rest() -> None:

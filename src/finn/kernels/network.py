@@ -712,8 +712,13 @@ class Network:
         return tuple(sorted(resolved.items(), key=lambda item: item[0]))
 
     def _stored(self, name: str) -> Mapping[str, object]:
+        """What member ``name`` stores, replayed as it is bound again: its committed
+        choices and those kept unchecked, by their stored values (a commitment whose check
+        waits is replayed as any other, and dropped with why where replay refuses it)."""
         held = self._unbound.get(name)
-        return held.stored if held is not None else self._answer(name, "chosen", chosen)
+        if held is not None:
+            return held.stored
+        return self._answer(name, "saved", lambda at: chosen(at, unchecked=True))
 
     def trial(
         self, changes: Mapping[Key, object], clear: Collection[Key] = (), *, check: bool = True
