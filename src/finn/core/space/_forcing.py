@@ -8,17 +8,20 @@ configuration's commitments, and each snapshot finds its own. The public reads a
 in ``inspection``: ``forced`` and ``viable`` report the verdicts, ``validity``
 a Space's answer.
 
-A case of an open Decision is **viable** (possible) unless a constraint that reads the
-Decision refuses it, read in the configuration plus the case (a **trial**), and, for a
-Decision over nodes, unless the candidate it places is refused, its validity read in
-the same trial (a Space refuses as soon as one of its pieces does, whatever else it
-still waits on). The constraints are every one whose evaluation may read the Decision,
+A case of an open Decision is one of its domain's listed values that the domain's
+membership does not reject (a listed domain lists all its values, and each is checked).
+It is **viable** (possible) unless a constraint that reads the Decision refuses it, read
+in the configuration plus the case (a **trial**), and, for a Decision over nodes, unless
+the candidate it places is refused, its validity read in the same trial (a Space
+refuses as soon as one of its pieces does, whatever else it still waits on). The
+constraints are every one whose evaluation may read the Decision,
 wherever it is owned: its own Space's, a placed Space's, an ancestor's, or one that
 reads it through a formal (``_rules``); a selector's are those outside its candidates.
 A constraint or a validity still waiting on an open choice, with nothing refused, does
 not refuse, and a Decision over values none of the constraints reads costs no trial.
 One viable case forces the Decision, several leave it open, and none refuses it
-(``decision-no-viable-case``, each case with its reason): the same for both kinds.
+(``decision-no-viable-case``, each case with its reason; an empty list too, since it
+lists no value): the same for both kinds.
 
 A snapshot finds its forced Decisions once, on the first read of an open
 Decision: rounds over the open Decisions in rank order, each forced value
@@ -593,17 +596,43 @@ def _verdict(current: Snapshot, index: int) -> Verdict:
     facts = _facts(current, roots)
     if not isinstance(listed.result, Available) or listed.result.value is None:
         return Verdict(None, {}, reads, isinstance(listed.result, Available), facts)
-    candidates = tuple(cast("Iterable[object]", listed.result.value))
+    candidates, outside = _members(
+        current, index, tuple(cast("Iterable[object]", listed.result.value))
+    )
     choice = linked.selector_choices.get(index)
     cases, reasons, more, seen = _cases(
         current, index, candidates, None if choice is None else linked.choices[choice]
     )
     return Verdict(
         cases,
-        MappingProxyType(reasons),
+        MappingProxyType({**outside, **reasons}),
         MappingProxyType({**reads, **more}),
         facts=facts | seen,
     )
+
+
+def _members(
+    current: Snapshot, index: int, listed: tuple[object, ...]
+) -> tuple[tuple[object, ...], dict[str, str]]:
+    """The listed values of a Decision's domain that its membership does not reject (a
+    listed domain lists all its values, and each is checked), and why each other one is
+    no case. Membership reads the domain's inputs, which the enumeration read already; one
+    that waits does not reject. A finite domain's values are its membership."""
+    domain = current.linked.nodes[index].domain
+    assert domain is not None
+    if domain.is_finite or not listed:
+        return listed, {}
+    checked = _runtime.listed_members(current, index, listed).result
+    if not isinstance(checked, Available):
+        return listed, {}
+    kept: list[object] = []
+    outside: dict[str, str] = {}
+    for case, answer in zip(listed, cast("tuple[QueryResult[bool], ...]", checked.value)):
+        if isinstance(answer, Rejected):
+            outside[repr(case)] = _describe(answer)
+        else:
+            kept.append(case)
+    return tuple(kept), outside
 
 
 def _find(snapshot: Snapshot) -> Found:
@@ -719,8 +748,10 @@ def _rounds(
                 values[index] = verdict.cases[0]
                 current = _extended(current, {**snapshot.assignments, **values}, index)
                 progressed = True
-            elif not verdict.cases and verdict.reasons:
+            elif not verdict.cases:
+                # An exhaustive list with no possible case, an empty one included.
                 detail = "; ".join(f"{case}: {why}" for case, why in verdict.reasons.items())
+                detail = detail or "the domain lists no value"
                 refused[index] = Rejected(
                     (
                         Finding(

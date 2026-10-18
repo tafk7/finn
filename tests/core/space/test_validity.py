@@ -43,6 +43,7 @@ from finn.core.space import (
     constraint,
     derived,
     design_space,
+    divisors_of,
     domain,
     inspection,
     occurrence,
@@ -750,3 +751,102 @@ def test_a_decision_refused_on_forcings_copies_but_through_its_guard_fails_loudl
     monkeypatch.setattr(_runtime, "_forced", refusing)
     with pytest.raises(EvaluationError, match="its guard not"):
         forced(design_space(Choosing(width=4)))
+
+
+# -- domains: a listed domain lists all its values ---------------------------------------
+
+
+class Listed(Space):
+    """``x`` lists 1, 2 and 3 up to ``limit`` and its membership rejects 2; ``y`` lists 1 and
+    2 and rejects 2; ``lanes`` lists the divisors of ``limit``. ``small`` reads ``other``
+    and ``spare``, and no domain reads either."""
+
+    limit: int = Param()
+    other: int = Param()
+    x: int = Decision(
+        domain=domain(
+            accepts=lambda *, candidate, limit: candidate != 2 and candidate <= limit,
+            candidates=lambda *, limit: tuple(value for value in (1, 2, 3) if value <= limit),
+            limit=limit,
+        )
+    )
+    y: int = Decision(
+        domain=domain(accepts=lambda *, candidate: candidate != 2, candidates=lambda: (1, 2))
+    )
+    lanes: int = Decision(domain=divisors_of(limit))
+    spare: int = Decision(values=(1, 2))
+
+    @constraint
+    def small(self) -> bool | Rejected:
+        return True if self.spare <= self.other else reject("big", "spare past other")
+
+
+def test_a_domains_enumeration_and_membership_read_only_its_own_inputs() -> None:
+    point = design_space(Listed(limit=4, other=1))
+    current = occurrence.state(point)
+    nodes = current.linked.nodes
+    index = occurrence.decision_index(point, Listed.x)
+
+    def keys(read: frozenset[int]) -> set[str]:
+        return {nodes[item].key for item in read}
+
+    for entry in (
+        _runtime.enumeration(current, index),
+        _runtime.membership(current, index, 1),
+        _runtime.listed_members(current, index, (1, 2, 3)),
+    ):
+        assert keys(entry.decisions) == set() and keys(entry.facts) == {"limit"}
+
+
+def test_a_listed_value_the_domains_membership_rejects_is_no_case() -> None:
+    point = design_space(Listed(limit=4, other=2))
+    viable = {item.key: item for item in inspection.viable(point)}
+    assert viable["x"].cases == (1, 3)
+    assert set(viable["x"].refused) == {"2"} and "domain-membership" in viable["x"].refused["2"]
+    # The one listed value its membership accepts is forced, the other named.
+    assert forced(point) == {"y": 1}
+    (item,) = inspection.forced(point)
+    assert set(item.refused) == {"2"} and "domain-membership" in item.refused["2"]
+    # Committing the rejected value is refused at the commit: the type check.
+    report = point.try_with_choices({Listed.x: 2})
+    assert not report.accepted
+    refused = report.outcomes[0].result
+    assert isinstance(refused, Rejected)
+    assert {finding.code for finding in refused.findings} == {"domain-membership"}
+
+
+class Empty(Space):
+    z: int = Decision(values=())
+
+
+def test_an_empty_list_refuses_its_decision_and_the_configuration() -> None:
+    point = design_space(Empty())
+    assert {item.key: item.cases for item in inspection.viable(point)} == {"z": ()}
+    validity = inspection.validity(point)
+    assert validity.status == "refused" and owners(validity) == ["z"]
+    assert codes(validity.pieces[0]) == {"decision-no-viable-case"}
+    (finding,) = validity.pieces[0].result.findings
+    assert "lists no value" in finding.message
+    assert isinstance(point.query(Empty.z), Rejected)
+
+
+def test_a_domain_whose_computed_list_is_empty_refuses_its_decision() -> None:
+    # The divisors of 0 are none: ``lanes`` is refused, and so is ``x`` (nothing up to 0).
+    validity = inspection.validity(design_space(Listed(limit=0, other=2)))
+    assert validity.status == "refused" and owners(validity) == ["lanes", "x"]
+    assert all(codes(piece) == {"decision-no-viable-case"} for piece in validity.pieces)
+
+
+def test_an_empty_list_under_a_selector_still_open_is_no_piece() -> None:
+    class Hollow(Space):
+        width: int = Param()
+        z: int = Decision(values=())
+
+    class Open(Space):
+        width: int = Param()
+        compute: Plain | Hollow = Decision({"plain": Plain, "hollow": Hollow}, width=width)
+
+    # Its presence waits: it is neither forced nor refused for having no case.
+    point = design_space(Open(width=8))
+    assert inspection.validity(point).status == "valid"
+    assert forced(point) == {}

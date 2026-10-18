@@ -87,12 +87,13 @@ def test_a_walk_is_the_same_for_the_same_seed() -> None:
 
 
 def test_a_kind_no_row_names_fails_the_walk_with_its_seed_step_and_description() -> None:
-    # Seed 1's description has a choice whose computed list is empty from the start.
-    assert walk(1, 3).failure is None
-    failure = walk(1, 3, kinds=expected_kinds() - {"empty-list"}).failure
+    # Seed 28's third step (the fact f0 set to 1) leaves two forced choices excluding each
+    # other: the model refuses c1 in a conflict, the engine forces it.
+    assert walk(28, 3).failure is None
+    failure = walk(28, 3, kinds=expected_kinds() - {"conflict"}).failure
     assert failure is not None
-    assert failure.startswith("seed 1, index path, step 0: a disagreement no row names")
-    assert "empty-list" in failure and "description:" in failure and "| engine" in failure
+    assert failure.startswith("seed 28, index path, step 2: a disagreement no row names")
+    assert "conflict" in failure and "description:" in failure and "| engine" in failure
 
 
 def test_a_case_trial_reading_a_kept_choice_is_told_and_fails_unexplained() -> None:
@@ -315,8 +316,8 @@ def test_a_walk_tells_only_kinds_a_row_names() -> None:
 
 
 def test_the_summary_names_the_kinds_no_walk_met() -> None:
-    tallies = [walk(1, 3)]
-    assert "empty-list" not in unmet(tallies)
+    tallies = [walk(28, 3)]
+    assert "conflict" not in unmet(tallies)
     assert "kinds a row names that no walk met: " + ", ".join(unmet(tallies)) in table(tallies)
 
 

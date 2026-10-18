@@ -1273,6 +1273,39 @@ def candidate_values(snapshot: Snapshot, node_index: int) -> QueryResult[tuple[o
     return cast(QueryResult[tuple[object, ...]], result)
 
 
+def _listed_frame(
+    snapshot: Snapshot, node: Node, candidates: tuple[object, ...]
+) -> _execution.Frame:
+    arguments, failure = yield from _arguments(snapshot.linked, node.domain_arguments, node.owner)
+    if failure is not None:
+        return Evaluation(failure)
+    assert node.domain is not None and node.semantics is not None
+    called = yield _execution.Call(
+        node.domain.listed_members,
+        (candidates, arguments),
+        {"semantics": node.semantics, "owner": node.owner},
+        "domain membership",
+    )
+    if isinstance(called, _execution._Halt):
+        blocked = _blocked(list(called.results))
+        assert blocked is not None
+        return Evaluation(blocked)
+    assert isinstance(called, _execution._Returned)
+    return Evaluation(Available(called.value))
+
+
+def listed_members(
+    snapshot: Snapshot, node_index: int, candidates: tuple[object, ...]
+) -> Evaluation:
+    """Whether a Decision's domain admits each of its listed values ``candidates`` here
+    (``Available``: one ``QueryResult[bool]`` each), with what membership read."""
+    with snapshot.lock:
+        node = snapshot.linked.nodes[node_index]
+        if node.domain is None or node.semantics is None:
+            raise EvaluationError(node.owner, "domain membership", "reference has no domain")
+        return _execution.run(snapshot, node_index, _listed_frame(snapshot, node, candidates))
+
+
 def membership(snapshot: Snapshot, node_index: int, value: object) -> Evaluation:
     """Whether a Decision's domain admits ``value`` here, with the refusal's finding and
     what membership read."""
@@ -1346,6 +1379,7 @@ __all__ = [
     "evaluate",
     "fresh",
     "inherit",
+    "listed_members",
     "membership",
     "new_cache",
     "reads",

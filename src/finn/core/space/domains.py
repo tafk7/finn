@@ -5,9 +5,11 @@
 
 A domain states a Decision's values and nothing else: its membership and its
 enumeration read only the domain's own inputs, and a choice's own check is its
-domain alone. A rule linking a value to anything else (``ultra`` needs UltraRAM)
-is a constraint of the Space that owns the choice, which forcing reads for each
-case (``finn.core.space._forcing``).
+domain alone. A listed domain lists all its values: each listed value is checked
+by membership too (one it rejects is no case), and an empty list means none. A
+rule linking a value to anything else (``ultra`` needs UltraRAM) is a constraint
+of the Space that owns the choice, which forcing reads for each case
+(``finn.core.space._forcing``).
 
 A domain is **ordered** when its cases have an order by construction, which its
 enumeration follows: the divisors of an extent ascending, an integer range. A
@@ -88,6 +90,11 @@ class Domain(Generic[T]):
                 "domain-enumeration-not-callable", _OWNER, "domain enumeration must be callable"
             )
 
+    @property
+    def is_finite(self) -> bool:
+        """Whether the domain is its listed values (``finite``): membership is the list."""
+        return self._finite_values is not None
+
     def with_semantics(self, semantics: ValueSemantics[T]) -> Domain[T]:
         """Bind finite values to their Decision's declared snapshot and equality."""
 
@@ -139,6 +146,24 @@ class Domain(Generic[T]):
             raise
         except Exception as cause:
             raise EvaluationError(owner, "domain membership", str(cause)) from cause
+
+    def listed_members(
+        self,
+        candidates: tuple[T, ...],
+        dependency_values: Mapping[str, object],
+        *,
+        semantics: ValueSemantics[T],
+        owner: str,
+    ) -> tuple[QueryResult[bool], ...]:
+        """Membership of each listed value (``enumerate``'s): a listed domain lists all its
+        values, and each is still checked by membership. A finite domain's values are its
+        membership, so each holds without a call."""
+        if self.is_finite:
+            return tuple(Available(True) for _ in candidates)
+        return tuple(
+            self.membership(candidate, dependency_values, semantics=semantics, owner=owner)
+            for candidate in candidates
+        )
 
     def enumerate(
         self,
