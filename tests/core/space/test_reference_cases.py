@@ -866,8 +866,8 @@ def test_a_domain_input_forcing_refuses_leaves_its_open_choice_waiting() -> None
 # A domain reading a value that does not apply: ``size``, a value of the scope ``extra``,
 # present when the fact ``on`` holds, and ``lanes`` over its divisors among 1, 2 and 4. With
 # ``on`` false the input is inapplicable: membership cannot be evaluated, so the commit is
-# accepted and the choice kept unchecked, waiting on the input, never refused as inactive
-# (``lanes`` itself is present).
+# accepted and the choice kept unchecked, waiting on what decides the input's presence (``on``),
+# never refused as inactive (``lanes`` itself is present).
 
 INAPPLICABLE_INPUT = Case(
     "a domain reading a value that does not apply",
@@ -921,3 +921,127 @@ def test_a_choice_whose_domain_input_applies_is_readable() -> None:
 
 def test_a_domain_input_that_does_not_apply_leaves_its_open_choice_waiting() -> None:
     INAPPLICABLE_INPUT.start({"on": False, "n": 4}).check_state("lanes")
+
+
+# A kept choice under a refused guard whose domain input also refuses: applicability first.
+# ``compute`` has two cores, ``packed`` (at most 64 lanes) and ``stub`` (an even width);
+# ``packed``'s ``pe`` lists the divisors among 1, 2, 4 and 8 of the derived ``lanew``, which
+# refuses an odd ``w`` (``bad-width``). At width 99 neither core is possible and ``w`` 7
+# refuses the input: ``pe``, kept at 4, is refused through its guard only (the selector's
+# no possible case), and adds nothing to validity beside the selector's piece. With the
+# guard holding (width 9 forces ``packed``), the refused input is its reason, as above.
+
+
+def even_lanew(read: Mapping[str, Any]) -> object:
+    return Refuse("bad-width") if read["w"] % 2 else read["w"]
+
+
+GUARD_FIRST = Case(
+    "a kept choice under a refused guard whose domain input refuses",
+    Space(
+        ("width", "w"),
+        Scope(
+            "",
+            selectors=(
+                Selector(
+                    "compute",
+                    (
+                        Scope(
+                            "packed",
+                            choices=(
+                                Choice(
+                                    "pe",
+                                    computed(
+                                        lambda read: tuple(
+                                            d for d in (1, 2, 4, 8) if read["lanew"] % d == 0
+                                        ),
+                                        ("lanew",),
+                                    ),
+                                ),
+                            ),
+                            constraints=(
+                                Constraint(
+                                    "fits",
+                                    ("width",),
+                                    lambda read: read["width"] <= 64,
+                                    "packed-width",
+                                ),
+                            ),
+                        ),
+                        Scope(
+                            "stub",
+                            constraints=(
+                                Constraint(
+                                    "even",
+                                    ("width",),
+                                    lambda read: read["width"] % 2 == 0,
+                                    "stub-width",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            derived=(Derived("lanew", ("w",), even_lanew),),
+        ),
+    ),
+)
+PE = "compute.packed.pe"
+
+
+def kept_at_four() -> Pair:
+    """``pe`` kept at 4 at width 9 and ``w`` 8 (``packed`` forced, 4 divides 8)."""
+    return GUARD_FIRST.start({"width": 9, "w": 8}, {PE: 4})
+
+
+def test_a_choice_kept_inside_its_domain_with_its_guard_forced_is_readable() -> None:
+    kept_at_four().check_state(PE)
+
+
+@expected("guard-first-new-facts")
+def test_new_facts_refusing_a_kept_choices_guard_and_its_input_are_accepted() -> None:
+    # Admitted under the refused guard: nothing is kept unchecked.
+    kept_at_four().check_change(Change(facts={"width": 99, "w": 7}))
+
+
+def guard_and_input_refused() -> Pair:
+    """``pe`` kept at 4, then width 99 and ``w`` 7, the change compared on the way (the
+    questions below are asked once both sides accept it)."""
+    pair = kept_at_four().check_change(Change(facts={"width": 99, "w": 7}))
+    assert pair is not None
+    return pair
+
+
+@expected("guard-first-state")
+def test_a_kept_choice_under_a_refused_guard_and_input_reads_refused_through_the_guard() -> None:
+    # The guard's reasons only: the refused input is not one of them while the guard refuses.
+    guard_and_input_refused().check_state(PE)
+
+
+@expected("guard-first-answer")
+def test_a_kept_choice_under_a_refused_guard_and_input_is_queried_refused_through_it() -> None:
+    guard_and_input_refused().check_answer(PE)
+
+
+@expected("guard-first-validity")
+def test_a_kept_choice_under_a_refused_guard_and_input_adds_nothing_to_validity() -> None:
+    # Blamed at the guard once: the one false piece is the selector's.
+    guard_and_input_refused().check_validity()
+
+
+@expected("guard-first-back")
+def test_a_kept_choice_back_under_its_guard_and_an_even_input_is_readable() -> None:
+    guard_and_input_refused().step(Change(facts={"width": 9, "w": 8})).check_state(PE)
+
+
+def guard_holding_input_refused() -> Pair:
+    """``pe`` kept at 4, then ``w`` 7 at width 9 (the guard holds), the change compared on
+    the way."""
+    pair = kept_at_four().check_change(Change(facts={"w": 7}))
+    assert pair is not None
+    return pair
+
+
+@expected("guard-first-holding-guard")
+def test_a_kept_choice_under_a_holding_guard_reads_refused_through_its_input() -> None:
+    guard_holding_input_refused().check_state(PE)

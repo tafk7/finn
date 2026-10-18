@@ -433,7 +433,8 @@ ROWS: tuple[Row, ...] = (
         "inapplicable-input-commit",
         "lane 1",
         "a domain input that does not apply leaves the own check unknown: the commit is "
-        "accepted and the choice kept unchecked, waiting on the input, not refused as inactive",
+        "accepted and the choice kept unchecked, waiting on the input's guard, not refused as "
+        "inactive",
         f"{_CASES}::test_a_commit_whose_domain_input_does_not_apply_is_kept_unchecked",
         note="the engine refuses the commit as inactive",
     ),
@@ -450,9 +451,58 @@ ROWS: tuple[Row, ...] = (
         "inapplicable-input-state",
         "lane 1",
         "a domain input that does not apply leaves the own check unknown: the kept choice is "
-        "unchecked, waiting on the input",
+        "unchecked, waiting on the input's guard",
         f"{_CASES}::test_a_choice_whose_domain_input_does_not_apply_waits_on_it",
         note="asked once the commit is accepted; the engine refuses the commit as inactive",
+    ),
+    # -- a kept choice under a refused guard whose domain input refuses: applicability first
+    Row(
+        "guard-first-new-facts",
+        "lane 1",
+        "a refusal elsewhere never refuses a commit: new facts that refuse a kept choice's guard "
+        "and its domain input are accepted, nothing kept unchecked",
+        f"{_CASES}::test_new_facts_refusing_a_kept_choices_guard_and_its_input_are_accepted",
+        note="the engine refuses the change, reaching the kept choice with no finding of its own",
+    ),
+    Row(
+        "guard-first-state",
+        "lane 1",
+        "applicability first: a kept choice under a refused guard whose domain input refuses "
+        "reads refused through the guard only",
+        f"{_CASES}::test_a_kept_choice_under_a_refused_guard_and_input_reads_refused_through_the_guard",
+        note="asked once the change is accepted; the engine refuses the change",
+    ),
+    Row(
+        "guard-first-answer",
+        "lane 1",
+        "applicability first: a kept choice under a refused guard whose domain input refuses is "
+        "queried refused through the guard only",
+        f"{_CASES}::test_a_kept_choice_under_a_refused_guard_and_input_is_queried_refused_through_it",
+        note="asked once the change is accepted; the engine refuses the change",
+    ),
+    Row(
+        "guard-first-validity",
+        "lane 1",
+        "applicability first: a kept choice under a refused guard whose domain input refuses adds "
+        "nothing to validity beside the guard's piece",
+        f"{_CASES}::test_a_kept_choice_under_a_refused_guard_and_input_adds_nothing_to_validity",
+        note="asked once the change is accepted; the engine refuses the change",
+    ),
+    Row(
+        "guard-first-back",
+        "lane 1",
+        "a refusal elsewhere never refuses a commit: a choice kept through a refused guard and "
+        "input reads its value again once both hold",
+        f"{_CASES}::test_a_kept_choice_back_under_its_guard_and_an_even_input_is_readable",
+        note="asked once the change refusing both is accepted; the engine refuses that change",
+    ),
+    Row(
+        "guard-first-holding-guard",
+        "lane 1",
+        "a refusal elsewhere never refuses a commit: with its guard holding, a kept choice whose "
+        "domain input refuses reads refused through the input",
+        f"{_CASES}::test_a_kept_choice_under_a_holding_guard_reads_refused_through_its_input",
+        note="asked once the change is accepted; the engine refuses the change",
     ),
     Row(
         "look-ahead-parent-rule",
