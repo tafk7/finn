@@ -352,11 +352,7 @@ class _Builder:
         if name in index.choices:
             return self._choice(scope, name)
         if name in index.derived:
-            node = index.derived[name][0]
-            body = node.compute
-            return derived(**self._aliases(scope, node.reads))(
-                _explicit(node.reads, body, self.value_type(name))
-            )
+            return self._derived(scope, name)
         if name in index.views:
             return self._view(scope, name)
         if name in index.constraints:
@@ -442,6 +438,19 @@ class _Builder:
         if requirements:
             built = requiring(built, *requirements)
         return Decision(domain=built, required=info.required)
+
+    def _derived(self, scope: str, path: str) -> object:
+        """A derived value; one whose function refuses rejects with the refusal's code."""
+        node = self.index.derived[path][0]
+
+        def body(read: dict[str, Any]) -> object:
+            output = node.compute(read)
+            if isinstance(output, model.Refuse):
+                return reject(output.code, "the derived value refuses")
+            return output
+
+        returns = self.value_type(path) | Rejected
+        return derived(**self._aliases(scope, node.reads))(_explicit(node.reads, body, returns))
 
     def _view(self, scope: str, path: str) -> object:
         node = self.index.views[path][0]
