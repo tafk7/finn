@@ -187,10 +187,21 @@ class Selector:
 @dataclass(frozen=True)
 class Space:
     """A description: the facts a configuration gives, and the root scope (whose own
-    name is not part of any path)."""
+    name is not part of any path).
+
+    ``trials_count_retained_checks`` sets how far a value case's trial reaches. Off
+    (the default), a value choice's case is tried against its own check and the
+    constraints that read it (a selector's case also against the stored choices of
+    that case), so a forced value may make a retained choice's own check false, which
+    refuses the change. On, the trial also counts every other stored choice's own check
+    that reads the choice, so forcing never picks such a value, and a retained choice's
+    own check found false under forced values at forcing's final check starts a
+    conflict (the change is never refused through a value nobody committed).
+    """
 
     facts: tuple[str, ...]
     root: Scope
+    trials_count_retained_checks: bool = False
 
     def validate(self) -> Index:
         """The description's index, or :class:`DefinitionError`."""
