@@ -565,6 +565,9 @@ def test_set_drops_a_stored_choice_the_change_makes_invalid_then_settles() -> No
 
 
 def test_a_held_choice_a_change_would_drop_refuses_the_change() -> None:
+    """A held choice a change would drop refuses the change; one a change only leaves
+    waiting is kept unchecked, and the hold waits with it; one settling cannot bring back
+    is ``Unsettled``."""
     explorer, network = seam()
     pumped = explorer.set(
         explorer.baseline(network),
@@ -587,14 +590,27 @@ def test_a_held_choice_a_change_would_drop_refuses_the_change() -> None:
     kept = explorer.set(pumped.network, keyed({"first.compute.packed.simd": 4}))
     assert isinstance(kept, Accepted)
     assert explorer.chosen(kept.network)[pumping] is True
-    opened = explorer.reopen(pumped.network, [("first", "compute.packed.simd")])[0]
+    # SIMD reopened, the held pumping is kept unchecked, waiting on it: the hold waits with
+    # it, and settling takes the first SIMD that keeps it (one lane would drop it).
+    opened, reach = explorer.reopen(pumped.network, [("first", "compute.packed.simd")])
+    assert reach == (("first", "compute.packed.simd"),)
+    assert [(key, item.value, item.blockers) for key, item in opened.unchecked()] == [
+        (pumping, True, ("compute.packed.simd",))
+    ]
+    settled = explorer.settle(opened, {})
+    assert explorer.chosen(settled)[pumping] is True
+    assert explorer.chosen(settled)[("first", "compute.packed.simd")] == 2
+    assert not settled.unchecked()
+    # Reopened itself, it is cleared for settling to bring back: SIMD's baseline, one
+    # lane, forces it off, so the hold is not met.
+    cleared = explorer.reopen(pumped.network, [("first", "compute.packed.simd"), pumping])[0]
     with refused(
         "pin-unsettled",
         error=Unsettled,
         owner="first.compute.packed.compute_pumping",
         message="held to True",
     ) as unsettled:
-        explorer.settle(opened, {})
+        explorer.settle(cleared, {})
     assert unsettled.error.findings == (unsettled.finding,)
 
 
