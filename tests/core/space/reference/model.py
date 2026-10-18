@@ -151,6 +151,14 @@ Readings chosen where the semantics leave room
       a refusal is blamed once and never refuses a change through another choice's
       own check; as a guard it is a refused guard. In the published configuration it
       reads as refused, and a constraint reading it answers false, naming the input.
+      Its counterpart for a stored choice whose own check is false: that refusal is
+      blamed once, at its own piece. Inside trials, forcing's final check and own
+      checks nothing is false only through it: its value reads unresolved, its
+      Space's validity counts the piece as unknown, and the views of that Space (and
+      of any Space above it), with whatever reads them, read unresolved. Pieces false
+      on their own still refuse the Space. The false own check itself refuses the
+      change, named or reached. So committing a value outside its domain never pushes
+      a guard to another case through a view of its own Space.
    d. *Dependents of withdrawn values* are recomputed: after a conflict, forcing runs
       again without the refused participants, so a value forced only because of a
       withdrawn one is no longer forced.
@@ -169,15 +177,21 @@ Readings chosen where the semantics leave room
       waiting, since no commitment can settle it; inside trials, forcing's final check
       and other own checks its piece is unknown, so the refusal is blamed once, at the
       input; published, its piece is false, refused through the input with the input's
-      own reasons, so the configuration reads refused. An input refused by forcing reads
-      unresolved there, as in (c); a fact not supplied, or an input that does not
-      apply, leaves the check unknown, waiting. A ``when`` guard reading a refused
-      choice directly is a refused guard; reading one through a derived value, an
-      unknown guard.
+      own reasons, so the configuration reads refused. Applicability comes first:
+      under a refused guard, a check that cannot conclude only through a refused input
+      has no answer of its own; the choice is refused through its guard, with the
+      guard's reasons only, and adds nothing to validity beside the guard's piece (a
+      value outside its domain there still has its own piece). An input refused by
+      forcing reads unresolved there, as in (c); a fact not supplied leaves the check
+      waiting on it; an input that does not apply leaves it waiting on what decides
+      that input's presence (its scope's selector, or its ``when``'s reads), not on the
+      input. A ``when`` guard reading a refused choice directly is a refused guard;
+      reading one through a derived value, an unknown guard.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import enum
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -612,11 +626,31 @@ class _Evaluation:
             else:
                 body = Known(output)
         reasons = list(body.reasons) if isinstance(body, Refused) else []
-        if self.validity(scope, published).verdict is Verdict.FALSE:
+        space = self.validity(scope, published)
+        if space.verdict is Verdict.FALSE:
             reasons.append(Reason(ReasonKind.SPACE_REFUSED, path, scope))
         if reasons:
             return Refused(sorted_reasons(reasons))
+        if not published:
+            # inside trials and forcing, a view of a Space a false own check would
+            # refuse reads unresolved, and so does whatever reads it
+            through = self._false_checks(scope)
+            if through:
+                waits = set(through)
+                if isinstance(body, Unresolved):
+                    waits.update(body.waits)
+                return Unresolved(tuple(sorted(waits)))
         return body
+
+    def _false_checks(self, scope: str) -> tuple[str, ...]:
+        """The stored choices at or below ``scope`` whose own check is false."""
+
+        return tuple(
+            name
+            for name in sorted(self.stored)
+            if self.index.within(self.index.choices[name].scope, scope)
+            and self.check_piece(name).verdict is Verdict.FALSE
+        )
 
     # -- checks
 
@@ -638,6 +672,10 @@ class _Evaluation:
             return Check(None)
         member, found, through = self.membership(choice, value, promote=True)
         waits = set(found)
+        if through and presence.state is Guard.REFUSED:
+            # applicability first: under a refused guard the guard's refusal is its
+            # answer; the refused input adds nothing
+            return Check(Verdict.UNKNOWN, through_guard=True)
         if through:
             # an input refused on facts: no commitment can settle it; unknown inside,
             # refused through the input when published (the commit still accepted)
@@ -679,7 +717,9 @@ class _Evaluation:
                     if isinstance(answer, Refused):
                         reasons.extend(answer.reasons)
                 return Verdict.UNKNOWN, frozenset(), sorted_reasons(reasons)
-            waits = inputs.waits | set(inputs.inapplicable)
+            waits = set(inputs.waits)
+            for path in inputs.inapplicable:
+                waits |= reader.absence_reads(path)
             return Verdict.UNKNOWN, frozenset(waits), ()
         if domain.values is not None:
             held = _contains(domain.values, value)
@@ -724,6 +764,30 @@ class _Evaluation:
             values.update(added)
             world = _Evaluation(self.index, self.facts, self.stored, values, self.refused, False)
 
+    def absence_reads(self, path: str) -> frozenset[str]:
+        """What decides that ``path``'s scope is absent: the selector of each case
+        another value leaves out, and the reads of each ``when`` that is false (``path``
+        itself when none is found)."""
+
+        if self.index.kind(path) == "fact":
+            return frozenset({path})
+        found: set[str] = set()
+        current: str | None = self.index.scope_of(path)
+        while current is not None:
+            info = self.index.scopes[current]
+            parent = info.parent
+            if (
+                parent is not None
+                and self.presence(current).state is Guard.ABSENT
+                and self.presence(parent).state is not Guard.ABSENT
+            ):
+                if info.selector is not None:
+                    found.add(info.selector)
+                if info.when is not None:
+                    found.update(info.when.reads)
+            current = parent
+        return frozenset(found) if found else frozenset({path})
+
     def _guard_cases(self, scope: str) -> dict[str, Any]:
         """Each selector above ``scope`` set to the case holding it."""
 
@@ -742,7 +806,11 @@ class _Evaluation:
         else:
             check = self.check(choice, self.stored[choice])
         scope = self.index.choices[choice].scope
-        if check.verdict is None or self.presence(scope).state is Guard.ABSENT:
+        if (
+            check.verdict is None
+            or check.through_guard
+            or self.presence(scope).state is Guard.ABSENT
+        ):
             # an absent scope contributes nothing, its stored values included (one
             # outside its domain is still refused with its own reason by a change)
             return Piece(PieceKind.OWN_CHECK, scope, choice, Verdict.TRUE, applies=False)
@@ -811,11 +879,15 @@ class _Evaluation:
             for name, (_, owner) in sorted(index.constraints.items())
             if index.within(owner, scope) and self.presence(owner).state is not Guard.REFUSED
         ]
-        pieces.extend(
-            self.check_piece(name)
-            for name in sorted(self.stored)
-            if index.within(index.choices[name].scope, scope)
-        )
+        for name in sorted(self.stored):
+            if not index.within(index.choices[name].scope, scope):
+                continue
+            piece = self.check_piece(name)
+            if not published and piece.verdict is Verdict.FALSE:
+                # blamed once, at its own piece: inside trials and forcing nothing is
+                # false only through it, its Space's validity included
+                piece = dataclasses.replace(piece, verdict=Verdict.UNKNOWN, waits=(name,))
+            pieces.append(piece)
         if published:
             pieces.extend(piece for piece in self.extra if index.within(piece.owner, scope))
         verdict = kleene_and(piece.verdict for piece in pieces)
@@ -1207,6 +1279,10 @@ class Solution:
                     assert isinstance(answer, Refused)
                     return GuardRefused(value, answer.reasons, self._peers.get(choice, ()))
                 return Readable(value, self._peers.get(choice, ()))
+            if check.through_guard:
+                answer = self._published.read(choice)
+                assert isinstance(answer, Refused)
+                return GuardRefused(value, answer.reasons, self._peers.get(choice, ()))
             if check.refused_input:
                 return InputRefused(value, check.reasons)
             if check.verdict is Verdict.UNKNOWN:
@@ -1284,7 +1360,9 @@ class Solution:
         return tuple(
             name
             for name, check in sorted(self._settled.checks.items())
-            if check.verdict is Verdict.UNKNOWN and not check.refused_input
+            if check.verdict is Verdict.UNKNOWN
+            and not check.refused_input
+            and not check.through_guard
         )
 
     def conflicts(self) -> tuple[Conflict, ...]:
