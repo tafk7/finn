@@ -50,6 +50,8 @@ class ReasonKind(enum.Enum):
     INPUT_REFUSED = "input-refused"
     #: a view's body refused, with its own code
     VIEW_BODY = "view-body"
+    #: a derived value's function refused, with its own code
+    DERIVED_BODY = "derived-body"
     #: a view's Space is refused
     SPACE_REFUSED = "space-refused"
     #: an open choice with an exhaustive list of which no case is possible
@@ -176,11 +178,18 @@ class Check:
     Membership is evaluated whatever the presence: a value outside its domain is
     false even under an unknown or refused guard; a value inside it is unknown under
     an unknown guard, waiting on the guard, and true under a refused one.
+
+    ``refused_input`` marks a check whose domain reads an input refused other than by
+    forcing (a derived value or view refusing on its facts): it cannot conclude, and
+    never will without a revision, so ``verdict`` is unknown inside trials and forcing
+    (blamed once, at the input) while ``reasons`` say why; published, its piece reads
+    refused through that input.
     """
 
     verdict: Verdict | None
     reasons: tuple[Reason, ...] = ()
     waits: tuple[str, ...] = ()
+    refused_input: bool = False
 
 
 # --- a choice's state ----------------------------------------------------------------
@@ -211,6 +220,18 @@ class GuardRefused:
     value: Any
     reasons: tuple[Reason, ...]
     conflict: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class InputRefused:
+    """Committed, its own check refused through an input of its domain that is refused
+    on facts (not by forcing): the commit is accepted (only membership refuses a value),
+    the choice is kept, never read as a value, and not waiting on anything a commitment
+    could settle; published it reads refused through that input, ``reasons`` naming the
+    input and its own reasons."""
+
+    value: Any
+    reasons: tuple[Reason, ...]
 
 
 @dataclass(frozen=True)
@@ -267,7 +288,9 @@ class Inactive:
     value: Any = None
 
 
-ChoiceState = Readable | GuardRefused | Unchecked | Forced | Open | RefusedChoice | Inactive
+ChoiceState = (
+    Readable | GuardRefused | InputRefused | Unchecked | Forced | Open | RefusedChoice | Inactive
+)
 
 
 @dataclass(frozen=True)
