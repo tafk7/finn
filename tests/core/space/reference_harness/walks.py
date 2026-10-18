@@ -747,9 +747,9 @@ def change_mechanisms(
     refuses with its own reason (:func:`_own_reason`), and the choices the engine
     reaches beyond the model's refusals, forcing having read that value, or the model
     beyond the engine's, as inactive, forcing not having read it (a case the value made
-    impossible possible again, and forced); a retained choice the model reaches as
-    inactive under a refused selector; a choice the model keeps unchecked that the engine
-    refuses as inactive (``trial-reads-waiting``)."""
+    impossible possible again, and forced; not under a refused selector, the next); a
+    retained choice the model reaches as inactive under a refused selector; a choice the
+    model keeps unchecked that the engine refuses as inactive (``trial-reads-waiting``)."""
     found: dict[str, set[str]] = {}
     engine = {refusal.choice: refusal for refusal in form.refusals}
     if isinstance(result, model.Rejected):
@@ -773,6 +773,7 @@ def change_mechanisms(
                     if item.kind == "reached"
                     and item.choice not in engine
                     and any(r.kind is model.ReasonKind.INACTIVE for r in item.reasons)
+                    and not _under_refused(solution, solution.index.choices[item.choice].scope)
                 }
                 if beyond or short:
                     found.setdefault("own-reason-forcing", set()).update({choice, *beyond, *short})
