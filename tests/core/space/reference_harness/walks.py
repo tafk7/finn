@@ -581,7 +581,10 @@ def mechanisms(solution: model.Solution, engine_refused: bool | None = None) -> 
                 add("state-under-refused-selector", path)
         elif isinstance(state, model.RefusedChoice) and not state.stored:
             cases = state.cases
-            if info.cases is None and info.domain.listed and not state.cases:
+            no_value = any(r.kind is model.ReasonKind.NO_POSSIBLE_VALUE for r in state.reasons)
+            if no_value and not state.cases:
+                # no possible value and no case refused: its list is empty (a forced
+                # choice refused by a conflict has no possible value reason)
                 add("empty-list", path)
             if state.peers or any(r.kind is model.ReasonKind.CONFLICT for r in state.reasons):
                 add("conflict", path, *state.peers)
