@@ -32,6 +32,7 @@ from .results import (
     Available,
     ConstraintAssessment,
     DecisionState,
+    Inapplicable,
     QueryResult,
     Rejected,
     Unresolved,
@@ -521,9 +522,10 @@ def viable(point: Space) -> tuple[Viable, ...]:
 class Unchecked:
     """A stored choice whose own check cannot conclude yet, for inspection: its key, the
     value stored, and what it waits on: the keys of the choices still open (or unchecked
-    themselves) and of the inputs not supplied that its check, and its guard, read. A read
-    of the choice answers unresolved until a change makes its check succeed; a change then
-    checks it again, and refuses it if the check fails."""
+    themselves) and of the inputs not supplied that its check, and its guard, read, and of
+    its domain's inputs that do not apply. A read of the choice answers unresolved until a
+    change makes its check succeed; a change then checks it again, and refuses it if the
+    check fails."""
 
     key: str
     value: object
@@ -543,10 +545,17 @@ def unchecked(point: Space) -> tuple[Unchecked, ...]:
 
     def blockers(index: int) -> tuple[str, ...]:
         node = linked.nodes[index]
-        entries = [_runtime.membership(current, index, current.assignments[index])]
+        membership = _runtime.membership(current, index, current.assignments[index])
+        entries = [membership]
         if node.guard is not None:
             entries.append(_runtime.evaluate(current, node.guard))
         read = {item for entry in entries for item in (*entry.decisions, *entry.facts)}
+        # An input of the domain that does not apply: the check waits on it applying.
+        read.update(
+            item
+            for item in membership.dependencies
+            if isinstance(_runtime.evaluate(current, item).result, Inapplicable)
+        )
         return tuple(
             sorted(
                 linked.nodes[item].key

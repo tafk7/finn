@@ -9,7 +9,8 @@ Requests are checked as a batch, and a trial reads the forced values of the conf
 it would publish. A choice's own check is its domain alone: a constraint never refuses a
 change, and the configuration it publishes reports its validity (``inspection.validity``).
 A choice whose own check is false refuses the batch. One whose own
-check cannot conclude (it reads a choice still open, or an input not supplied) is kept
+check cannot conclude (it reads a choice still open, an input not supplied, or an input that
+does not apply) is kept
 **unchecked**: stored, read unresolved, and reported. A refusal elsewhere never refuses a
 change: one whose domain reads an input that is itself refused is kept too, never read as
 a value, and the configuration reads it refused through that input. Which choices are unchecked also

@@ -284,7 +284,7 @@ class Snapshot:
     does not reach them (``_TrialSnapshot``; a choice whose own check was read with its
     guard's cases assumed has none, and is checked again on every change). ``unchecked``
     holds the assignments whose own check cannot conclude yet (it reads a choice still open,
-    or an input not supplied): each
+    an input not supplied, or an input that does not apply): each
     is stored and read **unresolved** until a change makes its check succeed, and forcing never
     seeds it or reads it as a value (``_decision_frame``); a read of a Decision answers the
     value or unresolved, and what a verdict or an evaluation records of one is that answer
@@ -473,18 +473,19 @@ class _TrialSnapshot(Snapshot):
     (its domain, on the stored value, with its guard's reads) is true, refused or
     unresolved, and ``own`` gives it: true admits the
     candidate, so that it reads as its value; refused refuses the change; unresolved
-    (it reads a choice still open, or an input not supplied) keeps the candidate
-    **unchecked**: stored, and read unresolved. A candidate's own check is read whatever
-    its guard answers: where the guard is refused or waits, in the configuration with the
-    selector cases its guard holds under committed too (``assumed``), since what the check
-    reads in its own scope is under that guard as well. Which candidates are unchecked is given
-    to the trial (``unchecked``), since the configuration it would publish forces by
-    them: a change starts from none, and runs again with those its own checks found
-    unresolved until they are the same (``_changes``). The base contributes its model,
-    frozen facts and lock, its verdicts, and the values it forces, which the trial reads
-    for the Decisions it does not change and stable. A Decision the base does not force
-    reads as the configuration the trial would publish forces it (``successor``): found
-    once, and that configuration is the one published.
+    (it reads a choice still open, an input not supplied, or one that does not apply) keeps
+    the candidate **unchecked**: stored, and read unresolved. A candidate's own check is
+    read whatever its guard answers: where the guard is refused or waits, in the
+    configuration with the selector cases its guard holds under committed too
+    (``assumed``), since what the check reads in its own scope is under that guard as well.
+    Which candidates are unchecked is given to the trial (``unchecked``), since the
+    configuration it would publish forces by them: a change starts from none, and runs
+    again with those its own checks found unresolved until they are the same
+    (``_changes``). The base contributes its model, frozen facts and lock, its verdicts,
+    and the values it forces, which the trial reads for the Decisions it does not change
+    and stable. A Decision the base does not force reads as the configuration the trial
+    would publish forces it (``successor``): found once, and that configuration is the one
+    published.
 
     A trial may be over other values of the base's formals (``parameters``, as
     ``try_with_facts`` makes it): its facts are those, and the formals that differ from
@@ -951,10 +952,12 @@ def _candidate_frame(snapshot: _TrialSnapshot, node: Node) -> _execution.Frame:
     its guard. An inapplicable guard refuses it.
 
     Only a domain that answers false for the value refuses it: a refusal elsewhere never
-    does. Where an input of the domain is itself refused (a derived value refusing on its
-    facts), whatever the guard answers, the own check is that refusal and the choice is
-    kept (``through``), never read as a value: unresolved in this trial, and refused
-    through the input in the configuration published (``Snapshot.input_refused``)."""
+    does, nor an input of the domain that does not apply (its own check waits on that
+    input, and the choice is kept unchecked). Where an input of the domain is itself
+    refused (a derived value refusing on its facts), whatever the guard answers, the own
+    check is that refusal and the choice is kept (``through``), never read as a value:
+    unresolved in this trial, and refused through the input in the configuration published
+    (``Snapshot.input_refused``)."""
     candidate = snapshot._candidates[node.index]
     inactive: NonValue | None = None
     through = False
@@ -1244,8 +1247,11 @@ def _domain_check(
     itself refused on its own (then the answer is that refusal, not the domain's): refused
     by a derived value's or a view's body, and through no Decision that reads refused (a
     choice its own check refuses, one with no possible case, one under a refused guard),
-    whose refusal is that choice's, answered as before."""
+    whose refusal is that choice's, answered as before. While an input does not apply (its
+    guard false) the check cannot conclude: unresolved, waiting on that input."""
     arguments, failure = yield from _arguments(snapshot.linked, node.domain_arguments, node.owner)
+    if isinstance(failure, Inapplicable):
+        return _inapplicable_input(snapshot, node), False
     if failure is not None:
         through = isinstance(failure, Rejected) and not _through_a_choice(
             snapshot, node.domain_arguments
@@ -1266,6 +1272,24 @@ def _domain_check(
         return blocked, False
     assert isinstance(called, _execution._Returned)
     return cast(QueryResult[object], called.value), False
+
+
+def _inapplicable_input(snapshot: Snapshot, node: Node) -> Unresolved:
+    """What a domain check answers while an input of the domain does not apply (its guard
+    false): unresolved, waiting on that input, which a change may make apply."""
+    found: list[Finding] = []
+    for argument in node.domain_arguments:
+        entry = snapshot.cache.get(argument.node)
+        if entry is not None and isinstance(entry.result, Inapplicable):
+            found.append(
+                Finding(
+                    FindingKind.BLOCKER,
+                    "input-inapplicable",
+                    snapshot.linked.nodes[argument.node].owner,
+                    "the domain's input does not apply here",
+                )
+            )
+    return Unresolved(tuple(found))
 
 
 def _through_a_choice(snapshot: Snapshot, arguments: tuple[Argument, ...]) -> bool:

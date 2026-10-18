@@ -1015,3 +1015,49 @@ def test_a_choice_admitted_under_a_refused_guard_is_committed_and_reads_refused_
 
 def test_a_choice_kept_through_a_refused_input_is_committed_and_reads_refused_through_it() -> None:
     assert refused_through_width(kept(lambda: Lanes(w=7), {"lanes": 1}, "lanes", 1))
+
+
+# -- a domain input that does not apply ----------------------------------------------------
+
+
+class Banks(Space):
+    """A choice whose domain reads ``width``, a value that applies only while ``wide``
+    holds."""
+
+    wide: bool = Decision(values=(False, True))
+
+    @derived(when=wide)
+    def width(self) -> int:
+        return 8
+
+    lanes: int = Decision(
+        domain=domain(
+            accepts=lambda *, candidate, width: width % candidate == 0,
+            candidates=lambda *, width: tuple(d for d in (1, 2, 4, 8) if width % d == 0),
+            width=width,
+        )
+    )
+
+
+def test_a_commit_whose_domain_input_does_not_apply_is_kept_unchecked_waiting_on_it() -> None:
+    narrow = commit(design_space(Banks()), {"wide": False})
+    assert isinstance(narrow.query(Banks.width), Inapplicable)
+    report = narrow.try_with_choices({Banks.lanes: 3})
+    assert report.accepted
+    (outcome,) = report.outcomes
+    assert outcome.status == "changed" and outcome.unchecked
+    assert isinstance(outcome.result, Unresolved)
+    assert {(f.code, f.owner) for f in outcome.result.findings} == {("input-inapplicable", "width")}
+    point = report.instance
+    assert isinstance(point.query(Banks.lanes), Unresolved)
+    assert inspection.unchecked(point) == (inspection.Unchecked("lanes", 3, ("width",)),)
+    assert inspection.validity(point).status == "undecided"
+    assert point.field(Banks.lanes).state == Available(DecisionState("lanes", "committed", 3))
+    # The input applying, the choice is checked: a value its domain admits reads as itself,
+    # one it does not refuses the change.
+    assert point.try_with_choices({Banks.wide: True, Banks.lanes: 4}).instance.lanes == 4
+    refused = point.try_with_choices({Banks.wide: True})
+    assert not refused.accepted
+    assert [(o.owner, o.status) for o in refused.outcomes if o.status == "refused"] == [
+        ("lanes", "refused")
+    ]
