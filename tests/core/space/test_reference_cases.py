@@ -34,9 +34,8 @@ from core.space.reference_harness import (
     Case,
     ChangeForm,
     Pair,
-    RuleForm,
+    Refusal,
     Spelling,
-    StateForm,
     expected,
 )
 
@@ -104,37 +103,56 @@ def test_a_selector_left_no_case_refuses_the_configuration() -> None:
 
 @expected("commit-under-refused-selector")
 def test_a_value_inside_its_domain_under_a_refused_selector_is_accepted() -> None:
-    # 3 divides 129: its own check holds, and the configuration reads refused through the
-    # selector. Ruled: accepted and readable, never unchecked (unchecked is for an open
-    # selector only).
-    TYPED.start({"width": 129}).check_change(
-        Change(commit={"compute.packed.pe": 3}), ruled=ChangeForm(True)
-    )
+    # 3 divides 129: its own check holds, so it is admitted, never unchecked (unchecked is
+    # for an open selector only), and the configuration reads refused through the selector.
+    TYPED.start({"width": 129}).check_change(Change(commit={"compute.packed.pe": 3}))
 
 
 def test_a_retained_value_inside_its_domain_under_a_selector_new_facts_refuse_is_kept() -> None:
-    # At 99 neither core is possible (past 64 lanes, odd), and 3 divides 99. Ruled: kept,
-    # readable, so nothing is kept unchecked.
+    # At 99 neither core is possible (past 64 lanes, odd), and 3 divides 99: kept, admitted,
+    # so nothing is kept unchecked.
     point = TYPED.start({"width": 9}, {"compute.packed.pe": 3})
-    point.check_change(Change(facts={"width": 99}), ruled=ChangeForm(True))
+    point.check_change(Change(facts={"width": 99}))
 
 
-@expected("readable-under-refused-selector")
-def test_a_value_inside_its_domain_under_a_refused_selector_is_readable() -> None:
-    point = TYPED.start({"width": 9}, {"compute.packed.pe": 3}).step(Change(facts={"width": 99}))
-    point.check_state("compute.packed.pe", ruled=StateForm("readable", 3))
+def refused_under() -> Pair:
+    """``pe`` admitted at 3, then new facts leave its selector no possible case."""
+    return TYPED.start({"width": 9}, {"compute.packed.pe": 3}).step(Change(facts={"width": 99}))
+
+
+def test_an_admitted_value_under_a_refused_selector_reads_refused_through_it() -> None:
+    # Published, its state is refused with the selector's no-possible-case.
+    refused_under().check_state("compute.packed.pe")
+
+
+def test_an_admitted_value_under_a_refused_selector_is_queried_refused_through_it() -> None:
+    refused_under().check_answer("compute.packed.pe")
+
+
+@expected("open-under-refused-selector")
+def test_an_open_choice_under_a_refused_selector() -> None:
+    refused_under().check_state("compute.stub.rows")
 
 
 def test_a_rule_under_a_refused_selector_reads_refused_through_it() -> None:
-    # Ruled: not evaluated; read, it is refused with the selector's reasons.
-    point = TYPED.start({"width": 9}, {"compute.packed.pe": 3}).step(Change(facts={"width": 99}))
-    refused = frozenset({("decision-no-viable-case", "compute")})
-    point.check_rule("compute.packed.fits", ruled=RuleForm("false", codes=refused))
+    # Not evaluated; queried directly, it is refused with the selector's reasons.
+    refused_under().check_rule("compute.packed.fits")
 
 
-def test_a_refused_selector_over_a_readable_value_refuses_the_configuration() -> None:
-    point = TYPED.start({"width": 9}, {"compute.packed.pe": 3}).step(Change(facts={"width": 99}))
-    point.check_validity()
+@expected("outside-domain-under-open-selector")
+def test_a_value_outside_its_domain_under_an_open_selector_is_refused_at_commit() -> None:
+    # At 12 both cores are possible: the selector is open, and 5 does not divide 12.
+    # Ruled: refused, named, with its own reason. (The model forces the other core to keep
+    # the value out of its domain, and refuses it as inactive.)
+    own = frozenset({("domain-membership", "compute.packed.pe")})
+    TYPED.start({"width": 12}).check_change(
+        Change(commit={"compute.packed.pe": 5}),
+        ruled=ChangeForm(False, refusals=frozenset({Refusal("compute.packed.pe", "named", own)})),
+    )
+
+
+def test_a_refused_selector_over_an_admitted_value_refuses_the_configuration() -> None:
+    refused_under().check_validity()
 
 
 # -- 2. guards -----------------------------------------------------------------------------------

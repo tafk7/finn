@@ -126,6 +126,10 @@ def state_form(solution: reference.Solution, path: str) -> StateForm:
     state = solution.state(path)
     if isinstance(state, reference.Readable):
         return StateForm("readable", state.value)
+    if isinstance(state, reference.GuardRefused):
+        # admitted (its own check holds), but published it reads refused through its
+        # guard: the engine's refused state, through the selector's no-possible-case
+        return StateForm("refused", codes=_codes(solution, state.reasons))
     if isinstance(state, reference.Unchecked):
         return StateForm("unchecked", state.value, blockers=frozenset(state.waits))
     if isinstance(state, reference.Forced):

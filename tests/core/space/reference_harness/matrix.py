@@ -75,13 +75,22 @@ ROWS: tuple[Row, ...] = (
         "commit-under-refused-selector",
     ),
     Row(
-        "readable-under-refused-selector",
+        "outside-domain-under-open-selector",
         "lane 0",
-        "a stored value whose own check holds under a selector with no possible case reads "
-        "as its value (readable), not refused through the selector",
-        f"{_CASES}::test_a_value_inside_its_domain_under_a_refused_selector_is_readable",
+        "a value outside its domain under a selector still open is refused at its own commit "
+        "with its own membership finding, not through the selector's open state",
+        f"{_CASES}::test_a_value_outside_its_domain_under_an_open_selector_is_refused_at_commit",
+        "own-reason",
+    ),
+    Row(
+        "open-under-refused-selector",
+        "lane 0",
+        "an open choice under a selector with no possible case is open, waiting on the "
+        "selector, not refused through it",
+        f"{_CASES}::test_an_open_choice_under_a_refused_selector",
         "state-under-refused-selector",
-        "unclassified: no lane names it; lane 0's guard states are likeliest",
+        "unclassified: pending a ruling on an open choice under a refused guard; the engine "
+        "reads it refused through the guard, as a rule under it",
     ),
     Row(
         "value-case-trial",
