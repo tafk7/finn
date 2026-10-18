@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
     Available,
     Decision,
@@ -22,8 +23,10 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
+    Unresolved,
     ValueUnavailableError,
     View,
+    _runtime,
     derived,
     design_space,
     inspection,
@@ -31,6 +34,7 @@ from finn.core.space import (
     supplied,
     view,
 )
+from finn.core.space.ir import Node
 
 
 class Memory(Space):
@@ -221,3 +225,21 @@ def test_a_source_may_read_whether_it_supplies_its_reader() -> None:
     point = design_space(Outer())
     assert point.echo.present(Echo.x) is True
     assert point.echo.x == 2
+
+
+def test_two_known_present_sources_refuse_at_once_whatever_else_waits() -> None:
+    # The single present source's reduction, read directly: no authored Space places
+    # several sources on one formal today. Counting the sources is apart from choosing the
+    # value, so two that answer refuse even beside one that waits.
+    node = Node(0, 0, "width", "present")
+    waiting = Unresolved((Finding(FindingKind.BLOCKER, "decision-unassigned", "s", "open"),))
+    two = _runtime._present(node, [Available(4), waiting, Available(4)])
+    assert isinstance(two, Rejected)
+    assert {finding.code for finding in two.findings} == {"multiple-suppliers"}
+    # One known source beside one that waits still waits; one alone supplies the value.
+    assert _runtime._present(node, [Available(4), waiting]) == waiting
+    assert _runtime._present(node, [Available(4), Inapplicable()]) == Available(4)
+    refused = reject("bad", "refused", owner="source")
+    both = _runtime._present(node, [Available(4), Available(4), refused])
+    assert isinstance(both, Rejected)
+    assert {finding.code for finding in both.findings} == {"multiple-suppliers", "bad"}

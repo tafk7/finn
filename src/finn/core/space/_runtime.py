@@ -833,19 +833,27 @@ def _guard_assessment(node: Node, answer: NonValue) -> Assessment | None:
 
 
 def _present(node: Node, answers: list[QueryResult[object]]) -> QueryResult[object]:
-    """The single present source. A refused source refuses the answer. Otherwise, while
-    any source is unresolved the answer is unresolved too: a later commitment could
-    still make a second one present."""
+    """The single present source. Counting the sources is apart from choosing the value:
+    two known present ones (each answering a value) refuse at once, whatever else is
+    unknown. Otherwise a refused source refuses the answer, and while any source is
+    unresolved the answer is unresolved too: a later commitment could still make a second
+    one present."""
     active = [answer for answer in answers if not isinstance(answer, Inapplicable)]
-    blocked = _blocked([answer for answer in active if not isinstance(answer, Available)])
+    failures: list[QueryResult[object]] = [
+        answer for answer in active if not isinstance(answer, Available)
+    ]
+    known = len(active) - len(failures)
+    if known > 1:
+        failures.append(
+            reject(
+                "multiple-suppliers",
+                f"{known} sources are present; at most one may supply this value",
+                owner=node.owner,
+            )
+        )
+    blocked = _blocked(failures)
     if blocked is not None:
         return blocked
-    if len(active) > 1:
-        return reject(
-            "multiple-suppliers",
-            f"{len(active)} sources are present; at most one may supply this value",
-            owner=node.owner,
-        )
     if not active:
         return Unresolved(
             (
