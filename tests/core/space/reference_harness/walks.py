@@ -13,10 +13,10 @@ state, each value's answer, each rule, validity, and the change's verdict.
 
 **The filter.** A disagreement gets a **kind** (:func:`classify`): a mechanism the
 model's answers show at work in the configuration (a case refused by a constraint, a
-conflict, a choice kept unchecked, ...) that reaches the question. A disagreement whose
-kind a row of the acceptance matrix still names (``matrix.ROWS``) is expected, and
-counted; any other fails the walk, printing the seed, the step, the description and both
-answers. Moving or removing a row moves the filter with it.
+conflict, a case's trial reading a choice kept unchecked, ...) that reaches the question.
+A disagreement whose kind a row of the acceptance matrix still names (``matrix.ROWS``) is
+expected, and counted; any other fails the walk, printing the seed, the step, the
+description and both answers. Moving or removing a row moves the filter with it.
 
 **Refinement** (on both sides): over a step that only commits choices nothing was stored
 for, no answer to a piece that existed before the step moves down the information order
@@ -423,12 +423,9 @@ def ask(question: Question) -> str:
 #: the kinds a walk can tell, each one a row names, most specific first: a disagreement
 #: several explain is counted under the first the matrix still names
 PRIORITY = (
-    "commit-under-refused-selector",
-    "commit-waits",
-    "own-reason",
     "own-reason-forcing",
     "inactive-under-refused-selector",
-    "stale-forced",
+    "trial-reads-unchecked",
     "view-of-refused-space",
     "empty-list",
     "listed-not-member",
@@ -596,6 +593,8 @@ def mechanisms(solution: model.Solution, engine_refused: bool | None = None) -> 
                 kind = _case_kind(index, path, case, reason)
                 if kind:
                     add(kind, path)
+                elif _reads_unchecked(solution, path, case, reason):
+                    add("trial-reads-unchecked", path)
     for conflict in solution.conflicts():
         add("conflict", *conflict.participants)
     if engine_refused is not False:
@@ -628,6 +627,27 @@ def _case_kind(index: model.Index, choice: str, case: object, reason: model.Reas
     return "selector-case-trial" if info.cases is not None else "value-case-trial"
 
 
+def _reads_unchecked(
+    solution: model.Solution, selector: str, case: object, reason: model.Reason
+) -> bool:
+    """Whether a selector's case was refused by a rule of the case's own Space reading a
+    stored choice of the case kept unchecked: the case's trial settles the presence the
+    choice waits on, so it reads the choice as its value (``trial-reads-unchecked``)."""
+    index = solution.index
+    if index.choices[selector].cases is None or reason.subject not in index.constraints:
+        return False
+    rule, owner = index.constraints[reason.subject]
+    scope = _join(selector, str(case))
+    if owner != scope:
+        return False
+    return any(
+        read in index.choices
+        and index.within(index.choices[read].scope, scope)
+        and isinstance(solution.state(read), model.Unchecked)
+        for read in rule.reads
+    )
+
+
 def outside(solution: model.Solution, choice: str, value: object) -> bool:
     """Whether ``value`` is outside ``choice``'s domain, by membership alone (its presence
     aside); ``False`` where the domain's reads wait."""
@@ -652,18 +672,17 @@ def outside(solution: model.Solution, choice: str, value: object) -> bool:
 def _own_reason(
     base: model.Solution, published: model.Solution, choice: str, engine: Refusal | None
 ) -> str | None:
-    """Which shape of a named value outside its domain, refused by the model with its own
-    reason, the engine answers otherwise in: its guard unknown, the engine refusing it as
-    inactive, forcing having read its false own check (``own-reason-forcing``); its guard
-    unknown before the change, the engine refusing it otherwise (``own-reason``). Its
-    guard false where the change would publish it, the value is refused as inactive, its
-    own check not evaluated: no shape."""
+    """Whether a named value outside its domain, refused by the model with its own reason,
+    is the shape the engine answers otherwise in: its guard unknown before the change, the
+    engine refusing it as inactive, forcing having read its false own check
+    (``own-reason-forcing``). Its guard false where the change would publish it, the value
+    is refused as inactive, its own check not evaluated: no shape."""
     scope = published.index.choices[choice].scope
     inactive = engine is not None and ("inactive", choice) in engine.codes
     if presence(published, scope) == "absent":
         return None
-    if presence(base, scope) == "unknown":
-        return "own-reason-forcing" if inactive else "own-reason"
+    if presence(base, scope) == "unknown" and inactive:
+        return "own-reason-forcing"
     return None
 
 
@@ -973,9 +992,7 @@ class _Walk:
             f"{'accepted' if form.accepted else 'refused'}" + ("" if agreed else " (disagree)")
         )
         if not agreed:
-            extra = self.change_mechanisms(
-                base.solution, published, solution, result, expected, form
-            )
+            extra = self.change_mechanisms(base.solution, published, solution, result, form)
             kinds = classify(
                 [base, Context(solution, self.reach)], ("change", ""), expected, form, extra
             )
@@ -990,26 +1007,13 @@ class _Walk:
         published: model.Configuration,
         solution: model.Solution,
         result: model.Accepted | model.Rejected,
-        expected: ChangeForm,
         form: ChangeForm,
     ) -> dict[str, set[str]]:
-        """What only a change's verdict shows, on the choices the two verdicts differ on: a
-        choice the configuration the change would publish keeps unchecked, or admits under
-        a refused guard;
-        a named value outside its domain the model refuses with its own reason
-        (:func:`_own_reason`); a retained choice the model reaches as inactive
-        under a refused selector; a change the engine refuses that a cold build of the
-        configuration it would publish accepts (only its base's forced values refused it),
-        or accepts where that cold build refuses (an admission its base made kept)."""
+        """What only a change's verdict shows: a named value outside its domain the model
+        refuses with its own reason (:func:`_own_reason`); a retained choice the model
+        reaches as inactive under a refused selector."""
         found: dict[str, set[str]] = {}
-        subjects = _subjects(("change", ""), expected, form) or set()
         engine = {refusal.choice: refusal for refusal in form.refusals}
-        for choice in sorted(subjects):
-            state = solution.state(choice)
-            if isinstance(state, model.Unchecked):
-                found.setdefault("commit-waits", set()).add(choice)
-            elif isinstance(state, model.GuardRefused):
-                found.setdefault("commit-under-refused-selector", set()).add(choice)
         if isinstance(result, model.Rejected):
             for refusal in result.refusals:
                 choice = refusal.choice
@@ -1021,10 +1025,6 @@ class _Walk:
                     solution, self.index.choices[choice].scope
                 ):
                     found.setdefault("inactive-under-refused-selector", set()).add(choice)
-        cold = self.engine.open(published.facts)
-        rebuilt, _ = cold.change(model.Change(commit=published.stored))
-        if rebuilt.accepted != form.accepted:
-            found.setdefault("stale-forced", set()).update(subjects)
         return found
 
     # -- drawing

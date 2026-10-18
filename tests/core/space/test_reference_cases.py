@@ -91,7 +91,6 @@ def test_a_selector_left_no_case_refuses_the_configuration() -> None:
     TYPED.start({"width": 129}).check_validity()
 
 
-@expected("commit-under-refused-selector")
 def test_a_value_inside_its_domain_under_a_refused_selector_is_accepted() -> None:
     # 3 divides 129: its own check holds, so it is admitted, never unchecked (unchecked is
     # for an open selector only), and the configuration reads refused through the selector.
@@ -129,7 +128,6 @@ def test_a_rule_under_a_refused_selector_reads_refused_through_it() -> None:
     refused_under().check_rule("compute.packed.fits")
 
 
-@expected("outside-domain-under-open-selector")
 def test_a_value_outside_its_domain_under_an_open_selector_is_refused_at_commit() -> None:
     # At 12 both cores are possible: the selector is open, and 5 does not divide 12. Its own
     # check is read with its case assumed: refused, named, with its own reason only.
@@ -456,12 +454,10 @@ def test_a_selector_settling_elsewhere_refuses_the_change() -> None:
     opened().check_change(Change(commit={"compute": "stub"}))
 
 
-@expected("commit-under-open-selector")
 def test_a_choice_committed_under_an_open_selector_is_kept_unchecked() -> None:
     UNCHECKED.start({}, {"lanes": 12}).check_change(Change(commit={"compute.packed.pe": 3}))
 
 
-@expected("facts-open-selector")
 def test_new_facts_that_open_a_selector_keep_a_choice_under_it_unchecked() -> None:
     # At 12 both cores are possible: the selector is open, and ``pe`` (3 divides 12) waits.
     point = TYPED.start({"width": 9}, {"compute.packed.pe": 3})
@@ -483,7 +479,6 @@ WAITING = Case(
 )
 
 
-@expected("commit-waits-on-fact")
 def test_a_choice_committed_while_its_domain_waits_on_a_fact_is_kept_unchecked() -> None:
     WAITING.start().check_change(Change(commit={"pe": 3}))
 
@@ -531,3 +526,71 @@ def test_clearing_a_selector_whose_case_a_kept_choice_rules_out_is_refused_as_in
         Change(commit={"core.wide.lanes": 2})
     )
     point.check_change(Change(clear=("core",)))
+
+
+def test_committing_a_choice_its_cases_rule_refuses_under_two_cases_is_refused_as_inactive() -> (
+    None
+):
+    # The selector is open (the limit is a fact, both cases possible). The trial of ``wide``
+    # reads the committed ``lanes`` as 2, which ``small`` refuses at a limit of 1: ``plain``
+    # is forced, and the commit is refused, ``lanes`` inactive where it would publish.
+    CASE_TRIAL.start({"limit": 1}).check_change(Change(commit={"core.wide.lanes": 2}))
+
+
+# The same with a third case: the commit is accepted, the choice kept unchecked waiting on its
+# selector, and the case whose rule refuses its value is not possible, the other two are.
+
+THREE_CASES = Case(
+    "a case's trial and a choice of the case kept unchecked, three cases",
+    Space(
+        ("limit",),
+        Scope(
+            "",
+            selectors=(
+                Selector(
+                    "core",
+                    (
+                        Scope("plain"),
+                        Scope("other"),
+                        Scope(
+                            "wide",
+                            choices=(Choice("lanes", listed(1, 2)),),
+                            constraints=(
+                                Constraint(
+                                    "small",
+                                    ("core.wide.lanes", "limit"),
+                                    lambda read: read["core.wide.lanes"] <= read["limit"],
+                                    "too-many-lanes",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def committed_wide() -> Pair:
+    """``lanes`` committed at 2 under the open selector, at a limit of 1."""
+    return THREE_CASES.start({"limit": 1}).step(Change(commit={"core.wide.lanes": 2}))
+
+
+def test_committing_a_choice_its_cases_rule_refuses_under_three_cases_is_accepted() -> None:
+    THREE_CASES.start({"limit": 1}).check_change(Change(commit={"core.wide.lanes": 2}))
+
+
+def test_a_choice_its_cases_rule_refuses_stays_unchecked_under_three_cases() -> None:
+    committed_wide().check_state("core.wide.lanes")
+
+
+@expected("case-trial-reads-unchecked")
+def test_a_case_whose_rule_refuses_a_kept_choice_of_it_is_not_possible() -> None:
+    # The trial of ``wide`` settles the presence ``lanes`` waits on, so it reads 2, which
+    # ``small`` refuses: ``plain`` and ``other`` are possible, ``wide`` is not.
+    committed_wide().check_possible("core")
+
+
+def test_a_choice_its_cases_rule_refuses_leaves_the_configuration_undecided() -> None:
+    committed_wide().check_validity()

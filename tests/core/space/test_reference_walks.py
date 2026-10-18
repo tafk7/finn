@@ -67,6 +67,18 @@ def test_a_kind_no_row_names_fails_the_walk_with_its_seed_step_and_description()
     assert "empty-list" in failure and "description:" in failure and "| engine" in failure
 
 
+def test_a_case_trial_reading_a_kept_choice_is_told_and_fails_unexplained() -> None:
+    # Seed 7's third step: a choice of one of three cases committed under the open selector,
+    # kept unchecked, that a rule of its case refuses. Its row explains it; without the row's
+    # kind the walk fails there.
+    assert walk(7, 3).failure is None
+    assert walk(7, 3).kinds["trial-reads-unchecked"]
+    failure = walk(7, 3, kinds=expected_kinds() - {"trial-reads-unchecked"}).failure
+    assert failure is not None
+    assert failure.startswith("seed 7, index path, step 3: a disagreement no row names")
+    assert "trial-reads-unchecked" in failure and "the state of s" in failure
+
+
 def test_a_walk_tells_only_kinds_a_row_names() -> None:
     # A kind no row names would only ever fail a walk; the classifier keeps none.
     assert set(PRIORITY) <= expected_kinds()

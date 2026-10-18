@@ -333,7 +333,6 @@ def test_a_retained_choice_false_on_the_commitments_is_refused_as_a_cold_build_i
     FIT.start().check_change(Change(commit={"lanes": 3, "span": 2}))
 
 
-@expected("retained-check-forced-core")
 def test_a_retained_choice_checked_against_the_successors_forced_core() -> None:
     # ``depth`` of 2 holds under the stub that 128 lanes force; 3 lanes leave only packed,
     # under which it does not hold. Forcing takes packed, so the change is refused, reaching
@@ -346,7 +345,6 @@ def test_a_retained_choice_checked_against_the_successors_forced_core_as_a_cold_
     FIT.start().check_change(Change(commit={"lanes": 3, "depth": 2}))
 
 
-@expected("stale-forced-core")
 def test_a_change_only_the_bases_forced_core_would_refuse_is_accepted() -> None:
     # At 3 lanes packed is forced and ``depth`` of 2 is outside its domain; the change to
     # 128 lanes forces the stub, under which it holds.

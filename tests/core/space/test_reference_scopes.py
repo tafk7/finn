@@ -304,7 +304,6 @@ def test_validity_counts_a_rule_three_deep() -> None:
     reach(point, Change(commit={PE: 4})).check_validity()
 
 
-@expected("nested-commit-under-open-selectors")
 def test_a_commit_three_deep_under_two_open_selectors_is_kept_unchecked() -> None:
     NESTED.start(OPEN).check_change(Change(commit={PE: 2}))
 

@@ -19,11 +19,11 @@ this one module, so a milestone that changes either changes it here:
   in its Space's admission group). A domain with a membership predicate is a
   ``domain(accepts=, candidates=)``: membership is the model's whole membership, the
   enumeration the listed values, unchecked by membership as the engine enumerates today.
-- **Questions.** The engine has no query for a configuration's validity at this commit, nor
-  a list of the choices a change keeps unchecked. ``Point.validity`` assembles validity
-  from what the engine counts (each present Space's admission group and each choice's
-  refusal), and ``Point.change`` lists the unchecked as the stored choices that read as
-  unresolved.
+- **Questions.** The engine has no query for a configuration's validity at this commit.
+  ``Point.validity`` assembles validity from what the engine counts (each present Space's
+  admission group and each choice's refusal). The choices kept unchecked, and what each
+  waits on, are the engine's own list (``inspection.unchecked``): a stored choice's state
+  and a change's unchecked choices are read from it.
 
 The description becomes one Space class per scope, built with ``composite``. Every member
 keeps the description's path as its key: a choice ``compute.packed.pe`` is the engine's
@@ -673,6 +673,15 @@ class Point:
     def _members(self) -> dict[str, Any]:
         return {item.key: item.reference for item in inspection.members(self.point)}
 
+    def unchecked(self) -> dict[str, frozenset[str]]:
+        """The stored choices kept unchecked, by path, each with what it waits on (the
+        engine's list: the choices still open or unchecked, and the inputs not supplied,
+        that its own check and its guard read)."""
+        return {
+            item.key: frozenset(self.engine.path(key) for key in item.blockers) - {item.key}
+            for item in inspection.unchecked(self.point)
+        }
+
     def stored(self) -> dict[str, object]:
         """The committed choices, by path."""
         current = occurrence.state(self.point)
@@ -700,21 +709,19 @@ class Point:
         if path in stored:
             if isinstance(state, Inapplicable):
                 return StateForm("inactive", stored[path])
-            if isinstance(state, Unresolved):
-                return StateForm(
-                    "unchecked", stored[path], blockers=engine.blockers(state.findings, path)
-                )
+            unchecked = self.unchecked()
+            if path in unchecked:
+                return StateForm("unchecked", stored[path], blockers=unchecked[path])
             if isinstance(state, Rejected):
                 return StateForm("refused", codes=engine.codes(state.findings))
             answer = self._query(path)
             if isinstance(answer, Available):
                 return StateForm("readable", stored[path])
-            if isinstance(answer, Unresolved):
-                return StateForm(
-                    "unchecked", stored[path], blockers=engine.blockers(answer.findings, path)
-                )
             if isinstance(answer, Rejected):
                 return StateForm("refused", codes=engine.codes(answer.findings))
+            if isinstance(state, Unresolved) or isinstance(answer, Unresolved):
+                # an engine fault, not a disagreement: stored, read unresolved, not listed
+                raise RuntimeError(f"{path}: stored and unresolved, but not listed unchecked")
             return StateForm("inactive", stored[path])
         if isinstance(state, Inapplicable):
             return StateForm("inactive")
@@ -822,8 +829,11 @@ class Point:
             )
             return ChangeForm(False, refusals=refusals), None
         successor = Point(engine, report.instance)
-        stored = successor.stored()
-        unchecked = frozenset(path for path in stored if successor.state(path).kind == "unchecked")
+        unchecked = frozenset(successor.unchecked())
+        reported = {outcome.owner for outcome in report.outcomes if outcome.unchecked}
+        if not reported <= unchecked:
+            # an engine fault: a choice the change reports unchecked is not listed so
+            raise RuntimeError(f"reported unchecked, not listed: {sorted(reported - unchecked)}")
         return ChangeForm(True, unchecked=unchecked), successor
 
 

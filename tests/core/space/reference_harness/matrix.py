@@ -52,54 +52,13 @@ _SCOPES = "test_reference_scopes"
 
 ROWS: tuple[Row, ...] = (
     Row(
-        "commit-under-open-selector",
-        "lane 0",
-        "a choice committed under a selector still open is accepted and kept unchecked, "
-        "waiting on the selector, not refused",
-        f"{_CASES}::test_a_choice_committed_under_an_open_selector_is_kept_unchecked",
-        "commit-waits",
-    ),
-    Row(
-        "facts-open-selector",
-        "lane 0",
-        "new facts that open the selector a retained choice sits under keep the choice "
-        "unchecked, not refused",
-        f"{_CASES}::test_new_facts_that_open_a_selector_keep_a_choice_under_it_unchecked",
-        "commit-waits",
-    ),
-    Row(
-        "commit-under-refused-selector",
-        "lane 0",
-        "a change reads the configuration it would publish, so a value inside its domain "
-        "under a selector with no possible case is accepted, the configuration refused "
-        "through the selector",
-        f"{_CASES}::test_a_value_inside_its_domain_under_a_refused_selector_is_accepted",
-        "commit-under-refused-selector",
-    ),
-    Row(
-        "commit-waits-on-fact",
-        "lane 0",
-        "a choice committed while its domain waits on a fact not given yet is accepted and kept "
-        "unchecked, waiting on the fact, not refused",
-        f"{_CASES}::test_a_choice_committed_while_its_domain_waits_on_a_fact_is_kept_unchecked",
-        "commit-waits",
-    ),
-    Row(
-        "outside-domain-under-open-selector",
-        "lane 0",
-        "a value outside its domain under a selector still open is refused at its own commit "
-        "with its own membership finding, not through the selector's open state",
-        f"{_CASES}::test_a_value_outside_its_domain_under_an_open_selector_is_refused_at_commit",
-        "own-reason",
-    ),
-    Row(
         "outside-domain-forcing",
         "lane 2",
         "a named value whose own check is false is refused with its own reason; forcing never "
         "reads it",
         f"{_CASES}::test_a_value_outside_its_domain_a_cores_rule_reads_is_refused_with_its_own_reason",
         "own-reason-forcing",
-        "lane 0 refuses it as inactive with no finding: the core's trial reads the false own "
+        "the engine refuses it as inactive with no finding: the core's trial reads the false own "
         "check and forcing selects the other core",
     ),
     Row(
@@ -270,24 +229,6 @@ ROWS: tuple[Row, ...] = (
         f"{_RULES}::test_the_four_choice_conflict_is_the_same_in_every_declaration_order",
         "conflict-order",
     ),
-    Row(
-        "retained-check-forced-core",
-        "lane 0",
-        "a change checks every retained choice against the configuration it would publish, "
-        "never an admission its base made: a retained value the successor's forced core puts "
-        "outside its domain refuses the change, as a cold build does",
-        f"{_RULES}::test_a_retained_choice_checked_against_the_successors_forced_core",
-        "stale-forced",
-    ),
-    Row(
-        "stale-forced-core",
-        "lane 0",
-        "a change checks retained and named choices against the configuration it would "
-        "publish, never a value its base forced: accepted where only the base's forced core "
-        "refused it",
-        f"{_RULES}::test_a_change_only_the_bases_forced_core_would_refuse_is_accepted",
-        "stale-forced",
-    ),
     # -- views, nested scopes, look-ahead (case 9, the composing cores' two)
     Row(
         "view-of-refused-space",
@@ -351,7 +292,7 @@ ROWS: tuple[Row, ...] = (
         "three deep under the forced selectors is accepted, checked",
         f"{_SCOPES}::test_a_commit_three_deep_under_forced_selectors_is_accepted",
         "selector-case-trial",
-        "lane 0 accepts it kept unchecked; lane 1 forces the selectors",
+        "the engine accepts it kept unchecked; lane 1 forces the selectors",
     ),
     Row(
         "nested-readable",
@@ -360,15 +301,7 @@ ROWS: tuple[Row, ...] = (
         "three deep under the forced selectors is readable",
         f"{_SCOPES}::test_a_commit_three_deep_under_forced_selectors_is_readable",
         "selector-case-trial",
-        "lane 0 accepts it kept unchecked; lane 1 forces the selectors",
-    ),
-    Row(
-        "nested-commit-under-open-selectors",
-        "lane 0",
-        "a choice committed three deep under two open selectors is accepted and kept "
-        "unchecked, waiting on both, not refused",
-        f"{_SCOPES}::test_a_commit_three_deep_under_two_open_selectors_is_kept_unchecked",
-        "commit-waits",
+        "the engine accepts it kept unchecked; lane 1 forces the selectors",
     ),
     Row(
         "nested-conflict-commit",
@@ -377,7 +310,7 @@ ROWS: tuple[Row, ...] = (
         "accepted, admitted under the refused core",
         f"{_SCOPES}::test_a_commit_three_deep_in_a_conflict_with_the_forced_selectors_is_accepted",
         "selector-case-trial",
-        "lane 0 accepts it kept unchecked; lane 1 forces the outer selector and refuses the "
+        "the engine accepts it kept unchecked; lane 1 forces the outer selector and refuses the "
         "inner one",
     ),
     Row(
@@ -389,9 +322,20 @@ ROWS: tuple[Row, ...] = (
         f"{_SCOPES}::test_a_choice_on_an_inner_selectors_other_case_is_inactive_under_a_refused_outer",
         "inactive-under-refused-selector",
         "classified beside the two-cores row (outside-domain-forcing): where the outer case is "
-        "assumed, the inner selector's admitted case decides the choice's presence; lane 0's "
-        "engine reads the choice under a refused guard (at the base the commits are refused "
-        "first)",
+        "assumed, the inner selector's admitted case decides the choice's presence; the "
+        "engine reads the choice under a refused guard",
+    ),
+    Row(
+        "case-trial-reads-unchecked",
+        "lane 2",
+        "a case's trial reads a stored choice of the case, kept unchecked only because its "
+        "presence waits, as its value, so a case whose rule refuses that value is not "
+        "possible: the selector lists only the other cases",
+        f"{_CASES}::test_a_case_whose_rule_refuses_a_kept_choice_of_it_is_not_possible",
+        "trial-reads-unchecked",
+        "classified beside the two-cores row (outside-domain-forcing): the engine lists the "
+        "case as possible (more than the model, never a wrong forced value); with two cases "
+        "it forces the other one, as the model does",
     ),
     Row(
         "nested-conflict-choice",
