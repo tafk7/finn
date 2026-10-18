@@ -594,6 +594,12 @@ def mechanisms(solution: model.Solution, engine_refused: bool | None = None) -> 
                 add("conflict", path, *state.peers)
         elif isinstance(state, (model.Readable, model.GuardRefused)) and state.conflict:
             add("conflict", path, *state.conflict)
+        elif isinstance(state, model.Inactive) and _under_refused(
+            solution, index.choices[path].scope
+        ):
+            # its case not the one an admitted inner selector holds, under a refused outer
+            # one: inactive, where the engine reads it under the refused guard
+            add("inactive-under-refused-selector", path)
         for case, reasons in cases:
             for reason in reasons:
                 kind = _case_kind(index, path, case, reason)
@@ -634,25 +640,47 @@ def _case_kind(index: model.Index, choice: str, case: object, reason: model.Reas
 
 
 def _reads_unchecked(
-    solution: model.Solution, selector: str, case: object, reason: model.Reason
+    solution: model.Solution, choice: str, case: object, reason: model.Reason
 ) -> bool:
-    """Whether a selector's case was refused by a rule reading a stored choice of the case
-    kept unchecked: the case's trial settles the presence the choice waits on, so it reads
-    the choice as its value (``trial-reads-unchecked``). The rule may be the case's own or
-    one outside it (a rule of the root reading the case's choice): the same trial reads the
-    same value. Where the rule is outside the case, the case's trial against it is also
-    ``selector-case-trial`` (:func:`_case_kind`); both are told, the more specific first."""
+    """Whether a case of an open choice was refused by a rule reading a stored choice the
+    case makes present, kept unchecked: the case's trial settles the presence the stored
+    choice waits on, so it reads it as its value (``trial-reads-unchecked``). The case makes
+    it present when it is a selector's case holding it, or when a ``when`` guard above it
+    reads the choice (a value choice's case, or a selector's). The rule may be the case's
+    own or one outside it (a rule of the root reading the stored choice): the same trial
+    reads the same value. Where the rule is not the case's own, the trial against it is also
+    ``selector-case-trial`` or ``value-case-trial`` (:func:`_case_kind`); both are told, the
+    more specific first."""
     index = solution.index
-    if index.choices[selector].cases is None or reason.subject not in index.constraints:
+    if reason.subject not in index.constraints:
         return False
     rule, _ = index.constraints[reason.subject]
-    scope = _join(selector, str(case))
+    held = _join(choice, str(case)) if index.choices[choice].cases is not None else None
+
+    def made_present(read: str) -> bool:
+        scope = index.choices[read].scope
+        if held is not None and index.within(scope, held):
+            return True
+        return choice in _guard_reads(index, scope)
+
     return any(
         read in index.choices
-        and index.within(index.choices[read].scope, scope)
+        and made_present(read)
         and isinstance(solution.state(read), model.Unchecked)
         for read in rule.reads
     )
+
+
+def _guard_reads(index: model.Index, scope: str) -> set[str]:
+    """What the ``when`` guards at and above ``scope`` read."""
+    found: set[str] = set()
+    current: str | None = scope
+    while current is not None:
+        info = index.scopes[current]
+        if info.when is not None:
+            found.update(info.when.reads)
+        current = info.parent
+    return found
 
 
 def outside(solution: model.Solution, choice: str, value: object) -> bool:
@@ -706,6 +734,58 @@ def _under_refused(solution: model.Solution, scope: str) -> bool:
             return True
         current = info.parent
     return False
+
+
+def change_mechanisms(
+    base: model.Solution,
+    published: model.Configuration,
+    solution: model.Solution,
+    result: model.Accepted | model.Rejected,
+    form: ChangeForm,
+) -> dict[str, set[str]]:
+    """What only a change's verdict shows: a named value outside its domain the model
+    refuses with its own reason (:func:`_own_reason`), and the choices the engine
+    reaches beyond the model's refusals, forcing having read that value, or the model
+    beyond the engine's, as inactive, forcing not having read it (a case the value made
+    impossible possible again, and forced); a retained choice the model reaches as
+    inactive under a refused selector; a choice the model keeps unchecked that the engine
+    refuses as inactive (``trial-reads-waiting``)."""
+    found: dict[str, set[str]] = {}
+    engine = {refusal.choice: refusal for refusal in form.refusals}
+    if isinstance(result, model.Rejected):
+        refused = {refusal.choice for refusal in result.refusals}
+        for refusal in result.refusals:
+            choice = refusal.choice
+            if refusal.kind == "named" and outside(solution, choice, published.stored[choice]):
+                kind = _own_reason(base, solution, choice, engine.get(choice))
+                if kind:
+                    found.setdefault(kind, set()).add(choice)
+                beyond = {
+                    other
+                    for other, item in engine.items()
+                    if other not in refused
+                    and item.kind == "reached"
+                    and item.codes == {("inactive", other)}
+                }
+                short = {
+                    item.choice
+                    for item in result.refusals
+                    if item.kind == "reached"
+                    and item.choice not in engine
+                    and any(r.kind is model.ReasonKind.INACTIVE for r in item.reasons)
+                }
+                if beyond or short:
+                    found.setdefault("own-reason-forcing", set()).update({choice, *beyond, *short})
+            elif refusal.kind == "reached" and _under_refused(
+                solution, solution.index.choices[choice].scope
+            ):
+                found.setdefault("inactive-under-refused-selector", set()).add(choice)
+    for choice, item in engine.items():
+        if ("inactive", choice) in item.codes and isinstance(
+            solution.state(choice), model.Unchecked
+        ):
+            found.setdefault("trial-reads-waiting", set()).add(choice)
+    return found
 
 
 @dataclass
@@ -999,7 +1079,7 @@ class _Walk:
             f"{'accepted' if form.accepted else 'refused'}" + ("" if agreed else " (disagree)")
         )
         if not agreed:
-            extra = self.change_mechanisms(base.solution, published, solution, result, form)
+            extra = change_mechanisms(base.solution, published, solution, result, form)
             kinds = classify(
                 [base, Context(solution, self.reach)], ("change", ""), expected, form, extra
             )
@@ -1007,49 +1087,6 @@ class _Walk:
         if isinstance(result, model.Accepted) and successor is not None:
             return result.configuration, successor
         return None
-
-    def change_mechanisms(
-        self,
-        base: model.Solution,
-        published: model.Configuration,
-        solution: model.Solution,
-        result: model.Accepted | model.Rejected,
-        form: ChangeForm,
-    ) -> dict[str, set[str]]:
-        """What only a change's verdict shows: a named value outside its domain the model
-        refuses with its own reason (:func:`_own_reason`), and the choices the engine
-        reaches beyond the model's refusals, forcing having read that value; a retained
-        choice the model reaches as inactive under a refused selector; a choice the model
-        keeps unchecked that the engine refuses as inactive (``trial-reads-waiting``)."""
-        found: dict[str, set[str]] = {}
-        engine = {refusal.choice: refusal for refusal in form.refusals}
-        if isinstance(result, model.Rejected):
-            refused = {refusal.choice for refusal in result.refusals}
-            for refusal in result.refusals:
-                choice = refusal.choice
-                if refusal.kind == "named" and outside(solution, choice, published.stored[choice]):
-                    kind = _own_reason(base, solution, choice, engine.get(choice))
-                    if kind:
-                        found.setdefault(kind, set()).add(choice)
-                    beyond = {
-                        other
-                        for other, item in engine.items()
-                        if other not in refused
-                        and item.kind == "reached"
-                        and item.codes == {("inactive", other)}
-                    }
-                    if beyond:
-                        found.setdefault("own-reason-forcing", set()).update({choice, *beyond})
-                elif refusal.kind == "reached" and _under_refused(
-                    solution, self.index.choices[choice].scope
-                ):
-                    found.setdefault("inactive-under-refused-selector", set()).add(choice)
-        for choice, item in engine.items():
-            if ("inactive", choice) in item.codes and isinstance(
-                solution.state(choice), model.Unchecked
-            ):
-                found.setdefault("trial-reads-waiting", set()).add(choice)
-        return found
 
     # -- drawing
 
@@ -1271,6 +1308,7 @@ __all__ = [
     "Tally",
     "WalkFailure",
     "added_unknown",
+    "change_mechanisms",
     "classify",
     "expected_kinds",
     "generate",
