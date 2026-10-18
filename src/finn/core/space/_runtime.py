@@ -879,13 +879,19 @@ def _unchecked_answer(node: Node) -> Unresolved:
 
 
 def _frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
-    """A node's evaluation: inapplicable while its guard does not hold, else its kind's."""
+    """A node's evaluation: inapplicable while its guard does not hold, else its kind's.
+    A Space's validity under a guard that waits is still its pieces' AND: a placed Space
+    is not one piece, and each piece inside answers unknown under that guard (its own
+    frame reads the guard first, and the body is never evaluated), so a Space with no
+    pieces (only open choices and views) contributes nothing."""
     if isinstance(snapshot, _TrialSnapshot) and node.index in snapshot._candidates:
         return (yield from _candidate_frame(snapshot, node))
     if node.guard is not None:
         guard = cast(QueryResult[object], (yield node.guard))
         inactive = _guard_result(node, guard)
-        if inactive is not None:
+        if inactive is not None and not (
+            node.kind == "validity" and isinstance(inactive, Unresolved)
+        ):
             return Evaluation(inactive, assessment=_guard_assessment(node, inactive))
     return (yield from _FRAMES[node.kind](snapshot, node))
 

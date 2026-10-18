@@ -152,10 +152,11 @@ def test_a_view_reference_supplies_a_formal_by_assignment_and_at_the_call() -> N
 
 def test_a_view_refuses_with_its_space_and_answers_while_it_is_undecided_in_both_forms() -> None:
     point = chosen()
-    # The garage's presence waits on its Decision: the hall is undecided, its views answer.
+    # The garage's presence waits on its Decision: its constraint is unknown under it, the
+    # hall is undecided, and its views answer.
     validity = inspection.validity(point)
     assert validity.status == "undecided"
-    assert [piece.owner for piece in validity.pieces] == ["garage"]
+    assert [piece.owner for piece in validity.pieces] == ["garage.small_enough"]
     assert point.checked == 16 and point.total == 40
     assert point.inspect(Hall.checked).validity == validity.result
     # A child refused refuses the hall, and every view of it, in both forms.

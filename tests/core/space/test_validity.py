@@ -229,14 +229,45 @@ def test_a_case_not_selected_contributes_nothing_and_the_selected_one_counts() -
     assert absent == Validity("valid", (), Inapplicable())
 
 
-def test_a_placed_space_whose_presence_waits_is_an_unknown_piece() -> None:
-    class Either(Space):
-        width: int = Param()
-        compute: Plain | Core = Decision({"plain": Plain, "core": Core}, width=width)
+class Either(Space):
+    width: int = Param()
+    compute: Plain | Core = Decision({"plain": Plain, "core": Core}, width=width)
 
+
+def test_the_pieces_of_a_placed_space_whose_presence_waits_are_unknown_each_under_its_guard() -> (
+    None
+):
+    # A placed Space is not one piece: each constraint inside is unknown, waiting on the
+    # selector, whatever its body would answer (``never_applies`` too: its own guard is not
+    # read while the Space's presence waits). ``plain`` holds no piece: it adds nothing.
     validity = inspection.validity(design_space(Either(width=8)))
     assert validity.status == "undecided"
-    assert owners(validity) == ["compute.core", "compute.plain"]
+    assert owners(validity) == ["compute.core.divides", "compute.core.never_applies"]
+    for piece in validity.pieces:
+        assert {(f.code, f.owner) for f in piece.result.findings} == {
+            ("decision-unassigned", "compute")
+        }
+
+
+def test_a_placed_space_with_no_pieces_whose_presence_waits_contributes_nothing() -> None:
+    class Bare(Space):
+        width: int = Param()
+        lanes: int = Decision(values=(1, 2))
+
+        @view
+        def doubled(self) -> int:
+            return 2 * self.lanes
+
+    class Open(Space):
+        width: int = Param()
+        compute: Plain | Bare = Decision({"plain": Plain, "bare": Bare}, width=width)
+
+    # An open choice and a view are no pieces: the configuration is valid while the
+    # selector is open. A choice stored inside is one, unknown until the selector settles.
+    point = design_space(Open(width=8))
+    assert inspection.validity(point) == Validity("valid", (), Available(True))
+    kept = commit(point, {"compute.bare.lanes": 2})
+    assert owners(inspection.validity(kept)) == ["compute.bare.lanes"]
 
 
 # -- views are products ----------------------------------------------------------------
