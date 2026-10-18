@@ -136,9 +136,9 @@ def test_a_value_outside_its_domain_under_an_open_selector_is_refused_at_commit(
     TYPED.start({"width": 12}).check_change(Change(commit={"compute.packed.pe": 5}))
 
 
-@expected("outside-domain-under-false-guard")
-def test_a_value_outside_its_domain_under_a_false_guard_is_refused_with_its_own_reason() -> None:
-    # The stub core is selected: ``pe`` is absent, and 5 does not divide 12.
+def test_a_value_outside_its_domain_under_a_false_guard_is_refused_as_inactive() -> None:
+    # The stub core is selected: ``pe`` does not exist, so its own check (5 does not divide
+    # 12) is not evaluated, and the value is refused as inactive.
     TYPED.start({"width": 12}, {"compute": "stub"}).check_change(
         Change(commit={"compute.packed.pe": 5})
     )
@@ -489,8 +489,8 @@ def test_a_choice_committed_while_its_domain_waits_on_a_fact_is_kept_unchecked()
 
 
 # A stored choice of a selector's case, its own check true, that a rule of the case refuses
-# (met by the seeded walks): once the selector is cleared the choice waits on it, unchecked.
-# Whether the case stays possible turns on whether its trial reads the choice as its value.
+# (met by the seeded walks): once the selector is cleared the choice waits only on its
+# presence. The case's trial settles that presence, so it reads the choice as its value.
 
 CASE_TRIAL = Case(
     "a case's trial and a choice of the case kept unchecked",
@@ -523,8 +523,10 @@ CASE_TRIAL = Case(
 )
 
 
-@expected("unchecked-in-case-trial")
-def test_clearing_a_selector_keeps_a_choice_of_its_case_unchecked_its_case_possible() -> None:
+def test_clearing_a_selector_whose_case_a_kept_choice_rules_out_is_refused_as_inactive() -> None:
+    # The trial of ``wide`` reads ``lanes`` as 2, which ``small`` refuses at a limit of 1:
+    # ``wide`` is not possible, ``plain`` is forced, and the clear is refused, leaving the
+    # retained ``lanes`` inactive.
     point = CASE_TRIAL.start({"limit": 1}, {"core": "wide"}).step(
         Change(commit={"core.wide.lanes": 2})
     )

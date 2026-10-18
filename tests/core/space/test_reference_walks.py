@@ -22,6 +22,7 @@ import pytest
 
 from core.space.reference_harness.forms import AnswerForm, Form, StateForm, ValidityForm
 from core.space.reference_harness.walks import (
+    PRIORITY,
     Question,
     added_unknown,
     expected_kinds,
@@ -64,6 +65,11 @@ def test_a_kind_no_row_names_fails_the_walk_with_its_seed_step_and_description()
     assert failure is not None
     assert failure.startswith("seed 1, index path, step 0: a disagreement no row names")
     assert "empty-list" in failure and "description:" in failure and "| engine" in failure
+
+
+def test_a_walk_tells_only_kinds_a_row_names() -> None:
+    # A kind no row names would only ever fail a walk; the classifier keeps none.
+    assert set(PRIORITY) <= expected_kinds()
 
 
 def test_the_summary_names_the_kinds_no_walk_met() -> None:

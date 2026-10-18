@@ -42,7 +42,7 @@ class Row:
     witness: str
     #: what a walk can match it by, where a walk can meet it
     kind: str | None = None
-    #: a qualification: unclassified, or waiting on a ruling
+    #: a qualification: how the engine answers it now, or what it comes with
     note: str = ""
 
 
@@ -101,29 +101,6 @@ ROWS: tuple[Row, ...] = (
         "own-reason-forcing",
         "lane 0 refuses it as inactive with no finding: the core's trial reads the false own "
         "check and forcing selects the other core",
-    ),
-    Row(
-        "outside-domain-under-false-guard",
-        "lane 2",
-        "a value outside its domain under a guard that is false (another case selected, or a "
-        "guard's test false) is refused with its own reason only, not as inactive",
-        f"{_CASES}::test_a_value_outside_its_domain_under_a_false_guard_is_refused_with_its_own_reason",
-        "own-reason-false-guard",
-        "unclassified: pending a ruling on whether a false guard leaves a value outside its "
-        "domain inactive, as the engine reads it, or refused by its own check, as the model "
-        "reads it; no lane names it, and the forcing row's fix would bring it",
-    ),
-    Row(
-        "unchecked-in-case-trial",
-        "lane 1",
-        "a stored choice kept unchecked, waiting only on its selector, is never read as its "
-        "value in a trial of its case, so the case stays possible: the change keeps the choice "
-        "unchecked, not refused reaching it as inactive",
-        f"{_CASES}::test_clearing_a_selector_keeps_a_choice_of_its_case_unchecked_its_case_possible",
-        "unchecked-in-case-trial",
-        "unclassified: pending a ruling on whether a trial assuming a selector's case reads that "
-        "case's stored choices kept unchecked as their values (the engine, at the base and on "
-        "lane 0, does, and forces the other case) or as unresolved (the model)",
     ),
     Row(
         "value-case-trial",
@@ -405,15 +382,16 @@ ROWS: tuple[Row, ...] = (
     ),
     Row(
         "inactive-under-refused-selector",
-        "E2",
+        "lane 2",
         "a choice under an inner selector admitted, under a refused outer selector, on another "
         "case is inactive in the configuration a change would publish: the change is refused, "
         "reaching it as inactive",
         f"{_SCOPES}::test_a_choice_on_an_inner_selectors_other_case_is_inactive_under_a_refused_outer",
         "inactive-under-refused-selector",
-        "unclassified: pending a ruling on whether the inner selector's admitted case or the "
-        "refused outer selector decides the choice's presence; the model reads it absent, "
-        "lane 0's engine under a refused guard (at the base the commits are refused first)",
+        "classified beside the two-cores row (outside-domain-forcing): where the outer case is "
+        "assumed, the inner selector's admitted case decides the choice's presence; lane 0's "
+        "engine reads the choice under a refused guard (at the base the commits are refused "
+        "first)",
     ),
     Row(
         "nested-conflict-choice",

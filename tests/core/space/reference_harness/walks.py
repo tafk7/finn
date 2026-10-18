@@ -420,21 +420,18 @@ def ask(question: Question) -> str:
 
 # --- the classification ---------------------------------------------------------------------------
 
-#: the kinds a walk can tell, most specific first: a disagreement several explain is
-#: counted under the first the matrix still names
+#: the kinds a walk can tell, each one a row names, most specific first: a disagreement
+#: several explain is counted under the first the matrix still names
 PRIORITY = (
     "commit-under-refused-selector",
-    "unchecked-in-case-trial",
     "commit-waits",
     "own-reason",
     "own-reason-forcing",
-    "own-reason-false-guard",
     "inactive-under-refused-selector",
     "stale-forced",
     "view-of-refused-space",
     "empty-list",
     "listed-not-member",
-    "trial-counts-own-checks",
     "conflict",
     "selector-case-trial",
     "value-case-trial",
@@ -614,7 +611,9 @@ def mechanisms(solution: model.Solution, engine_refused: bool | None = None) -> 
 def _case_kind(index: model.Index, choice: str, case: object, reason: model.Reason) -> str | None:
     """What refused one case of an open choice, as a kind the engine at this commit lacks;
     ``None`` for what it does too (a selector's case refused by a rule of the case's own
-    Space, a listed value outside a list it computes)."""
+    Space, a listed value outside a list it computes). Another choice's own check refusing
+    the case (``trial-counts-own-checks``) is a kind no row names: it never explains a
+    disagreement."""
     info = index.choices[choice]
     if reason.subject in index.constraints:
         if info.cases is not None:
@@ -654,14 +653,15 @@ def _own_reason(
     base: model.Solution, published: model.Solution, choice: str, engine: Refusal | None
 ) -> str | None:
     """Which shape of a named value outside its domain, refused by the model with its own
-    reason, the engine answers otherwise in: its guard false where the change would
-    publish it (``own-reason-false-guard``); its guard unknown, the engine refusing it as
+    reason, the engine answers otherwise in: its guard unknown, the engine refusing it as
     inactive, forcing having read its false own check (``own-reason-forcing``); its guard
-    unknown before the change, the engine refusing it otherwise (``own-reason``)."""
+    unknown before the change, the engine refusing it otherwise (``own-reason``). Its
+    guard false where the change would publish it, the value is refused as inactive, its
+    own check not evaluated: no shape."""
     scope = published.index.choices[choice].scope
     inactive = engine is not None and ("inactive", choice) in engine.codes
     if presence(published, scope) == "absent":
-        return "own-reason-false-guard" if inactive else None
+        return None
     if presence(base, scope) == "unknown":
         return "own-reason-forcing" if inactive else "own-reason"
     return None
@@ -994,8 +994,8 @@ class _Walk:
         form: ChangeForm,
     ) -> dict[str, set[str]]:
         """What only a change's verdict shows, on the choices the two verdicts differ on: a
-        choice the configuration the change would publish keeps unchecked (one the engine
-        refuses as inactive: a trial of its case read it), or admits under a refused guard;
+        choice the configuration the change would publish keeps unchecked, or admits under
+        a refused guard;
         a named value outside its domain the model refuses with its own reason
         (:func:`_own_reason`); a retained choice the model reaches as inactive
         under a refused selector; a change the engine refuses that a cold build of the
@@ -1007,9 +1007,6 @@ class _Walk:
         for choice in sorted(subjects):
             state = solution.state(choice)
             if isinstance(state, model.Unchecked):
-                refused = engine.get(choice)
-                if refused is not None and ("inactive", choice) in refused.codes:
-                    found.setdefault("unchecked-in-case-trial", set()).add(choice)
                 found.setdefault("commit-waits", set()).add(choice)
             elif isinstance(state, model.GuardRefused):
                 found.setdefault("commit-under-refused-selector", set()).add(choice)
