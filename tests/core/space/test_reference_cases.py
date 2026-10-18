@@ -486,3 +486,46 @@ WAITING = Case(
 @expected("commit-waits-on-fact")
 def test_a_choice_committed_while_its_domain_waits_on_a_fact_is_kept_unchecked() -> None:
     WAITING.start().check_change(Change(commit={"pe": 3}))
+
+
+# A stored choice of a selector's case, its own check true, that a rule of the case refuses
+# (met by the seeded walks): once the selector is cleared the choice waits on it, unchecked.
+# Whether the case stays possible turns on whether its trial reads the choice as its value.
+
+CASE_TRIAL = Case(
+    "a case's trial and a choice of the case kept unchecked",
+    Space(
+        ("limit",),
+        Scope(
+            "",
+            selectors=(
+                Selector(
+                    "core",
+                    (
+                        Scope("plain"),
+                        Scope(
+                            "wide",
+                            choices=(Choice("lanes", listed(1, 2)),),
+                            constraints=(
+                                Constraint(
+                                    "small",
+                                    ("core.wide.lanes", "limit"),
+                                    lambda read: read["core.wide.lanes"] <= read["limit"],
+                                    "too-many-lanes",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+@expected("unchecked-in-case-trial")
+def test_clearing_a_selector_keeps_a_choice_of_its_case_unchecked_its_case_possible() -> None:
+    point = CASE_TRIAL.start({"limit": 1}, {"core": "wide"}).step(
+        Change(commit={"core.wide.lanes": 2})
+    )
+    point.check_change(Change(clear=("core",)))

@@ -114,6 +114,18 @@ ROWS: tuple[Row, ...] = (
         "reads it; no lane names it, and the forcing row's fix would bring it",
     ),
     Row(
+        "unchecked-in-case-trial",
+        "lane 1",
+        "a stored choice kept unchecked, waiting only on its selector, is never read as its "
+        "value in a trial of its case, so the case stays possible: the change keeps the choice "
+        "unchecked, not refused reaching it as inactive",
+        f"{_CASES}::test_clearing_a_selector_keeps_a_choice_of_its_case_unchecked_its_case_possible",
+        "unchecked-in-case-trial",
+        "unclassified: pending a ruling on whether a trial assuming a selector's case reads that "
+        "case's stored choices kept unchecked as their values (the engine, at the base and on "
+        "lane 0, does, and forces the other case) or as unresolved (the model)",
+    ),
+    Row(
         "value-case-trial",
         "lane 1",
         "a value case is tried against the rules whose answer depends on the choice, "

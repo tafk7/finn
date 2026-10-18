@@ -424,6 +424,7 @@ def ask(question: Question) -> str:
 #: counted under the first the matrix still names
 PRIORITY = (
     "commit-under-refused-selector",
+    "unchecked-in-case-trial",
     "commit-waits",
     "own-reason",
     "own-reason-forcing",
@@ -993,22 +994,26 @@ class _Walk:
         form: ChangeForm,
     ) -> dict[str, set[str]]:
         """What only a change's verdict shows, on the choices the two verdicts differ on: a
-        choice the configuration the change would publish keeps unchecked, or admits under
-        a refused guard; a named value outside its domain the model refuses with its own
-        reason (:func:`_own_reason`); a retained choice the model reaches as inactive
+        choice the configuration the change would publish keeps unchecked (one the engine
+        refuses as inactive: a trial of its case read it), or admits under a refused guard;
+        a named value outside its domain the model refuses with its own reason
+        (:func:`_own_reason`); a retained choice the model reaches as inactive
         under a refused selector; a change the engine refuses that a cold build of the
         configuration it would publish accepts (only its base's forced values refused it),
         or accepts where that cold build refuses (an admission its base made kept)."""
         found: dict[str, set[str]] = {}
         subjects = _subjects(("change", ""), expected, form) or set()
+        engine = {refusal.choice: refusal for refusal in form.refusals}
         for choice in sorted(subjects):
             state = solution.state(choice)
             if isinstance(state, model.Unchecked):
+                refused = engine.get(choice)
+                if refused is not None and ("inactive", choice) in refused.codes:
+                    found.setdefault("unchecked-in-case-trial", set()).add(choice)
                 found.setdefault("commit-waits", set()).add(choice)
             elif isinstance(state, model.GuardRefused):
                 found.setdefault("commit-under-refused-selector", set()).add(choice)
         if isinstance(result, model.Rejected):
-            engine = {refusal.choice: refusal for refusal in form.refusals}
             for refusal in result.refusals:
                 choice = refusal.choice
                 if refusal.kind == "named" and outside(solution, choice, published.stored[choice]):
