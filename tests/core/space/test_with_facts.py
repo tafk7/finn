@@ -44,6 +44,7 @@ from finn.core.space import (
     inspection,
     occurrence,
     reject,
+    requires,
     supplied,
 )
 
@@ -466,6 +467,117 @@ def test_the_published_reading_accepts_a_commit_the_choice_reading_accepts() -> 
     # choice refused through its selector's guard, and the same as each other.
     states = [state_of(report.instance, "compute.core.pe") for report in (by_choices, by_facts)]
     assert states[0] == states[1] and isinstance(states[0], Rejected)
+
+
+# -- a choice whose own check reads its core's own values (a kernel's folding) --------------------
+
+
+class Folded(Space):
+    """A core whose choices' domains read a value of its own, as a kernel's folding reads its
+    extents, so every read of them is under the case's guard. Its admission needs the lanes
+    to divide the width, and up to 8 of it."""
+
+    width: int = Param()
+
+    @derived
+    def lanes(self) -> int:
+        return self.width
+
+    pe: int = Decision(domain=divisors_of(lanes))
+    simd: int = Decision(domain=divisors_of(lanes))
+
+    @derived
+    def split(self) -> bool:
+        return self.simd >= 2
+
+    pumped: bool = Decision(
+        values=(False, True),
+        requires=(requires(split, "pumped-split: pumping needs two lanes", cases=(True,)),),
+    )
+
+    @constraint
+    def divides(self) -> bool | Rejected:
+        if self.width % self.pe:
+            return reject("lanes-divide", "the lanes do not divide the width")
+        return True
+
+    @constraint
+    def fits(self) -> bool | Rejected:
+        if self.width > 8:
+            return reject("too-wide", "the core takes widths up to 8")
+        return True
+
+    admission = ConstraintGroup(divides, fits)
+
+
+class Folder(Space):
+    width: int = Param()
+    compute: Folded = Decision({"core": Folded}, width=width)
+
+
+def folder_change(point: Space, **values: object) -> dict[Any, object]:
+    return {reference_of(point, f"compute.core.{name}"): value for name, value in values.items()}
+
+
+def refusals(report: Any) -> dict[str, set[tuple[str, str]]]:
+    """The owners a report refuses, each with its findings' codes and owners."""
+    return {
+        outcome.owner: {(item.code, item.owner) for item in outcome.result.findings}
+        for outcome in report.outcomes
+        if outcome.status == "refused"
+    }
+
+
+def test_a_choice_whose_domain_reads_its_core_is_refused_by_its_own_finding() -> None:
+    # MatMul's shape: the selector is forced to the one core while `pe` is open. `pe = 3`
+    # fails its domain (3 does not divide 4), and that is also why the core's admission
+    # refuses, so the configuration the change would publish has no case. The domains read
+    # the core's `lanes`, under the case's guard: each choice's own check is read with its
+    # guard's case assumed. `pe` is refused with its own finding beside the selector's; `simd`
+    # and `pumped`, whose own checks hold, are not refused through the selector. Both readings.
+    point = design_space(Folder(width=4))
+    assert isinstance(point.compute, Folded)
+    change = folder_change(point, pe=3, simd=2, pumped=False)
+    for report in (point.try_with_choices(change), point.try_with_facts({}, change)):
+        assert not report.accepted
+        assert refusals(report) == {
+            "compute.core.pe": {
+                ("domain-membership", "compute.core.pe"),
+                ("decision-no-viable-case", "compute"),
+            }
+        }
+    # A requirement reading another choice of the core reads it through that choice's own
+    # check, in the configuration with the case assumed: one lane cannot be pumped.
+    change = folder_change(point, pe=3, simd=1, pumped=True)
+    assert refusals(point.try_with_choices(change)) == {
+        "compute.core.pe": {
+            ("domain-membership", "compute.core.pe"),
+            ("decision-no-viable-case", "compute"),
+        },
+        "compute.core.pumped": {
+            ("pumped-split", "compute.core.pumped"),
+            ("decision-no-viable-case", "compute"),
+        },
+    }
+
+
+def test_an_admission_under_a_refused_selector_records_what_its_own_check_read() -> None:
+    # At 12 the core refuses whatever its choices are (past 8), so the selector is refused,
+    # and its verdict reads no choice of the core. `pumped`'s own check holds with two lanes:
+    # admitted, the configuration reading it refused through its guard. Its check read `simd`
+    # with the case assumed, so a change to one lane reaches it (the selector, all the guard
+    # read, is stable): it is checked again and refused, as a configuration built from
+    # nothing refuses it.
+    point = design_space(Folder(width=12))
+    two = point.try_with_choices(folder_change(point, simd=2, pumped=True))
+    assert two.accepted
+    assert isinstance(state_of(two.instance, "compute.core.pumped"), Rejected)
+    one = two.instance.try_with_choices(folder_change(two.instance, simd=1))
+    built = design_space(Folder(width=12))
+    cold = built.try_with_choices(folder_change(built, simd=1, pumped=True))
+    assert not one.accepted and not cold.accepted
+    pumped = {("pumped-split", "compute.core.pumped"), ("decision-no-viable-case", "compute")}
+    assert refusals(one) == refusals(cold) == {"compute.core.pumped": pumped}
 
 
 # -- a choice admitted under a selector that stays refused ----------------------------------------

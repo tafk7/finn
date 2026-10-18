@@ -182,6 +182,24 @@ def test_invalid_configuration_fails_during_construction(changes, match):
         assembly(**changes)
 
 
+def test_a_folding_factor_outside_its_domain_is_refused_by_its_own_finding_alone():
+    """PE 3 divides neither extent, and that is also why no core is viable once it is
+    committed. It is refused with its own finding (the selector's beside it); SIMD and
+    pumping, committed with it, whose own values hold, are not refused through the
+    selector."""
+    trial = matmul_point(**FACTS).trial(
+        {
+            ("matmul", "compute.packed.pe"): 3,
+            ("matmul", "compute.packed.simd"): 2,
+            ("matmul", "compute.packed.compute_pumping"): False,
+        },
+        check=False,
+    )
+    assert list(trial.refused) == [("matmul", "compute.packed.pe")]
+    found = {(item.code, item.owner) for item in trial.refused[("matmul", "compute.packed.pe")]}
+    assert ("domain-membership", "compute.packed.pe") in found
+
+
 def test_weights_that_are_not_integers_are_unrecognized_as_the_weights_value() -> None:
     with refused("literal-unrecognized", error=DefinitionError, message="integer tensor"):
         assembly(weight_delivery=WeightDelivery.MEMSTREAM, weights=[[0.5] * 4] * 4)
