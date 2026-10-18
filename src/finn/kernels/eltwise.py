@@ -20,7 +20,6 @@ import math
 import struct
 
 from finn.core.space import (
-    ConstraintGroup,
     Decision,
     Param,
     Rejected,
@@ -135,8 +134,6 @@ class EltwiseKernel(LeafKernel):
                 if isinstance(admitted, Rejected):
                     return admitted
         return True
-
-    admission = ConstraintGroup(implementation_supported, operands_supported)
 
     @derived
     def indices(self) -> tuple[Index, ...]:

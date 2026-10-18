@@ -128,7 +128,7 @@ def test_its_module_takes_pe_and_the_function_on_native_pins() -> None:
 
 
 @pytest.mark.parametrize("function", FUNCTIONS)
-def test_each_function_is_admitted_on_dsp58(function: str) -> None:
+def test_each_function_is_valid_on_dsp58(function: str) -> None:
     assert not rejected(placed_case(case(function, (2, 8))))
 
 

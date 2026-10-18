@@ -29,7 +29,6 @@ KernelOp reaches it: ``tests/support/kernel_specs/pwpolyf.py``.
 from __future__ import annotations
 
 from finn.core.space import (
-    ConstraintGroup,
     Decision,
     Param,
     Rejected,
@@ -161,8 +160,6 @@ class PwPolyKernel(LeafKernel):
         if self.platform.dsp is not DspBlock.DSP58:
             return reject("pwpolyf-target", "the polynomial's DSPFP32 chain requires DSP58")
         return True
-
-    admission = ConstraintGroup(function_supported, element_supported, target_supported)
 
     @derived
     def clocking(self) -> Clocking:
