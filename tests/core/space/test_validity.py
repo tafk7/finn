@@ -47,6 +47,7 @@ from finn.core.space import (
     inspection,
     occurrence,
     reject,
+    selected,
     view,
 )
 from finn.core.space.inspection import Piece, Validity
@@ -539,11 +540,158 @@ class Pair(Space):
         return True
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="a value case is tried against the constraints of its Decision's Space and of the "
-    "Spaces it places; an ancestor's constraint reading it is not tried yet",
-)
 def test_an_ancestors_constraint_reading_a_decision_rules_out_its_cases() -> None:
     point = commit(design_space(Pair()), {"first.factor": 2})
     assert forced(point) == {"second.factor": 2}
+    (item,) = inspection.forced(point)
+    assert {case: "disagree" in why for case, why in item.refused.items()} == {"1": True, "3": True}
+    # Open, the constraint reads both and refuses no case of either.
+    assert forced(design_space(Pair())) == {}
+
+
+class Source(Space):
+    width: int = Decision(values=(3, 4))
+
+
+class Wired(Space):
+    source = Source()
+    sink = Narrowing(width=source.width)
+
+
+def test_a_siblings_constraint_reading_a_decision_through_a_formal_rules_out_its_cases() -> None:
+    point = design_space(Wired())
+    assert forced(point) == {"source.width": 4}
+    (item,) = inspection.forced(point)
+    assert "odd" in item.refused["3"]
+
+
+class Capped(Space):
+    """A constraint that reads another choice before the Decision below it."""
+
+    gate: int = Decision(values=(1, 2))
+    inner = Twin()
+
+    @constraint
+    def capped(self) -> bool | Rejected:
+        if self.gate == 2 and self.inner.factor > 1:
+            return reject("capped", "the factor is capped at 1 behind the gate")
+        return True
+
+
+def test_a_decisions_verdict_reads_what_a_constraint_waited_on_before_reading_it() -> None:
+    base = design_space(Capped())
+    # While the gate is open the constraint stops there and does not read the factor, which
+    # stays open; its verdict still read the gate, so committing it reaches the verdict.
+    assert {item.key: item.cases for item in inspection.viable(base)}["inner.factor"] == (1, 2, 3)
+    report = base.try_with_choices({Capped.gate: 2})
+    assert report.accepted
+    assert forced(report.instance) == {"inner.factor": 1}
+    assert forced(commit(design_space(Capped()), {"gate": 2})) == {"inner.factor": 1}
+
+
+class Small(Space):
+    pass
+
+
+class Large(Space):
+    pass
+
+
+class Chooser(Space):
+    """The owner's constraint reads its own selector, then a formal and another choice."""
+
+    strict: bool = Param()
+    other: int = Decision(values=(1, 2))
+    core: Small | Large = Decision({"small": Small, "large": Large})
+    which = selected(core)
+
+    @constraint
+    def allowed(self) -> bool | Rejected:
+        if self.which == "small" and self.strict and self.other == 2:
+            return reject("small-ruled-out", "the small core is ruled out")
+        return True
+
+
+def test_a_selectors_case_is_tried_against_its_owners_constraint_reading_the_selector() -> None:
+    point = design_space(Chooser(strict=True))
+    # While the other choice is open, the constraint waits for it: both cores are possible.
+    assert {item.key: item.cases for item in inspection.viable(point)} == {
+        "other": (1, 2),
+        "core": ("small", "large"),
+    }
+    # A change commits the other choice: the selector's verdict read it, through the
+    # constraint, so the successor finds it again and forces the large core.
+    report = point.try_with_choices({Chooser.other: 2})
+    assert report.accepted
+    assert forced(report.instance) == {"core": "large"}
+    (item,) = inspection.forced(report.instance)
+    assert "small-ruled-out" in item.refused["small"]
+    assert forced(commit(design_space(Chooser(strict=True)), {"other": 2})) == {"core": "large"}
+
+
+def test_a_selectors_verdict_is_found_again_under_other_facts_its_owners_constraint_read() -> None:
+    point = commit(design_space(Chooser(strict=False)), {"other": 2})
+    assert forced(point) == {}
+    report = point.try_with_facts({Chooser.strict: True})
+    assert report.accepted
+    assert forced(report.instance) == {"core": "large"}
+    assert forced(report.instance) == forced(
+        commit(design_space(Chooser(strict=True)), {"other": 2})
+    )
+
+
+class Storage(Space):
+    style: str = Decision(values=("lut", "bram"))
+
+
+class Queue(Space):
+    storage = Storage()
+
+
+class Wire(Space):
+    pass
+
+
+class Channel(Space):
+    """A channel's constraint reads its own transport selector, and a choice two Spaces
+    below it, inside the selector's candidate."""
+
+    depth: int = Param()
+    transport: Queue | Wire = Decision({"queue": Queue, "wire": Wire})
+
+    @constraint
+    def compatible(self) -> bool | Rejected:
+        transport = self.transport
+        if isinstance(transport, Wire):
+            return True if self.depth == 0 else reject("wire-depth", "a wire holds no data")
+        if self.depth > 32 and transport.storage.style == "lut":
+            return reject("lut-depth", "a deep queue needs block RAM")
+        return True
+
+
+def test_an_ancestors_constraint_forces_its_own_selector_and_a_choice_two_spaces_below() -> None:
+    assert forced(design_space(Channel(depth=0))) == {}
+    shallow = design_space(Channel(depth=8))
+    assert forced(shallow) == {"transport": "queue"}
+    deep = design_space(Channel(depth=64))
+    assert forced(deep) == {"transport": "queue", "transport.queue.storage.style": "bram"}
+    reasons = {item.key: item.refused for item in inspection.forced(deep)}
+    assert "wire-depth" in reasons["transport"]["wire"]
+    assert "lut-depth" in reasons["transport.queue.storage.style"]["'lut'"]
+    # Under other facts, the choice below the selector is found again.
+    report = shallow.try_with_facts({Channel.depth: 64})
+    assert report.accepted and forced(report.instance) == forced(deep)
+    # A stored choice there that the constraint refuses: the commit is accepted (its own
+    # check holds), and the selector's trial reads it, so the queue is not possible either:
+    # the transport has no possible case, and the configuration is refused naming it.
+    stored = commit(deep, {"transport.queue.storage.style": "lut"})
+    assert forced(stored) == {}
+    (transport,) = inspection.viable(stored)
+    assert transport.key == "transport" and transport.cases == ()
+    assert "lut-depth" in transport.refused["queue"] and "wire-depth" in transport.refused["wire"]
+    validity = inspection.validity(stored)
+    assert validity.status == "refused" and {"compatible", "transport"} <= set(owners(validity))
+    # Shallow, the same stored choice leaves the queue possible, and forced.
+    assert forced(commit(shallow, {"transport.queue.storage.style": "lut"})) == {
+        "transport": "queue"
+    }

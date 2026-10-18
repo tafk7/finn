@@ -116,11 +116,13 @@ class Mutual(Space):
 
 class Gated(Space):
     """``x`` is forced while ``y`` is open, and its verdict reads ``y`` open. A change to
-    ``gate`` forces ``y`` too, which ``x``'s verdict then did not see."""
+    ``gate`` forces ``y`` too, which ``x``'s verdict then did not see. ``x``'s case reads
+    ``y`` and then ``gate``, so while ``gate`` is open no case of ``y`` refuses it, and
+    ``y`` stays open."""
 
     @derived
     def y_is_a(self) -> bool:
-        return isinstance(self.y, Unless)
+        return isinstance(self.y, Unless) and self.gate == 2
 
     @derived
     def gate_shut(self) -> bool:

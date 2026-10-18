@@ -8,17 +8,17 @@ configuration's commitments, and each snapshot finds its own. The public reads a
 in ``inspection``: ``forced`` and ``viable`` report the verdicts, ``validity``
 a Space's answer.
 
-A case of a Decision over nodes is **viable** (possible) when the candidate it
-places is not refused, its validity read in the configuration plus the case (a
-Space refuses as soon as one of its pieces does, whatever else it still waits on). A
-validity still waiting on an open choice, with nothing refused, does not refuse, and
-the Decision's owner is not consulted. A case of a Decision over values is viable
-unless a constraint that reads the Decision refuses it, read in the configuration
-plus the case (a **trial**); the constraints read are those of the Space that owns
-the Decision and of every Space it places, at any depth (``_rules``), and a
-Decision none of them reads costs no trial. One viable case forces the Decision,
-several leave it open, and none refuses it (``decision-no-viable-case``, each case
-with its reason): the same for both kinds.
+A case of an open Decision is **viable** (possible) unless a constraint that reads the
+Decision refuses it, read in the configuration plus the case (a **trial**), and, for a
+Decision over nodes, unless the candidate it places is refused, its validity read in
+the same trial (a Space refuses as soon as one of its pieces does, whatever else it
+still waits on). The constraints are every one whose evaluation may read the Decision,
+wherever it is owned: its own Space's, a placed Space's, an ancestor's, or one that
+reads it through a formal (``_rules``); a selector's are those outside its candidates.
+A constraint or a validity still waiting on an open choice, with nothing refused, does
+not refuse, and a Decision over values none of the constraints reads costs no trial.
+One viable case forces the Decision, several leave it open, and none refuses it
+(``decision-no-viable-case``, each case with its reason): the same for both kinds.
 
 A snapshot finds its forced Decisions once, on the first read of an open
 Decision: rounds over the open Decisions in rank order, each forced value
@@ -51,16 +51,17 @@ each, and the formals it read, and is reused while none of them changed: within 
 rounds, and by a successor from its base, so a change re-checks only the verdicts it
 reaches. A configuration with other values for a formal (``try_with_facts``) finds
 again the verdicts that read it. A forced Decision whose verdict read a Decision the
-rounds forced after it (a choice inside the candidate it forces, read by a constraint
-there) keeps that verdict as its step of the derivation, and is given the verdict found
-again under the final values (``Verdict.settled``), which the final check and a change's
-reach read.
+rounds forced after it (one a constraint reading the first reads too, such as a choice
+inside the candidate it forces) keeps that verdict as its step of the derivation, and is
+given the verdict found again under the final values (``Verdict.settled``), which the
+final check and a change's reach read.
 
 A selector's verdict rests on its candidates' validity, read on copies where an open
 Decision reads as unassigned and a stored one as its value: there a Decision's piece
-refuses only through its guard, so the verdict records the reads of the constraints, the
-guards and the placed Spaces' validity, not the Decisions inside the candidate
-(``_refusal_roots``), and a choice committed inside a candidate does not reach it.
+refuses only through its guard, so the verdict records the reads of the constraints,
+the guards and the placed Spaces' validity, not the Decisions inside the candidate
+(``_refusal_roots``), and a choice committed inside a candidate does not reach it unless
+a constraint reading the selector reads it.
 """
 
 from __future__ import annotations
@@ -110,8 +111,8 @@ class Verdict:
     applicable, and known by its domain's membership only.
 
     ``settled``: for a forced Decision whose verdict read a Decision still open that the
-    rounds forced later (a choice inside the candidate it forces, which a constraint
-    there reads), the verdict found again under the rounds' final values with the
+    rounds forced later (one that a constraint reading it reads too, such as a choice
+    inside the candidate it forces), the verdict found again under the rounds' final values with the
     Decision itself open, which forces the same case. This verdict stays the step of the
     derivation a successor replays; the settled one is what the final values give, which
     the rounds' final check and a change's reach read (``_settle``)."""
@@ -272,22 +273,136 @@ def validity(snapshot: Snapshot, scope: int) -> tuple[QueryResult[object], int]:
     return _runtime.evaluate(snapshot, index).result, index
 
 
-def _rules(model: Model[Space], scope: int) -> tuple[int, ...]:
-    """The constraints of ``scope`` and of every scope it places, at any depth: the
-    constraints a value Decision of ``scope`` is tried against. Found once per model and
-    scope and kept with the model."""
-    key = ("rules", scope)
+def _rules(model: Model[Space], index: int) -> tuple[int, ...]:
+    """The constraints that may read the Decision ``index`` in some configuration, wherever
+    they are owned: those a case of it is tried against. For a Decision over nodes, not
+    those of its candidates (the candidate's validity counts them, and a candidate not
+    selected leaves them inactive). Found once per model and Decision and kept with the
+    model (``_may_read``)."""
+    key = ("rules", index)
     found = model._read.get(key)
     if found is None:
         linked = model.linked
-        below = {scope}
-        for item in linked.scopes:  # a scope is allocated after its parent
-            if item.parent in below:
-                below.add(item.index)
-        found = model._read[key] = tuple(
-            node.index for node in linked.nodes if node.kind == "constraint" and node.scope in below
-        )
+        rules = _may_read(model).get(index, ())
+        choice = linked.selector_choices.get(index)
+        if choice is not None:
+            inside = _below(linked, [scope for _, scope in linked.choices[choice].cases])
+            rules = tuple(rule for rule in rules if linked.nodes[rule].scope not in inside)
+        found = model._read[key] = rules
     return cast(tuple[int, ...], found)
+
+
+def _below(linked: LinkedModel, scopes: Iterable[int | None]) -> set[int]:
+    """``scopes`` (None aside) and every scope placed under one of them, at any depth."""
+    below = {scope for scope in scopes if scope is not None}
+    for item in linked.scopes:  # a scope is allocated after its parent
+        if item.parent in below:
+            below.add(item.index)
+    return below
+
+
+def _may_read(model: Model[Space]) -> Mapping[int, tuple[int, ...]]:
+    """For each Decision, the constraints whose evaluation may read it in some
+    configuration: those from which it is reached through the nodes' structural edges
+    (``Node.dependencies``; a Decision's read reads its guard only), where a callback
+    called on its Space (``self``) may read any node of its Space and of every Space
+    below it. Found once per model and kept with it.
+
+    A constraint that did not read a Decision in one configuration may read it in another
+    (it waited on another choice first, or took another branch), so a Decision's verdict
+    records what every one of these read, not only what its readers did; one that can
+    never read it is left out, so a change to what it reads does not reach the verdict."""
+    key = ("may read", 0)
+    found = model._read.get(key)
+    if found is None:
+        found = model._read[key] = _readers_index(model.linked)
+    return cast(Mapping[int, tuple[int, ...]], found)
+
+
+def _readers_index(linked: LinkedModel) -> Mapping[int, tuple[int, ...]]:
+    """``_may_read``: the read graph's strongly connected components (Tarjan's, iterative;
+    a node ``n`` of scope ``s`` has the successor ``len(nodes) + s`` when called on its
+    Space, and that one every node of ``s`` and the same for each scope placed in ``s``),
+    each with the Decisions reached from it as a bit set, found sinks first."""
+    nodes, scopes = linked.nodes, linked.scopes
+    size = len(nodes)
+    in_scope: list[list[int]] = [[] for _ in scopes]
+    for node in nodes:
+        in_scope[node.scope].append(node.index)
+    for item in scopes:
+        if item.parent is not None:
+            in_scope[item.parent].append(size + item.index)
+    bit = {decision: 1 << ordinal for ordinal, decision in enumerate(linked.decisions)}
+
+    def successors(vertex: int) -> tuple[int, ...]:
+        if vertex >= size:
+            return tuple(in_scope[vertex - size])
+        node = nodes[vertex]
+        if node.kind == "decision":
+            return () if node.guard is None else (node.guard,)
+        edges = (*node.dependencies, *(source for _, source in node.via))
+        return (*edges, size + node.scope) if node.call_style == "self" else edges
+
+    total = size + len(scopes)
+    order = [0] * total  # discovery order + 1; 0: not visited
+    low = [0] * total
+    component = [-1] * total
+    masks: list[int] = []
+    stack: list[int] = []
+    counter = 0
+    for root in range(total):
+        if order[root]:
+            continue
+        counter += 1
+        order[root] = low[root] = counter
+        stack.append(root)
+        frames = [(root, iter(successors(root)))]
+        while frames:
+            vertex, pending = frames[-1]
+            advanced = False
+            for child in pending:
+                if not order[child]:
+                    counter += 1
+                    order[child] = low[child] = counter
+                    stack.append(child)
+                    frames.append((child, iter(successors(child))))
+                    advanced = True
+                    break
+                if component[child] < 0:
+                    low[vertex] = min(low[vertex], order[child])
+            if advanced:
+                continue
+            frames.pop()
+            if frames:
+                parent = frames[-1][0]
+                low[parent] = min(low[parent], low[vertex])
+            if low[vertex] != order[vertex]:
+                continue
+            # ``vertex`` roots a component: every component it reaches is found already.
+            members: list[int] = []
+            while True:
+                member = stack.pop()
+                component[member] = len(masks)
+                members.append(member)
+                if member == vertex:
+                    break
+            mask = 0
+            for member in members:
+                mask |= bit.get(member, 0)
+                for child in successors(member):
+                    if component[child] != len(masks):
+                        mask |= masks[component[child]]
+            masks.append(mask)
+    readers: dict[int, list[int]] = {}
+    for node in nodes:
+        if node.kind != "constraint":
+            continue
+        mask = masks[component[node.index]]
+        while mask:
+            lowest = mask & -mask
+            readers.setdefault(linked.decisions[lowest.bit_length() - 1], []).append(node.index)
+            mask ^= lowest
+    return MappingProxyType({decision: tuple(each) for decision, each in readers.items()})
 
 
 def _describe(result: Rejected) -> str:
@@ -406,68 +521,56 @@ def _unchanged(
     return True
 
 
-def _nodes(
-    current: Snapshot, index: int, choice: Choice, candidates: tuple[object, ...]
+def _cases(
+    current: Snapshot, index: int, candidates: tuple[object, ...], choice: Choice | None
 ) -> tuple[tuple[object, ...], dict[str, str], dict[int, object], frozenset[int]]:
-    """A Decision over nodes' viable cases: those whose candidate's validity does not
-    refuse in the configuration plus the case, and what the validity read: the Decisions
-    with the values seen, and the formals."""
-    scopes = dict(choice.cases)
+    """An open Decision's viable cases: those that no constraint reading the Decision
+    refuses in the configuration plus the case (a **trial**), nor, for a Decision over
+    nodes, the candidate's validity; why each other case is not viable; and what was read:
+    the Decisions with the values seen, and the formals.
+
+    The constraints are every one that may read the Decision, wherever it is owned
+    (``_rules``), each read in ``current`` with the Decision open: one whose evaluation
+    read the Decision (directly or through another) is tried with each case assumed; one
+    that did not answers the same whatever the case. What every one of them read is the
+    verdict's, since a constraint that stopped before the Decision (it waits on another
+    choice) may read it once that choice is made. A case a constraint waits on is still
+    viable. A Decision over values none of them reads costs no trial; a Decision over
+    nodes tries each case that places a Space, against its candidate's validity
+    (``_refusal_roots``: the reads it rests on)."""
+    rules = _rules(current.model, index)
+    readers = [rule for rule in rules if index in _runtime.evaluate(current, rule).decisions]
+    reads = _reads(current, rules, index)
+    facts = set(_facts(current, rules))
+    scopes = {} if choice is None else dict(choice.cases)
     viable: list[object] = []
     reasons: dict[str, str] = {}
-    reads: dict[int, object] = {}
-    facts: set[int] = set()
     for case in candidates:
-        scope = scopes[str(case)]
-        if scope is None:
+        scope = scopes.get(str(case))
+        if scope is None and not readers:
             viable.append(case)
             continue
         # The configuration plus the case, without revalidating the rest: a committed
         # choice nested under a selector not forced yet is not this case's refusal.
         trial = _extended(current, {**current.assignments, index: case}, index)
-        verdict, node = validity(trial, scope)
-        roots = _refusal_roots(trial, node)
-        reads.update(_reads(trial, roots, index))
-        facts |= _facts(trial, roots)
-        if isinstance(verdict, Rejected):
-            reasons[str(case)] = _describe(verdict)
-            continue
-        viable.append(case)
-    return tuple(viable), reasons, reads, frozenset(facts)
-
-
-def _values(
-    current: Snapshot, index: int, candidates: tuple[object, ...]
-) -> tuple[tuple[object, ...], dict[str, str], dict[int, object], frozenset[int]]:
-    """A Decision over values' viable cases: those that no constraint reading the
-    Decision refuses in the configuration plus the case, and what was read (as
-    ``_nodes``).
-
-    The constraints are its Space's and its placed Spaces' (``_rules``), each read in
-    ``current`` with the Decision open: one whose evaluation read the Decision (directly
-    or through another) is tried with each case assumed; one that did not answers the
-    same whatever the case. What every one of them read is the verdict's, since a
-    constraint that stopped before the Decision (it waits on another choice) may read it
-    once that choice is made. A case a constraint waits on is still viable."""
-    rules = _rules(current.model, current.linked.nodes[index].scope)
-    readers = [rule for rule in rules if index in _runtime.evaluate(current, rule).decisions]
-    reads = _reads(current, rules, index)
-    facts = set(_facts(current, rules))
-    if not readers:
-        return candidates, {}, reads, frozenset(facts)
-    viable: list[object] = []
-    reasons: dict[str, str] = {}
-    for case in candidates:
-        trial = _extended(current, {**current.assignments, index: case}, index)
-        refused = [
-            answer
-            for rule in readers
-            if isinstance(answer := _runtime.evaluate(trial, rule).result, Rejected)
-        ]
+        refused: list[Rejected] = []
+        if scope is not None:
+            verdict, node = validity(trial, scope)
+            roots = _refusal_roots(trial, node)
+            reads.update(_reads(trial, roots, index))
+            facts |= _facts(trial, roots)
+            if isinstance(verdict, Rejected):
+                refused.append(verdict)
+        for rule in readers:
+            answer = _runtime.evaluate(trial, rule).result
+            if isinstance(answer, Rejected):
+                refused.append(answer)
         reads.update(_reads(trial, readers, index))
         facts |= _facts(trial, readers)
         if refused:
-            reasons[repr(case)] = "; ".join(_describe(answer) for answer in refused)
+            reasons[str(case) if choice is not None else repr(case)] = "; ".join(
+                _describe(answer) for answer in refused
+            )
         else:
             viable.append(case)  # waiting on an open choice is not a refusal
     return tuple(viable), reasons, reads, frozenset(facts)
@@ -492,10 +595,9 @@ def _verdict(current: Snapshot, index: int) -> Verdict:
         return Verdict(None, {}, reads, isinstance(listed.result, Available), facts)
     candidates = tuple(cast("Iterable[object]", listed.result.value))
     choice = linked.selector_choices.get(index)
-    if choice is not None:
-        cases, reasons, more, seen = _nodes(current, index, linked.choices[choice], candidates)
-    else:
-        cases, reasons, more, seen = _values(current, index, candidates)
+    cases, reasons, more, seen = _cases(
+        current, index, candidates, None if choice is None else linked.choices[choice]
+    )
     return Verdict(
         cases,
         MappingProxyType(reasons),
@@ -644,8 +746,8 @@ def _settle(
     settled verdict (``Verdict.settled``): found again on a copy of ``current`` (which
     holds every forced value) with the Decision itself open, kept where it forces the
     same case. One found before is reused while it holds. A verdict is found again only
-    where a Decision it read open was forced after it: a choice inside a candidate the
-    Decision forces, read by a constraint there."""
+    where a Decision it read open was forced after it: one a constraint reading the
+    Decision reads too, such as a choice inside a candidate the Decision forces."""
     linked = snapshot.linked
     final = {**snapshot.assignments, **values}
     for index, value in values.items():
