@@ -345,9 +345,11 @@ ROWS: tuple[Row, ...] = (
         "two-case selector is accepted and kept unchecked, not refused as inactive",
         f"{_CASES}::test_a_choice_waiting_on_a_fact_under_two_cases_is_kept_unchecked",
         "trial-reads-waiting",
-        "unclassified, placed beside case-trial-reads-unchecked: the engine's trial reads the "
-        "value, refuses the case and forces the other; with three cases it lists the case, "
-        "as the model does",
+        "beside case-trial-reads-unchecked, outside-domain-forcing and "
+        "inactive-under-refused-selector, one fault: a change's trial iteration reaches the "
+        "least fixed point from nothing readable and takes no refusal from a pass that read a "
+        "candidate before its check could conclude; with three cases the engine lists the "
+        "case, as the model does",
     ),
     Row(
         "nested-conflict-choice",
