@@ -216,6 +216,7 @@ def agrees(expected: Form, engine: Form) -> bool:
 
 
 def _check(case: str, question: str, expected: Form, engine: Form) -> None:
+    __tracebackhide__ = True  # a disagreement is shown at the test's question
     if not agrees(expected, engine):
         raise Disagreement(case, question, expected, engine)
 
@@ -264,23 +265,28 @@ class Pair:
     # -- the questions
 
     def check_state(self, path: str, *, ruled: StateForm | None = None) -> None:
+        __tracebackhide__ = True
         expected = ruled or state_form(self.solution(), path)
         _check(self.case.name, f"the state of {path}", expected, self.engine.state(path))
 
     def check_answer(self, path: str, *, ruled: AnswerForm | None = None) -> None:
+        __tracebackhide__ = True
         expected = ruled or answer_form(self.solution(), path)
         _check(self.case.name, f"the answer of {path}", expected, self.engine.answer(path))
 
     def check_rule(self, path: str, *, ruled: RuleForm | None = None) -> None:
+        __tracebackhide__ = True
         expected = ruled or rule_form(self.solution(), path)
         _check(self.case.name, f"the rule {path}", expected, self.engine.rule(path))
 
     def check_validity(self, *, ruled: ValidityForm | None = None) -> None:
+        __tracebackhide__ = True
         expected = ruled or validity_form(self.solution())
         _check(self.case.name, "validity", expected, self.engine.validity())
 
     def check_possible(self, path: str, *, ruled: tuple[Any, ...] | None = None) -> None:
         """An open choice's possible cases (its forced value, or none when refused)."""
+        __tracebackhide__ = True
         solution = self.solution()
         expected = state_form(solution, path)
         if ruled is not None:
@@ -291,6 +297,7 @@ class Pair:
         self, edit: reference.Change, *, ruled: ChangeForm | None = None
     ) -> Pair | None:
         """``edit`` compared; the successor where both accept it."""
+        __tracebackhide__ = True
         result = reference.change(self.model, edit)
         if ruled is None:
             successor = _published(self.model, edit)
@@ -314,6 +321,7 @@ def check_definition(
     none, against the engine's. The engine reports a cycle when building the Space, or
     when asked (its validity, every rule and every view of the configuration with
     ``facts``), as a dependency cycle; it answers otherwise."""
+    __tracebackhide__ = True
     try:
         description.validate()
         expected = DefinitionForm(None)

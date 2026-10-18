@@ -14,7 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from core.space import reference, test_reference_cases, test_reference_rules
+from core.space import (
+    reference,
+    test_reference_cases,
+    test_reference_rules,
+    test_reference_scopes,
+)
 from core.space.reference import Change, Choice, Scope, Selector, Space, listed
 from core.space.reference_harness import (
     MILESTONES,
@@ -59,7 +64,7 @@ def test_the_model_imports_the_standard_library_only() -> None:
 
 def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() -> None:
     assert ROWS
-    assert not problems([test_reference_cases, test_reference_rules])
+    assert not problems([test_reference_cases, test_reference_rules, test_reference_scopes])
 
 
 def test_the_matrix_prints_as_a_markdown_table_in_milestone_order() -> None:

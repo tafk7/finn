@@ -41,6 +41,7 @@ pytestmark = pytest.mark.usefixtures("index_path")
 def reach(pair: Pair, edit: Change) -> Pair:
     """``edit`` compared, then its successor: a change the model accepts and the engine
     refuses is a disagreement, so a question about its configuration cannot be asked."""
+    __tracebackhide__ = True
     successor = pair.check_change(edit)
     assert successor is not None, "the model refuses the change: the test is written wrongly"
     return successor

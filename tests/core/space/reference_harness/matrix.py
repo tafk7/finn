@@ -293,6 +293,162 @@ ROWS: tuple[Row, ...] = (
         f"{_RULES}::test_a_change_only_the_bases_forced_core_would_refuse_is_accepted",
         "stale-forced",
     ),
+    # -- views, nested scopes, look-ahead (case 9, the composing cores' two)
+    Row(
+        "view-of-refused-space",
+        "lane 1",
+        "a view refuses when its Space is refused, every view, not only one with obligations",
+        f"{_SCOPES}::test_a_view_refuses_when_its_space_is_refused",
+        "view-of-refused-space",
+    ),
+    Row(
+        "cycle-storage-view",
+        "lane 1",
+        "a view refuses when its Space is refused, so a constraint on a storage view of its "
+        "own Space is a dependency cycle the engine reports",
+        f"{_SCOPES}::test_a_constraint_on_a_storage_view_of_its_own_space_is_a_cycle",
+        "view-cycle",
+    ),
+    Row(
+        "cycle-by-name",
+        "lane 1",
+        "a view refuses when its Space is refused, so a constraint reading views of its own "
+        "Space by name is a dependency cycle the engine reports",
+        f"{_SCOPES}::test_a_constraint_reading_views_of_its_own_space_by_name_is_a_cycle",
+        "view-cycle",
+    ),
+    Row(
+        "cycle-own-stages",
+        "lane 1",
+        "a view refuses when its Space is refused, so a parent's constraint reading its "
+        "children's stages through its own view is a dependency cycle the engine reports",
+        f"{_SCOPES}::test_a_parent_reading_its_childrens_stages_through_its_own_view_is_a_cycle",
+        "view-cycle",
+    ),
+    Row(
+        "nested-outer-forced",
+        "lane 1",
+        "a selector's case is tried against the constraints reading the selector, so a "
+        "parent's rule refusing one kernel forces the other",
+        f"{_SCOPES}::test_forcing_selects_the_outer_kernel",
+        "selector-case-trial",
+    ),
+    Row(
+        "nested-inner-forced",
+        "lane 1",
+        "a selector's case is tried against the constraints reading the selector, so the core "
+        "inside the forced kernel is forced too",
+        f"{_SCOPES}::test_forcing_selects_the_core_inside_the_forced_kernel",
+        "selector-case-trial",
+    ),
+    Row(
+        "nested-possible",
+        "lane 1",
+        "a selector's case is tried against the constraints reading the selector, so a choice "
+        "three deep under the forced selectors lists its possible cases",
+        f"{_SCOPES}::test_a_choice_three_deep_under_forced_selectors_lists_its_possible_cases",
+        "selector-case-trial",
+    ),
+    Row(
+        "nested-commit-forced",
+        "lane 1",
+        "a selector's case is tried against the constraints reading the selector, so a commit "
+        "three deep under the forced selectors is accepted, checked",
+        f"{_SCOPES}::test_a_commit_three_deep_under_forced_selectors_is_accepted",
+        "selector-case-trial",
+        "lane 0 accepts it kept unchecked; lane 1 forces the selectors",
+    ),
+    Row(
+        "nested-readable",
+        "lane 1",
+        "a selector's case is tried against the constraints reading the selector, so a commit "
+        "three deep under the forced selectors is readable",
+        f"{_SCOPES}::test_a_commit_three_deep_under_forced_selectors_is_readable",
+        "selector-case-trial",
+        "lane 0 accepts it kept unchecked; lane 1 forces the selectors",
+    ),
+    Row(
+        "nested-commit-under-open-selectors",
+        "lane 0",
+        "a choice committed three deep under two open selectors is accepted and kept "
+        "unchecked, waiting on both, not refused",
+        f"{_SCOPES}::test_a_commit_three_deep_under_two_open_selectors_is_kept_unchecked",
+        "commit-waits",
+    ),
+    Row(
+        "nested-conflict-commit",
+        "lane 1",
+        "a value inside its domain three deep, whose core the forced selectors refuse, is "
+        "accepted, admitted under the refused core",
+        f"{_SCOPES}::test_a_commit_three_deep_in_a_conflict_with_the_forced_selectors_is_accepted",
+        "selector-case-trial",
+        "lane 0 accepts it kept unchecked; lane 1 forces the outer selector and refuses the "
+        "inner one",
+    ),
+    Row(
+        "nested-conflict-choice",
+        "lane 2",
+        "a committed choice in a conflict keeps its value, read refused through both selectors "
+        "the conflict refuses",
+        f"{_SCOPES}::test_a_choice_three_deep_in_a_conflict_keeps_its_value_refused_through_its_guards",
+        "conflict",
+    ),
+    Row(
+        "nested-conflict-outer",
+        "lane 2",
+        "a selector forced only because its other case is refused takes part in the conflict "
+        "with the choice three deep, refused naming the others",
+        f"{_SCOPES}::test_the_outer_selector_in_a_conflict_with_a_choice_three_deep_is_refused",
+        "conflict",
+    ),
+    Row(
+        "nested-conflict-inner",
+        "lane 2",
+        "a selector with no possible case takes part in the conflict with the choice three "
+        "deep, refused naming the others",
+        f"{_SCOPES}::test_the_inner_selector_in_a_conflict_with_a_choice_three_deep_is_refused",
+        "conflict",
+    ),
+    Row(
+        "nested-conflict-validity",
+        "lane 2",
+        "a conflict with a choice three deep refuses the configuration, as a conflict and the "
+        "selector's no possible value",
+        f"{_SCOPES}::test_a_conflict_with_a_choice_three_deep_refuses_the_configuration",
+        "conflict",
+    ),
+    Row(
+        "look-ahead-conflict",
+        "lane 2",
+        "a selector with no possible case is a conflict with the committed choice its "
+        "presence hangs on, refused naming it",
+        f"{_SCOPES}::test_the_selector_a_committed_case_puts_in_scope_has_no_possible_value",
+        "conflict",
+    ),
+    Row(
+        "look-ahead-conflict-validity",
+        "lane 2",
+        "a selector with no possible case under a committed case refuses the configuration as "
+        "a conflict besides its no possible value",
+        f"{_SCOPES}::test_the_selector_a_committed_case_puts_in_scope_refuses_the_configuration",
+        "conflict",
+    ),
+    Row(
+        "look-ahead-parent-rule",
+        "lane 1",
+        "a value case is tried against the constraints that read it, so a parent's rule over "
+        "the capabilities makes the case impossible and forces the other",
+        f"{_SCOPES}::test_a_parent_rule_over_the_capabilities_makes_the_case_impossible",
+        "value-case-trial",
+    ),
+    Row(
+        "look-ahead-inactive",
+        "lane 1",
+        "a value case is tried against the constraints that read it, so the selector under the "
+        "impossible case is inactive, not open",
+        f"{_SCOPES}::test_the_selector_under_the_impossible_case_is_inactive",
+        "value-case-trial",
+    ),
 )
 
 BY_ID = {row.id: row for row in ROWS}
