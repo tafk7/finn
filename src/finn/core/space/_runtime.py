@@ -286,7 +286,12 @@ class Snapshot:
     is stored and read **unresolved** until a change makes its check succeed, and forcing never
     seeds it or reads it as a value (``_decision_frame``); a read of a Decision answers the
     value or unresolved, and what a verdict or an evaluation records of one is that answer
-    (``_forcing.observed``). ``answers`` holds what
+    (``_forcing.observed``). ``input_refused`` holds those of them whose own check reads an
+    input that is itself refused (a derived value refusing on its facts): a refusal
+    elsewhere never refuses a commit, so each is kept and never read as a value; a
+    configuration that forces reads it refused through that input, with the input's
+    findings, and a copy that does not force reads it unresolved, as any unchecked one, so
+    the refusal is blamed once, at the input. ``answers`` holds what
     inspection answered of it, by question and scope (``inspection``), where the answer
     shares its values. The cache is an exact ``dict``, **only added to**: an evaluation is
     given by ``setdefault``, and none is replaced or removed once held, or ``readers`` would
@@ -311,6 +316,7 @@ class Snapshot:
     admissions: Mapping[int, frozenset[int]] = field(default_factory=dict, repr=False)
     admission_facts: Mapping[int, frozenset[int]] = field(default_factory=dict, repr=False)
     unchecked: frozenset[int] = field(default_factory=frozenset)
+    input_refused: frozenset[int] = field(default_factory=frozenset)
     cache: dict[int, Evaluation] = field(default_factory=new_cache, init=False, repr=False)
     readers: Readers | None = field(default=None, init=False, repr=False)
     made: int = field(default=0, init=False, repr=False)
@@ -535,6 +541,7 @@ class _TrialSnapshot(Snapshot):
         "_own",
         "_assumed",
         "_read_assumed",
+        "_through",
     )
 
     _pending: dict[int, object]
@@ -548,6 +555,7 @@ class _TrialSnapshot(Snapshot):
     _own: dict[int, QueryResult[object]]
     _assumed: dict[frozenset[tuple[int, str]], _TrialSnapshot]
     _read_assumed: set[int]
+    _through: set[int]
 
     def __init__(
         self,
@@ -556,6 +564,7 @@ class _TrialSnapshot(Snapshot):
         parameters: Mapping[int, object] | None = None,
         *,
         unchecked: frozenset[int] = _NONE,
+        input_refused: frozenset[int] = _NONE,
     ) -> None:
         facts = _NONE if parameters is None else changed_facts(base, parameters)
         super().__init__(
@@ -565,6 +574,7 @@ class _TrialSnapshot(Snapshot):
             base.lock,
             base.forcing,
             unchecked=unchecked,
+            input_refused=input_refused,
         )
         candidates = MappingProxyType(dict(candidates))
         touched = _touched(base, candidates, facts, unchecked)
@@ -592,6 +602,7 @@ class _TrialSnapshot(Snapshot):
         object.__setattr__(self, "_own", {})
         object.__setattr__(self, "_assumed", {})
         object.__setattr__(self, "_read_assumed", set())
+        object.__setattr__(self, "_through", set())
         object.__setattr__(self, "assignments", MappingProxyType(pending))
         object.__setattr__(self, "_pending", pending)
         object.__setattr__(self, "_candidates", candidates)
@@ -631,6 +642,7 @@ class _TrialSnapshot(Snapshot):
                 verdicts=verdicts,
                 carried=carried(base),
                 unchecked=self.unchecked,
+                input_refused=self.input_refused,
             )
             inherit(successor, base, [*self._touches, *changed])
             object.__setattr__(self, "_successor", successor)
@@ -683,9 +695,15 @@ class _TrialSnapshot(Snapshot):
     def own(self, index: int) -> QueryResult[object]:
         """The result of candidate ``index``'s own check in this trial, once it was read: true
         where it was admitted, the refusal where it was refused, unresolved where it cannot
-        conclude (``_candidate_frame``). A choice whose admission the trial reused was
-        admitted."""
+        conclude (``_candidate_frame``), and the input's refusal where it reads a refused
+        input (``through``). A choice whose admission the trial reused was admitted."""
         return self._own.get(index, Available(True))
+
+    def through(self) -> frozenset[int]:
+        """The candidates whose own check, read so far, reads an input that is itself
+        refused: none of them refuses the change; each is kept, refused through that input
+        (``Snapshot.input_refused``)."""
+        return frozenset(self._through)
 
     def assumed(self, node: Node) -> _TrialSnapshot | None:
         """The trial of this change with each selector case ``node``'s guard holds under
@@ -714,6 +732,7 @@ class _TrialSnapshot(Snapshot):
                 {**candidates, **committed},
                 self.parameters if self._changed else None,
                 unchecked=self.unchecked,
+                input_refused=self.input_refused,
             )
             self._assumed[key] = trial
         return trial
@@ -919,9 +938,16 @@ def _candidate_frame(snapshot: _TrialSnapshot, node: Node) -> _execution.Frame:
     guard that waits, its own check false refuses it with its own finding (a commit is a
     check of the value against its domain where the choice exists, which a value that can
     never hold there fails at once), and true or unresolved keeps it unchecked, waiting on
-    its guard. An inapplicable guard refuses it."""
+    its guard. An inapplicable guard refuses it.
+
+    Only a domain that answers false for the value refuses it: a refusal elsewhere never
+    does. Where an input of the domain is itself refused (a derived value refusing on its
+    facts), whatever the guard answers, the own check is that refusal and the choice is
+    kept (``through``), never read as a value: unresolved in this trial, and refused
+    through the input in the configuration published (``Snapshot.input_refused``)."""
     candidate = snapshot._candidates[node.index]
     inactive: NonValue | None = None
+    through = False
     if node.guard is not None:
         guard = cast(QueryResult[object], (yield node.guard))
         inactive = _guard_result(node, guard)
@@ -930,12 +956,14 @@ def _candidate_frame(snapshot: _TrialSnapshot, node: Node) -> _execution.Frame:
         if assumed is not None:
             evaluate(assumed, node.index)
             own = assumed.own(node.index)
+            through = node.index in assumed._through
             snapshot._read_assumed.add(node.index)
         else:
-            checked = yield from _membership_frame(snapshot, node, candidate, check_guard=False)
-            own = checked.result
+            own, through = yield from _domain_check(snapshot, node, candidate)
         holds = isinstance(own, Available) and own.value is True
-        if isinstance(inactive, Unresolved):
+        if through:
+            pass  # kept, refused through its input
+        elif isinstance(inactive, Unresolved):
             if not isinstance(own, Rejected):
                 own = inactive
         elif inactive is not None and not holds and not isinstance(own, Unresolved):
@@ -945,6 +973,9 @@ def _candidate_frame(snapshot: _TrialSnapshot, node: Node) -> _execution.Frame:
     else:
         own = inactive
     snapshot._own[node.index] = own
+    if through:
+        snapshot._through.add(node.index)
+        return Evaluation(_unchecked_answer(node))
     if isinstance(own, Available) and own.value is True:
         if node.index in snapshot.unchecked:
             return Evaluation(_unchecked_answer(node))
@@ -977,9 +1008,17 @@ def _const_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
 
 
 def _decision_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
-    yield from ()  # answers at once
+    """A Decision: its stored value, its forced value or refusal, or unassigned. A stored
+    choice whose own check reads a refused input (``Snapshot.input_refused``) reads, where
+    the configuration forces, refused through that input, with the input's findings."""
     if node.index in snapshot.assignments:
         if node.index in snapshot.unchecked:
+            if node.index in snapshot.input_refused and snapshot.forcing:
+                _, failure = yield from _arguments(
+                    snapshot.linked, node.domain_arguments, node.owner
+                )
+                if isinstance(failure, Rejected):
+                    return Evaluation(failure)
             return Evaluation(_unchecked_answer(node))
         return Evaluation(Available(snapshot.assignments[node.index]))
     found = _forced(snapshot, node.index)
@@ -1072,9 +1111,9 @@ def _piece(snapshot: Snapshot, piece: Node, answer: QueryResult[object]) -> Quer
     """A validity piece's answer as a check. A constraint and a placed Space's validity
     answer as themselves. A Decision is its stored choice's own check: true once the
     choice reads as its value, unresolved while unchecked, refused through a refused
-    guard. An open Decision is a piece only where it has no possible case (forcing
-    refuses it, ``decision-no-viable-case``); otherwise, forced or still to choose,
-    it counts as true.
+    guard or a refused input of its domain. An open Decision is a piece only where it
+    has no possible case (forcing refuses it, ``decision-no-viable-case``); otherwise,
+    forced or still to choose, it counts as true.
 
     On forcing's copies (which do not force) an open Decision reads unassigned and a
     stored one as its value or unresolved, so a Decision's piece is false there only
@@ -1184,9 +1223,24 @@ def _membership_frame(
         inactive = _guard_result(node, guard)
         if inactive is not None:
             return Evaluation(inactive)
+    result, _ = yield from _domain_check(snapshot, node, value)
+    return Evaluation(result)
+
+
+def _domain_check(
+    snapshot: Snapshot, node: Node, value: object
+) -> Generator[int | _execution.Call, object, tuple[QueryResult[object], bool]]:
+    """Whether a Decision's domain admits ``value``, and whether an input of the domain is
+    itself refused on its own (then the answer is that refusal, not the domain's): refused
+    by a derived value's or a view's body, and through no Decision that reads refused (a
+    choice its own check refuses, one with no possible case, one under a refused guard),
+    whose refusal is that choice's, answered as before."""
     arguments, failure = yield from _arguments(snapshot.linked, node.domain_arguments, node.owner)
     if failure is not None:
-        return Evaluation(failure)
+        through = isinstance(failure, Rejected) and not _through_a_choice(
+            snapshot, node.domain_arguments
+        )
+        return failure, through
     if node.domain is None or node.semantics is None:
         raise EvaluationError(node.owner, "domain membership", "reference has no domain")
     candidate = _clone(node, value, owner=node.owner, role="domain candidate snapshot")
@@ -1199,9 +1253,25 @@ def _membership_frame(
     if isinstance(called, _execution._Halt):
         blocked = _blocked(list(called.results))
         assert blocked is not None
-        return Evaluation(blocked)
+        return blocked, False
     assert isinstance(called, _execution._Returned)
-    return Evaluation(cast(QueryResult[object], called.value))
+    return cast(QueryResult[object], called.value), False
+
+
+def _through_a_choice(snapshot: Snapshot, arguments: tuple[Argument, ...]) -> bool:
+    """Whether a refused one of ``arguments`` (just read in ``snapshot``) is, or read, a
+    Decision that reads refused."""
+    nodes, cache = snapshot.linked.nodes, snapshot.cache
+    for argument in arguments:
+        entry = cache.get(argument.node)
+        if entry is None or not isinstance(entry.result, Rejected):
+            continue
+        own = (argument.node,) if nodes[argument.node].kind == "decision" else ()
+        for index in (*own, *entry.decisions):
+            read = cache.get(index)
+            if read is not None and isinstance(read.result, Rejected):
+                return True
+    return False
 
 
 def _enumeration_frame(snapshot: Snapshot, node: Node) -> _execution.Frame:
@@ -1249,6 +1319,9 @@ def decision_state(snapshot: Snapshot, node_index: int) -> QueryResult[DecisionS
         if node_index not in snapshot.assignments:
             return Available(DecisionState(node.owner))
         if node_index in snapshot.unchecked:
+            read = evaluate(snapshot, node_index).result
+            if isinstance(read, Rejected):
+                return read  # kept, refused through a refused input of its domain
             return _unchecked_answer(node)
         value = _clone(
             node, snapshot.assignments[node_index], owner=node.owner, role="decision state"

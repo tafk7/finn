@@ -438,11 +438,12 @@ def _pieces(current: _runtime.Snapshot, index: int, wanted: type[object]) -> lis
 
 def validity(point: Space) -> Validity:
     """The validity of this configuration's Space (its root's is the configuration's):
-    every constraint of the Space and of each placed Space that is present, every stored
-    choice's own check (an unchecked one is unknown), and every open Decision with no
-    possible case (``decision-no-viable-case``). A candidate that is not selected
-    contributes nothing. Valid, refused naming the false pieces, or undecided naming the
-    unknown pieces and what each waits on (``Validity``)."""
+    every constraint of the Space and of each placed Space that is present (each unknown
+    while its presence waits), every stored choice's own check (an unchecked one is unknown;
+    one whose domain reads a refused input is false, refused through that input), and every
+    open Decision with no possible case (``decision-no-viable-case``, an empty list too). A
+    candidate that is not selected contributes nothing. Valid, refused naming the false
+    pieces, or undecided naming the unknown pieces and what each waits on (``Validity``)."""
     _execution.driver_only("validity")
     current = state(point)
     scope = point._scope
@@ -533,7 +534,8 @@ def unchecked(point: Space) -> tuple[Unchecked, ...]:
     """The choices below this scope that are stored and unchecked (see ``Unchecked``), by
     key. A configuration that holds one is not complete: a choice kept unchecked is a
     commitment with pending evidence, not an accepted value, and what generates hardware
-    from a configuration is to refuse it."""
+    from a configuration is to refuse it. A choice kept whose domain reads a refused input
+    is not listed: no commitment settles it, and it reads refused through that input."""
     _execution.driver_only("unchecked inspection")
     current = state(point)
     linked = current.linked
@@ -557,7 +559,7 @@ def unchecked(point: Space) -> tuple[Unchecked, ...]:
         return tuple(
             Unchecked(decision_key(linked, index), copy(index, current.assignments[index]), found)
             for index in sorted(current.unchecked, key=lambda item: linked.nodes[item].key)
-            if linked.nodes[index].scope in included
+            if linked.nodes[index].scope in included and index not in current.input_refused
             for found in (blockers(index),)
         )
 

@@ -10,7 +10,9 @@ it would publish. A choice's own check is its domain alone: a constraint never r
 change, and the configuration it publishes reports its validity (``inspection.validity``).
 A choice whose own check is false refuses the batch. One whose own
 check cannot conclude (it reads a choice still open, or an input not supplied) is kept
-**unchecked**: stored, read unresolved, and reported. Which choices are unchecked also
+**unchecked**: stored, read unresolved, and reported. A refusal elsewhere never refuses a
+change: one whose domain reads an input that is itself refused is kept too, never read as
+a value, and the configuration reads it refused through that input. Which choices are unchecked also
 decides what the configuration forces, so the batch is checked again with the choices
 found unchecked declared, until the same ones are found. A configuration with other
 values for its formals (``try_with_facts``) is the same replacement over other facts: it
@@ -122,22 +124,28 @@ def _checked(
 ) -> tuple[_runtime._TrialSnapshot, dict[int, QueryResult[bool]]]:
     """The trial of ``merged`` over ``base`` and each candidate's own check in it, with the
     choices found unchecked declared to it: a trial reads a declared one unresolved, as the
-    configuration it would publish does, and forces by that. Starting from none, a pass
-    declares the choices whose own check it found unresolved and runs again, until a pass
-    finds the choices it was given. Less is read each time, so a check that was unresolved
-    stays so and the choices only grow, at most one pass for each (a pass that declares
-    nothing, the usual one, is the only one)."""
+    configuration it would publish does, and forces by that. So are the choices kept through
+    a refused input of their domain (``_TrialSnapshot.through``), which that configuration
+    never reads as a value either. Starting from none, a pass declares the choices whose own
+    check it found unresolved, and those it found kept, and runs again, until a pass finds
+    the choices it was given. Less is read each time, so a choice once declared stays so
+    (kept may become unresolved, never the reverse) and the choices only grow, at most two
+    passes for each (a pass that declares nothing, the usual one, is the only one)."""
     ranked = sorted(merged, key=base.linked.ranks.__getitem__)
     unchecked = frozenset[int]()
-    for _ in range(len(ranked) + 1):
-        trial = _runtime._TrialSnapshot(base, merged, parameters, unchecked=unchecked)
+    kept = frozenset[int]()
+    for _ in range(2 * len(ranked) + 1):
+        trial = _runtime._TrialSnapshot(
+            base, merged, parameters, unchecked=unchecked | kept, input_refused=kept
+        )
         validation = {index: _admission(trial, index) for index in ranked}
         found = frozenset(
             index for index, result in validation.items() if isinstance(result, Unresolved)
         )
-        if found == unchecked:
+        through = trial.through()
+        if found == unchecked and through == kept:
             return trial, validation
-        unchecked = found
+        unchecked, kept = found, through
     raise RuntimeError("the choices found unchecked did not settle")
 
 
@@ -236,10 +244,13 @@ def _replace(
 
         trial, validation = _checked(current, merged, parameters if changed else None)
         waiting = {index for index, result in validation.items() if isinstance(result, Unresolved)}
+        kept = trial.input_refused
         refused = {
             index
             for index, result in validation.items()
-            if index not in waiting and not (isinstance(result, Available) and result.value is True)
+            if index not in waiting
+            and index not in kept
+            and not (isinstance(result, Available) and result.value is True)
         }
         outcomes: list[ChangeOutcome] = []
         requested_nodes = set(normalized)
@@ -294,6 +305,18 @@ def _replace(
                     "unchanged",
                     requested=False,
                     unchecked=True,
+                )
+            )
+        # A retained choice this change keeps through a refused input, which its base did not.
+        for index in sorted(
+            kept - requested_nodes - current.input_refused, key=current.linked.ranks.__getitem__
+        ):
+            published.append(
+                ChangeOutcome(
+                    current.linked.nodes[index].owner,
+                    validation[index],
+                    "unchanged",
+                    requested=False,
                 )
             )
         return ConfigurationResult(successor, True, tuple(published))

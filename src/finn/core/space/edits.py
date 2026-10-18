@@ -39,7 +39,10 @@ class ChangeOutcome:
     """What a change did to one choice. ``unchecked``: the choice is kept, and its own check
     cannot conclude yet (it reads a choice still open, or an input not supplied): ``result``
     is the unresolved answer naming what it waits on, and the choice reads unresolved until
-    a change makes its check succeed (``inspection.unchecked`` lists them)."""
+    a change makes its check succeed (``inspection.unchecked`` lists them). A choice kept
+    whose domain reads an input that is itself refused (a refusal elsewhere never refuses a
+    change) is not refused: ``result`` is that input's refusal, and the configuration reads
+    the choice refused through it."""
 
     owner: str
     result: QueryResult[bool]

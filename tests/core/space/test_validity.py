@@ -850,3 +850,67 @@ def test_an_empty_list_under_a_selector_still_open_is_no_piece() -> None:
     point = design_space(Open(width=8))
     assert inspection.validity(point).status == "valid"
     assert forced(point) == {}
+
+
+# -- a refusal elsewhere never refuses a commit ------------------------------------------
+
+
+class Lanes(Space):
+    """``width`` refuses an odd ``w``; ``lanes`` lists the divisors of ``width`` among 1, 2,
+    4 and 8."""
+
+    w: int = Param()
+
+    @derived
+    def width(self) -> int | Rejected:
+        return reject("bad-width", "an odd width") if self.w % 2 else self.w
+
+    lanes: int = Decision(
+        domain=domain(
+            accepts=lambda *, candidate, width: width % candidate == 0,
+            candidates=lambda *, width: tuple(d for d in (1, 2, 4, 8) if width % d == 0),
+            width=width,
+        )
+    )
+
+
+def refused_through_width(answer: object) -> bool:
+    return isinstance(answer, Rejected) and {(f.code, f.owner) for f in answer.findings} == {
+        ("bad-width", "width")
+    }
+
+
+def test_a_commit_whose_domain_input_is_refused_is_kept_and_reads_refused_through_it() -> None:
+    report = design_space(Lanes(w=7)).try_with_choices({Lanes.lanes: 1})
+    assert report.accepted
+    (outcome,) = report.outcomes
+    assert outcome.status == "changed" and not outcome.unchecked
+    assert refused_through_width(outcome.result)
+    point = report.instance
+    # Kept, never read as a value: refused through the input, not waiting on anything.
+    assert inspection.unchecked(point) == ()
+    assert refused_through_width(point.query(Lanes.lanes))
+    assert refused_through_width(point.field(Lanes.lanes).state)
+    validity = inspection.validity(point)
+    assert validity.status == "refused" and owners(validity) == ["lanes"]
+    assert refused_through_width(validity.pieces[0].result)
+
+
+def test_new_facts_that_refuse_a_kept_choices_domain_input_are_accepted() -> None:
+    kept = commit(design_space(Lanes(w=8)), {"lanes": 4})
+    report = kept.try_with_facts({Lanes.w: 7})
+    assert report.accepted
+    (reached,) = [outcome for outcome in report.outcomes if not outcome.requested]
+    assert reached.owner == "lanes" and refused_through_width(reached.result)
+    assert refused_through_width(report.instance.query(Lanes.lanes))
+    # Facts that make the input whole again make the choice readable.
+    again = report.instance.with_facts({Lanes.w: 8})
+    assert again.lanes == 4 and inspection.validity(again).status == "valid"
+
+
+def test_only_a_domain_that_answers_false_refuses_a_commit() -> None:
+    report = design_space(Lanes(w=8)).try_with_choices({Lanes.lanes: 3})
+    assert not report.accepted
+    (outcome,) = report.outcomes
+    assert isinstance(outcome.result, Rejected)
+    assert {finding.code for finding in outcome.result.findings} == {"domain-membership"}

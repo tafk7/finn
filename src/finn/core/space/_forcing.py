@@ -721,6 +721,8 @@ def _rounds(
     # The copy starts from the snapshot's evaluations that read no open Decision but a
     # seed: an open Decision reads as unassigned on the copy, and as forced on the
     # snapshot, and a seed is assigned on the copy, forced to the same value on the snapshot.
+    # A choice kept through a refused input reads refused on the snapshot and unresolved
+    # on the copy, so nothing that read one is taken either way.
     current = Snapshot(
         snapshot.model,
         snapshot.parameters,
@@ -728,7 +730,11 @@ def _rounds(
         forcing=False,
         unchecked=snapshot.unchecked,
     )
-    _runtime.inherit(current, snapshot, [index for index in open_ if index not in values])
+    _runtime.inherit(
+        current,
+        snapshot,
+        [*(index for index in open_ if index not in values), *snapshot.input_refused],
+    )
     refused: dict[int, Rejected] = {}
     progressed = True
     while progressed:
@@ -822,8 +828,10 @@ def _publish(
     """The result of the rounds, and what their last copy evaluated, given to the snapshot."""
     # The last copy assigns every forced value as the snapshot reads it, and an open
     # Decision that is not forced reads as unassigned on both, unless it is refused:
-    # what the copy evaluated that read no refused Decision answers the same here.
-    for index, entry in _runtime.unaffected(_runtime.fresh(current), refused).items():
+    # what the copy evaluated that read no refused Decision, nor a choice kept through a
+    # refused input, answers the same here.
+    unlike = refused.keys() | snapshot.input_refused
+    for index, entry in _runtime.unaffected(_runtime.fresh(current), unlike).items():
         snapshot.cache.setdefault(index, entry)
     return Found(
         MappingProxyType(values), MappingProxyType(dict(refused)), MappingProxyType(verdicts)
