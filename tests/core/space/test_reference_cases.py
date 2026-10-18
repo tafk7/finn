@@ -783,3 +783,141 @@ def test_a_commit_whose_domain_input_waits_on_a_fact_is_kept_unchecked() -> None
 
 def test_a_choice_whose_domain_input_waits_on_a_fact_waits_on_it() -> None:
     REFUSED_INPUT.start({}, {"lanes": 1}).check_state("lanes")
+
+
+# A domain reading a selector that forcing refuses: two cores, ``packed`` needing at most 64
+# lanes and ``stub`` an even width, and ``lanes`` listing 1 and 2 under ``packed``, 1 under
+# ``stub``. At 129 neither core is possible: the domain's input is refused by forcing, so it
+# reads unresolved inside the own check. The commit is accepted and the choice kept
+# unchecked, waiting on the selector; the configuration is refused through the selector.
+
+FORCING_REFUSED_INPUT = Case(
+    "a domain reading a selector forcing refuses",
+    Space(
+        ("width",),
+        Scope(
+            "",
+            choices=(
+                Choice(
+                    "lanes",
+                    computed(
+                        lambda read: (1, 2) if read["compute"] == "packed" else (1,),
+                        ("compute",),
+                    ),
+                ),
+            ),
+            selectors=(
+                Selector(
+                    "compute",
+                    (
+                        Scope(
+                            "packed",
+                            constraints=(
+                                Constraint(
+                                    "fits",
+                                    ("width",),
+                                    lambda read: read["width"] <= 64,
+                                    "packed-width",
+                                ),
+                            ),
+                        ),
+                        Scope(
+                            "stub",
+                            constraints=(
+                                Constraint(
+                                    "even",
+                                    ("width",),
+                                    lambda read: read["width"] % 2 == 0,
+                                    "stub-width",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+@expected("forcing-refused-input-commit")
+def test_a_commit_whose_domain_input_forcing_refuses_is_kept_unchecked() -> None:
+    FORCING_REFUSED_INPUT.start({"width": 129}).check_change(Change(commit={"lanes": 2}))
+
+
+@expected("forcing-refused-input-new-facts")
+def test_new_facts_that_leave_a_kept_choices_domain_input_no_case_keep_it_unchecked() -> None:
+    # At 9 the stub core refuses an odd width, so packed is forced and 2 is in the domain.
+    point = FORCING_REFUSED_INPUT.start({"width": 9}, {"lanes": 2})
+    point.check_change(Change(facts={"width": 129}))
+
+
+@expected("forcing-refused-input-state")
+def test_a_choice_whose_domain_input_forcing_refuses_waits_on_it() -> None:
+    pair = FORCING_REFUSED_INPUT.start({"width": 129}).check_change(Change(commit={"lanes": 2}))
+    assert pair is not None  # asked once both sides accept the commit
+    pair.check_state("lanes")
+
+
+def test_a_domain_input_forcing_refuses_leaves_its_open_choice_waiting() -> None:
+    FORCING_REFUSED_INPUT.start({"width": 129}).check_state("lanes")
+
+
+# A domain reading a value that does not apply: ``size``, a value of the scope ``extra``,
+# present when the fact ``on`` holds, and ``lanes`` over its divisors among 1, 2 and 4. With
+# ``on`` false the input is inapplicable: membership cannot be evaluated, so the commit is
+# accepted and the choice kept unchecked, waiting on the input, never refused as inactive
+# (``lanes`` itself is present).
+
+INAPPLICABLE_INPUT = Case(
+    "a domain reading a value that does not apply",
+    Space(
+        ("on", "n"),
+        Scope(
+            "",
+            choices=(
+                Choice(
+                    "lanes",
+                    computed(
+                        lambda read: tuple(d for d in (1, 2, 4) if read["extra.size"] % d == 0),
+                        ("extra.size",),
+                    ),
+                ),
+            ),
+            children=(
+                Scope(
+                    "extra",
+                    when=When(("on",), lambda read: bool(read["on"])),
+                    derived=(Derived("size", ("n",), lambda read: read["n"]),),
+                ),
+            ),
+        ),
+    ),
+    Spelling(types={"on": bool}),
+)
+
+
+@expected("inapplicable-input-commit")
+def test_a_commit_whose_domain_input_does_not_apply_is_kept_unchecked() -> None:
+    INAPPLICABLE_INPUT.start({"on": False, "n": 4}).check_change(Change(commit={"lanes": 2}))
+
+
+@expected("inapplicable-input-new-facts")
+def test_new_facts_under_which_a_kept_choices_domain_input_does_not_apply_keep_it() -> None:
+    point = INAPPLICABLE_INPUT.start({"on": True, "n": 4}, {"lanes": 2})
+    point.check_change(Change(facts={"on": False}))
+
+
+@expected("inapplicable-input-state")
+def test_a_choice_whose_domain_input_does_not_apply_waits_on_it() -> None:
+    pair = INAPPLICABLE_INPUT.start({"on": False, "n": 4}).check_change(Change(commit={"lanes": 2}))
+    assert pair is not None  # asked once both sides accept the commit
+    pair.check_state("lanes")
+
+
+def test_a_choice_whose_domain_input_applies_is_readable() -> None:
+    INAPPLICABLE_INPUT.start({"on": True, "n": 4}, {"lanes": 2}).check_state("lanes")
+
+
+def test_a_domain_input_that_does_not_apply_leaves_its_open_choice_waiting() -> None:
+    INAPPLICABLE_INPUT.start({"on": False, "n": 4}).check_state("lanes")
