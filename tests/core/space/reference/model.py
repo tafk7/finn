@@ -65,12 +65,14 @@ and the original kept.
    value. A configuration's counted pairs are each false piece of the root's validity
    with each origin it is false through: the piece itself, or the origins its refused
    inputs lead back to.
-3. *Refusal.* The change is refused when the successor holds a counted pair the
-   predecessor does not: a piece false through an origin it was not false through
-   before (a piece absent, unknown or true before counts as not false before). Each
-   origin of such a pair refuses it once (:class:`~.answers.RuleRefusal`), naming the
-   stored choices standing in its way. A rule false only through a refused input is
-   never itself a refusal. So no accepted change adds a pair.
+3. *Refusal.* A change that sets a choice or a fact is refused when the successor
+   holds a counted pair the predecessor does not: a piece false through an origin it
+   was not false through before (a piece absent, unknown or true before counts as not
+   false before). Each origin of such a pair refuses it once
+   (:class:`~.answers.RuleRefusal`), naming the stored choices standing in its way. A
+   rule false only through a refused input is never itself a refusal. So no accepted
+   change that sets adds a pair. A change made only of clears and unsets is never
+   refused (reading 3).
 4. *Accepted*, the change reports the stored choices it puts dormant or brings into
    play and the open choices it brings into presence. A change that changes nothing
    returns the same configuration.
@@ -106,14 +108,15 @@ corpus; § 16 holds the readings its author gave for this model.
    rule is false through a derived value over a stored ``c`` is refused with ``c``
    standing; a configuration built with a broken rule accepts a change keeping that
    rule false through the same origin, and refuses one making it false through another.
-   Every accepted change leaves the set of pairs no larger, so the bind of a
-   configuration reached by accepted changes from nothing is accepted (FN3), and no
+   Every accepted change that sets leaves the set of pairs no larger, so the bind of a
+   configuration reached by such changes from nothing is accepted (FN3), and no
    accepted addition leaves a Space newly refused (§ 16.14's exception cannot arise).
-   Read literally, clearing (or unsetting a fact) can refuse in one shape: a piece
-   false only through a view refused with its Space, whose Space the clearing leaves
-   no longer refused, so that the view answers and the piece is false at an origin of
-   its own. § 5.6 says clearing never refuses; the model follows § 16.15's words, and
-   the difference is an open question for the note.
+   *Clears and unsets are never refused* (§ 16.16; § 5.6 stands): a change made only
+   of them is accepted whatever pairs it adds. It can add one in a single shape,
+   **masking**: a piece false only through a view refused with its Space, whose Space
+   the change reopens, so that the view answers and the piece is false at an origin of
+   its own. The configuration reads refused, naming it; its bind may be refused (a
+   named limit of FN3's invariant, until products leave the Space).
 4. *What stands in the way* (§ 16.4): the stored choices among the origin's declared
    reads followed through derived values' and views' bodies (not its presence's
    reads), less every choice the change names (committed or cleared) and every choice
@@ -853,11 +856,13 @@ def change(configuration: Configuration, edit: Change) -> Accepted | Rejected:
     before = Solution(configuration)
     after = Solution(successor)
 
-    # 2 and 3. each origin of a counted pair the predecessor lacks refuses the change, once
+    # 2 and 3. each origin of a counted pair the predecessor lacks refuses a change that
+    # sets, once; clears and unsets alone are never refused (§ 16.16)
+    sets = bool(edit.commit) or bool(edit.facts)
     counted = before.evaluation.pairs()
     named = set(edit.commit) | set(edit.clear)
     refusals: dict[str, ChangeRefusal] = {}
-    for piece, origins in sorted(after.evaluation.pairs().items()):
+    for piece, origins in sorted(after.evaluation.pairs().items() if sets else ()):
         for origin, (kind, reasons) in sorted(origins.items()):
             if origin in counted.get(piece, {}) or origin in refusals:
                 continue

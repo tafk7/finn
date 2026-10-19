@@ -1162,21 +1162,66 @@ def viewed_child() -> Space:
     )
 
 
-def test_clearing_is_refused_where_a_view_stops_refusing_with_its_space() -> None:
-    """§ 16.15 read literally, against § 5.6's "clearing never refuses" (open): with
-    ``c`` refused, ``v`` refuses with it and ``high`` is false through ``v`` with no
-    origin of its own. Clearing ``x`` leaves ``c`` open, so ``v`` answers 1 and ``high``
-    is false at its own origin: a new pair, refused, ``c.y`` standing."""
+def test_a_clear_revealing_a_rule_masked_by_its_views_space_is_accepted() -> None:
+    """§ 16.16, masking: with ``c`` refused, ``v`` refuses with it and ``high`` is false
+    through ``v`` with no origin of its own. Clearing ``x`` leaves ``c`` open, so ``v``
+    answers 1 and ``high`` is false at its own origin: a new pair, but a change made only
+    of clears is never refused, and the configuration reads refused at ``high``."""
 
     broken = Configuration(viewed_child(), {}, {"c.x": 3, "c.y": 1})
     assert false_kinds(broken.solve()) == {
         (PieceKind.CONSTRAINT, "high"),
         (PieceKind.CONSTRAINT, "c.small"),
     }
-    assert rejected(change(broken, Change(clear=("c.x",)))).refusals == (
+    cleared = accepted(change(broken, Change(clear=("c.x",))))
+    assert cleared.validity.false == (
+        Piece(PieceKind.CONSTRAINT, "", "high", F, reasons=(constraint_reason("high", "low"),)),
+    )
+    assert cleared.configuration.solve().view("c.v") == Known(1)
+    # a change that also sets is judged by its pairs: committing ``y`` = 2 beside the clear
+    # leaves ``high`` true
+    assert accepted(change(broken, Change(clear=("c.x",), commit={"c.y": 2}))).validity.verdict is U
+
+
+def viewed_child_over_a_fact() -> Space:
+    """As :func:`viewed_child`, the child's rule over the fact ``f``."""
+
+    child = Scope(
+        "c",
+        choices=(Choice("y", listed(1, 2, 3)),),
+        constraints=(Constraint("small", ("f",), lambda r: r["f"] <= 1, "big"),),
+        views=(View("v", ("c.y",), lambda r: r["c.y"]),),
+    )
+    return Space(
+        ("f",),
+        Scope(
+            "",
+            children=(child,),
+            constraints=(Constraint("high", ("c.v",), lambda r: r["c.v"] >= 2, "low"),),
+        ),
+    )
+
+
+def test_an_unset_revealing_a_rule_masked_by_its_views_space_is_accepted() -> None:
+    """§ 16.16 for facts: ``f = 3`` refuses ``c``, masking ``high``; ``y = 1`` is set
+    beside it (no new pair). Unsetting ``f`` reopens ``c`` and reveals ``high`` false at
+    its own origin: accepted, reading refused at ``high``. Setting ``f`` to 1 reveals it
+    too, and is refused, being a change that sets."""
+
+    masked = accepted(
+        change(Configuration(viewed_child_over_a_fact(), {"f": 3}), Change(commit={"c.y": 1}))
+    )
+    assert false_kinds(masked.configuration.solve()) == {
+        (PieceKind.CONSTRAINT, "high"),
+        (PieceKind.CONSTRAINT, "c.small"),
+    }
+    unset = accepted(change(masked.configuration, Change(unset=("f",))))
+    assert unset.validity.false == (
+        Piece(PieceKind.CONSTRAINT, "", "high", F, reasons=(constraint_reason("high", "low"),)),
+    )
+    assert rejected(change(masked.configuration, Change(facts={"f": 1}))).refusals == (
         rule("high", "low", standing=("c.y",)),
     )
-    assert accepted(change(broken, Change(clear=("c.x",), commit={"c.y": 2})))
 
 
 # --- assignment ---------------------------------------------------------------------------

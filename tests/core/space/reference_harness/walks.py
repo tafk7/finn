@@ -14,16 +14,22 @@ step (each change tried, accepted or refused), on both index paths:
    state, each value's answer, each rule, validity, each listed choice's possible values
    and ranking) as ``Configuration(space, facts, stored)`` built from nothing. And the
    **bind**, ``change(Configuration(space, facts), Change(commit=stored))``, is accepted
-   with the same answers, for every walked configuration (FN3: what a step publishes binds
-   again unrefused). Why (§ 16.15): every accepted change leaves the set of counted pairs
-   (3) no larger, so a walked configuration's false pieces are those its facts made false
-   from the start, which the configuration the bind starts from (its facts, nothing
-   stored) counts too.
+   with the same answers, for every configuration the walk reaches by accepted changes
+   that set (FN3: what a step publishes binds again unrefused). Why (§ 16.15): such a
+   change leaves the set of counted pairs (3) no larger, so the configuration's false
+   pieces are those its facts made false from the start, which the configuration the bind
+   starts from (its facts, nothing stored) counts too. Its scope (§ 16.16): after a
+   clear-only step that revealed a masked rule (3), the bind may be refused, by the origins
+   so revealed and nothing else; that is counted as expected, never anywhere else.
 2. *Additions move answers only up the information order* (:func:`below`, the order
    defined in one place) over a step that only sets choices nothing was stored for, with no
    exception: no accepted addition leaves a Space newly refused (§ 16.15 removes § 16.14's).
-3. *No accepted change adds a (false piece, origin) pair* (§ 16.15): every pair counted in
-   the published configuration is counted in the one before it.
+3. *No accepted change that sets a choice or a fact adds a (false piece, origin) pair*
+   (§ 16.15): every pair counted in the published configuration is counted in the one
+   before it. A change made only of clears and unsets is never refused (§ 16.16), and may
+   add a pair only by **masking**: each pair it adds must, before the step, read (its
+   origin, or through its origin's or its piece's body reads) a view refused through its
+   Space, or a fact the step unsets.
 4. *Every refusal names exactly the origins of the pairs it would add, and their standing
    choices*, checked by brute force: each named origin is false on its own values in the
    would-be configuration; the origins named are exactly those of the pairs counted there
@@ -62,7 +68,7 @@ import sys
 import time
 import traceback
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
@@ -994,6 +1000,42 @@ class Checked:
 
     runs: Counter[str] = field(default_factory=Counter)
     problems: list[str] = field(default_factory=list)
+    #: the origins of the pairs an accepted clear-only step revealed (§ 16.16)
+    revealed: set[str] = field(default_factory=set)
+
+
+def clear_only(edit: model.Change) -> bool:
+    """Whether ``edit`` is made only of clears and unsets, which are never refused (§ 16.16)."""
+    return not (edit.commit or edit.facts)
+
+
+def masking_problems(
+    structure: Structure, before: model.Solution, edit: model.Change, added: Mapping[Pair, str]
+) -> list[str]:
+    """Each pair ``added`` by the clear-only ``edit`` that is not masking revealed: its origin,
+    or what its origin's or its piece's body reads, is neither a view that ``before`` reads
+    refused through its Space nor a fact ``edit`` unsets (§ 16.16)."""
+
+    def masked(path: str) -> bool:
+        if path in edit.unset:
+            return True
+        if path not in structure.index.views:
+            return False
+        answer = before.read(path)
+        return isinstance(answer, model.Refused) and any(
+            reason.kind is model.ReasonKind.SPACE_REFUSED and reason.subject == path
+            for reason in answer.reasons
+        )
+
+    problems = []
+    for (piece, origin), _ in sorted(added.items()):
+        reads = {origin, *structure.bodies(origin), *structure.bodies(piece[1])}
+        if not any(masked(path) for path in reads):
+            problems.append(
+                f"3 clears: the clear-only change adds {(piece, origin)}, not by revealing a rule "
+                "masked by a view's Space or an unset fact (§ 16.16)"
+            )
+    return problems
 
 
 def check_change(
@@ -1032,6 +1074,16 @@ def check_change(
     after = model.Configuration(configuration.space, facts, stored).solve()
     added = added_pairs(structure, before, after)
     expected = {origin: kind for (_, origin), kind in added.items()}
+    if clear_only(edit):
+        checked.runs["3 clears"] += 1
+        if isinstance(result, model.Rejected):
+            checked.problems.append(
+                "3 clears: a change made only of clears and unsets is refused (§ 16.16)"
+            )
+            return checked
+        checked.problems.extend(masking_problems(structure, before, edit, added))
+        checked.revealed = set(expected)
+        return checked
     if isinstance(result, model.Accepted):
         checked.runs["3 accepted"] += 1
         published = result.configuration
@@ -1120,23 +1172,38 @@ def _standing(
 
 
 def bind_problems(
-    walked: model.Configuration, result: model.Accepted | model.Rejected
-) -> list[str]:
+    walked: model.Configuration,
+    result: model.Accepted | model.Rejected,
+    revealed: Collection[str] = frozenset(),
+) -> tuple[list[str], bool]:
     """Invariant 1's bind: ``result``, ``walked``'s stored set committed as one change from
-    an empty configuration with the same facts, is accepted, and answers as ``walked``."""
+    an empty configuration with the same facts, is accepted, and answers as ``walked``; or
+    (§ 16.16) refused by origins of ``revealed``, those clear-only steps of the walk revealed
+    from behind a view's Space, and nothing else. And whether it was refused so."""
     if isinstance(result, model.Rejected):
+        if result.refusals and all(
+            isinstance(item, model.RuleRefusal) and item.origin in revealed
+            for item in result.refusals
+        ):
+            return [], True
         named = sorted(
             (item.origin, item.kind)
             if isinstance(item, model.RuleRefusal)
             else (item.choice, "assignment")
             for item in result.refusals
         )
-        return [f"1 bind: refused by {named}; what a walk publishes binds again unrefused (FN3)"]
+        return [
+            f"1 bind: refused by {named}; what a walk publishes binds again unrefused (FN3), "
+            f"but for rules a clear revealed ({sorted(revealed)})"
+        ], False
     asked = [q for q in questions(walked.index) if q[0] != "possible"]
     moved = differences(
         model_forms(walked.solve(), asked), model_forms(result.configuration.solve(), asked)
     )
-    return [f"1 bind: accepted, answering otherwise: {[ask(q) for q in moved]}"] if moved else []
+    problems = (
+        [f"1 bind: accepted, answering otherwise: {[ask(q) for q in moved]}"] if moved else []
+    )
+    return problems, False
 
 
 # --- the engine comparison: counted while a milestone is pending ----------------------------------
@@ -1258,6 +1325,8 @@ class Tally:
     by_question: Counter[str] = field(default_factory=Counter)
     by_kind: Counter[str] = field(default_factory=Counter)
     engine_errors: int = 0
+    #: binds refused by rules clear-only steps revealed (§ 16.16), as invariant 1 allows
+    binds_refused: int = 0
     seconds: float = 0.0
     #: what failed: an invariant's name, "engine", "disagreement" or "error"
     failed: str | None = None
@@ -1300,6 +1369,8 @@ class _Walk:
         self.history: list[str] = []
         #: each selector's case before a switch, for a switch back
         self.previous: dict[str, object] = {}
+        #: the origins clear-only steps revealed from behind a view's Space (§ 16.16)
+        self.revealed: set[str] = set()
 
     # -- reporting
 
@@ -1355,7 +1426,9 @@ class _Walk:
         )
         empty = model.Configuration(configuration.space, dict(configuration.facts))
         result = model.change(empty, model.Change(commit=dict(configuration.stored)))
-        self.invariant("1 bind", bind_problems(configuration, result))
+        problems, refused = bind_problems(configuration, result, self.revealed)
+        self.invariant("1 bind", problems)
+        self.tally.binds_refused += refused
 
     def additions(self, before: _State, forms: Mapping[Question, Form], edit: model.Change) -> None:
         """Invariant 2."""
@@ -1604,6 +1677,7 @@ class _Walk:
         if not isinstance(result, model.Accepted):
             return state
         tally.accepted += 1
+        self.revealed |= checked.revealed
         addition = bool(edit.commit) and not (
             edit.clear or edit.facts or set(edit.commit) & set(configuration.stored)
         )
@@ -1696,7 +1770,8 @@ def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
         f"{summed('steps')}, accepted {summed('accepted')}, the model's alone "
         f"{summed('model_only')}; {seconds:.1f} s, {seconds / max(len(tallies), 1):.2f} s per walk",
         f"descriptions skipped: {_counts(totals['skipped'])}",
-        f"invariant checks: {_counts(totals['checks'])}",
+        f"invariant checks: {_counts(totals['checks'])}; binds refused by rules a clear "
+        f"revealed (§ 16.16) {summed('binds_refused')}",
         f"engine's own checks: {_counts(totals['engine_checks'])}; configurations compared "
         f"{summed('compared')}, engine rebound to the model's {summed('rebound')}, out of step "
         f"{summed('out_of_step')}",
@@ -1730,9 +1805,11 @@ __all__ = [
     "check_change",
     "added_pairs",
     "classify",
+    "clear_only",
     "counted_pairs",
     "differences",
     "generate",
+    "masking_problems",
     "order_problems",
     "pending",
     "questions",

@@ -24,6 +24,7 @@ from collections.abc import Callable
 
 import pytest
 
+from core.space.reference_harness import walks
 from core.space import reference
 from core.space.reference import (
     Accepted,
@@ -57,6 +58,7 @@ from core.space.reference_harness.forms import (
 )
 from core.space.reference_harness.walks import (
     UNCLASSIFIED,
+    Pair,
     Structure,
     below,
     bind_problems,
@@ -64,6 +66,7 @@ from core.space.reference_harness.walks import (
     classify,
     counted_pairs,
     differences,
+    masking_problems,
     generate,
     model_forms,
     order_problems,
@@ -158,7 +161,9 @@ def test_the_summary_names_the_mode_and_the_checks() -> None:
     tallies = [walk(0, 3)]
     text = table(tallies)
     checks = ", ".join(f"{name} {count}" for name, count in sorted(tallies[0].checks.items()))
-    assert f"invariant checks: {checks}\n" in text
+    assert (
+        f"invariant checks: {checks}; binds refused by rules a clear revealed (§ 16.16) 0" in text
+    )
     assert "engine disagreements (counted (pending: engine core)) by question:" in text
     assert "excused" not in text
     assert text.splitlines()[2].startswith("| 0 | index | 3 |")
@@ -220,12 +225,15 @@ ODD = (Reason(ReasonKind.DERIVED_BODY, "d", "", "odd"),)
 def test_a_configuration_binds_again_with_the_same_answers() -> None:
     walked = Configuration(linked(), {}, {"a": 2, "b": 1})
     bind = change(Configuration(linked()), Change(commit={"a": 2, "b": 1}))
-    assert bind_problems(walked, bind) == []
+    assert bind_problems(walked, bind) == ([], False)
     refused = Rejected((RuleRefusal("linked", "constraint", (), ()),), None)
-    assert bind_problems(walked, refused) == [
-        "1 bind: refused by [('linked', 'constraint')]; what a walk publishes binds again "
-        "unrefused (FN3)"
-    ]
+    assert bind_problems(walked, refused) == (
+        [
+            "1 bind: refused by [('linked', 'constraint')]; what a walk publishes binds again "
+            "unrefused (FN3), but for rules a clear revealed ([])"
+        ],
+        False,
+    )
 
 
 def test_a_walk_never_reaches_a_configuration_whose_bind_is_refused() -> None:
@@ -244,8 +252,10 @@ def test_a_walk_never_reaches_a_configuration_whose_bind_is_refused() -> None:
     built = Configuration(guarded_by_a_stored_choice(), {}, {"x": 1, "s": "a"})
     assert built.solve().validity().verdict is reference.Verdict.FALSE
     bind = change(Configuration(guarded_by_a_stored_choice()), Change(commit={"x": 1, "s": "a"}))
-    assert bind_problems(built, bind) == [
-        "1 bind: refused by [('d', 'derived')]; what a walk publishes binds again unrefused (FN3)"
+    problems, _ = bind_problems(built, bind)
+    assert problems == [
+        "1 bind: refused by [('d', 'derived')]; what a walk publishes binds again unrefused "
+        "(FN3), but for rules a clear revealed ([])"
     ]
 
 
@@ -500,3 +510,66 @@ def test_the_counted_pairs_name_each_false_piece_with_the_origins_it_is_false_th
         result = change(base, edit)
         assert isinstance(result, kind)
         assert check_change(structure, base, edit, result).problems == []
+
+
+# -- clears and unsets (§ 16.16): never refused, adding a pair only by masking ---------------------
+
+
+def viewed_child() -> Space:
+    """The child ``c`` caps ``x``; its view ``v`` answers ``y``; the root's ``high`` asks
+    ``v`` to be at least 2: while ``c`` is refused, ``high`` is false through ``v`` alone."""
+    child = Scope(
+        "c",
+        choices=(Choice("x", listed(1, 2, 3)), Choice("y", listed(1, 2, 3))),
+        constraints=(Constraint("small", ("c.x",), lambda r: r["c.x"] <= 1, "big"),),
+        views=(View("v", ("c.y",), lambda r: r["c.y"]),),
+    )
+    return Space(
+        (),
+        Scope(
+            "",
+            children=(child,),
+            constraints=(Constraint("high", ("c.v",), lambda r: r["c.v"] >= 2, "low"),),
+        ),
+    )
+
+
+def test_a_clear_revealing_a_masked_rule_is_accepted_and_its_bind_refusal_counted() -> None:
+    masked = Configuration(viewed_child(), {}, {"c.x": 3, "c.y": 1})
+    edit = Change(clear=("c.x",))
+    result = change(masked, edit)
+    assert isinstance(result, Accepted)
+    checked = check_change(Structure(masked.index), masked, edit, result)
+    assert (checked.problems, checked.revealed, checked.runs["3 clears"]) == ([], {"high"}, 1)
+    # refused, a clear-only change is a problem whatever it adds
+    fake = Rejected((RuleRefusal("high", "constraint", (), ()),), None)
+    assert check_change(Structure(masked.index), masked, edit, fake).problems == [
+        "3 clears: a change made only of clears and unsets is refused (§ 16.16)"
+    ]
+    # its bind is refused by the revealed rule: expected after the clear, and only then
+    revealed = result.configuration
+    bind = change(Configuration(viewed_child()), Change(commit=dict(revealed.stored)))
+    assert isinstance(bind, Rejected)
+    assert bind_problems(revealed, bind, {"high"}) == ([], True)
+    assert bind_problems(revealed, bind)[0]
+
+
+def test_a_clear_only_step_adding_a_pair_any_other_way_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No clear adds such a pair under the model's rules; the checker is shown it by hand. The
+    # sum read no view and no fact, so the pair it adds is no masking revealed, and the walk
+    # fails on the problem (as on every problem check_change returns).
+    before = Configuration(summed(), {}, {"b": 2, "c": 2})
+    edit = Change(clear=("c",))
+    pair: Pair = (("constraint", "sum"), "sum")
+    assert masking_problems(
+        Structure(before.index), before.solve(), edit, {pair: "constraint"}
+    ) == [
+        "3 clears: the clear-only change adds (('constraint', 'sum'), 'sum'), not by revealing a "
+        "rule masked by a view's Space or an unset fact (§ 16.16)"
+    ]
+    monkeypatch.setattr(walks, "added_pairs", lambda *args: {pair: "constraint"})
+    result = change(before, edit)
+    problems = check_change(Structure(before.index), before, edit, result).problems
+    assert len(problems) == 1 and problems[0].startswith("3 clears: the clear-only change adds")
