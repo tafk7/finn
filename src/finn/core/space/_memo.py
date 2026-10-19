@@ -48,6 +48,14 @@ T = TypeVar("T")
 TRACES_KEPT = 8
 
 # How many traces a model's memo keeps in all, the least recently used dropped first.
+# Measured on a chain of 64 kernels and their channels composed as one Space: configuring
+# it keeps about 12,800 traces, about 5 MB (some 400 bytes a trace, its answers shared
+# with the worlds); 40 changes add about 1,500, and the possible values of one kernel's
+# choices about 200. Below what configuring keeps, a later binding of the same Space finds
+# little: those possible values, configured again without the kernel's choices, took 13 s
+# with a budget of 5,000 traces (as with none) against 5 s. A budget of 100,000 keeps such
+# a configuration and a few thousand changes of exploration whole, so nothing measured is
+# dropped, and bounds what a model keeps for the life of the process at about 40 MB.
 BUDGET = 100_000
 
 
