@@ -35,7 +35,6 @@ from finn.core.space import (
     divisors_of,
     inspection,
     reject,
-    view,
 )
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.gemm import Form
@@ -70,7 +69,7 @@ class Pool(LeafKernel):
     def schedule(self) -> Schedule | Rejected:
         return self.bound_schedule(order=(b, s, c), factors={c: self.pe})
 
-    @view
+    @derived
     def y_tensor(self) -> Tensor | Rejected:
         shape = self.spanned((b, c))
         if isinstance(shape, Rejected):
