@@ -35,6 +35,7 @@ from finn.core.space.references import DecisionHandle, ValueHandle
 PHYSICAL = ViewKey("physical", int)
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_inspection_does_not_run_domains_or_evaluators() -> None:
     calls: list[str] = []
 

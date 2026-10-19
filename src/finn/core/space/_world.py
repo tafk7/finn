@@ -34,6 +34,11 @@ the run evaluates the deep node first, then again what it abandoned: authored
 functions are pure, so one run again answers the same (it may start more than once;
 it completes once).
 
+Both the memo and the depth guard rest on that purity. The **purity check**
+(``check_purity``, a test mode) tests it: every memo hit runs its function again, and so
+does every method the depth guard abandoned once it completes; an answer that differs
+by value semantics is the function's ``EvaluationError``.
+
 A configuration (``_state.State``) is its facts and stored choices and the world they
 read in; a change makes the world of the configuration it would publish from its
 receiver's (``_assign``). A chain of such worlds is kept short by sharing its bulk
@@ -47,6 +52,7 @@ turn, the base of the worlds made after it.
 
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import Context, copy_context
@@ -121,6 +127,20 @@ FLATTEN = 8
 # A flattened world stands alone once its own entries are this share of its base's: the
 # base's entries it takes then cost at most twice what it already holds.
 BASE_SHARE = 0.5
+
+# The purity check (``check_purity``; on from the start where the environment variable
+# FINN_SPACE_CHECK_PURITY is 1): every memo hit runs its function again, and so does a
+# method the depth guard abandoned, once it completes; where the two answers differ by
+# value semantics, the function is impure, its ``EvaluationError``.
+_PURITY = os.environ.get("FINN_SPACE_CHECK_PURITY") == "1"
+
+
+def check_purity(on: bool) -> bool:
+    """Switch the purity check on or off, for every model; the setting it replaces."""
+    global _PURITY  # noqa: PLW0603 - a test mode, switched for the process
+    previous, _PURITY = _PURITY, on
+    return previous
+
 
 # The nodes that read their own bit (a fact, a choice): they are never cut early.
 _OWN_BIT: frozenset[NodeKind] = frozenset(("param", "decision"))
@@ -213,15 +233,17 @@ _Key: TypeAlias = "tuple[World, NodeId]"
 @dataclass(slots=True, eq=False)
 class _Run:
     """One driver demand: the context its authored calls copy, the failures met (kept
-    for this run only: a later demand runs the function again), and what is being
+    for this run only: a later demand runs the function again), what is being
     evaluated, on the Python stack (``active``) and abandoned to the run's own stack
-    (``pending``), for cycles."""
+    (``pending``), for cycles, and the methods the depth guard abandoned (for the purity
+    check)."""
 
     context: Context
     failures: dict[_Key, Failure] = field(default_factory=dict)
     active: dict[_Key, None] = field(default_factory=dict)
     pending: dict[_Key, None] = field(default_factory=dict)
     depth: int = 0
+    abandoned: set[_Key] = field(default_factory=set)  # methods the depth guard abandoned
 
 
 def _drive(evaluator: Evaluator, demand: Callable[[], T]) -> T:
@@ -1124,21 +1146,67 @@ def _callback(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
     held = _recall(world, key, called_on)
     if held is not None:
         evaluator.counters.hit(node.kind, node.index)
+        if _PURITY:
+            _again(node, node.kind, held.outcome.result, _call(world, node, answers).result)
         return _entry(held.outcome, reads, tuple(trace))
+    evaluator.counters.call(node.kind, node.index)
+    called = _call(world, node, answers)
+    evaluator.memo.keep(key, called_on, called)
+    return _entry(called, reads, tuple(trace))
+
+
+def _call(world: World, node: Node, answers: Sequence[QueryResult[object]]) -> Called:
+    """An explicit function called on its arguments' answers (each a value), detached."""
+    nodes = world.evaluator.nodes
     arguments = {
         argument.name: _clone(
-            evaluator.nodes[argument.node],
+            nodes[argument.node],
             cast(Available[object], answer).value,
             owner=node.owner,
             role="dependency snapshot",
         )
         for argument, answer in zip(node.arguments, answers)
     }
-    evaluator.counters.call(node.kind, node.index)
-    outcome = _authored(world, Call(node.owner, node.kind), node.function, (), arguments)
-    called = _finished(node, cast(_Returned, outcome).value)
-    evaluator.memo.keep(key, called_on, called)
-    return _entry(called, reads, tuple(trace))
+    function = cast(Callable[..., object], node.function)
+    outcome = _authored(world, Call(node.owner, node.kind), function, (), arguments)
+    return _finished(node, cast(_Returned, outcome).value)
+
+
+def _again(node: Node, role: str, held: QueryResult[object], found: QueryResult[object]) -> None:
+    """The purity check: ``found``, a function's answer run again on the same reads, is
+    ``held``, its answer before, by value semantics; else the function is impure."""
+    if not _same_outcome(node, held, found):
+        raise EvaluationError(
+            node.owner,
+            role,
+            "answered differently when run again on the same reads: an authored function "
+            "must answer from what it reads alone",
+        )
+
+
+def _same_outcome(node: Node, left: QueryResult[object], right: QueryResult[object]) -> bool:
+    """Whether two answers of one function of ``node`` are the same: non-values with equal
+    findings; values equal by the node's semantics (a domain's: each value of the choice
+    by its semantics, a bool or nothing listed exactly; a constraint's, the bool)."""
+    if left is right:
+        return True
+    if type(left) is not type(right):
+        return False
+    if not isinstance(left, Available):
+        try:
+            return bool(left.findings == cast(NonValue, right).findings)
+        except Exception:  # noqa: BLE001 - findings without equality are never the same
+            return False
+    one, other = left.value, cast(Available[object], right).value
+    if node.kind == "decision":
+        if isinstance(one, tuple) and isinstance(other, tuple):
+            return len(one) == len(other) and all(
+                _same_value(node, a, b) for a, b in zip(one, other)
+            )
+        return type(one) is type(other) and one == other
+    if node.kind == "constraint":
+        return one is other
+    return _same_value(node, one, other)
 
 
 def _inputs(arguments: Sequence[Argument], answers: Sequence[QueryResult[object]]) -> Trace:
@@ -1454,25 +1522,40 @@ def _method(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
             else:
                 evaluator.memo.used(kept)
                 evaluator.counters.hit(node.kind, node.index)
+                if _PURITY:
+                    _again(
+                        node, node.kind, kept.outcome.result, _call_method(world, node)[0].result
+                    )
                 return _entry(kept.outcome, reads | more, (*trace, *kept.trace))
         except Failing:
             break
-    call = Call(node.owner, node.kind)
-    reader = MethodReader(world, node, call)
     evaluator.counters.call(node.kind, node.index)
-    outcome = _authored(
-        world, call, cast(Callable[..., object], node.function), (receiver(reader, node.scope),)
-    )
-    via = tuple(reader.via)
-    if isinstance(outcome, _Halted):
-        blocked = cast(NonValue, _blocked(outcome.results))
-        called = Called(blocked, _guard_assessment(node, blocked), via=via)
-    else:
-        finished = _finished(node, outcome.value)
-        called = Called(finished.result, finished.assessment, finished.own_refusal, via)
+    called, reader = _call_method(world, node)
+    if _PURITY and (world, node.index) in cast(_Run, evaluator.run).abandoned:
+        _again(node, node.kind, called.result, _call_method(world, node)[0].result)
     recorded = tuple(reader.trace)
     evaluator.memo.keep(key, recorded, called)
     return _entry(called, reads | reader.reads, (*trace, *recorded))
+
+
+def _call_method(world: World, node: Node) -> tuple[Called, MethodReader]:
+    """A ``self`` method called on a receiver reading through ``world``: what it came to,
+    and its reader (what it read). Abandoned by the depth guard, it is noted in its run."""
+    call = Call(node.owner, node.kind)
+    reader = MethodReader(world, node, call)
+    try:
+        outcome = _authored(
+            world, call, cast(Callable[..., object], node.function), (receiver(reader, node.scope),)
+        )
+    except Deeper:
+        cast(_Run, world.evaluator.run).abandoned.add((world, node.index))
+        raise
+    via = tuple(reader.via)
+    if isinstance(outcome, _Halted):
+        blocked = cast(NonValue, _blocked(outcome.results))
+        return Called(blocked, _guard_assessment(node, blocked), via=via), reader
+    finished = _finished(node, outcome.value)
+    return Called(finished.result, finished.assessment, finished.own_refusal, via), reader
 
 
 # -- domains ----------------------------------------------------------------------------
@@ -1553,25 +1636,56 @@ def _type_check(
     answers, blocked, reads = _domain_inputs(world, node, trace, reads)
     if blocked is not None:
         return blocked, reads
-    evaluator = world.evaluator
-    key = (node.index, "membership")
+
+    def membership() -> QueryResult[object]:
+        candidate = _clone(node, value.value, owner=node.owner, role="domain candidate snapshot")
+        outcome = _authored(
+            world,
+            Call(node.owner, "domain membership"),
+            domain.membership,
+            (candidate, _domain_values(world, node, answers)),
+            {"semantics": semantics, "owner": node.owner},
+        )
+        return cast(QueryResult[object], cast(_Returned, outcome).value)
+
     called_on = ((node.index, value), *_inputs(membership_arguments(node), answers))
+    return _memoized(world, node, "membership", called_on, membership), reads
+
+
+def _memoized(
+    world: World,
+    node: Node,
+    purpose: str,
+    called_on: Trace,
+    compute: Callable[[], QueryResult[object]],
+) -> QueryResult[object]:
+    """What a Decision's domain answers for ``purpose`` (its membership, listing,
+    enumeration or order) on the reads ``called_on``: kept in the model's memo, or
+    computed and kept. Under the purity check a kept answer is computed again and
+    compared."""
+    evaluator = world.evaluator
+    kind = _DOMAIN_KINDS[purpose]
+    key = (node.index, purpose)
     held = _recall(world, key, called_on)
     if held is not None:
-        evaluator.counters.hit("domain membership", node.index)
-        return held.outcome.result, reads
-    candidate = _clone(node, value.value, owner=node.owner, role="domain candidate snapshot")
-    evaluator.counters.call("domain membership", node.index)
-    outcome = _authored(
-        world,
-        Call(node.owner, "domain membership"),
-        domain.membership,
-        (candidate, _domain_values(world, node, answers)),
-        {"semantics": semantics, "owner": node.owner},
-    )
-    result = cast(QueryResult[object], cast(_Returned, outcome).value)
+        evaluator.counters.hit(kind, node.index)
+        if _PURITY:
+            _again(node, kind, held.outcome.result, compute())
+        return held.outcome.result
+    evaluator.counters.call(kind, node.index)
+    result = compute()
     evaluator.memo.keep(key, called_on, Called(result))
-    return result, reads
+    return result
+
+
+# What each domain purpose is counted as.
+_DOMAIN_KINDS = {
+    "membership": "domain membership",
+    "listing": "domain listing",
+    "lists a value": "domain listing",
+    "enumeration": "domain enumeration",
+    "order": "domain order",
+}
 
 
 def _listed_members(
@@ -1598,21 +1712,23 @@ def _listed(
     """A choice's listed values here (``Available(None)``: membership only, nothing is
     listed): its domain's enumeration, each value checked by membership (memoized on the
     domain inputs' answers)."""
-    domain, semantics = node.domain, node.semantics
-    assert domain is not None and semantics is not None
+    domain = node.domain
+    assert domain is not None
     answers, blocked, reads = _domain_inputs(world, node, trace, reads)
     if blocked is not None:
         return blocked, reads
     if domain.candidates is None:
         return Available(None), reads
-    evaluator = world.evaluator
-    key = (node.index, "listing")
     called_on = _inputs(membership_arguments(node), answers)
-    held = _recall(world, key, called_on)
-    if held is not None:
-        evaluator.counters.hit("domain listing", node.index)
-        return held.outcome.result, reads
-    evaluator.counters.call("domain listing", node.index)
+    return _memoized(world, node, "listing", called_on, lambda: _list(world, node, answers)), reads
+
+
+def _list(
+    world: World, node: Node, answers: tuple[QueryResult[object], ...]
+) -> QueryResult[object]:
+    """A domain's listed values on its inputs' answers (each available)."""
+    domain, semantics = node.domain, node.semantics
+    assert domain is not None and semantics is not None
     listed = _enumerate(world, node, answers)
     if isinstance(listed, Available) and domain._finite_values is None:
         kept = _authored(
@@ -1623,8 +1739,7 @@ def _listed(
             {"semantics": semantics, "owner": node.owner},
         )
         listed = Available(cast(_Returned, kept).value)
-    evaluator.memo.keep(key, called_on, Called(listed))
-    return listed, reads
+    return listed
 
 
 def _first_member(
@@ -1653,40 +1768,43 @@ def _lists_a_value(
     non-value its inputs answer. Membership is asked up to the first value it holds (the
     full list, where it was already made, answers at once); memoized on the domain
     inputs' answers."""
-    domain, semantics = node.domain, node.semantics
-    assert domain is not None and semantics is not None
+    domain = node.domain
+    assert domain is not None
     answers, blocked, reads = _domain_inputs(world, node, trace, reads)
     if blocked is not None:
         return blocked, reads
     if domain.candidates is None:
         return Available(None), reads
-    evaluator = world.evaluator
     called_on = _inputs(membership_arguments(node), answers)
-    for purpose in ("listing", "lists a value"):
-        held = _recall(world, (node.index, purpose), called_on)
-        if held is not None:
-            evaluator.counters.hit("domain listing", node.index)
-            found = held.outcome.result
-            if purpose == "listing" and isinstance(found, Available):
-                found = Available(found.value != ())
-            return found, reads
+    if _recall(world, (node.index, "listing"), called_on) is not None:
+        found = _memoized(world, node, "listing", called_on, lambda: _list(world, node, answers))
+        if isinstance(found, Available):
+            found = Available(found.value != ())
+        return found, reads
+    found = _memoized(world, node, "lists a value", called_on, lambda: _lists(world, node, answers))
+    return found, reads
+
+
+def _lists(
+    world: World, node: Node, answers: tuple[QueryResult[object], ...]
+) -> QueryResult[object]:
+    """Whether a domain lists a value on its inputs' answers (each available)."""
+    domain, semantics = node.domain, node.semantics
+    assert domain is not None and semantics is not None
     enumerated = _enumerate(world, node, answers)
-    result: QueryResult[object] = enumerated
-    if isinstance(enumerated, Available):
-        values = cast(tuple[object, ...], enumerated.value)
-        if domain._finite_values is not None or not values:
-            result = Available(bool(values))
-        else:
-            kept = _authored(
-                world,
-                Call(node.owner, "domain membership"),
-                _first_member,
-                (domain, values, _domain_values(world, node, answers)),
-                {"semantics": semantics, "owner": node.owner},
-            )
-            result = Available(cast(_Returned, kept).value)
-    evaluator.memo.keep((node.index, "lists a value"), called_on, Called(result))
-    return result, reads
+    if not isinstance(enumerated, Available):
+        return enumerated
+    values = cast(tuple[object, ...], enumerated.value)
+    if domain._finite_values is not None or not values:
+        return Available(bool(values))
+    kept = _authored(
+        world,
+        Call(node.owner, "domain membership"),
+        _first_member,
+        (domain, values, _domain_values(world, node, answers)),
+        {"semantics": semantics, "owner": node.owner},
+    )
+    return Available(cast(_Returned, kept).value)
 
 
 def listed_values(world: World, node: NodeId) -> QueryResult[object]:
@@ -1745,27 +1863,19 @@ def _ranked(
     blocked = _blocked([answer for answer in answers if not isinstance(answer, Available)])
     if blocked is not None:
         return blocked
-    evaluator = world.evaluator
-    key = (node.index, "order")
-    called_on = (
-        *_inputs(membership_arguments(node), inputs),
-        *_inputs(arguments, answers),
-    )
-    held = _recall(world, key, called_on)
-    if held is not None:
-        evaluator.counters.hit("domain order", node.index)
-        return held.outcome.result
-    evaluator.counters.call("domain order", node.index)
-    ranked = _authored(
-        world,
-        Call(node.owner, "domain order"),
-        domain.rank,
-        (enumerated.value, _domain_values(world, node, answers, arguments)),
-        {"semantics": semantics, "owner": node.owner},
-    )
-    result: QueryResult[object] = Available(cast(_Returned, ranked).value)
-    evaluator.memo.keep(key, called_on, Called(result))
-    return result
+
+    def rank() -> QueryResult[object]:
+        ranked = _authored(
+            world,
+            Call(node.owner, "domain order"),
+            domain.rank,
+            (enumerated.value, _domain_values(world, node, answers, arguments)),
+            {"semantics": semantics, "owner": node.owner},
+        )
+        return Available(cast(_Returned, ranked).value)
+
+    called_on = (*_inputs(membership_arguments(node), inputs), *_inputs(arguments, answers))
+    return _memoized(world, node, "order", called_on, rank)
 
 
 def _enumerate(
@@ -1775,24 +1885,19 @@ def _enumerate(
     what ``candidates()`` answers, and the listing filters."""
     domain, semantics = node.domain, node.semantics
     assert domain is not None and semantics is not None
-    evaluator = world.evaluator
-    key = (node.index, "enumeration")
+
+    def enumerate_() -> QueryResult[object]:
+        enumerated = _authored(
+            world,
+            Call(node.owner, "domain enumeration"),
+            domain.enumerate,
+            (_domain_values(world, node, answers),),
+            {"semantics": semantics, "owner": node.owner},
+        )
+        return cast(QueryResult[object], cast(_Returned, enumerated).value)
+
     called_on = _inputs(membership_arguments(node), answers)
-    held = _recall(world, key, called_on)
-    if held is not None:
-        evaluator.counters.hit("domain enumeration", node.index)
-        return held.outcome.result
-    evaluator.counters.call("domain enumeration", node.index)
-    enumerated = _authored(
-        world,
-        Call(node.owner, "domain enumeration"),
-        domain.enumerate,
-        (_domain_values(world, node, answers),),
-        {"semantics": semantics, "owner": node.owner},
-    )
-    result = cast(QueryResult[object], cast(_Returned, enumerated).value)
-    evaluator.memo.keep(key, called_on, Called(result))
-    return result
+    return _memoized(world, node, "enumeration", called_on, enumerate_)
 
 
 def enumeration(world: World, node: NodeId) -> QueryResult[object]:
@@ -1826,6 +1931,7 @@ __all__ = [
     "Evaluator",
     "MethodReader",
     "World",
+    "check_purity",
     "enumeration",
     "listed_values",
     "membership_arguments",

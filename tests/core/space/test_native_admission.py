@@ -148,6 +148,7 @@ def test_invalid_candidate_never_crosses_a_getter_or_reaches_division() -> None:
     assert starts == [] and divisions == []
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_published_reads_do_not_repeat_admission_callbacks() -> None:
     calls: list[int] = []
 
@@ -308,6 +309,7 @@ def _deep_space(depth: int, completed: list[str] | None = None) -> tuple[type[Sp
     return cast(type[Space], type("DeepSelf", (Space,), declarations)), names
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_native_chain_20000_completes_each_callback_once() -> None:
     """Past the depth the Python stack takes, the evaluation unwinds and runs again what
     it abandoned: a method may start more than once, and completes once."""
@@ -320,6 +322,7 @@ def test_native_chain_20000_completes_each_callback_once() -> None:
     assert len(completed) == 20_000
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_native_wide_fan_in_and_cached_prefix_deep_dependency() -> None:
     completed: list[str] = []
     space_type, names = _deep_space(1_200, completed)

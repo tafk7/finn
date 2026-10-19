@@ -180,6 +180,7 @@ def test_replacement_equality_is_contextual_and_cannot_mutate_stored_values() ->
     assert chosen.value == [1]
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -> None:
     limits: list[int] = []
     admitted: list[int] = []

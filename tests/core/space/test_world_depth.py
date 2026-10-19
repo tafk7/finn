@@ -39,9 +39,16 @@ def no_call_is_left_active() -> object:
     assert _failure.current() is None
 
 
-def _chain(depth: int, completed: list[int], *, broken: int | None = None) -> type[Space]:
+def _chain(
+    depth: int,
+    completed: list[int],
+    *,
+    broken: int | None = None,
+    impure: int | None = None,
+) -> type[Space]:
     """``value_<n>`` reads ``value_<n-1>`` through its receiver; ``completed`` gets ``n``
-    once ``value_<n>`` returns (its read answered)."""
+    once ``value_<n>`` returns (its read answered). ``value_<impure>`` adds how often it
+    completed before, odd or even: run again, it answers otherwise."""
     members: dict[str, object] = {"__annotations__": {"value_0": int}, "value_0": Param()}
 
     def step(number: int, previous: str) -> Callable[[Space], int]:
@@ -50,6 +57,8 @@ def _chain(depth: int, completed: list[int], *, broken: int | None = None) -> ty
                 raise LookupError("the bottom")
             found = cast(int, getattr(self, previous))
             completed.append(number)
+            if number == impure:
+                return found + 1 + completed.count(number) % 2
             return found + 1
 
         return compute
@@ -59,6 +68,22 @@ def _chain(depth: int, completed: list[int], *, broken: int | None = None) -> ty
     return cast(type[Space], type("DeepSelf", (Space,), members))
 
 
+def test_the_purity_check_runs_again_a_method_the_depth_guard_abandoned() -> None:
+    """Past ``DEPTH`` the methods in flight are abandoned and run again; under the purity
+    check one completed after it was abandoned runs once more, and an impure one is
+    named. Pure, every abandoned method completes twice."""
+    completed: list[int] = []
+    world = open_world(_chain(100, completed)(value_0=0))  # type: ignore[call-arg]
+    assert world.result(node(world, "value_100")) == Available(100)
+    assert 0 < sum(completed.count(number) == 2 for number in range(1, 101)) < 100
+    completed.clear()
+    impure = open_world(_chain(100, completed, impure=50)(value_0=0))  # type: ignore[call-arg]
+    with pytest.raises(NativeEvaluationError) as caught:
+        impure.entry(node(impure, "value_100"))
+    assert caught.value.primary.owner == "value_50"
+
+
+@pytest.mark.usefixtures("purity_unchecked")
 def test_a_chain_of_twenty_thousand_methods_completes_each_once() -> None:
     """Moved from ``test_native_admission``'s
     ``test_native_chain_20000_has_one_start_per_callback``: each callback completes once;
@@ -118,6 +143,7 @@ def test_a_cycle_longer_than_the_guard_is_found() -> None:
         world.entry(node(world, "value_0"))
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_wide_fan_in_and_a_deep_dependency_behind_a_cached_prefix() -> None:
     """Mirrors ``test_native_admission``'s
     ``test_native_wide_fan_in_and_cached_prefix_deep_dependency``: one method reading 400

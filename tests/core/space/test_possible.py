@@ -297,6 +297,7 @@ def test_a_successor_keeps_what_its_change_does_not_reach_whichever_order_declar
             assert got.result(node.index) == want.result(node.index), node.key
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_a_values_trial_keeps_what_the_value_does_not_reach() -> None:
     """Each value's trial is a world one choice away from the configuration's: a value the
     trials share is derived once, not again in every trial."""

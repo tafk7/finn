@@ -12,10 +12,15 @@ a model, the least recently used dropped first.
 
 from __future__ import annotations
 
+from itertools import count
+
+import pytest
+
 from core.space._world_support import node, open_world, successor
 from finn.core.space import Available, Decision, Param, Space, derived
+from finn.core.space._failure import NativeEvaluationError
 from finn.core.space._memo import TRACES_KEPT, BitTable, Counters, Memo
-from finn.core.space._world import Called, World
+from finn.core.space._world import Called, World, check_purity
 from finn.core.space.results import QueryResult
 
 
@@ -91,6 +96,7 @@ class Pair(Space):
         return scaled + right
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_sibling_worlds_share_what_either_called() -> None:
     calls.clear()
     base = open_world(Pair(width=4), {"left": 1, "right": 1})
@@ -120,6 +126,7 @@ def test_counters_count_calls_and_hits_by_kind_and_node_and_reset() -> None:
     assert counters == Counters()
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_worlds_started_apart_share_what_they_compute_alike() -> None:
     """A world started on its own makes its own answer objects; the memo finds what
     another world called where each argument is equal by its value semantics."""
@@ -132,3 +139,34 @@ def test_worlds_started_apart_share_what_they_compute_alike() -> None:
     assert counters.hits["derived"] == 2 and counters.semantic >= 2
     # The other world's answer is the kept outcome, the same object.
     assert world.result(node(world, "total")) is other.result(node(other, "total"))
+
+
+STAMPS = count()
+
+
+class Stamped(Space):
+    """Impure: each answer reads a counter outside the Space."""
+
+    width: int = Param()
+
+    @derived
+    def stamped(self) -> int:
+        return self.width + next(STAMPS) % 2
+
+    @derived
+    def numbered(*, width: int) -> int:
+        return width + next(STAMPS) % 2
+
+
+@pytest.mark.parametrize("key", ["stamped", "numbered"])
+def test_the_purity_check_runs_a_memo_hit_again_and_names_an_impure_function(key: str) -> None:
+    world = open_world(Stamped(width=4))
+    first = world.result(node(world, key))
+    other = World.start(world.evaluator, world.facts, world.stored)  # equal reads: a hit
+    with pytest.raises(NativeEvaluationError) as caught:
+        other.result(node(other, key))
+    assert caught.value.primary.owner == key
+    assert "answered differently when run again" in str(caught.value.primary)
+    check_purity(False)  # unchecked, the hit answers what was kept, silently
+    again = World.start(world.evaluator, world.facts, world.stored)
+    assert again.result(node(again, key)) is first

@@ -105,6 +105,7 @@ def test_a_change_to_one_stage_keeps_what_read_the_far_stages(stages_first: bool
     assert built.world.result(keys["h5.narrow"]) == far.result
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_a_change_does_not_evaluate_the_guard_of_a_choice_it_does_not_reach() -> None:
     guards: list[str] = []
 

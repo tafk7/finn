@@ -207,6 +207,7 @@ class Counted(Space):
         return "even" if self.parity else "odd"
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_a_method_is_memoized_by_its_traces() -> None:
     calls.clear()
     base = open_world(Counted(width=4), {"left": 1, "right": 1})
@@ -223,6 +224,7 @@ def test_a_method_is_memoized_by_its_traces() -> None:
     assert calls == ["label", "parity", "scaled", "scaled", "parity"]
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_a_halted_method_is_memoized_with_its_blocked_read() -> None:
     """A trace is replayed by the reads' answers, compared by value semantics, so a world
     started apart (other answer objects, equal answers) finds it too."""
@@ -235,6 +237,7 @@ def test_a_halted_method_is_memoized_with_its_blocked_read() -> None:
     assert world.evaluator.counters.hits["derived"] == 3
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_two_models_evaluate_at_once_one_model_one_at_a_time() -> None:
     """Moved from ``test_native_admission``'s
     ``test_concurrent_independent_and_cold_shared_snapshots``: the lock is the model's,
