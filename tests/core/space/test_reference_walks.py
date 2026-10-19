@@ -154,6 +154,9 @@ def test_a_disagreement_is_told_by_one_simple_rule_or_left_unclassified() -> Non
         "no-dormant-report"
     )
     assert classify(AnswerForm("unresolved"), AnswerForm("value", 1)) == "forced-value"
+    out_of_play, guard_false = RuleForm("inapplicable"), RuleForm("false", frozenset({("o", "d")}))
+    assert classify(out_of_play, guard_false, reference.Presence.REFUSED) == "refused-guard"
+    assert classify(out_of_play, guard_false, reference.Presence.ABSENT) == UNCLASSIFIED
     assert classify(StateForm("set", 1), StateForm("set", 2)) == UNCLASSIFIED
 
 

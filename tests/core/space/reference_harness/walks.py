@@ -1292,10 +1292,12 @@ def _codes(form: Form) -> frozenset[tuple[str, str]]:
     return found
 
 
-def classify(expected: Form, engine: Form) -> str:
+def classify(expected: Form, engine: Form, scope: model.Presence | None = None) -> str:
     """The row kind a disagreement most plausibly belongs to, by one simple rule on the
-    two answers, or ``unclassified``: a tally, never a filter. The rules, in order: the
-    engine's own legacy forms; a possible-values answer; a change by its refusals; the
+    two answers (and, for a rule, ``scope``: its scope's presence in the model), or
+    ``unclassified``: a tally, never a filter. The rules, in order: the engine's own legacy
+    forms; a rule the model leaves out of play under a refused guard that the engine finds
+    false (``refused-guard``); a possible-values answer; a change by its refusals; the
     provisional codes; the engine deciding what the model leaves open (forcing gave it a
     value, ``forced-value``); a refusal where the model waits (a selector forcing refused,
     ``no-viable-case``)."""
@@ -1304,6 +1306,12 @@ def classify(expected: Form, engine: Form) -> str:
             return "forced-value"
         if engine.kind == "refused":
             return "refused-guard" if expected.kind == "absent" else "no-viable-case"
+    if (
+        isinstance(expected, RuleForm)
+        and isinstance(engine, RuleForm)
+        and (expected.kind, engine.kind, scope) == ("inapplicable", "false", model.Presence.REFUSED)
+    ):
+        return "refused-guard"
     if isinstance(engine, PossibleForm):
         return "viable-per-choice"
     if isinstance(expected, ChangeForm) and isinstance(engine, ChangeForm):
@@ -1427,9 +1435,17 @@ class _Walk:
         if problems:
             self.fail(name, "invariant " + "\n".join(problems))
 
-    def disagree(self, what: str, label: str, expected: Form, engine: Form) -> None:
-        """Count a disagreement with the engine, or fail the walk on it (strict)."""
-        kind = classify(expected, engine)
+    def disagree(
+        self,
+        what: str,
+        label: str,
+        expected: Form,
+        engine: Form,
+        scope: model.Presence | None = None,
+    ) -> None:
+        """Count a disagreement with the engine, or fail the walk on it (strict). ``scope``:
+        for a rule, its scope's presence in the model."""
+        kind = classify(expected, engine, scope)
         if self.strict:
             self.fail(
                 "disagreement",
@@ -1497,11 +1513,22 @@ class _Walk:
             )
         return forms
 
-    def compare(self, forms: Mapping[Question, Form], engine: Mapping[Question, Form]) -> None:
+    def compare(
+        self,
+        solution: model.Solution,
+        forms: Mapping[Question, Form],
+        engine: Mapping[Question, Form],
+    ) -> None:
         self.tally.compared += 1
         for question in self.engine_asked:
             if not agrees(forms[question], engine[question]):
-                self.disagree(question[0], ask(question), forms[question], engine[question])
+                what, path = question
+                scope = (
+                    solution.presence(solution.index.constraints[path][1])
+                    if what == "rule"
+                    else None
+                )
+                self.disagree(what, ask(question), forms[question], engine[question], scope)
 
     def engine_change(self, point: Point, edit: model.Change) -> tuple[ChangeForm, Point | None]:
         """``edit`` on the engine; its permanent check: as on a configuration built from
@@ -1644,7 +1671,7 @@ class _Walk:
         self.history_independence(configuration, forms)
         engine = self.engine_state(point) if point is not None else None
         if engine is not None:
-            self.compare(forms, engine)
+            self.compare(solution, forms, engine)
         return _State(configuration, solution, forms, point, engine)
 
     def run(self) -> Tally:
@@ -1728,7 +1755,7 @@ class _Walk:
             tally.out_of_step += point is None
         engine_forms_ = self.engine_state(point) if point is not None else None
         if engine_forms_ is not None:
-            self.compare(forms, engine_forms_)
+            self.compare(solution, forms, engine_forms_)
             if addition and successor is not None and state.engine is not None:
                 self.engine_refinement(state, forms, engine_forms_, edit)
         return _State(result.configuration, solution, forms, point, engine_forms_)

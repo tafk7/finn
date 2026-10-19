@@ -484,3 +484,31 @@ def test_an_unset_choice_under_a_guard_refused_through_its_input_is_absent() -> 
 
 def test_a_rule_reading_a_choice_under_a_refused_guard_is_false_through_it() -> None:
     GATED.start({"w": 3}).check_rule("uses")
+
+
+# The same guard over a scope holding a rule of its own, over the fact ``w``: refused through
+# its input, the scope is not in play, so its rule does not apply when asked (§ 16.8); the
+# guard's one piece refuses the configuration.
+
+GATED_RULE = Case(
+    "a rule under a guard refused through its input",
+    Space(
+        ("w",),
+        Scope(
+            "",
+            derived=(Derived("gate", ("w",), lambda r: Refuse("odd") if r["w"] % 2 else r["w"]),),
+            children=(
+                Scope(
+                    "g",
+                    when=When(("gate",), lambda r: r["gate"] > 2),
+                    constraints=(Constraint("fits", ("w",), lambda r: r["w"] < 9, "wide"),),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+@expected("rule-under-refused-guard")
+def test_a_rule_under_a_guard_refused_through_its_input_does_not_apply() -> None:
+    GATED_RULE.start({"w": 3}).check_rule("g.fits")

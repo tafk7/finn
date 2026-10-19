@@ -592,6 +592,15 @@ ROWS: tuple[Row, ...] = (
         f"{_SCOPES}::test_an_unset_choice_under_a_guard_refused_through_its_input_is_absent",
         "refused-guard",
     ),
+    Row(
+        "rule-under-refused-guard",
+        _CORE,
+        "a rule in a scope under a guard refused through its input does not apply when asked: the "
+        "scope is not in play, and the guard's one piece refuses",
+        f"{_SCOPES}::test_a_rule_under_a_guard_refused_through_its_input_does_not_apply",
+        "refused-guard",
+        "today the rule is false through the guard's input",
+    ),
 )
 
 BY_ID = {row.id: row for row in ROWS}
