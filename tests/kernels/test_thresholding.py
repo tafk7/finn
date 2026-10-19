@@ -119,10 +119,10 @@ def test_threshold_sets_present_a_selector_bus_and_refuse_axilite_addressing() -
         if isinstance(port, Bus) and port.name == "s_axis_set"
     )
     assert next(signal.width for signal in selector.signals if signal.logical == "tdata") == 8
-    assert isinstance(
-        threshold(table=table, axilite=True).inspect(ThresholdingAxiKernel.module).accepted_result,
-        Rejected,
-    )
+    # Runtime-writable sets: the AXI-Lite wrapper addresses one set, so setting it is
+    # refused by that rule.
+    with pytest.raises(ValueError, match="threshold-config-sets"):
+        threshold(table=table, axilite=True)
 
 
 def test_threshold_partial_dtype_query_does_not_adopt_implementation_decisions() -> None:
@@ -134,18 +134,25 @@ def test_threshold_partial_dtype_query_does_not_adopt_implementation_decisions()
 
 def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
     profiles = (
-        threshold(table=((-2, 0, 3),), pe=None),  # no sets axis
         threshold(table=(((2, 1),),)),
         threshold(table=(((0, 20),),)),
         threshold(threshold_dtype="UINT5"),
         threshold(bias=1 << 31),
         threshold(bias=-10),
-        threshold(memory={"ram_style": "distributed", "block_stages": 2, "ultra_stages": 1}),
     )
     assert all(
         isinstance(point.inspect(ThresholdingAxiKernel.module).accepted_result, Rejected)
         for point in profiles
     )
+    # A table with no sets axis is refused on its facts, before any choice is set.
+    flat = threshold_base(table=((-2, 0, 3),), channels=1)
+    assert inspection.validity(flat).status == "refused"
+    # More stages than the RTL has: the change placing them is refused by the triggers'
+    # rule (a commit that breaks a rule is).
+    report = threshold_base().try_with_choices(
+        pe=1, ram_style="distributed", block_stages=2, ultra_stages=1
+    )
+    assert not report.accepted and [rule.rule for rule in report.broken] == ["depth_triggers"]
     # The table is an integer tensor: nothing else is one.
     for malformed in ((), (((0,), (0, 1)),), (([-2, 0, 3],),)):
         with refused("literal-unrecognized", error=DefinitionError, message="integer tensor"):

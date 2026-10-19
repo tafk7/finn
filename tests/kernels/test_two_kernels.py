@@ -28,7 +28,6 @@ from support.helpers import (
     dotp_extents,
     exact_result_dtype,
     labels,
-    module_of,
     with_adapter_memories,
     with_direct_transports,
 )
@@ -36,7 +35,7 @@ from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.rtlsim_pacing import FREE, STALLED
-from finn.core.space import Rejected, design_space
+from finn.core.space import design_space
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.plan import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -160,7 +159,8 @@ def layered(*, adaptable: bool = True) -> Network:
             "second.reducer": "tree",
         },
     )
-    # A channel admitting no adapter keeps its Decision closed; the others' are forced.
+    # The network sets each channel's adapters as it builds it (the interim channel
+    # rule); their memories and the transports are set here.
     return with_adapter_memories(with_direct_transports(network))
 
 
@@ -218,12 +218,15 @@ def test_the_network_s_cycles_are_its_slowest_member_s_and_its_buffering_their_s
 
 
 def test_a_hidden_stream_admitting_no_adapter_refuses_the_pair():
-    point = layered(adaptable=False)
-    refused = point.member("h").query(Channel.netlist)
-    assert isinstance(refused, Rejected)
-    plan = [finding for finding in refused.findings if finding.code == "channel-plan"]
-    assert plan and "width_conversion -> reorder -> markers" in plan[0].message
-    assert isinstance(module_of(point, STEM), Rejected)
+    """The foldings of the pair need the hidden stream to convert widths, reorder and
+    frame; a channel admitting no adapter refuses them, naming what it would need (a
+    change that breaks a rule is refused)."""
+    with pytest.raises(
+        ValueError,
+        match="h.compatible: .*channel-form: needs a width_conversion -> reorder adapter.*"
+        "channel-marker",
+    ):
+        layered(adaptable=False)
 
 
 @requires_xsim
