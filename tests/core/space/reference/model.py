@@ -45,9 +45,11 @@ when its Space's validity is false.
 (:func:`~.answers.kleene_and`) of the pieces at or below it: each constraint (absent
 or not in play: true, not applying; an input refused: false through it; an input
 waiting: unknown; an input inapplicable: true, not applying; else its predicate on its
-own values, false at its origin); each listed domain (false when it lists no value);
-each guard refused through an input (false). A piece of a scope whose presence is
-unknown is unknown, whatever it would answer. No choice is otherwise a piece.
+own values, false at its origin); each listed domain that lists no value (false), or
+whose list cannot be made yet (reading 13); each guard refused through an input
+(false). A listed domain that lists a value is no piece, whatever its presence. A
+piece of a scope whose presence is unknown is unknown, whatever it would answer. No
+choice is otherwise a piece.
 
 **A change** (commit or replace choices, clear choices, set or unset facts, as one
 batch) is assignment: the successor is published whole, or refused with each refusal
@@ -133,16 +135,19 @@ corpus; § 16 holds the readings its author gave for this model.
 10. *A domain's order* (§ 16.10) ranks the membership list over ``order_reads``, which
     may read choices: :meth:`Solution.ordered` is the ranking, known, or waiting while a
     read waits. Possible values are answered in membership's list order.
-11. *An unknown guard answers unknown* for every piece under it (constraints, listed
-    domains, guards), not Kleene's implication (the canon's text in § 11: "a scope
+11. *An unknown guard answers unknown* for every piece under it (constraints, empty
+    listed domains, guards), not Kleene's implication (the canon's text in § 11: "a scope
     whose guard waits counts each of its pieces as unknown").
 12. *Assignment comes first* (§ 5.1): a change with an assignment refusal reports those
     alone, and its ``validity`` is ``None``: a value of the wrong type makes no
     configuration whose rules could be read.
-13. *A listed domain's piece* (§ 4) is false when its list is empty (the origin),
-    unknown while the list waits on a missing fact, and false through the input when
-    its membership reads a refused input (the list cannot be made; blamed at that
-    input's origin). A membership-only domain has no piece.
+13. *A listed domain is a piece only when it lists no value* (§ 4.6, § 16.12): false
+    when its list is empty and its choice present (the origin), unknown when it is
+    empty under a guard that waits; unknown while the list waits on a missing fact, and
+    false through the input when its membership reads a refused input (the list cannot
+    be made; blamed at that input's origin). A list with a value adds no piece, whatever
+    its presence: an open selector whose case holds a listed choice and no rules leaves
+    the configuration valid. A membership-only domain has no piece.
 14. *A stored choice waits on what it waits on*: an unknown presence's waits and its
     membership's missing facts, never on itself. An open choice also waits on itself.
 15. *A ``when`` reading an input that does not apply* leaves its scope unknown,
@@ -559,16 +564,19 @@ class _Evaluation:
         reason = Reason(ReasonKind.CONSTRAINT, path, scope, rule.code)
         return Piece(kind, scope, path, Verdict.FALSE, reasons=(reason,))
 
-    def domain(self, choice: str) -> Piece:
-        """A listed domain's piece: does it list a value?"""
+    def domain(self, choice: str) -> Piece | None:
+        """A listed domain's piece: none when it lists a value (reading 13), whatever
+        its presence; else does it list a value?"""
 
         scope = self.index.choices[choice].scope
         kind = PieceKind.EMPTY_DOMAIN
+        listing = self.facts.listing(choice)
+        assert listing is not None
+        if isinstance(listing, Known) and listing.value:
+            return None
         presence = self.presence(scope)
         if presence.state in _OUT:
             return Piece(kind, scope, choice, Verdict.TRUE, applies=False)
-        listing = self.facts.listing(choice)
-        assert listing is not None
         if presence.state is Presence.UNKNOWN:
             waits = set(presence.waits)
             if isinstance(listing, Unresolved):
@@ -578,9 +586,6 @@ class _Evaluation:
             return Piece(kind, scope, choice, Verdict.UNKNOWN, waits=listing.waits)
         if isinstance(listing, Refused):
             return Piece(kind, scope, choice, Verdict.FALSE, reasons=listing.reasons)
-        assert isinstance(listing, Known)
-        if listing.value:
-            return Piece(kind, scope, choice, Verdict.TRUE)
         reason = Reason(ReasonKind.EMPTY_DOMAIN, choice, scope)
         return Piece(kind, scope, choice, Verdict.FALSE, reasons=(reason,))
 
@@ -620,11 +625,11 @@ class _Evaluation:
             for name, (_, owner) in sorted(index.constraints.items())
             if index.within(owner, scope)
         ]
-        pieces.extend(
-            self.domain(name)
-            for name, info in sorted(index.choices.items())
-            if info.domain.listed and index.within(info.scope, scope)
-        )
+        for name, info in sorted(index.choices.items()):
+            if info.domain.listed and index.within(info.scope, scope):
+                domain = self.domain(name)
+                if domain is not None:
+                    pieces.append(domain)
         for name in sorted(index.scopes):
             if index.within(name, scope):
                 guard = self.guard(name)

@@ -49,6 +49,7 @@ from core.space.reference import (
     Solution,
     Space,
     Unresolved,
+    Validity,
     Verdict,
     View,
     Waiting,
@@ -450,8 +451,8 @@ def two_cores() -> Space:
 def test_a_named_choice_under_an_open_selector_waits() -> None:
     first = accepted(change(Configuration(two_cores()), Change(commit={"mode.a.p": 2})))
     assert (first.dormant, first.in_play, first.opened) == ((), (), ())
-    # each case's domain piece waits on the selector (reading 11)
-    assert (first.validity.verdict, first.validity.waits) == (U, ("mode",))
+    # each case's list has a value, so no piece waits on the selector (reading 13)
+    assert first.validity == Validity(T, (), ())
     solution = first.configuration.solve()
     assert solution.state("mode.a.p") == Waiting(2, ("mode",))
     assert solution.read("mode.a.p") == Unresolved(("mode",))
@@ -909,6 +910,25 @@ def test_an_empty_list_is_a_false_piece_and_a_waiting_list_an_unknown_one() -> N
     assert solve(counted(), {"n": 2}).possible("x") == ((0, Possible()), (1, Possible()))
 
 
+def test_reading_13_a_listed_choice_under_an_open_selector_is_no_piece() -> None:
+    """§ 16.12: a list with a value adds no piece, whatever its presence; so an open
+    selector whose case holds a listed choice and no rules leaves the configuration
+    valid. Emptied, the same list is an unknown piece under the waiting selector."""
+
+    def held() -> Space:
+        case = Scope("on", choices=(Choice("x", computed(lambda r: tuple(range(r["n"])), ("n",))),))
+        return Space(("n",), Scope("", selectors=(Selector("mode", (case, Scope("off"))),)))
+
+    open_selector = solve(held(), {"n": 2})
+    assert open_selector.state("mode") == Open()
+    assert open_selector.state("mode.on.x") == Open(("mode",))
+    assert open_selector.validity() == Validity(T, (), ())
+    emptied = solve(held(), {"n": 0})
+    assert emptied.validity().unknown == (
+        Piece(PieceKind.EMPTY_DOMAIN, "mode.on", "mode.on.x", U, waits=("mode",)),
+    )
+
+
 def ranked() -> Space:
     def order(values: tuple[Any, ...], r: Reads) -> tuple[Any, ...]:
         return tuple(reversed(values)) if r["size"] == "large" else values
@@ -1012,8 +1032,8 @@ def test_an_addition_moves_answers_only_from_unknown_to_known() -> None:
     base = Configuration(additive(), {}, {"a": 1, "mode.on.q": 1})
     before = base.solve()
     assert before.validity().verdict is U
-    # pieces sort by kind, owner, subject: the constraints, then the domain piece
-    assert [p.subject for p in before.validity().unknown] == ["sum", "mode.on.inner", "mode.on.q"]
+    # pieces sort by kind, owner, subject; ``mode.on.q`` lists values, so it is no piece
+    assert [p.subject for p in before.validity().unknown] == ["sum", "mode.on.inner"]
     assert before.validity().waits == ("b", "mode")
     assert before.states() == {
         "a": Set(1),
