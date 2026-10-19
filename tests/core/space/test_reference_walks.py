@@ -20,7 +20,7 @@ The gate runs a fixed set of seeds; ``python -m core.space.reference_harness wal
 from __future__ import annotations
 
 import random
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 import pytest
 
@@ -45,7 +45,8 @@ from core.space.reference import (
     change,
     listed,
 )
-from core.space.reference_harness import walks
+from core.space.reference_harness import Row, walks
+from core.space.reference_harness.engine import Point
 from core.space.reference_harness.forms import (
     AnswerForm,
     ChangeForm,
@@ -59,6 +60,7 @@ from core.space.reference_harness.forms import (
 from core.space.reference_harness.walks import (
     UNCLASSIFIED,
     Pair,
+    Question,
     Structure,
     below,
     bind_problems,
@@ -124,24 +126,60 @@ def test_descriptions_hold_two_to_six_choices_and_skip_cycles() -> None:
 
 
 # -- the engine comparison: counted while a milestone is pending, strict without -------------------
+#
+# The engine agrees with the model on every walk, so a disagreement is made here: the engine
+# answers every choice's state as absent (the model's start holds an open choice), and a
+# milestone with one row is put in the matrix while one is pending.
 
 
-def test_disagreements_are_counted_while_the_engine_core_has_rows() -> None:
-    assert pending() == ("engine core",)
+@pytest.fixture
+def engine_disagrees(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The engine answers every choice's state as absent: consistently, so its own checks
+    (walked against built from nothing) still hold."""
+    asked = walks.engine_forms
+
+    def absent(point: Point, questions: Iterable[Question]) -> dict[Question, Form]:
+        forms = asked(point, questions)
+        return {q: StateForm("absent") if q[0] == "state" else form for q, form in forms.items()}
+
+    monkeypatch.setattr(walks, "engine_forms", absent)
+
+
+def pend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A later milestone, ``lane 9``, with one row: pending."""
+    row = Row("a-row", "lane 9", "the change", "test_reference_cases::test_it", "a-kind")
+    monkeypatch.setattr(walks, "MILESTONES", ("base", "lane 9"))
+    monkeypatch.setattr(walks, "ROWS", (row,))
+
+
+@pytest.mark.usefixtures("engine_disagrees")
+def test_disagreements_are_counted_while_a_milestone_has_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pend(monkeypatch)
+    assert pending() == ("lane 9",)
     tally = walk(0, 6)
     assert tally.failure is None, tally.failure
-    assert sum(tally.by_question.values()) == sum(tally.by_kind.values()) > 0
+    assert tally.by_question["state"] > 0 and tally.engine_errors == 0
 
 
-def test_without_the_engine_cores_rows_every_disagreement_fails_its_walk() -> None:
-    assert pending(("engine core",)) == ()
-    tally = walk(0, 6, without=("engine core",))
-    assert tally.failed == "disagreement" and tally.failure is not None
-    first = tally.failure.splitlines()[0]
-    assert first == "seed 0, step 0: the engine disagrees (state, told as forced-value)"
-    assert "description:" in tally.failure and "| engine" in tally.failure
+@pytest.mark.usefixtures("engine_disagrees")
+def test_with_no_milestone_pending_every_disagreement_fails_its_walk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(walks, "ROWS", ())
+    assert pending() == ()
+    strict = walk(0, 6)
+    pend(monkeypatch)
+    assert pending(("lane 9",)) == ()
+    without = walk(0, 6, without=("lane 9",))
+    for tally in (strict, without):
+        assert tally.failed == "disagreement" and tally.failure is not None
+        first = tally.failure.splitlines()[0]
+        assert first.startswith("seed 0, step 0: the engine disagrees (state")
+        assert "description:" in tally.failure and "| engine" in tally.failure
     with pytest.raises(ValueError, match="no such milestone"):
-        pending(("lane 9",))
+        pending(("lane 10",))
 
 
 def test_a_disagreement_is_told_by_one_simple_rule_or_left_unclassified() -> None:
@@ -186,17 +224,18 @@ def test_a_disagreement_is_told_by_one_simple_rule_or_left_unclassified() -> Non
     assert classify(on_selector, engine_on_fact, reference.Presence.PRESENT) == UNCLASSIFIED
 
 
-def test_the_summary_names_the_mode_and_the_checks() -> None:
+def test_the_summary_names_the_mode_and_the_checks(monkeypatch: pytest.MonkeyPatch) -> None:
     tallies = [walk(0, 3)]
+    pend(monkeypatch)
     text = table(tallies)
     checks = ", ".join(f"{name} {count}" for name, count in sorted(tallies[0].checks.items()))
     assert (
         f"invariant checks: {checks}; binds refused by rules a clear revealed (§ 16.16) 0" in text
     )
-    assert "engine disagreements (counted (pending: engine core)) by question:" in text
+    assert "engine disagreements (counted (pending: lane 9)) by question:" in text
     assert "excused" not in text
     assert text.splitlines()[2].startswith("| 0 | 3 |")
-    assert "strict (no milestone with rows pending)" in table(tallies, ("engine core",))
+    assert "strict (no milestone with rows pending)" in table(tallies, ("lane 9",))
 
 
 def test_a_broken_standing_list_in_the_model_fails_a_walk(monkeypatch: pytest.MonkeyPatch) -> None:
