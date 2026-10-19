@@ -24,12 +24,13 @@ step (each change tried, accepted or refused), on both index paths:
 2. *Additions move answers only up the information order* (:func:`below`, the order
    defined in one place) over a step that only sets choices nothing was stored for, with no
    exception: no accepted addition leaves a Space newly refused (§ 16.15 removes § 16.14's).
-3. *No accepted change that sets a choice or a fact adds a (false piece, origin) pair*
-   (§ 16.15): every pair counted in the published configuration is counted in the one
-   before it. A change made only of clears and unsets is never refused (§ 16.16), and may
-   add a pair only by **masking**: each pair it adds must, before the step, read (its
-   origin, or through its origin's or its piece's body reads) a view refused through its
-   Space, or a fact the step unsets.
+3. *No accepted change that sets a choice or a fact to a new value adds a (false piece,
+   origin) pair* (§ 16.15): every pair counted in the published configuration is counted in
+   the one before it. A change setting no new value (§ 16.18: its commits repeat stored
+   values), only clearing and unsetting, is never refused (§ 16.16), and may add a pair
+   only by **masking**: each pair it adds must, before the step, read (its origin, or
+   through its origin's or its piece's body reads) a view refused through its Space, or a
+   fact the step unsets.
 4. *Every refusal names exactly the origins of the pairs it would add, and their standing
    choices*, checked by brute force: each named origin is false on its own values in the
    would-be configuration; the origins named are exactly those of the pairs counted there
@@ -1034,9 +1035,13 @@ class Checked:
     revealed: set[str] = field(default_factory=set)
 
 
-def clear_only(edit: model.Change) -> bool:
-    """Whether ``edit`` is made only of clears and unsets, which are never refused (§ 16.16)."""
-    return not (edit.commit or edit.facts)
+def clear_only(configuration: model.Configuration, edit: model.Change) -> bool:
+    """Whether ``edit``, from ``configuration``, sets no new value (§ 16.18: every committed
+    value is the one stored, every fact set its own value), so is made only of clears and
+    unsets, which are never refused (§ 16.16)."""
+    stored, facts = configuration.stored, configuration.facts
+    repeats = all(path in stored and same(stored[path], v) for path, v in edit.commit.items())
+    return repeats and all(name in facts and same(facts[name], v) for name, v in edit.facts.items())
 
 
 def masking_problems(
@@ -1104,7 +1109,7 @@ def check_change(
     after = model.Configuration(configuration.space, facts, stored).solve()
     added = added_pairs(structure, before, after)
     expected = {origin: kind for (_, origin), kind in added.items()}
-    if clear_only(edit):
+    if clear_only(configuration, edit):
         checked.runs["3 clears"] += 1
         if isinstance(result, model.Rejected):
             checked.problems.append(

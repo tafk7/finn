@@ -66,14 +66,15 @@ and the original kept.
    value. A configuration's counted pairs are each false piece of the root's validity
    with each origin it is false through: the piece itself, or the origins its refused
    inputs lead back to.
-3. *Refusal.* A change that sets a choice or a fact is refused when the successor
-   holds a counted pair the predecessor does not: a piece false through an origin it
-   was not false through before (a piece absent, unknown or true before counts as not
-   false before). Each origin of such a pair refuses it once
+3. *Refusal.* A change that sets a choice or a fact to a new value is refused when
+   the successor holds a counted pair the predecessor does not: a piece false through
+   an origin it was not false through before (a piece absent, unknown or true before
+   counts as not false before). Each origin of such a pair refuses it once
    (:class:`~.answers.RuleRefusal`), naming the stored choices standing in its way. A
    rule false only through a refused input is never itself a refusal. So no accepted
-   change that sets adds a pair. A change made only of clears and unsets is never
-   refused (reading 3).
+   change that sets adds a pair. A change that sets nothing new (its commits repeat
+   stored values, its facts their own values) and clears or unsets is never refused
+   (reading 3).
 4. *Accepted*, the change reports the stored choices it puts dormant or brings into
    play and the open choices it brings into presence. A change that changes nothing
    returns the same configuration.
@@ -113,7 +114,10 @@ corpus; § 16 holds the readings its author gave for this model.
    configuration reached by such changes from nothing is accepted (FN3), and no
    accepted addition leaves a Space newly refused (§ 16.14's exception cannot arise).
    *Clears and unsets are never refused* (§ 16.16; § 5.6 stands): a change made only
-   of them is accepted whatever pairs it adds. It can add one in a single shape,
+   of them is accepted whatever pairs it adds. "Sets" means a new value (§ 16.18):
+   committing the value already stored, or setting a fact to its own value, sets
+   nothing, so a change whose commits all repeat stored values is clear-only too (as a
+   same-value update returns the receiver). It can add a pair in a single shape,
    **masking**: a piece false only through a view refused with its Space, whose Space
    the change reopens, so that the view answers and the piece is false at an origin of
    its own. The configuration reads refused, naming it; its bind may be refused (a
@@ -886,6 +890,19 @@ def _assignment(checker: FactsOnly, path: str, value: Any) -> tuple[Reason, ...]
     return ()
 
 
+def _sets_new(configuration: Configuration, edit: Change) -> bool:
+    """Whether ``edit`` sets a choice or a fact to a new value (§ 16.18): a committed value
+    differing from the one stored, or a fact set to a value it does not have. A change that
+    does not is clear-only, never refused (§ 16.16)."""
+
+    old, facts = configuration.stored, configuration.facts
+    return any(
+        path not in old or not same(old[path], value) for path, value in edit.commit.items()
+    ) or any(
+        name not in facts or not same(facts[name], value) for name, value in edit.facts.items()
+    )
+
+
 def _standing(
     index: Index, origin: str, kind: str, stored: Mapping[str, Any], named: set[str]
 ) -> tuple[str, ...]:
@@ -937,8 +954,8 @@ def change(configuration: Configuration, edit: Change) -> Accepted | Rejected:
     after = Solution(successor)
 
     # 2 and 3. each origin of a counted pair the predecessor lacks refuses a change that
-    # sets, once; clears and unsets alone are never refused (§ 16.16)
-    sets = bool(edit.commit) or bool(edit.facts)
+    # sets a new value, once; clears and unsets alone are never refused (§ 16.16, § 16.18)
+    sets = _sets_new(configuration, edit)
     counted = before.evaluation.pairs()
     named = set(edit.commit) | set(edit.clear)
     refusals: dict[str, ChangeRefusal] = {}

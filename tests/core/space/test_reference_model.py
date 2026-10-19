@@ -1237,6 +1237,24 @@ def test_a_clear_revealing_a_rule_masked_by_its_views_space_is_accepted() -> Non
     assert accepted(change(broken, Change(clear=("c.x",), commit={"c.y": 2}))).validity.verdict is U
 
 
+def test_a_clear_beside_a_repeated_value_is_clear_only_and_accepted() -> None:
+    """§ 16.18: "sets" means a new value. Committing ``y`` = 1, the value stored, beside
+    the clear that reveals ``high`` sets nothing: the change is clear-only, accepted, and
+    the configuration reads refused at ``high``. Committing a new value that keeps
+    ``high`` false is a change that sets, and is refused."""
+
+    broken = Configuration(viewed_child(), {}, {"c.x": 3, "c.y": 1})
+    repeated = accepted(change(broken, Change(clear=("c.x",), commit={"c.y": 1})))
+    assert repeated.configuration.stored == {"c.y": 1}
+    assert repeated.validity.false == (
+        Piece(PieceKind.CONSTRAINT, "", "high", F, reasons=(constraint_reason("high", "low"),)),
+    )
+    other = Configuration(viewed_child(), {}, {"c.x": 3, "c.y": 2})
+    assert rejected(change(other, Change(clear=("c.x",), commit={"c.y": 1}))).refusals == (
+        rule("high", "low"),
+    )
+
+
 def viewed_child_over_a_fact() -> Space:
     """As :func:`viewed_child`, the child's rule over the fact ``f``."""
 
