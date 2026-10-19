@@ -38,7 +38,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from fnmatch import fnmatchcase
-from typing import Any, TypeVar, cast
+from typing import Any, TypedDict, TypeVar, cast
 
 from qonnx.core.ranges import TensorRange
 
@@ -190,6 +190,21 @@ def is_decision(space_type: object, name: str) -> bool:
     return isinstance(getattr(space_type, name, None), Decision)
 
 
+class DotpExtents(TypedDict):
+    """The extents a dot-product core's parent states (``dotp_extents``)."""
+
+    columns: int
+    widest_reduction: int
+
+
+def dotp_extents(w_tensor: Tensor) -> DotpExtents:
+    """What a dot-product core's parent states from the operation's facts (``columns``,
+    ``widest_reduction``), for a core without one, on weights ``w_tensor`` ``(K, N)``:
+    with no parent, no choice changes its datapath, so the widest K is its weights'."""
+    k, n = w_tensor.shape[-2:]
+    return DotpExtents(columns=n, widest_reduction=k)
+
+
 def placed_dotp(
     space_type: Callable[..., S],
     *,
@@ -254,6 +269,7 @@ def placed_dotp(
                 x_tensor=x_tensor,
                 w_tensor=w_tensor,
                 result_range=result_range or ordinary_integer_bounds(result_dtype),
+                **dotp_extents(w_tensor),
                 **facts,
             ),
         }

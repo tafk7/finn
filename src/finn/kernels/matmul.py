@@ -30,9 +30,10 @@ operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
 (``block_diagonal``), reading its (M, K, N) activations as (M, K * N).
 
 ``MatMulKernel`` is a kernel with children: the compute cores, which read the
-tensors it is given, ``x_tensor`` (the activations) and ``w_tensor`` (the
-weights), and present its interfaces (``x``, ``w``, ``y``): ``x_end``, ``w_end`` and
-``y_end`` are the selected core's ports' ends, labelled ``compute.<core>.x``
+tensors it is given, ``x_tensor`` (the activations) and ``w_tensor`` (the weights),
+and N and the widest K (``widest_reduction``), stated from its facts alone for their
+folding factors' domains, and present its interfaces (``x``, ``w``, ``y``): ``x_end``,
+``w_end`` and ``y_end`` are the selected core's ports' ends, labelled ``compute.<core>.x``
 (``finn.kernels.base.PortEnd``). Each channel, its adapter, its FIFO and its source
 are its network's: the network (a test harness's, or the graph's, a KernelOp's alone or
 a partition's) declares each channel, gives it the tensor MatMul's port reads or
@@ -323,6 +324,13 @@ class MatMulKernel(ComposedKernel):
         return self.depthwise and self.datapath is Form.DENSE
 
     @derived
+    def widest_reduction(self) -> int:
+        """The widest K a datapath of the operation reads, from its facts alone: the window
+        times the channels when depthwise (a dense realization reads that), else K. The
+        cores' SIMD domains read it, which read no choice."""
+        return self.k * self.n if self.depthwise else self.k
+
+    @derived
     def datapath_k(self) -> int:
         """The datapath's K: the window times the channels when densely realized."""
         return self.k * self.n if self.dense_view else self.k
@@ -516,6 +524,8 @@ class MatMulKernel(ComposedKernel):
         platform=platform,
         x_tensor=x_tensor,
         w_tensor=carried_weights,
+        columns=n,
+        widest_reduction=widest_reduction,
     )
     compute_case = selected(compute)
 

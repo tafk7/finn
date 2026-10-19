@@ -596,6 +596,9 @@ def kernel_fixtures(api):
             PackedDotpKernel(
                 x_tensor=dotp_tensors[0],
                 w_tensor=dotp_tensors[1],
+                # What a parent states from the operation's facts: N and K.
+                columns=4,
+                widest_reduction=4,
                 result_range=(-128, 127),  # int8's: the core's accumulator is INT8
                 platform=platform,
             ),

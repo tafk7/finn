@@ -289,3 +289,28 @@ def test_narrow_weights_follow_known_weights(weights, delivery, narrow):
         platform=FULL_DSP48E2, **{**facts, "weights": weights, "weight_delivery": delivery}
     )
     assert parameters(built.module, "matmul.compute.packed")["NARROW_WEIGHTS"] == narrow
+
+
+@pytest.mark.parametrize("realization", ["native", "dense"])
+@pytest.mark.parametrize("core", ["packed", "int8_dsp58"])
+def test_a_cores_folding_factors_are_listed_from_facts_and_simd_fits_its_datapath(
+    realization, core
+):
+    """PE's and SIMD's domains read the operation's facts alone, whichever realization:
+    PE the channels' divisors, SIMD the divisors of the widest K (window times channels).
+    A native datapath's K is the window's, so the SIMDs that divide the widest K and not
+    the window's are listed and refused by their fit (``dotp-simd``)."""
+    weights = tuple(tuple((r + c) % 5 - 2 for c in range(4)) for r in range(9))
+    network = choose(
+        matmul_point(realization=realization, **FACTS, weights=weights),
+        {"matmul.compute": core},
+    )
+    found = {item.key: item for item in inspection.viable(network.member("matmul"))}
+    pe, simd = found[f"compute.{core}.pe"], found[f"compute.{core}.simd"]
+    assert pe.cases == (1, 2, 4) and not pe.refused
+    if realization == "dense":
+        assert simd.cases == (1, 2, 3, 4, 6, 9, 12, 18, 36) and not simd.refused
+    else:
+        assert simd.cases == (1, 3, 9)
+        assert set(simd.refused) == {"2", "4", "6", "12", "18", "36"}
+        assert all("dotp-simd" in reason for reason in simd.refused.values())

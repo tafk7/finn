@@ -86,6 +86,9 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         "window",
         "x_tensor",
         "w_tensor",
+        # The extents its folding factors' domains read, stated by its parent.
+        "columns",
+        "widest_reduction",
     }
     # The core's own choices.
     assert {item.key for item in inspection.decisions(point)} == {

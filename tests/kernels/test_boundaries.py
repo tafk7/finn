@@ -68,6 +68,8 @@ placed = Network({
         result_range=ordinary_integer_bounds(DataType["INT8"]),
         x_tensor=X2,
         w_tensor=W2,
+        columns=2,
+        widest_reduction=2,
         platform=PLATFORM,
     ),
 })

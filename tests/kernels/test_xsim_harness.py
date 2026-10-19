@@ -29,7 +29,14 @@ import pytest
 from qonnx.core.datatype import DataType
 from support.chain import STEM, chain
 from support.conformance import Sample, design_module, place
-from support.helpers import FULL_DSP48E2, built, cycles_of, full_platform, point_for
+from support.helpers import (
+    FULL_DSP48E2,
+    built,
+    cycles_of,
+    dotp_extents,
+    full_platform,
+    point_for,
+)
 from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import (
@@ -318,6 +325,7 @@ def test_a_pumped_module_gets_its_doubled_clock_aligned(tmp_path: Path) -> None:
             "result_range": datatype_range(
                 6, ScalarEncoding(DataType["INT8"]), ScalarEncoding(DataType["INT8"])
             ),
+            **dotp_extents(inputs["w_channel"]),
         },
     )
     found = design_module(point, Int8Dsp58DotpKernel)

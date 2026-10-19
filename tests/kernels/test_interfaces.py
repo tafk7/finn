@@ -21,6 +21,7 @@ from support.helpers import (
     built,
     choose,
     cycles_of,
+    dotp_extents,
     placed,
     with_adapter_memories,
     with_direct_transports,
@@ -83,6 +84,7 @@ def activated(*, writable: bool) -> Network:
                 result_range=ordinary_integer_bounds(R),
                 x_tensor=X,
                 w_tensor=WEIGHT_TENSOR,
+                **dotp_extents(WEIGHT_TENSOR),
                 platform=FULL_DSP48E2,
             ),
             "activate": ThresholdingAxiKernel(

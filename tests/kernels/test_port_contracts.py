@@ -26,6 +26,7 @@ from support.helpers import (
     FULL_DSP58,
     choose,
     codes,
+    dotp_extents,
     matmul_point,
     with_adapter_memories,
     with_direct_transports,
@@ -122,6 +123,7 @@ def placed(
                 result_range=ordinary_integer_bounds(R),
                 x_tensor=a_tensor,
                 w_tensor=w_tensor,
+                **dotp_extents(w_tensor),
                 platform=FULL_DSP58,
             ),
         }

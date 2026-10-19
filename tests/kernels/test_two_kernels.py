@@ -25,6 +25,7 @@ from support.helpers import (
     built,
     choose,
     cycles_of,
+    dotp_extents,
     exact_result_dtype,
     labels,
     module_of,
@@ -67,6 +68,7 @@ def _layer(result: DataType, x_tensor: Tensor, w_tensor: Tensor, y_tensor: Tenso
         result_range=ordinary_integer_bounds(result),
         x_tensor=x_tensor,
         w_tensor=w_tensor,
+        **dotp_extents(w_tensor),
         platform=FULL_DSP48E2,
     )
 

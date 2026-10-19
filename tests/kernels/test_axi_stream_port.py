@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP58, choose, with_direct_transports
+from support.helpers import FULL_DSP58, choose, dotp_extents, with_direct_transports
 from support.refusals import refused
 
 from finn.core.space import (
@@ -233,6 +233,7 @@ def test_dotp_binds_from_its_inputs_through_the_dense_view() -> None:
             result_range=ordinary_integer_bounds(DataType["INT9"]),
             x_tensor=x,
             w_tensor=w,
+            **dotp_extents(w),
         )
     )
     assert (point.rows, point.outputs, point.reduction) == (2, 4, 12)
@@ -245,6 +246,7 @@ def test_dotp_binds_from_its_inputs_through_the_dense_view() -> None:
             result_range=ordinary_integer_bounds(DataType["INT9"]),
             x_tensor=tensor((2, 14), "INT3"),
             w_tensor=w,
+            **dotp_extents(w),
         )
     )
     assert coded_messages(wide.query(PackedDotpKernel.extents)) == {

@@ -212,8 +212,9 @@ def test_a_folding_factor_outside_its_domain_is_refused_by_its_own_finding_alone
 def test_a_folding_factor_under_an_open_core_is_refused_by_its_domain_or_waits() -> None:
     """On DSP58 two cores are viable, so ``compute`` stays open. PE is checked against its
     domain all the same, where it exists: 3 divides no extent of 4, and is refused at its own
-    commit by its own finding; 2 is kept unchecked, waiting on ``compute``. Both readings
-    (other facts: twice the rows)."""
+    commit by its own finding; 2 is kept unchecked, waiting on ``compute`` and on the known
+    weights, not supplied, whose presence decides N. Both readings (other facts: twice the
+    rows)."""
     point = design_space(
         MatMulKernel(platform=FULL_DSP58, x_tensor=int4((8, 4)), w_tensor=int4((4, 4)))
     )
@@ -231,7 +232,7 @@ def test_a_folding_factor_under_an_open_core_is_refused_by_its_domain_or_waits()
         two = reading({pe: 2})
         assert two.accepted
         assert inspection.unchecked(two.instance) == (
-            inspection.Unchecked("compute.packed.pe", 2, ("compute",)),
+            inspection.Unchecked("compute.packed.pe", 2, ("compute", "w_contents")),
         )
 
 
@@ -281,6 +282,7 @@ def validity_of(point):
             [
                 ("compute.packed.clocked", {"decision-unassigned"}),
                 ("compute.packed.pumping_has_lanes", {"decision-unassigned"}),
+                ("compute.packed.simd_fits", {"decision-unassigned"}),
                 ("compute.packed.stream_widths_supported", {"decision-unassigned"}),
             ],
         ),
@@ -403,6 +405,8 @@ def test_matmul_honors_its_cores_rules_not_just_its_raw_module(monkeypatch):
             result_range=MatMulKernel.result_range,
             x_tensor=MatMulKernel.x_tensor,
             w_tensor=MatMulKernel.carried_weights,
+            columns=MatMulKernel.n,
+            widest_reduction=MatMulKernel.widest_reduction,
         )
 
     # Substitute a fully authored Space class, without mutating declarations.
