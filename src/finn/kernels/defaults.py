@@ -59,7 +59,7 @@ class Fixed:
     """A fixed default: the author's one ``value`` for a choice (a selector's case by its
     key), set at conversion, with no claim that it is best."""
 
-    value: object
+    value: bool | int | str
 
 
 FIRST_VALID: Literal["first valid"] = "first valid"
