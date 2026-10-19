@@ -39,21 +39,11 @@ from finn.core.space import (
 )
 from finn.core.space.inspection import candidate
 
-# The chain's domains read choices (a unit's lanes, through the link's widths): a value
-# stored under one width is not checked again when a later change moves the width, so a
-# walk over it finds a configuration built from nothing refusing what the walk kept. The
-# chain is reshaped (each such domain a constraint) with the rule that refuses it.
-until_domain_rule = pytest.mark.xfail(
-    strict=True, reason="until P3: the chain's domains read choices; reshaped with the domain rule"
-)
 
-
-@until_domain_rule
 def test_a_chain_walked_from_nothing() -> None:
     check(walk(design_space(Pipeline(width=10)), seed=1, steps=250))
 
 
-@until_domain_rule
 def test_a_chain_walked_from_a_configured_start() -> None:
     start = replay(
         design_space(Pipeline(width=10)), {"u0.compute": "packed", "probe.enabled": True}
@@ -126,7 +116,6 @@ def test_a_published_choice_records_its_guards_decisions() -> None:
     assert decisions_read(point, Host.extra_size) >= {"extra.size", "want"}
 
 
-@until_domain_rule
 def test_a_retained_choice_under_a_selector_the_change_opened_answers_as_a_recomputation() -> None:
     report = walk(design_space(Pipeline(width=10)), seed=2, steps=250)
     check(report)

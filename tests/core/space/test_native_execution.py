@@ -8,9 +8,11 @@ from collections.abc import Callable
 from contextvars import ContextVar
 
 import pytest
+from support.refusals import refused
 
 from finn.core.space import (
     Decision,
+    DefinitionError,
     EvaluationError,
     Inapplicable,
     NativeEvaluationError,
@@ -260,7 +262,7 @@ def test_blocked_self_constraint_keeps_its_inspectable_assessment() -> None:
 def test_membership_only_domain_enumeration_keeps_applicability_and_blockers() -> None:
     class Example(Space):
         enabled: bool = Param()
-        prerequisite: int = Decision(values=(1, 2))
+        prerequisite: int = Param(required=False)
         choice: int = Decision(
             domain=domain(accepts=lambda candidate, value: candidate == value, value=prerequisite),
             when=enabled,
@@ -270,8 +272,8 @@ def test_membership_only_domain_enumeration_keeps_applicability_and_blockers() -
         design_space(Example(enabled=False)).field(Example.choice).candidates(), Inapplicable
     )
     point = design_space(Example(enabled=True))
-    assert isinstance(point.field(Example.choice).candidates(), Unresolved)
-    assert point.with_choices(prerequisite=1).field(Example.choice).candidates() is None
+    assert isinstance(point.field(Example.choice).candidates(), Unresolved)  # a missing fact
+    assert point.with_facts({Example.prerequisite: 1}).field(Example.choice).candidates() is None
 
 
 def test_self_cycles_are_reached_through_scopes_admission_and_guards() -> None:
@@ -309,9 +311,11 @@ def test_self_cycles_are_reached_through_scopes_admission_and_guards() -> None:
     with pytest.raises(EvaluationError, match="dependency cycle") as scoped:
         _ = point.output
     assert "child.value" in str(scoped.value)
-    for space_type in (Admission, Guard):
-        with pytest.raises(EvaluationError, match="dependency cycle"):
-            design_space(space_type()).with_choices(choice=1)
+    # A domain reading its own choice reads a choice: refused when the model is made.
+    with refused("domain-reads-choice", error=DefinitionError):
+        design_space(Admission())
+    with pytest.raises(EvaluationError, match="dependency cycle"):
+        design_space(Guard()).with_choices(choice=1)
 
 
 def test_an_entry_a_query_keeps_has_read_what_a_fresh_evaluation_reads() -> None:

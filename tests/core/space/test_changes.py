@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from typing import cast
 
@@ -15,6 +16,7 @@ from finn.core.space import (
     Space,
     ValueSemantics,
     composite,
+    constraint,
     design_space,
     domain,
 )
@@ -25,7 +27,7 @@ from finn.core.space.errors import (
     RequestError,
 )
 from finn.core.space.inspection import candidate, choices, decision_handle
-from finn.core.space.results import Available, Inapplicable, Rejected, Unresolved
+from finn.core.space.results import Available, Inapplicable, Unresolved
 
 
 def test_malformed_batch_structure_and_types_precede_every_snapshot_callback() -> None:
@@ -232,40 +234,42 @@ def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -
     assert all(isinstance(base.query(member), Unresolved) for member in members)
 
 
-def test_dependent_batch_is_order_independent_without_precommitting_candidates() -> None:
-    calls: list[tuple[int, int]] = []
+def test_a_chain_of_related_choices_is_order_independent_as_its_constraints() -> None:
+    """Each step one more than the last: a relation of a choice to another, so a
+    constraint of the Space holding both (a domain reads facts only). Set in one batch,
+    in any order, the chain is accepted; one step off breaks the rule beside it."""
+    calls: list[int] = []
+    steps: tuple[int, ...] = tuple(range(1, 34))
+    members = [Decision(values=steps) for _ in range(32)]
+    rules: dict[str, object] = {}
 
-    def membership(*, candidate: int, previous: int) -> bool:
-        calls.append((candidate, previous))
-        return candidate == previous + 1
+    def follows(at: int) -> Callable[..., bool]:
+        def rule(*, step: int, previous: int) -> bool:
+            calls.append(at)
+            return step == previous + 1
 
-    members: list[int] = [Decision(values=(1,))]
-    for _ in range(31):
-        members.append(Decision(domain=domain(accepts=membership, previous=members[-1])))
+        return rule
+
+    for index in range(1, len(members)):
+        rules[f"follows_{index}"] = constraint(step=members[index], previous=members[index - 1])(
+            follows(index)
+        )
     space_type = composite(
         "DependentBatch",
-        {f"step_{i}": member for i, member in enumerate(members)},
+        {**{f"step_{i}": member for i, member in enumerate(members)}, **rules},
         annotations={f"step_{i}": int for i in range(len(members))},
     )
     base = design_space(space_type())
     edits = [base.field(member).change(index + 1) for index, member in enumerate(members)]
     report = base.try_with_choices(*reversed(edits))
     assert report.accepted
-    assert calls == [(index + 1, index) for index in range(1, len(members))]
+    assert sorted(calls) == list(range(1, len(members)))  # each rule once
     assert report.instance.query(members[-1]) == Available(len(members))
-    calls.clear()
     edits[0] = base.field(members[0]).change(2)
     failed = base.try_with_choices(*reversed(edits))
-    assert not failed.accepted
-    assert failed.instance is base
-    assert calls == []  # the refused first candidate never became a dependency value
-    primary = failed.outcomes[-1].result
-    assert isinstance(primary, Rejected)
-    assert primary.findings and all(finding.owner == "step_0" for finding in primary.findings)
-    # Dependents preserve the prerequisite cause; they have not run membership.
-    for item in failed.outcomes[:-1]:
-        assert isinstance(item.result, Rejected)
-        assert item.result.findings == primary.findings
+    assert not failed.accepted and failed.instance is base
+    assert all(outcome.status == "checked" for outcome in failed.outcomes)
+    assert [(rule.rule, rule.standing) for rule in failed.broken] == [("follows_1", ())]
 
 
 def test_selector_and_nested_edit_share_atomic_order_and_inactive_edits_are_dormant() -> None:

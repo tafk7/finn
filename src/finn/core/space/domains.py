@@ -9,7 +9,10 @@ bound to those), and assigning a value checks it against the domain alone (its t
 check). A listed domain lists all its values: each listed value is checked by
 membership too (one it rejects is not listed), and an empty list means none. A rule
 linking a value to anything else (``ultra`` needs UltraRAM, two choices go together) is
-a constraint of the Space that owns the choice.
+a constraint of the Space that owns the choice. Compilation checks it: a domain whose
+membership or enumeration reaches a choice is a ``DefinitionError``
+(``domain-reads-choice``), naming the way it reads it (``_reads.check_domains``); an input
+under the guards deciding whether the choice itself exists reads as a fact.
 
 Each of the domain's callables takes the inputs its signature names, of those the domain
 declares: ``accepts(*, candidate, ...)``, ``candidates(*, ...)`` and ``order(values,

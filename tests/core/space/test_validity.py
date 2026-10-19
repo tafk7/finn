@@ -27,6 +27,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
+from support.refusals import refused
 from support.space_cores import built, commit
 
 from core.space._possible_support import broken, possible, refusals
@@ -34,7 +35,6 @@ from finn.core.space import (
     Available,
     Decision,
     DecisionState,
-    DefinitionError,
     EvaluationError,
     Inapplicable,
     Members,
@@ -56,10 +56,6 @@ from finn.core.space import (
     view,
 )
 from finn.core.space.inspection import Piece, Validity
-
-until_domain_rule = pytest.mark.xfail(
-    strict=True, reason="until P3: a domain whose membership reads a choice is a definition error"
-)
 
 
 def owners(validity: Validity) -> list[str]:
@@ -968,11 +964,10 @@ class Banks(Space):
     )
 
 
-@until_domain_rule
 def test_a_domain_input_that_another_choices_guard_decides_is_a_definition_error() -> None:
     """``width`` exists while ``wide`` holds, a choice: what the domain reads would then
     depend on a choice, which is a constraint's to say."""
-    with pytest.raises(DefinitionError, match="domain-reads-choice"):
+    with refused("domain-reads-choice", owner="lanes", message="reads the choice wide"):
         design_space(Banks())
 
 
@@ -999,7 +994,6 @@ class Banked(Space):
     )
 
 
-@until_domain_rule
 def test_a_domain_input_of_another_case_is_a_definition_error() -> None:
-    with pytest.raises(DefinitionError, match="domain-reads-choice"):
+    with refused("domain-reads-choice", owner="lanes", message="reads the choice mode"):
         design_space(Banked())

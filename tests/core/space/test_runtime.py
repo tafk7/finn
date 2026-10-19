@@ -22,7 +22,6 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.core.space.domains import divisors_of
 from finn.core.space.errors import DefinitionError, EvaluationError, RequestError
 from finn.core.space.results import Available, QueryResult, Rejected, Unresolved
 
@@ -105,8 +104,14 @@ def test_required_inputs_one_refused_and_another_waiting_read_as_refused() -> No
 
 def test_atomic_refinement_follows_dependencies_and_never_publishes_partial_state() -> None:
     class Tiles(Space):
+        """The lanes divide the extent: a relation of two choices, so a constraint."""
+
         extent: int = Decision(values=(8, 12))
-        lanes: int = Decision(domain=divisors_of(extent))
+        lanes: int = Decision(values=(1, 2, 3, 4, 5, 6, 8, 12))
+
+        @constraint
+        def divides(self) -> bool:
+            return self.extent % self.lanes == 0
 
     base = design_space(Tiles())
     report = base.try_with_choices(
@@ -120,7 +125,8 @@ def test_atomic_refinement_follows_dependencies_and_never_publishes_partial_stat
     )
     assert not failure.accepted
     assert failure.instance is base
-    assert {x.status for x in failure.outcomes} == {"refused", "checked"}
+    assert {x.status for x in failure.outcomes} == {"checked"}
+    assert [(rule.rule, rule.standing) for rule in failure.broken] == [("divides", ())]
     assert isinstance(base.query(Tiles.extent), Unresolved)
     with pytest.raises(RequestError):
         base.try_with_choices(

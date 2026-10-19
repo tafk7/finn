@@ -19,11 +19,13 @@ from types import FrameType
 from typing import TYPE_CHECKING
 
 import pytest
+from support.refusals import refused
 
 from core.space._world_support import node, open_world, source_line, successor
 from finn.core.space import (
     Available,
     Decision,
+    DefinitionError,
     EvaluationError,
     Inapplicable,
     Param,
@@ -769,7 +771,8 @@ def test_blocked_self_constraint_keeps_its_inspectable_assessment() -> None:
 def test_self_cycles_are_reached_through_scopes_domains_and_guards() -> None:
     """Mirrors ``test_native_execution``'s
     ``test_self_cycles_are_reached_through_scopes_admission_and_guards``: a cycle through
-    a child's formal, through a stored choice's type check, through a guard."""
+    a child's formal, through a guard. One through a choice's domain cannot be built: a
+    domain reading its own choice reads a choice, refused when the model is made."""
 
     class Child(Space):
         source: int = Param()
@@ -805,10 +808,11 @@ def test_self_cycles_are_reached_through_scopes_domains_and_guards() -> None:
     with pytest.raises(EvaluationError, match="dependency cycle") as scoped:
         read(world, "output")
     assert "child.value" in str(scoped.value)
-    for space_type in (Domain, Guard):
-        cyclic = open_world(space_type(), {"choice": 1})
-        with pytest.raises(EvaluationError, match="dependency cycle"):
-            read(cyclic, "choice")
+    with refused("domain-reads-choice", error=DefinitionError):
+        open_world(Domain(), {"choice": 1})
+    cyclic = open_world(Guard(), {"choice": 1})
+    with pytest.raises(EvaluationError, match="dependency cycle"):
+        read(cyclic, "choice")
 
 
 def test_a_failure_in_a_successor_runs_its_readers_cleanup() -> None:

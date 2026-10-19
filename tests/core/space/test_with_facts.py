@@ -17,6 +17,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from support.space_cores import CORES
+from support.space_cores import Packed as CorePacked
+from support.space_cores import Stub as CoreStub
 from support.space_pipeline import Pipeline, Stub, Unit
 from support.space_walk import check, fresh, walk
 
@@ -44,20 +47,12 @@ from finn.core.space import (
     supplied,
 )
 
-# The chain's domains read choices (a unit's lanes, through the link's widths): a walk over
-# it keeps a value its later changes leave outside its domain, which a configuration built
-# from nothing refuses. The chain is reshaped with the rule that refuses such a domain.
-until_domain_rule = pytest.mark.xfail(
-    strict=True, reason="until P3: the chain's domains read choices; reshaped with the domain rule"
-)
-
 WIDTHS = (4, 6, 8, 9, 10, 12, 14, 70)
 
 
 # -- walked against a binding built from nothing ----------------------------------------------
 
 
-@until_domain_rule
 def test_a_chain_walked_through_other_widths() -> None:
     for seed in (1, 2, 3):
         report = walk(
@@ -310,27 +305,43 @@ def refused(point: Space, facts: dict[object, object]) -> dict[str, list[str]]:
     }
 
 
+class Head(Space):
+    """A unit over the support's two cores, given its width."""
+
+    width: int = Param()
+    compute: CorePacked | CoreStub = Decision(CORES, width=width)
+
+
+class Front(Space):
+    """One unit whose width is the root's fact: its packed core's ``pe`` lists the
+    divisors of a fact, a domain over facts (the chain's units read their neighbours'
+    choices, so theirs is a constraint)."""
+
+    width: int = Param()
+    u0 = Head(width=width)
+
+
 def test_other_facts_refuse_a_retained_choice_their_domain_excludes_and_name_its_domain() -> None:
-    point = replay(design_space(Pipeline(width=10)), {"u0.compute": "packed"})
+    point = replay(design_space(Front(width=10)), {"u0.compute": "packed"})
     point = replay(point, {"u0.compute.packed.pe": 2})
     # 2 divides 10 and 8, not 9 or 7.
-    assert committed(point.with_facts({Pipeline.width: 8}))["u0.compute.packed.pe"] == 2
+    assert committed(point.with_facts({Front.width: 8}))["u0.compute.packed.pe"] == 2
     for width in (9, 7):
-        assert refused(point, {Pipeline.width: width}) == {
+        assert refused(point, {Front.width: width}) == {
             "u0.compute.packed.pe": ["domain-membership"]
         }
     with pytest.raises(ConfigurationError):
-        point.with_facts({Pipeline.width: 9})
+        point.with_facts({Front.width: 9})
     assert committed(point)["u0.compute.packed.pe"] == 2  # the base is as it was
 
 
 def test_a_stored_choice_under_an_open_selector_is_checked_again_by_new_facts() -> None:
     # The selector is open at 9 and at 12: ``pe`` waits on it, checked where its case is
     # selected. 3 divides both widths: the facts change keeps it, waiting.
-    point = design_space(Pipeline(width=9))
-    assert isinstance(point.query(Pipeline.u0.compute), Unresolved)
+    point = design_space(Front(width=9))
+    assert isinstance(point.query(Front.u0.compute), Unresolved)
     point = replay(point, {"u0.compute.packed.pe": 3})
-    report = point.try_with_facts({Pipeline.width: 12})
+    report = point.try_with_facts({Front.width: 12})
     assert report.accepted
     pe = reference_of(report.instance, "u0.compute.packed.pe")
     waiting = report.instance.query(pe)
@@ -338,7 +349,7 @@ def test_a_stored_choice_under_an_open_selector_is_checked_again_by_new_facts() 
     assert {(f.code, f.owner) for f in waiting.findings} == {("decision-unassigned", "u0.compute")}
     assert waiting == fresh(report.instance).query(pe)
     # The same choice once the selector is set with it: in play at width 12.
-    both = point.try_with_facts({Pipeline.width: 12}, {Pipeline.u0.compute: "packed"})
+    both = point.try_with_facts({Front.width: 12}, {Front.u0.compute: "packed"})
     assert both.accepted and both.instance.width == 12
     assert committed(both.instance)["u0.compute.packed.pe"] == 3
     assert both.instance.query(pe) == Available(3)
@@ -347,8 +358,8 @@ def test_a_stored_choice_under_an_open_selector_is_checked_again_by_new_facts() 
 def test_a_refusal_names_the_choices_domain_alone() -> None:
     # `pe = 3` is stored at 9, waiting on the open selector. At 71, 3 does not divide 71: the
     # facts change is refused by its type check, which names its domain alone.
-    point = replay(design_space(Pipeline(width=9)), {"u0.compute.packed.pe": 3})
-    report = point.try_with_facts({Pipeline.width: 71})
+    point = replay(design_space(Front(width=9)), {"u0.compute.packed.pe": 3})
+    report = point.try_with_facts({Front.width: 71})
     assert not report.accepted
     (outcome,) = (o for o in report.outcomes if o.status == "refused")
     assert outcome.owner == "u0.compute.packed.pe"

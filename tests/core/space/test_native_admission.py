@@ -24,6 +24,7 @@ from finn.core.space import (
     Rejected,
     Space,
     ValueSemantics,
+    constraint,
     default_semantics,
     derived,
     design_space,
@@ -38,33 +39,28 @@ from finn.core.space.occurrence import state
 
 
 def _chain_space(reverse: bool) -> type[Space]:
+    """``b`` follows ``a`` and ``c`` follows ``b``, through derived values: relations of
+    choices, so constraints (a domain reads facts only)."""
+
     def plus_a(self: Space) -> int:
         return cast(int, getattr(self, "a")) + 1
 
     def plus_b(self: Space) -> int:
         return cast(int, getattr(self, "b")) + 1
 
+    def same(*, value: int, previous: int) -> bool:
+        return value == previous
+
     after_a, after_b = derived(plus_a), derived(plus_b)
+    b, c = Decision(values=(1, 2, 3)), Decision(values=(1, 2, 3))
     declarations = [
         ("a", Decision(values=(1,))),
         ("after_a", after_a),
-        (
-            "b",
-            Decision(
-                domain=domain(
-                    accepts=lambda candidate, previous: candidate == previous, previous=after_a
-                ),
-            ),
-        ),
+        ("b", b),
+        ("b_follows", constraint(value=b, previous=after_a)(same)),
         ("after_b", after_b),
-        (
-            "c",
-            Decision(
-                domain=domain(
-                    accepts=lambda candidate, previous: candidate == previous, previous=after_b
-                ),
-            ),
-        ),
+        ("c", c),
+        ("c_follows", constraint(value=c, previous=after_b)(same)),
     ]
     return cast(
         type[Space],
@@ -108,8 +104,14 @@ def test_dependent_admission_all_request_and_declaration_orders(
             if valid:
                 assert tuple(getattr(instance, name) for name in ("a", "b", "c")) == (1, 2, 3)
             else:
+                # ``a`` is outside its domain: its type check alone refuses the change.
                 assert instance is point
-                assert all(isinstance(outcome.result, Rejected) for outcome in outcomes)
+                assert {o.owner: o.status for o in outcomes} == {
+                    "a": "refused",
+                    "b": "checked",
+                    "c": "checked",
+                }
+                assert all(isinstance(o.result, Rejected) == (o.owner == "a") for o in outcomes)
 
 
 def test_invalid_candidate_never_crosses_a_getter_or_reaches_division() -> None:
@@ -126,19 +128,24 @@ def test_invalid_candidate_never_crosses_a_getter_or_reaches_division() -> None:
             divisions.append(value)
             return 12 // value
 
-        output: int = Decision(
-            domain=domain(accepts=lambda candidate, value: candidate == value, value=quotient)
-        )
+        output: int = Decision(domain=domain(accepts=lambda candidate: candidate > 0))
+
+        @constraint
+        def divides(self) -> bool:
+            return self.output == self.quotient
 
     for order in (("output", "divisor"), ("divisor", "output")):
         report = design_space(Example()).try_with_choices(
             **{name: 0 if name == "divisor" else 3 for name in order}
         )
         assert not report.accepted
-        assert all(isinstance(outcome.result, Rejected) for outcome in report.outcomes)
-    # The second order's ``quotient`` reads the divisor refused as the first did: the model's
-    # memo answers it from that trace, and the method starts once in all.
-    assert len(starts) == 1 and divisions == []
+        assert {o.owner: o.status for o in report.outcomes} == {
+            "divisor": "refused",
+            "output": "checked",
+        }
+    # A value its type check refuses reports alone: no rule is read, so ``quotient`` never
+    # starts with it.
+    assert starts == [] and divisions == []
 
 
 def test_published_reads_do_not_repeat_admission_callbacks() -> None:

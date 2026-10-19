@@ -15,6 +15,7 @@ from finn.core.space import (
     Space,
     Unresolved,
     constraint,
+    derived,
     design_space,
     inspection,
 )
@@ -215,3 +216,74 @@ def test_a_declared_input_no_callable_reads_is_a_definition_error() -> None:
         design_space(Unread(extent=4))
     with pytest.raises(DefinitionError, match="domain-order-unlisted|membership only"):
         domain(accepts=lambda *, candidate: True, order=lambda values: values)
+
+
+# -- a domain's membership reads facts only, checked when the model is made --------------
+
+
+def test_a_domain_reading_a_choice_is_a_definition_error_naming_the_way() -> None:
+    class Direct(Space):
+        extent: int = Decision(values=(8, 12))
+        lanes: int = Decision(domain=divisors_of(extent))
+
+    with refused(
+        "domain-reads-choice",
+        owner="lanes",
+        message=r"reads the choice extent \(extent\).*constraint",
+    ):
+        design_space(Direct())
+
+    class Through(Space):
+        width: int = Param()
+        wide: bool = Decision(values=(False, True))
+
+        @derived
+        def extent(self) -> int:
+            return 2 * self.width if self.wide else self.width
+
+        lanes: int = Decision(domain=divisors_of(extent))
+
+    with refused("domain-reads-choice", message=r"\(extent -> wide\)"):
+        design_space(Through(width=4))
+
+
+def test_a_domain_reading_what_a_dynamic_method_reads_is_a_definition_error() -> None:
+    class Dynamic(Space):
+        width: int = Param()
+
+        @derived
+        def extent(self) -> int:
+            return int(getattr(self, "wi" + "dth"))
+
+        lanes: int = Decision(domain=divisors_of(extent))
+
+    with refused("domain-reads-choice", message="__reads__"):
+        design_space(Dynamic(width=4))
+
+
+class Window(Space):
+    channels: int = Param()
+    simd: int = Decision(domain=divisors_of(channels))
+
+
+class Whole(Space):
+    pass
+
+
+class Core(Space):
+    """The window's ``simd`` reads its own case's ``channels`` (a formal bound to a fact)
+    under its selector and a ``when`` over a choice: what decides whether the choice
+    exists holds wherever it is read."""
+
+    channels: int = Param()
+    enabled: bool = Decision(values=(False, True))
+    form: Window | Whole = Decision(
+        {"window": Window(channels=channels), "whole": Whole}, when=enabled
+    )
+
+
+def test_a_domain_input_under_the_choices_own_existence_guards_is_a_fact() -> None:
+    point = design_space(Core(channels=12))
+    simd = {item.key: item.reference for item in inspection.decisions(point)}["form.window.simd"]
+    (values,) = inspection.viable(point, [simd])
+    assert values.cases == (1, 2, 3, 4, 6, 12)

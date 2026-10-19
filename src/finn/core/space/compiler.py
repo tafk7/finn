@@ -151,9 +151,14 @@ def _definition_classes(space_types: tuple[type[Space], ...]) -> tuple[type[Spac
 
 
 def _publish(space_type: type[S], linked: LinkedModel) -> Model[S]:
+    from ._reads import check_domains
+
     scope_types = tuple(dict.fromkeys(scope.space_type for scope in linked.scopes))
     _validate_constructors(scope_types)
     model = Model(space_type, linked)
+    # Every domain's membership reads facts only (what each method may read is inferred
+    # when the model is made).
+    check_domains(linked, model.evaluator.reads)
     # Publication happens only after the complete definition linked successfully.
     for definition in _definition_classes(scope_types):
         type.__setattr__(definition, "_space_definition_finalized", True)
