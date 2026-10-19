@@ -4,15 +4,15 @@
 """From ``tests``: ``python -m core.space.reference_harness`` prints the acceptance matrix as
 a markdown table; ``python -m core.space.reference_harness walks --seeds 0-99 --steps 40``
 runs the seeded walks (both index paths unless ``--paths`` says otherwise) and prints their
-summary, then each failed walk whole; ``--without "lane 2"`` expects only the kinds of the
-rows the other milestones keep (a milestone's engine walked as if it had removed its rows). It
-exits 1 when a walk failed."""
+summary, then each failed walk whole; ``--without "engine core"`` expects only the kinds of
+the rows the other milestones keep (a milestone's engine walked as if it had removed its rows).
+It exits 1 when a walk failed. The walks are imported by their command alone, so the matrix
+prints whatever state the walks are in."""
 
 import argparse
 import sys
 
 from .matrix import markdown
-from .walks import expected_kinds, seeds, table, walk
 
 
 def main(argv: list[str]) -> int:
@@ -25,12 +25,15 @@ def main(argv: list[str]) -> int:
     walks.add_argument(
         "--without",
         default="",
-        help='milestones whose rows are taken as removed, comma-separated ("lane 2")',
+        help='milestones whose rows are taken as removed, comma-separated ("engine core")',
     )
     arguments = parser.parse_args(argv)
     if arguments.command != "walks":
         print(markdown())
         return 0
+    # the walks are imported by their command alone (piece 3 of the lane rewrites them)
+    from .walks import expected_kinds, seeds, table, walk  # noqa: PLC0415
+
     paths = [path for path in arguments.paths.split(",") if path]
     without = [item.strip() for item in arguments.without.split(",") if item.strip()]
     kinds = expected_kinds(without)

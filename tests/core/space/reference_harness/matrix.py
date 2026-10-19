@@ -4,12 +4,17 @@
 """The acceptance matrix: every disagreement between the engine and the reference model
 expected at this commit, by the milestone that removes it.
 
+The model states the semantics that replace forcing (assignment, refusal at the origin,
+dormant choices); the engine at this commit is the one before them. Every disagreement is
+therefore the engine core's: the checklist its lane works down, landing with the model.
+
 Each row names the change that removes it, in one sentence, and its **witness**: the one
 test that shows it, marked with :func:`expected` (a strict expected failure raising
 :class:`~.compare.Disagreement`, so an engine error or a harness fault still fails). A
 milestone is accepted when its rows' witnesses pass (each strict expected failure then
-fails) and it removes the rows. A row's **kind** names the disagreement for a walk to
-match against, where a walk can meet it.
+fails) and it removes the rows. A row's **kind** is the mechanism of the disagreement its
+witness shows on today's engine (a question asked beyond a change today's engine refuses
+shows that refusal), shared by the rows it explains, for a walk to match against.
 
 ``python -m core.space.reference_harness`` (from ``tests``) prints the matrix as a markdown
 table.
@@ -27,8 +32,9 @@ import pytest
 
 from .compare import Disagreement
 
-#: in order: the line as this harness lands, the three lanes, the composition's pieces
-MILESTONES = ("base", "lane 0", "lane 1", "lane 2", "E2")
+#: in order: the line as this harness lands, then the engine core (the rewrite to the
+#: semantics the model states, landing with it)
+MILESTONES = ("base", "engine core")
 
 
 @dataclass(frozen=True)
@@ -37,176 +43,535 @@ class Row:
 
     id: str
     milestone: str
-    #: the change that removes it, in one sentence
+    #: the change that removes it, in one sentence: what the milestone's engine must do
     change: str
     #: the test showing it, ``module::function``
     witness: str
-    #: what a walk can match it by, where a walk can meet it
-    kind: str | None = None
-    #: a qualification: how the engine answers it now, or what it comes with
+    #: the mechanism, shared by the rows it explains: what a walk can match it by
+    kind: str
+    #: a qualification: how the engine answers it now
     note: str = ""
 
 
 _CASES = "test_reference_cases"
 _RULES = "test_reference_rules"
 _SCOPES = "test_reference_scopes"
+_CORE = "engine core"
 
 ROWS: tuple[Row, ...] = (
     Row(
-        "outside-domain-forcing",
-        "lane 2",
-        "a named value whose own check is false is refused with its own reason; forcing never "
-        "reads it",
-        f"{_CASES}::test_a_value_outside_its_domain_a_cores_rule_reads_is_refused_with_its_own_reason",
-        "own-reason-forcing",
-        "the engine refuses it as inactive with no finding: the core's trial reads the false own "
-        "check and forcing selects the other core",
-    ),
-    # -- rules between choices (cases 5 to 8)
-    Row(
-        "pair-first",
-        "lane 2",
-        "forcing runs in frozen rounds with one final check: two forced choices excluding each "
-        "other are both refused, the first naming the second, not both forced",
-        f"{_RULES}::test_the_first_of_two_forced_choices_excluding_each_other_is_refused_naming_the_other",
-        "conflict",
+        "outside-domain-unselected",
+        _CORE,
+        "a named value is checked against its domain wherever its choice sits: one outside it "
+        "under a case not selected is refused by its type, not as inactive",
+        f"{_CASES}::test_a_value_outside_its_domain_under_an_unselected_case_is_refused_by_its_type",
+        "inactive-refused",
     ),
     Row(
-        "pair-second",
-        "lane 2",
-        "forcing runs in frozen rounds with one final check: two forced choices excluding each "
-        "other are both refused, the second naming the first, not both forced",
-        f"{_RULES}::test_the_second_of_two_forced_choices_excluding_each_other_is_refused_naming_the_other",
-        "conflict",
+        "commit-unselected",
+        _CORE,
+        "a value set under a case not selected is accepted and kept out of play, not refused as "
+        "inactive",
+        f"{_CASES}::test_a_value_inside_its_domain_under_an_unselected_case_is_accepted_out_of_play",
+        "inactive-refused",
     ),
     Row(
-        "pair-validity",
-        "lane 2",
-        "a conflict refuses the configuration as a piece of its own, naming its participants, "
-        "in place of the rule the forced values break",
-        f"{_RULES}::test_two_forced_choices_excluding_each_other_refuse_the_configuration",
-        "conflict",
+        "no-case-waits",
+        _CORE,
+        "a selector no case of which the facts allow stays open: a value set under it waits on "
+        "it, not refused through it",
+        f"{_CASES}::test_a_value_under_a_selector_no_case_of_which_holds_still_waits_on_it",
+        "no-viable-case",
     ),
     Row(
-        "four-participants",
-        "lane 2",
-        "the four-choice conflict refuses every participant, each naming the other three",
-        f"{_RULES}::test_the_four_choice_conflict_refuses_every_participant_naming_the_others",
-        "conflict",
+        "no-case-rule",
+        _CORE,
+        "a rule of a case under a selector no case of which holds waits on the selector, not "
+        "false through the selector's refusal",
+        f"{_CASES}::test_a_rule_of_a_case_no_rule_of_which_holds_waits_on_its_selector",
+        "no-viable-case",
     ),
     Row(
-        "four-validity",
-        "lane 2",
-        "the four-choice conflict refuses the configuration as a conflict and a choice with no "
-        "possible value, not as the first rule rank-order forcing breaks",
-        f"{_RULES}::test_the_four_choice_conflict_refuses_the_configuration",
-        "conflict",
+        "no-case-validity",
+        _CORE,
+        "a selector with no possible case is no piece of validity: the configuration is open, its "
+        "cases' rules waiting on it",
+        f"{_CASES}::test_a_selector_no_case_of_which_holds_leaves_the_configuration_open",
+        "no-viable-case",
     ),
     Row(
-        "four-orders",
-        "lane 2",
-        "the refused set and each participant's peers are the same in every order the choices "
-        "and rules are declared",
-        f"{_RULES}::test_the_four_choice_conflict_is_the_same_in_every_declaration_order",
-        "conflict-order",
-    ),
-    # -- views, nested scopes, look-ahead (case 9, the composing cores' two)
-    Row(
-        "inactive-under-refused-selector",
-        "lane 2",
-        "a choice under an inner selector admitted, under a refused outer selector, on another "
-        "case is inactive in the configuration a change would publish: the change is refused, "
-        "reaching it as inactive",
-        f"{_SCOPES}::test_a_choice_on_an_inner_selectors_other_case_is_inactive_under_a_refused_outer",
-        "inactive-under-refused-selector",
-        "classified beside the two-cores row (outside-domain-forcing): where the outer case is "
-        "assumed, the inner selector's admitted case decides the choice's presence; the "
-        "engine reads the choice under a refused guard",
+        "select-facts-break",
+        _CORE,
+        "selecting a case reaches its rules: one false over the facts refuses the switch, naming "
+        "it with nothing standing",
+        f"{_CASES}::test_selecting_a_case_whose_rule_the_facts_break_is_refused_naming_the_rule",
+        "change-breaks-rule",
     ),
     Row(
-        "case-trial-reads-unchecked",
-        "lane 2",
-        "a case's trial reads a stored choice of the case, kept unchecked only because its "
-        "presence waits, as its value, so a case whose rule refuses that value is not "
-        "possible: the selector lists only the other cases",
-        f"{_CASES}::test_a_case_whose_rule_refuses_a_kept_choice_of_it_is_not_possible",
-        "trial-reads-unchecked",
-        "classified beside the two-cores row (outside-domain-forcing): the engine lists the "
-        "case as possible (more than the model, never a wrong forced value); with two cases "
-        "it forces the other one, as the model does; a walk meets it through a rule of the "
-        "root reading the case's choice too",
+        "outside-domain-trial",
+        _CORE,
+        "a value outside its domain is refused by its type alone, never read by a case's trial "
+        "and refused as inactive once forcing selects the other case",
+        f"{_CASES}::test_a_value_outside_its_domain_a_cores_rule_reads_is_refused_by_its_type",
+        "forced-case",
     ),
     Row(
-        "case-trial-reads-waiting",
-        "lane 2",
-        "a case's trial never reads as its value a stored choice of the case whose own check "
-        "waits on more than its presence (a fact not given), so a commit of it under a "
-        "two-case selector is accepted and kept unchecked, not refused as inactive",
-        f"{_CASES}::test_a_choice_waiting_on_a_fact_under_two_cases_is_kept_unchecked",
-        "trial-reads-waiting",
-        "beside case-trial-reads-unchecked, outside-domain-forcing and "
-        "inactive-under-refused-selector, one fault: a change's trial iteration reaches the "
-        "least fixed point from nothing readable and takes no refusal from a pass that read a "
-        "candidate before its check could conclude; with three cases the engine lists the "
-        "case, as the model does",
+        "case-trial-commit",
+        _CORE,
+        "a value set under an open selector is accepted and waits on it: no case's trial reads "
+        "it, so a rule refusing it never selects the other case and refuses it as inactive",
+        f"{_CASES}::test_a_value_a_root_rule_refuses_under_an_open_selector_is_accepted_waiting",
+        "forced-case",
     ),
     Row(
-        "nested-conflict-choice",
-        "lane 2",
-        "a committed choice in a conflict keeps its value, read refused through both selectors "
-        "the conflict refuses",
-        f"{_SCOPES}::test_a_choice_three_deep_in_a_conflict_keeps_its_value_refused_through_its_guards",
-        "conflict",
+        "case-trial-select",
+        _CORE,
+        "selecting the case of a waiting choice a root rule refuses is refused, naming the rule "
+        "and the choice standing",
+        f"{_CASES}::test_selecting_the_case_of_a_choice_a_root_rule_refuses_names_the_choice_standing",
+        "forced-case",
+        "today the commit on the way is refused as inactive",
     ),
     Row(
-        "nested-conflict-outer",
-        "lane 2",
-        "a selector forced only because its other case is refused takes part in the conflict "
-        "with the choice three deep, refused naming the others",
-        f"{_SCOPES}::test_the_outer_selector_in_a_conflict_with_a_choice_three_deep_is_refused",
-        "conflict",
+        "guard-open",
+        _CORE,
+        "nothing gives a choice a value: a choice one of whose values brings a false rule into "
+        "play stays open, not forced to the other",
+        f"{_CASES}::test_a_guards_choice_whose_value_brings_a_false_rule_into_play_is_open",
+        "forced-value",
     ),
     Row(
-        "nested-conflict-inner",
-        "lane 2",
-        "a selector with no possible case takes part in the conflict with the choice three "
-        "deep, refused naming the others",
-        f"{_SCOPES}::test_the_inner_selector_in_a_conflict_with_a_choice_three_deep_is_refused",
-        "conflict",
+        "guard-possible",
+        _CORE,
+        "possible values are answered per value: false refused by the rule it brings into play, "
+        "true possible, opening what it brings into presence",
+        f"{_CASES}::test_a_guards_value_bringing_a_false_rule_into_play_is_not_possible",
+        "viable-per-choice",
+        "today the choice is forced, so not listed",
     ),
     Row(
-        "nested-conflict-validity",
-        "lane 2",
-        "a conflict with a choice three deep refuses the configuration as a conflict, naming "
-        "the forced selector it refuses (the inner selector, under it, adds nothing of its own)",
-        f"{_SCOPES}::test_a_conflict_with_a_choice_three_deep_refuses_the_configuration",
-        "conflict",
-    ),
-    # -- a domain reading an input refused by forcing, or one that does not apply
-    Row(
-        "forcing-refused-input-commit",
-        "lane 2",
-        "forcing never reads a refused value as one: a choice whose domain input forcing "
-        "refuses (a selector with no possible case) is accepted and kept unchecked, waiting on "
-        "the input",
-        f"{_CASES}::test_a_commit_whose_domain_input_forcing_refuses_is_kept_unchecked",
-        note="the engine refuses the commit, naming the choice with no finding of its own",
+        "guard-off",
+        _CORE,
+        "turning a guard off is accepted and puts the stored choices under it dormant, not "
+        "refused as inactive",
+        f"{_CASES}::test_turning_a_guard_off_puts_the_choices_under_it_dormant",
+        "inactive-refused",
     ),
     Row(
-        "forcing-refused-input-new-facts",
-        "lane 2",
-        "forcing never reads a refused value as one: new facts that leave a kept choice's "
-        "domain input no possible case are accepted, the choice kept unchecked",
-        f"{_CASES}::test_new_facts_that_leave_a_kept_choices_domain_input_no_case_keep_it_unchecked",
-        note="the engine refuses the change, reaching the kept choice with no finding of its own",
+        "empty-list-state",
+        _CORE,
+        "a choice whose list is empty is open (its domain is the piece that refuses), not refused",
+        f"{_CASES}::test_a_choice_whose_list_is_empty_is_open",
+        "no-viable-case",
     ),
     Row(
-        "forcing-refused-input-state",
-        "lane 2",
-        "forcing never reads a refused value as one: a kept choice whose domain input forcing "
-        "refuses is unchecked, waiting on the input",
-        f"{_CASES}::test_a_choice_whose_domain_input_forcing_refuses_waits_on_it",
-        note="asked once the commit is accepted; the engine refuses the commit",
+        "empty-list-code",
+        _CORE,
+        "an empty list's piece carries the code domain-empty, not decision-no-viable-case",
+        f"{_CASES}::test_an_empty_list_refuses_the_configuration",
+        "provisional-code",
+    ),
+    Row(
+        "switch-waiting-away",
+        _CORE,
+        "selecting the other case puts a waiting choice dormant and opens the new case's choices, "
+        "reported; not refused as inactive",
+        f"{_CASES}::test_selecting_the_other_case_puts_a_waiting_choice_dormant",
+        "inactive-refused",
+    ),
+    Row(
+        "select-stored-break",
+        _CORE,
+        "selecting a case whose rule a stored choice breaks is refused, naming the rule and that "
+        "choice standing",
+        f"{_CASES}::test_selecting_a_case_whose_rule_a_stored_choice_breaks_names_it_standing",
+        "change-breaks-rule",
+    ),
+    Row(
+        "selector-possible",
+        _CORE,
+        "each possible case of a selector names what selecting it moves: in play, dormant and "
+        "opened",
+        f"{_CASES}::test_the_possible_cases_of_a_selector_name_what_each_moves",
+        "viable-per-choice",
+    ),
+    Row(
+        "case-rule-commit",
+        _CORE,
+        "a choice set under an open selector whose case's rule refuses it is accepted, waiting: "
+        "no trial selects the other case and refuses it as inactive",
+        f"{_CASES}::test_setting_a_choice_its_cases_rule_refuses_under_an_open_selector_is_accepted",
+        "forced-case",
+    ),
+    Row(
+        "case-rule-possible",
+        _CORE,
+        "a case whose rule refuses a waiting choice of it is impossible, the choice standing; the "
+        "other case possible, putting the choice dormant",
+        f"{_CASES}::test_a_case_whose_rule_refuses_a_waiting_choice_of_it_is_not_possible",
+        "forced-case",
+        "today the commit on the way is refused as inactive",
+    ),
+    Row(
+        "refused-input-commit",
+        _CORE,
+        "a value whose membership reads a refused input is not of its type: the commit is "
+        "refused, blamed at the input, not kept",
+        f"{_CASES}::test_a_value_whose_membership_reads_a_refused_input_is_refused_at_commit",
+        "assignment-type-check",
+    ),
+    Row(
+        "refused-input-facts",
+        _CORE,
+        "new facts making a stored value's membership input refuse are refused by that value's "
+        "type check",
+        f"{_CASES}::test_new_facts_that_refuse_a_stored_choices_membership_input_are_refused",
+        "assignment-type-check",
+    ),
+    Row(
+        "refused-input-validity",
+        _CORE,
+        "a listed domain whose list cannot be made through a refused input is a false piece, "
+        "blamed at the input",
+        f"{_CASES}::test_a_list_refused_through_its_input_refuses_the_configuration_at_the_input",
+        "legacy-validity",
+    ),
+    Row(
+        "guarded-input-set",
+        _CORE,
+        "membership is read over the facts whatever its input's presence: a value whose "
+        "membership input is out of play is set, not waiting",
+        f"{_CASES}::test_a_choice_whose_membership_input_is_out_of_play_is_set",
+        "assignment-type-check",
+    ),
+    Row(
+        "linked-open",
+        _CORE,
+        "a linking rule leaves the other choice open, not forced to the one value it allows",
+        f"{_RULES}::test_a_linking_rule_leaves_the_other_choice_open",
+        "forced-value",
+    ),
+    Row(
+        "linked-refuses",
+        _CORE,
+        "a value breaking a linking rule is refused, naming the rule and the other choice standing",
+        f"{_RULES}::test_a_linking_rule_refuses_a_value_naming_the_other_choice_standing",
+        "change-breaks-rule",
+    ),
+    Row(
+        "linked-possible",
+        _CORE,
+        "an impossible value carries its refusal: the rule, and the other choice standing",
+        f"{_RULES}::test_a_linking_rules_possible_values_name_the_other_choice_standing",
+        "viable-per-choice",
+        "today's reasons are text",
+    ),
+    Row(
+        "domain-reads-choice",
+        _CORE,
+        "a domain whose membership reads a choice is a definition error at compile "
+        "(domain-reads-choice)",
+        f"{_RULES}::test_a_domain_reading_another_choice_is_no_definition",
+        "domain-reads-choice",
+    ),
+    Row(
+        "required-open",
+        _CORE,
+        "a choice one of whose cases the facts rule out stays open, not forced to the other",
+        f"{_RULES}::test_a_case_needing_a_capability_the_facts_lack_leaves_the_choice_open",
+        "forced-value",
+    ),
+    Row(
+        "required-possible",
+        _CORE,
+        "the possible values of a choice the facts narrow: the allowed case possible, the other "
+        "refused by its rule, nothing standing",
+        f"{_RULES}::test_a_case_needing_a_capability_the_facts_lack_is_not_possible",
+        "viable-per-choice",
+        "today the choice is forced, so not listed",
+    ),
+    Row(
+        "required-commit",
+        _CORE,
+        "a value breaking a rule over itself and the facts is refused, naming the rule with "
+        "nothing standing",
+        f"{_RULES}::test_setting_a_case_needing_a_missing_capability_is_refused_by_the_facts_alone",
+        "change-breaks-rule",
+    ),
+    Row(
+        "required-facts",
+        _CORE,
+        "new facts breaking a rule they reach are refused, naming the rule and the stored choice "
+        "standing",
+        f"{_RULES}::test_new_facts_lacking_a_capability_a_stored_case_needs_are_refused",
+        "change-breaks-rule",
+    ),
+    Row(
+        "pair-left-alone",
+        _CORE,
+        "the canon's Pair: left alone at 6 is refused by right_not_slower, right's lanes standing",
+        f"{_RULES}::test_the_pairs_left_alone_at_six_is_refused_naming_the_rule_and_right",
+        "change-breaks-rule",
+    ),
+    Row(
+        "pair-possible",
+        _CORE,
+        "possible values answer a stored choice too, each refused value with its rule and what "
+        "stands in its way",
+        f"{_RULES}::test_the_pairs_possible_values_of_left_beside_right_at_three",
+        "viable-per-choice",
+        "today a stored choice is not listed",
+    ),
+    Row(
+        "memory-possible",
+        _CORE,
+        "the canon's Memory: block possible, ultra refused by ultra_needs_uram with nothing "
+        "standing",
+        f"{_RULES}::test_the_memorys_ultra_is_not_possible_without_uram",
+        "viable-per-choice",
+        "today the choice is forced, so not listed",
+    ),
+    Row(
+        "memory-commit",
+        _CORE,
+        "the canon's Memory: ultra without UltraRAM is refused, naming ultra_needs_uram",
+        f"{_RULES}::test_the_memorys_ultra_is_refused_without_uram_nothing_standing",
+        "change-breaks-rule",
+    ),
+    Row(
+        "origin-blame",
+        _CORE,
+        "a change making a derived value refuse on its own values is refused at that origin "
+        "alone, not at the rule false through it",
+        f"{_RULES}::test_a_refusal_through_a_refused_input_is_blamed_at_its_origin_only",
+        "change-breaks-rule",
+    ),
+    Row(
+        "switch-reaches-case-rule",
+        _CORE,
+        "a switch is refused by a rule of the new case false over the facts, naming it, not for "
+        "the old case's choices it leaves out of play",
+        f"{_RULES}::test_a_rule_in_a_case_that_never_names_its_selector_is_reached_by_switching",
+        "inactive-refused",
+    ),
+    Row(
+        "switch-dormant-opened",
+        _CORE,
+        "a switch is accepted, putting the old case's choices dormant and opening the new case's, "
+        "reported",
+        f"{_RULES}::test_a_switch_puts_the_old_cases_choices_dormant_and_opens_the_new_ones",
+        "inactive-refused",
+    ),
+    Row(
+        "sum-two-standing",
+        _CORE,
+        "a new value breaking a sum is refused, naming the other two choices standing",
+        f"{_RULES}::test_a_new_value_breaking_a_sum_names_the_other_two_standing",
+        "change-breaks-rule",
+    ),
+    Row(
+        "sum-one-standing",
+        _CORE,
+        "a new value breaking a sum with one other set in the same change names the last standing",
+        f"{_RULES}::test_a_new_value_breaking_a_sum_with_one_other_set_names_the_last_standing",
+        "change-breaks-rule",
+    ),
+    Row(
+        "switch-away",
+        _CORE,
+        "switching a selector away is accepted, its case's choices dormant and the new case's "
+        "opened, reported",
+        f"{_RULES}::test_switching_away_puts_the_cases_choices_dormant",
+        "inactive-refused",
+    ),
+    Row(
+        "switched-away-dormant",
+        _CORE,
+        "a choice of the case switched away is dormant, keeping its value",
+        f"{_RULES}::test_a_choice_of_the_case_switched_away_is_dormant",
+        "inactive-refused",
+        "today the switch on the way is refused as inactive",
+    ),
+    Row(
+        "switch-back",
+        _CORE,
+        "switching back brings the dormant choices into play and puts the other case's dormant, "
+        "reported",
+        f"{_RULES}::test_switching_back_brings_the_dormant_choices_into_play",
+        "inactive-refused",
+        "today the switch on the way is refused as inactive",
+    ),
+    Row(
+        "switch-back-refused",
+        _CORE,
+        "a switch back is refused by a rule a restored choice breaks, naming it and the restored "
+        "choice and the other stored one standing",
+        f"{_RULES}::test_a_switch_back_is_refused_by_a_restored_choice",
+        "inactive-refused",
+        "today the switch on the way is refused as inactive",
+    ),
+    Row(
+        "switch-back-moved",
+        _CORE,
+        "a switch back setting the restored choice in the same change is accepted, the choice in "
+        "play",
+        f"{_RULES}::test_a_switch_back_with_the_restored_choice_moved_too_is_accepted",
+        "inactive-refused",
+        "today the switch on the way is refused as inactive",
+    ),
+    Row(
+        "facts-dormant-outside",
+        _CORE,
+        "a facts change is refused by a dormant value outside its new domain: every stored value "
+        "is type-checked",
+        f"{_RULES}::test_a_facts_change_is_refused_by_a_dormant_value_outside_its_new_domain",
+        "inactive-refused",
+        "today the switch on the way is refused as inactive",
+    ),
+    Row(
+        "facts-each-outside",
+        _CORE,
+        "a facts change names each stored value outside its new domain, in play or dormant",
+        f"{_RULES}::test_a_facts_change_is_refused_by_each_value_outside_its_new_domain",
+        "inactive-refused",
+        "today the switch on the way is refused as inactive",
+    ),
+    Row(
+        "facts-clear-standing",
+        _CORE,
+        "a facts change clearing the value that stands in its way is accepted",
+        f"{_RULES}::test_a_facts_change_clearing_what_stands_in_its_way_is_accepted",
+        "inactive-refused",
+        "today the switch on the way is refused as inactive",
+    ),
+    Row(
+        "waiting-valid",
+        _CORE,
+        "a waiting choice whose list has values is no piece of validity: valid, not open on its "
+        "selector",
+        f"{_RULES}::test_a_named_choice_under_an_open_selector_leaves_the_configuration_valid",
+        "legacy-validity",
+    ),
+    Row(
+        "waiting-in-play",
+        _CORE,
+        "selecting a waiting choice's case reports it brought into play",
+        f"{_RULES}::test_selecting_a_waiting_choices_case_brings_it_into_play",
+        "no-dormant-report",
+    ),
+    Row(
+        "nested-open",
+        _CORE,
+        "a selector whose other case the facts refuse stays open, not forced to the case left",
+        f"{_SCOPES}::test_a_selector_whose_other_case_the_facts_refuse_stays_open",
+        "forced-value",
+    ),
+    Row(
+        "nested-waits",
+        _CORE,
+        "a value set three deep waits on both open selectors, which nothing sets: not read as set",
+        f"{_SCOPES}::test_a_commit_three_deep_under_two_open_selectors_waits_on_both",
+        "forced-value",
+    ),
+    Row(
+        "nested-opened",
+        _CORE,
+        "selecting the outer kernel reports the inner selector opened",
+        f"{_SCOPES}::test_selecting_the_outer_kernel_leaves_a_choice_three_deep_waiting_on_the_inner",
+        "no-dormant-report",
+    ),
+    Row(
+        "nested-in-play",
+        _CORE,
+        "selecting the inner kernel reports the choice three deep brought into play",
+        f"{_SCOPES}::test_selecting_both_kernels_brings_a_choice_three_deep_into_play",
+        "no-dormant-report",
+    ),
+    Row(
+        "nested-away",
+        _CORE,
+        "switching the outer kernel away is accepted, the inner selector and the choice three "
+        "deep dormant, reported",
+        f"{_SCOPES}::test_switching_the_outer_kernel_away_puts_the_inner_choices_dormant",
+        "inactive-refused",
+    ),
+    Row(
+        "nested-rule",
+        _CORE,
+        "a value three deep breaking its case's rule over the facts is refused, naming the rule",
+        f"{_SCOPES}::test_a_commit_three_deep_breaking_its_rule_is_refused_naming_it",
+        "change-breaks-rule",
+    ),
+    Row(
+        "outer-facts",
+        _CORE,
+        "new facts under which no case of an open selector holds are accepted: nothing is refused "
+        "through the selector",
+        f"{_SCOPES}::test_new_facts_no_case_of_an_open_selector_holds_under_are_accepted",
+        "no-viable-case",
+    ),
+    Row(
+        "outer-select",
+        _CORE,
+        "selecting the outer case brings the inner selector into play, reported; the choice under "
+        "its other case stays dormant, not refused as inactive",
+        f"{_SCOPES}::test_selecting_the_outer_case_brings_the_inner_selector_into_play",
+        "inactive-refused",
+    ),
+    Row(
+        "look-opened",
+        _CORE,
+        "a possible value names the choices it opens: native opens the core selector it puts in "
+        "scope",
+        f"{_SCOPES}::test_a_case_is_not_tried_against_a_selector_it_puts_in_scope",
+        "viable-per-choice",
+    ),
+    Row(
+        "look-open",
+        _CORE,
+        "a selector no case of which the facts allow stays open, not refused",
+        f"{_SCOPES}::test_the_selector_a_set_case_puts_in_scope_stays_open",
+        "no-viable-case",
+    ),
+    Row(
+        "look-validity",
+        _CORE,
+        "a selector with no possible case leaves the configuration open, its cases' rules waiting "
+        "on it, not refused",
+        f"{_SCOPES}::test_the_selector_a_set_case_puts_in_scope_leaves_the_configuration_open",
+        "no-viable-case",
+    ),
+    Row(
+        "ruled-possible",
+        _CORE,
+        "native is impossible by the parent's rule over the facts, nothing standing; other "
+        "possible",
+        f"{_SCOPES}::test_a_parent_rule_over_the_capabilities_makes_the_case_impossible",
+        "viable-per-choice",
+        "today the choice is forced, so not listed",
+    ),
+    Row(
+        "guard-input-facts",
+        _CORE,
+        "new facts making a guard's input refuse are refused at that input's origin",
+        f"{_SCOPES}::test_new_facts_refusing_a_guards_input_are_refused_at_the_input",
+        "change-breaks-rule",
+    ),
+    Row(
+        "guard-code",
+        _CORE,
+        "a guard refused through its input is one piece carrying guard-refused beside its input's "
+        "codes",
+        f"{_SCOPES}::test_a_guard_refused_through_its_input_refuses_the_configuration_at_the_guard",
+        "provisional-code",
+    ),
+    Row(
+        "guard-absent",
+        _CORE,
+        "a scope under a guard refused through its input is out of play: an unset choice in it is "
+        "absent, not refused",
+        f"{_SCOPES}::test_an_unset_choice_under_a_guard_refused_through_its_input_is_absent",
+        "refused-guard",
     ),
 )
 
@@ -280,7 +645,5 @@ def markdown() -> str:
     order = {milestone: position for position, milestone in enumerate(MILESTONES)}
     for row in sorted(ROWS, key=lambda item: (order[item.milestone], item.id)):
         change = row.change + (f" ({row.note})" if row.note else "")
-        lines.append(
-            f"| {row.id} | {row.milestone} | {change} | `{row.witness}` | {row.kind or ''} |"
-        )
+        lines.append(f"| {row.id} | {row.milestone} | {change} | `{row.witness}` | {row.kind} |")
     return "\n".join(lines)

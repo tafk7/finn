@@ -1,12 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The engine against the reference model: views, nested scopes and look-ahead, one test
-per question.
+"""The engine against the reference model: views, nested scopes and guards, one test per
+question.
 
 Case 9 of the reference cases (views and validity, and a constraint reading a view of its
 own Space, a cycle, in three shapes), and two of how a Space holds cores: selectors nested
-three deep, and a value choice whose case puts a selector with no possible case in scope.
+three deep, and a value choice whose case puts a selector no case of which holds in scope.
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ from core.space.reference import (
     Change,
     Choice,
     Constraint,
+    Derived,
+    Refuse,
     Scope,
     Selector,
     Space,
@@ -27,7 +29,6 @@ from core.space.reference import (
 from core.space.reference_harness import (
     ByName,
     Case,
-    Pair,
     Spelling,
     check_definition,
     expected,
@@ -35,14 +36,6 @@ from core.space.reference_harness import (
 
 # Each test runs with the readers index used for every cache, then for none: the same answers.
 pytestmark = pytest.mark.usefixtures("index_path")
-
-
-def reach(pair: Pair, edit: Change) -> Pair:
-    """``edit`` compared, then its successor (a refusal by the engine is a disagreement)."""
-    __tracebackhide__ = True
-    successor = pair.check_change(edit)
-    assert successor is not None, "the model refuses the change: the test is written wrongly"
-    return successor
 
 
 # -- 9. views and validity -------------------------------------------------------------------------
@@ -77,7 +70,7 @@ def test_a_view_refuses_when_its_space_is_refused() -> None:
     VIEWED.start({"limit": 2, "name": "bad"}).check_answer("title")
 
 
-def test_a_view_answers_while_its_space_is_undecided() -> None:
+def test_a_view_answers_while_its_space_is_open() -> None:
     VIEWED.start({"name": "unit"}).check_answer("title")
 
 
@@ -252,6 +245,7 @@ NESTED = Case(
 )
 OPEN = {"plain_ok": True, "serial_ok": True, "width": 4}
 CLOSED = {"plain_ok": False, "serial_ok": False, "width": 6}
+INNER_PACKED = {"kernel": "inner", COMPUTE: "packed"}
 
 
 def test_a_rule_three_deep_under_two_open_selectors_waits_on_both() -> None:
@@ -266,73 +260,56 @@ def test_a_rule_three_deep_under_an_unselected_case_does_not_apply() -> None:
     NESTED.start(OPEN, {"kernel": "plain"}).check_rule(FITS)
 
 
-def test_a_choice_three_deep_under_an_unselected_case_is_inactive() -> None:
+def test_an_unset_choice_three_deep_under_an_unselected_case_is_absent() -> None:
     NESTED.start(OPEN, {"kernel": "plain"}).check_state(PE)
 
 
-def test_forcing_selects_the_outer_kernel() -> None:
+@expected("nested-open")
+def test_a_selector_whose_other_case_the_facts_refuse_stays_open() -> None:
     NESTED.start(CLOSED).check_state("kernel")
 
 
-def test_forcing_selects_the_core_inside_the_forced_kernel() -> None:
-    NESTED.start(CLOSED).check_state(COMPUTE)
-
-
-def test_a_choice_three_deep_under_forced_selectors_lists_its_possible_cases() -> None:
-    NESTED.start(CLOSED).check_state(PE)
-
-
-def test_a_commit_three_deep_under_forced_selectors_is_accepted() -> None:
+def test_a_commit_three_deep_under_two_open_selectors_is_accepted() -> None:
     NESTED.start(CLOSED).check_change(Change(commit={PE: 2}))
 
 
-def test_a_commit_three_deep_under_forced_selectors_is_readable() -> None:
-    reach(NESTED.start(CLOSED), Change(commit={PE: 2})).check_state(PE)
+@expected("nested-waits")
+def test_a_commit_three_deep_under_two_open_selectors_waits_on_both() -> None:
+    NESTED.start(CLOSED, {PE: 2}).check_state(PE)
 
 
-def test_validity_counts_a_rule_three_deep() -> None:
-    point = NESTED.start({**OPEN, "width": 6}, {"kernel": "inner", COMPUTE: "packed"})
-    reach(point, Change(commit={PE: 4})).check_validity()
+@expected("nested-opened")
+def test_selecting_the_outer_kernel_leaves_a_choice_three_deep_waiting_on_the_inner() -> None:
+    NESTED.start(OPEN, {PE: 2}).check_change(Change(commit={"kernel": "inner"}))
 
 
-def test_a_commit_three_deep_under_two_open_selectors_is_kept_unchecked() -> None:
-    NESTED.start(OPEN).check_change(Change(commit={PE: 2}))
+@expected("nested-in-play")
+def test_selecting_both_kernels_brings_a_choice_three_deep_into_play() -> None:
+    NESTED.start(OPEN, {PE: 2, "kernel": "inner"}).check_change(Change(commit={COMPUTE: "packed"}))
 
 
-def test_a_commit_three_deep_in_a_conflict_with_the_forced_selectors_is_accepted() -> None:
-    # 4 does not divide 6, so ``packed`` is refused; ``serial`` is refused by its fact, so
-    # ``compute`` has no possible case; ``kernel`` was forced to ``inner`` only because
-    # ``plain`` is refused. Both selectors are refused, and ``pe`` keeps its value.
-    NESTED.start(CLOSED).check_change(Change(commit={PE: 4}))
+@expected("nested-away")
+def test_switching_the_outer_kernel_away_puts_the_inner_choices_dormant() -> None:
+    NESTED.start(OPEN, {**INNER_PACKED, PE: 2}).check_change(Change(commit={"kernel": "plain"}))
 
 
-@expected("nested-conflict-choice")
-def test_a_choice_three_deep_in_a_conflict_keeps_its_value_refused_through_its_guards() -> None:
-    reach(NESTED.start(CLOSED), Change(commit={PE: 4})).check_state(PE)
+@expected("nested-rule")
+def test_a_commit_three_deep_breaking_its_rule_is_refused_naming_it() -> None:
+    NESTED.start({**OPEN, "width": 6}, INNER_PACKED).check_change(Change(commit={PE: 4}))
 
 
-@expected("nested-conflict-outer")
-def test_the_outer_selector_in_a_conflict_with_a_choice_three_deep_is_refused() -> None:
-    reach(NESTED.start(CLOSED), Change(commit={PE: 4})).check_state("kernel")
+def test_validity_waits_on_a_fact_a_rule_three_deep_reads() -> None:
+    NESTED.start({"plain_ok": True, "serial_ok": True}, {**INNER_PACKED, PE: 4}).check_validity()
 
 
-@expected("nested-conflict-inner")
-def test_the_inner_selector_in_a_conflict_with_a_choice_three_deep_is_refused() -> None:
-    reach(NESTED.start(CLOSED), Change(commit={PE: 4})).check_state(COMPUTE)
-
-
-@expected("nested-conflict-validity")
-def test_a_conflict_with_a_choice_three_deep_refuses_the_configuration() -> None:
-    reach(NESTED.start(CLOSED), Change(commit={PE: 4})).check_validity()
-
-
-# An inner selector inside a case of an outer one: ``inner`` committed to ``y`` and a choice
-# under its other case ``x`` committed too, both while ``outer`` is open (both wait on it).
-# New facts then leave ``outer`` no possible case: ``inner`` is admitted under the refused
-# selector, and the choice under ``x``, its guard's other case committed, is inactive.
+# An inner selector inside a case of an outer one: ``inner`` set to ``y`` and a choice under
+# its other case ``x`` set too, both while ``outer`` is open (both wait on it). New facts then
+# leave neither of ``outer``'s cases' rules holding: no case is selected, so the change is
+# accepted and both still wait. The choice under ``x`` is dormant throughout: ``inner`` holds
+# ``y``. Selecting ``a`` brings ``inner`` into play.
 
 OUTER = Case(
-    "an inner selector under a refused outer one",
+    "an inner selector under an open outer one",
     Space(
         ("on",),
         Scope(
@@ -365,21 +342,24 @@ OUTER = Case(
         ),
     ),
 )
+INNER_SET = {"outer.a.inner": "y", "outer.a.inner.x.c": 1}
 
 
-@expected("inactive-under-refused-selector")
-def test_a_choice_on_an_inner_selectors_other_case_is_inactive_under_a_refused_outer() -> None:
-    point = reach(
-        OUTER.start({"on": 2}), Change(commit={"outer.a.inner": "y", "outer.a.inner.x.c": 1})
-    )
-    point.check_change(Change(facts={"on": 0}))
+@expected("outer-facts")
+def test_new_facts_no_case_of_an_open_selector_holds_under_are_accepted() -> None:
+    OUTER.start({"on": 2}, INNER_SET).check_change(Change(facts={"on": 0}))
 
 
-# -- a look-ahead against a choice with no possible value ------------------------------------------
+@expected("outer-select")
+def test_selecting_the_outer_case_brings_the_inner_selector_into_play() -> None:
+    OUTER.start({"on": 2}, INNER_SET).check_change(Change(commit={"outer": "a"}))
+
+
+# -- a case putting a selector in scope whose every case the facts refuse --------------------------
 #
 # ``realization`` is ``native`` or ``other``; ``native`` puts a scope in place whose selector
 # chooses a core, ``fast`` or ``slow``, each needing its capability. With neither
-# capability the selector has no possible case once ``native`` is chosen.
+# capability neither core's rule holds; with ``native_needs_core``, ``native`` itself needs one.
 
 
 def realized(with_rule: bool) -> Space:
@@ -437,22 +417,70 @@ RULED = Case("a parent rule over the capabilities", realized(with_rule=True), CA
 NO_CORES = {"fast_ok": False, "slow_ok": False}
 
 
-def test_a_case_is_not_tried_against_another_choice_having_no_possible_value() -> None:
-    LOOK.start(NO_CORES).check_state("realization")
+@expected("look-opened")
+def test_a_case_is_not_tried_against_a_selector_it_puts_in_scope() -> None:
+    LOOK.start(NO_CORES).check_possible("realization")
 
 
-def test_the_selector_a_committed_case_puts_in_scope_has_no_possible_value() -> None:
-    # A plain refusal naming each core's reason: no forced value takes part, so no conflict.
+def test_a_selector_a_case_puts_in_scope_waits_while_the_case_is_open() -> None:
+    LOOK.start(NO_CORES).check_state("native_impl.compute")
+
+
+@expected("look-open")
+def test_the_selector_a_set_case_puts_in_scope_stays_open() -> None:
     LOOK.start(NO_CORES, {"realization": "native"}).check_state("native_impl.compute")
 
 
-def test_the_selector_a_committed_case_puts_in_scope_refuses_the_configuration() -> None:
+@expected("look-validity")
+def test_the_selector_a_set_case_puts_in_scope_leaves_the_configuration_open() -> None:
     LOOK.start(NO_CORES, {"realization": "native"}).check_validity()
 
 
+@expected("ruled-possible")
 def test_a_parent_rule_over_the_capabilities_makes_the_case_impossible() -> None:
-    RULED.start(NO_CORES).check_state("realization")
+    RULED.start(NO_CORES).check_possible("realization")
 
 
-def test_the_selector_under_the_impossible_case_is_inactive() -> None:
-    RULED.start(NO_CORES).check_state("native_impl.compute")
+# -- a guard refused through its input ------------------------------------------------------------
+#
+# ``g`` is present while the derived ``gate`` exceeds 2; ``gate`` refuses an odd fact ``w``.
+# A root rule reads ``g.n``. Refused through its input, the guard refuses its scope once, at
+# the guard; the scope is not in play, so ``g.n`` is dormant and ``g.m`` absent.
+
+GATED = Case(
+    "a guard refused through its input",
+    Space(
+        ("w",),
+        Scope(
+            "",
+            derived=(Derived("gate", ("w",), lambda r: Refuse("odd") if r["w"] % 2 else r["w"]),),
+            children=(
+                Scope(
+                    "g",
+                    when=When(("gate",), lambda r: r["gate"] > 2),
+                    choices=(Choice("n", listed(1, 2)), Choice("m", listed(1, 2))),
+                ),
+            ),
+            constraints=(Constraint("uses", ("g.n",), lambda r: r["g.n"] >= 1, "unused"),),
+        ),
+    ),
+)
+
+
+@expected("guard-input-facts")
+def test_new_facts_refusing_a_guards_input_are_refused_at_the_input() -> None:
+    GATED.start({"w": 4}, {"g.n": 1}).check_change(Change(facts={"w": 3}))
+
+
+@expected("guard-code")
+def test_a_guard_refused_through_its_input_refuses_the_configuration_at_the_guard() -> None:
+    GATED.start({"w": 3}).check_validity()
+
+
+@expected("guard-absent")
+def test_an_unset_choice_under_a_guard_refused_through_its_input_is_absent() -> None:
+    GATED.start({"w": 3}).check_state("g.m")
+
+
+def test_a_rule_reading_a_choice_under_a_refused_guard_is_false_through_it() -> None:
+    GATED.start({"w": 3}).check_rule("uses")

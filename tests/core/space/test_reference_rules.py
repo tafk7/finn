@@ -3,15 +3,17 @@
 
 """The engine against the reference model: rules between choices, one test per question.
 
-Cases 5 to 8 of the reference cases (cases 1 to 4 are ``test_reference_cases``): a linking
-rule, a requirement, forcing conflicts and the one trial rule. Each rule is a constraint in
-the model; the engine spells it as it is authored at this commit (``Spelling`` beside each
-case), so the acceptance matrix shows what a later milestone changes in each spelling.
+A linking rule and a requirement (cases 5 and 6 of the reference cases; cases 1 to 4 are
+``test_reference_cases``), the canon's two examples, and the hand cases of the reference
+model's rewrite: a change is assignment, refused where it breaks a rule it reaches, naming
+the rule at its origin and the stored choices standing in its way; a selector switched
+away puts its case's choices dormant. Each rule is a constraint in the model; the engine
+spells it as it is authored at this commit (``Spelling`` beside each case).
 """
 
 from __future__ import annotations
 
-import itertools
+from typing import Any
 
 import pytest
 
@@ -20,9 +22,12 @@ from core.space.reference import (
     Choice,
     Constraint,
     Derived,
+    Reads,
+    Refuse,
     Scope,
     Selector,
     Space,
+    View,
     computed,
     listed,
 )
@@ -31,6 +36,7 @@ from core.space.reference_harness import (
     Pair,
     Requirement,
     Spelling,
+    check_definition,
     expected,
 )
 
@@ -38,85 +44,80 @@ from core.space.reference_harness import (
 pytestmark = pytest.mark.usefixtures("index_path")
 
 
-def reach(pair: Pair, edit: Change) -> Pair:
-    """``edit`` compared, then its successor: a change the model accepts and the engine
-    refuses is a disagreement, so a question about its configuration cannot be asked."""
-    __tracebackhide__ = True
-    successor = pair.check_change(edit)
-    assert successor is not None, "the model refuses the change: the test is written wrongly"
-    return successor
+def divisors(extent: int) -> tuple[int, ...]:
+    return tuple(value for value in range(1, extent + 1) if extent % value == 0)
 
 
 # -- 5. a linking rule as a constraint -------------------------------------------------------------
 #
-# ``b <= a``, over two choices of one Space: a constraint of the Space (in its admission group
-# today). Beside it, the same bound as ``b``'s domain, computed from ``a``: not a rule but
-# ``b``'s type check, its own check (unchecked while ``a`` is open, false refusing a named
-# commit or a reached retained ``b``).
+# ``b <= a``, over two choices of one Space: a constraint of the Space. The same bound as
+# ``b``'s domain, computed from ``a``, is no definition: a domain's membership reads facts
+# only, and a relation to another choice is a constraint.
 
-LINKED_SPACE = Space(
-    (),
-    Scope(
-        "",
-        choices=(Choice("a", listed(1, 2, 3)), Choice("b", listed(1, 2, 3))),
-        constraints=(
-            Constraint("linked", ("a", "b"), lambda read: read["b"] <= read["a"], "b-above-a"),
-        ),
-    ),
-)
-LINKED = Case("a linking rule", LINKED_SPACE)
-LINKED_DOMAIN = Case(
-    "a domain reading another choice",
+LINKED = Case(
+    "a linking rule",
     Space(
         (),
         Scope(
             "",
-            choices=(
-                Choice("a", listed(1, 2, 3)),
-                Choice(
-                    "b",
-                    computed(lambda read: tuple(v for v in (1, 2, 3) if v <= read["a"]), ("a",)),
-                ),
+            choices=(Choice("a", listed(1, 2, 3)), Choice("b", listed(1, 2, 3))),
+            constraints=(
+                Constraint("linked", ("a", "b"), lambda read: read["b"] <= read["a"], "b-above-a"),
             ),
         ),
     ),
 )
 
 
-def test_a_linking_rule_leaves_the_other_choice_the_cases_it_holds_for() -> None:
-    LINKED.start({}, {"b": 2}).check_state("a")
-
-
-def test_a_linking_rule_never_refuses_a_commit() -> None:
-    LINKED.start({}, {"b": 2}).check_change(Change(commit={"a": 1}))
-
-
-def test_a_linking_rule_refuses_the_configuration_naming_itself() -> None:
-    reach(LINKED.start({}, {"b": 2}), Change(commit={"a": 1})).check_validity()
-
-
-def test_a_linking_rule_forces_the_open_choice() -> None:
+@expected("linked-open")
+def test_a_linking_rule_leaves_the_other_choice_open() -> None:
     LINKED.start({}, {"a": 1}).check_state("b")
 
 
-def test_a_domain_reading_another_choice_takes_a_commit_before_the_choice_it_reads() -> None:
-    LINKED_DOMAIN.start().check_change(Change(commit={"b": 2}))
+@expected("linked-refuses")
+def test_a_linking_rule_refuses_a_value_naming_the_other_choice_standing() -> None:
+    LINKED.start({}, {"b": 2}).check_change(Change(commit={"a": 1}))
 
 
-def test_a_domain_reading_another_choice_refuses_a_commit_that_puts_a_kept_choice_outside() -> None:
-    # ``b`` of 2 is kept unchecked while ``a`` is open; ``a`` of 1 leaves 2 outside ``b``'s
-    # domain: the change is refused, reaching ``b``.
-    LINKED_DOMAIN.start({}, {"b": 2}).check_change(Change(commit={"a": 1}))
+def test_a_linking_rule_accepts_both_choices_moved_in_one_change() -> None:
+    LINKED.start({}, {"a": 3, "b": 2}).check_change(Change(commit={"a": 1, "b": 1}))
 
 
-def test_a_domain_reading_another_choice_forces_its_one_value_left() -> None:
-    LINKED_DOMAIN.start({}, {"a": 1}).check_state("b")
+def test_a_linking_rule_accepts_a_value_once_the_other_choice_is_cleared() -> None:
+    LINKED.start({}, {"b": 2}).check_change(Change(commit={"a": 1}, clear=("b",)))
+
+
+@expected("linked-possible")
+def test_a_linking_rules_possible_values_name_the_other_choice_standing() -> None:
+    LINKED.start({}, {"b": 2}).check_possible("a")
+
+
+@expected("domain-reads-choice")
+def test_a_domain_reading_another_choice_is_no_definition() -> None:
+    check_definition(
+        "a domain reading another choice",
+        Space(
+            (),
+            Scope(
+                "",
+                choices=(
+                    Choice("a", listed(1, 2, 3)),
+                    Choice(
+                        "b",
+                        computed(
+                            lambda read: tuple(v for v in (1, 2, 3) if v <= read["a"]), ("a",)
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
 
 
 # -- 6. a requirement as a constraint --------------------------------------------------------------
 #
 # ``style`` ``big`` needs a capability, the fact ``has_big``: a constraint over the choice
-# and the fact, spelled ``requires(has_big, cases=("big",))`` on the domain today.
+# and the fact, spelled ``requires(has_big, cases=("big",))`` on the domain in the canon.
 
 REQUIRED = Case(
     "a requirement",
@@ -142,220 +143,443 @@ REQUIRED = Case(
 )
 
 
-def test_a_case_needing_a_capability_the_facts_lack_is_not_possible() -> None:
+@expected("required-open")
+def test_a_case_needing_a_capability_the_facts_lack_leaves_the_choice_open() -> None:
     REQUIRED.start({"has_big": False}).check_state("style")
 
 
+@expected("required-possible")
+def test_a_case_needing_a_capability_the_facts_lack_is_not_possible() -> None:
+    REQUIRED.start({"has_big": False}).check_possible("style")
+
+
 def test_a_case_needing_an_unknown_capability_is_possible() -> None:
-    REQUIRED.start().check_state("style")
+    REQUIRED.start().check_possible("style")
 
 
-def test_committing_a_case_needing_a_missing_capability_is_accepted() -> None:
+@expected("required-commit")
+def test_setting_a_case_needing_a_missing_capability_is_refused_by_the_facts_alone() -> None:
     REQUIRED.start({"has_big": False}).check_change(Change(commit={"style": "big"}))
 
 
-def test_committing_a_case_needing_a_missing_capability_refuses_the_configuration() -> None:
-    reach(REQUIRED.start({"has_big": False}), Change(commit={"style": "big"})).check_validity()
+@expected("required-facts")
+def test_new_facts_lacking_a_capability_a_stored_case_needs_are_refused() -> None:
+    REQUIRED.start({"has_big": True}, {"style": "big"}).check_change(
+        Change(facts={"has_big": False})
+    )
 
 
-# -- 7. forcing conflicts --------------------------------------------------------------------------
+# -- 7. the canon's examples (DESIGN § 3 and § 4.6) ------------------------------------------------
 #
-# The pair: ``x`` and ``y`` each have one value, and a rule excludes both. The four-choice
-# example: ``x + y <= 1``, ``d == y``, ``y + d + z <= 2``, with ``x``, ``y``, ``z`` of one
-# value and ``d`` of two; every choice takes part.
-
-PAIR = Case(
-    "an excluding pair",
-    Space(
-        (),
-        Scope(
-            "",
-            choices=(Choice("x", listed(1)), Choice("y", listed(1))),
-            constraints=(
-                Constraint(
-                    "exclusive", ("x", "y"), lambda read: read["x"] + read["y"] <= 1, "both"
-                ),
-            ),
-        ),
-    ),
-)
-
-FOUR_CHOICES = (
-    Choice("x", listed(1)),
-    Choice("y", listed(1)),
-    Choice("z", listed(1)),
-    Choice("d", listed(0, 1)),
-)
-FOUR_RULES = (
-    Constraint("pair", ("x", "y"), lambda read: read["x"] + read["y"] <= 1, "pair"),
-    Constraint("copy", ("d", "y"), lambda read: read["d"] == read["y"], "copy"),
-    Constraint(
-        "triple", ("y", "d", "z"), lambda read: read["y"] + read["d"] + read["z"] <= 2, "triple"
-    ),
-)
+# ``Pair``: two ``Tiles`` of one extent, each with ``lanes`` dividing it and a budget of four
+# cycles, and a rule that the right is not slower than the left. ``Memory``: a style
+# ``ultra`` needs UltraRAM, a fact.
 
 
-def four(choices: tuple[int, ...], rules: tuple[int, ...]) -> Case:
-    """The four-choice example, its choices and rules declared in the given order."""
-    return Case(
-        f"four choices {choices} {rules}",
-        Space(
-            (),
-            Scope(
-                "",
-                choices=tuple(FOUR_CHOICES[index] for index in choices),
-                constraints=tuple(FOUR_RULES[index] for index in rules),
-            ),
+def tiles(name: str) -> Scope:
+    lanes, cycles = f"{name}.lanes", f"{name}.cycles"
+    return Scope(
+        name,
+        choices=(Choice("lanes", computed(lambda r: divisors(r["extent"]), ("extent",))),),
+        derived=(Derived("cycles", ("extent", lanes), lambda r: r["extent"] // r[lanes]),),
+        constraints=(
+            Constraint("within_budget", (cycles,), lambda r: r[cycles] <= 4, "over-budget"),
         ),
     )
 
 
-FOUR = four((0, 1, 2, 3), (0, 1, 2))
+PAIR = Case(
+    "the canon's Pair",
+    Space(
+        ("extent",),
+        Scope(
+            "",
+            children=(tiles("left"), tiles("right")),
+            constraints=(
+                Constraint(
+                    "right_not_slower",
+                    ("right.cycles", "left.cycles"),
+                    lambda r: r["right.cycles"] <= r["left.cycles"],
+                    "right-slower",
+                ),
+            ),
+            views=(
+                View(
+                    "timing",
+                    ("left.cycles", "right.cycles"),
+                    lambda r: (r["left.cycles"], r["right.cycles"]),
+                ),
+            ),
+        ),
+    ),
+    Spelling(types={"timing": tuple}),
+)
+BOTH_AT_THREE = {"left.lanes": 3, "right.lanes": 3}
 
 
-@expected("pair-first")
-def test_the_first_of_two_forced_choices_excluding_each_other_is_refused_naming_the_other() -> None:
-    PAIR.start().check_state("x")
+def test_the_pair_with_nothing_set_is_open() -> None:
+    PAIR.start({"extent": 12}).check_validity()
 
 
-@expected("pair-second")
-def test_the_second_of_two_forced_choices_excluding_each_other_is_refused_naming_the_other() -> (
-    None
-):
-    PAIR.start().check_state("y")
+def test_the_pair_with_both_lanes_set_is_valid() -> None:
+    PAIR.start({"extent": 12}, BOTH_AT_THREE).check_validity()
 
 
-@expected("pair-validity")
-def test_two_forced_choices_excluding_each_other_refuse_the_configuration() -> None:
-    PAIR.start().check_validity()
+def test_the_pairs_timing_view_answers() -> None:
+    PAIR.start({"extent": 12}, BOTH_AT_THREE).check_answer("timing")
 
 
-def test_committing_a_participant_of_a_conflict_is_accepted() -> None:
-    PAIR.start().check_change(Change(commit={"x": 1}))
+@expected("pair-left-alone")
+def test_the_pairs_left_alone_at_six_is_refused_naming_the_rule_and_right() -> None:
+    PAIR.start({"extent": 12}, BOTH_AT_THREE).check_change(Change(commit={"left.lanes": 6}))
 
 
-def test_a_committed_participant_keeps_its_value() -> None:
-    reach(PAIR.start(), Change(commit={"x": 1})).check_state("x")
+def test_the_pairs_lanes_both_at_six_are_accepted() -> None:
+    PAIR.start({"extent": 12}, BOTH_AT_THREE).check_change(
+        Change(commit={"left.lanes": 6, "right.lanes": 6})
+    )
 
 
-def test_the_other_choice_of_a_rule_with_a_committed_one_has_no_possible_value() -> None:
-    reach(PAIR.start(), Change(commit={"x": 1})).check_state("y")
+@expected("pair-possible")
+def test_the_pairs_possible_values_of_left_beside_right_at_three() -> None:
+    # 1, 2: left's own budget, nothing standing; 3: the value held; 4, 6, 12:
+    # ``right_not_slower``, with ``right.lanes`` standing.
+    PAIR.start({"extent": 12}, BOTH_AT_THREE).check_possible("left.lanes")
 
 
-@expected("four-participants")
-def test_the_four_choice_conflict_refuses_every_participant_naming_the_others() -> None:
-    point = FOUR.start()
-    for name in ("x", "y", "z", "d"):
-        point.check_state(name)
+MEMORY = Case(
+    "the canon's Memory",
+    Space(
+        ("uram",),
+        Scope(
+            "",
+            choices=(Choice("style", listed("block", "ultra")),),
+            constraints=(
+                Constraint(
+                    "ultra_needs_uram",
+                    ("style", "uram"),
+                    lambda r: r["style"] != "ultra" or bool(r["uram"]),
+                    "uram-absent",
+                ),
+            ),
+        ),
+    ),
+    Spelling(types={"uram": bool}),
+)
 
 
-@expected("four-validity")
-def test_the_four_choice_conflict_refuses_the_configuration() -> None:
-    FOUR.start().check_validity()
+@expected("memory-possible")
+def test_the_memorys_ultra_is_not_possible_without_uram() -> None:
+    MEMORY.start({"uram": False}).check_possible("style")
 
 
-@expected("four-orders")
-def test_the_four_choice_conflict_is_the_same_in_every_declaration_order() -> None:
-    # The 24 orders of the choices, each with one of the 6 orders of the rules in turn.
-    rule_orders = list(itertools.permutations(range(3)))
-    for position, choices in enumerate(itertools.permutations(range(4))):
-        point = four(choices, rule_orders[position % len(rule_orders)]).start()
-        for name in ("x", "y", "z", "d"):
-            point.check_state(name)
+@expected("memory-commit")
+def test_the_memorys_ultra_is_refused_without_uram_nothing_standing() -> None:
+    MEMORY.start({"uram": False}).check_change(Change(commit={"style": "ultra"}))
 
 
-# -- 8. the one trial rule -------------------------------------------------------------------------
+# -- 8. the reference model's hand cases (the semantics note, § 12) --------------------------------
 #
-# ``lanes`` forces the core: two leave both cores possible, three force ``packed`` (the stub
-# takes an even width), 100 and 128 force ``stub`` (packed takes at most 64). ``rows`` is 2
-# under the stub, 1 under packed. ``depth`` takes at most ``rows``: through the forced core
-# (``depth``), or from ``lanes`` directly, a committed choice (``span``).
+# A refusal through a refused input is blamed at its origin: ``x = 3`` makes ``width``
+# refuse on its own values, and ``fits`` is false only through it.
 
-FIT = Case(
-    "the one trial rule",
+
+def odd_width(r: Reads) -> Any:
+    return Refuse("odd") if (r["x"] * r["y"]) % 2 else r["x"] * r["y"]
+
+
+ODD_PRODUCT = Case(
+    "a refusal through a refused input",
     Space(
         (),
         Scope(
             "",
-            choices=(
-                Choice("lanes", listed(2, 3, 100, 128)),
-                Choice(
-                    "depth",
-                    listed(1, 2, member=lambda value, read: value <= read["rows"], reads=("rows",)),
-                ),
-                Choice(
-                    "span",
-                    listed(
-                        1,
-                        2,
-                        member=lambda value, read: value <= (1 if read["lanes"] % 2 else 2),
-                        reads=("lanes",),
+            choices=(Choice("x", listed(1, 2, 3)), Choice("y", listed(1, 2))),
+            derived=(Derived("width", ("x", "y"), odd_width),),
+            constraints=(Constraint("fits", ("width",), lambda r: r["width"] <= 4, "too-wide"),),
+            views=(View("shown", ("width",), lambda r: r["width"]),),
+        ),
+    ),
+)
+
+
+@expected("origin-blame")
+def test_a_refusal_through_a_refused_input_is_blamed_at_its_origin_only() -> None:
+    ODD_PRODUCT.start({}, {"x": 2, "y": 1}).check_change(Change(commit={"x": 3}))
+
+
+# ``compute``: the ``packed`` core, or ``dsp58``, which a rule over facts alone allows only
+# on a part with DSP58; ``dsp58``'s rule never names its selector.
+
+DSP58 = Case(
+    "a rule in a case that never names its selector",
+    Space(
+        ("has_dsp58",),
+        Scope(
+            "",
+            selectors=(
+                Selector(
+                    "compute",
+                    (
+                        Scope("packed", choices=(Choice("pe", listed(1, 2)),)),
+                        Scope(
+                            "dsp58",
+                            choices=(Choice("pe", listed(1, 2, 4)),),
+                            constraints=(
+                                Constraint(
+                                    "supported",
+                                    ("has_dsp58",),
+                                    lambda r: bool(r["has_dsp58"]),
+                                    "no-dsp58",
+                                ),
+                            ),
+                        ),
                     ),
                 ),
             ),
+        ),
+    ),
+    Spelling(types={"has_dsp58": bool}),
+)
+ON_PACKED = {"compute": "packed", "compute.packed.pe": 2}
+
+
+@expected("switch-reaches-case-rule")
+def test_a_rule_in_a_case_that_never_names_its_selector_is_reached_by_switching() -> None:
+    DSP58.start({"has_dsp58": False}, ON_PACKED).check_change(Change(commit={"compute": "dsp58"}))
+
+
+@expected("switch-dormant-opened")
+def test_a_switch_puts_the_old_cases_choices_dormant_and_opens_the_new_ones() -> None:
+    DSP58.start({"has_dsp58": True}, ON_PACKED).check_change(Change(commit={"compute": "dsp58"}))
+
+
+# ``a + b + c <= 10``.
+
+BUDGET = Case(
+    "a budget over three choices",
+    Space(
+        (),
+        Scope(
+            "",
+            choices=tuple(Choice(name, listed(1, 2, 3, 4, 5, 6)) for name in ("a", "b", "c")),
+            constraints=(
+                Constraint(
+                    "budget", ("a", "b", "c"), lambda r: r["a"] + r["b"] + r["c"] <= 10, "over"
+                ),
+            ),
+        ),
+    ),
+)
+SPENT = {"a": 1, "b": 4, "c": 4}
+
+
+@expected("sum-two-standing")
+def test_a_new_value_breaking_a_sum_names_the_other_two_standing() -> None:
+    BUDGET.start({}, SPENT).check_change(Change(commit={"a": 5}))
+
+
+@expected("sum-one-standing")
+def test_a_new_value_breaking_a_sum_with_one_other_set_names_the_last_standing() -> None:
+    BUDGET.start({}, SPENT).check_change(Change(commit={"a": 5, "b": 3}))
+
+
+def test_clearing_what_stands_in_a_sums_way_is_accepted() -> None:
+    BUDGET.start({}, SPENT).check_change(Change(clear=("b", "c")))
+
+
+def test_a_value_once_what_stood_in_its_way_is_cleared_is_accepted() -> None:
+    BUDGET.start({}, SPENT).step(Change(clear=("b", "c"))).check_change(Change(commit={"a": 5}))
+
+
+# A selector switched away and back: the old case's choices go dormant and come back.
+
+PE2, SIMD2, LANES2 = "compute.packed.pe", "compute.packed.simd", "compute.serial.lanes"
+TWO_KINDS = Case(
+    "a selector switched away and back",
+    Space(
+        (),
+        Scope(
+            "",
             selectors=(
                 Selector(
                     "compute",
                     (
                         Scope(
                             "packed",
-                            constraints=(
-                                Constraint(
-                                    "fits",
-                                    ("lanes",),
-                                    lambda read: read["lanes"] <= 64,
-                                    "packed-width",
-                                ),
-                            ),
+                            choices=(Choice("pe", listed(1, 2, 4)), Choice("simd", listed(1, 2))),
                         ),
-                        Scope(
-                            "stub",
-                            constraints=(
-                                Constraint(
-                                    "even",
-                                    ("lanes",),
-                                    lambda read: read["lanes"] % 2 == 0,
-                                    "stub-width",
-                                ),
-                            ),
-                        ),
+                        Scope("serial", choices=(Choice("lanes", listed(1, 2)),)),
                     ),
                 ),
             ),
-            derived=(
-                Derived("rows", ("compute",), lambda read: 2 if read["compute"] == "stub" else 1),
+        ),
+    ),
+)
+ON_PACKED_TWO = {"compute": "packed", PE2: 2, SIMD2: 1}
+
+
+@expected("switch-away")
+def test_switching_away_puts_the_cases_choices_dormant() -> None:
+    TWO_KINDS.start({}, ON_PACKED_TWO).check_change(Change(commit={"compute": "serial"}))
+
+
+def away() -> Pair:
+    """``pe`` and ``simd`` set on ``packed``, then ``serial`` selected (compared on the way)."""
+    return TWO_KINDS.start({}, ON_PACKED_TWO).reach(Change(commit={"compute": "serial"}))
+
+
+@expected("switched-away-dormant")
+def test_a_choice_of_the_case_switched_away_is_dormant() -> None:
+    away().check_state(PE2)
+
+
+@expected("switch-back")
+def test_switching_back_brings_the_dormant_choices_into_play() -> None:
+    away().step(Change(commit={LANES2: 2})).check_change(Change(commit={"compute": "packed"}))
+
+
+def test_clearing_a_selector_leaves_its_cases_choices_waiting() -> None:
+    TWO_KINDS.start({}, ON_PACKED_TWO).step(Change(clear=("compute",))).check_state(PE2)
+
+
+# A switch back refused by a restored choice: ``pe = 4`` is dormant while ``w`` moves to 6;
+# switching back brings ``pe`` into play, where ``pe_fits`` is false.
+
+FITTED = Case(
+    "a switch back refused by a restored choice",
+    Space(
+        (),
+        Scope(
+            "",
+            choices=(Choice("w", listed(4, 6)),),
+            selectors=(
+                Selector(
+                    "compute",
+                    (
+                        Scope(
+                            "packed",
+                            choices=(Choice("pe", listed(1, 2, 4)),),
+                            constraints=(
+                                Constraint(
+                                    "pe_fits",
+                                    (PE2, "w"),
+                                    lambda r: r["w"] % r[PE2] == 0,
+                                    "pe-misfit",
+                                ),
+                            ),
+                        ),
+                        Scope("serial"),
+                    ),
+                ),
             ),
         ),
     ),
 )
 
 
-def test_a_retained_choice_false_on_the_commitments_refuses_the_change() -> None:
-    # ``span`` of 2 holds at 128 lanes, and not at 3.
-    FIT.start({}, {"lanes": 128, "span": 2}).check_change(Change(commit={"lanes": 3}))
+def moved() -> Pair:
+    """``pe = 4`` on ``packed`` at ``w = 4``, then ``serial`` (compared on the way), then
+    ``w = 6``."""
+    base = FITTED.start({}, {"w": 4, "compute": "packed", PE2: 4})
+    return base.reach(Change(commit={"compute": "serial"})).step(Change(commit={"w": 6}))
 
 
-def test_a_retained_choice_false_on_the_commitments_is_refused_as_a_cold_build_is() -> None:
-    FIT.start().check_change(Change(commit={"lanes": 3, "span": 2}))
+@expected("switch-back-refused")
+def test_a_switch_back_is_refused_by_a_restored_choice() -> None:
+    moved().check_change(Change(commit={"compute": "packed"}))
 
 
-def test_a_retained_choice_checked_against_the_successors_forced_core() -> None:
-    # ``depth`` of 2 holds under the stub that 128 lanes force; 3 lanes leave only packed,
-    # under which it does not hold. Forcing takes packed, so the change is refused, reaching
-    # ``depth`` with its own reason: the configuration it would publish, as a cold build of
-    # the same choices reads it, not the admission ``depth`` had under the stub.
-    FIT.start({}, {"lanes": 128, "depth": 2}).check_change(Change(commit={"lanes": 3}))
+@expected("switch-back-moved")
+def test_a_switch_back_with_the_restored_choice_moved_too_is_accepted() -> None:
+    moved().check_change(Change(commit={"compute": "packed", PE2: 2}))
 
 
-def test_a_retained_choice_checked_against_the_successors_forced_core_as_a_cold_build() -> None:
-    FIT.start().check_change(Change(commit={"lanes": 3, "depth": 2}))
+# A facts change refused by a stored value outside its new domain, a dormant one included.
+
+SIZED = Case(
+    "a facts change and the stored values' types",
+    Space(
+        ("n",),
+        Scope(
+            "",
+            choices=(Choice("lanes", computed(lambda r: divisors(r["n"]), ("n",))),),
+            selectors=(
+                Selector(
+                    "mode",
+                    (
+                        Scope(
+                            "a",
+                            choices=(
+                                Choice("depth", computed(lambda r: divisors(r["n"]), ("n",))),
+                            ),
+                        ),
+                        Scope("b"),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+DORMANT_DEPTH = {"lanes": 4, "mode": "a", "mode.a.depth": 8}
 
 
-def test_a_change_only_the_bases_forced_core_would_refuse_is_accepted() -> None:
-    # At 3 lanes packed is forced and ``depth`` of 2 is outside its domain; the change to
-    # 128 lanes forces the stub, under which it holds.
-    FIT.start({}, {"lanes": 3}).check_change(Change(commit={"lanes": 128, "depth": 2}))
+def sized() -> Pair:
+    """``lanes`` 4 and ``mode.a.depth`` 8 at ``n = 8``, then ``mode`` switched to ``b``
+    (compared on the way)."""
+    return SIZED.start({"n": 8}, DORMANT_DEPTH).reach(Change(commit={"mode": "b"}))
 
 
-def test_a_change_only_the_bases_forced_core_would_refuse_is_accepted_as_a_cold_build() -> None:
-    FIT.start().check_change(Change(commit={"lanes": 128, "depth": 2}))
+@expected("facts-dormant-outside")
+def test_a_facts_change_is_refused_by_a_dormant_value_outside_its_new_domain() -> None:
+    sized().check_change(Change(facts={"n": 12}))
+
+
+@expected("facts-each-outside")
+def test_a_facts_change_is_refused_by_each_value_outside_its_new_domain() -> None:
+    sized().check_change(Change(facts={"n": 6}))
+
+
+@expected("facts-clear-standing")
+def test_a_facts_change_clearing_what_stands_in_its_way_is_accepted() -> None:
+    sized().check_change(Change(facts={"n": 12}, clear=("mode.a.depth",)))
+
+
+# A named choice under an open selector waits on it.
+
+OPEN_MODE = Case(
+    "a named choice under an open selector",
+    Space(
+        (),
+        Scope(
+            "",
+            selectors=(
+                Selector(
+                    "mode",
+                    (
+                        Scope("a", choices=(Choice("p", listed(1, 2)),)),
+                        Scope("b", choices=(Choice("q", listed(5, 6)),)),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def test_a_named_choice_under_an_open_selector_is_accepted() -> None:
+    OPEN_MODE.start().check_change(Change(commit={"mode.a.p": 2}))
+
+
+def test_a_named_choice_under_an_open_selector_waits() -> None:
+    OPEN_MODE.start({}, {"mode.a.p": 2}).check_state("mode.a.p")
+
+
+@expected("waiting-valid")
+def test_a_named_choice_under_an_open_selector_leaves_the_configuration_valid() -> None:
+    OPEN_MODE.start({}, {"mode.a.p": 2}).check_validity()
+
+
+@expected("waiting-in-play")
+def test_selecting_a_waiting_choices_case_brings_it_into_play() -> None:
+    OPEN_MODE.start({}, {"mode.a.p": 2}).check_change(Change(commit={"mode": "a"}))

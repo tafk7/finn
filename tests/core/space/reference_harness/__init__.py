@@ -9,18 +9,17 @@ it the model's questions (everything that depends on how the engine is authored 
 at this commit is there); :mod:`.compare` puts the model's answers in the same form
 (:mod:`.forms`) and compares them; :mod:`.matrix` records every disagreement expected at
 this commit by the milestone that removes it; :mod:`.walks` compares the two over seeded
-random walks, expecting only the disagreements whose kind a row still names.
+random walks (imported on its own, never by this package).
 
     CASE = Case("a toy", Space(("wide",), Scope("", choices=(Choice("x", listed(1, 2)),))))
     pair = CASE.start(facts={"wide": True})
-    pair.check_change(Change(commit={"x": 3}))     # refused, named, outside its domain
+    pair.check_change(Change(commit={"x": 3}))     # refused: x is not of its type
 """
 
 from .compare import Case, Disagreement, Pair, SetupError, check_definition
 from .engine import (
     Admission,
     ByName,
-    Membership,
     NotTranslatable,
     Obligation,
     Plain,
@@ -31,7 +30,9 @@ from .forms import (
     AnswerForm,
     ChangeForm,
     DefinitionForm,
-    Refusal,
+    OutcomeForm,
+    PossibleForm,
+    RefusalForm,
     RuleForm,
     StateForm,
     ValidityForm,
@@ -48,12 +49,13 @@ __all__ = [
     "ChangeForm",
     "DefinitionForm",
     "Disagreement",
-    "Membership",
     "NotTranslatable",
     "Obligation",
+    "OutcomeForm",
     "Pair",
     "Plain",
-    "Refusal",
+    "PossibleForm",
+    "RefusalForm",
     "Requirement",
     "Row",
     "RuleForm",
