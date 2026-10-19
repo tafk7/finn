@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import FrozenInstanceError
-from typing import assert_type
+from typing import assert_type, cast
 
 import pytest
 
@@ -347,3 +347,31 @@ def test_choices_reading_one_another_are_taken_in_declaration_order_and_noted(
     (record,) = [r for r in caplog.records if getattr(r, FINDING).code == "flow-loop"]
     finding = getattr(record, FINDING)
     assert (finding.owner, finding.details) == ("a", (("choices", ("a", "fed.b")),))
+
+
+class Gated(Space):
+    lanes: int = Decision(values=(1, 2))
+
+
+class Knob(Space):
+    level: int = Decision(values=(1, 2))
+
+
+#: The name a dynamic method reads by: a module global, so its source does not fix it.
+LEVEL = "level"
+
+
+class Hidden(Space):
+    @derived
+    def wide(self) -> bool:
+        # A computed name: the method is dynamic, and may read anything below its Space.
+        return cast(int, getattr(self.knob, LEVEL)) > 1
+
+    gated = Gated(when=wide)
+    knob = Knob()
+
+
+def test_a_dynamic_method_on_a_presence_path_may_read_every_choice_of_its_space_and_below() -> None:
+    # ``gated`` is placed first, but its presence reads ``wide``, a dynamic method: it
+    # may read ``knob.level``, so ``gated.lanes`` comes after it.
+    assert keys_of(Hidden) == (["knob.level", "gated.lanes"], ["knob.level", "gated.lanes"])

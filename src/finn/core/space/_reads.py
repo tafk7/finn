@@ -691,7 +691,8 @@ def flow_order(linked: LinkedModel, reads: ModelReads) -> Flow:
 
     What a choice reads so (``_Upstream``) is followed from its existence guards, its
     domain's inputs and the formals of its scope and of every enclosing one, through
-    every value each may read, to the first choice on each way. Kahn's algorithm orders
+    every value each may read (a dynamic method: every node of its Space and of the Spaces
+    below it), to the first choice on each way. Kahn's algorithm orders
     the choices by those reads, the next ready choice the first declared. Choices that
     read one another (a loop) are taken as one, where the first of them declared would
     be, and in declaration order among themselves."""
@@ -733,12 +734,29 @@ class _Upstream:
     every way back from its existence guards, its domain's inputs and its scopes' formals
     (a scope's formals' choices found once, for every choice below it). A way ends at a
     choice, at a fact and at a Space's validity (a view's Space is not followed). A
-    dynamic method's reads are not known: it adds none."""
+    dynamic method's reads are not known: it may read every node of its Space and of the
+    Spaces below it, and each is followed (the domain rule's over-approximation)."""
 
     def __init__(self, linked: LinkedModel, reads: ModelReads) -> None:
         self.linked = linked
         self.reads = reads
         self.scopes: dict[int, frozenset[NodeId]] = {}
+        self.below: dict[int, tuple[NodeId, ...]] = {}
+
+    def subtree(self, scope: int) -> tuple[NodeId, ...]:
+        """Every node of ``scope`` and of the scopes below it (what a dynamic method of
+        ``scope`` may read)."""
+        found = self.below.get(scope)
+        if found is None:
+            # Scopes are allocated after their parent: one pass finds the subtree.
+            inside = {scope}
+            for held in self.linked.scopes:
+                if held.parent in inside:
+                    inside.add(held.index)
+            found = self.below[scope] = tuple(
+                node.index for node in self.linked.nodes if node.scope in inside
+            )
+        return found
 
     def __call__(self, decision: NodeId) -> frozenset[NodeId]:
         node = self.linked.nodes[decision]
@@ -780,7 +798,8 @@ class _Upstream:
             pending.extend(current.dependencies)
             pending.extend(source for _, source in current.via)
             if current.call_style == "self" and current.function is not None:
-                pending.extend(methods.get(index) or ())
+                read = methods.get(index)
+                pending.extend(self.subtree(current.scope) if read is None else read)
         return frozenset(found)
 
 

@@ -68,6 +68,8 @@ def test_discarded_candidates_release_their_outputs_past_the_memo_budget() -> No
 
 
 def test_successor_retains_only_the_outputs_its_change_does_not_reach() -> None:
+    """A successor's outputs are retained through the parent world, bounded by
+    ``FLATTEN``, and released with the chain."""
     produced: list[ReferenceType[Payload]] = []
 
     class Example(Space):
