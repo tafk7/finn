@@ -36,7 +36,8 @@ shell of the model's target (``in_shell``).
   ``stored``): every node's attributes and every channel's ``finn.channel`` on its tensor
   (in a partition's body only, ``refuse_outside_body``). A stored value outside its domain
   over the current facts is dropped as stale, with why (``Partition.stale``); a stored set
-  that breaks a rule refuses the bind, naming it (``network-invalid``); a channel whose
+  that breaks a rule refuses the bind, naming it (``network-invalid``, the rule's findings
+  its causes); a channel whose
   ends wait holds its choices until it is bound. Nothing is filled in. With every KernelOp
   of the model selected, choices a tensor states that is no channel of it are stale too.
   Nothing is written: ``persist``, the one writer of choices, writes a network's choices
@@ -620,8 +621,19 @@ def _bound(
             whole=whole,
         )
     except NetworkError as error:
-        raise KernelOpError.refused(
-            "network-invalid", "Partition", f"{name}: {error}", node=name
+        message = f"{name}: {error}"
+        raise KernelOpError(
+            message,
+            findings=(
+                Finding(
+                    FindingKind.REJECTION,
+                    "network-invalid",
+                    "Partition",
+                    message,
+                    (("node", name),),
+                    error.findings,
+                ),
+            ),
         ) from error
     _stale(model, bound, nodes, ops)
     return bound

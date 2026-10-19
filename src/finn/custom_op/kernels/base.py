@@ -111,7 +111,7 @@ from finn.kernels.base import Kernel
 from finn.kernels.configure import describe
 from finn.kernels.configure import refusal as refusal_of
 from finn.kernels.defaults import defaulted
-from finn.kernels.members import Facts, configured
+from finn.kernels.members import Facts, configured, reasons
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.target import Target
 
@@ -197,21 +197,29 @@ def why(findings: Iterable[Finding]) -> str:
 def refusal(
     owner: str,
     label: str,
-    found: Mapping[str, str],
+    found: Mapping[str, tuple[Finding, ...]],
+    standing: Mapping[str, tuple[str, ...]] | None = None,
     *,
     node: str | None = None,
     tensor: str | None = None,
 ) -> KernelOpError:
     """The error for choices replay refused (``choices-refused``, by ``owner``): each
-    one, by name, with why."""
-    return KernelOpError.refused(
-        "choices-refused",
-        owner,
-        f"{label}: refused choices: "
-        + "; ".join(f"{name}: {reason}" for name, reason in sorted(found.items())),
-        tuple(sorted(found)),
-        node=node,
-        tensor=tensor,
+    refused choice or broken rule by its key, once, with its findings and the stored
+    choices standing in its way (``reasons``); every such finding, each once, about the
+    ``node`` or ``tensor``, its causes."""
+    subjects = {name: value for name, value in (("node", node), ("tensor", tensor)) if value}
+    message = f"{label}: refused choices: {reasons(found, standing)}"
+    keys = tuple(sorted(found))
+    causes = tuple(
+        dict.fromkeys(finding.about(**subjects) for key in keys for finding in found[key])
+    )
+    details = (("keys", keys), *subjects.items())
+    return KernelOpError(
+        message,
+        keys,
+        findings=(
+            Finding(FindingKind.REJECTION, "choices-refused", owner, message, details, causes),
+        ),
     )
 
 
@@ -454,13 +462,15 @@ class KernelOp(CustomOp):
         """``point``, with ``choices`` (by attribute) in place of the node's: set on its
         kernel as one change, as a network binds a member's stored choices
         (``configured``); refused where a value is outside its domain, or a rule they break
-        together, each by name."""
+        together, each by name with its findings (``refusal``; nothing stands in a rule's
+        way at a bind, which sets every stored choice)."""
         found = configured(self.facts(), typed(type(self).kernel, choices))
         if found.dropped or found.point is None:
             raise refusal(
                 self.op_type,
                 self.label,
-                {key: why(each) for key, each in (*found.dropped.items(), *found.refused.items())},
+                {**found.dropped, **found.refused},
+                found.standing,
                 node=self.label,
             )
         point: Kernel = found.point  # type: ignore[assignment]

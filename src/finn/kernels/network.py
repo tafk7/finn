@@ -111,6 +111,7 @@ from finn.kernels.members import (
     configured,
     current,
     observed,
+    reasons,
     rejection,
     replayed,
     uncached,
@@ -134,7 +135,13 @@ def dotted(key: Key) -> str:
 
 
 class NetworkError(ValueError):
-    """A network that cannot be built as declared, or a member read that is no member's."""
+    """A network that cannot be built as declared, or a member read that is no member's.
+    ``findings``: the coded reasons where the engine gave any (a member whose stored
+    choices are refused: each rule's or value's findings, about the member)."""
+
+    def __init__(self, message: str, findings: Iterable[Finding] = ()) -> None:
+        super().__init__(message)
+        self.findings = tuple(findings)
 
 
 # -- the module ---------------------------------------------------------------------------
@@ -517,16 +524,17 @@ def _kernel(name: str, member: Space | Facts, stored: Mapping[str, object]) -> C
     return replayed(point, stored)
 
 
-def _bound(name: str, member: Configured) -> Space:
+def _bound(name: str, member: Configured, subject: str) -> Space:
     """The point of member ``name`` as a network binds it; a ``NetworkError`` naming why
     its stored choices are refused: a rule they break together, or a value outside its
-    domain."""
+    domain, each by its key with its findings (``reasons``; nothing stands in a rule's way
+    at a bind, which sets every stored choice), those findings, each once, about the
+    member (its ``subject``, ``node`` or ``tensor``)."""
     if member.point is None:
+        found = (finding for why in member.refused.values() for finding in why)
         raise NetworkError(
-            f"{name}: its stored choices are refused: "
-            + "; ".join(
-                f"{key}: " + "; ".join(map(str, why)) for key, why in member.refused.items()
-            )
+            f"{name}: its stored choices are refused: " + reasons(member.refused, member.standing),
+            dict.fromkeys(finding.about(**{subject: name}) for finding in found),
         )
     return member.point
 
@@ -636,7 +644,7 @@ class Network:
         dropped: dict[Key, tuple[Finding, ...]] = {}
         for name, declared in kernels.items():
             kernel = _kernel(name, declared, held.get(name, {}))
-            points[name] = _bound(name, kernel)
+            points[name] = _bound(name, kernel, "node")
             dropped |= {(name, key): why for key, why in kernel.dropped.items()}
         unbound: dict[str, Unbound] = {}
         facts: dict[str, FactsKey] = {}
@@ -646,7 +654,7 @@ class Network:
                 unbound[name] = Unbound(read.member, read.result, held.get(name, {}))
                 continue
             channel = _channel(read, held.get(name, {}), {}, ())
-            points[name], facts[name] = _bound(name, channel), read
+            points[name], facts[name] = _bound(name, channel, "tensor"), read
             dropped |= {(name, key): why for key, why in channel.dropped.items()}
         self._points = MappingProxyType(points)
         self._unbound = MappingProxyType(unbound)

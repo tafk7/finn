@@ -166,7 +166,9 @@ def test_a_graph_with_a_cleared_choice_a_rule_reads_waits_then_is_refused() -> N
     stated as the raw attributes state it. The pumping is checked by its own domain and
     kept; the rule that pumping needs lanes waits on SIMD, so nothing is refused; once SIMD
     is stated as one lane, the stored choices break the rule, so binding them is refused
-    (``verify_node``, ``point``), naming the rule at its origin."""
+    (``verify_node``, ``point``), naming the rule at its origin, its key once, the rule's
+    findings the refusal's causes (nothing stands in its way at a bind, which sets every
+    stored choice)."""
     model = matmul_model()
     configured(model, {"first": FOLDING})
     write_raw(model, "first", "compute.packed.simd", None)
@@ -182,13 +184,18 @@ def test_a_graph_with_a_cleared_choice_a_rule_reads_waits_then_is_refused() -> N
     (problem,) = op(model).verify_node()
     assert problem.startswith("first: refused choices: compute.packed.pumping_has_lanes: ")
     assert "dotp-pumping: pumping requires SIMD >= 2" in problem
+    assert problem.count("pumping_has_lanes") == 1 and "standing" not in problem
     with refused(
         "choices-refused",
         error=KernelOpError,
         message="dotp-pumping",
         keys=("compute.packed.pumping_has_lanes",),
-    ):
+        node="first",
+    ) as caught:
         op(model).point()
+    assert [(f.code, f.owner, dict(f.details)) for f in caught.finding.causes] == [
+        ("dotp-pumping", "compute.packed.pumping_has_lanes", {"node": "first"})
+    ]
     write_raw(model, "first", "compute.packed.compute_pumping", None)
     assert op(model).verify_node() == []
 

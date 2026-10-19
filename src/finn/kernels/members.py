@@ -161,6 +161,27 @@ class Refusal:
         return f"Refusal({dict(self.why)!r}, {dict(self.standing)!r})"
 
 
+def reasons(
+    found: Mapping[str, Iterable[Finding]], standing: Mapping[str, Iterable[str]] | None = None
+) -> str:
+    """Why each key of ``found`` (a choice's or a rule's) is refused, as text, in key order:
+    the key once, then each of its findings (its code and message where the key owns it),
+    and the stored choices ``standing`` in its way where any do."""
+    standing = standing or {}
+
+    def text(key: str, finding: Finding) -> str:
+        return f"{finding.code}: {finding.message}" if finding.owner == key else str(finding)
+
+    def stood(key: str) -> str:
+        keys = tuple(standing.get(key, ()))
+        return f" (standing: {', '.join(keys)})" if keys else ""
+
+    return "; ".join(
+        f"{key}: " + "; ".join(text(key, finding) for finding in found[key]) + stood(key)
+        for key in sorted(found)
+    )
+
+
 def rejection(code: str, owner: str, message: str) -> tuple[Finding, ...]:
     return (Finding(FindingKind.REJECTION, code, owner, message),)
 
@@ -514,6 +535,7 @@ __all__ = [
     "key",
     "member_cache",
     "observed",
+    "reasons",
     "refusal",
     "rejection",
     "replayed",

@@ -170,7 +170,8 @@ def test_a_channel_choice_a_rule_a_changed_fact_makes_false_refuses_the_bind() -
     """The weights' memory stored as ``ultra`` on a part with UltraRAM, the model then built
     for one without. Whether the part has UltraRAM is a rule of the memory's, not its
     domain: binding the stored choices together breaks it, so the bind is refused, naming
-    the rule (``network-invalid``); nothing is dropped behind the user's back."""
+    each rule by its key once (``network-invalid``), the rules' findings its causes, about
+    the channel; nothing is dropped behind the user's back."""
     model = retarget(matmul_model(), VERSAL)
     configured(
         model, {"first": FOLDING, "w": {**WEIGHT_SOURCE, "source.memstream.ram_style": "ultra"}}
@@ -181,8 +182,13 @@ def test_a_channel_choice_a_rule_a_changed_fact_makes_false_refuses_the_bind() -
         "network-invalid",
         error=KernelOpError,
         message="w: its stored choices are refused: .*uram",
-    ):
+    ) as caught:
         bound(model)
+    assert caught.finding.message.count("uram_present") == 1
+    assert {(f.code, f.owner, dict(f.details)["tensor"]) for f in caught.finding.causes} == {
+        ("uram-absent", "source.memstream.uram_present", "w"),
+        ("uram-init", "source.memstream.uram_init_taken", "w"),
+    }
     assert channel_choices(model, "w")["source.memstream.ram_style"] == "ultra"
 
 

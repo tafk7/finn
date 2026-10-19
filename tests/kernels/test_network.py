@@ -23,8 +23,10 @@ from qonnx.core.datatype import DataType
 from support import chain
 from support.helpers import FULL_DSP48E2, built, choose, keyed, labels, matmul_point
 
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Decision, Space, Unresolved, derived, design_space, inspection
 from finn.kernels.base import CYCLES
+from finn.kernels.members import reasons
 from finn.kernels.network import Fact, Interface, Network, NetworkError, Wire, wire
 from finn.platform.capabilities import Platform
 
@@ -211,10 +213,30 @@ ULTRA_FIFO = {
 
 def test_a_stored_set_that_breaks_a_rule_refuses_the_network_by_name() -> None:
     """Stored choices are set together as the member binds: a rule they break refuses the
-    network, naming it (a FIFO in UltraRAM on a platform without it)."""
+    network, naming it once, its findings carried about the member (a FIFO in UltraRAM on
+    a platform without it)."""
     stored = keyed({**ULTRA_FIFO, "board.uram": False})
-    with pytest.raises(NetworkError, match="hidden: its stored choices are refused: .*uram"):
+    with pytest.raises(
+        NetworkError, match="hidden: its stored choices are refused: .*uram"
+    ) as caught:
         Network(boarded(), stored={**chain.chain().chosen(), **stored})
+    rule = "transport.fifo.buffer.uram_present"
+    assert str(caught.value).count(rule) == 1
+    assert [(f.code, f.owner, dict(f.details)) for f in caught.value.findings] == [
+        ("uram-absent", rule, {"tensor": "hidden"})
+    ]
+
+
+def test_reasons_name_each_key_once_with_the_choices_standing_in_its_way() -> None:
+    """A refusal's text: each key once, in order, a finding it owns by code and message,
+    another's whole, and the stored choices standing in its way where any do."""
+    owned = Finding(FindingKind.REJECTION, "dotp-pumping", "rule", "pumping requires SIMD >= 2")
+    other = Finding(FindingKind.REJECTION, "uram-absent", "elsewhere", "no UltraRAM")
+    found = {"rule": (owned, other), "a": (other,)}
+    assert reasons(found, {"rule": ("simd", "pumping")}) == (
+        "a: elsewhere: uram-absent: no UltraRAM; rule: dotp-pumping: pumping requires "
+        "SIMD >= 2; elsewhere: uram-absent: no UltraRAM (standing: simd, pumping)"
+    )
 
 
 def test_a_channel_rebuilt_from_new_facts_rederives_only_what_they_refuse() -> None:
