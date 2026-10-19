@@ -61,14 +61,23 @@ from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
 from finn.kernels.artifacts.module import Composed, Leaf, ProducerIdentity
 from finn.kernels.base import CYCLES
 from finn.kernels.configure import chosen, commit, describe
-from finn.kernels.defaults import defaulted
+from finn.kernels.defaults import defaulted, ranked
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.explore import Choice
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel, datatype_range
 from finn.kernels.members import decision
-from finn.kernels.network import Fact, Interface, Key, Network, Wire, dotted, wire
+from finn.kernels.network import (
+    Fact,
+    Interface,
+    Key,
+    Network,
+    Wire,
+    dotted,
+    interim_channel_defaults,
+    wire,
+)
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.domains import range_dtype, set_index_dtype
 from finn.kernels.values.semantics import (
@@ -584,26 +593,54 @@ def _committed(subject: P, choices: Mapping[str, object]) -> P:
     return cast(P, commit(subject, choices))
 
 
+def _first_valid(point: Space, key: str) -> object:
+    """The first value of ``point``'s choice ``key`` that setting alone accepts, in its
+    domain's order (``finn.kernels.defaults.ranked``), as its first valid policy takes it."""
+    reference = cast(Any, decision(point, key)).reference
+    (found,) = inspection.viable(point, [reference])
+    items = ranked(point, reference, found.values or ())
+    assert isinstance(items, tuple), f"{key}: its order is not known: {items}"
+    first = next((item for item in items if isinstance(item, inspection.Possible)), None)
+    assert first is not None, f"{key} has no possible value: {found}"
+    return first.value
+
+
 def with_adapter_memories(subject: P, ram_style: str | None = None) -> P:
     """Each open adapter input_gen's memory takes ``ram_style``, or where None its first
-    possible value (an explicit style, by the size the buffer holds), as its first valid
-    policy takes it, on a network or a point. A channel's adapter is set first (a network
-    sets it as it builds the channel, by the interim channel rule)."""
+    valid value (an explicit style, by the size the buffer holds: the domain's order), as
+    its first valid policy takes it, on a network or a point. A channel's adapter is set
+    first (a network sets it as it builds the channel, by the interim channel rule)."""
     styles = _undecided(subject, ADAPTER_RAM_STYLES)
     if not styles:
         return subject
     if ram_style is None:
         if isinstance(subject, Network):
-            viable = {
-                dotted(key): item for key, item in subject.viable(keyed(dict.fromkeys(styles)))
+            first = {
+                key: _first_valid(subject.member(owner), below)
+                for key in styles
+                for owner, below in (key.split(".", 1),)
             }
         else:
-            references = [cast(Any, decision(subject, key)).reference for key in styles]
-            found = inspection.viable(subject, references)
-            viable = {item.key: item for item in found}
-        first = {key: item.cases[0] for key, item in viable.items() if item.cases}
-        return _committed(subject, {key: first[key] for key in styles})
+            first = {key: _first_valid(subject, key) for key in styles}
+        return _committed(subject, first)
     return _committed(subject, dict.fromkeys(styles, ram_style))
+
+
+def with_channel_defaults(network: N) -> N:
+    """``network`` with each bound channel's open choices in play that are not required set
+    as the cut sets them, by the interim channel rule (``interim_channel_defaults``: first
+    valid; a FIFO's depth stays open): for a network built by hand, which no cut made."""
+    for name in network.channels:
+        if network.unbound(name) is not None:
+            continue
+        point = network.member(name)
+        done = interim_channel_defaults(point)
+        assert not isinstance(done, tuple), f"{name}: " + "; ".join(map(str, done))
+        before = chosen(point)
+        values = {(name, key): value for key, value in chosen(done).items() if key not in before}
+        if values:
+            network = network.with_choices(values)
+    return network
 
 
 TRANSPORTS = "*.transport"
