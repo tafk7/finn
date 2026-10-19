@@ -305,7 +305,8 @@ def test_selector_and_nested_edit_share_atomic_order_and_inactive_edits_are_dorm
     )
 
 
-def test_enumerated_candidates_still_pass_membership_before_commitment() -> None:
+@pytest.mark.usefixtures("purity_unchecked")
+def test_candidates_are_the_enumerated_values_membership_accepts() -> None:
     seen: list[int] = []
 
     def membership(*, candidate: int) -> bool:
@@ -316,11 +317,15 @@ def test_enumerated_candidates_still_pass_membership_before_commitment() -> None
         value: int = Decision(domain=domain(accepts=membership, candidates=lambda: (-1, 1)))
 
     base = design_space(Trial())
-    assert base.field(Trial.value).candidates() == Available((-1, 1))
-    assert seen == []
+    # Membership is asked of each enumerated value once, and kept.
+    assert base.field(Trial.value).candidates() == Available((1,))
+    assert seen == [-1, 1]
+    assert base.field(Trial.value).candidates() == Available((1,))
+    assert seen == [-1, 1]
+    # A value set is type-checked by membership, listed or not.
     report = base.try_with_choices(base.field(Trial.value).change(-1))
     assert not report.accepted
-    assert seen == [-1]
+    assert seen == [-1, 1, -1]
     # Nothing is filled in, though one listed value alone passes membership.
     assert isinstance(base.query(Trial.value), Unresolved)
 

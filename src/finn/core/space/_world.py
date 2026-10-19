@@ -1849,11 +1849,12 @@ def type_check(world: World, node: NodeId, value: Available[object]) -> QueryRes
     return _drive(world.evaluator, lambda: _type_check(world, spec, value, [], 0)[0])
 
 
-def _enumerated(world: World, node: Node) -> QueryResult[object]:
-    """A choice's enumeration as its domain gives it, ranked by its order where it has
-    one (``Available(None)``: membership only), under its guard: inapplicable where the
-    choice is absent, the guard's answer while it waits or is refused; the order's inputs'
-    non-value while one of them is not a value (memoized on the inputs' answers)."""
+def _candidates(world: World, node: Node) -> QueryResult[object]:
+    """A choice's candidates: its listed values (its domain's enumeration, each value its
+    membership accepts), ranked by its order where it has one (``Available(None)``:
+    membership only), under its guard: inapplicable where the choice is absent, the
+    guard's answer while it waits or is refused; the order's inputs' non-value while one
+    of them is not a value (memoized on the inputs' answers)."""
     domain, semantics = node.domain, node.semantics
     if domain is None or semantics is None:
         raise EvaluationError(node.owner, "domain enumeration", "reference has no domain")
@@ -1866,20 +1867,21 @@ def _enumerated(world: World, node: Node) -> QueryResult[object]:
         return blocked
     if domain.candidates is None:
         return Available(None)
-    enumerated = _enumerate(world, node, answers)
-    if domain.order is None or not isinstance(enumerated, Available):
-        return enumerated
-    return _ranked(world, node, answers, enumerated)
+    called_on = _inputs(membership_arguments(node), answers)
+    listed = _memoized(world, node, "listing", called_on, lambda: _list(world, node, answers))
+    if domain.order is None or not isinstance(listed, Available):
+        return listed
+    return _ranked(world, node, answers, listed)
 
 
 def _ranked(
     world: World,
     node: Node,
     inputs: tuple[QueryResult[object], ...],
-    enumerated: Available[object],
+    listed: Available[object],
 ) -> QueryResult[object]:
-    """An enumeration (found from the membership inputs' answers ``inputs``) as the
-    domain's order ranks it, over the order's own inputs (memoized on both inputs'
+    """Listed values (found from the membership inputs' answers ``inputs``) as the
+    domain's order ranks them, over the order's own inputs (memoized on both inputs'
     answers)."""
     domain, semantics = node.domain, node.semantics
     assert domain is not None and semantics is not None
@@ -1894,7 +1896,7 @@ def _ranked(
             world,
             Call(node.owner, "domain order"),
             domain.rank,
-            (enumerated.value, _domain_values(world, node, answers, arguments)),
+            (listed.value, _domain_values(world, node, answers, arguments)),
             {"semantics": semantics, "owner": node.owner},
         )
         return Available(cast(_Returned, ranked).value)
@@ -1907,7 +1909,7 @@ def _enumerate(
     world: World, node: Node, answers: tuple[QueryResult[object], ...]
 ) -> QueryResult[object]:
     """A domain's enumeration on its inputs' answers (each available), memoized on them:
-    what ``candidates()`` answers, and the listing filters."""
+    what the listing filters by membership."""
     domain, semantics = node.domain, node.semantics
     assert domain is not None and semantics is not None
 
@@ -1925,11 +1927,11 @@ def _enumerate(
     return _memoized(world, node, "enumeration", called_on, enumerate_)
 
 
-def enumeration(world: World, node: NodeId) -> QueryResult[object]:
-    """A choice's enumerated values in ``world`` (``Available(None)``: membership only),
-    from a driver: the domain's enumeration, each value still to pass membership."""
+def candidates(world: World, node: NodeId) -> QueryResult[object]:
+    """A choice's candidates in ``world`` (``Available(None)``: membership only), from a
+    driver: its listed values, in its domain's order."""
     spec = world.evaluator.nodes[node]
-    return _drive(world.evaluator, lambda: _enumerated(world, spec))
+    return _drive(world.evaluator, lambda: _candidates(world, spec))
 
 
 _FRAMES: Mapping[NodeKind, Callable[[World, Node, _Trace, ReadSet], Entry]] = {
@@ -1956,8 +1958,8 @@ __all__ = [
     "Evaluator",
     "MethodReader",
     "World",
+    "candidates",
     "check_purity",
-    "enumeration",
     "listed_values",
     "membership_arguments",
     "order_arguments",

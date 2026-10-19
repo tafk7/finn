@@ -253,14 +253,15 @@ def decision_index(point: Space, reference: object) -> NodeId:
 
 
 def candidates(point: Space, reference: object) -> QueryResult[tuple[object, ...]] | None:
-    """A choice's enumerated values, ranked by its domain's order where it has one (None:
-    known by membership only), under its guard."""
-    from ._world import enumeration
+    """A choice's listed values (its domain's enumeration, each value its membership
+    accepts), ranked by its domain's order where it has one (None: known by membership
+    only), under its guard."""
+    from ._world import candidates as listed
 
     driver_only("domain enumeration")
     current = state(point)
     index = decision_index(point, reference)
-    result = enumeration(current.world, index)
+    result = listed(current.world, index)
     if isinstance(result, Available) and result.value is None:
         return None
     if isinstance(result, Available):

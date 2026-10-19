@@ -78,10 +78,10 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
         assert isinstance(result, Available)
         scores.append((result.value, value))
     assert min(scores, key=lambda item: item[0]) == (3, 4)
-    # Membership runs once for each value set, and once more when the validity asks
-    # whether the domain lists any value (the empty-domain piece stops at the first it
-    # holds): shared by every trial, as the enumeration is with ``candidates()``.
-    assert calls.count("membership") == 4
+    # Membership runs once for each listed value, for ``candidates()``, and once for
+    # each value set; the validity's question whether the domain lists any value is
+    # answered by the same listing, shared by every trial, as the enumeration is.
+    assert calls.count("membership") == 6
     assert calls.count("candidates") == 1
     assert isinstance(point.query(Example.lanes), Unresolved)
 

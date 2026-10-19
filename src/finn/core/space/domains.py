@@ -16,7 +16,7 @@ under the guards deciding whether the choice itself exists reads as a fact.
 
 Each of the domain's callables takes the inputs its signature names, of those the domain
 declares: ``accepts(*, candidate, ...)``, ``candidates(*, ...)`` and ``order(values,
-*, ...)``. A domain's **order** ranks its enumerated values and checks nothing: it may
+*, ...)``. A domain's **order** ranks its listed values and checks nothing: it may
 read other values (a choice, the size a memory holds), and while one it reads is open the
 ranking waits. It returns a permutation of the values it is given, which is checked. The
 ranking is information for a policy (conversion's first valid value, a strategy); validity
@@ -90,7 +90,7 @@ class Domain(Generic[T]):
     Neither constructing nor binding a domain invokes its callbacks. Enumeration
     is advisory: every assignment goes through membership independently.
     ``ordered`` states that the cases have an order by construction, which the
-    enumeration follows. ``order(values, *, ...)`` ranks the enumerated values and may
+    enumeration follows. ``order(values, *, ...)`` ranks the listed values and may
     read other values. Each callable receives the inputs its signature names: the
     membership's inputs (``membership_inputs``) are those ``accepts`` and
     ``candidates`` name, the order's (``order_inputs``) those ``order`` names.
@@ -257,7 +257,7 @@ class Domain(Generic[T]):
         semantics: ValueSemantics[T],
         owner: str,
     ) -> tuple[T, ...]:
-        """``values`` (its enumeration) as its order ranks them, checked to be a permutation
+        """``values`` (its listed values) as its order ranks them, checked to be a permutation
         of them by the values' semantics; ``values`` themselves where it has no order."""
         if self.order is None:
             return values
@@ -340,7 +340,7 @@ def domain(
 ) -> Domain[T]:
     """A domain over ``dependencies``, each callable taking those its signature names;
     ``ordered`` when its cases have an order by construction (an integer range), which
-    ``candidates`` follows; ``order(values, *, ...)`` ranks the enumerated values,
+    ``candidates`` follows; ``order(values, *, ...)`` ranks the listed values,
     reading what it names (other choices among them)."""
     return Domain(
         tuple(dependencies.items()), accepts, candidates, semantics, ordered=ordered, order=order
