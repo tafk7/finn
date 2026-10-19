@@ -5,9 +5,9 @@
 
 Each case is a small synthetic description, built in the model and in the engine
 (``core.space.reference_harness``); each test brings one configuration to its question on
-both sides and compares the answers. A question the engine answers differently at this
-commit is a strict expected failure, the witness of its row in the acceptance matrix
-(``reference_harness.matrix``), which names the milestone that removes it.
+both sides and compares the answers. A question the engine answers differently is a
+failure, unless a pending milestone's row in the acceptance matrix
+(``reference_harness.matrix``) names the test as its witness.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from core.space.reference import (
     listed,
     membership,
 )
-from core.space.reference_harness import Case, Pair, Spelling, expected
+from core.space.reference_harness import Case, Pair, Spelling
 
 # Each test runs with the readers index used for every cache, then for none: the same answers.
 
@@ -85,13 +85,11 @@ def test_a_value_outside_its_domain_under_a_selector_no_case_of_which_holds_is_r
     TYPED.start({"width": 129}).check_change(Change(commit={PE: 2}))
 
 
-@expected("outside-domain-unselected")
 def test_a_value_outside_its_domain_under_an_unselected_case_is_refused_by_its_type() -> None:
     # The stub core is selected: ``pe`` is not in play, and its type is still checked.
     TYPED.start({"width": 12}, {"compute": "stub"}).check_change(Change(commit={PE: 5}))
 
 
-@expected("commit-unselected")
 def test_a_value_inside_its_domain_under_an_unselected_case_is_accepted_out_of_play() -> None:
     TYPED.start({"width": 12}, {"compute": "stub"}).check_change(Change(commit={PE: 3}))
 
@@ -116,22 +114,18 @@ def no_core() -> Pair:
     return TYPED.start({"width": 9}, {PE: 3}).step(Change(facts={"width": 99}))
 
 
-@expected("no-case-waits")
 def test_a_value_under_a_selector_no_case_of_which_holds_still_waits_on_it() -> None:
     no_core().check_state(PE)
 
 
-@expected("no-case-rule")
 def test_a_rule_of_a_case_no_rule_of_which_holds_waits_on_its_selector() -> None:
     no_core().check_rule("compute.packed.fits")
 
 
-@expected("no-case-validity")
 def test_a_selector_no_case_of_which_holds_leaves_the_configuration_open() -> None:
     no_core().check_validity()
 
 
-@expected("select-facts-break")
 def test_selecting_a_case_whose_rule_the_facts_break_is_refused_naming_the_rule() -> None:
     no_core().check_change(Change(commit={"compute": "packed"}))
 
@@ -174,7 +168,6 @@ TWO_CORES = Case(
 )
 
 
-@expected("outside-domain-trial")
 def test_a_value_outside_its_domain_a_cores_rule_reads_is_refused_by_its_type() -> None:
     # At 4 both cores are possible, and 3 does not divide 4.
     TWO_CORES.start({"width": 4}).check_change(Change(commit={PE: 3}))
@@ -197,7 +190,6 @@ ROOT_RULE = Case(
 )
 
 
-@expected("case-trial-commit")
 def test_a_value_a_root_rule_refuses_under_an_open_selector_is_accepted_waiting() -> None:
     ROOT_RULE.start({"width": 12}).check_change(Change(commit={PE: 12}))
 
@@ -206,7 +198,6 @@ def test_a_root_rule_reading_a_waiting_choice_waits_on_its_selector() -> None:
     ROOT_RULE.start({"width": 12}, {PE: 4}).check_rule("small")
 
 
-@expected("case-trial-select")
 def test_selecting_the_case_of_a_choice_a_root_rule_refuses_names_the_choice_standing() -> None:
     waiting = ROOT_RULE.start({"width": 12}).reach(Change(commit={PE: 12}))
     waiting.check_change(Change(commit={"compute": "packed"}))
@@ -307,21 +298,18 @@ def test_a_choice_under_an_unknown_guard_is_open_waiting_on_it() -> None:
     GUARDS.start({"budget": 5}).check_state("extra.size")
 
 
-@expected("guard-open")
 def test_a_guards_choice_whose_value_brings_a_false_rule_into_play_is_open() -> None:
     # At a budget of 5 ``costly``'s rule is false wherever it applies, and it applies when
     # ``want`` is false; nothing is given a value, so ``want`` stays open.
     GUARDS.start({"budget": 5}).check_state("want")
 
 
-@expected("guard-possible")
 def test_a_guards_value_bringing_a_false_rule_into_play_is_not_possible() -> None:
     # False brings ``costly`` into play, whose rule refuses (``want`` decides its existence,
     # so it does not stand in its way); true opens ``spare.size``.
     GUARDS.start({"budget": 5}).check_possible("want")
 
 
-@expected("guard-off")
 def test_turning_a_guard_off_puts_the_choices_under_it_dormant() -> None:
     GUARDS.start({"budget": 25}, {"want": True, "spare.size": 2}).check_change(
         Change(commit={"want": False})
@@ -407,12 +395,10 @@ def test_a_membership_only_domain_over_a_refused_input_leaves_the_configuration_
     MEMBERSHIP_REFUSED.start({"f": 5}).check_validity()
 
 
-@expected("empty-list-state")
 def test_a_choice_whose_list_is_empty_is_open() -> None:
     EMPTY.start().check_state("z")
 
 
-@expected("empty-list-code")
 def test_an_empty_list_refuses_the_configuration() -> None:
     EMPTY.start().check_validity()
 
@@ -501,18 +487,15 @@ def test_a_waiting_choice_is_set_once_its_case_is_selected() -> None:
     waiting().step(Change(commit={"compute": "packed"})).check_state(PE)
 
 
-@expected("switch-waiting-away")
 def test_selecting_the_other_case_puts_a_waiting_choice_dormant() -> None:
     waiting().check_change(Change(commit={"compute": "stub"}))
 
 
-@expected("select-stored-break")
 def test_selecting_a_case_whose_rule_a_stored_choice_breaks_names_it_standing() -> None:
     # The stub core refuses 9 lanes: ``even`` reads ``lanes``, stored and not named.
     WAITING_CORE.start({}, {"lanes": 9}).check_change(Change(commit={"compute": "stub"}))
 
 
-@expected("selector-possible")
 def test_the_possible_cases_of_a_selector_name_what_each_moves() -> None:
     WAITING_CORE.start({}, {"lanes": 12, PE: 3}).check_possible("compute")
 
@@ -560,7 +543,6 @@ FACT_RULE = Case(
 )
 
 
-@expected("waiting-reader-blockers")
 def test_a_rule_over_a_choice_waiting_on_a_fact_waits_on_the_fact() -> None:
     FACT_RULE.start({}, {"pe": 3}).check_rule("few")
 
@@ -599,12 +581,10 @@ CASE_RULE = Case(
 )
 
 
-@expected("case-rule-commit")
 def test_setting_a_choice_its_cases_rule_refuses_under_an_open_selector_is_accepted() -> None:
     CASE_RULE.start({"limit": 1}).check_change(Change(commit={"core.wide.lanes": 2}))
 
 
-@expected("case-rule-possible")
 def test_a_case_whose_rule_refuses_a_waiting_choice_of_it_is_not_possible() -> None:
     # ``plain`` puts ``lanes`` dormant; ``wide`` brings it into play, where ``small`` refuses
     # it, ``lanes`` standing in the way.
@@ -654,17 +634,14 @@ def test_a_derived_value_that_refuses_reads_refused_with_its_code() -> None:
     REFUSED_INPUT.start({"w": 7}).check_answer("width")
 
 
-@expected("refused-input-commit")
 def test_a_value_whose_membership_reads_a_refused_input_is_refused_at_commit() -> None:
     REFUSED_INPUT.start({"w": 7}).check_change(Change(commit={"lanes": 1}))
 
 
-@expected("refused-input-facts")
 def test_new_facts_that_refuse_a_stored_choices_membership_input_are_refused() -> None:
     REFUSED_INPUT.start({"w": 8}, {"lanes": 4}).check_change(Change(facts={"w": 7}))
 
 
-@expected("refused-input-validity")
 def test_a_list_refused_through_its_input_refuses_the_configuration_at_the_input() -> None:
     REFUSED_INPUT.start({"w": 7}).check_validity()
 
@@ -726,12 +703,10 @@ GUARDED_INPUT = Case(
 )
 
 
-@expected("guarded-input-commit")
 def test_a_commit_whose_membership_input_does_not_apply_is_refused_naming_it() -> None:
     GUARDED_INPUT.start({"on": False, "n": 4}).check_change(Change(commit={"lanes": 2}))
 
 
-@expected("guarded-input-validity")
 def test_an_unset_choice_whose_membership_input_does_not_apply_refuses_the_configuration() -> None:
     GUARDED_INPUT.start({"on": False, "n": 4}).check_validity()
 
@@ -740,7 +715,6 @@ def test_a_choice_whose_membership_input_is_in_play_is_set() -> None:
     GUARDED_INPUT.start({"on": True, "n": 4}, {"lanes": 2}).check_state("lanes")
 
 
-@expected("guarded-input-facts")
 def test_new_facts_putting_a_stored_choices_membership_input_out_of_play_are_refused() -> None:
     point = GUARDED_INPUT.start({"on": True, "n": 4}, {"lanes": 2})
     point.check_change(Change(facts={"on": False}))

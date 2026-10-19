@@ -29,7 +29,6 @@ from core.space.reference_harness import (
     Case,
     Spelling,
     check_definition,
-    expected,
 )
 
 # Each test runs with the readers index used for every cache, then for none: the same answers.
@@ -261,7 +260,6 @@ def test_an_unset_choice_three_deep_under_an_unselected_case_is_absent() -> None
     NESTED.start(OPEN, {"kernel": "plain"}).check_state(PE)
 
 
-@expected("nested-open")
 def test_a_selector_whose_other_case_the_facts_refuse_stays_open() -> None:
     NESTED.start(CLOSED).check_state("kernel")
 
@@ -270,27 +268,22 @@ def test_a_commit_three_deep_under_two_open_selectors_is_accepted() -> None:
     NESTED.start(CLOSED).check_change(Change(commit={PE: 2}))
 
 
-@expected("nested-waits")
 def test_a_commit_three_deep_under_two_open_selectors_waits_on_both() -> None:
     NESTED.start(CLOSED, {PE: 2}).check_state(PE)
 
 
-@expected("nested-opened")
 def test_selecting_the_outer_kernel_leaves_a_choice_three_deep_waiting_on_the_inner() -> None:
     NESTED.start(OPEN, {PE: 2}).check_change(Change(commit={"kernel": "inner"}))
 
 
-@expected("nested-in-play")
 def test_selecting_both_kernels_brings_a_choice_three_deep_into_play() -> None:
     NESTED.start(OPEN, {PE: 2, "kernel": "inner"}).check_change(Change(commit={COMPUTE: "packed"}))
 
 
-@expected("nested-away")
 def test_switching_the_outer_kernel_away_puts_the_inner_choices_dormant() -> None:
     NESTED.start(OPEN, {**INNER_PACKED, PE: 2}).check_change(Change(commit={"kernel": "plain"}))
 
 
-@expected("nested-rule")
 def test_a_commit_three_deep_breaking_its_rule_is_refused_naming_it() -> None:
     NESTED.start({**OPEN, "width": 6}, INNER_PACKED).check_change(Change(commit={PE: 4}))
 
@@ -343,17 +336,14 @@ OUTER = Case(
 INNER_SET = {"outer.a.inner": "y", "outer.a.inner.x.c": 1}
 
 
-@expected("outer-facts")
 def test_new_facts_no_case_of_an_open_selector_holds_under_are_accepted() -> None:
     OUTER.start({"on": 2}, INNER_SET).check_change(Change(facts={"on": 0}))
 
 
-@expected("outer-select")
 def test_selecting_the_outer_case_brings_the_inner_selector_into_play() -> None:
     OUTER.start({"on": 2}, INNER_SET).check_change(Change(commit={"outer": "a"}))
 
 
-@expected("nested-unselected")
 def test_a_choice_under_the_inner_case_not_selected_is_dormant_while_the_outer_is_open() -> None:
     """``x``'s presence is unknown (``outer`` open) and false (``inner`` holds ``y``): Kleene's
     AND over the path is false (§ 16.21), so its stored choice is dormant, waiting on nothing."""
@@ -387,12 +377,10 @@ FALSE_WHEN = Case("a false when over a fact under an open selector", false_when(
 FALSE_WHEN_CHOICE = Case("a when over a choice under an open selector", false_when(True))
 
 
-@expected("false-when-under-open")
 def test_a_choice_under_a_false_when_beneath_an_open_selector_is_absent() -> None:
     FALSE_WHEN.start({"k": 0}).check_state("s.a.g.x")
 
 
-@expected("false-when-dormant-report")
 def test_turning_a_when_off_beneath_an_open_selector_puts_its_choice_dormant() -> None:
     FALSE_WHEN_CHOICE.start({}, {"k": 5, "s.a.g.x": 1}).check_change(Change(commit={"k": 0}))
 
@@ -459,7 +447,6 @@ RULED = Case("a parent rule over the capabilities", realized(with_rule=True), CA
 NO_CORES = {"fast_ok": False, "slow_ok": False}
 
 
-@expected("look-opened")
 def test_a_case_is_not_tried_against_a_selector_it_puts_in_scope() -> None:
     LOOK.start(NO_CORES).check_possible("realization")
 
@@ -468,17 +455,14 @@ def test_a_selector_a_case_puts_in_scope_waits_while_the_case_is_open() -> None:
     LOOK.start(NO_CORES).check_state("native_impl.compute")
 
 
-@expected("look-open")
 def test_the_selector_a_set_case_puts_in_scope_stays_open() -> None:
     LOOK.start(NO_CORES, {"realization": "native"}).check_state("native_impl.compute")
 
 
-@expected("look-validity")
 def test_the_selector_a_set_case_puts_in_scope_leaves_the_configuration_open() -> None:
     LOOK.start(NO_CORES, {"realization": "native"}).check_validity()
 
 
-@expected("ruled-possible")
 def test_a_parent_rule_over_the_capabilities_makes_the_case_impossible() -> None:
     RULED.start(NO_CORES).check_possible("realization")
 
@@ -509,17 +493,14 @@ GATED = Case(
 )
 
 
-@expected("guard-input-facts")
 def test_new_facts_refusing_a_guards_input_are_refused_at_the_input() -> None:
     GATED.start({"w": 4}, {"g.n": 1}).check_change(Change(facts={"w": 3}))
 
 
-@expected("guard-code")
 def test_a_guard_refused_through_its_input_refuses_the_configuration_at_the_guard() -> None:
     GATED.start({"w": 3}).check_validity()
 
 
-@expected("guard-absent")
 def test_an_unset_choice_under_a_guard_refused_through_its_input_is_absent() -> None:
     GATED.start({"w": 3}).check_state("g.m")
 
@@ -551,6 +532,5 @@ GATED_RULE = Case(
 )
 
 
-@expected("rule-under-refused-guard")
 def test_a_rule_under_a_guard_refused_through_its_input_does_not_apply() -> None:
     GATED_RULE.start({"w": 3}).check_rule("g.fits")

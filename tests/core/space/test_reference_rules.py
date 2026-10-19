@@ -35,7 +35,6 @@ from core.space.reference_harness import (
     Requirement,
     Spelling,
     check_definition,
-    expected,
 )
 
 # Each test runs with the readers index used for every cache, then for none: the same answers.
@@ -66,12 +65,10 @@ LINKED = Case(
 )
 
 
-@expected("linked-open")
 def test_a_linking_rule_leaves_the_other_choice_open() -> None:
     LINKED.start({}, {"a": 1}).check_state("b")
 
 
-@expected("linked-refuses")
 def test_a_linking_rule_refuses_a_value_naming_the_other_choice_standing() -> None:
     LINKED.start({}, {"b": 2}).check_change(Change(commit={"a": 1}))
 
@@ -84,12 +81,10 @@ def test_a_linking_rule_accepts_a_value_once_the_other_choice_is_cleared() -> No
     LINKED.start({}, {"b": 2}).check_change(Change(commit={"a": 1}, clear=("b",)))
 
 
-@expected("linked-possible")
 def test_a_linking_rules_possible_values_name_the_other_choice_standing() -> None:
     LINKED.start({}, {"b": 2}).check_possible("a")
 
 
-@expected("domain-reads-choice")
 def test_a_domain_reading_another_choice_is_no_definition() -> None:
     check_definition(
         "a domain reading another choice",
@@ -140,12 +135,10 @@ REQUIRED = Case(
 )
 
 
-@expected("required-open")
 def test_a_case_needing_a_capability_the_facts_lack_leaves_the_choice_open() -> None:
     REQUIRED.start({"has_big": False}).check_state("style")
 
 
-@expected("required-possible")
 def test_a_case_needing_a_capability_the_facts_lack_is_not_possible() -> None:
     REQUIRED.start({"has_big": False}).check_possible("style")
 
@@ -154,12 +147,10 @@ def test_a_case_needing_an_unknown_capability_is_possible() -> None:
     REQUIRED.start().check_possible("style")
 
 
-@expected("required-commit")
 def test_setting_a_case_needing_a_missing_capability_is_refused_by_the_facts_alone() -> None:
     REQUIRED.start({"has_big": False}).check_change(Change(commit={"style": "big"}))
 
 
-@expected("required-facts")
 def test_new_facts_lacking_a_capability_a_stored_case_needs_are_refused() -> None:
     REQUIRED.start({"has_big": True}, {"style": "big"}).check_change(
         Change(facts={"has_big": False})
@@ -226,7 +217,6 @@ def test_the_pairs_timing_view_answers() -> None:
     PAIR.start({"extent": 12}, BOTH_AT_THREE).check_answer("timing")
 
 
-@expected("pair-left-alone")
 def test_the_pairs_left_alone_at_six_is_refused_naming_the_rule_and_right() -> None:
     PAIR.start({"extent": 12}, BOTH_AT_THREE).check_change(Change(commit={"left.lanes": 6}))
 
@@ -237,7 +227,6 @@ def test_the_pairs_lanes_both_at_six_are_accepted() -> None:
     )
 
 
-@expected("pair-possible")
 def test_the_pairs_possible_values_of_left_beside_right_at_three() -> None:
     # 1, 2: left's own budget, nothing standing; 3: the value held; 4, 6, 12:
     # ``right_not_slower``, with ``right.lanes`` standing.
@@ -265,12 +254,10 @@ MEMORY = Case(
 )
 
 
-@expected("memory-possible")
 def test_the_memorys_ultra_is_not_possible_without_uram() -> None:
     MEMORY.start({"uram": False}).check_possible("style")
 
 
-@expected("memory-commit")
 def test_the_memorys_ultra_is_refused_without_uram_nothing_standing() -> None:
     MEMORY.start({"uram": False}).check_change(Change(commit={"style": "ultra"}))
 
@@ -300,7 +287,6 @@ ODD_PRODUCT = Case(
 )
 
 
-@expected("origin-blame")
 def test_a_refusal_through_a_refused_input_is_blamed_at_its_origin_only() -> None:
     ODD_PRODUCT.start({}, {"x": 2, "y": 1}).check_change(Change(commit={"x": 3}))
 
@@ -341,12 +327,10 @@ DSP58 = Case(
 ON_PACKED = {"compute": "packed", "compute.packed.pe": 2}
 
 
-@expected("switch-reaches-case-rule")
 def test_a_rule_in_a_case_that_never_names_its_selector_refuses_a_switch_to_it() -> None:
     DSP58.start({"has_dsp58": False}, ON_PACKED).check_change(Change(commit={"compute": "dsp58"}))
 
 
-@expected("switch-dormant-opened")
 def test_a_switch_puts_the_old_cases_choices_dormant_and_opens_the_new_ones() -> None:
     DSP58.start({"has_dsp58": True}, ON_PACKED).check_change(Change(commit={"compute": "dsp58"}))
 
@@ -371,12 +355,10 @@ BUDGET = Case(
 SPENT = {"a": 1, "b": 4, "c": 4}
 
 
-@expected("sum-two-standing")
 def test_a_new_value_breaking_a_sum_names_the_other_two_standing() -> None:
     BUDGET.start({}, SPENT).check_change(Change(commit={"a": 5}))
 
 
-@expected("sum-one-standing")
 def test_a_new_value_breaking_a_sum_with_one_other_set_names_the_last_standing() -> None:
     BUDGET.start({}, SPENT).check_change(Change(commit={"a": 5, "b": 3}))
 
@@ -416,7 +398,6 @@ SELECTOR_READ = Case(
 )
 
 
-@expected("value-read-decider-stands")
 def test_a_selector_a_rule_reads_as_a_value_stands_beside_the_choice_it_decides() -> None:
     SELECTOR_READ.start({}, {"s": "a", "s.a.p": 1, "x": 1}).check_change(Change(commit={"x": 3}))
 
@@ -448,7 +429,6 @@ TWO_KINDS = Case(
 ON_PACKED_TWO = {"compute": "packed", PE2: 2, SIMD2: 1}
 
 
-@expected("switch-away")
 def test_switching_away_puts_the_cases_choices_dormant() -> None:
     TWO_KINDS.start({}, ON_PACKED_TWO).check_change(Change(commit={"compute": "serial"}))
 
@@ -458,12 +438,10 @@ def away() -> Pair:
     return TWO_KINDS.start({}, ON_PACKED_TWO).reach(Change(commit={"compute": "serial"}))
 
 
-@expected("switched-away-dormant")
 def test_a_choice_of_the_case_switched_away_is_dormant() -> None:
     away().check_state(PE2)
 
 
-@expected("switch-back")
 def test_switching_back_brings_the_dormant_choices_into_play() -> None:
     away().step(Change(commit={LANES2: 2})).check_change(Change(commit={"compute": "packed"}))
 
@@ -514,12 +492,10 @@ def moved() -> Pair:
     return base.reach(Change(commit={"compute": "serial"})).step(Change(commit={"w": 6}))
 
 
-@expected("switch-back-refused")
 def test_a_switch_back_is_refused_by_a_restored_choice() -> None:
     moved().check_change(Change(commit={"compute": "packed"}))
 
 
-@expected("switch-back-moved")
 def test_a_switch_back_with_the_restored_choice_moved_too_is_accepted() -> None:
     moved().check_change(Change(commit={"compute": "packed", PE2: 2}))
 
@@ -559,17 +535,14 @@ def sized() -> Pair:
     return SIZED.start({"n": 8}, DORMANT_DEPTH).reach(Change(commit={"mode": "b"}))
 
 
-@expected("facts-dormant-outside")
 def test_a_facts_change_is_refused_by_a_dormant_value_outside_its_new_domain() -> None:
     sized().check_change(Change(facts={"n": 12}))
 
 
-@expected("facts-each-outside")
 def test_a_facts_change_is_refused_by_each_value_outside_its_new_domain() -> None:
     sized().check_change(Change(facts={"n": 6}))
 
 
-@expected("facts-clear-standing")
 def test_a_facts_change_clearing_what_stands_in_its_way_is_accepted() -> None:
     sized().check_change(Change(facts={"n": 12}, clear=("mode.a.depth",)))
 
@@ -604,11 +577,9 @@ def test_a_named_choice_under_an_open_selector_waits() -> None:
     OPEN_MODE.start({}, {"mode.a.p": 2}).check_state("mode.a.p")
 
 
-@expected("waiting-valid")
 def test_a_named_choice_under_an_open_selector_leaves_the_configuration_valid() -> None:
     OPEN_MODE.start({}, {"mode.a.p": 2}).check_validity()
 
 
-@expected("waiting-in-play")
 def test_selecting_a_waiting_choices_case_brings_it_into_play() -> None:
     OPEN_MODE.start({}, {"mode.a.p": 2}).check_change(Change(commit={"mode": "a"}))

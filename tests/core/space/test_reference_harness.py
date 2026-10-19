@@ -37,10 +37,12 @@ from core.space.reference_harness import (
     OutcomeForm,
     PossibleForm,
     RefusalForm,
+    Row,
     RuleForm,
     StateForm,
     ValidityForm,
     markdown,
+    matrix,
 )
 from core.space.reference_harness.compare import (
     agrees,
@@ -84,26 +86,67 @@ CASE_MODULES = tuple(
 
 
 def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() -> None:
-    assert ROWS and all(path.exists() for path in CASE_MODULES)
+    assert all(path.exists() for path in CASE_MODULES)
     assert not problems(CASE_MODULES)
 
 
+def test_the_engine_core_is_accepted_its_rows_removed() -> None:
+    assert MILESTONES == ("base",) and ROWS == ()
+
+
+# A later milestone with rows, put in the matrix where a test needs one.
+LATER = ("lane 9", "lane 10")
+WITNESS = "test_reference_cases::test_it"
+LATER_ROWS = (
+    Row("b-row", "lane 10", "the second change", "test_reference_cases::test_other"),
+    Row("a-row", "lane 9", "the change", WITNESS, "today refused"),
+)
+
+
+@pytest.fixture
+def later(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(matrix, "MILESTONES", ("base", *LATER))
+    monkeypatch.setattr(matrix, "ROWS", LATER_ROWS)
+    monkeypatch.setattr(matrix, "BY_ID", {row.id: row for row in LATER_ROWS})
+
+
+@pytest.mark.usefixtures("later")
 def test_the_matrix_check_finds_a_row_without_its_witness(tmp_path: Path) -> None:
     """A check that has never rejected anything is a check nobody has tested."""
-    witness = ROWS[0].witness.split("::")[1]
-    elsewhere = tmp_path / "test_reference_cases.py"
-    elsewhere.write_text(f"@pytest.mark.xfail(strict=True)\ndef {witness}() -> None: ...\n")
-    found = problems([elsewhere])
-    assert f"test_reference_cases::{witness}: an expected failure with no row" in found
-    assert any(item.startswith(f"{ROWS[0].id}: witnessed by []") for item in found)
+    module = tmp_path / "test_reference_cases.py"
+    module.write_text(
+        '@expected("a-row")\ndef test_it() -> None: ...\n\n'
+        "@pytest.mark.xfail(strict=True)\ndef test_other() -> None: ...\n\n"
+        '@expected("c-row")\ndef test_third() -> None: ...\n'
+    )
+    assert problems([module]) == [
+        "test_reference_cases::test_other: an expected failure with no row",
+        "c-row: witnessed by ['test_reference_cases::test_third'], but no such row",
+        "b-row: witnessed by [], names test_reference_cases::test_other",
+    ]
 
 
+@pytest.mark.usefixtures("later")
+def test_a_witness_is_a_strict_expected_failure_raising_a_disagreement() -> None:
+    @matrix.expected("a-row")
+    def test_it() -> None: ...
+
+    (mark,) = test_it.pytestmark  # type: ignore[attr-defined]
+    assert mark.name == "xfail" and mark.kwargs == {
+        "strict": True,
+        "raises": Disagreement,
+        "reason": "lane 9: the change (today refused)",
+    }
+
+
+@pytest.mark.usefixtures("later")
 def test_the_matrix_prints_as_a_markdown_table_in_milestone_order() -> None:
     table = markdown().splitlines()
-    assert table[0].startswith("| Row | Milestone |") and len(table) == len(ROWS) + 2
-    milestones = [line.split(" | ")[1] for line in table[2:]]
-    assert milestones == sorted(milestones, key=MILESTONES.index)
-    assert all(f"| {row.id} |" in markdown() for row in ROWS)
+    assert table[0] == "| Row | Milestone | The change that removes it | Witness |"
+    assert table[2:] == [
+        f"| a-row | lane 9 | the change (today refused) | `{WITNESS}` |",
+        "| b-row | lane 10 | the second change | `test_reference_cases::test_other` |",
+    ]
 
 
 # -- the comparison --------------------------------------------------------------------------------

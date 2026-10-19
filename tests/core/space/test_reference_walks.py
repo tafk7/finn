@@ -141,7 +141,7 @@ def engine_disagrees(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def pend(monkeypatch: pytest.MonkeyPatch) -> None:
     """A later milestone, ``lane 9``, with one row: pending."""
-    row = Row("a-row", "lane 9", "the change", "test_reference_cases::test_it", "a-kind")
+    row = Row("a-row", "lane 9", "the change", "test_reference_cases::test_it")
     monkeypatch.setattr(walks, "MILESTONES", ("base", "lane 9"))
     monkeypatch.setattr(walks, "ROWS", (row,))
 
@@ -191,9 +191,12 @@ def test_the_summary_names_the_mode_and_the_checks(monkeypatch: pytest.MonkeyPat
 
 
 def test_a_broken_standing_list_in_the_model_fails_a_walk(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The walk end to end: a model naming one standing choice too few fails at the step.
+    # The walk end to end: a model naming one standing choice too few fails at the step. The
+    # engine, unbroken, disagrees with it sooner (its possible values name the standing
+    # choices too): counted, under a milestone pending, so the invariant is what fails.
     standing: Callable[..., tuple[str, ...]] = reference.model._standing
     monkeypatch.setattr(reference.model, "_standing", lambda *args: standing(*args)[1:])
+    pend(monkeypatch)
     tally = walk(11, 3)
     assert tally.failed == "4 standing" and tally.failure is not None
     assert tally.failure.startswith("seed 11, step 3: invariant 4 standing: clearing")
