@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias, TypeVar
 
-from .results import QueryResult
+from .results import QueryResult, Rejected
 
 if TYPE_CHECKING:
     from ._configuration import Space
@@ -59,13 +59,38 @@ class ChangeOutcome:
 
 
 @dataclass(frozen=True, slots=True)
+class BrokenRule:
+    """A rule a change would break: a piece of validity it would make false through an
+    origin it was not false through before.
+
+    ``rule``: the origin's key, where the failure starts: a constraint false on its own
+    values, a derived value or a view refusing on its own values, a choice whose listed
+    domain lists no value (or whose list cannot be made: an input of its domain does not
+    apply), a formal two sources supply; never a guard (a guard refuses only through an
+    input, and the refusal names the origin behind it). ``result``: the origin's own
+    refusal. ``standing``: the stored choices standing in its way, by key: those the
+    origin reads that the change does not name, which the caller sets in the same change
+    or clears first (none where the values named and the facts alone break it)."""
+
+    rule: str
+    result: Rejected
+    standing: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class ConfigurationResult(Generic[S]):
+    """A change's report: the configuration it publishes (the receiver where it changes
+    nothing, or is refused), whether it was accepted, and each item's outcome. A change
+    refused by the rules it would break names each in ``broken``."""
+
     instance: S
     accepted: bool
     outcomes: tuple[ChangeOutcome, ...]
+    broken: tuple[BrokenRule, ...] = ()
 
 
 __all__ = [
+    "BrokenRule",
     "Change",
     "ChangeOutcome",
     "ChangeRequest",

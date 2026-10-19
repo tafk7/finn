@@ -9,6 +9,7 @@ from typing import cast
 
 import pytest
 from support.refusals import refused
+from support.space_cores import built
 
 from finn.core.space import (
     Available,
@@ -93,7 +94,13 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
     field = base.optional.field(Interface.lanes)
     assert isinstance(field, BoundDecision)
     assert isinstance(field.state, Inapplicable)
-    successor = base.with_choices(implementation="refused")
+    # The refused candidate's rule is false on the facts alone: switching to it is refused.
+    report = base.try_with_choices(implementation="refused")
+    assert not report.accepted
+    assert [(rule.rule, rule.standing) for rule in report.broken] == [
+        ("implementation.refused.supported", ())
+    ]
+    successor = built(base, {"implementation": "refused"})
     selected = successor.implementation
     assert isinstance(selected, Refused)
     direct = selected.inspect(Refused.physical).accepted_result

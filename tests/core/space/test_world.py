@@ -160,9 +160,11 @@ def test_a_guard_refused_through_its_input_is_one_piece_per_guard() -> None:
         "leaf.$validity": [("guard-refused", "leaf"), ("size-negative", "big")],
         "limit": [("guard-refused", "limit"), ("size-negative", "big")],
     }
-    # The guarded members read refused through the guard; the guard is no origin.
-    assert _codes(answer(world, "limit")) == [("size-negative", "big")]
-    assert not world.entry(node(world, "limit")).own_refusal
+    # The scope is not in play (§ 16.8): its constraint does not apply, the guard's piece
+    # standing for it; a value under it reads refused through the guard, no origin.
+    assert isinstance(answer(world, "limit"), Inapplicable)
+    assert _codes(answer(world, "banks")) == [("size-negative", "big")]
+    assert not world.entry(node(world, "banks")).own_refusal
     assert world.entry(node(world, "big")).own_refusal
 
     held = open_world(Guarded(size=8))

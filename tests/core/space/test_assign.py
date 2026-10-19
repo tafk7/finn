@@ -6,8 +6,9 @@ Each value set is type-checked against its domain, which reads facts only: outsi
 refuses the change; an input of the domain refusing, or not applying, refuses it,
 naming the input; a missing fact leaves the choice stored and waiting. A choice under a
 case not selected is accepted (dormant); under a selector still open it is checked
-where the selector reads its case. A facts change checks every stored value again. No
-rule refuses a change here: constraints only read.
+where the selector reads its case. A facts change checks every stored value again. A
+change that passes its type checks and makes a rule newly false is refused, naming the
+rule and the stored choices standing in its way.
 """
 
 from __future__ import annotations
@@ -111,13 +112,25 @@ def test_a_value_in_its_domain_is_published_and_one_outside_refuses_the_change()
     assert codes(refused.outcomes[0].result) == [("domain-membership", "lanes")]
 
 
-def test_no_rule_refuses_a_change_here() -> None:
-    """Until rules gate a change, one breaking a constraint is accepted and the
-    configuration reads refused (``small``: 4 lanes of 16 bits is 64 > 32)."""
+def test_a_change_breaking_a_rule_is_refused_naming_it_after_the_type_checks() -> None:
+    """``small``: 4 lanes of 16 bits is 64 > 32, false on the values the change names, so
+    nothing stored stands in its way. Each value named passes its type check."""
     report = change(start(Core(extent=12)), {"lanes": 4, "width": 16})
-    assert report.accepted
-    point = cast(State, report.state)
-    assert isinstance(read(point, "small"), Rejected)
+    assert not report.accepted and report.state is None
+    assert [(o.owner, o.status, o.result) for o in report.outcomes] == [
+        ("lanes", "checked", Available(True)),
+        ("width", "checked", Available(True)),
+    ]
+    (rule,) = report.broken
+    assert (rule.rule, rule.standing) == ("small", ())
+    assert codes(rule.result) == [("constraint-false", "small")]
+    # Set one at a time, the second change is refused with the first standing in its way.
+    point = cast(State, change(start(Core(extent=12)), {"lanes": 4}).state)
+    (rule,) = change(point, {"width": 16}).broken
+    assert (rule.rule, rule.standing) == ("small", ("lanes",))
+    # A value outside its domain reports its type check alone.
+    alone = change(start(Core(extent=12)), {"lanes": 5, "width": 16})
+    assert [o.status for o in alone.outcomes] == ["refused", "checked"] and alone.broken == ()
 
 
 def test_the_same_values_keep_the_configuration() -> None:
@@ -259,7 +272,10 @@ def test_an_input_of_the_domain_refusing_on_facts_refuses_the_assignment_naming_
         ("w", "checked", True),
         ("lanes", "refused", False),
     ]
-    assert change(point, facts={"w": 7}, clear=("lanes",)).accepted
+    # Clearing it opens the choice, whose list the facts cannot make: refused through
+    # ``width``, on the facts alone.
+    cleared = change(point, facts={"w": 7}, clear=("lanes",))
+    assert [(rule.rule, rule.standing) for rule in cleared.broken] == [("width", ())]
 
 
 class Banks(Space):

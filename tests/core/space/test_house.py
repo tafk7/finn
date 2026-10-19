@@ -11,6 +11,8 @@ The house is declared in ``_toys_support``, which the collapse tests share.
 
 from __future__ import annotations
 
+from support.space_cores import built
+
 from core.space._choices_support import committed, replay
 from core.space._results_support import codes
 from core.space._toys_support import Boiler, HeatPump, House, Room, Thermostat
@@ -72,7 +74,16 @@ def test_a_structural_choice_reads_as_the_selected_candidate() -> None:
 
 def test_the_relation_and_the_budget_own_their_refusals() -> None:
     house = design_space(House(budget=80))
-    point = house.with_choices(
+    choices = {
+        "want_garage": True,
+        "heating": "boiler",
+        "hall.finish": 1,
+        "kitchen.finish": 1,
+        "dining.finish": 3,
+        "garage.finish": 1,
+    }
+    # The change breaks both of the house's rules, on the values it names alone.
+    report = house.try_with_choices(
         {
             House.want_garage: True,
             House.heating: "boiler",
@@ -82,6 +93,13 @@ def test_the_relation_and_the_budget_own_their_refusals() -> None:
             House.garage.finish: 1,
         }
     )
+    assert not report.accepted
+    assert [(rule.rule, rule.standing) for rule in report.broken] == [
+        ("matched", ()),
+        ("within_budget", ()),
+    ]
+    # Built directly (as a saved graph), the same choices read refused, naming both.
+    point = built(house, choices)
     refused = point.inspect(House.total)
     assert isinstance(refused.output_result, Available)
     validity = inspection.validity(point)
@@ -90,8 +108,7 @@ def test_the_relation_and_the_budget_own_their_refusals() -> None:
     assert set(results) == {"matched", "within_budget"}
     assert codes(results["matched"]) == {"mismatch"}
     assert "kitchen.finish=1, dining.finish=3" in {
-        finding.message
-        for finding in refused.accepted_result.findings  # type: ignore[union-attr]
+        finding.message for finding in refused.accepted_result.findings
     }
     assert codes(results["within_budget"]) == {"over-budget"}
     assert isinstance(point.query(House.garage.cost), Available)

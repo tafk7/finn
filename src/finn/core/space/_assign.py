@@ -22,8 +22,18 @@ A change is **assignment**. In order:
    presence, it is accepted and checked when it comes into play: a stored choice the
    change brings into play is checked again. A facts change checks every stored value
    again, dormant ones included.
-6. **Publication:** with nothing refused, the configuration is published whole; else
-   nothing is, and each item's outcome says why. Nothing is cleared or filled in.
+6. **Rules.** A change that sets a new value (a choice set to a value it does not hold,
+   or a fact to a value it does not have) is refused where the configuration it would
+   publish holds a false piece of validity through an origin it was not false through
+   before (``_origins``): a piece newly present counts as not false before. Each such
+   origin is a ``BrokenRule``, with the stored choices standing in its way. So no
+   accepted change that sets adds a false piece and its origin: a configuration's false
+   pieces are those its facts made false. A change of clears alone is never refused:
+   clearing opens a choice, and an open choice turns what reads it unknown, never false.
+   A change with a value refused by its type check reports those alone.
+7. **Publication:** with nothing refused, the configuration is published whole; else
+   nothing is, and each item's outcome, and each rule broken, says why. Nothing is
+   cleared or filled in.
 """
 
 from __future__ import annotations
@@ -34,9 +44,10 @@ from typing import Any, Literal, TypeVar, cast
 
 from ._configuration import Space
 from ._failure import driver_only
+from ._origins import Origin, Pairs, pairs, standing
 from ._state import State, prepare, presence
 from ._world import FLATTEN, World, type_check
-from .edits import Change, ChangeOutcome, ChangeRequest, ConfigurationResult
+from .edits import BrokenRule, Change, ChangeOutcome, ChangeRequest, ConfigurationResult
 from .errors import ConfigurationError, RequestError
 from .ir import Node, NodeId
 from .occurrence import attach, decision_index, state
@@ -52,12 +63,14 @@ _MISSING = object()
 @dataclass(frozen=True, slots=True)
 class Assigned:
     """What a change came to: the configuration it publishes (the receiver's state
-    where it changes nothing; ``None`` where it is refused) and each item's outcome, in
+    where it changes nothing; ``None`` where it is refused); each item's outcome, in
     order: the facts given, the choices named, then the stored choices the change checked
-    again (a facts change, or brought into play) and found refusing."""
+    again (a facts change, or brought into play) and found refusing; and each rule it
+    would break."""
 
     state: State | None
     outcomes: tuple[ChangeOutcome, ...]
+    broken: tuple[BrokenRule, ...] = ()
 
     @property
     def accepted(self) -> bool:
@@ -153,6 +166,42 @@ def _refuses(result: QueryResult[bool]) -> bool:
     )
 
 
+def _pairs(state: State) -> Pairs:
+    """A configuration's pairs (each false piece of its root's validity with each origin it
+    is false through), kept on it."""
+    found = state.answers.get(("pairs", 0))
+    if found is None:
+        found = state.answers[("pairs", 0)] = pairs(state.world)
+    return cast(Pairs, found)
+
+
+def _broken(current: State, world: World, named: frozenset[NodeId]) -> tuple[BrokenRule, ...]:
+    """The rules a change would break: each origin through which ``world`` (the
+    configuration it would publish) holds a false piece that ``current`` does not hold
+    through it, with the stored choices standing in its way (``named``: the choices the
+    change sets or clears)."""
+    after = pairs(world)
+    if not after:
+        return ()
+    before = _pairs(current)
+    found: dict[NodeId, Origin] = {}
+    for piece, origins in after.items():
+        held = before.get(piece, {})
+        for index, origin in origins.items():
+            if index not in held:
+                found.setdefault(index, origin)
+    nodes = world.evaluator.nodes
+    return tuple(
+        sorted(
+            (
+                BrokenRule(nodes[index].owner, origin.result, standing(world, index, named))
+                for index, origin in found.items()
+            ),
+            key=lambda rule: rule.rule,
+        )
+    )
+
+
 def assign(
     current: State,
     facts: Mapping[NodeId, object],
@@ -243,6 +292,22 @@ def assign(
                 if index in refused
             )
             return Assigned(None, tuple(outcomes))
+        sets = bool(changed_facts) or any(
+            not item.remove and held.get(index, _MISSING) is not stored[index]
+            for index, item in normalized.items()
+        )
+        broken = _broken(current, world, frozenset(normalized)) if sets else ()
+        if broken:
+            refused_outcomes = (
+                *(ChangeOutcome(o.owner, o.result, "checked") for o in fact_outcomes),
+                *(
+                    ChangeOutcome(
+                        nodes[item.node].owner, checks.get(item.node, Available(True)), "checked"
+                    )
+                    for item in requests
+                ),
+            )
+            return Assigned(None, refused_outcomes, broken)
         if world.depth > FLATTEN:
             world.flatten()
         published = [
@@ -327,7 +392,7 @@ def _report(point: S, assigned: Assigned) -> ConfigurationResult[S]:
     """A change's report: the configuration it publishes (the receiver where it changes
     nothing or is refused), and each item's outcome."""
     if assigned.state is None:
-        return ConfigurationResult(point, False, assigned.outcomes)
+        return ConfigurationResult(point, False, assigned.outcomes, assigned.broken)
     if assigned.state is state(point):
         return ConfigurationResult(point, True, assigned.outcomes)
     return ConfigurationResult(

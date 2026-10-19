@@ -15,11 +15,11 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from support.space_cores import CORES, Packed, Stub, commit
+from support.space_cores import CORES, Packed, Stub, built, commit
 from support.space_walk import fresh
 
 from core.space._choices_support import committed
-from core.space._possible_support import possible, refusals
+from core.space._possible_support import broken, possible, refusals
 from finn.core.space import (
     Available,
     Decision,
@@ -193,18 +193,22 @@ class Memory(Space):
         return True
 
 
-def test_a_case_a_constraint_refuses_is_stored_and_the_configuration_reads_refused() -> None:
+def test_a_case_a_constraint_refuses_is_refused_and_a_configuration_holding_it_reads_refused() -> (
+    None
+):
     open_ = design_space(Memory())
     assert commit(open_, {"style": "fast"}).style == "fast"
     point = design_space(Memory(capabilities=Capabilities(fast=False, ports=0)))
     assert unassigned(point.query(Memory.style)) and unassigned(point.query(Memory.writable))
-    # A commit checks the choice's own values: the constraint does not gate it. The
-    # configuration reads refused, naming the constraint.
+    # The value passes its type check, and breaks the constraint on the facts alone: the
+    # change is refused naming it, nothing standing in its way.
     report = point.try_with_choices({Memory.style: "fast"})
-    assert report.accepted
+    assert not report.accepted
     (outcome,) = report.outcomes
-    assert outcome.result == Available(True)
-    validity = inspection.validity(report.instance)
+    assert outcome.result == Available(True) and outcome.status == "checked"
+    assert broken(report) == {"fast_present": set()}
+    # A configuration holding it, built directly, reads refused, naming the constraint.
+    validity = inspection.validity(built(point, {"style": "fast"}))
     assert validity.status == "refused"
     assert [
         (piece.owner, [f.code for f in piece.result.findings]) for piece in validity.pieces
@@ -289,8 +293,8 @@ def test_a_successor_keeps_what_its_change_does_not_reach_whichever_order_declar
     # Outside a and b, nothing of theirs is evaluated again.
     unreached = commit(base, {"other.size": 2})
     assert kept(unreached, "a.") and kept(unreached, "b.")
-    # Inside a, a's rule is evaluated again and nothing of b's.
-    reached = commit(base, {"a.burst": 2})
+    # Inside a, what reads a's limit is evaluated again and nothing of b's.
+    reached = commit(base, {"a.compute.limited.limit": 8})
     assert kept(reached, "b.") and not kept(reached, "a.")
     # Each answers every node as a configuration built from nothing.
     for point in (unreached, reached):

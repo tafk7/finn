@@ -227,7 +227,6 @@ def test_dynamic_prepared_space_class_and_bound_metadata_are_collectable() -> No
     assert bound_ref() is None
 
 
-@pytest.mark.xfail(strict=True, reason="until P3: a change is refused by the rules it breaks")
 def test_replacement_revalidates_retained_choices_and_supports_atomic_clear() -> None:
     class Example(Space):
         extent: int = Decision(values=(8, 12))
@@ -282,7 +281,6 @@ def test_value_reads_preserve_result_and_view_context() -> None:
     assert configured.field(Example.choice).query() == Available(0)
 
 
-@pytest.mark.xfail(strict=True, reason="until P3: a change is refused by the rules it breaks")
 def test_child_replacement_returns_child_and_revalidates_the_whole_root() -> None:
     class Child(Space):
         local: int = Decision(values=(1, 2))
@@ -335,7 +333,9 @@ def test_replacement_reuses_frozen_facts_keeps_views_lazy_and_drops_what_it_reac
     assert state(revised).world.facts is state(first).world.facts
     linked = state(revised).linked
     kept = {linked.nodes[index].key for index in state(revised).world.cache}
-    assert kept <= {"source", "choice"}  # what read the replaced choice is not kept
+    # What read the replaced choice is not kept; the change read the root's validity (for
+    # the rules it might break), and nothing else.
+    assert kept <= {"source", "choice", "$validity"}
     assert revised.result == 3
     assert calls == [1, 2]
 

@@ -27,7 +27,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from support.space_cores import commit
+from support.space_cores import built, commit
 
 from core.space._possible_support import broken, possible, refusals
 from finn.core.space import (
@@ -57,11 +57,8 @@ from finn.core.space import (
 )
 from finn.core.space.inspection import Piece, Validity
 
-# A change that breaks a rule it reaches is refused, and ``inspection.viable(point, keys)``
-# answers each value possible or refused, from the next piece of the engine on.
-until_rules = pytest.mark.xfail(
-    strict=True, reason="until P3: a change is refused by the rules it breaks"
-)
+# ``inspection.viable(point, keys)`` answers each value possible or refused, from the
+# next piece of the engine on.
 until_viable = pytest.mark.xfail(
     strict=True, reason="until P3: inspection.viable(point, keys) answers each value"
 )
@@ -135,19 +132,26 @@ def test_a_constraint_that_waits_leaves_the_space_open_naming_what_it_waits_on()
 
 
 def test_a_false_piece_refuses_whatever_else_waits() -> None:
-    # Committing a value a constraint refuses is accepted: the configuration reads refused.
+    # Setting a value a constraint refuses on its own values is refused, naming it: no
+    # stored choice stands in its way.
     report = design_space(Engine(width=8)).try_with_choices({Engine.wanted: 2})
-    assert report.accepted
+    assert not report.accepted
     (outcome,) = report.outcomes
-    assert outcome.result == Available(True)
-    validity = inspection.validity(report.instance)
+    assert outcome.result == Available(True) and outcome.status == "checked"
+    assert broken(report) == {"small": set()}
+    # The same choice stored in a configuration built directly reads refused.
+    validity = inspection.validity(built(design_space(Engine(width=8)), {"wanted": 2}))
     assert validity.status == "refused"
     assert owners(validity) == ["small"]  # core.divides still waits: false beats unknown
     assert codes(validity.pieces[0]) == {"too-many"}
 
 
 def test_a_refused_child_refuses_its_parent_naming_the_childs_piece() -> None:
-    point = commit(design_space(Engine(width=6)), {"core.lanes": 4, "wanted": 1})
+    report = design_space(Engine(width=6)).try_with_choices(
+        {Engine.core.lanes: 4, Engine.wanted: 1}
+    )
+    assert not report.accepted and broken(report) == {"core.divides": set()}
+    point = built(design_space(Engine(width=6)), {"core.lanes": 4, "wanted": 1})
     validity = inspection.validity(point)
     assert validity.status == "refused"
     assert owners(validity) == ["core.divides"]
@@ -225,7 +229,10 @@ def test_a_case_not_selected_contributes_nothing_and_the_selected_one_counts() -
     point = design_space(Selector(width=4))
     validity = inspection.validity(point)
     assert validity.status == "open" and owners(validity) == ["compute.refusing.never"]
-    selected = commit(point, {"compute": "refusing"})
+    # Switching to the refusing candidate makes its rule false on the facts alone.
+    report = point.try_with_choices({Selector.compute: "refusing"})
+    assert not report.accepted and broken(report) == {"compute.refusing.never": set()}
+    selected = built(point, {"compute": "refusing"})
     assert owners(inspection.validity(selected)) == ["compute.refusing.never"]
     plain = commit(point, {"compute": "plain"})
     assert inspection.validity(plain).status == "valid"
@@ -302,7 +309,9 @@ def test_a_view_answers_while_its_space_is_open_and_refuses_with_it() -> None:
     assert open_.cycles == 4
     assessment = open_.inspect(Product.cycles)
     assert isinstance(assessment.validity, Unresolved) and assessment.readiness.ready is None
-    refused = open_.with_choices(lanes=3)  # a commit is a check of the domain only
+    report = open_.try_with_choices(lanes=3)  # ``divides`` false on its own values
+    assert not report.accepted and broken(report) == {"divides": set()}
+    refused = built(open_, {"lanes": 3})
     answer = refused.query(Product.cycles)
     assert isinstance(answer, Rejected)
     assert [(f.owner, f.code) for f in answer.findings] == [("divides", "lanes-divide")]
@@ -395,12 +404,12 @@ def test_a_constraint_reading_a_view_of_its_own_space_is_a_cycle_naming_its_path
         def capacity_supported(self) -> bool:
             return self.storage <= 32
 
-    point = design_space(Storage()).with_choices(depth=2)
+    # The change that sets ``depth`` reads the root's validity, and meets the cycle there.
     with pytest.raises(EvaluationError, match="dependency cycle") as caught:
-        _ = point.storage
+        design_space(Storage()).with_choices(depth=2)
     assert caught.value.role == "dependency cycle"
     assert caught.value.detail == (
-        "storage (view) -> $validity (validity) -> capacity_supported (constraint) -> storage"
+        "$validity (validity) -> capacity_supported (constraint) -> storage (view) -> $validity"
     )
 
 
@@ -421,9 +430,8 @@ def test_a_childs_constraint_reading_its_parents_view_through_a_formal_is_a_cycl
 
         child = Child(width=cast(int, carried))
 
-    point = design_space(Parent()).with_choices(lanes=1)
     with pytest.raises(EvaluationError, match="dependency cycle") as caught:
-        inspection.validity(point)
+        design_space(Parent()).with_choices(lanes=1)
     assert "carried" in str(caught.value) and "child.narrow" in str(caught.value)
 
     # Reading a derived value instead, which the view presents, is no cycle.
@@ -483,7 +491,9 @@ class Holder(Space):
 
 
 def test_a_value_export_answers_while_its_space_is_refused_and_a_view_export_refuses() -> None:
-    point = commit(design_space(Holder()), {"stage.lanes": 8})
+    report = design_space(Holder()).try_with_choices({Holder.stage.lanes: 8})
+    assert not report.accepted and broken(report) == {"stage.fits": set()}
+    point = built(design_space(Holder()), {"stage.lanes": 8})
     assert owners(inspection.validity(point.stage)) == ["stage.fits"]
     assert point.total_width == 16
     refused = point.query(Holder.total_cost)
@@ -524,7 +534,6 @@ def test_a_value_case_a_constraint_refuses_is_not_possible() -> None:
     assert possible(open_, Pumped.style) == ("a", "b")
 
 
-@until_rules
 def test_a_change_to_a_value_a_constraint_refuses_is_refused_naming_what_stands() -> None:
     report = commit(design_space(Pumped()), {"simd": 1}).try_with_choices({Pumped.pumping: True})
     assert not report.accepted
@@ -860,9 +869,10 @@ def test_new_facts_that_refuse_a_stored_choices_domain_input_are_refused() -> No
     (reached,) = [outcome for outcome in report.outcomes if not outcome.requested]
     assert reached.owner == "lanes" and reached.status == "refused"
     assert refused_through_width(reached.result)
-    # Cleared in the same change, the facts are accepted.
-    cleared = kept.with_facts({Lanes.w: 7}, kept.field(Lanes.lanes).clear())
-    assert isinstance(cleared.query(Lanes.lanes), Unresolved)
+    # Cleared in the same change, the facts still refuse it: the open choice's list
+    # cannot be made, false through ``width`` on the facts alone.
+    cleared = kept.try_with_facts({Lanes.w: 7}, kept.field(Lanes.lanes).clear())
+    assert not cleared.accepted and broken(cleared) == {"width": set()}
 
 
 def test_only_a_domain_that_answers_false_refuses_a_commit() -> None:
@@ -944,7 +954,6 @@ def test_a_choice_stored_under_an_open_selector_is_committed_and_waits_on_it() -
         assert {(f.code, f.owner) for f in read.findings} == {("decision-unassigned", "source")}
 
 
-@until_rules
 def test_a_switch_bringing_a_stored_choice_into_play_is_refused_by_the_rule_it_breaks() -> None:
     point = commit(design_space(Sourced(ultra=False)), {"source.memory.style": "ultra"})
     report = point.try_with_choices({Sourced.source: "memory"})

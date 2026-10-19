@@ -405,6 +405,10 @@ class World:
         if node.guard is not None:
             guard, reads = self.read(trace, node.guard, reads)
             inactive = _guard_result(node, guard.result)
+            if node.kind == "constraint" and isinstance(inactive, Rejected):
+                # Under a guard refused through an input its scope is not in play: the
+                # constraint does not apply, and the guard's piece stands for it.
+                inactive = _INAPPLICABLE
             # A Space's validity under a guard that waits is still its pieces' AND: each
             # piece inside reads the same guard first and answers unknown.
             if inactive is not None and not (
@@ -709,7 +713,8 @@ def _validity(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
     """A Space's validity: Kleene's AND of its pieces, refused when one is false, else
     unresolved when one is unknown, else true. The pieces (``Node.constraints``):
 
-    - each constraint, as it answers (inactive counts true);
+    - each constraint, as it answers (inactive counts true; under a guard refused through
+      an input it does not apply);
     - each placed Space's validity (absent counts true);
     - each choice, only where it is a piece: present with a listed domain that lists no
       value (refused, ``domain-empty``); presence unknown and its list empty or not yet
@@ -730,7 +735,7 @@ def _validity(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
             continue
         entry, reads = world.read(trace, index, reads)
         answer = cast(QueryResult[bool], entry.result)
-        if isinstance(answer, Rejected) and piece.guard is not None:
+        if isinstance(answer, (Inapplicable, Rejected)) and piece.guard is not None:
             guard, reads = world.read(trace, piece.guard, reads)
             if isinstance(guard.result, Rejected):
                 if piece.guard in guards:
@@ -817,7 +822,9 @@ def _graph(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
         for _, target in node.alternatives:
             entry, reads = world.read(trace, target, reads)
             answers.append(entry.result)
-        return Entry(_present(node, answers), reads, tuple(trace))
+        # Two known present sources refuse at the formal: its own refusal, an origin.
+        several = sum(1 for answer in answers if isinstance(answer, Available)) > 1
+        return Entry(_present(node, answers), reads, tuple(trace), own_refusal=several)
     located: list[Located[object]] = []
     failures: list[QueryResult[object]] = []
     for (name, target), member in zip(node.alternatives, cast(tuple[str, ...], node.value)):
@@ -1270,21 +1277,22 @@ def _domain_inputs(
     world: World, node: Node, trace: _Trace, reads: ReadSet
 ) -> tuple[tuple[QueryResult[object], ...], NonValue | None, ReadSet]:
     """The answers of a Decision's domain inputs, read in ``world`` (and traced), and the
-    non-value that keeps the domain from being asked (an input that does not apply where
-    the choice is present cannot decide it)."""
+    non-value that keeps the domain from being asked. An input that does not apply where
+    the choice is present cannot decide it, whatever the other inputs answer: the domain
+    is refused at the choice, naming it."""
     answers: list[QueryResult[object]] = []
     for argument in node.domain_arguments:
         entry, reads = world.read(trace, argument.node, reads)
         answers.append(entry.result)
+    nodes = world.evaluator.nodes
+    absent = [
+        nodes[argument.node].owner
+        for argument, answer in zip(node.domain_arguments, answers)
+        if isinstance(answer, Inapplicable)
+    ]
+    if absent:
+        return tuple(answers), _inputs_absent(node, absent), reads
     blocked = _blocked([answer for answer in answers if not isinstance(answer, Available)])
-    if isinstance(blocked, Inapplicable):
-        nodes = world.evaluator.nodes
-        absent = [
-            nodes[argument.node].owner
-            for argument, answer in zip(node.domain_arguments, answers)
-            if isinstance(answer, Inapplicable)
-        ]
-        blocked = _inputs_absent(node, absent)
     return tuple(answers), blocked, reads
 
 

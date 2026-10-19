@@ -23,7 +23,7 @@ from .declarations import (
     view,
 )
 from .domains import Domain, divisors_of, domain
-from .edits import Change, ChangeOutcome, ChangeRequest, ConfigurationResult
+from .edits import BrokenRule, Change, ChangeOutcome, ChangeRequest, ConfigurationResult
 from .errors import (
     ConfigurationError,
     DefinitionError,
@@ -98,6 +98,7 @@ __all__ = [
     "ChangeRequest",
     "ChangeOutcome",
     "ConfigurationResult",
+    "BrokenRule",
     # Errors and native cleanup diagnostics
     "DefinitionError",
     "RequestError",

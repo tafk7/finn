@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import TypeVar, cast
 
+from support.space_cores import built
+
 from core.space._collapse_support import answers, counts, open_space
 from core.space._toys_support import House
 from finn.core.space import (
@@ -80,9 +82,9 @@ def test_every_node_answers_the_same_with_and_without_collapse() -> None:
     for declaration, choices in cases:
         collapsed = open_space(declaration, collapsed=True)
         plain = open_space(declaration, collapsed=False)
-        if choices:
-            collapsed = _choices(collapsed, **choices)
-            plain = _choices(plain, **choices)
+        if choices:  # built directly: the house's second set breaks both its rules
+            collapsed = built(collapsed, choices)
+            plain = built(plain, choices)
         assert answers(collapsed) == answers(plain), type(declaration).__name__
 
 

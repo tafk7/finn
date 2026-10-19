@@ -9,7 +9,7 @@ from typing import cast
 
 import pytest
 
-from core.space.test_assign import change, codes, start
+from core.space.test_assign import change, codes, key, start
 from finn.core.space import (
     Available,
     Decision,
@@ -25,7 +25,8 @@ from finn.core.space import (
     reject,
     supplied,
 )
-from finn.core.space._state import State, answer, source_applies, value
+from finn.core.space._state import State, answer, prepare, source_applies, value
+from finn.core.space._world import World
 from finn.core.space.inspection import _evidence, _validity_of
 
 
@@ -58,7 +59,15 @@ def test_validity_is_valid_refused_or_open_naming_its_pieces() -> None:
     # ``fits`` waits on ``width``; the leaf's ``even`` waits under the open ``mode``.
     assert validity.status == "open"
     assert [piece.owner for piece in validity.pieces] == ["fits", "mode.leaf.even"]
-    point = cast(State, change(base, {"width": 16, "mode": "leaf", "mode.leaf.lanes": 1}).state)
+    choices = {"width": 16, "mode": "leaf", "mode.leaf.lanes": 1}
+    report = change(base, choices)  # breaks both rules on the values it names
+    assert [(rule.rule, rule.standing) for rule in report.broken] == [
+        ("fits", ()),
+        ("mode.leaf.even", ()),
+    ]
+    # Built directly, the same choices read refused, naming both.
+    stored = prepare(base.linked, {key(base, k): (v, "choice") for k, v in choices.items()})
+    point = State(base.model, World.start(base.evaluator, base.world.facts, stored))
     refused = _validity_of(point, 0)
     assert refused.status == "refused"
     assert [piece.owner for piece in refused.pieces] == ["fits", "mode.leaf.even"]

@@ -13,7 +13,9 @@ from __future__ import annotations
 import inspect as _inspect
 from collections.abc import Callable, Mapping
 
-from finn.core.space import Space, design_space, inspection
+from support.space_cores import built
+
+from finn.core.space import Space, design_space
 from finn.core.space._world import Evaluator, World
 from finn.core.space.ir import NodeId
 from finn.core.space.occurrence import prepare_values, state
@@ -58,12 +60,10 @@ def successor(world: World, choices: Mapping[str, object]) -> World:
 
 
 def today(declaration: Space, choices: Mapping[str, object]) -> dict[str, QueryResult[object]]:
-    """Every node's answer, by key, in the configuration a change publishes with
-    ``choices`` (on the model's own evaluator, from a design space)."""
-    point = design_space(declaration)
-    if choices:
-        handles = {item.key: item.reference for item in inspection.decisions(point)}
-        point = point.with_choices({handles[key]: value for key, value in choices.items()})
+    """Every node's answer, by key, in the configuration of ``choices`` built directly on
+    a design space (on the model's own evaluator; no rule is checked, so a set breaking
+    one reads refused)."""
+    point = built(design_space(declaration), dict(choices))
     world = state(point).world
     return {item.key: world.result(item.index) for item in world.evaluator.linked.nodes}
 
