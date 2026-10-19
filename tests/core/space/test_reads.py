@@ -1,0 +1,245 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+"""What each method may read, inferred from its source, and each node's existence guards.
+
+The evaluation core checks every read a ``self`` method makes against these reads
+(``finn.core.space._reads``), so each way a method reads its Space is pinned here: a
+member, a child's member, a candidate's member through its selector, ``getattr`` with a
+fixed name, a helper method or property (in the scope it is reached through),
+``present()``, declared ``__reads__``, and what makes a method dynamic.
+"""
+
+from __future__ import annotations
+
+from typing import cast
+
+from finn.core.space import Decision, Param, Space, constraint, derived, view
+from finn.core.space._reads import ModelReads, existence_guards, infer, summary
+from finn.core.space.compiler import compile_model
+from finn.core.space.ir import LinkedModel
+
+
+class Leaf(Space):
+    width: int = Param()
+    lanes: int = Decision(values=(1, 2))
+
+    @derived
+    def bits(self) -> int:
+        return self.width * self.lanes
+
+    @property
+    def doubled(self) -> int:
+        return 2 * self.width
+
+    def scaled(self, factor: int) -> int:
+        return factor * self.lanes
+
+
+class Wide(Space):
+    width: int = Param()
+    span: int = Decision(values=(2, 4))
+
+
+NAME = "width"
+
+
+class Outer(Space):
+    width: int = Param()
+    enabled: bool = Decision(values=(False, True))
+    leaf = Leaf(width=width)
+    guarded = Leaf(width=width, when=enabled)
+    mode: Leaf | Wide = Decision({"leaf": Leaf(width=width), "wide": Wide(width=width)})
+
+    @derived
+    def direct(self) -> int:
+        return self.width + 1
+
+    @derived
+    def through_child(self) -> int:
+        return self.leaf.bits
+
+    @derived
+    def through_choice(self) -> int:
+        return self.mode.width
+
+    @derived
+    def by_getattr(self) -> int:
+        return cast(int, getattr(self, "width")) + cast(int, getattr(self, NAME))
+
+    @derived
+    def by_helper(self) -> int:
+        return self.leaf.scaled(3)
+
+    @derived
+    def by_property(self) -> int:
+        return self.leaf.doubled
+
+    @derived
+    def by_presence(self) -> bool:
+        return self.present(self.guarded)
+
+    @constraint
+    def branching(self) -> bool:
+        return self.enabled or self.direct > 2
+
+    @view
+    def explicit(*, width: int) -> int:
+        return width
+
+
+def _model() -> tuple[LinkedModel, ModelReads]:
+    linked = compile_model(Outer).linked
+    return linked, infer(linked)
+
+
+def _keys(linked: LinkedModel, nodes: frozenset[int] | None) -> set[str]:
+    assert nodes is not None
+    return {linked.nodes[index].key for index in nodes}
+
+
+def _reads(linked: LinkedModel, reads: ModelReads, key: str) -> set[str]:
+    return _keys(linked, reads.methods[linked.keys[key]])
+
+
+def test_member_child_and_candidate_paths() -> None:
+    linked, reads = _model()
+    assert _reads(linked, reads, "direct") == {"width"}
+    assert _reads(linked, reads, "through_child") == {"leaf.bits"}
+    # A member read through a Decision over nodes reads the selector and the member of
+    # every candidate that has it.
+    assert _reads(linked, reads, "through_choice") == {"mode", "mode.leaf.width", "mode.wide.width"}
+
+
+def test_getattr_with_a_name_the_source_or_its_module_fixes() -> None:
+    linked, reads = _model()
+    # The literal is fixed; NAME is a module global, not a closure: it is not followed,
+    # and the read through it makes the method dynamic.
+    assert reads.methods[linked.keys["by_getattr"]] is None
+
+    def make(name: str) -> type[Space]:
+        def read(self: Space) -> int:
+            return cast(int, getattr(self, name))
+
+        members = {"__annotations__": {"width": int}, "width": Param(), "value": derived(read)}
+        return cast(type[Space], type("Closure", (Space,), members))
+
+    linked = compile_model(make("width")).linked
+    assert _reads(linked, infer(linked), "value") == {"width"}
+
+
+def test_helpers_and_properties_are_read_in_the_scope_they_are_reached_through() -> None:
+    linked, reads = _model()
+    assert _reads(linked, reads, "by_helper") == {"leaf.lanes"}
+    assert _reads(linked, reads, "by_property") == {"leaf.width"}
+
+
+def test_presence_reads_the_guards_on_the_way() -> None:
+    linked, reads = _model()
+    assert _reads(linked, reads, "by_presence") == {"guarded.$guard"}
+
+
+def test_every_branch_is_a_possible_read() -> None:
+    linked, reads = _model()
+    assert _reads(linked, reads, "branching") == {"enabled", "direct"}
+
+
+def test_explicit_functions_name_their_inputs_and_are_not_inferred() -> None:
+    linked, reads = _model()
+    assert linked.keys["explicit"] not in reads.methods
+    assert all(linked.nodes[index].call_style == "self" for index in reads.methods)
+
+
+def test_dynamic_methods_and_declared_reads() -> None:
+    def computed(self: Space) -> int:
+        return sum(cast(int, getattr(self, name)) for name in ("a", "b"))
+
+    def declared(self: Space) -> int:
+        return sum(cast(int, getattr(self, name)) for name in ("a", "b"))
+
+    declared.__reads__ = ("a", "b")  # type: ignore[attr-defined]
+
+    def handed_on(self: Space) -> int:
+        return len(repr(self))
+
+    members: dict[str, object] = {
+        "__annotations__": {"a": int, "b": int},
+        "a": Param(),
+        "b": Param(),
+        "computed": derived(computed),
+        "declared": derived(declared),
+        "handed_on": derived(handed_on),
+    }
+    linked = compile_model(cast(type[Space], type("Dynamic", (Space,), members))).linked
+    reads = infer(linked)
+    assert reads.methods[linked.keys["computed"]] is None
+    assert reads.methods[linked.keys["handed_on"]] is None
+    assert _reads(linked, reads, "declared") == {"a", "b"}
+    found = summary(linked, reads)
+    assert found["dynamic"] == 2 and found["dynamic_by_class"] == {
+        "Dynamic": ["computed", "handed_on"]
+    }
+
+
+def test_unresolved_paths_are_kept_as_a_diagnostic() -> None:
+    class Constants(Space):
+        width: int = Param()
+        LIMIT = 4
+
+        @derived
+        def capped(self) -> int:
+            return min(self.width, self.LIMIT)
+
+    linked = compile_model(Constants).linked
+    reads = infer(linked)
+    assert _reads(linked, reads, "capped") == {"width"}
+    assert reads.unresolved[linked.keys["capped"]] == ("LIMIT",)
+    assert summary(linked, reads)["unresolved_paths"] == ["LIMIT"]
+
+
+def test_existence_guards_innermost_first() -> None:
+    linked, reads = _model()
+    lanes = linked.keys["guarded.lanes"]
+    assert [linked.nodes[index].key for index in reads.guards(lanes)] == ["guarded.$guard"]
+    span = linked.keys["mode.wide.span"]
+    # A candidate's member exists while its case is selected.
+    assert [linked.nodes[index].key for index in reads.guards(span)] == ["mode.wide.$selected"]
+    assert reads.guards(linked.keys["width"]) == ()
+    assert existence_guards(linked, span) == reads.guards(span)
+
+
+def test_nested_guards_reach_the_root() -> None:
+    class Inner(Space):
+        on: bool = Param()
+        value: int = Decision(values=(1,), when=on)
+
+    class Middle(Space):
+        on: bool = Param()
+        inner = Inner(on=on, when=on)
+
+    class Top(Space):
+        on: bool = Param()
+        middle = Middle(on=on, when=on)
+
+    linked = compile_model(Top).linked
+    guards = existence_guards(linked, linked.keys["middle.inner.value"])
+    assert [linked.nodes[index].key for index in guards] == [
+        "middle.inner.value.$guard",
+        "middle.inner.$guard",
+        "middle.$guard",
+    ]
+
+
+def test_a_chain_of_closures_is_inferred_from_one_parse() -> None:
+    def step(previous: str) -> object:
+        def compute(self: Space) -> int:
+            return cast(int, getattr(self, previous)) + 1
+
+        return derived(compute)
+
+    members: dict[str, object] = {"__annotations__": {"value_0": int}, "value_0": Param()}
+    for index in range(1, 2_001):
+        members[f"value_{index}"] = step(f"value_{index - 1}")
+    linked = compile_model(cast(type[Space], type("Chain", (Space,), members))).linked
+    reads = infer(linked)
+    for index in range(1, 2_001):
+        assert _reads(linked, reads, f"value_{index}") == {f"value_{index - 1}"}
