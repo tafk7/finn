@@ -19,7 +19,7 @@ S = TypeVar("S", bound="Space")
 
 @dataclass(frozen=True, slots=True)
 class Change(Generic[T_co]):
-    """One typed choice patch tied to an exact immutable base snapshot."""
+    """One typed choice patch tied to the exact configuration it changes."""
 
     base: object = field(repr=False)
     scope: int
@@ -36,20 +36,26 @@ ChangeRequest: TypeAlias = Change[Any]
 
 @dataclass(frozen=True, slots=True)
 class ChangeOutcome:
-    """What a change did to one choice. ``unchecked``: the choice is kept, and its own check
-    cannot conclude yet (it reads a choice still open, an input not supplied, or an input that
-    does not apply): ``result`` is the unresolved answer naming what it waits on (for an
-    input that does not apply, what decides that it applies), and the choice reads
-    unresolved until a change makes its check succeed (``inspection.unchecked`` lists
-    them). A choice kept whose domain reads an input that is itself refused (a refusal
-    elsewhere never refuses a change) is not refused: ``result`` is that input's refusal,
-    and the configuration reads the choice refused through it."""
+    """What a change did to one choice or fact.
+
+    ``result``: for a choice set, its type check, the domain over the facts: true where
+    it holds the value; refused outside it, or through an input of the domain refusing
+    or not applying; unresolved while a fact the domain reads is missing (the choice is
+    stored and waits on it). A choice whose scope is absent or waits is checked where its
+    selectors read its case; where a guard over something else decides its presence,
+    ``result`` is why it was not checked (inapplicable: absent; unresolved: its presence
+    waits), and it is checked when a change brings it into play. For a fact, or a clear,
+    ``Available(True)``.
+
+    ``status``: ``"changed"``, ``"unchanged"`` or ``"removed"`` in a published change;
+    in a refused one, ``"refused"`` for what refuses it and ``"checked"`` for the rest.
+    ``requested`` is false for a stored choice the change did not name and checked
+    again (a facts change, or one bringing it into play)."""
 
     owner: str
     result: QueryResult[bool]
-    status: Literal["unchanged", "admissible", "checked", "refused", "changed", "removed"]
+    status: Literal["unchanged", "changed", "removed", "checked", "refused"]
     requested: bool = True
-    unchecked: bool = False
 
 
 @dataclass(frozen=True, slots=True)

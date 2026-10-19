@@ -46,7 +46,7 @@ Assessment: TypeAlias = ViewAssessment[object] | ConstraintAssessment
 Presence: TypeAlias = Literal["present", "absent", "unknown"]
 
 
-@dataclass(frozen=True, slots=True, eq=False)
+@dataclass(frozen=True, slots=True, eq=False, weakref_slot=True)
 class State:
     """A configuration: its model, and the world of its facts and stored choices.
     ``answers``: what inspection answered of it, kept by question and scope."""

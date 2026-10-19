@@ -3,16 +3,17 @@
 """Worlds of the evaluation core (``finn.core.space._world``) for its own tests.
 
 A world is opened from a root declaration: the facts as ``design_space`` binds them,
-and stored choices by key, recognized and frozen as a change would. Nothing here
-publishes a configuration: the core is not wired to ``Space`` yet.
+and stored choices by key, recognized and frozen as a change would, on an evaluator of
+its own. ``today`` answers the same questions through a published configuration.
+``source_line`` finds an interruption point in the core's source.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import inspect as _inspect
+from collections.abc import Callable, Mapping
 
 from finn.core.space import Space, design_space, inspection
-from finn.core.space._runtime import evaluate
 from finn.core.space._world import Evaluator, World
 from finn.core.space.ir import NodeId
 from finn.core.space.occurrence import prepare_values, state
@@ -34,12 +35,11 @@ def open_world(
 ) -> World:
     """A world of ``declaration``'s facts and ``choices`` (by key), on its own evaluator
     unless one of the same model is given."""
-    point = design_space(declaration)
-    snapshot = state(point)
+    current = state(design_space(declaration))
     if evaluator is None:
-        evaluator = Evaluator(snapshot.model)
-    assert evaluator.model is snapshot.model
-    return World.start(evaluator, snapshot.parameters, stored(evaluator, choices or {}))
+        evaluator = Evaluator(current.model)
+    assert evaluator.model is current.model
+    return World.start(evaluator, current.facts, stored(evaluator, choices or {}))
 
 
 def node(world: World, key: str) -> NodeId:
@@ -58,11 +58,19 @@ def successor(world: World, choices: Mapping[str, object]) -> World:
 
 
 def today(declaration: Space, choices: Mapping[str, object]) -> dict[str, QueryResult[object]]:
-    """Every node's answer on the current evaluator, by key, for ``choices`` (all stored
-    and within their domains, so forcing has nothing to add)."""
+    """Every node's answer, by key, in the configuration a change publishes with
+    ``choices`` (on the model's own evaluator, from a design space)."""
     point = design_space(declaration)
     if choices:
         handles = {item.key: item.reference for item in inspection.decisions(point)}
         point = point.with_choices({handles[key]: value for key, value in choices.items()})
-    snapshot = state(point)
-    return {item.key: evaluate(snapshot, item.index).result for item in snapshot.model.linked.nodes}
+    world = state(point).world
+    return {item.key: world.result(item.index) for item in world.evaluator.linked.nodes}
+
+
+def source_line(function: Callable[..., object], marker: str) -> int:
+    """The line of ``function``'s source holding ``marker``, once (an interruption point)."""
+    source, start = _inspect.getsourcelines(function)
+    matches = [start + offset for offset, line in enumerate(source) if marker in line]
+    assert len(matches) == 1, f"expected one interruption boundary for {marker!r}: {matches}"
+    return matches[0]

@@ -87,12 +87,12 @@ class BoundDecision(BoundValue[T], Generic[T]):
         return cast(QueryResult[tuple[T, ...]] | None, candidates(self.instance, self.reference))
 
     def change(self, value: T) -> Change[T]:
-        from ._changes import change
+        from ._assign import change
 
         return change(self.instance, self.reference, value)
 
     def clear(self) -> Change[T]:
-        from ._changes import clear
+        from ._assign import clear
 
         return cast(Change[T], clear(self.instance, self.reference))
 
@@ -180,14 +180,14 @@ def _structural(value: object) -> bool:
 
 
 def _check_configuration_mutation(point: Space, name: str) -> None:
-    from ._execution import driver_only
-    from .occurrence import state
+    from ._failure import driver_only
+    from .occurrence import model_of
 
     driver_only("configuration mutation")
     current = getattr(point, "_state", None)
     scope_index = getattr(point, "_scope", None)
     if current is not None and type(scope_index) is int:
-        scope = state(point).model.linked.scopes[scope_index]
+        scope = model_of(point).linked.scopes[scope_index]
         if name in scope.named_members or name in scope.named_children:
             raise AttributeError(f"{name} is an immutable configuration field; use with_choices()")
 
@@ -355,14 +355,14 @@ class Space(metaclass=SpaceMeta):
     ) -> Self:
         """Commit choices atomically: ``{House.kitchen.finish: 2}``, Change objects,
         or keywords for this configuration's own decisions."""
-        from ._changes import with_choices
+        from ._assign import with_choices
 
         return with_choices(self, *changes, **choices)
 
     def try_with_choices(
         self, /, *changes: ChangeRequest | Mapping[Any, object], **choices: object
     ) -> ConfigurationResult[Self]:
-        from ._changes import try_with_choices
+        from ._assign import try_with_choices
 
         return try_with_choices(self, *changes, **choices)
 
@@ -370,16 +370,17 @@ class Space(metaclass=SpaceMeta):
         self, facts: Mapping[Any, object], /, *changes: ChangeRequest | Mapping[Any, object]
     ) -> Self:
         """The same model with other values for root formals (``{House.budget: 120}``),
-        keeping every evaluation that read none of them, and the retained choices admitted
-        as a trial admits them. ``changes`` are choices, as for ``with_choices``."""
-        from ._changes import with_facts
+        keeping every evaluation that read none of them; every stored choice is checked
+        again against its domain over the new facts. ``changes`` are choices, as for
+        ``with_choices``."""
+        from ._assign import with_facts
 
         return with_facts(self, facts, *changes)
 
     def try_with_facts(
         self, facts: Mapping[Any, object], /, *changes: ChangeRequest | Mapping[Any, object]
     ) -> ConfigurationResult[Self]:
-        from ._changes import try_with_facts
+        from ._assign import try_with_facts
 
         return try_with_facts(self, facts, *changes)
 

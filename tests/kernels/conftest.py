@@ -4,4 +4,3 @@
 """Each test in one member cache (``support.member_cache``)."""
 
 from support.member_cache import _member_cache, pytest_sessionfinish  # noqa: F401
-from support.space_checks import index_path, pytest_terminal_summary  # noqa: F401

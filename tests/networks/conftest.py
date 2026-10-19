@@ -13,4 +13,3 @@ from support.fixtures import (  # noqa: F401
     tfc_streamlined,
 )
 from support.member_cache import _member_cache, pytest_sessionfinish  # noqa: F401
-from support.space_checks import index_path, pytest_terminal_summary  # noqa: F401

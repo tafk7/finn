@@ -16,7 +16,6 @@ from __future__ import annotations
 from typing import Any, cast
 
 import numpy as np
-import pytest
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
@@ -32,9 +31,6 @@ from finn.kernels.explore import Seam
 from finn.kernels.network import Fact, Interface
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
-
-# Each test runs with the readers index used for every cache, then for none: the same answers.
-pytestmark = pytest.mark.usefixtures("index_path")
 
 D, ROWS = 16, 4
 

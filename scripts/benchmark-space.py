@@ -741,7 +741,7 @@ def markdown(report: dict[str, object]) -> str:
         f"Recorded {report['recorded_at_utc']}; suite `{report['suite']}`. "
         "All semantic work assertions passed.",
         "",
-        f"Python: `{environment['python']}`; greenlet `{environment['greenlet']}`.",
+        f"Python: `{environment['python']}`.",
         f"Platform: `{environment['platform']}`.",
         f"Source revision: `{environment['repository']['revision']}`; "
         f"dirty: `{environment['repository']['dirty']}`.",
@@ -892,7 +892,7 @@ def markdown(report: dict[str, object]) -> str:
         "Timings are observations on this machine, not CI thresholds. No cross-snapshot cache "
         "sharing is assumed. Runtime/kernel subprocess RSS includes the interpreter, imports, "
         "prepared definitions and native allocations. Its ordinary process peak is captured "
-        "before the separate tracing run; it is not an attribution of all bytes to greenlets. "
+        "before the separate tracing run; it is not an attribution of all bytes to the engine. "
         "Current RSS can stay high after objects are reclaimed because allocators retain pages. "
         "Weak-reference assertions establish configuration/payload reclamation, not complete "
         "release of the process resident set. Deep scope names retain their existing storage cost.",
@@ -967,7 +967,6 @@ def main() -> None:
             "platform": platform.platform(),
             "machine": platform.machine(),
             "module": "finn.core.space",
-            "greenlet": importlib.import_module("greenlet").__version__,
             "repository": repository_state(root),
             "space_source_sha256": source_digest(Path(api.__file__).parent),
             "kernel_source_sha256": source_digest(root / "src/finn/kernels"),

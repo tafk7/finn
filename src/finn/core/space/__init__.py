@@ -4,9 +4,7 @@
 
 from . import inspection
 from ._configuration import BoundDecision, BoundValue, Space
-from ._execution import (
-    NativeEvaluationError,
-)
+from ._failure import NativeEvaluationError
 from .compiler import Model, design_space
 from .declarations import (
     Const,

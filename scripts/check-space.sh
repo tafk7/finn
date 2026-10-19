@@ -14,17 +14,13 @@ gate_pytest tests/core/space
 # (tests/support/refusals.py), which every layer's tests use, the two cores the engine's tests
 # share (tests/support/space_cores.py), the chain two engine tests walk
 # (tests/support/space_pipeline.py), the walk an engine test and a kernel test share
-# (tests/support/space_walk.py), the cache the tests install and the fixture and summary that go with it
-# (tests/support/checked_cache.py, space_checks.py),
-# and the pre-commit check every gate's gate_ruff runs, are
+# (tests/support/space_walk.py), and the pre-commit check every gate's gate_ruff runs, are
 # checked with the lowest layer.
 gate_ruff src/finn/core/reporting tests/core/reporting src/finn/core/space tests/core/space \
     tests/support/layering.py tests/support/refusals.py tests/support/value_classes.py \
     tests/support/space_cores.py tests/support/space_pipeline.py tests/support/space_walk.py \
-    tests/support/checked_cache.py tests/support/space_checks.py \
     scripts/_gate_precommit.py
 gate_mypy -p finn.core.reporting -p finn.core.space
 gate_mypy tests/core/reporting tests/core/space tests/support/layering.py \
     tests/support/refusals.py tests/support/value_classes.py tests/support/space_cores.py \
-    tests/support/space_pipeline.py tests/support/space_walk.py tests/support/checked_cache.py \
-    tests/support/space_checks.py
+    tests/support/space_pipeline.py tests/support/space_walk.py

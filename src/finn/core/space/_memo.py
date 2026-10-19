@@ -6,7 +6,7 @@ authored functions by what they read.
 An evaluation records which choices and facts it read as a **read set**, a bit set
 over the model's choices (``decision`` nodes) and facts (root ``param`` nodes). A bit
 is allocated the first time a node is read or changed (``BitTable``), so a model pays
-only for the choices and facts it touches.
+only for the choices and facts it reads or changes.
 
 An authored function is pure: it answers from what it reads alone. So its answer is
 kept across every world of the model (``Memo``): an explicit function by the answers

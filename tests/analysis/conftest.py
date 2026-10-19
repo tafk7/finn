@@ -8,4 +8,3 @@ from __future__ import annotations
 
 from support.fixtures import ip_store  # noqa: F401
 from support.member_cache import _member_cache, pytest_sessionfinish  # noqa: F401
-from support.space_checks import index_path, pytest_terminal_summary  # noqa: F401

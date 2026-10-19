@@ -92,7 +92,7 @@ from .results import (
     owned_result,
     reject,
 )
-from .semantics import equal
+from .semantics import equal, recognize
 from .semantics import snapshot as snapshot_value
 
 if TYPE_CHECKING:
@@ -474,11 +474,23 @@ def _refused_view(entry: Entry) -> bool:
 
 
 def _same_value(node: Node, left: object, right: object) -> bool:
+    """Whether two values of ``node`` are equal by its semantics, each compared as a
+    detached copy (equality may not change a held value)."""
     if left is right:
         return True
-    if node.semantics is None:
+    semantics = node.semantics
+    if semantics is None:
         return False
-    return equal(node.semantics, left, right, owner=node.owner, role="early cutoff")
+    role = "early cutoff"
+    owner = node.owner
+    if not (
+        recognize(semantics, left, owner=owner, role=role)
+        and recognize(semantics, right, owner=owner, role=role)
+    ):
+        return False
+    left = snapshot_value(semantics, left, owner=owner, role=role)
+    right = snapshot_value(semantics, right, owner=owner, role=role)
+    return equal(semantics, left, right, owner=owner, role=role)
 
 
 # -- answers ----------------------------------------------------------------------------
@@ -1357,20 +1369,15 @@ def _listed(
     if held is not None:
         evaluator.counters.hit("domain listing")
         return held.outcome.result, reads
-    arguments = _domain_values(world, node, answers)
     evaluator.counters.call("domain listing")
-    keywords = {"semantics": semantics, "owner": node.owner}
-    enumerated = _authored(
-        world, Call(node.owner, "domain enumeration"), domain.enumerate, (arguments,), keywords
-    )
-    listed = cast(QueryResult[object], cast(_Returned, enumerated).value)
+    listed = _enumerate(world, node, answers)
     if isinstance(listed, Available) and domain._finite_values is None:
         kept = _authored(
             world,
             Call(node.owner, "domain membership"),
             _listed_members,
-            (domain, listed.value, arguments),
-            keywords,
+            (domain, listed.value, _domain_values(world, node, answers)),
+            {"semantics": semantics, "owner": node.owner},
         )
         listed = Available(cast(_Returned, kept).value)
     evaluator.memo.keep_explicit(node.index, "listing", answers, Called(listed))
@@ -1410,6 +1417,16 @@ def _enumerated(world: World, node: Node) -> QueryResult[object]:
         return blocked
     if domain.candidates is None:
         return Available(None)
+    return _enumerate(world, node, answers)
+
+
+def _enumerate(
+    world: World, node: Node, answers: tuple[QueryResult[object], ...]
+) -> QueryResult[object]:
+    """A domain's enumeration on its inputs' answers (each available), memoized on them:
+    what ``candidates()`` answers, and the listing filters."""
+    domain, semantics = node.domain, node.semantics
+    assert domain is not None and semantics is not None
     evaluator = world.evaluator
     held = evaluator.memo.explicit(node.index, "enumeration", answers)
     if held is not None:

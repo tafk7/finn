@@ -36,10 +36,6 @@ import random
 from support.member_cache import _member_cache, pytest_sessionfinish  # noqa: F401
 from support.rng_seed import seed_from_nodeid
 
-# Every Space snapshot's cache refuses what the engine's rule forbids, and a test may take
-# the index path (support.space_checks).
-from support.space_checks import index_path, pytest_terminal_summary  # noqa: F401
-
 try:
     import torch
 except ImportError:

@@ -471,9 +471,10 @@ class _Allocation:
         self.table.scopes = tuple(draft.freeze() for draft in self.table.drafts)
 
     def validity_pieces(self) -> None:
-        """Each scope's validity pieces: its constraints and its Decisions (their own
-        checks), in node order, then each scope it places (its validity), in placement
-        order: a child node, or a candidate of a Decision over nodes."""
+        """Each scope's validity pieces: its constraints and its Decisions (each a piece
+        only where its domain lists no value, or its guard is refused), in node order,
+        then each scope it places (its validity), in placement order: a child node, or a
+        candidate of a Decision over nodes."""
         nodes, drafts = self.table.nodes, self.table.drafts
         own: dict[int, list[int]] = {draft.index: [] for draft in drafts}
         for node in nodes:

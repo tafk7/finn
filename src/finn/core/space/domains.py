@@ -4,12 +4,11 @@
 """Decision membership and optional enumeration with explicit dependencies.
 
 A domain states a Decision's values and nothing else: its membership and its
-enumeration read only the domain's own inputs, and a choice's own check is its
-domain alone. A listed domain lists all its values: each listed value is checked
-by membership too (one it rejects is no case), and an empty list means none. A
-rule linking a value to anything else (``ultra`` needs UltraRAM) is a constraint
-of the Space that owns the choice, which forcing reads for each case
-(``finn.core.space._forcing``).
+enumeration read only the domain's own inputs, and assigning a value checks it
+against the domain alone (its type check). A listed domain lists all its values:
+each listed value is checked by membership too (one it rejects is not listed), and an
+empty list means none. A rule linking a value to anything else (``ultra`` needs
+UltraRAM) is a constraint of the Space that owns the choice.
 
 A domain is **ordered** when its cases have an order by construction, which its
 enumeration follows: the divisors of an extent ascending, an integer range. A

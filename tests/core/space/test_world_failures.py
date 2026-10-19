@@ -22,8 +22,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from core.space._native_support import source_line
-from core.space._world_support import node, open_world, successor
+from core.space._world_support import node, open_world, source_line, successor
 from finn.core.space import (
     Available,
     Decision,

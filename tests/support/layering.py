@@ -114,8 +114,8 @@ LAYERS: tuple[Layer, ...] = (
     # What a run says: its findings and the refusals that carry them, its log and its
     # manifest. The standard library only, below the engine.
     Layer("reporting", ("finn.core.reporting",), (), (), "tests/core/reporting"),
-    # The generic Space engine: the standard library and its native dependency.
-    Layer("space", ("finn.core.space",), ("reporting",), ("greenlet",), "tests/core/space"),
+    # The generic Space engine: the standard library only.
+    Layer("space", ("finn.core.space",), ("reporting",), (), "tests/core/space"),
     # Canonical logical values: QONNX's datatypes and their ranges (a tensor's range is
     # part of its datatype fact, qonnx.core.ranges) and numpy, no engine; the findings
     # their refusals carry.
@@ -434,8 +434,6 @@ LAYERS: tuple[Layer, ...] = (
         "tests.core.space",
         (
             "core.space",
-            "support.checked_cache",
-            "support.space_checks",
             "support.space_cores",
             "support.space_pipeline",
             "support.space_walk",

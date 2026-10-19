@@ -4,8 +4,9 @@
 
 A change is **assignment**. In order:
 
-1. **Identities.** Every item names a choice of this configuration, once (a ``Change``
-   of this very configuration); facts name root formals, once. A malformed or foreign
+1. **Identities.** Every item names a choice of this configuration, once (a ``Change``,
+   a ``{reference: value}`` mapping, or a keyword of the scope's own choices); facts
+   name root formals, once. A malformed or foreign
    item is a ``RequestError``, before anything is evaluated.
 2. **Recognition**, then **snapshot**: every supplied value is recognized by its
    semantics, all before any is frozen (``_state.prepare``).
@@ -29,15 +30,21 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Any, Literal, TypeVar, cast
 
+from ._configuration import Space
+from ._failure import driver_only
 from ._state import State, prepare, presence
 from ._world import FLATTEN, World, type_check
-from .edits import Change, ChangeOutcome
-from .errors import RequestError
+from .edits import Change, ChangeOutcome, ChangeRequest, ConfigurationResult
+from .errors import ConfigurationError, RequestError
 from .ir import Node, NodeId
+from .occurrence import attach, decision_index, state
 from .results import Available, Inapplicable, QueryResult, Unresolved
 from .semantics import equal, snapshot
+
+T = TypeVar("T")
+S = TypeVar("S", bound=Space)
 
 _MISSING = object()
 
@@ -257,4 +264,125 @@ def assign(
         return Assigned(State(current.model, world), tuple(published))
 
 
-__all__ = ["Assigned", "assign", "check", "normalize", "placed"]
+# -- the configuration's change methods ------------------------------------------------
+
+
+def change(point: Space, reference: object, value: T) -> Change[T]:
+    driver_only("change construction")
+    current = state(point)
+    index = decision_index(point, reference)
+    return Change(current, current.linked.nodes[index].scope, index, value)
+
+
+def clear(point: Space, reference: object) -> Change[object]:
+    driver_only("clear construction")
+    current = state(point)
+    index = decision_index(point, reference)
+    return Change(current, current.linked.nodes[index].scope, index, remove=True)
+
+
+def _keyword_change(point: Space, name: str, value: object) -> Change[object]:
+    current = state(point)
+    scope = current.linked.scopes[point._scope]
+    index = scope.named_members.get(name)
+    if index is None:
+        raise RequestError(f"unknown direct choice {name!r}")
+    node = current.linked.nodes[index]
+    if node.kind != "decision" or node.scope != point._scope:
+        raise RequestError(f"{node.key} is not a direct owned choice in this scope")
+    return Change(current, node.scope, index, value)
+
+
+def _requests(
+    point: Space, items: tuple[ChangeRequest | Mapping[Any, object], ...]
+) -> list[Change[object]]:
+    """Expand ``{reference: value}`` mappings in order; Change objects pass through."""
+    current = state(point)
+    result: list[Change[object]] = []
+    for item in items:
+        if isinstance(item, Mapping):
+            for reference, value in item.items():
+                index = decision_index(point, reference)
+                result.append(Change(current, current.linked.nodes[index].scope, index, value))
+        else:
+            result.append(item)
+    return result
+
+
+def _fact_nodes(point: Space, facts: Mapping[Any, object]) -> dict[NodeId, object]:
+    """``{formal: value}`` by node: each formal a root formal the model exposes."""
+    current = state(point)
+    nodes: dict[NodeId, object] = {}
+    for reference, value in facts.items():
+        index = current.model.resolve(point._scope, reference)
+        if index not in current.linked.parameters:
+            raise RequestError(f"{current.linked.nodes[index].key} is not an exposed parameter")
+        if index in nodes:
+            raise RequestError(f"duplicate fact for {current.linked.nodes[index].key}")
+        nodes[index] = value
+    return nodes
+
+
+def _report(point: S, assigned: Assigned) -> ConfigurationResult[S]:
+    """A change's report: the configuration it publishes (the receiver where it changes
+    nothing or is refused), and each item's outcome."""
+    if assigned.state is None:
+        return ConfigurationResult(point, False, assigned.outcomes)
+    if assigned.state is state(point):
+        return ConfigurationResult(point, True, assigned.outcomes)
+    return ConfigurationResult(
+        cast(S, attach(assigned.state, point._scope)), True, assigned.outcomes
+    )
+
+
+def try_with_choices(
+    point: S, /, *changes: ChangeRequest | Mapping[Any, object], **choices: object
+) -> ConfigurationResult[S]:
+    """Set, replace and clear choices as one batch, over the same facts."""
+    driver_only("configuration replacement")
+    keyword_changes = tuple(_keyword_change(point, name, value) for name, value in choices.items())
+    requests = (*_requests(point, changes), *keyword_changes)
+    return _report(point, assign(state(point), {}, requests))
+
+
+def try_with_facts(
+    point: S, facts: Mapping[Any, object], /, *changes: ChangeRequest | Mapping[Any, object]
+) -> ConfigurationResult[S]:
+    """Other values for root formals, and the choices ``changes`` make, as one batch:
+    every stored value is checked again against its domain over the new facts."""
+    driver_only("configuration replacement")
+    given = _fact_nodes(point, facts)
+    return _report(point, assign(state(point), given, _requests(point, changes)))
+
+
+def with_choices(
+    point: S, /, *changes: ChangeRequest | Mapping[Any, object], **choices: object
+) -> S:
+    report = try_with_choices(point, *changes, **choices)
+    if not report.accepted:
+        raise ConfigurationError(report)
+    return report.instance
+
+
+def with_facts(
+    point: S, facts: Mapping[Any, object], /, *changes: ChangeRequest | Mapping[Any, object]
+) -> S:
+    report = try_with_facts(point, facts, *changes)
+    if not report.accepted:
+        raise ConfigurationError(report)
+    return report.instance
+
+
+__all__ = [
+    "Assigned",
+    "assign",
+    "change",
+    "check",
+    "clear",
+    "normalize",
+    "placed",
+    "try_with_choices",
+    "try_with_facts",
+    "with_choices",
+    "with_facts",
+]
