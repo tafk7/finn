@@ -3,8 +3,7 @@
 """Every Space operation must restore the caller's evaluation context (no authored call
 left active); every memo hit runs its function again and compares (the purity check),
 but in a test that counts the calls the memo saves (``purity_unchecked``, from
-``support.purity``); and the reference model's comparisons against the engine sit out
-until the model rewrite's adapter lands."""
+``support.purity``)."""
 
 from collections.abc import Iterator
 
@@ -13,16 +12,6 @@ from support.purity import purity_unchecked  # noqa: F401
 
 from finn.core.space._failure import current
 from finn.core.space._world import check_purity
-
-# The reference harness compares the engine through an adapter that still reads the removed
-# forcing and unchecked answers; the model's rewrite brings the adapter to the new engine.
-collect_ignore = [
-    "test_reference_cases.py",
-    "test_reference_rules.py",
-    "test_reference_scopes.py",
-    "test_reference_harness.py",
-    "test_reference_walks.py",
-]  # until the model rewrite's adapter lands on the joint tree
 
 
 @pytest.fixture(autouse=True)
