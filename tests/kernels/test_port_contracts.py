@@ -320,11 +320,12 @@ def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():
         ("kernel-extents", "c is 4 (lhs axis 1) and 3 (rhs axis 0)")
     }
     # An operand of another element: its port carries its tensor's, and the kernel
-    # refuses the pair: its PE, set, is refused by that rule.
+    # refuses the pair on its facts, its PE still open; setting PE breaks no rule that
+    # was not broken before, so it is accepted, and the kernel stays refused.
     other = eltwise_between((4,), rhs_dtype="INT3", pe=None)
     assert other.member("add").rhs.element == ScalarEncoding(DataType["INT3"])
+    pair = {("eltwise-integer-pair", "implementation_supported")}
+    assert {(f.code, f.owner) for f in other.checked(["add"])[("add", "")]} == pair
     trial = other.trial(keyed({"add.pe": 2}))
-    assert not trial.accepted
-    assert {(f.code, f.owner) for why in trial.refused.values() for f in why} == {
-        ("eltwise-integer-pair", "implementation_supported")
-    }
+    assert trial.accepted
+    assert {(f.code, f.owner) for f in trial.network.checked(["add"])[("add", "")]} == pair

@@ -15,7 +15,7 @@ from support.kernel_specs.eltwise import computed
 
 from finn.core.space import (
     Available,
-    ConfigurationResult,
+    Decision,
     Param,
     Rejected,
     Space,
@@ -27,6 +27,7 @@ from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.configure import refusal
 from finn.kernels.eltwise import EltwiseKernel
 from finn.platform.capabilities import DspBlock, Platform
 from kernels.sweeps import eltwise_numeric
@@ -77,23 +78,22 @@ def test_eltwise_rounds_its_scale_to_binary32_and_lists_its_sources_in_order() -
 def test_eltwise_refuses_a_nonfinite_or_unrepresentable_native_scale(
     scale: float,
 ) -> None:
-    """The scale is refused on its own value; setting PE is refused through it, at the
-    origin, nothing standing (the kernel's rules read PE first)."""
+    """The scale is refused on its own value, and the kernel through it, at the origin,
+    its PE still open (the kernel's rule reads facts alone). Setting PE breaks no rule
+    that was not broken before, so it is accepted, and the kernel stays refused."""
     point = eltwise(scale=scale, pe=None)
     assert isinstance(point.query(EltwiseKernel.native_scale), Rejected)
+    assert isinstance(dict(inspection.states(point))["pe"], inspection.Open)
+    assert refused_by(point) == {("native_scale", "eltwise-scale")}
     report = point.try_with_choices(pe=2)
-    assert not report.accepted
-    assert broken(report) == [("native_scale", (), {"eltwise-scale"})]
+    assert report.accepted
+    assert refused_by(report.instance) == {("native_scale", "eltwise-scale")}
 
 
-def broken(
-    report: ConfigurationResult[EltwiseKernel],
-) -> list[tuple[str, tuple[str, ...], set[str]]]:
-    """Each rule a refused change breaks, with the choices standing in its way and its codes."""
-    return [
-        (rule.rule, rule.standing, {finding.code for finding in rule.result.findings})
-        for rule in report.broken
-    ]
+def refused_by(point: EltwiseKernel) -> set[tuple[str, str]]:
+    """The owner and code of each finding that refuses ``point``'s configuration (its
+    validity's false pieces)."""
+    return {(finding.owner, finding.code) for finding in refusal(inspection.validity(point))}
 
 
 @pytest.mark.parametrize(
@@ -108,13 +108,33 @@ def broken(
     ),
 )
 def test_eltwise_refuses_unsupported_profiles(profile: dict[str, Any], code: str) -> None:
-    """A profile the RTL does not implement: setting PE on it is refused by the kernel's
-    rule, nothing standing; a PE outside its domain by the domain."""
+    """A profile the RTL does not implement is refused on its facts, its PE still open:
+    the kernel's rule reads facts alone, so the kernel reads refused from the start,
+    naming it. Setting PE breaks no rule that was not broken before, so it is accepted,
+    and the kernel stays refused by the same rule; a PE outside its domain is refused by
+    the domain."""
     with pytest.raises(ValueError, match="domain-membership"):
         eltwise(pe=0)
-    report = eltwise(pe=None, **profile).try_with_choices(pe=2)
-    assert not report.accepted
-    assert broken(report) == [("implementation_supported", (), {code})]
+    point = eltwise(pe=None, **profile)
+    assert isinstance(dict(inspection.states(point))["pe"], inspection.Open)
+    assert inspection.validity(point).status == "refused"
+    # BIPOLAR is no ordinary integer either: operands_supported refuses it beside.
+    assert ("implementation_supported", code) in refused_by(point)
+    report = point.try_with_choices(pe=2)
+    assert report.accepted
+    assert refused_by(report.instance) == refused_by(point)
+
+
+def test_eltwise_pe_is_a_divisor_of_the_channels_its_parameter_holds() -> None:
+    """PE's domain lists the channels' divisors, and admits none past the RTL's PE
+    parameter, a 32-bit integer: a type, not a rule."""
+    point = eltwise(pe=None)
+    (pe,) = inspection.viable(point, [EltwiseKernel.pe])
+    assert pe.values is not None and [item.value for item in pe.values] == [1, 2, 3, 6]
+    declared = EltwiseKernel.__dict__["pe"]
+    assert isinstance(declared, Decision)
+    assert declared.domain.accepts(candidate=2**31, extent=2**32) is True
+    assert declared.domain.accepts(candidate=2**32, extent=2**33) is False
 
 
 def test_eltwise_result_is_known_while_an_optional_parent_platform_is_unset() -> None:
