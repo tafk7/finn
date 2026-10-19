@@ -302,11 +302,12 @@ def test_validity_waits_on_a_fact_a_rule_three_deep_reads() -> None:
     NESTED.start({"plain_ok": True, "serial_ok": True}, {**INNER_PACKED, PE: 4}).check_validity()
 
 
-# An inner selector inside a case of an outer one: ``inner`` set to ``y`` and a choice under
-# its other case ``x`` set too, both while ``outer`` is open (both wait on it). New facts then
+# An inner selector inside a case of an outer one: ``inner`` set to ``y`` while ``outer`` is
+# open (it waits on it), and a choice under its other case ``x`` set too. New facts then
 # leave neither of ``outer``'s cases' rules holding: no case is selected, so the change is
-# accepted and both still wait. The choice under ``x`` is dormant throughout: ``inner`` holds
-# ``y``. Selecting ``a`` brings ``inner`` into play.
+# accepted and ``inner`` still waits. The choice under ``x`` is dormant throughout, waiting on
+# nothing: ``inner`` holds ``y``, and presence is Kleene's AND over the path (§ 16.21).
+# Selecting ``a`` brings ``inner`` into play.
 
 OUTER = Case(
     "an inner selector under an open outer one",
@@ -353,6 +354,13 @@ def test_new_facts_no_case_of_an_open_selector_holds_under_are_accepted() -> Non
 @expected("outer-select")
 def test_selecting_the_outer_case_brings_the_inner_selector_into_play() -> None:
     OUTER.start({"on": 2}, INNER_SET).check_change(Change(commit={"outer": "a"}))
+
+
+@expected("nested-unselected")
+def test_a_choice_under_the_inner_case_not_selected_is_dormant_while_the_outer_is_open() -> None:
+    """``x``'s presence is unknown (``outer`` open) and false (``inner`` holds ``y``): Kleene's
+    AND over the path is false (§ 16.21), so its stored choice is dormant, waiting on nothing."""
+    OUTER.start({"on": 2}, INNER_SET).check_state("outer.a.inner.x.c")
 
 
 # -- a case putting a selector in scope whose every case the facts refuse --------------------------

@@ -196,6 +196,15 @@ ROWS: tuple[Row, ...] = (
         "viable-per-choice",
     ),
     Row(
+        "waiting-reader-blockers",
+        _CORE,
+        "what reads a stored value waiting on a missing fact waits on that fact, not on the "
+        "choice: a stored choice is never a blocker (reading 14)",
+        f"{_CASES}::test_a_rule_over_a_choice_waiting_on_a_fact_waits_on_the_fact",
+        "waiting-blocker",
+        "today the rule waits on the choice",
+    ),
+    Row(
         "case-rule-commit",
         _CORE,
         "a choice set under an open selector whose case's rule refuses it is accepted, waiting: "
@@ -536,6 +545,17 @@ ROWS: tuple[Row, ...] = (
         "its other case stays dormant, not refused as inactive",
         f"{_SCOPES}::test_selecting_the_outer_case_brings_the_inner_selector_into_play",
         "inactive-refused",
+    ),
+    Row(
+        "nested-unselected",
+        _CORE,
+        "a case its stored inner selector does not select is absent while the outer selector is "
+        "open (§ 16.21: presence is Kleene's AND over the path): its stored choices dormant, its "
+        "unset ones absent, its rules not applying; nothing waits on the outer selector",
+        f"{_SCOPES}::test_a_choice_under_the_inner_case_not_selected_is_dormant_while_the_outer_"
+        "is_open",
+        "unselected-under-open",
+        "today the stored choice waits on the outer selector",
     ),
     Row(
         "look-opened",

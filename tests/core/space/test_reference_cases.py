@@ -510,6 +510,27 @@ def test_the_fact_a_waiting_choice_lacks_checks_its_type_when_it_comes() -> None
     ON_A_FACT.start({}, {"pe": 3}).check_change(Change(facts={"width": 8}))
 
 
+# A rule over such a choice: the choice waits on the fact, never on itself (reading 14), so
+# what reads it waits on the fact too, not on the choice.
+
+FACT_RULE = Case(
+    "a rule over a choice waiting on a fact",
+    Space(
+        ("width",),
+        Scope(
+            "",
+            choices=(Choice("pe", computed(lambda read: divisors(read["width"]), ("width",))),),
+            constraints=(Constraint("few", ("pe",), lambda read: read["pe"] <= 4, "many-pe"),),
+        ),
+    ),
+)
+
+
+@expected("waiting-reader-blockers")
+def test_a_rule_over_a_choice_waiting_on_a_fact_waits_on_the_fact() -> None:
+    FACT_RULE.start({}, {"pe": 3}).check_rule("few")
+
+
 # A stored choice of a selector's case that a rule of the case refuses: set under the open
 # selector, it waits, and the rule waits with it. Selecting its case makes the rule newly false.
 

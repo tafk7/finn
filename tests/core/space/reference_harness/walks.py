@@ -1257,6 +1257,8 @@ CLASSIFIED = (
     "assignment-type-check",
     "provisional-code",
     "legacy-validity",
+    "unselected-under-open",
+    "waiting-blocker",
 )
 
 
@@ -1281,6 +1283,9 @@ _PROVISIONAL = {"domain-empty", "guard-refused", "decision-no-viable-case"}
 #: what an answer that is still open reads as, on either side
 _OPEN = {"unresolved", "unknown", "open", "waiting"}
 
+#: what the model answers out of play: a choice, a value, a rule
+_OUT_OF_PLAY = {"absent", "dormant", "inapplicable"}
+
 
 def _verdict(form: Form) -> str:
     kind = getattr(form, "kind", None)
@@ -1292,15 +1297,29 @@ def _codes(form: Form) -> frozenset[tuple[str, str]]:
     return found
 
 
-def classify(expected: Form, engine: Form, scope: model.Presence | None = None) -> str:
+def _blockers(form: Form) -> frozenset[str]:
+    found: frozenset[str] = getattr(form, "blockers", frozenset())
+    return found
+
+
+def classify(
+    expected: Form,
+    engine: Form,
+    scope: model.Presence | None = None,
+    waiting: frozenset[str] = frozenset(),
+) -> str:
     """The row kind a disagreement most plausibly belongs to, by one simple rule on the
-    two answers (and, for a rule, ``scope``: its scope's presence in the model), or
-    ``unclassified``: a tally, never a filter. The rules, in order: the engine's own legacy
-    forms; a rule the model leaves out of play under a refused guard that the engine finds
-    false (``refused-guard``); a possible-values answer; a change by its refusals; the
-    provisional codes; the engine deciding what the model leaves open (forcing gave it a
-    value, ``forced-value``); a refusal where the model waits (a selector forcing refused,
-    ``no-viable-case``)."""
+    two answers (and, for a rule, ``scope``: its scope's presence in the model; ``waiting``:
+    the choices the model reports waiting), or ``unclassified``: a tally, never a filter.
+    The rules, in order: the engine's own legacy forms; a rule the model leaves out of play
+    under a refused guard that the engine finds false (``refused-guard``); a possible-values
+    answer; a change by its refusals; the provisional codes; the engine deciding what the
+    model leaves open (forcing gave it a value, ``forced-value``); a refusal where the model
+    waits (a selector forcing refused, ``no-viable-case``); a rule both sides leave unknown
+    under a selector the model leaves open, waiting on nothing the model names (forcing
+    selected its case, ``forced-value``); what the model has out of play the engine leaves
+    open (an unselected case under an open selector, ``unselected-under-open``); both sides
+    open, the engine waiting on a choice the model reports waiting (``waiting-blocker``)."""
     if isinstance(expected, StateForm) and isinstance(engine, StateForm):
         if engine.kind == "forced":
             return "forced-value"
@@ -1336,7 +1355,31 @@ def classify(expected: Form, engine: Form, scope: model.Presence | None = None) 
         return "no-viable-case"
     if _verdict(expected) in _OPEN and _verdict(engine) not in _OPEN:
         return "forced-value"
+    if (
+        isinstance(expected, RuleForm)
+        and isinstance(engine, RuleForm)
+        and (expected.kind, engine.kind, scope) == ("unknown", "unknown", model.Presence.UNKNOWN)
+        and not expected.blockers & engine.blockers
+    ):
+        return "forced-value"
+    if _verdict(expected) in _OUT_OF_PLAY and _verdict(engine) in _OPEN:
+        return "unselected-under-open"
+    if (
+        _verdict(expected) in _OPEN
+        and _verdict(engine) in _OPEN
+        and (_blockers(engine) - _blockers(expected)) & waiting
+    ):
+        return "waiting-blocker"
     return UNCLASSIFIED
+
+
+def waiting_choices(forms: Mapping[Question, Form]) -> frozenset[str]:
+    """The choices whose state in ``forms`` is waiting."""
+    return frozenset(
+        path
+        for (what, path), form in forms.items()
+        if what == "state" and isinstance(form, StateForm) and form.kind == "waiting"
+    )
 
 
 # --- the walk -------------------------------------------------------------------------------------
@@ -1442,10 +1485,12 @@ class _Walk:
         expected: Form,
         engine: Form,
         scope: model.Presence | None = None,
+        waiting: frozenset[str] = frozenset(),
     ) -> None:
         """Count a disagreement with the engine, or fail the walk on it (strict). ``scope``:
-        for a rule, its scope's presence in the model."""
-        kind = classify(expected, engine, scope)
+        for a rule, its scope's presence in the model; ``waiting``: the choices the model
+        reports waiting."""
+        kind = classify(expected, engine, scope, waiting)
         if self.strict:
             self.fail(
                 "disagreement",
@@ -1520,6 +1565,7 @@ class _Walk:
         engine: Mapping[Question, Form],
     ) -> None:
         self.tally.compared += 1
+        waiting = waiting_choices(forms)
         for question in self.engine_asked:
             if not agrees(forms[question], engine[question]):
                 what, path = question
@@ -1528,7 +1574,9 @@ class _Walk:
                     if what == "rule"
                     else None
                 )
-                self.disagree(what, ask(question), forms[question], engine[question], scope)
+                self.disagree(
+                    what, ask(question), forms[question], engine[question], scope, waiting
+                )
 
     def engine_change(self, point: Point, edit: model.Change) -> tuple[ChangeForm, Point | None]:
         """``edit`` on the engine; its permanent check: as on a configuration built from
@@ -1569,10 +1617,12 @@ class _Walk:
         found = order_problems(before.engine, engine, edit.commit)
         for question, move in sorted(found.items()):
             # told by the answers that disagree: after the step, or else before it
-            pair = (forms[question], engine[question])
+            pair, waiting = (forms[question], engine[question]), waiting_choices(forms)
             if agrees(*pair):
                 pair = (before.forms[question], before.engine[question])
-            self.disagree("refinement", f"{ask(question)} moves down: {move}", *pair)
+                waiting = waiting_choices(before.forms)
+            label = f"{ask(question)} moves down: {move}"
+            self.disagree("refinement", label, *pair, waiting=waiting)
 
     # -- drawing
 
@@ -1877,5 +1927,6 @@ __all__ = [
     "questions",
     "seeds",
     "table",
+    "waiting_choices",
     "walk",
 ]
