@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TypeVar, cast, overload
+from typing import TYPE_CHECKING, TypeVar, cast, overload
 
 from . import _execution, _runtime
 from ._collapse import guard_implies
@@ -37,8 +37,22 @@ from .results import (
 )
 from .semantics import recognize, snapshot, unrecognized
 
+if TYPE_CHECKING:
+    from ._world import MethodReader
+
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
+
+
+def _core_reader(point: Space) -> MethodReader | None:
+    """The evaluation core's method reader, where it is ``point``'s state: a method
+    running on the core (``_world``) reads through the world it runs in."""
+    current = vars(point).get("_state")
+    if isinstance(current, Snapshot):
+        return None
+    from ._world import MethodReader
+
+    return current if isinstance(current, MethodReader) else None
 
 
 def state(point: Space) -> Snapshot:
@@ -148,6 +162,9 @@ def query(point: Space, reference: object) -> QueryResult[object]:
 def present(point: Space, node: object) -> bool:
     """Whether a node, or a value input, is present, read like a value (undecided presence
     raises)."""
+    reader = _core_reader(point)
+    if reader is not None:  # a method on the evaluation core reads through its world
+        return reader.present(point, node)
     target = _node_scope(point, node)
     if target is None:
         if isinstance(node, Param):
@@ -239,6 +256,9 @@ def _unsupplied(answer: Unresolved) -> bool:
 
 
 def read_value(point: Space, reference: ValueRef[T] | View[T]) -> T:
+    reader = _core_reader(point)
+    if reader is not None:  # a method on the evaluation core reads through its world
+        return cast(T, reader.read_value(point, reference))
     active = _execution.current()
     try:
         return _read_value(point, reference)
@@ -351,6 +371,9 @@ def bind_field(point: Space, reference: ValueRef[T] | View[T]) -> BoundValue[T] 
 
 
 def root(point: Space) -> Space:
+    reader = _core_reader(point)
+    if reader is not None:  # a method on the evaluation core reads through its world
+        return reader.root(point)
     current = state(point)
     _execution.check_snapshot(current)
     return point if point._scope == 0 else attach(current, 0)
@@ -358,6 +381,9 @@ def root(point: Space) -> Space:
 
 def child(point: Space, record: Declaration) -> Space:
     """A child node's configuration."""
+    reader = _core_reader(point)
+    if reader is not None:  # a method on the evaluation core reads through its world
+        return reader.child(point, record)
     current = state(point)
     _execution.check_snapshot(current)
     scope = current.linked.scopes[point._scope]
@@ -381,6 +407,9 @@ def _scope_choice(current: Snapshot, scope: int, decision: object) -> Choice:
 
 def selected_candidate(point: Space, decision: Declaration) -> Space | None:
     """The configuration of the candidate a Decision over nodes selects, or None."""
+    reader = _core_reader(point)
+    if reader is not None:  # a method on the evaluation core reads through its world
+        return reader.selected_candidate(point, decision)
     current = state(point)
     _execution.check_snapshot(current)
     choice = _scope_choice(current, point._scope, decision)
@@ -393,6 +422,9 @@ def selected_candidate(point: Space, decision: Declaration) -> Space | None:
 
 def candidate(point: Space, decision: object, case: str) -> Space | None:
     """A candidate's configuration whether or not it is selected (None for a None case)."""
+    reader = _core_reader(point)
+    if reader is not None:  # a method on the evaluation core reads through its world
+        return reader.candidate(point, decision, case)
     current = state(point)
     _execution.check_snapshot(current)
     if type(case) is not str:

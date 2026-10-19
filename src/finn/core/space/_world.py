@@ -20,26 +20,60 @@ in turn.
 Authored functions are pure, so their outcomes are kept across every world of the
 model (``_memo.Memo``): an explicit function by its arguments' answers, a ``self``
 method by its traces. A ``self`` method is a plain call; its receiver reads through a
-``MethodReader`` on the world it runs in, which records each read.
+``MethodReader`` on the world it runs in, which records each read and checks it
+against the reads inferred from the method's source (``_reads``).
 
-Nothing outside this module's tests evaluates through it yet: the configuration's
-reads, changes and inspection still run on ``_runtime``.
+Each driver demand (``World.entry``) is a **run**. Its authored calls each run in a
+copy of the context the driver entered with, and fail as ``_failure`` says (the first
+failure primary, cleanup in order, failures kept for the run only). A node demanded
+while it is being evaluated is a dependency cycle. Evaluation recurses on the Python
+stack to ``DEPTH`` evaluations; past it the **depth guard** unwinds (``Deeper``), and
+the run evaluates the deep node first, then again what it abandoned: authored
+functions are pure, so one run again answers the same (it may start more than once;
+it completes once).
+
+Only its own tests evaluate through it yet: the configuration's reads, changes and
+inspection still run on ``_runtime``, and ``occurrence`` routes a receiver's reads here
+only for the methods this core runs.
 """
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from contextvars import Context, copy_context
+from dataclasses import dataclass, field
 from threading import RLock
-from typing import TYPE_CHECKING, TypeAlias, cast
+from typing import TYPE_CHECKING, TypeAlias, TypeVar, cast
 
 from finn.core.reporting.findings import Finding, FindingKind
 
+from ._collapse import guard_implies
+from ._configuration import Space
+from ._failure import (
+    ACTIVE,
+    Call,
+    CleanupFailure,
+    Failing,
+    Failure,
+    check_transformation,
+    current,
+    driver_only,
+    exception,
+    fault,
+    from_exception,
+    raise_failure,
+    remember_exception,
+    remember_failure,
+)
 from ._memo import BitTable, Counters, Memo, ReadSet, Trace
+from ._nodes import NodeDecl, unwrap
 from ._reads import ModelReads, infer
-from .errors import EvaluationError, ValueUnavailableError
+from .declarations import Param, declared_path
+from .errors import EvaluationError, RequestError, ValueUnavailableError
 from .graph import Located
-from .ir import LinkedModel, Node, NodeId, NodeKind
+from .ir import Choice, LinkedModel, Node, NodeId, NodeKind
+from .references import descend
 from .results import (
     Available,
     ConstraintAssessment,
@@ -60,12 +94,18 @@ from .semantics import equal
 from .semantics import snapshot as snapshot_value
 
 if TYPE_CHECKING:
-    from ._configuration import Space
     from .compiler import Model
+    from .domains import Domain
+    from .semantics import ValueSemantics
 
 Assessment: TypeAlias = ViewAssessment[object] | ConstraintAssessment
+T = TypeVar("T")
 
 _INAPPLICABLE = Inapplicable()
+
+# How many evaluations deep a run goes on the Python stack before the depth guard
+# unwinds it. Each level through a method's read takes about a dozen Python frames.
+DEPTH = 32
 
 # The nodes that read their own bit (a fact, a choice): they are never cut early.
 _OWN_BIT: frozenset[NodeKind] = frozenset(("param", "decision"))
@@ -106,7 +146,7 @@ class Evaluator:
     model's lock (worlds share their parents' entries and the memo, so evaluation of
     one model is serialized)."""
 
-    __slots__ = ("model", "linked", "nodes", "reads", "bits", "memo", "counters", "lock")
+    __slots__ = ("model", "linked", "nodes", "reads", "bits", "memo", "counters", "lock", "run")
 
     def __init__(self, model: Model[Space]) -> None:
         self.model = model
@@ -117,6 +157,71 @@ class Evaluator:
         self.memo: Memo[Called] = Memo()
         self.counters = Counters()
         self.lock = RLock()
+        # The run in progress (under the lock), if any.
+        self.run: _Run | None = None
+
+
+class Deeper(BaseException):
+    """The depth guard: ``node`` was demanded in ``world`` deeper than ``DEPTH``. Every
+    evaluation and call it passes through is abandoned (nothing kept); the run evaluates
+    the node first, then again what it abandoned."""
+
+    def __init__(self, world: World, node: NodeId) -> None:
+        super().__init__(node)
+        self.world = world
+        self.node = node
+
+
+_Key: TypeAlias = "tuple[World, NodeId]"
+
+
+@dataclass(slots=True, eq=False)
+class _Run:
+    """One driver demand: the context its authored calls copy, the failures met (kept
+    for this run only: a later demand runs the function again), and what is being
+    evaluated, on the Python stack (``active``) and abandoned to the run's own stack
+    (``pending``), for cycles."""
+
+    context: Context
+    failures: dict[_Key, Failure] = field(default_factory=dict)
+    active: dict[_Key, None] = field(default_factory=dict)
+    pending: dict[_Key, None] = field(default_factory=dict)
+    depth: int = 0
+
+
+def _drive(evaluator: Evaluator, demand: Callable[[], T]) -> T:
+    """Run ``demand`` (a driver's evaluation) under the model's lock: past the depth
+    guard, the deep node is evaluated from the run's own stack, then the demand again;
+    a failure is raised as its exception."""
+    driver_only("evaluation")
+    with evaluator.lock:
+        run = _Run(copy_context())
+        outer, evaluator.run = evaluator.run, run
+        failure: Failure | None = None
+        try:
+            stack: list[_Key] = []
+            while True:
+                try:
+                    if not stack:
+                        return demand()
+                    world, node = stack[-1]
+                    world._get(node)
+                except Deeper as deeper:
+                    if stack:
+                        run.pending[stack[-1]] = None
+                    stack.append((deeper.world, deeper.node))
+                    continue
+                except Failing:
+                    if not stack:
+                        raise
+                stack.pop()
+                if stack:
+                    del run.pending[stack[-1]]
+        except Failing as failing:
+            failure = failing.failure
+        finally:
+            evaluator.run = outer
+        raise_failure(failure)
 
 
 _MISSING = object()
@@ -172,33 +277,36 @@ class World:
         delta = 0
         new_facts = self.facts if facts is None else dict(facts)
         new_stored = self.stored if stored is None else dict(stored)
-        for old, new in ((self.facts, new_facts), (self.stored, new_stored)):
-            if old is new:
-                continue
-            for node, value in new.items():
-                held = old.get(node, _MISSING)
-                if held is _MISSING or not _same_value(evaluator.nodes[node], held, value):
-                    delta |= evaluator.bits.bit(node)
-                    values[node] = Available(value)
-            for node in old:
-                if node not in new:
-                    delta |= evaluator.bits.bit(node)
-                    del values[node]
+        with evaluator.lock:  # the bit table is the model's
+            for old, new in ((self.facts, new_facts), (self.stored, new_stored)):
+                if old is new:
+                    continue
+                for node, value in new.items():
+                    held = old.get(node, _MISSING)
+                    if held is _MISSING or not _same_value(evaluator.nodes[node], held, value):
+                        delta |= evaluator.bits.bit(node)
+                        values[node] = Available(value)
+                for node in old:
+                    if node not in new:
+                        delta |= evaluator.bits.bit(node)
+                        del values[node]
         return World(evaluator, new_facts, new_stored, values, self, delta)
 
     # -- evaluation ----------------------------------------------------------------------
 
     def entry(self, node: NodeId) -> Entry:
-        """``node``'s entry in this world: the one way to evaluate (from a driver)."""
-        with self.evaluator.lock:
-            return self._get(node)
+        """``node``'s entry in this world: the one way to evaluate, from a driver. A
+        failure is raised as ``NativeEvaluationError`` (or as its cancellation)."""
+        return _drive(self.evaluator, lambda: self._get(node))
 
     def result(self, node: NodeId) -> QueryResult[object]:
         return self.entry(node).result
 
     def _get(self, node: NodeId) -> Entry:
-        """``node``'s entry: held here, taken from a parent that read nothing this world
-        reads otherwise, or evaluated (with the nearest parent's entry for early cutoff)."""
+        """``node``'s entry, inside a run: held here, taken from a parent that read
+        nothing this world reads otherwise, or evaluated (with the nearest parent's entry
+        for early cutoff). A failure met in this run raises again; a node being evaluated
+        is a cycle; past ``DEPTH`` the depth guard unwinds."""
         found = self.cache.get(node)
         if found is not None:
             return found
@@ -215,8 +323,43 @@ class World:
                 previous = held
                 break
             world = world.parent
-        entry = self._evaluate(node, previous)
-        return self.cache.setdefault(node, entry)
+        run = self.evaluator.run
+        assert run is not None, "an evaluation outside a run"
+        key = (self, node)
+        failure = run.failures.get(key)
+        if failure is not None:
+            raise Failing(failure)
+        if key in run.active or key in run.pending:
+            raise Failing(self._cycle(run, node))
+        if run.depth >= DEPTH:
+            raise Deeper(self, node)
+        run.depth += 1
+        run.active[key] = None
+        outer = sys.exception()
+        try:
+            entry = self._evaluate(node, previous)
+            return self.cache.setdefault(node, entry)
+        except Deeper:
+            raise
+        except Failing as failing:
+            run.failures[key] = failing.failure
+            raise
+        except BaseException as cause:
+            spec = self.evaluator.nodes[node]
+            failure = from_exception(cause, owner=spec.owner, role=spec.kind, outer=outer)
+            run.failures[key] = failure
+            raise Failing(failure) from cause
+        finally:
+            run.depth -= 1
+            del run.active[key]
+
+    def _cycle(self, run: _Run, node: NodeId) -> Failure:
+        """A dependency cycle: ``node`` demanded while it is being evaluated."""
+        nodes = self.evaluator.nodes
+        path = [f"{nodes[index].owner} ({nodes[index].kind})" for _, index in run.pending]
+        path += [f"{nodes[index].owner} ({nodes[index].kind})" for _, index in run.active]
+        owner = nodes[node].owner
+        return Failure(EvaluationError(owner, "dependency cycle", " -> ".join((*path, owner))))
 
     def _evaluate(self, index: NodeId, previous: Entry | None) -> Entry:
         evaluator = self.evaluator
@@ -241,10 +384,14 @@ class World:
 
     def _cut(self, previous: Entry) -> Entry | None:
         """Early cutoff: ``previous`` (a parent's entry of the node) stands, the same answer
-        object, where everything its trace read answers the same here."""
+        object, where everything its trace read answers the same here. A read that fails
+        here leaves the node to be evaluated (its cleanup, if a method, runs)."""
         reads = 0
         for dependency, answer in previous.trace:
-            found = self._get(dependency)
+            try:
+                found = self._get(dependency)
+            except Failing:
+                return None
             if not self.same(dependency, found.result, answer):
                 return None
             reads |= found.reads
@@ -666,6 +813,78 @@ def _entry(called: Called, reads: ReadSet, trace: Trace) -> Entry:
     return Entry(called.result, reads, trace, called.assessment, called.own_refusal, called.via)
 
 
+@dataclass(frozen=True, slots=True)
+class _Returned:
+    value: object
+
+
+@dataclass(frozen=True, slots=True)
+class _Halted:
+    """A method halted by reads of non-values (its blocked reads' answers)."""
+
+    results: tuple[NonValue, ...]
+
+
+_ABANDONED = object()
+# Never swallowed by an abandoned call: they fail it, keeping their identity.
+_CANCELLATIONS = (KeyboardInterrupt, SystemExit, GeneratorExit)
+
+
+def _invoke(
+    call: Call,
+    function: Callable[..., object],
+    arguments: tuple[object, ...],
+    keywords: Mapping[str, object],
+) -> object:
+    """Run one authored function as ``call`` (the active call): its value, its halt, its
+    failure (sticky: one it caught still counts), or abandoned by the depth guard."""
+    token = ACTIVE.set(call)
+    call.outer = sys.exception()
+    try:
+        try:
+            value = function(*arguments, **keywords)
+        except BaseException as cause:
+            if call.abandoned is not None and not isinstance(cause, _CANCELLATIONS):
+                return _ABANDONED
+            failure = remember_exception(call, cause)
+            if failure is not None:
+                return failure
+            if call.blocked:
+                return _Halted(tuple(call.blocked.values()))
+            # A value-unavailable error raised by hand, with no read behind it.
+            error = EvaluationError(call.owner, call.role, str(cause))
+            error.__cause__ = cause
+            return remember_failure(call, Failure(error))
+        if call.abandoned is not None:
+            return _ABANDONED
+        if call.failure is not None:
+            return call.failure
+        if call.blocked:
+            return _Halted(tuple(call.blocked.values()))
+        return _Returned(value)
+    finally:
+        ACTIVE.reset(token)
+
+
+def _authored(
+    world: World,
+    call: Call,
+    function: Callable[..., object],
+    arguments: tuple[object, ...] = (),
+    keywords: Mapping[str, object] | None = None,
+) -> _Returned | _Halted:
+    """Call an authored function as ``call``, in a copy of its driver's context: a failure
+    goes on as ``Failing``, an abandoned call as the depth guard's ``Deeper``."""
+    run = world.evaluator.run
+    assert run is not None, "an authored call outside a run"
+    outcome = run.context.copy().run(_invoke, call, function, arguments, keywords or {})
+    if outcome is _ABANDONED:
+        raise cast(BaseException, call.abandoned)
+    if isinstance(outcome, Failure):
+        raise Failing(outcome)
+    return cast(_Returned | _Halted, outcome)
+
+
 def _callback(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
     """A derived value, a constraint or a view's body: its authored function."""
     if node.function is None:
@@ -694,47 +913,265 @@ def _callback(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
         for argument, answer in zip(node.arguments, answers)
     }
     evaluator.counters.call(node.kind)
-    function = node.function
-    try:
-        called = _finish(node, function(**arguments))
-    except (EvaluationError, ValueUnavailableError):
-        raise
-    except Exception as cause:
-        raise EvaluationError(node.owner, node.kind, str(cause)) from cause
+    outcome = _authored(world, Call(node.owner, node.kind), node.function, (), arguments)
+    called = _finished(node, cast(_Returned, outcome).value)
     evaluator.memo.keep_explicit(node.index, "call", tuple(answers), called)
     return _entry(called, reads, tuple(trace))
 
 
+def _finished(node: Node, returned: object) -> Called:
+    """``_finish``, where a returned value that fails as an answer is the owner's error."""
+    try:
+        return _finish(node, returned)
+    except EvaluationError:
+        raise
+    except Exception as cause:
+        raise EvaluationError(node.owner, node.kind, str(cause)) from cause
+
+
 class MethodReader:
-    """The reads of one running ``self`` method, on the world it runs in: each read is
-    evaluated there and recorded, in order, with its answer; a read of a non-value is
-    kept (``blocked``) and halts the method."""
+    """The reads of one running ``self`` method, on the world it runs in.
 
-    __slots__ = ("world", "node", "trace", "reads", "blocked", "via")
+    A method's receiver (``receiver``) reads through it: each read is evaluated in the
+    world and recorded, in order, with its answer; a read of a non-value is kept on the
+    call (``Call.blocked``) and halts the method. Every read is checked against what the
+    method's source may read (``_reads``, always on: an undeclared read is the method's
+    failure), and is refused outside the method's own call (another computation's
+    receiver, a value transformation). A read of a forwarding alias goes to its source
+    where the alias applies whenever the method does, recorded in ``via``."""
 
-    def __init__(self, world: World, node: Node) -> None:
+    __slots__ = ("world", "node", "call", "trace", "reads", "via")
+
+    def __init__(self, world: World, node: Node, call: Call) -> None:
         self.world = world
         self.node = node
+        self.call = call
         self.trace: list[tuple[NodeId, QueryResult[object]]] = []
         self.reads: ReadSet = 0
-        self.blocked: dict[NodeId, NonValue] = {}
         self.via: list[tuple[NodeId, NodeId]] = []
 
-    def answer(self, index: NodeId) -> QueryResult[object]:
-        """``index``'s answer, recorded; a non-value does not halt the method."""
-        entry = self.world._get(index)
+    # -- the read boundary -------------------------------------------------------------
+
+    def _enter(self) -> None:
+        """Any read through this reader: only from its own call, never in a value
+        transformation; an abandoned call reads nothing more."""
+        check_transformation()
+        active = current()
+        if active is not self.call:
+            if active is None:
+                raise EvaluationError(
+                    self.node.owner, "field read", "a method's receiver is read after it returned"
+                )
+            error = EvaluationError(active.owner, "field read", "cross-configuration access")
+            fault(active, error)
+            raise error
+        if self.call.abandoned is not None:
+            raise self.call.abandoned
+
+    def _check(self, index: NodeId) -> None:
+        """A read the method's source does not name is its failure."""
+        allowed = self.world.evaluator.reads.methods.get(self.node.index)
+        if allowed is None or index in allowed:
+            return
+        member = self.world.evaluator.nodes[index].key
+        error = EvaluationError(
+            self.node.owner,
+            "read-undeclared",
+            f"read {member}, which its source does not name: read it through a path from "
+            "its receiver, or declare it in __reads__",
+        )
+        fault(self.call, error)
+        raise error
+
+    def _take(self, index: NodeId) -> Entry:
+        """``index``'s entry, recorded. A failure met is the call's (its primary, or a
+        cleanup failure) and is raised in the method; the depth guard abandons it."""
+        try:
+            entry = self.world._get(index)
+        except Deeper as deeper:
+            self.call.abandoned = deeper
+            raise
+        except Failing as failing:
+            # Interrupted here, the failure still reaches the call: it is the context of
+            # what interrupts (``remember_exception`` follows it).
+            remember_failure(self.call, failing.failure)
+            raise exception(failing.failure)
         self.trace.append((index, entry.result))
         self.reads |= entry.reads
-        return entry.result
+        return entry
 
-    def value(self, index: NodeId) -> object:
-        """``index``'s value, recorded and detached; a non-value halts the method."""
-        answer = self.answer(index)
+    def _answer(self, index: NodeId) -> QueryResult[object]:
+        """``index``'s answer, checked and recorded; a non-value does not halt."""
+        self._check(index)
+        return self._take(index).result
+
+    def _value(self, index: NodeId) -> object:
+        """``index``'s value, recorded and detached; a non-value halts the method (in
+        cleanup, after a failure, it is a cleanup read)."""
+        answer = self._take(index).result
         node = self.world.evaluator.nodes[index]
         if isinstance(answer, Available):
             return public_value(node, answer)
-        self.blocked[index] = answer
+        self.call.blocked[index] = answer
+        if self.call.failure is not None:
+            self.call.failure.add(CleanupFailure(node.owner, "cleanup read", result=answer))
         raise ValueUnavailableError(answer, context=node.owner)
+
+    # -- what a receiver reads ---------------------------------------------------------
+
+    def read_value(self, point: Space, reference: object) -> object:
+        """A member read as a value (``self.x``). Whatever it raises is the call's."""
+        try:
+            return self._read_value(point, reference)
+        except BaseException as cause:
+            if current() is self.call and not isinstance(cause, Deeper):
+                remember_exception(self.call, cause)
+            raise
+
+    def _read_value(self, point: Space, reference: object) -> object:
+        self._enter()
+        evaluator = self.world.evaluator
+        index = evaluator.model.resolve(point._scope, reference)
+        self._check(index)
+        linked = evaluator.linked
+        source = linked.forward[index]
+        if source != index and guard_implies(
+            linked.nodes, linked.nodes[index].guard, self.node.guard
+        ):
+            self.via.append((index, source))
+            index = source
+        return self._value(index)
+
+    def present(self, point: Space, node: object) -> bool:
+        """Whether a node is present, or a value input supplied (``occurrence.present``)."""
+        self._enter()
+        target = self._node_scope(point, node)
+        if target is None:
+            if isinstance(node, Param):
+                return self._supplied(point, node)
+            raise RequestError("present() takes a node (a child or a candidate) or a value input")
+        presence = self.world.evaluator.linked.scopes[target].guard
+        if presence is None:
+            return True
+        answer = self._answer(presence)
+        if isinstance(answer, Available):
+            return answer.value is True
+        if isinstance(answer, Inapplicable) or (
+            isinstance(answer, Unresolved) and _unsupplied(answer)
+        ):
+            return False
+        return bool(self._value(presence))  # undecided: halts like any value read
+
+    def _node_scope(self, point: Space, reference: object) -> int | None:
+        """For a node reference, the node's scope; ``None`` for anything else."""
+        if not isinstance(reference, Space):
+            return None
+        path = declared_path(reference)
+        if path is None:
+            return None
+        *outer, last = path
+        if not isinstance(last, NodeDecl):
+            return None
+        scopes = self.world.evaluator.linked.scopes
+        holder = descend(scopes, point._scope, outer)
+        scope = scopes[holder]
+        if last is scope.record:
+            return holder
+        target = scope.children.get(last)
+        if target is None:
+            raise RequestError("node is not part of this compiled scope")
+        return target
+
+    def _supplied(self, point: Space, formal: object) -> bool:
+        """Whether a value input is supplied: a source applies (never its value)."""
+        index = self.world.evaluator.model.resolve(point._scope, formal)
+        applies = self._source_applies(index)
+        if isinstance(applies, bool):
+            return applies
+        self._value(applies)  # undecided: halts like any value read
+        raise AssertionError("an undecided presence read halts")
+
+    def _source_applies(self, index: NodeId) -> bool | NodeId:
+        """Whether a source applies at ``index``, or the presence node still undecided."""
+        node = self.world.evaluator.nodes[index]
+        if node.guard is not None:
+            holds = self._holds(node.guard)
+            if holds is not True:
+                return holds
+        if node.kind == "param":
+            return isinstance(self._answer(index), Available)  # given at start
+        if node.kind in ("alias", "guard", "view"):
+            return self._source_applies(cast(NodeId, node.output))
+        if node.kind == "select":
+            selector = cast(NodeId, node.selector)
+            case = self._answer(selector)
+            if not isinstance(case, Available):
+                return False if isinstance(case, Inapplicable) else selector
+            target = cast(Mapping[str, NodeId], node.selection_index).get(cast(str, case.value))
+            return False if target is None else self._source_applies(target)
+        if node.kind == "present":
+            answers = [self._source_applies(target) for _, target in node.alternatives]
+            if any(answer is True for answer in answers):  # a node may be 1
+                return True
+            return next((answer for answer in answers if answer is not False), False)
+        return True  # a const, a decision, a computation: the source itself
+
+    def _holds(self, guard: NodeId) -> bool | NodeId:
+        """Whether a guard holds (inapplicable: it does not), or the guard while undecided."""
+        answer = self._answer(guard)
+        if isinstance(answer, Available):
+            return answer.value is True
+        return False if isinstance(answer, Inapplicable) else guard
+
+    def child(self, point: Space, record: object) -> Space:
+        """A child node's receiver."""
+        self._enter()
+        scope = self.world.evaluator.linked.scopes[point._scope]
+        child_scope = scope.children.get(record)
+        if child_scope is None:
+            raise RequestError("child node is not part of this compiled scope")
+        return receiver(self, child_scope)
+
+    def _choice(self, scope: int, decision: object) -> Choice:
+        linked = self.world.evaluator.linked
+        try:
+            return linked.choices[linked.scopes[scope].choices[unwrap(decision)]]
+        except (KeyError, TypeError) as error:
+            raise RequestError(
+                "the Decision over nodes is not part of this compiled scope"
+            ) from error
+
+    def selected_candidate(self, point: Space, decision: object) -> Space | None:
+        """The receiver of the candidate a Decision over nodes selects, or ``None``."""
+        self._enter()
+        choice = self._choice(point._scope, decision)
+        self._check(choice.selector)
+        case = self._value(choice.selector)
+        for key, candidate in choice.cases:
+            if key == case:
+                return None if candidate is None else receiver(self, candidate)
+        raise EvaluationError(choice.key, "selection", "selector is not a declared case")
+
+    def candidate(self, point: Space, decision: object, case: str) -> Space | None:
+        """A candidate's receiver, selected or not (``None`` for a case placing nothing)."""
+        self._enter()
+        if type(case) is not str:
+            raise RequestError("a candidate key must be a string")
+        choice = self._choice(point._scope, decision)
+        for key, index in choice.cases:
+            if key == case:
+                return None if index is None else receiver(self, index)
+        raise RequestError(f"{choice.key}: unknown candidate {case!r}")
+
+    def root(self, point: Space) -> Space:
+        """The root's receiver."""
+        self._enter()
+        return point if point._scope == 0 else receiver(self, 0)
+
+
+def _unsupplied(answer: Unresolved) -> bool:
+    findings = answer.findings
+    return bool(findings) and all(finding.code == "input-unsupplied" for finding in findings)
 
 
 def receiver(reader: MethodReader, scope: int) -> Space:
@@ -749,40 +1186,34 @@ def receiver(reader: MethodReader, scope: int) -> Space:
 def _method(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
     """A ``self`` method: a plain call on a receiver reading through the world, memoized
     by its traces. A kept trace whose every read answers the same here gives its
-    outcome without a call."""
+    outcome without a call (a read that fails here leaves it to the call)."""
     evaluator = world.evaluator
     for recorded, called in evaluator.memo.traces(node.index):
         more = 0
-        for dependency, answer in recorded:
-            found = world._get(dependency)
-            if not world.same(dependency, found.result, answer):
-                break
-            more |= found.reads
-        else:
-            evaluator.counters.hit(node.kind)
-            return _entry(called, reads | more, (*trace, *recorded))
-    reader = MethodReader(world, node)
-    function = cast(Callable[[object], object], node.function)
+        try:
+            for dependency, answer in recorded:
+                found = world._get(dependency)
+                if not world.same(dependency, found.result, answer):
+                    break
+                more |= found.reads
+            else:
+                evaluator.counters.hit(node.kind)
+                return _entry(called, reads | more, (*trace, *recorded))
+        except Failing:
+            break
+    call = Call(node.owner, node.kind)
+    reader = MethodReader(world, node, call)
     evaluator.counters.call(node.kind)
-    returned: object = None
-    try:
-        returned = function(receiver(reader, node.scope))
-    except ValueUnavailableError:
-        if not reader.blocked:
-            raise
-    except EvaluationError:
-        raise
-    except Exception as cause:
-        if not reader.blocked:
-            raise EvaluationError(node.owner, node.kind, str(cause)) from cause
-    if reader.blocked:
-        blocked = cast(NonValue, _blocked(list(reader.blocked.values())))
-        called = Called(blocked, _guard_assessment(node, blocked), via=tuple(reader.via))
+    outcome = _authored(
+        world, call, cast(Callable[..., object], node.function), (receiver(reader, node.scope),)
+    )
+    via = tuple(reader.via)
+    if isinstance(outcome, _Halted):
+        blocked = cast(NonValue, _blocked(outcome.results))
+        called = Called(blocked, _guard_assessment(node, blocked), via=via)
     else:
-        finished = _finish(node, returned)
-        called = Called(
-            finished.result, finished.assessment, finished.own_refusal, tuple(reader.via)
-        )
+        finished = _finished(node, outcome.value)
+        called = Called(finished.result, finished.assessment, finished.own_refusal, via)
     recorded = tuple(reader.trace)
     evaluator.memo.keep_method(node.index, recorded, called)
     return _entry(called, reads | reader.reads, (*trace, *recorded))
@@ -833,7 +1264,8 @@ def _type_check(
 ) -> tuple[QueryResult[object], ReadSet]:
     """Whether a choice's domain holds ``value`` here (memoized on the value's answer and
     the domain inputs' answers)."""
-    assert node.domain is not None and node.semantics is not None
+    domain, semantics = node.domain, node.semantics
+    assert domain is not None and semantics is not None
     answers, blocked, reads = _domain_inputs(world, node, trace, reads)
     if blocked is not None:
         return blocked, reads
@@ -845,16 +1277,34 @@ def _type_check(
         return held.outcome.result, reads
     candidate = _clone(node, value.value, owner=node.owner, role="domain candidate snapshot")
     evaluator.counters.call("domain membership")
-    result = node.domain.membership(
-        candidate,
-        _domain_values(world, node, answers),
-        semantics=node.semantics,
-        owner=node.owner,
+    outcome = _authored(
+        world,
+        Call(node.owner, "domain membership"),
+        domain.membership,
+        (candidate, _domain_values(world, node, answers)),
+        {"semantics": semantics, "owner": node.owner},
     )
-    evaluator.memo.keep_explicit(
-        node.index, "membership", key, Called(cast(QueryResult[object], result))
+    result = cast(QueryResult[object], cast(_Returned, outcome).value)
+    evaluator.memo.keep_explicit(node.index, "membership", key, Called(result))
+    return result, reads
+
+
+def _listed_members(
+    domain: Domain[object],
+    values: tuple[object, ...],
+    arguments: Mapping[str, object],
+    *,
+    semantics: ValueSemantics[object],
+    owner: str,
+) -> tuple[object, ...]:
+    """The listed values a domain's membership does not refuse, in list order."""
+    return tuple(
+        value
+        for value in values
+        if not isinstance(
+            domain.membership(value, arguments, semantics=semantics, owner=owner), Rejected
+        )
     )
-    return cast(QueryResult[object], result), reads
 
 
 def _listed(
@@ -863,11 +1313,12 @@ def _listed(
     """A choice's listed values here (``Available(None)``: membership only, nothing is
     listed): its domain's enumeration, each value checked by membership (memoized on the
     domain inputs' answers)."""
-    assert node.domain is not None and node.semantics is not None
+    domain, semantics = node.domain, node.semantics
+    assert domain is not None and semantics is not None
     answers, blocked, reads = _domain_inputs(world, node, trace, reads)
     if blocked is not None:
         return blocked, reads
-    if node.domain.candidates is None:
+    if domain.candidates is None:
         return Available(None), reads
     evaluator = world.evaluator
     held = evaluator.memo.explicit(node.index, "listing", answers)
@@ -876,31 +1327,29 @@ def _listed(
         return held.outcome.result, reads
     arguments = _domain_values(world, node, answers)
     evaluator.counters.call("domain listing")
-    listed = cast(
-        QueryResult[object],
-        node.domain.enumerate(arguments, semantics=node.semantics, owner=node.owner),
+    keywords = {"semantics": semantics, "owner": node.owner}
+    enumerated = _authored(
+        world, Call(node.owner, "domain enumeration"), domain.enumerate, (arguments,), keywords
     )
-    if isinstance(listed, Available) and node.domain._finite_values is None:
-        kept = tuple(
-            value
-            for value in cast(tuple[object, ...], listed.value)
-            if not isinstance(
-                node.domain.membership(
-                    value, arguments, semantics=node.semantics, owner=node.owner
-                ),
-                Rejected,
-            )
+    listed = cast(QueryResult[object], cast(_Returned, enumerated).value)
+    if isinstance(listed, Available) and domain._finite_values is None:
+        kept = _authored(
+            world,
+            Call(node.owner, "domain membership"),
+            _listed_members,
+            (domain, listed.value, arguments),
+            keywords,
         )
-        listed = Available(kept)
+        listed = Available(cast(_Returned, kept).value)
     evaluator.memo.keep_explicit(node.index, "listing", answers, Called(listed))
     return listed, reads
 
 
 def listed_values(world: World, node: NodeId) -> QueryResult[object]:
-    """A choice's listed values in ``world`` (``Available(None)``: membership only)."""
-    with world.evaluator.lock:
-        found, _ = _listed(world, world.evaluator.nodes[node], [], 0)
-        return found
+    """A choice's listed values in ``world`` (``Available(None)``: membership only), from
+    a driver."""
+    spec = world.evaluator.nodes[node]
+    return _drive(world.evaluator, lambda: _listed(world, spec, [], 0)[0])
 
 
 _FRAMES: Mapping[NodeKind, Callable[[World, Node, _Trace, ReadSet], Entry]] = {

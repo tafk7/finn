@@ -168,10 +168,19 @@ class _Visitor(ast.NodeVisitor):
         return None
 
     def _presence(self, argument: ast.expr) -> None:
-        """``self.present(argument)``: the path of what presence is asked of."""
+        """``self.present(argument)``: the path of what presence is asked of, from the
+        receiver (``self.child``) or from a class (``Office.rate``, ``House.kitchen``)."""
         path = self._chain(argument)
         if path:
             self.uses.present.add(path)
+            return
+        names: list[str] = []
+        current = argument
+        while isinstance(current, ast.Attribute):
+            names.append(current.attr)
+            current = current.value
+        if names and isinstance(current, ast.Name):
+            self.uses.present.add(tuple(reversed(names)))
             return
         if isinstance(argument, ast.Name):
             # A declaration a closure holds (the engine's ``supplied``): its member name.
@@ -466,7 +475,8 @@ def infer(linked: LinkedModel) -> ModelReads:
         if node.call_style != "self" or node.function is None:
             continue
         reads, missing = inference.reads(node.function, node.scope)
-        methods[node.index] = None if reads is None else reads - {node.index}
+        # A method reading itself keeps that read: it is a cycle, found when it runs.
+        methods[node.index] = reads
         if missing:
             unresolved[node.index] = tuple(dict.fromkeys(missing))
     return ModelReads(

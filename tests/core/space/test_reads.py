@@ -76,7 +76,7 @@ class Outer(Space):
 
     @derived
     def by_presence(self) -> bool:
-        return self.present(self.guarded)
+        return self.present(Outer.guarded)
 
     @constraint
     def branching(self) -> bool:
