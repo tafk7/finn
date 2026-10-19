@@ -67,7 +67,7 @@ shell, are ``finn.custom_op.kernels.shell``'s.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Collection, Hashable, Iterable, Mapping
+from collections.abc import Callable, Hashable, Iterable, Mapping
 from dataclasses import replace
 from functools import partial
 from typing import TYPE_CHECKING, Any, TypeVar, cast
@@ -87,7 +87,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import edge_tensor, initializer, reading
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest
 from finn.core.reporting.findings import Finding, FindingKind
-from finn.core.space import Available, QueryResult, Rejected, Space, Unresolved
+from finn.core.space import Available, QueryResult, Rejected, Space, Unresolved, inspection
 from finn.custom_op.kernels.base import KernelOp, kernel_op, typed
 from finn.kernels.artifacts.module import Composed, ProducerIdentity
 from finn.kernels.base import RESOURCES
@@ -660,9 +660,7 @@ def _write_channel(model: ModelWrapper, tensor: str, choices: Mapping[str, objec
         model.set(CHANNEL_KEYS[key], value, tensor=tensor)
 
 
-def persist(
-    model: ModelWrapper, network: Network, owners: Collection[str] | None = None
-) -> dict[str, dict[str, object]]:
+def persist(model: ModelWrapper, network: Network) -> dict[str, dict[str, object]]:
     """Write ``network``'s choices, a network of ``model``'s nodes (``network``), back
     where they are stated, each owner's whole: every Decision it commits, and every choice
     it keeps unchecked (a commitment whose check cannot conclude yet; a forced one is never
@@ -670,17 +668,17 @@ def persist(
     kernel's node or a channel's tensor; a choice an owner holds that the network does
     not (one replay dropped as stale) cleared, and, where it is a partition holding every
     KernelOp of the model, so are the channel choices of a tensor that is no channel of it.
-    Of ``owners`` only, where named (conversion writes its node's own, and no tensor's).
 
-    The one writer of choices: a route to one is ``Hold`` in a step after the cut, this
-    function for the compiler, and ``support.configure.configured`` for a test. Channel
+    The one writer of a network's choices: a route to one is ``Hold`` in a step after the
+    cut, this function for the compiler (``persist_kernel`` beside it for conversion, one
+    node's kernel alone), and ``support.configure.configured`` for a test. Channel
     choices are a partition's body's only: written on a graph that is not (host nodes
     beside the KernelOps) they are refused, by name, before anything is written
     (``channel-choices-outside-body``). Every value is checked and encoded before any is
     written, so a write cannot fail halfway; none is replayed on a fresh point, since the
     network has bound each (its committed Decisions are checked as it commits them).
     Returns what each owner now holds, by graph name."""
-    names = [name for name in network.members if owners is None or name in owners]
+    names = list(network.members)
     held_by: dict[str, dict[str, object]] = {name: {} for name in names}
     for (owner, key), value in network.chosen(names).items():
         held_by[owner][key] = value
@@ -698,13 +696,29 @@ def persist(
         elif values or name in stated:
             _encoded(name, values)
             writes.append(_channel_write(model, name, values))
-    whole = owners is None and isinstance(network, Partition) and network.whole
+    whole = isinstance(network, Partition) and network.whole
     stray = [tensor for tensor in stated if whole and tensor not in held_by]
     for write in writes:
         write()
     for tensor in stray:
         model.clear(CHANNEL, tensor=tensor)
     return held_by
+
+
+def persist_kernel(model: ModelWrapper, node: NodeProto, point: Space) -> dict[str, object]:
+    """Write ``point``, the KernelOp ``node``'s kernel alone, on the node, its whole: every
+    choice it stores, by key, whatever its state (``inspection.states``: set, waiting or
+    dormant). Conversion's write (``finn.transformation.kernels.convert``): one node, no
+    network, nothing on a tensor. As ``persist``, every value is checked and encoded before
+    any is written. Returns what the node now holds."""
+    held = {
+        key: state.value
+        for key, state in inspection.states(point)
+        if isinstance(state, (inspection.Set, inspection.Waiting, inspection.Dormant))
+    }
+    op = kernel_op(model, node)
+    op._write(op._saved(held))
+    return held
 
 
 def _kernel_write(op: KernelOp, merged: Mapping[str, int | str]) -> Callable[[], None]:
@@ -724,5 +738,6 @@ __all__ = [
     "member",
     "network",
     "persist",
+    "persist_kernel",
     "stale_text",
 ]

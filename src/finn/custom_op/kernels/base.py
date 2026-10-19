@@ -22,13 +22,14 @@ Both are kept by the facts, by value, in the build's member cache
 
 Conversion asks two questions of a node. Does the op's pattern cover it? ``match`` reads
 only the graph's structure (op types, connections, attributes), never a datatype or a
-value, and never changes the model. Will a kernel build it? ``accepted`` asks its
-kernel, and the node alone as a network (``network``: its kernel, and a channel on each
-ONNX input and output as a boundary, ``in<i>_V``, ``out<j>_V``), whose channels must be
-realized once its choices take their baselines. A missing shape or datatype raises
-``FactUnstated``, and the node stays on the host; anything else wrong with the facts is
-an error (``KernelOpError``). Conversion stores the kernel's choices only, and writes
-nothing on a tensor.
+value, and never changes the model. Will a kernel build it? ``defaulted`` applies its
+kernel's default policies once, on the kernel alone (``finn.kernels.defaults``): refused
+where its facts alone refuse it, or where a choice in play can be given no value, its
+fixed one or a first valid one. Conversion builds no channel: the channels are a
+partition's, made at the cut. A missing shape or datatype raises ``FactUnstated``, and
+the node stays on the host; anything else wrong with the facts is an error
+(``KernelOpError``). Conversion stores the kernel's choices only, and writes nothing on a
+tensor.
 
 ``execute_node`` is the reference for what the op covers, and must equal ONNX on every
 node the op converts (FINN executes ONNX with exact integers, which importing ``finn``
@@ -37,19 +38,21 @@ The test harness checks this (``finn.harness.reference``); builds do not.
 
 A node's attributes are its semantic attributes, which are part of the operation
 (Thresholding's ``bias``), and its kernel's choices, named by the kernel's own decision
-keys (``compute.packed.pe``), each set to its baseline at conversion. A channel's
+keys (``compute.packed.pe``), each set by its default policy at conversion (a required
+one is left open, for a strategy to set). A channel's
 choices are stored on its tensor instead, and only in a partition's body (``CHANNEL``).
 Only the compiler writes a choice (``persist``): ``get_nodeattr`` of a choice answers what
 the node stores or refuses it as absent, and ``set_nodeattr`` of one is refused.
 
 **Who calls what.** One writer, the readers beside it, and a guard on the door:
 
-- *Writes*, all through ``persist`` (``network.persist``, which writes past the guard).
-  Conversion persists the one-node network its acceptance baselined, only the node's
-  choices (``baseline_kernel_op``). The cut persists the body's choices at their
-  baselines, the channels' too (``shell.baseline_choices``). Every strategy persists the
-  network it returns (``explore_kernel_choices``). A user sets a choice by ``Hold`` in
-  a step after the cut, which the strategies apply: no one writes an attribute.
+- *Writes*, all through ``persist`` (``network.persist``, which writes past the guard) and,
+  for conversion, ``network.persist_kernel``: conversion writes the node's kernel as its
+  policies leave it (``defaulted``), only the node's choices. The cut persists the body's
+  choices at their baselines, the channels' too (``shell.baseline_choices``). Every
+  strategy persists the network it returns (``explore_kernel_choices``). A user sets a
+  choice by ``Hold`` in a step after the cut, which the strategies apply: no one writes an
+  attribute.
 - *Reads*: ``choices`` (the attributes the node holds), ``stored`` (as the kernel's
   Decisions take them), ``point`` (the kernel with them committed), ``verify_node`` and
   every bind of a network. They never write: a stored choice the facts refuse is
@@ -100,16 +103,15 @@ from qonnx.util.basic import get_by_name
 from finn.core.graph.annotations.channel import CHANNEL, value_type
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
-from finn.core.graph.facts import edge_tensor, initializer, reading, state
+from finn.core.graph.facts import edge_tensor, initializer, state
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available, Rejected, Space, inspection
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import Kernel
-from finn.kernels.configure import describe, refusals
+from finn.kernels.configure import describe
 from finn.kernels.configure import refusal as refusal_of
-from finn.kernels.explore import ExploreError, Seam
+from finn.kernels.defaults import defaulted
 from finn.kernels.members import Facts, configured
-from finn.kernels.network import Fact, Interface, Network, NetworkError, Wire, wire
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.target import Target
 
@@ -407,9 +409,9 @@ class KernelOp(CustomOp):
     def get_nodeattr(self, name: str) -> _NodeAttr:
         """The attribute ``name``: a choice as the node stores it (as ``choices`` decodes
         it), refused (``choice-absent``) where the node holds none, never a made-up 0 or
-        "". A choice is not stored when it is open, forced (never stored), or not
-        applicable under the selected case; the value in effect is read from ``point()``
-        (``inspection.forced`` explains a forced one). Any other name is qonnx's."""
+        "". A choice is not stored when it is open (no policy or strategy has set it), or
+        its scope is absent (under a case not selected) and nothing set it there; the
+        configuration is read from ``point()``. Any other name is qonnx's."""
         schema = self.schema()
         if name not in schema:
             return super().get_nodeattr(name)
@@ -418,9 +420,8 @@ class KernelOp(CustomOp):
             raise KernelOpError.refused(
                 "choice-absent",
                 self.op_type,
-                f"{self.label}: {name} is not stored: it is open, forced (never stored), or "
-                "not applicable under the selected case; read the value in effect from the "
-                "op's configuration (KernelOp.point(); inspection.forced explains a forced one)",
+                f"{self.label}: {name} is not stored: it is open, or under a case not selected "
+                "and never set; read the op's configuration from KernelOp.point()",
                 (name,),
                 node=self.label,
             )
@@ -523,55 +524,6 @@ class KernelOp(CustomOp):
             port: tensor for port, tensor in found.items() if initializer(model, tensor) is not None
         }
 
-    def network(self) -> Network:
-        """The node alone, as conversion checks it: its kernel (named as the node) and a
-        channel on each ONNX input and output (named as the tensor), each a boundary named
-        by its ONNX position (``in<i>_V``, ``out<j>_V``), on the target's platform. An
-        input's carries its tensor, a parameter's the tensor and values its kernel states
-        for it; an output's what its kernel states it writes. Nothing chosen."""
-        with reading(self.model()):
-            return self._network()
-
-    def _network(self) -> Network:
-        facts = self.facts()
-        owned = self.owned()
-        platform = self.target().platform
-        model, label, node = self.model(), self.label, self.onnx_node
-        members: dict[str, Space | Facts | Wire] = {}
-        for index, (port, tensor) in enumerate(zip(self.ports, node.input)):
-            if port is None:
-                continue
-            wiring = self.wiring[port]
-            stated: dict[str, object] = (
-                {
-                    "tensor": Fact(label, cast(str, wiring.carried)),
-                    "contents": Fact(label, cast(str, wiring.stored)),
-                }
-                if port in owned
-                else {"tensor": edge_tensor(model, tensor, label)}
-            )
-            members[tensor] = wire(
-                port=f"in{index}_V",
-                consumer=Interface(label, wiring.end),
-                platform=platform,
-                **stated,
-            )
-        members[label] = facts
-        for index, (port, tensor) in enumerate(zip(self.outputs, node.output)):
-            wiring = self.wiring[port]
-            members[tensor] = wire(
-                tensor=Fact(label, wiring.tensor),
-                port=f"out{index}_V",
-                producer=Interface(label, wiring.end),
-                platform=platform,
-            )
-        try:
-            return Network(members)
-        except NetworkError as error:
-            raise KernelOpError.refused(
-                "network-invalid", "Network", f"{label}: {error}", node=label
-            ) from error
-
     # -- inference ------------------------------------------------------------------------
 
     def output_tensors(self) -> dict[str, Tensor]:
@@ -611,46 +563,20 @@ class KernelOp(CustomOp):
             state(model, name, tensor.element)
 
     def refusals(self, point: Kernel) -> tuple[Finding, ...]:
-        """What stops its kernel from building ``point``, whatever its open choices: its
-        validity's refusal, each open decision with no viable case among it with why each
-        case was refused as its causes (``finn.kernels.configure.refusals``). Empty when
-        nothing does."""
-        return refusals(point)
+        """What stops its kernel from building ``point``: its validity's refusal, the
+        findings of its false pieces (``finn.kernels.configure.refusal``). Empty where it is
+        valid or open."""
+        return refusal_of(inspection.validity(point))
 
-    def baselined(self) -> Network:
-        """The node alone (``network``), every choice with cases at its baseline
-        (``Seam.baseline``): refused (``KernelOpError``) where a Decision has no viable
-        case, with the exploration's findings, each naming the node."""
-        try:
-            return Seam().baseline(self.network())
-        except ExploreError as error:
-            raise KernelOpError(
-                f"{self.label}: no baseline: {error}",
-                findings=tuple(finding.about(node=self.label) for finding in error.findings),
-            ) from error
-
-    def accepted(self) -> Network | tuple[Finding, ...]:
-        """The node alone at its baselines (``baselined``), where conversion accepts it;
-        else why it does not: its kernel's refusals bound on its inputs, whatever its open
-        choices (``refusals``), or, the node alone as a network, each channel not realized,
-        its validity refused (a Decision of it without a viable case among its pieces).
-        Conversion persists the network it gets here, the node's own choices
-        (``persist``), rather than baselining the node again."""
-        found = self.refusals(self.bound())
-        if found:
-            return found
-        try:
-            based = self.baselined()
-        except KernelOpError as error:
-            return error.findings
-        refused: list[Finding] = []
-        for name in based.members:
-            if based.unbound(name) is not None:
-                refused.extend(refusal_of(based.validity(name)))
-            else:
-                found_here = based.checked([name]).values()
-                refused.extend(finding for each in found_here for finding in each)
-        return based if not refused else tuple(dict.fromkeys(refused))
+    def defaulted(self) -> Kernel | tuple[Finding, ...]:
+        """Conversion's answer (the module docstring): the node's kernel bound to its facts
+        with its default policies applied once (``finn.kernels.defaults.defaulted``), every
+        choice in play given its fixed or first valid value, a required one left open;
+        else why not: its kernel's refusal on its facts alone, or a choice no value can be
+        set for (``choice-no-valid-value``, owned by its key, each value's refusal among its
+        causes). Conversion writes the point it gets here on the node (``persist_kernel``)."""
+        found: Kernel | tuple[Finding, ...] = defaulted(self.bound())
+        return found
 
     def verify_node(self) -> list[str]:
         """Why the node's stored choices are refused, or each of ``refusals`` of its
