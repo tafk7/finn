@@ -4,9 +4,10 @@
 
 Each value set is type-checked against its domain, which reads facts only: outside it
 refuses the change; an input of the domain refusing, or not applying, refuses it,
-naming the input; a missing fact leaves the choice stored and waiting. A choice under a
-case not selected is accepted (dormant); under a selector still open it is checked
-where the selector reads its case. A facts change checks every stored value again. A
+naming the input; a missing fact leaves the choice stored and waiting. A choice's
+membership is read as if it existed: under a case not selected or a false guard it is
+checked and kept dormant, under a selector still open it is checked and waits. A facts
+change checks every stored value again, dormant ones included. A
 change that passes its type checks and makes a rule newly false is refused, naming the
 rule and the stored choices standing in its way.
 """
@@ -168,7 +169,7 @@ def test_a_choice_under_a_case_not_selected_is_checked_there_and_kept_dormant() 
     report = change(plain, {"mode.mode.lanes": 3})
     assert report.accepted
     (outcome,) = report.outcomes
-    # Checked where its selector reads its case: 3 divides 12.
+    # Checked as if it existed: 3 divides 12.
     assert outcome.status == "changed" and outcome.result == Available(True)
     point = cast(State, report.state)
     assert isinstance(read(point, "mode.mode.lanes"), Inapplicable)  # dormant
@@ -182,6 +183,17 @@ def test_a_choice_under_a_case_not_selected_is_checked_there_and_kept_dormant() 
     # Switching to its case brings it into play, as stored.
     back = cast(State, change(point, {"mode": "mode"}).state)
     assert read(back, "mode.mode.lanes") == Available(3)
+
+
+def test_an_open_selectors_case_adds_a_piece_only_where_its_list_would_be_empty() -> None:
+    """Presence unknown, a choice's list is made as if it existed: a list with a value
+    adds nothing, so a case with no rule leaves the configuration valid; an empty one is
+    an unknown piece, waiting on the selector."""
+    base = start(Selected(extent=12))
+    root = cast(NodeId, base.linked.scopes[0].validity)
+    assert base.world.result(root) == Available(True)
+    empty = start(Selected(extent=0))
+    assert codes(empty.world.result(root)) == [("decision-unassigned", "mode")]
 
 
 def test_a_choice_under_an_open_selector_is_checked_at_its_case_and_waits() -> None:
@@ -199,25 +211,58 @@ class Gated(Space):
     lanes: int = Decision(domain=divisors_of(extent), when=enabled)
 
 
-def test_a_choice_whose_presence_another_guard_decides_is_checked_when_it_comes_into_play() -> None:
-    """``lanes`` exists while ``enabled`` holds, which no selector case decides: set while
-    ``enabled`` is open or false, its value is accepted unchecked (the guard's answer is
-    the outcome's result), and checked when a change brings it into play."""
+def test_a_choice_under_a_when_over_a_choice_is_checked_as_if_it_existed() -> None:
+    """``lanes`` exists while ``enabled`` holds: its membership is read as if it did,
+    whether ``enabled`` is open or false, so a value outside its domain is refused at
+    once and one inside it is kept, waiting or dormant, and comes into play unchecked."""
     base = start(Gated(extent=12))
-    waiting = change(base, {"lanes": 5})
-    assert waiting.accepted
-    assert codes(waiting.outcomes[0].result) == [("decision-unassigned", "enabled")]
-    off = change(base, {"enabled": False, "lanes": 5})
-    assert off.accepted and isinstance(off.outcomes[1].result, Inapplicable)
-    point = cast(State, off.state)
-    refused = change(point, {"enabled": True})
-    assert not refused.accepted
+    for choices in ({"lanes": 5}, {"enabled": False, "lanes": 5}):
+        refused = change(base, choices)
+        assert not refused.accepted
+        assert codes(refused.outcomes[-1].result) == [("domain-membership", "lanes")]
+    waiting = change(base, {"lanes": 4})
+    assert waiting.accepted and waiting.outcomes[0].result == Available(True)
+    off = cast(State, change(base, {"enabled": False, "lanes": 4}).state)
+    assert isinstance(read(off, "lanes"), Inapplicable)  # dormant
+    on = change(off, {"enabled": True})
+    assert on.accepted and [o.owner for o in on.outcomes] == ["enabled"]
+    assert read(cast(State, on.state), "lanes") == Available(4)
+
+
+class Windowed(Space):
+    channels: int = Param()
+    lanes: int = Decision(domain=divisors_of(channels))
+
+
+class Fenced(Space):
+    wide: bool = Param()
+    extent: int = Param()
+    window = Windowed(channels=extent, when=wide)
+
+
+def test_a_choice_under_a_when_over_a_fact_is_checked_where_its_inputs_exist_there() -> None:
+    """``window`` is absent while ``wide`` is false; its ``lanes`` reads the window's own
+    ``channels``, which exists under the window's guard: taken as holding, its value
+    decides."""
+    narrow = start(Fenced(wide=False, extent=12))
+    refused = change(narrow, {"window.lanes": 5})
+    assert codes(refused.outcomes[0].result) == [("domain-membership", "window.lanes")]
+    kept = change(narrow, {"window.lanes": 3})
+    assert kept.accepted and kept.outcomes[0].result == Available(True)
+    assert isinstance(read(cast(State, kept.state), "window.lanes"), Inapplicable)
+
+
+def test_a_facts_change_checks_a_dormant_value_again_as_if_it_existed() -> None:
+    off = cast(State, change(start(Gated(extent=12)), {"enabled": False, "lanes": 4}).state)
+    refused = change(off, facts={"extent": 10})
     assert [(o.owner, o.status, o.requested) for o in refused.outcomes] == [
-        ("enabled", "checked", True),
+        ("extent", "checked", True),
         ("lanes", "refused", False),
     ]
     assert codes(refused.outcomes[1].result) == [("domain-membership", "lanes")]
-    assert change(point, {"enabled": True, "lanes": 4}).accepted
+    assert change(off, {"lanes": 2}, facts={"extent": 10}).accepted
+    narrow = cast(State, change(start(Fenced(wide=False, extent=12)), {"window.lanes": 4}).state)
+    assert not change(narrow, facts={"extent": 10}).accepted
 
 
 class Waits(Space):

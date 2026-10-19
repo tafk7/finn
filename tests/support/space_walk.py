@@ -46,6 +46,7 @@ from finn.core.space import (
     occurrence,
 )
 from finn.core.space._assign import check as type_check
+from finn.core.space._assign import placed
 from finn.core.space._origins import pairs
 from finn.core.space._state import State
 from finn.core.space._world import World, listed_values
@@ -139,9 +140,9 @@ class _Walk:
     # -- drawing ------------------------------------------------------------------------
 
     def listed(self, current: State, index: NodeId) -> tuple[object, ...]:
-        """A choice's listed values here (its domain over the facts), whatever its
-        presence; none where they cannot be listed."""
-        found = listed_values(current.world, index)
+        """A choice's listed values here (its domain over the facts, as if it existed),
+        whatever its presence; none where they cannot be listed."""
+        found = listed_values(placed(current.world, index), index)
         if isinstance(found, Available) and found.value:
             return tuple(cast(tuple[object, ...], found.value))
         return ()

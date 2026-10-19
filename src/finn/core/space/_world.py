@@ -259,9 +259,22 @@ class World:
     object per fact and stored value, shared with the parent for what did not change;
     ``parent`` and ``delta``: the world this one takes entries from, and the bits of the
     choices and facts it reads otherwise; ``depth``: how many worlds stand above it;
-    ``cache``: the entries found here (only ever added to)."""
+    ``cache``: the entries found here (only ever added to). ``assumed``: guards taken as
+    holding, in a world where a choice's membership is read (``membership``); its own
+    such worlds are kept in ``memberships``."""
 
-    __slots__ = ("evaluator", "facts", "stored", "values", "parent", "delta", "depth", "cache")
+    __slots__ = (
+        "evaluator",
+        "facts",
+        "stored",
+        "values",
+        "parent",
+        "delta",
+        "depth",
+        "cache",
+        "assumed",
+        "memberships",
+    )
 
     def __init__(
         self,
@@ -271,6 +284,7 @@ class World:
         values: dict[NodeId, Available[object]],
         parent: World | None = None,
         delta: ReadSet = 0,
+        assumed: frozenset[NodeId] = frozenset(),
     ) -> None:
         self.evaluator = evaluator
         self.facts = facts
@@ -280,6 +294,8 @@ class World:
         self.delta = delta
         self.depth: int = 0 if parent is None else parent.depth + 1
         self.cache: dict[NodeId, Entry] = {}
+        self.assumed = assumed
+        self.memberships: dict[tuple[NodeId, ...], World] | None = None
 
     @classmethod
     def start(
@@ -317,6 +333,26 @@ class World:
                         delta |= evaluator.bits.bit(node)
                         del values[node]
         return World(evaluator, new_facts, new_stored, values, self, delta)
+
+    def membership(self, node: NodeId) -> World:
+        """Where the choice ``node``'s membership is read as if the choice existed: a world
+        of this one's facts and stored choices in which every guard deciding whether it
+        exists (the selectors above it at its case, the ``when`` and ``supplied`` guards of
+        its scope and every enclosing one) is taken as holding, and every other guard is
+        read as usual. Its membership reads facts only, so it is decided there wherever the
+        choice sits. This world itself for a choice with no guard; kept on this world, by
+        the guards (a world of its own, taking no entry of another)."""
+        guards = self.evaluator.reads.guards(node)
+        if not guards:
+            return self
+        if self.memberships is None:
+            self.memberships = {}
+        found = self.memberships.get(guards)
+        if found is None:
+            found = self.memberships[guards] = World(
+                self.evaluator, self.facts, self.stored, self.values, assumed=frozenset(guards)
+            )
+        return found
 
     def flatten(self) -> None:
         """Stand alone: take every entry of the worlds above this one that read nothing
@@ -415,6 +451,8 @@ class World:
     def _evaluate(self, index: NodeId, previous: Entry | None) -> Entry:
         evaluator = self.evaluator
         node = evaluator.nodes[index]
+        if index in self.assumed:
+            return Entry(Available(True), 0, ())
         cases = evaluator.reads.cases
         if (
             previous is not None
@@ -825,12 +863,23 @@ def _choice_piece(
             return None, reads  # absent
     if piece.domain is None:
         return None, reads
+    if waiting is not None:
+        # Presence unknown: its list as if it existed; empty (or not known) it is an
+        # unknown piece. What that list read is traced as it answered there, so the piece
+        # is found again only where those reads answer the same.
+        place = world.membership(piece.index)
+        listed, found = _listed(place, piece, [], 0)
+        bits = place.evaluator.bits
+        trace.extend((source, place._get(source).result) for source in bits.nodes(found))
+        reads |= found
+        if isinstance(listed, Available):
+            return (None if listed.value != () else waiting), reads
+        if isinstance(listed, Unresolved):  # it waits on a missing fact too
+            return Unresolved(merged_findings((waiting, listed))), reads
+        return waiting, reads
     listed, reads = _listed(world, piece, trace, reads)
     known = isinstance(listed, Available)
     values = cast(Available[tuple[object, ...] | None], listed).value if known else None
-    if waiting is not None:
-        # Presence unknown: an empty list (or one not yet known) is an unknown piece.
-        return (None if known and values != () else waiting), reads
     if known:
         return (_empty_domain(piece) if values == () else None), reads
     return cast(QueryResult[bool], listed), reads

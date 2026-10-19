@@ -17,11 +17,10 @@ A change is **assignment**. In order:
 5. **Type checks.** Each value set is checked against its domain, which reads facts
    only (``_world.type_check``): outside it, or an input of the domain refusing or not
    applying, refuses the change; a missing fact leaves the choice stored, waiting on it.
-   A choice whose scope is absent or waits is checked where the selectors above it read
-   its case (its domain's inputs exist only there); where another guard decides its
-   presence, it is accepted and checked when it comes into play: a stored choice the
-   change brings into play is checked again. A facts change checks every stored value
-   again, dormant ones included.
+   Membership is read as if the choice existed (``World.membership``: every guard
+   deciding whether it exists taken as holding), so a choice is checked wherever it
+   sits, dormant or waiting on its presence alike, and its check holds until the facts
+   change. A facts change checks every stored value again, dormant ones included.
 6. **Rules.** A change that sets a new value (a choice set to a value it does not hold,
    or a fact to a value it does not have) is refused where the configuration it would
    publish holds a false piece of validity through an origin it was not false through
@@ -51,7 +50,7 @@ from .edits import BrokenRule, Change, ChangeOutcome, ChangeRequest, Configurati
 from .errors import ConfigurationError, RequestError
 from .ir import Node, NodeId
 from .occurrence import attach, decision_index, state
-from .results import Available, Inapplicable, QueryResult, Unresolved
+from .results import Available, QueryResult, Unresolved
 from .semantics import equal, snapshot
 
 T = TypeVar("T")
@@ -75,9 +74,8 @@ class Moved:
 class Assigned:
     """What a change came to: the configuration it publishes (the receiver's state
     where it changes nothing; ``None`` where it is refused); each item's outcome, in
-    order: the facts given, the choices named, then the stored choices the change checked
-    again (a facts change, or brought into play) and found refusing; and each rule it
-    would break."""
+    order: the facts given, the choices named, then the stored choices a facts change
+    checked again and found refusing; each rule it would break; and what it moved."""
 
     state: State | None
     outcomes: tuple[ChangeOutcome, ...]
@@ -125,55 +123,28 @@ def _equal(node: Node, left: object, right: object, role: str, *, detach: bool) 
     return equal(semantics, left, right, owner=node.owner, role=role)
 
 
-def placed(world: World, index: NodeId) -> World | QueryResult[object]:
-    """Where a choice's type check is made: ``world``, where the choice is present there;
-    else the world where every selector above it reads the case that holds it, if the
-    choice is present there; else why it cannot be checked yet, from its guard
-    (inapplicable: it is absent; unresolved: its presence waits)."""
-    evaluator = world.evaluator
-    node = evaluator.nodes[index]
+def placed(world: World, index: NodeId) -> World:
+    """Where a choice's type check is made: ``world``, where every guard above the choice
+    holds there; else the world where its membership is read as if it existed
+    (``World.membership``: its existence guards taken as holding)."""
+    node = world.evaluator.nodes[index]
     if node.guard is None:
         return world
     guard = world.result(node.guard)
     if isinstance(guard, Available) and guard.value is True:
         return world
-    reads = evaluator.reads
-    cases = {
-        held[0]: held[1]
-        for held in (reads.cases.get(item) for item in reads.guards(index))
-        if held is not None
-    }
-    if any(world.stored.get(selector) != case for selector, case in cases.items()):
-        place = world.successor(stored={**world.stored, **cases})
-        guard = place.result(node.guard)
-        if isinstance(guard, Available) and guard.value is True:
-            return place
-    if isinstance(guard, Unresolved):
-        return guard
-    return Inapplicable()
+    return world.membership(index)
 
 
 def check(world: World, index: NodeId) -> QueryResult[bool]:
-    """A stored value's type check, made where its scope is in play (``placed``)."""
-    place = placed(world, index)
-    if not isinstance(place, World):
-        return cast(QueryResult[bool], place)
-    return cast(QueryResult[bool], type_check(place, index, world.values[index]))
-
-
-def _into_play(before: World, after: World, index: NodeId) -> bool:
-    """Whether a stored choice the change does not name comes into play: present after,
-    and not before (its type check may not have been made where it now is)."""
-    if before.evaluator.nodes[index].guard is None:
-        return False
-    return presence(after, index)[0] == "present" and presence(before, index)[0] != "present"
+    """A stored value's type check, made as if the choice existed (``placed``)."""
+    return cast(QueryResult[bool], type_check(placed(world, index), index, world.values[index]))
 
 
 def _refuses(result: QueryResult[bool]) -> bool:
-    """A type check that refuses the change: anything but true, unresolved (a missing
-    fact, or presence still waiting) or inapplicable (the scope absent: checked when it
-    comes into play)."""
-    return not isinstance(result, (Unresolved, Inapplicable)) and not (
+    """A type check that refuses the change: anything but true or unresolved (a missing
+    fact: the choice is stored and waits on it)."""
+    return not isinstance(result, Unresolved) and not (
         isinstance(result, Available) and result.value is True
     )
 
@@ -311,19 +282,13 @@ def assign(
             for index in normalized
             if held.get(index, _MISSING) is not stored.get(index, _MISSING)
         }
-        evaluator = world.evaluator
-        # Only a choice whose presence reads something the change moves can come into play.
-        reached = (
-            stored
-            if changed_facts
-            else {choice for source in sources for choice in evaluator.presence_readers(source)}
-        )
+        # Membership reads facts only: a stored value is checked again by new facts alone,
+        # every one of them, dormant ones included.
         retained: dict[NodeId, QueryResult[bool]] = {}
-        for index in sorted(reached, key=linked.ranks.__getitem__):
-            if index in normalized or index not in stored:
-                continue
-            if changed_facts or _into_play(current.world, world, index):
-                retained[index] = check(world, index)
+        if changed_facts:
+            for index in sorted(stored, key=linked.ranks.__getitem__):
+                if index not in normalized:
+                    retained[index] = check(world, index)
         refused = {
             index for index, result in (*checks.items(), *retained.items()) if _refuses(result)
         }

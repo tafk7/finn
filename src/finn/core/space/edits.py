@@ -38,19 +38,17 @@ ChangeRequest: TypeAlias = Change[Any]
 class ChangeOutcome:
     """What a change did to one choice or fact.
 
-    ``result``: for a choice set, its type check, the domain over the facts: true where
-    it holds the value; refused outside it, or through an input of the domain refusing
-    or not applying; unresolved while a fact the domain reads is missing (the choice is
-    stored and waits on it). A choice whose scope is absent or waits is checked where its
-    selectors read its case; where a guard over something else decides its presence,
-    ``result`` is why it was not checked (inapplicable: absent; unresolved: its presence
-    waits), and it is checked when a change brings it into play. For a fact, or a clear,
+    ``result``: for a choice set, its type check, the domain over the facts, read as if
+    the choice existed (wherever it sits: present, dormant or waiting on its presence):
+    true where it holds the value; refused outside it, or through an input of the
+    domain refusing or not applying; unresolved while a fact the domain reads is
+    missing (the choice is stored and waits on it). For a fact, or a clear,
     ``Available(True)``.
 
     ``status``: ``"changed"``, ``"unchanged"`` or ``"removed"`` in a published change;
     in a refused one, ``"refused"`` for what refuses it and ``"checked"`` for the rest.
-    ``requested`` is false for a stored choice the change did not name and checked
-    again (a facts change, or one bringing it into play)."""
+    ``requested`` is false for a stored choice the change did not name that a facts
+    change checked again."""
 
     owner: str
     result: QueryResult[bool]
