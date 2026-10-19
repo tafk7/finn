@@ -301,8 +301,9 @@ MEMORY_STYLES = ("distributed", "block", "ultra")
 
 BLOCK_FIRST_BITS = 8192
 """The least bits a memory holds for which its kernel offers block RAM first: half a
-RAMB18's 16 384 data bits, and 128 LUTs or more in LUTRAM; below it, LUTRAM first. A
-baseline, the kernel's preference, which a budget may move; not a placement rule."""
+RAMB18's 16 384 data bits, and 128 LUTs or more in LUTRAM; below it, LUTRAM first. The
+kernel's preference, which a first valid policy takes and a budget may move; not a
+placement rule."""
 
 AUTO_UNSTATED = "placed by Vivado, not stated"
 """Why a memory in ``auto`` states no resources."""

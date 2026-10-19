@@ -62,7 +62,7 @@ class Node:
     call_style: Literal["explicit", "self"] = "explicit"
     value: object = None
     required: bool = True
-    # A Decision with no safe baseline (``Decision(required=True)``); ``required``
+    # A Decision no default policy may set (``Decision(required=True)``); ``required``
     # above is a formal's, that something must supply it.
     required_choice: bool = False
     domain: Domain[object] | None = None

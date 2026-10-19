@@ -6,8 +6,9 @@
 A boundary channel of a partition's network has a side without an end, its **free
 side**: the AXIS port the network presents (``Channel.free_side``). A shell with ends
 offers each such channel the ends it can place there (``EndOffer``), and the channel's
-``end`` Decision chooses one, by kind (``ENDS``), as it places its ``source``; one
-offered is forced, so nothing is persisted. An end binds no RTL in the partition's
+``end`` Decision chooses one, by kind (``ENDS``), as it places its ``source``; the
+interim channel rule sets it where the network builds the channel (the first valid end,
+the one offered), and it is persisted. An end binds no RTL in the partition's
 module: its pins stay its own, and the shell integrates the end beside the IP from its
 facts (``EndContract``).
 
