@@ -708,7 +708,7 @@ class Seam:
         rederived = {
             key: self._rederived.get(key, ())
             for key, value in before.items()
-            if key not in prior and after.get(key, _ABSENT) != value
+            if key not in prior and key not in self._named and after.get(key, _ABSENT) != value
         }
         interim = {
             key: value
