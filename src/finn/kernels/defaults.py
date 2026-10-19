@@ -20,16 +20,18 @@ list to take a first value from) that is neither required nor fixed are definiti
 (``policies``).
 
 The engine knows nothing of it: a policy is applied once, by ``defaulted``, and the values
-it sets are ordinary choices, unmarked. Choices are taken in declaration order, an
-enclosing selector before the choices of its cases, and only those in play are defaulted:
-a choice under a case not selected, or whose presence waits on a choice still open, is
-left as it is. A value is valid when setting it alone is accepted (``inspection.viable``):
-a rule that waits on a choice still open does not refuse it.
+it sets are ordinary choices, unmarked. Choices are taken in the flow order
+(``inspection.states``): each after every choice its presence, its list or its Space's
+facts read, an enclosing selector before the choices of its cases, ties in declaration
+order. Only those in play are defaulted: a choice under a case not selected, or whose
+presence waits on a choice still open, is left as it is. A value is valid when setting it
+alone is accepted (``inspection.viable``): a rule that waits on a choice still open does
+not refuse it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal, TypeAlias, TypeVar
 
@@ -136,12 +138,11 @@ def _check_keys(space_type: type[Space]) -> None:
         )
 
 
-def _declaration_order(point: Space) -> tuple[str, ...]:
-    """The keys of ``point``'s choices in declaration order: an enclosing selector before
-    the choices of its cases."""
-    below = {item.key for item in inspection.decisions(point)}
-    linked = inspection.model(point).linked
-    return tuple(key for key in (linked.nodes[i].key for i in linked.decisions) if key in below)
+def _flow_order(point: Space) -> tuple[str, ...]:
+    """The keys of ``point``'s choices in the flow order (``inspection.states``): each
+    after every choice its presence, its list or its Space's facts read, an enclosing
+    selector before the choices of its cases, ties in declaration order."""
+    return tuple(key for key, _ in inspection.states(point))
 
 
 def _rules(broken: tuple[BrokenRule, ...]) -> str:
@@ -202,21 +203,22 @@ def unset(key: str, policy: str, message: str, causes: tuple[Finding, ...]) -> F
     )
 
 
-def defaulted(point: S) -> S | tuple[Finding, ...]:
-    """``point``, a design space's root (a kernel bound to its facts), with each of its
-    policies applied once (the module docstring): every choice in play and unset that is
-    not required set to its fixed value or its first valid one, in declaration order; or
-    why it cannot be: its validity's refusal on what it already holds, or a choice no value
-    can be set for (``unset``). Choices it holds are kept."""
+def defaulted(point: S, *, kept: Collection[str] = ()) -> S | tuple[Finding, ...]:
+    """``point``, a design space's root (a kernel or a channel bound to its facts), with
+    each of its policies applied once (the module docstring): every choice in play and
+    unset that is not required set to its fixed value or its first valid one, in the flow
+    order; or why it cannot be: its validity's refusal on what it already holds, or a
+    choice no value can be set for (``unset``). Choices it holds are kept, and so are the
+    open choices ``kept`` names, by key: left open."""
     validity = inspection.validity(point)
     if isinstance(validity.result, Rejected):
         return validity.result.findings
     found = policies(type(point))
     decisions = {item.key: item for item in inspection.decisions(point)}
-    for key in _declaration_order(point):
+    for key in _flow_order(point):
         policy = found[key]
         state = dict(inspection.states(point))[key]
-        if policy is None or not isinstance(state, inspection.Open) or state.waits:
+        if policy is None or key in kept or not isinstance(state, inspection.Open) or state.waits:
             continue
         reference = decisions[key].reference
         if isinstance(policy, Fixed):

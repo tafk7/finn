@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """A choice's default policy (``finn.kernels.defaults``): fixed, first valid, or none
-(required), stated on the class that declares the choice and applied once, in declaration
+(required), stated on the class that declares the choice and applied once, in the flow
 order, on the kernel alone (``defaulted``)."""
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ def states(point: Any) -> dict[str, object]:
     return dict(inspection.states(point))
 
 
-def test_each_choice_in_play_takes_its_first_valid_value_in_declaration_order() -> None:
+def test_each_choice_in_play_takes_its_first_valid_value_in_the_flow_order() -> None:
     """The selector's first case first, then the choices of that case alone; each value
     the first its rules do not refuse; the required choice left open, the other case's
     choices absent."""
@@ -83,6 +83,14 @@ def test_each_choice_in_play_takes_its_first_valid_value_in_declaration_order() 
 def test_a_choice_already_set_is_kept() -> None:
     held = design_space(Toy(width=2)).with_choices({Toy.style: "large"})
     assert states(defaulted(held))["style"] == inspection.Set("large")
+
+
+def test_a_choice_named_kept_is_left_open() -> None:
+    """``kept`` names open choices the caller leaves open (the interim channel rule keeps
+    a choice a change cleared): every other one takes its policy."""
+    point = defaulted(design_space(Toy(width=2)), kept={"style"})
+    assert states(point)["style"] == inspection.Open()
+    assert states(point)["core"] == inspection.Set("narrow")
 
 
 def test_a_choice_no_value_can_be_set_for_names_its_policy_each_value_and_each_rule() -> None:
