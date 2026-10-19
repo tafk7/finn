@@ -34,9 +34,13 @@ it completes once).
 
 A configuration (``_state.State``) is its facts and stored choices and the world they
 read in; a change makes the world of the configuration it would publish from its
-receiver's (``_assign``). A chain of such worlds is kept short: a world published
-``FLATTEN`` changes from its oldest ancestor takes every entry of its ancestors that
-read nothing it reads otherwise, and stands alone (``World.flatten``).
+receiver's (``_assign``). A chain of such worlds is kept short by sharing its bulk
+(``World.flatten``): a world published more than ``FLATTEN`` worlds below one standing
+alone takes, as its parent, its ancestor holding the most entries (its **base**, made
+to stand alone first), and folds only the layers between into its own entries. A
+lookup then goes no further than the world and its base, and nothing large is copied.
+A flattened world whose own entries reach ``BASE_SHARE`` of its base's stands alone in
+turn, the base of the worlds made after it.
 """
 
 from __future__ import annotations
@@ -111,6 +115,10 @@ DEPTH = 32
 
 # How many worlds a chain of changes may stack before the newest is flattened.
 FLATTEN = 8
+
+# A flattened world stands alone once its own entries are this share of its base's: the
+# base's entries it takes then cost at most twice what it already holds.
+BASE_SHARE = 0.5
 
 # The nodes that read their own bit (a fact, a choice): they are never cut early.
 _OWN_BIT: frozenset[NodeKind] = frozenset(("param", "decision"))
@@ -258,10 +266,10 @@ class World:
     ``facts`` and ``stored`` (dormant choices included) by node; ``values``: one answer
     object per fact and stored value, shared with the parent for what did not change;
     ``parent`` and ``delta``: the world this one takes entries from, and the bits of the
-    choices and facts it reads otherwise; ``depth``: how many worlds stand above it;
-    ``cache``: the entries found here (only ever added to). ``assumed``: guards taken as
-    holding, in a world where a choice's membership is read (``membership``); its own
-    such worlds are kept in ``memberships``."""
+    choices and facts it reads otherwise; ``cache``: the entries found here (only ever
+    added to). ``assumed``: guards taken as holding, in a world where a choice's
+    membership is read (``membership``); its own such worlds are kept in
+    ``memberships``."""
 
     __slots__ = (
         "evaluator",
@@ -270,7 +278,6 @@ class World:
         "values",
         "parent",
         "delta",
-        "depth",
         "cache",
         "assumed",
         "memberships",
@@ -292,7 +299,6 @@ class World:
         self.values = values
         self.parent = parent
         self.delta = delta
-        self.depth: int = 0 if parent is None else parent.depth + 1
         self.cache: dict[NodeId, Entry] = {}
         self.assumed = assumed
         self.memberships: dict[tuple[NodeId, ...], World] | None = None
@@ -354,24 +360,85 @@ class World:
             )
         return found
 
+    @property
+    def depth(self) -> int:
+        """How many worlds stand above this one."""
+        depth, world = 0, self.parent
+        while world is not None:
+            depth, world = depth + 1, world.parent
+        return depth
+
     def flatten(self) -> None:
-        """Stand alone: take every entry of the worlds above this one that read nothing
-        this world reads otherwise (nearest first), and drop them, so a chain of worlds
-        made change after change stays short and a lookup never walks far. Only a world
-        nothing has made a successor of yet is flattened (its own entries stay)."""
+        """Keep the chain above this world short by sharing its bulk: its ancestor holding
+        the most entries (the oldest of equals) becomes its parent, its **base**, standing
+        alone first; the layers between are folded into this world (each entry of theirs
+        that read nothing this world reads otherwise, nearest first), and this world reads
+        otherwise than its base only in the choices and facts whose values differ there.
+        A lookup then walks two worlds, and nothing of the base is copied. Where this
+        world's own entries reach ``BASE_SHARE`` of its base's, it stands alone in turn: a
+        new base, for the worlds made after it.
+
+        Only a world nothing has made a successor of yet is flattened; a base standing
+        alone keeps its answers, and so do the worlds made from it (their lookups stop at
+        it, which now holds what they found above it)."""
         with self.evaluator.lock:
-            reached = 0
-            world: World = self
-            cache = self.cache
-            while world.parent is not None:
-                reached |= world.delta
-                for node, entry in world.parent.cache.items():
-                    if not entry.reads & reached:
-                        cache.setdefault(node, entry)
+            layers: list[World] = []
+            world = self.parent
+            while world is not None:
+                layers.append(world)
                 world = world.parent
+            if not layers:
+                return
+            base = max(reversed(layers), key=lambda layer: len(layer.cache))
+            base.stand_alone()
+            reached = self._fold(layers[: layers.index(base)])
+            self.parent = base
+            self.delta = self._differing(base, reached)
+            if len(self.cache) >= BASE_SHARE * len(base.cache):
+                self.stand_alone()
+
+    def stand_alone(self) -> None:
+        """Take every entry of the worlds above this one that read nothing it reads
+        otherwise, and drop them: a world of its own, whose answers are unchanged."""
+        with self.evaluator.lock:
+            layers: list[World] = []
+            world = self.parent
+            while world is not None:
+                layers.append(world)
+                world = world.parent
+            self._fold(layers)
             self.parent = None
             self.delta = 0
-            self.depth = 0
+
+    def _fold(self, layers: Sequence[World]) -> ReadSet:
+        """Take into this world's cache each entry of ``layers`` (the worlds above it,
+        nearest first) that read nothing this world reads otherwise than that layer; the
+        choices and facts it then reads otherwise than the world above the last layer."""
+        reached = self.delta
+        cache = self.cache
+        for layer in layers:
+            for node, entry in layer.cache.items():
+                if not entry.reads & reached:
+                    cache.setdefault(node, entry)
+            reached |= layer.delta
+        return reached
+
+    def _differing(self, base: World, reached: ReadSet) -> ReadSet:
+        """The bits of ``reached`` whose choice or fact has another value here than in
+        ``base`` (a value set back to the base's is read as the base reads it)."""
+        evaluator = self.evaluator
+        differing = 0
+        for node in evaluator.bits.nodes(reached):
+            here, there = self.values.get(node), base.values.get(node)
+            if here is there:
+                continue
+            if (
+                here is None
+                or there is None
+                or not _same_value(evaluator.nodes[node], here.value, there.value)
+            ):
+                differing |= evaluator.bits.bit(node)
+        return differing
 
     # -- evaluation ----------------------------------------------------------------------
 

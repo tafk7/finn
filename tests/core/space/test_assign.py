@@ -14,8 +14,11 @@ rule and the stored choices standing in its way.
 
 from __future__ import annotations
 
+import random
 from collections.abc import Mapping
 from typing import cast
+
+from support.space_cores import chain
 
 from finn.core.space import (
     Available,
@@ -33,7 +36,7 @@ from finn.core.space import (
 )
 from finn.core.space._assign import Assigned, assign
 from finn.core.space._state import State, bind, decision_state, prepare
-from finn.core.space._world import FLATTEN
+from finn.core.space._world import BASE_SHARE, FLATTEN, World
 from finn.core.space.compiler import compile_model, root_parameters, root_record
 from finn.core.space.edits import Change
 from finn.core.space.ir import NodeId
@@ -379,3 +382,41 @@ def test_a_long_chain_of_changes_stays_short_and_answers_as_one_built_at_once() 
     )
     for node in point.linked.nodes:
         assert point.world.result(node.index) == fresh.world.result(node.index), node.key
+
+
+def test_a_walk_of_hundreds_of_changes_shares_its_base_and_answers_as_one_built_at_once() -> None:
+    """A world published past ``FLATTEN`` sits on the ancestor holding the most entries,
+    which stands alone: a lookup walks two worlds. A flattened world shares its base
+    (nothing of it copied) until its own entries reach ``BASE_SHARE`` of the base's, when
+    it stands alone itself. Every fifty steps the walk's configuration answers every node
+    as the same facts and stored choices built at once."""
+    point = start(chain(40)())
+    ones = {f"s{i}.size": 1 for i in range(40)} | {f"h{i}.depth": 1 for i in range(39)}
+    point = cast(State, change(point, ones).state)
+    rng = random.Random(7)
+    flattened = shared = 0
+    for step in range(301):
+        if step % 50 == 0:
+            world = point.world
+            built = World.start(world.evaluator, dict(world.facts), dict(world.stored))
+            for node in point.linked.nodes:
+                assert world.result(node.index) == built.result(node.index), node.key
+        # A stage's size and the depth of the hop after it, moved together.
+        stage = rng.randrange(40)
+        size = 3 - cast(int, point.stored[key(point, f"s{stage}.size")])
+        moved = {f"s{stage}.size": size} | ({f"h{stage}.depth": size} if stage < 39 else {})
+        before = point.world.depth
+        report = change(point, moved)
+        if report.state is None or report.state is point:
+            continue
+        point = report.state
+        world = point.world
+        assert world.depth <= FLATTEN
+        if world.depth <= before:  # flattened on publication
+            flattened += 1
+            assert world.depth <= 1
+            if world.parent is not None:
+                shared += 1
+                assert world.parent.parent is None
+                assert len(world.cache) < BASE_SHARE * len(world.parent.cache)
+    assert flattened >= 10 and shared >= 5, (flattened, shared)

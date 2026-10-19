@@ -22,7 +22,10 @@ SOURCE = Path(_world.__file__).parent
 # Where a cache is given an entry with ``setdefault``.
 SETDEFAULT_SITES = {
     ("_world.py", "_get"): "a world keeps the first entry it finds (only added to)",
-    ("_world.py", "flatten"): "a world standing alone takes its ancestors' entries it lacks",
+    (
+        "_world.py",
+        "_fold",
+    ): "a flattened world takes the entries of the layers it folds that it lacks",
 }
 # A function that gives a world its cache other than its constructor's annotated assignment.
 CACHE_SETTERS: set[tuple[str, str]] = set()
