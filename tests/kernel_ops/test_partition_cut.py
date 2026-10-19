@@ -292,7 +292,8 @@ def test_an_iodma_end_refuses_w2_repeated_or_tiled_by_name() -> None:
     ``end-repetition``, at any folding; at the Chain's own each pass is also in 2 x 2
     tiles, which the driver's row-major buffer does not hold, ``end-order``. The cut can
     set w2's end to no value (``choice-no-valid-value``, each rule's finding its causes)
-    and leaves it open; emission refuses it, naming the rules it breaks."""
+    and leaves it open; emission refuses it, naming the rules it breaks, their findings
+    its causes."""
     repeated = (
         r"end\.iodma_hls\.single_pass: end-repetition: s_axis_1: an iodma_hls end moves "
         r"one pass of a \[4, 4\] buffer a frame, and this free side presents it 3 times a "
@@ -325,8 +326,13 @@ def test_an_iodma_end_refuses_w2_repeated_or_tiled_by_name() -> None:
             node="partition",
             keys=("w2.end",),
             message=r"w2\.end: no value is possible: 'iodma_hls' breaks .*single_pass",
-        ):
+        ) as caught:
             configured_network(model, "partition")
+        # Each open choice no value fits is a cause, with the findings of the rules its
+        # values break, as the cut reports it.
+        ((cause, owner, why),) = [(f.code, f.owner, f.causes) for f in caught.finding.causes]
+        assert (cause, owner) == ("choice-no-valid-value", "w2.end")
+        assert set(why) == set(causes)
 
 
 def test_an_end_or_bus_the_block_design_cannot_wire_is_refused_by_name(tmp_path: Path) -> None:

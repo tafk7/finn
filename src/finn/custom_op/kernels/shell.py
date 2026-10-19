@@ -249,10 +249,12 @@ def configured_network(
     and its boundary (tensor, port). Every choice is stored where it is created (a
     KernelOp's at conversion, a channel's at the cut) and replaced by the strategies, so
     nothing is completed here. A stale choice; an open choice in play, each by name: one no
-    value of which is possible (each refused value's rules), a required one no strategy set
-    ("required: run step_size_fifos or step_placeholder_choices"), any other one never set
-    ("not set: the cut, MakeCutChoices, or a strategy sets it"; one finding,
-    ``choices-open``); a network over the shell's budgets (``budget_refusal``), or whose
+    value of which is possible (each refused value's rules; a ``choice-no-valid-value``
+    cause each, owned by the key, the rules' findings its causes, as the cut reports it), a
+    required one no strategy set ("required: run step_size_fifos or
+    step_placeholder_choices"), any other one never set ("not set: the cut,
+    MakeCutChoices, or a strategy sets it"; one finding, ``choices-open``); a network over
+    the shell's budgets (``budget_refusal``), or whose
     module or cycles its members refuse; or graph inputs and outputs out of port order
     refuse, named. A dormant choice (stored under a case not selected) is not open, and
     refuses nothing. It only binds: it does not check the FIFOs against their streams
@@ -283,16 +285,12 @@ def configured_network(
         required = {key for key, item in bound.decisions().items() if item.required}
         listed = bound.viable(key for key in open_keys if key not in required)
         impossible = {
-            key: "; ".join(
-                f"{item.value!r} breaks " + ", ".join(rule.rule for rule in item.broken)
-                for item in viable.values
-                if isinstance(item, inspection.Refused)
-            )
+            key: _impossible(key, viable.values)
             for key, viable in listed
             if viable.values is not None and not viable.cases
         }
         named = [
-            f"{dotted(key)}: no value is possible: {impossible[key] or 'its domain lists none'}"
+            f"{dotted(key)}: {impossible[key].message}"
             if key in impossible
             else f"{dotted(key)} (required: run step_size_fifos or step_placeholder_choices)"
             if key in required
@@ -311,6 +309,7 @@ def configured_network(
                     "configured_network",
                     text,
                     (("keys", keys), ("node", label)),
+                    tuple(impossible.values()),
                 ),
             ),
         )
@@ -348,6 +347,28 @@ def configured_network(
         )
     slowest = max(each.value for each in cycles.values() if isinstance(each, Available))
     return Configured(bound, module.value, slowest), bound.boundary
+
+
+def _impossible(key: Key, values: tuple[inspection.Possible | inspection.Refused, ...]) -> Finding:
+    """Why open choice ``key`` can take no value (``choice-no-valid-value``, owned by its
+    dotted key): each listed value with the rules it breaks, those rules' findings, each
+    once, its causes."""
+    refused = [item for item in values if isinstance(item, inspection.Refused)]
+    why = "; ".join(
+        f"{item.value!r} breaks " + ", ".join(rule.rule for rule in item.broken) for item in refused
+    )
+    causes = tuple(
+        dict.fromkeys(
+            finding for item in refused for rule in item.broken for finding in rule.result.findings
+        )
+    )
+    return Finding(
+        FindingKind.REJECTION,
+        "choice-no-valid-value",
+        dotted(key),
+        f"no value is possible: {why or 'its domain lists none'}",
+        causes=causes,
+    )
 
 
 def verify_partition(model: ModelWrapper, label: str) -> tuple[Configured, FifoCheck]:
