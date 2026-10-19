@@ -19,6 +19,7 @@ from support.models import matmul_model, thresholding_model
 from support.refusals import refused
 
 from finn.core.graph.errors import KernelOpError
+from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.thresholding import Thresholding
@@ -48,10 +49,11 @@ def test_an_absent_choice_is_read_as_absent(key: str) -> None:
 
 
 def test_a_key_never_stored_is_absent_and_its_value_in_effect_is_read_from_the_point() -> None:
-    """A forced key is never stored, and nor is one that the selected case does not have:
-    ``get_nodeattr`` refuses either as absent, and the value in effect is the point's.
-    A Thresholding's ``use_axilite`` is forced False (no control bus); a MatMul's
-    ``compute`` is forced to ``packed``, so ``compute.int8_dsp58.pe`` does not apply."""
+    """A key never stored is absent: ``get_nodeattr`` refuses it, open or under a case not
+    selected, and the value in effect is the point's. A node made by hand stores only what
+    was set on it (conversion's policies never ran on it): a Thresholding's
+    ``use_axilite``, never set, is open, and nothing sets it in its place; a MatMul's
+    ``compute`` set to ``packed`` leaves ``compute.int8_dsp58.pe`` out of play."""
     model = configured(
         thresholding_model(),
         {"activate": {"pe": 2, "ram_style": "distributed", "block_stages": 1}},
@@ -67,15 +69,18 @@ def test_a_key_never_stored_is_absent_and_its_value_in_effect_is_read_from_the_p
         keys=("use_axilite",),
     ):
         found.get_nodeattr("use_axilite")
-    assert found.point().use_axilite is False  # type: ignore[attr-defined]
+    assert dict(inspection.states(found.point()))["use_axilite"] == inspection.Open()
 
-    op = matmul(configured(matmul_model(), {"first": FOLDING}))
-    assert {"compute", "compute.int8_dsp58.pe"}.isdisjoint(op.choices())
-    for key in ("compute", "compute.int8_dsp58.pe"):
-        with refused(
-            "choice-absent", owner=MatMul.op_type, error=KernelOpError, node="first", keys=(key,)
-        ):
-            op.get_nodeattr(key)
+    op = matmul(configured(matmul_model(), {"first": {"compute": "packed", **FOLDING}}))
+    assert op.choices()["compute"] == "packed" and "compute.int8_dsp58.pe" not in op.choices()
+    with refused(
+        "choice-absent",
+        owner=MatMul.op_type,
+        error=KernelOpError,
+        node="first",
+        keys=("compute.int8_dsp58.pe",),
+    ):
+        op.get_nodeattr("compute.int8_dsp58.pe")
     assert type(op.point().compute).__name__ == "PackedDotpKernel"  # type: ignore[attr-defined]
 
 

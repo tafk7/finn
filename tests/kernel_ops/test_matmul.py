@@ -6,7 +6,8 @@
 A node's choice attributes are its own choices, each set by its default policy once the
 node is converted (every choice in play, a selector's case included), absent on a node made
 by hand until configured (``support.configure``, which sets choices as the compiler does,
-never a point); a nested choice applies under its forced selector.
+never a point); a nested choice applies under its selector's case, waits while the
+selector is open, and is kept out of play (dormant) under another case.
 """
 
 from __future__ import annotations
@@ -137,8 +138,8 @@ def test_the_schema_is_pinned_for_its_op_version() -> None:
 def test_configured_choices_are_written_and_replay_reads_them() -> None:
     model = matmul_model()
     configured(model, {"first": FOLDING})
-    # ``compute`` is forced on this target: the compiler never stores it, nor does the helper.
-    assert attributes(model) == sorted(set(FOLDING) - {"compute"})
+    # Every value set is stored, the core's case too.
+    assert attributes(model) == sorted(FOLDING)
     assert op(model).choices()["compute.packed.pe"] == 2
     point = op(model).point()
     assert point.compute.pe == 2
@@ -146,37 +147,48 @@ def test_configured_choices_are_written_and_replay_reads_them() -> None:
     with refused("domain-membership", owner="compute.packed.pe"):
         configured(model, {"first": {"compute.packed.pe": 3}})
     assert op(model).choices()["compute.packed.pe"] == 2
-    # A value no case holds, and a forced selector (here, DSP48E2): each refused by its code.
-    with refused("forced", owner="first.compute"):
+    # A value of another type, one no case holds, and a core this target (DSP48E2) refuses:
+    # each refused by its code, the core by its own rule.
+    with refused("request-refused", owner="compute"):
         configured(model, {"first": {"compute": 1}})
-    with refused("forced", owner="first.compute"):
+    with refused("domain-membership", owner="compute"):
         configured(model, {"first": {"compute": "dense"}})
+    with refused("dotp-target", owner="compute.int8_dsp58.core_supported"):
+        configured(model, {"first": {"compute": "int8_dsp58"}})
     # A channel's choice is no node's: refused, naming the key.
     with refused("not-a-decision", owner="first.w.transport"):
         configured(model, {"first": {"w.transport": "direct"}})
-    assert attributes(model) == sorted(set(FOLDING) - {"compute"})
+    assert attributes(model) == sorted(FOLDING)
 
 
 def test_a_graph_with_a_cleared_choice_a_rule_reads_waits_then_is_refused() -> None:
     """The read side of a clear: a graph whose SIMD is gone, its pumping still stored, is
     stated as the raw attributes state it. The pumping is checked by its own domain and
     kept; the rule that pumping needs lanes waits on SIMD, so nothing is refused; once SIMD
-    is stated as one lane, the node's point is refused (``verify_node``): no core is
-    possible, the rule the packed core's reason, its stored choices all replayed."""
+    is stated as one lane, the stored choices break the rule, so binding them is refused
+    (``verify_node``, ``point``), naming the rule at its origin."""
     model = matmul_model()
     configured(model, {"first": FOLDING})
     write_raw(model, "first", "compute.packed.simd", None)
     assert "compute.packed.simd" not in attributes(model)
     assert op(model).verify_node() == []
-    assert inspection.unchecked(op(model).point()) == ()
+    states = dict(inspection.states(op(model).point()))
+    assert states["compute.packed.simd"] == inspection.Open()
+    assert states["compute.packed.compute_pumping"] == inspection.Set(False)
     # Pumped, it waits all the same; SIMD stated as one lane, the rule refuses it.
     write_raw(model, "first", "compute.packed.compute_pumping", True)
     assert op(model).verify_node() == []
     write_raw(model, "first", "compute.packed.simd", 1)
     (problem,) = op(model).verify_node()
-    assert problem.startswith("first: compute: decision-no-viable-case: no case is viable: ")
-    assert "packed: compute.packed.pumping_has_lanes: dotp-pumping: pumping requires" in problem
-    assert inspection.validity(op(model).point()).status == "refused"
+    assert problem.startswith("first: refused choices: compute.packed.pumping_has_lanes: ")
+    assert "dotp-pumping: pumping requires SIMD >= 2" in problem
+    with refused(
+        "choices-refused",
+        error=KernelOpError,
+        message="dotp-pumping",
+        keys=("compute.packed.pumping_has_lanes",),
+    ):
+        op(model).point()
     write_raw(model, "first", "compute.packed.compute_pumping", None)
     assert op(model).verify_node() == []
 
@@ -220,21 +232,22 @@ def test_a_kernel_op_error_carries_at_least_one_finding() -> None:
 def test_the_weight_sources_choices_persist_on_the_weights_and_the_network_replays_them() -> None:
     """The node owns its weight channel, whose choices are stated on the initializer's
     tensor, beside its value, never on the node; the network replays them, the node its
-    kernel's alone. The source, its one case forced, is written only when saved on
-    purpose."""
+    kernel's alone. The source's one case is stored as the interim channel rule sets it,
+    and stating it again changes nothing."""
     model = matmul_model()
     configured(model, {"first": FOLDING})  # its ends known, so its channels bind
     configured(model, {"w": {"source.memstream.ram_style": "block", "transport": "direct"}})
-    assert attributes(model) == sorted(set(FOLDING) - {"compute"})
+    assert attributes(model) == sorted(FOLDING)
     assert channel_choices(model, "w") == {
+        "source": "memstream",
         "source.memstream.ram_style": "block",
+        "source.memstream.pumped_memory": False,
         "transport": "direct",
     }
     weights = network(model, model.graph.node).member("w")
     assert weights.source.ram_style == "block" and isinstance(weights.source, MemStreamKernel)
-    # The source's one case is forced: stating it is dropped, as the compiler never stores it.
     configured(model, {"w": {"source": "memstream"}})
-    assert "source" not in channel_choices(model, "w")
+    assert channel_choices(model, "w")["source"] == "memstream"
     assert network(model, model.graph.node).member("w").source.ram_style == "block"
 
 
@@ -253,11 +266,19 @@ def test_conversion_stores_every_value_its_policies_set() -> None:
     }
 
 
-def test_a_nested_choice_under_a_case_not_forced_is_refused_by_name() -> None:
+def test_a_nested_choice_under_a_case_not_selected_is_stored_out_of_play() -> None:
+    """A choice under a case is set wherever it sits: under the open core it is stored and
+    waits on ``compute``; under a core not selected it is stored and dormant, its rules
+    out of play."""
     model = matmul_model()
-    with refused("inapplicable", owner="compute.int8_dsp58.pe"):
-        configured(model, {"first": {"compute.int8_dsp58.pe": 2}})
-    assert attributes(model) == []
+    configured(model, {"first": {"compute.int8_dsp58.pe": 2}})
+    assert attributes(model) == ["compute.int8_dsp58.pe"]
+    state = dict(inspection.states(op(model).point()))["compute.int8_dsp58.pe"]
+    assert state == inspection.Waiting(2, ("compute",))
+    configured(model, {"first": FOLDING})
+    assert attributes(model) == sorted({*FOLDING, "compute.int8_dsp58.pe"})
+    state = dict(inspection.states(op(model).point()))["compute.int8_dsp58.pe"]
+    assert state == inspection.Dormant(2)
 
 
 def test_a_choice_goes_stale_when_a_fact_changes() -> None:
@@ -292,8 +313,12 @@ def test_an_unknown_attribute_is_refused() -> None:
 def test_replay_reads_the_stored_folding_and_verify_node_catches_a_misfolding() -> None:
     model = configured(matmul_model(), {"first": FOLDING})
     assert op(model).point().compute.pe == 2
-    # A folding naming only the nested key replays under the forced selector.
+    # A folding naming only the nested key waits on its selector, open on a node made by
+    # hand, and replays once the core is set.
     alone = configured(matmul_model(), {"first": {"compute.packed.pe": 2}})
+    state = dict(inspection.states(op(alone).point()))["compute.packed.pe"]
+    assert state == inspection.Waiting(2, ("compute",))
+    configured(alone, {"first": {"compute": "packed"}})
     assert op(alone).point().compute.pe == 2
     # A misfolding the seam would refuse is stored raw, as a graph FINN did not write holds
     # it: the replay's verification names the key.

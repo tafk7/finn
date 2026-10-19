@@ -171,12 +171,13 @@ def test_the_converted_graph_computes_the_source_graphs_results(second_weights: 
 
 
 def test_the_export_of_the_choices_round_trips_through_configured() -> None:
-    """The export names nodes and, after them, tensors: ``configured`` sets what the export
-    holds (a node's, and a channel's on its tensor), as ``Hold`` reads it back
-    (test_explore). Each node holds every choice of its own from conversion on (its
-    baselines); the round trip starts from nodes holding none, as a graph FINN did not
-    write holds them. A forced key is never stored (``ram_style`` auto forces the stages
-    to 0), so the export does not hold it."""
+    """The export names nodes and tensors in graph order: ``configured`` sets what the
+    export holds (a node's, and a channel's on its tensor), as ``Hold`` reads it back
+    (test_explore). Each node holds every choice its policies set from conversion on, a
+    choice with one possible value too, and each channel every choice the interim channel
+    rule sets, as the cut sets them; the round trip starts from nodes holding none, as a
+    graph FINN did not write holds them. A choice put out of play is kept: ``ram_style``
+    auto leaves ``block_stages`` dormant, stored as conversion set it."""
     model = inferred()
     configured(
         model,
@@ -187,19 +188,41 @@ def test_the_export_of_the_choices_round_trips_through_configured() -> None:
         },
     )
     config = kernel_choices_config(model)
+    adapted = {
+        "adapter": "input_gen",
+        "adapter.input_gen.input_gen.ram_style": "distributed",
+        "transport": "direct",
+    }
+    weights = {
+        "source": "memstream",
+        "source.memstream.pumped_memory": False,
+        "source.memstream.ram_style": "distributed",
+        "transport": "direct",
+    }
+    matmul = {
+        "compute": "packed",
+        "compute.packed.compute_pumping": 0,
+        "compute.packed.pe": 1,
+        "compute.packed.reducer": "tree",
+        "compute.packed.simd": 1,
+    }
     assert config == {
-        "first": {
-            "compute.packed.pe": 2,
-            "compute.packed.reducer": "tree",
-            "compute.packed.simd": 1,
+        "x": adapted,
+        "w1": weights,
+        "first": {**matmul, "compute.packed.pe": 2},
+        "hidden": {"output_adapter": "vpc", "transport": "direct"},
+        "activate": {
+            "block_stages": 0,
+            "deep_pipeline": 0,
+            "pe": 1,
+            "ram_style": "auto",
+            "ultra_stages": 0,
+            "use_axilite": 0,
         },
-        "activate": {"deep_pipeline": 0, "pe": 1, "ram_style": "auto"},
-        "second": {
-            "compute.packed.pe": 1,
-            "compute.packed.reducer": "tree",
-            "compute.packed.simd": 1,
-        },
-        "w1": {"transport": "direct"},
+        "levels": adapted,
+        "w2": weights,
+        "second": matmul,
+        "y": {"transport": "direct"},
     }
     blank = inferred()
     for node in blank.graph.node:

@@ -23,7 +23,7 @@ from qonnx.util.basic import qonnx_make_model
 from finn.core.graph.annotations.platform import write_target
 from finn.custom_op.kernels.base import KernelOp
 from finn.custom_op.kernels.network import Partition, persist
-from finn.custom_op.kernels.shell import InShell, in_shell
+from finn.custom_op.kernels.shell import InShell, in_shell, make_cut_choices
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
@@ -357,9 +357,13 @@ def choose_memories(model: ModelWrapper) -> InShell:
 
 
 def configure_partition(model: ModelWrapper) -> InShell:
-    """The partition's network in its shell, its open adapter memories chosen
-    (``choose_memories``), and the partition verified as the build verifies it before
-    emission (``support.packaging.verified``), so that it packages."""
+    """The partition's network in its shell, the choices it leaves open set as the cut sets
+    them (``make_cut_choices``: the ends a shell it was retargeted to offers, by the interim
+    channel rule), its open adapter memories chosen (``choose_memories``), and the
+    partition verified as the build verifies it before emission
+    (``support.packaging.verified``), so that it packages."""
+    made = make_cut_choices(model)
+    assert not (made.stale or made.unset), made
     bound = choose_memories(model)
     verified(model, "chain")
     return bound

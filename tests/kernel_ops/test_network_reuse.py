@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import replace
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 import pytest
@@ -23,14 +24,13 @@ from onnx import GraphProto
 from qonnx.core.datatype import DataType
 from qonnx.core.metadata import clear
 from qonnx.core.modelwrapper import ModelWrapper
-from support.helpers import choose
+from support.helpers import ADAPTER_RAM_STYLES, choose
 from support.models import (
     TARGET,
     WEIGHTS,
     configure_partition,
     kernel_model,
     matmul_model,
-    open_memories,
 )
 from support.refusals import refused
 from support.tfc import ULTRA96
@@ -53,9 +53,20 @@ from finn.kernels.members import (
     verification_counts,
     write_counts,
 )
+from finn.kernels.network import dotted
 from finn.platform.resolve import resolve_target
 from finn.platform.shells import shell_row
 from finn.transformation.kernels import InferKernelTensors
+from finn.transformation.kernels.cut import MakeCutChoices
+
+
+def memories(bound: Partition) -> dict[str, object]:
+    """The stored styles of the network's adapter memories, by ``member.key``."""
+    return {
+        dotted(key): value
+        for key, value in bound.chosen().items()
+        if fnmatchcase(dotted(key), ADAPTER_RAM_STYLES)
+    }
 
 
 def cache() -> MemberCache:
@@ -73,14 +84,14 @@ def test_the_same_facts_reuse_the_bindings_never_the_choices() -> None:
     # Each kernel and each channel is found by its facts and choices: nothing bound.
     assert cache().misses == misses
     assert type(again.member("first")) is type(first.member("first"))
-    # Choices are replayed on each network, never shared: saving the open memories
-    # reaches the next network and leaves the first one's open.
-    _, styles = open_memories(first)
-    assert styles
+    # Choices are replayed on each network, never shared: saving other memories reaches
+    # the next network and leaves the first one's as they were.
+    styles = memories(first)
+    assert styles and "auto" not in styles.values()
     persist(model, choose(first, dict.fromkeys(styles, "auto")))
     configured = network(model, model.graph.node, name="chain")
-    assert open_memories(configured)[1] == [] and not configured.stale
-    assert open_memories(first)[1] == styles
+    assert memories(configured) == dict.fromkeys(styles, "auto") and not configured.stale
+    assert memories(first) == styles
 
 
 def changed_weights() -> ModelWrapper:
@@ -174,7 +185,7 @@ def test_a_network_is_kept_by_its_design_and_selection() -> None:
     assert network(model, model.graph.node[:1], name="chain") is not first
     assert networks(cache()) == (hits + 1, misses + 2)
     # A choice persisted changes the design: bound again, the members kept.
-    _, styles = open_memories(first)
+    styles = memories(first)
     persist(model, choose(first, dict.fromkeys(styles, "auto")))
     members = cache().misses
     assert network(model, model.graph.node, name="chain") is not first
@@ -235,10 +246,12 @@ def test_a_body_bound_plain_and_in_shells_keeps_a_network_each() -> None:
     """One body bound in one cache, in the verifying mode, three ways: plain (no ends
     offered), in Ultra96's shell (its row offers an end) and in a row of the same ends
     with no static region of its own. Each is its own entry, as it is bound without the
-    cache, and binding each again is its own entry's hit, verified."""
+    cache, and binding each again is its own entry's hit, verified. Retargeted by hand,
+    its new ends are set as the cut sets them (``MakeCutChoices``)."""
     model = kernel_model()
     configure_partition(model)
     write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices())
     nodes = list(model.graph.node)
     row = shell_row("pynq", "Ultra96")
     bare = replace(row, static_region=None)

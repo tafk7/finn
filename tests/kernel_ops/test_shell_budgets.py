@@ -39,6 +39,7 @@ from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform.shells import IP_ROW, ShellRow, budgets, bus_counts, shell_row
 from finn.transformation.kernels import explore_kernel_choices
+from finn.transformation.kernels.cut import MakeCutChoices
 
 PYNQ_ROW = shell_row("pynq", "Ultra96")
 
@@ -128,9 +129,11 @@ def test_the_ip_shell_takes_the_same_partition_presenting_every_bus() -> None:
 
 def test_a_partition_of_kernel_ops_counts_its_ends() -> None:
     """The Chain in the Zynq shell: no AXI-Lite bus of its own and two ends, within nine;
-    on a row taking one bus, its ends alone exceed it."""
+    on a row taking one bus, its ends alone exceed it. Retargeted by hand, its new ends
+    are set as the cut sets them (``MakeCutChoices``)."""
     model = kernel_model()
     write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices())
     explore_kernel_choices(model)
     configured_network(model, "chain")
     narrow = replace(PYNQ_ROW, control_budget=1)
@@ -170,6 +173,7 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     assert point.row is IP_ROW and IP_ROW.clk2x
     assert point.module.abi.clock_alignments
     write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices())  # the ends the pynq row offers
     assert not in_shell(model, model.graph.node, name="chain").row.clk2x
     with refused(
         "clock-unavailable",
