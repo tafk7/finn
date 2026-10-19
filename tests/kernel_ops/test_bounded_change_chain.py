@@ -3,12 +3,14 @@
 """A successor answers as a recomputation, on one whole Space of eight kernels.
 
 Stage 7's synthetic chain (four MatMuls, each followed by a Thresholding, and the
-channels between them) joined as one Space, kernels first, its baseline committed. The
-engine's walk (``support.space_walk``) applies seeded changes to it: a kernel's
-core, its folding, a channel's adapter or depth, a clear, a pair of changes, and ones
-the kernels refuse; each successor is compared with a configuration of the same
-assignments built from nothing. Here a channel's verdicts read its kernel's forced
-``compute``, as the engine's own examples do in ``core.space.test_bounded_change``.
+channels between them) joined as one Space, kernels first, its choices committed as
+conversion and the cut set them (each kernel's by its default policies, each channel's
+by the interim channel rule). The engine's walk (``support.space_walk``) applies seeded
+changes to it: a kernel's core, its folding, a channel's adapter or depth, a clear, a
+pair of changes, and ones the kernels refuse; each successor is compared with a
+configuration of the same assignments built from nothing. Here a channel's facts read
+its kernel's ``compute``, as the engine's own examples do in
+``core.space.test_bounded_change``.
 """
 
 from __future__ import annotations
@@ -22,12 +24,11 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 from support.space_walk import check, walk
 
-from finn.core.space import Space, _forcing, composite, design_space, occurrence
+from finn.core.space import Space, composite, design_space
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import in_shell
+from finn.custom_op.kernels.shell import in_shell, make_cut_choices
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
-from finn.kernels.explore import Seam
 from finn.kernels.network import Fact, Interface
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
@@ -80,13 +81,15 @@ def mlp(layers: int) -> ModelWrapper:
 
 
 def whole_space(layers: int) -> Space:
-    """The chain's kernels and channels as one Space, kernels first, the baseline's
-    stored choices committed, its forced Decisions found."""
+    """The chain's kernels and channels as one Space, kernels first, with the choices
+    conversion and the cut store committed (``make_cut_choices``: what the cut does to
+    a body)."""
     target = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)
     model = mlp(layers).transform(ToKernelOps(target)).transform(InferKernelTensors())
     nodes = list(model.graph.node)
+    made = make_cut_choices(model)
+    assert not (made.stale or made.late or made.unset), made
     net = in_shell(model, nodes)
-    baseline = Seam(target.platform).baseline(net)
     declared: dict[str, Any] = {}
     for node in nodes:
         facts = kernel_op(model, node).facts()
@@ -102,13 +105,13 @@ def whole_space(layers: int) -> Space:
             given[fact] = value
         channels[name] = Channel(**given)
     whole = composite(f"chain_{2 * layers}", {**declared, **channels})
-    stored = {f"{owner}.{key}": value for (owner, key), value in baseline.chosen().items()}
-    point = commit(design_space(whole()), stored)
-    _forcing.forced(occurrence.state(point))
-    return point
+    stored = {f"{owner}.{key}": value for (owner, key), value in net.chosen().items()}
+    return commit(design_space(whole()), stored)
 
 
 def test_eight_kernels_answer_as_a_recomputation() -> None:
     # Few steps: each recomputes the base and the successor from nothing, ~0.7 s on this
-    # chain. Seed 3 accepts, refuses, clears, pairs and moves a forced value within 12.
-    check(walk(whole_space(4), seed=3, steps=20, everything=False))
+    # chain. Seed 5 accepts, refuses, clears, pairs and puts stored choices dormant.
+    report = walk(whole_space(4), seed=5, steps=20, everything=False)
+    check(report)
+    assert report.tallies.dormant, report.tallies
