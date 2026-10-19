@@ -29,7 +29,7 @@ from support.explore_models import choices, kernel_model
 from support.helpers import Lanes
 from support.models import TARGET, matmul_model
 from support.refusals import refused
-from support.tfc_built import TFC_BUILT
+from support.tfc_built import TFC_BUILT, TFC_STORED
 
 import finn.kernels.explore as explore_module
 from finn.core.graph.annotations.choices import HELD, OBJECTIVE_FPS
@@ -685,26 +685,6 @@ def test_target_throughput_folds_tfc_through_each_matmul_s_core_on_a_dsp58_part(
         assert held[f"compute.{row['taken']}.simd"]["by"] == "target_throughput"
 
 
-#: What conversion, the cut and the fold store on TFC beside ``TFC_BUILT`` (forcing left
-#: them unstored): each MatMul's core (conversion's first valid), each Thresholding's
-#: AXI-Lite and UltraRAM stages (conversion's), each weight's source and each
-#: activation's adapter (the interim channel rule's one possible), the end of each
-#: boundary channel the pynq row offers one, and the output adapter the fold brings into
-#: play on each activation and on the first MatMul's output (the interim channel rule's).
-STORED: dict[str, dict[str, object]] = {
-    **{f"MatMul_{index}": {"compute": "packed"} for index in range(4)},
-    **{f"MultiThreshold_{index}": {"use_axilite": 0, "ultra_stages": 0} for index in range(4)},
-    **{f"MatMul_{index}_param0": {"source": "memstream"} for index in range(4)},
-    **{
-        f"MultiThreshold_{index}_out0": {"adapter": "input_gen", "output_adapter": "vpc"}
-        for index in range(4)
-    },
-    "MatMul_0_out0": {"output_adapter": "vpc"},
-    "Reshape_0_out0": {"end": "iodma_hls"},
-    "MatMul_3_out0": {"end": "iodma_hls"},
-}
-
-
 @pytest.mark.slow
 def test_tfc_at_a_million_frames_a_second_is_saved_as_the_57_values_it_is_built_with(
     tfc: ModelWrapper,
@@ -712,15 +692,13 @@ def test_tfc_at_a_million_frames_a_second_is_saved_as_the_57_values_it_is_built_
     """TFC's body explored by target_throughput 1e6, then size_fifos, saves the 57 values
     it was built with when exploration left choices open and a completion policy
     completed them on a copy (``TFC_BUILT``), and the 27 conversion, the cut and the
-    fold now store beside them (``STORED``, which forcing left unstored): the target
+    fold now store beside them, which forcing left unstored (``TFC_STORED``, both): the target
     reopens the kernels' choices, folds and gives the rest back; sizing places no FIFO."""
     model = ModelWrapper(tfc.model.__deepcopy__())
     target = explore_kernel_choices(model, TargetThroughput(1e6)).report["strategy"]
     report = explore_kernel_choices(model, SizeFifos()).report
     found = kernel_choices_config(model)
-    assert found == {
-        owner: {**TFC_BUILT.get(owner, {}), **STORED.get(owner, {})} for owner in found
-    }
+    assert found == TFC_STORED
     assert sum(map(len, TFC_BUILT.values())) == 57 and sum(map(len, found.values())) == 84
     sizing = report["strategy"]
     assert (target["by_policy"], target["unset"], target["rederived"]) == ([], {}, {})

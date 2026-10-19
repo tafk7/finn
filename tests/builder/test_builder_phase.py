@@ -50,7 +50,7 @@ from support.packaging import (
 )
 from support.refusals import refused
 from support.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition, run_steps
-from support.tfc_built import SET_FOLDING, TFC_BUILT
+from support.tfc_built import SET_FOLDING, TFC_BUILT, TFC_STORED
 
 import finn.kernels.explore as explore_module
 from finn.builder import build_dataflow_steps
@@ -1037,28 +1037,6 @@ def test_a_step_the_build_does_not_know_is_refused(tmp_path: Path) -> None:
     ]
 
 
-#: What conversion, the cut and the fold store on TFC beside ``TFC_BUILT`` (forcing left
-#: them unstored): each MatMul's core, each Thresholding's AXI-Lite and UltraRAM stages
-#: (conversion's), each weight's source and each activation's adapter, the end of each
-#: boundary channel the pynq row offers one, and the output adapter the fold at 1e6 frames
-#: a second brings into play on each activation and on the first MatMul's output (the
-#: interim channel rule's).
-STORED: dict[str, dict[str, object]] = {
-    **{f"MatMul_{index}": {"compute": "packed"} for index in range(4)},
-    **{f"MultiThreshold_{index}": {"use_axilite": 0, "ultra_stages": 0} for index in range(4)},
-    **{f"MatMul_{index}_param0": {"source": "memstream"} for index in range(4)},
-    **{
-        f"MultiThreshold_{index}_out0": {"adapter": "input_gen", "output_adapter": "vpc"}
-        for index in range(4)
-    },
-    "MatMul_0_out0": {"output_adapter": "vpc"},
-    "Reshape_0_out0": {"end": "iodma_hls"},
-    "MatMul_3_out0": {"end": "iodma_hls"},
-}
-#: Every value TFC is built with at 1e6 frames a second: ``TFC_BUILT`` and ``STORED``.
-STORED_TFC = {owner: {**TFC_BUILT[owner], **STORED.get(owner, {})} for owner in TFC_BUILT}
-
-
 @pytest.mark.slow
 def test_a_target_throughput_folds_tfc_as_set_folding_does(
     source: ModelWrapper, tmp_path: Path
@@ -1144,8 +1122,8 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     assert sizing["reopened"] == 13
     assert report["fifos"] == "sized by size_fifos: 13 channels, 0 FIFOs placed"
     # The ends change no choice: TFC is built with the 57 values of the build before the
-    # engine core, and the 27 forcing left unstored (``STORED``).
-    assert sized == STORED_TFC
+    # engine core, and the 27 forcing left unstored (``TFC_STORED``).
+    assert sized == TFC_STORED
     assert sum(map(len, TFC_BUILT.values())) == 57 and sum(map(len, sized.values())) == 84
     rows = sizing["channels"]
     assert {row["transport"] for row in rows.values()} == {"direct"}
@@ -1313,7 +1291,7 @@ def test_the_export_of_tfc_on_pynq_names_both_ends_iodmas_and_every_connection(
     assert module_name(point.module) == "finn_partition__023b52bd70edebcc"
     persisted = json.loads((output / "report" / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)
-    assert persisted == STORED_TFC
+    assert persisted == TFC_STORED
 
 
 #: The block design Z0's build wrote for TFC (its ip_config.tcl's custom section, its
