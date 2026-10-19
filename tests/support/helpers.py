@@ -48,7 +48,6 @@ from finn.core.space import (
     Space,
     design_space,
     inspection,
-    reject,
 )
 from finn.core.space.results import Available, QueryResult
 from finn.dataflow.datatypes import (
@@ -61,12 +60,14 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
 from finn.kernels.artifacts.module import Composed, Leaf, ProducerIdentity
 from finn.kernels.base import CYCLES
-from finn.kernels.configure import commit, describe, refusal, undecided
+from finn.kernels.configure import chosen, commit, describe
+from finn.kernels.defaults import defaulted
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.explore import Choice
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel, datatype_range
+from finn.kernels.members import decision
 from finn.kernels.network import Fact, Interface, Key, Network, Wire, dotted, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.domains import range_dtype, set_index_dtype
@@ -565,11 +566,16 @@ def open_choices(network: Network, pattern: str) -> list[str]:
 
 
 def _undecided(subject: Space | Network, pattern: str) -> list[str]:
-    """The open choices of a point or a network matching ``pattern``, by key (a network's
-    as ``member.key``)."""
+    """The open choices in play of a point or a network matching ``pattern``, by key (a
+    network's as ``member.key``): unset in a scope that is present (``inspection.Open``,
+    waiting on nothing)."""
     if isinstance(subject, Network):
         return [dotted(key) for key in subject.undecided() if fnmatchcase(dotted(key), pattern)]
-    return undecided(subject, pattern)
+    return [
+        key
+        for key, state in inspection.states(subject)
+        if isinstance(state, inspection.Open) and not state.waits and fnmatchcase(key, pattern)
+    ]
 
 
 def _committed(subject: P, choices: Mapping[str, object]) -> P:
@@ -579,18 +585,22 @@ def _committed(subject: P, choices: Mapping[str, object]) -> P:
 
 
 def with_adapter_memories(subject: P, ram_style: str | None = None) -> P:
-    """Each open adapter input_gen's memory takes ``ram_style``, or where None its
-    baseline, the first viable case (an explicit style, by the size the buffer holds),
-    as ``Seam.baseline`` takes it, on a network or a point. Each
-    channel's adapter, its one viable chain, is forced."""
+    """Each open adapter input_gen's memory takes ``ram_style``, or where None its first
+    possible value (an explicit style, by the size the buffer holds), as its first valid
+    policy takes it, on a network or a point. A channel's adapter is set first (a network
+    sets it as it builds the channel, by the interim channel rule)."""
     styles = _undecided(subject, ADAPTER_RAM_STYLES)
     if not styles:
         return subject
     if ram_style is None:
         if isinstance(subject, Network):
-            viable = {dotted(key): item for key, item in subject.viable()}
+            viable = {
+                dotted(key): item for key, item in subject.viable(keyed(dict.fromkeys(styles)))
+            }
         else:
-            viable = {item.key: item for item in inspection.viable(subject)}
+            references = [cast(Any, decision(subject, key)).reference for key in styles]
+            found = inspection.viable(subject, references)
+            viable = {item.key: item for item in found}
         first = {key: item.cases[0] for key, item in viable.items() if item.cases}
         return _committed(subject, {key: first[key] for key in styles})
     return _committed(subject, dict.fromkeys(styles, ram_style))
@@ -651,23 +661,6 @@ def _frozen(values: object) -> object:
     return values
 
 
-def _realizes(network: Network, realization: str) -> QueryResult[bool]:
-    """Accepted when the realization commits on ``network``, its own rule holds, and some
-    core can compute it."""
-    try:
-        network = choose(network, {"matmul.realization": realization})
-    except ValueError as error:
-        return reject("matmul-realization", str(error))
-    matmul = network.member("matmul")
-    rule: QueryResult[bool] = matmul.inspect(MatMulKernel.realization_supported).result
-    if not isinstance(rule, Available):
-        return rule
-    cores = matmul.query(MatMulKernel.compute)  # refused when no core is viable
-    if isinstance(cores, Rejected):
-        return reject("matmul-realization", "no core computes it")
-    return Available(True)
-
-
 def matmul_assembly(
     *,
     m: int,
@@ -700,13 +693,14 @@ def matmul_assembly(
     ``weight_fifo_depth`` places a FIFO on the weight channel; ``None`` connects
     it directly. The ``platform``'s clock period is the clock the module must
     meet; it sets dotp's DSP58 chain segmentation. ``core`` names the
-    compute core (``packed`` or ``int8_dsp58``); left out, the one core
-    compatible with the configuration is forced, and several compatible cores
-    must be chosen from. PE, SIMD and pumping are the core's, and the
-    packed core's ``reducer``.
-    Every Decision with one viable case (the source, the adapters, the core
-    on DSP48E2) is forced, not committed. The kernel's choices are committed first,
-    then its channels', whose ends are its.
+    compute core (``packed`` or ``int8_dsp58``) and ``realization`` a depthwise
+    MatMul's; each left out takes the kernel's own default policy, first valid in the
+    flow order (``finn.kernels.defaults.defaulted``: the realization before the core),
+    as conversion would set it. PE, SIMD and pumping are the core's, and the
+    packed core's ``reducer``. The kernel's choices are set first, then its channels',
+    whose ends are its: the network builds each channel as its ends become known and
+    gives its choices their first valid values (the interim channel rule), the
+    weight channel's memory and FIFO as given.
     """
     if not isinstance(weight_delivery, WeightDelivery):
         raise ValueError("weight_delivery must be a WeightDelivery value")
@@ -736,35 +730,21 @@ def matmul_assembly(
         channel["w.transport.fifo.buffer.depth"] = weight_fifo_depth
         channel["w.transport.fifo.buffer.ram_style"] = "auto"
     network = matmul_point(realization=realization, **facts)
-    if form is Form.DEPTHWISE and realization is None:
-        # The realization sets the datapath's reduction, and so the weight channel's
-        # tensor: each is tried on the one network.
-        viable = [
-            case for case in ("native", "dense") if isinstance(_realizes(network, case), Available)
-        ]
-        if len(viable) != 1:
-            named = ", ".join(viable) or "none"
-            raise ValueError(f"realizations compatible with this configuration: {named}")
-        network = choose(network, {"matmul.realization": viable[0]})
-    if core is None:
-        forced = network.forced(("matmul",))
-        if ("matmul", "compute") not in forced:
-            refusals = {
-                case: refusal(
-                    inspection.validity(
-                        choose(network, {"matmul.compute": case}).member("matmul").compute
-                    )
-                )
-                for case in network.decisions()[("matmul", "compute")].cases
-            }
-            cores = [case for case, why in refusals.items() if not why]
-            if cores:
-                raise ValueError(f"compute cores {', '.join(cores)} are all compatible; choose one")
-            found = "; ".join(str(finding) for why in refusals.values() for finding in why)
-            raise ValueError(f"no compute core is compatible: {found}")
-        core = str(forced[("matmul", "compute")])
-    else:
-        network = choose(network, {"matmul.compute": core})
+    # What the caller leaves out of the realization and the core takes the kernel's
+    # policy, first valid in the flow order; every other choice is the caller's.
+    point = network.member("matmul")
+    left = {"realization", "compute"} - ({"compute"} if core is not None else set())
+    kept = {key for key, _ in inspection.states(point)} - left
+    defaulted_point = defaulted(point, kept=kept)
+    if isinstance(defaulted_point, tuple):
+        raise ValueError("no value can be set: " + "; ".join(map(str, defaulted_point)))
+    taken = {
+        f"matmul.{key}": value
+        for key, value in chosen(defaulted_point).items()
+        if key in left and key not in chosen(point)
+    }
+    network = choose(network, {**taken, **({"matmul.compute": core} if core is not None else {})})
+    core = str(chosen(network.member("matmul"))["compute"])
     network = choose(
         network,
         {

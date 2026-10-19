@@ -45,7 +45,6 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest, partition_body
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_network, in_shell
-from finn.kernels.explore import Seam
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
     InferKernelTensors,
@@ -406,35 +405,60 @@ def test_the_kernel_ops_domain_is_the_registering_package() -> None:
 
 #: A TFC KernelOp's own choices at their baselines, as conversion stores them: the
 #: least folding, the adder tree, the thresholds' stages in LUTRAM, no block stage.
-TFC_NODE_BASELINES: dict[str, dict[str, object]] = {
-    "Thresholding": {"block_stages": 0, "deep_pipeline": 0, "pe": 1, "ram_style": "distributed"},
-    "MatMul": {"compute.packed.pe": 1, "compute.packed.reducer": "tree", "compute.packed.simd": 1},
+TFC_NODE_DEFAULTS: dict[str, dict[str, object]] = {
+    "Thresholding": {
+        "block_stages": 0,
+        "deep_pipeline": 0,
+        "pe": 1,
+        "ram_style": "distributed",
+        "ultra_stages": 0,
+        "use_axilite": 0,
+    },
+    "MatMul": {
+        "compute": "packed",
+        "compute.packed.compute_pumping": 0,
+        "compute.packed.pe": 1,
+        "compute.packed.reducer": "tree",
+        "compute.packed.simd": 1,
+    },
 }
 
 
 def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
     tfc_streamlined: Path, tmp_path: Path
 ) -> None:
-    """SR6's two moments on TFC_W2A2: conversion stores each KernelOp's own choices at
-    their baselines (28 values on 8 nodes) and no channel's; the cut creates the
-    channels' (25 values on 13 tensors: transports, the weights' memories, the input
-    buffers' memories) on the body's network, where it re-checks the nodes' in
-    context: 53 values, the nodes' the same 28 (none dropped), nothing left open."""
+    """SR6's two moments on TFC_W2A2: conversion stores each KernelOp's own choices,
+    each at its default policy, first valid (44 values on 8 nodes), and no channel's; the
+    cut creates the channels' by the interim channel rule, first valid (35 values on 13
+    tensors: transports, the weights' sources and memories, the input buffers' adapters
+    and memories, the two boundary ends), on the body's network, where it binds the
+    nodes' in context: 79 values, the nodes' the same 44 (none dropped), nothing left
+    open."""
     model = ModelWrapper(str(tfc_streamlined)).transform(ToKernelOps(ULTRA96))
     model = model.transform(InferKernelTensors())
     nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
     converted = {node.name: kernel_op(model, node).choices() for node in nodes}
-    assert converted == {node.name: TFC_NODE_BASELINES[node.op_type] for node in nodes}
-    assert sum(map(len, converted.values())) == 28
+    assert converted == {node.name: TFC_NODE_DEFAULTS[node.op_type] for node in nodes}
+    assert sum(map(len, converted.values())) == 44
     assert model.tensors_stating(CHANNEL) == []
     cutting = CutKernelPartition(tmp_path)
     _, body, _ = partition_body(model.transform(cutting))
-    assert cutting.dropped == {}
+    assert (cutting.dropped, cutting.late, cutting.unset) == ({}, {}, {})
     config = kernel_choices_config(body)
     assert {name: config[name] for name in converted} == converted
     channels = {name: held for name, held in config.items() if name not in converted}
-    assert (len(channels), sum(map(len, channels.values()))) == (13, 25)
+    assert (len(channels), sum(map(len, channels.values()))) == (13, 35)
     assert {held["transport"] for held in channels.values()} == {"direct"}
+    assert sorted(name for name, held in channels.items() if "source" in held) == [
+        f"MatMul_{index}_param0" for index in range(4)
+    ]
+    assert sorted(name for name, held in channels.items() if "adapter" in held) == [
+        f"MultiThreshold_{index}_out0" for index in range(4)
+    ]
+    assert {name: held["end"] for name, held in channels.items() if "end" in held} == {
+        "MatMul_3_out0": "iodma_hls",
+        "Reshape_0_out0": "iodma_hls",
+    }
     bound = in_shell(body, body.graph.node)
     assert bound.stale == {}
-    assert Seam().choices(bound) == ()
+    assert bound.undecided() == ()

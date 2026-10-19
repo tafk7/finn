@@ -17,7 +17,7 @@ from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.transpose import TransposeKernel
 from finn.platform.capabilities import Platform
-from support.helpers import FULL_DSP48E2, choose, with_adapter_memories, with_direct_transports
+from support.helpers import FULL_DSP48E2, choose, with_direct_transports
 
 ELEMENT = ScalarEncoding(DataType["INT4"])
 ROWS, CHANNELS = 3, 12
@@ -33,10 +33,11 @@ def values(rows: int = ROWS, channels: int = CHANNELS) -> tuple[tuple[int, ...],
     )
 
 
-def adapted(
-    source: Traversal, pe: int, *, adaptable: bool = True, commit_all: bool = True
-) -> Network:
-    """A cyclic producer presenting ``source``, thresholding ``pe`` channels a beat."""
+def adapted(source: Traversal, pe: int, *, adaptable: bool = True) -> Network:
+    """A cyclic producer presenting ``source``, thresholding ``pe`` channels a beat. The
+    network builds each channel once its ends are known and gives its choices their first
+    valid values (the interim channel rule): its adapters, their memories and its
+    transport; a channel refused on its own facts is left as it is."""
     rows, channels = source.shape
 
     x_tensor = Tensor(source.shape, ELEMENT)
@@ -72,21 +73,18 @@ def adapted(
             ),
         }
     )
-    point = with_direct_transports(
-        choose(
-            network,
-            {
-                "producer.ram_style": "distributed",
-                "producer.pumped_memory": False,
-                "activate.pe": pe,
-                "activate.ultra_stages": 0,
-                "activate.ram_style": "auto",
-                "activate.use_axilite": False,
-                "activate.deep_pipeline": False,
-            },
-        )
+    return choose(
+        network,
+        {
+            "producer.ram_style": "distributed",
+            "producer.pumped_memory": False,
+            "activate.pe": pe,
+            "activate.ultra_stages": 0,
+            "activate.ram_style": "auto",
+            "activate.use_axilite": False,
+            "activate.deep_pipeline": False,
+        },
     )
-    return with_adapter_memories(point) if commit_all else point
 
 
 def columns_first(rows: int, channels: int, lanes: int) -> Traversal:
