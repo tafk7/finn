@@ -18,7 +18,7 @@ import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2
 
-from finn.core.space import Inapplicable, Rejected, design_space, inspection
+from finn.core.space import ConfigurationResult, Inapplicable, design_space, inspection
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform.capabilities import Platform
@@ -123,26 +123,45 @@ def test_each_case_maps_to_the_triggers_the_rtl_reads(
     assert styles(point) == assigned
 
 
+def broken(report: ConfigurationResult[ThresholdingAxiKernel]) -> list[tuple[str, set[str]]]:
+    """Each rule a refused change breaks, with its codes."""
+    return [
+        (rule.rule, {finding.code for finding in rule.result.findings}) for rule in report.broken
+    ]
+
+
 def test_more_stages_than_the_rtl_has_are_refused() -> None:
-    point = configured(ram_style="distributed", block_stages=2, ultra_stages=1)
-    refused = point.query(ThresholdingAxiKernel.module)
-    assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"threshold-memory"}
+    """Three stages placed where the table has two: the change is refused by the rule
+    on the triggers the RTL reads."""
+    base = configured(ram_style="distributed", block_stages=0, ultra_stages=0)
+    report = base.try_with_choices(block_stages=2, ultra_stages=1)
+    assert not report.accepted
+    assert broken(report) == [("depth_triggers", {"threshold-memory"})]
 
 
 def test_block_stages_apply_only_to_distributed_memories() -> None:
+    """Under ``auto`` the block stages are out of play: set, the value is kept dormant,
+    and the triggers do not read it."""
     base = configured(ram_style="auto", ultra_stages=0)
-    assert not base.try_with_choices(block_stages=1).accepted
+    report = base.try_with_choices(block_stages=1)
+    assert report.accepted
+    state = dict(inspection.states(report.instance))["block_stages"]
+    assert state == inspection.Dormant(1)
+    assert triggers(report.instance) == triggers(base) == (0, 0)
 
 
 def test_every_stage_in_ultraram_has_one_spelling() -> None:
     """With every stage in UltraRAM none is left: ``ram_style`` (and with it
-    ``block_stages``) does not apply, so the assignment is ``ultra_stages`` alone."""
+    ``block_stages``) does not apply, so the assignment is ``ultra_stages`` alone; a
+    style set beside it is kept dormant and changes nothing."""
     point = configured(ultra_stages=2)
     assert triggers(point) == (0, 4) and styles(point) == ("ultra", "ultra")
     assert isinstance(point.query(ThresholdingAxiKernel.ram_style), Inapplicable)
     for style in ("auto", "distributed"):
-        assert not point.try_with_choices(ram_style=style).accepted
+        report = point.try_with_choices(ram_style=style)
+        assert report.accepted
+        assert dict(inspection.states(report.instance))["ram_style"] == inspection.Dormant(style)
+        assert triggers(report.instance) == (0, 4)
     # One stage left: it takes a ram_style.
     left = configured(ram_style="distributed", block_stages=0, ultra_stages=1)
     assert styles(left) == ("distributed", "ultra")
@@ -159,8 +178,9 @@ def test_the_choices_do_not_move_with_pe() -> None:
 
 def test_the_platform_narrows_the_memories_and_a_control_bus_the_axilite() -> None:
     """An UltraRAM stage needs UltraRAM that takes initial contents, runtime-writable
-    thresholds a control bus (which a bare kernel has not): on a platform without
-    them, each case is refused by name and its Decision forced to what remains."""
+    thresholds a control bus (which a bare kernel has not): on a platform without them,
+    each value is refused by the rule that names it, nothing standing, and only what
+    remains is possible."""
 
     def point(platform: Platform) -> ThresholdingAxiKernel:
         return design_space(
@@ -173,25 +193,25 @@ def test_the_platform_narrows_the_memories_and_a_control_bus_the_axilite() -> No
             )
         )
 
-    forced = {item.key: item for item in inspection.forced(point(FULL_DSP48E2))}
-    assert "ultra_stages" not in forced
-    assert forced["use_axilite"].refused == {
-        "True": "control_for_writes: threshold-control: runtime-writable thresholds need a "
-        "control bus"
-    }
-    bare = {item.key: item for item in inspection.forced(point(replace(FULL_DSP48E2, uram=False)))}
-    assert bare["ultra_stages"].value == 0
-    assert {"1", "2"} == set(bare["ultra_stages"].refused)
-    assert all("uram-absent" in why for why in bare["ultra_stages"].refused.values())
+    def refused(viable: inspection.Viable) -> dict[object, list[tuple[str, tuple[str, ...]]]]:
+        return {
+            item.value: [(rule.rule, rule.standing) for rule in item.broken]
+            for item in viable.values or ()
+            if isinstance(item, inspection.Refused)
+        }
+
+    full = point(FULL_DSP48E2)
+    ultra, axilite = inspection.viable(
+        full, [ThresholdingAxiKernel.ultra_stages, ThresholdingAxiKernel.use_axilite]
+    )
+    assert ultra.cases == (0, 1, 2)
+    assert axilite.cases == (False,) and refused(axilite) == {True: [("control_for_writes", ())]}
+    bare = point(replace(FULL_DSP48E2, uram=False))
+    (ultra,) = inspection.viable(bare, [ThresholdingAxiKernel.ultra_stages])
+    assert ultra.cases == (0,)
+    assert refused(ultra) == {1: [("uram_present", ())], 2: [("uram_present", ())]}
     zynq = point(replace(FULL_DSP48E2, uram_init=False))
-    # A constraint never gates a commit: the case is committed, and the configuration is
-    # refused by the constraint that names it.
+    # A commit that breaks a rule is refused, naming it.
     report = zynq.try_with_choices(ultra_stages=1)
-    assert report.accepted
-    validity = inspection.validity(report.instance)
-    assert validity.status == "refused"
-    assert {
-        (piece.owner, finding.code)
-        for piece in validity.pieces
-        for finding in piece.result.findings
-    } == {("uram_init_taken", "uram-init")}
+    assert not report.accepted
+    assert broken(report) == [("uram_init_taken", {"uram-init"})]

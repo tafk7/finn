@@ -519,7 +519,7 @@ def generator(
 def eltwise(
     *,
     operation: str = "ADD",
-    pe: int = 2,
+    pe: int | None = 2,
     lhs: str = "INT3",
     rhs: str = "INT3",
     scale: float = 1.0,
@@ -527,19 +527,17 @@ def eltwise(
     shape: tuple[int, ...] = (2, 6),
 ) -> EltwiseKernel:
     """An elementwise kernel's design space on two ``shape`` operands, on a platform of
-    ``target``, its ``pe`` committed."""
-    return commit(
-        design_space(
-            EltwiseKernel(
-                operation=operation,
-                lhs_tensor=Tensor(shape, ScalarEncoding(resolve_qonnx_datatype_name(lhs))),
-                rhs_tensor=Tensor(shape, ScalarEncoding(resolve_qonnx_datatype_name(rhs))),
-                b_scale=scale,
-                platform=full_platform(target),
-            )
-        ),
-        {"pe": pe},
+    ``target``, its ``pe`` committed (left open where None)."""
+    point = design_space(
+        EltwiseKernel(
+            operation=operation,
+            lhs_tensor=Tensor(shape, ScalarEncoding(resolve_qonnx_datatype_name(lhs))),
+            rhs_tensor=Tensor(shape, ScalarEncoding(resolve_qonnx_datatype_name(rhs))),
+            b_scale=scale,
+            platform=full_platform(target),
+        )
     )
+    return point if pe is None else commit(point, {"pe": pe})
 
 
 def codes(result: object) -> set[str]:
