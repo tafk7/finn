@@ -591,3 +591,81 @@ def test_a_stored_value_waiting_on_a_missing_fact_names_the_fact() -> None:
     # move (section 16.19), only its type check was made.
     supplied = point.try_with_facts({Waits.extent: 10})
     assert supplied.accepted and supplied.in_play == () and supplied.instance.doubled == 10
+
+
+# -- facts changes, by the same rules -----------------------------------------------------
+
+
+class Sized(Space):
+    extent: int = Param()
+    uram: bool = Param()
+    lanes: int = Decision(domain=divisors_of(extent))
+    style: str = Decision(values=("block", "ultra"))
+
+    @constraint
+    def ultra_needs_uram(self) -> bool | Rejected:
+        if self.style == "ultra" and not self.uram:
+            return reject("uram-absent", "no UltraRAM")
+        return True
+
+
+def test_a_facts_change_leaving_a_stored_value_outside_its_domain_is_refused() -> None:
+    point = design_space(Sized(extent=12, uram=True)).with_choices(lanes=4)
+    report = point.try_with_facts({Sized.extent: 10})
+    assert not report.accepted and report.broken == ()
+    assert [(o.owner, o.status, o.requested) for o in report.outcomes] == [
+        ("extent", "checked", True),
+        ("lanes", "refused", False),
+    ]
+    assert codes(report.outcomes[1].result) == {"domain-membership"}
+    # Set or cleared in the same change, the facts are accepted.
+    assert point.with_facts({Sized.extent: 10}, {Sized.lanes: 5}).lanes == 5
+    cleared = point.with_facts({Sized.extent: 10}, point.field(Sized.lanes).clear())
+    assert isinstance(cleared.query(Sized.lanes), Unresolved)
+
+
+def test_a_facts_change_breaking_a_rule_names_the_stored_choices_in_its_way() -> None:
+    point = design_space(Sized(extent=12, uram=True)).with_choices(style="ultra")
+    report = point.try_with_facts({Sized.uram: False})
+    assert broken(report) == [("ultra_needs_uram", ("style",))]
+    # Cleared in the same change, the rule waits on it: nothing is newly false.
+    cleared = point.with_facts({Sized.uram: False}, point.field(Sized.style).clear())
+    assert inspection.validity(cleared).status == "open"
+    # A fact set to the value it has sets nothing: the receiver itself.
+    assert point.with_facts({Sized.uram: True}) is point
+
+
+def test_a_facts_change_emptying_a_present_choices_domain_is_refused() -> None:
+    """Reading 9 of the note's section 16, open for the human: the domain's piece is its
+    own origin, with nothing standing in its way."""
+    base = design_space(Sized(extent=12, uram=True))
+    report = base.try_with_facts({Sized.extent: 0})
+    assert broken(report) == [("lanes", ())]
+    assert codes(report.broken[0].result) == {"domain-empty"}
+    # Created with such facts, a design space reads refused: it is no change.
+    empty = design_space(Sized(extent=0, uram=True))
+    assert [piece.owner for piece in inspection.validity(empty).pieces] == ["lanes"]
+    # A facts change keeping that piece through the same origin refuses nothing.
+    assert empty.with_facts({Sized.uram: False}).uram is False
+
+
+class Spanned(Space):
+    wide: bool = Param()
+    width: int = Param(default=8)
+
+    @derived(when=wide)
+    def span(self) -> int:
+        return self.width
+
+    lanes: int = Decision(domain=divisors_of(span))
+
+
+def test_a_facts_change_leaving_a_domains_input_absent_is_refused() -> None:
+    """Reading 9 with section 16.17-18: the input does not exist for the new facts, so
+    the present choice's list cannot be made, at its own origin, nothing standing."""
+    wide = design_space(Spanned(wide=True))
+    assert broken(wide.try_with_facts({Spanned.wide: False})) == [("lanes", ())]
+    stored = wide.with_choices(lanes=4)
+    report = stored.try_with_facts({Spanned.wide: False})
+    (refused,) = [o for o in report.outcomes if not o.requested]
+    assert refused.owner == "lanes" and codes(refused.result) == {"domain-input-absent"}

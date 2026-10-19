@@ -354,7 +354,10 @@ class Space(metaclass=SpaceMeta):
         self, /, *changes: ChangeRequest | Mapping[Any, object], **choices: object
     ) -> Self:
         """Commit choices atomically: ``{House.kitchen.finish: 2}``, Change objects,
-        or keywords for this configuration's own decisions."""
+        or keywords for this configuration's own decisions. Refused (``ConfigurationError``,
+        its report as ``try_with_choices`` answers it) where a value is outside its domain,
+        or the change would make a rule newly false, naming the rule and the stored choices
+        standing in its way."""
         from ._assign import with_choices
 
         return with_choices(self, *changes, **choices)
@@ -370,9 +373,13 @@ class Space(metaclass=SpaceMeta):
         self, facts: Mapping[Any, object], /, *changes: ChangeRequest | Mapping[Any, object]
     ) -> Self:
         """The same model with other values for root formals (``{House.budget: 120}``),
-        keeping every evaluation that read none of them; every stored choice is checked
-        again against its domain over the new facts. ``changes`` are choices, as for
-        ``with_choices``."""
+        keeping every evaluation that read none of them. Refused by the same rules as a
+        change of choices: every stored choice is checked again against its domain over
+        the new facts, dormant ones included, and a rule the new facts make newly false
+        refuses them (a present choice's domain they leave without a value included),
+        naming the stored choices standing in its way. ``changes`` are choices, as for
+        ``with_choices``: the caller clears or sets what stands in the way in the same
+        change."""
         from ._assign import with_facts
 
         return with_facts(self, facts, *changes)

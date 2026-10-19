@@ -437,8 +437,11 @@ def try_with_choices(
 def try_with_facts(
     point: S, facts: Mapping[Any, object], /, *changes: ChangeRequest | Mapping[Any, object]
 ) -> ConfigurationResult[S]:
-    """Other values for root formals, and the choices ``changes`` make, as one batch:
-    every stored value is checked again against its domain over the new facts."""
+    """Other values for root formals, and the choices ``changes`` make, as one batch, by
+    the rules of any change: every stored value is checked again against its domain over
+    the new facts (dormant ones included), and a rule the new facts make newly false (a
+    present choice's domain left without a value, or without an input, included) refuses
+    them."""
     driver_only("configuration replacement")
     given = _fact_nodes(point, facts)
     return _report(point, assign(state(point), given, _requests(point, changes)))
