@@ -253,7 +253,8 @@ def decision_index(point: Space, reference: object) -> NodeId:
 
 
 def candidates(point: Space, reference: object) -> QueryResult[tuple[object, ...]] | None:
-    """A choice's enumerated values (None: known by membership only), under its guard."""
+    """A choice's enumerated values, ranked by its domain's order where it has one (None:
+    known by membership only), under its guard."""
     from ._world import enumeration
 
     driver_only("domain enumeration")

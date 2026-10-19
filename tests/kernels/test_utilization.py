@@ -344,12 +344,15 @@ class Stored(Space):
 
 def test_a_choice_that_stores_in_ultraram_is_a_constraint_on_the_platform() -> None:
     def refusing(*, uram: bool = True, uram_init: bool = True) -> dict[str, set[str]]:
+        """The rules that refuse storing in UltraRAM on such a platform, with their codes:
+        each false on the platform (a fact) and the values set, nothing standing."""
         platform = replace(FULL_DSP58, uram=uram, uram_init=uram_init)
-        point = design_space(Stored(platform=platform)).with_choices(ram_style="ultra", stages=1)
-        validity = inspection.validity(point)
+        report = design_space(Stored(platform=platform)).try_with_choices(
+            ram_style="ultra", stages=1
+        )
+        assert all(rule.standing == () for rule in report.broken)
         return {
-            piece.owner: {finding.code for finding in piece.result.findings}
-            for piece in validity.pieces
+            rule.rule: {finding.code for finding in rule.result.findings} for rule in report.broken
         }
 
     assert refusing() == {}
@@ -363,10 +366,8 @@ def test_a_choice_that_stores_in_ultraram_is_a_constraint_on_the_platform() -> N
     # not possible on it.
     bare = design_space(Stored(platform=replace(FULL_DSP58, uram=False, uram_init=False)))
     assert inspection.validity(bare.with_choices(ram_style="block", stages=0)).status == "valid"
-    assert {item.key: item.value for item in inspection.forced(bare)} == {
-        "ram_style": "block",
-        "stages": 0,
-    }
+    style, stages = inspection.viable(bare, [Stored.ram_style, Stored.stages])
+    assert (style.cases, stages.cases) == (("block",), (0,))
 
 
 def test_every_fabric_has_its_primitives() -> None:

@@ -31,7 +31,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from ._world import World
+from ._world import World, membership_arguments
 from .ir import Node, NodeId
 from .results import ConstraintAssessment, Inapplicable, Rejected
 
@@ -90,7 +90,7 @@ def _domain_origins(world: World, node: Node, answer: Rejected) -> dict[NodeId, 
     """A choice's domain piece: its own origin where its list is empty or an input of its
     domain does not apply; else the origins of the inputs refusing on the facts."""
     inputs = [
-        (argument.node, world._get(argument.node).result) for argument in node.domain_arguments
+        (argument.node, world._get(argument.node).result) for argument in membership_arguments(node)
     ]
     if not any(isinstance(result, Inapplicable) for _, result in inputs):
         refused = [index for index, result in inputs if isinstance(result, Rejected)]

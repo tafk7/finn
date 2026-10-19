@@ -74,7 +74,7 @@ from ._reads import ModelReads, infer, presence_readers
 from .declarations import Param, declared_path
 from .errors import EvaluationError, RequestError, ValueUnavailableError
 from .graph import Located
-from .ir import Choice, LinkedModel, Node, NodeId, NodeKind
+from .ir import Argument, Choice, LinkedModel, Node, NodeId, NodeKind
 from .references import descend
 from .results import (
     Available,
@@ -1373,21 +1373,41 @@ def _method(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
 # -- domains ----------------------------------------------------------------------------
 
 
+def membership_arguments(node: Node) -> tuple[Argument, ...]:
+    """A Decision's domain inputs its membership and enumeration read (an order's own
+    inputs aside)."""
+    domain = node.domain
+    if domain is None:
+        return ()
+    named = set(domain.membership_inputs)
+    return tuple(argument for argument in node.domain_arguments if argument.name in named)
+
+
+def order_arguments(node: Node) -> tuple[Argument, ...]:
+    """A Decision's domain inputs its order reads."""
+    domain = node.domain
+    if domain is None:
+        return ()
+    named = set(domain.order_inputs)
+    return tuple(argument for argument in node.domain_arguments if argument.name in named)
+
+
 def _domain_inputs(
     world: World, node: Node, trace: _Trace, reads: ReadSet
 ) -> tuple[tuple[QueryResult[object], ...], NonValue | None, ReadSet]:
-    """The answers of a Decision's domain inputs, read in ``world`` (and traced), and the
-    non-value that keeps the domain from being asked. An input that does not apply where
-    the choice is present cannot decide it, whatever the other inputs answer: the domain
-    is refused at the choice, naming it."""
+    """The answers of a Decision's membership inputs, read in ``world`` (and traced), and
+    the non-value that keeps the domain from being asked. An input that does not apply
+    where the choice is present cannot decide it, whatever the other inputs answer: the
+    domain is refused at the choice, naming it."""
+    arguments = membership_arguments(node)
     answers: list[QueryResult[object]] = []
-    for argument in node.domain_arguments:
+    for argument in arguments:
         entry, reads = world.read(trace, argument.node, reads)
         answers.append(entry.result)
     nodes = world.evaluator.nodes
     absent = [
         nodes[argument.node].owner
-        for argument, answer in zip(node.domain_arguments, answers)
+        for argument, answer in zip(arguments, answers)
         if isinstance(answer, Inapplicable)
     ]
     if absent:
@@ -1397,8 +1417,13 @@ def _domain_inputs(
 
 
 def _domain_values(
-    world: World, node: Node, answers: tuple[QueryResult[object], ...]
+    world: World,
+    node: Node,
+    answers: tuple[QueryResult[object], ...],
+    arguments: tuple[Argument, ...] | None = None,
 ) -> dict[str, object]:
+    """The values of a Decision's domain inputs (its membership inputs, unless
+    ``arguments`` names others), detached, by name."""
     nodes = world.evaluator.nodes
     return {
         argument.name: _clone(
@@ -1407,7 +1432,9 @@ def _domain_values(
             owner=node.owner,
             role="dependency snapshot",
         )
-        for argument, answer in zip(node.domain_arguments, answers)
+        for argument, answer in zip(
+            membership_arguments(node) if arguments is None else arguments, answers
+        )
     }
 
 
@@ -1571,9 +1598,10 @@ def type_check(world: World, node: NodeId, value: Available[object]) -> QueryRes
 
 
 def _enumerated(world: World, node: Node) -> QueryResult[object]:
-    """A choice's enumeration as its domain gives it (``Available(None)``: membership
-    only), under its guard: inapplicable where the choice is absent, the guard's answer
-    while it waits or is refused (memoized on the inputs' answers)."""
+    """A choice's enumeration as its domain gives it, ranked by its order where it has
+    one (``Available(None)``: membership only), under its guard: inapplicable where the
+    choice is absent, the guard's answer while it waits or is refused; the order's inputs'
+    non-value while one of them is not a value (memoized on the inputs' answers)."""
     domain, semantics = node.domain, node.semantics
     if domain is None or semantics is None:
         raise EvaluationError(node.owner, "domain enumeration", "reference has no domain")
@@ -1586,7 +1614,39 @@ def _enumerated(world: World, node: Node) -> QueryResult[object]:
         return blocked
     if domain.candidates is None:
         return Available(None)
-    return _enumerate(world, node, answers)
+    enumerated = _enumerate(world, node, answers)
+    if domain.order is None or not isinstance(enumerated, Available):
+        return enumerated
+    return _ranked(world, node, enumerated)
+
+
+def _ranked(world: World, node: Node, enumerated: Available[object]) -> QueryResult[object]:
+    """An enumeration as the domain's order ranks it, over the order's own inputs
+    (memoized on the enumeration's and the inputs' answers)."""
+    domain, semantics = node.domain, node.semantics
+    assert domain is not None and semantics is not None
+    arguments = order_arguments(node)
+    answers = tuple(world._get(argument.node).result for argument in arguments)
+    blocked = _blocked([answer for answer in answers if not isinstance(answer, Available)])
+    if blocked is not None:
+        return blocked
+    evaluator = world.evaluator
+    key = (enumerated, *answers)
+    held = evaluator.memo.explicit(node.index, "order", key)
+    if held is not None:
+        evaluator.counters.hit("domain order")
+        return held.outcome.result
+    evaluator.counters.call("domain order")
+    ranked = _authored(
+        world,
+        Call(node.owner, "domain order"),
+        domain.rank,
+        (enumerated.value, _domain_values(world, node, answers, arguments)),
+        {"semantics": semantics, "owner": node.owner},
+    )
+    result: QueryResult[object] = Available(cast(_Returned, ranked).value)
+    evaluator.memo.keep_explicit(node.index, "order", key, Called(result))
+    return result
 
 
 def _enumerate(
@@ -1647,6 +1707,8 @@ __all__ = [
     "World",
     "enumeration",
     "listed_values",
+    "membership_arguments",
+    "order_arguments",
     "public_value",
     "receiver",
     "type_check",

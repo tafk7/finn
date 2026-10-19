@@ -4,10 +4,20 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any, cast
 
 import pytest
 from support.refusals import refused
 
+from finn.core.space import (
+    Decision,
+    Param,
+    Space,
+    Unresolved,
+    constraint,
+    design_space,
+    inspection,
+)
 from finn.core.space.domains import Domain, divisors_of, domain, finite
 from finn.core.space.errors import DefinitionError, EvaluationError
 from finn.core.space.results import Available, Inapplicable, QueryResult, Rejected, reject
@@ -126,3 +136,82 @@ def test_domain_rejects_conflicting_dependency_names_and_semantics() -> None:
     integers: ValueSemantics[object] = ValueSemantics.immutable_nominal(int)
     with refused("domain-semantics-incompatible", error=DefinitionError, message="incompatible"):
         allowed.with_semantics(integers)
+
+
+# -- a domain's order apart from its membership -----------------------------------------
+
+
+class Buffer(Space):
+    """A memory whose style's order reads the depth chosen beside it: membership reads
+    nothing, so the styles are a type over the facts; the ranking moves with the depth."""
+
+    depth: int = Decision(values=(4, 16))
+    style: str = Decision(
+        domain=domain(
+            accepts=lambda *, candidate: candidate in ("block", "lut", "ultra"),
+            candidates=lambda: ("ultra", "lut", "block"),
+            order=lambda values, *, size: tuple(
+                sorted(values, key=("block" if size >= 8 else "lut", "lut", "block", "ultra").index)
+            ),
+            semantics=default_semantics(str),
+            size=depth,
+        )
+    )
+
+    @constraint
+    def ultra_deep(self) -> bool:
+        return self.style != "ultra" or self.depth >= 16
+
+
+def test_each_callable_takes_the_inputs_its_signature_names() -> None:
+    style = cast(Any, Buffer.__dict__["style"]).domain
+    assert style.membership_inputs == () and style.order_inputs == ("size",)
+    assert divisors_of(object()).membership_inputs == ("extent",)
+    assert style.membership("lut", {}, semantics=default_semantics(str), owner="style") == (
+        Available(True)
+    )
+
+
+def test_a_domains_order_ranks_its_values_and_waits_on_what_it_reads() -> None:
+    base = design_space(Buffer())
+    # The ranking waits on the open depth; the membership does not.
+    assert isinstance(base.field(Buffer.style).candidates(), Unresolved)
+    assert base.with_choices(style="lut").style == "lut"
+    shallow, deep = base.with_choices(depth=4), base.with_choices(depth=16)
+    assert shallow.field(Buffer.style).candidates() == Available(("lut", "block", "ultra"))
+    assert deep.field(Buffer.style).candidates() == Available(("block", "lut", "ultra"))
+    # Possible values are answered in the domain's list order, whatever the ranking.
+    (style,) = inspection.viable(shallow, [Buffer.style])
+    assert style.cases == ("lut", "block") and listed(style) == ("ultra", "lut", "block")
+
+
+def listed(item: Any) -> tuple[object, ...]:
+    return tuple(value.value for value in item.values)
+
+
+def test_an_order_that_is_no_permutation_of_its_values_fails_the_domain() -> None:
+    class Short(Space):
+        style: str = Decision(
+            domain=domain(
+                accepts=lambda *, candidate: True,
+                candidates=lambda: ("a", "b"),
+                order=lambda values: ("a",),
+                semantics=default_semantics(str),
+            )
+        )
+
+    with pytest.raises(EvaluationError, match="not a permutation"):
+        design_space(Short()).field(Short.style).candidates()
+
+
+def test_a_declared_input_no_callable_reads_is_a_definition_error() -> None:
+    class Unread(Space):
+        extent: int = Param()
+        lanes: int = Decision(
+            domain=domain(accepts=lambda *, candidate: candidate > 0, extent=extent)
+        )
+
+    with refused("domain-signature-incompatible", error=DefinitionError, message="none"):
+        design_space(Unread(extent=4))
+    with pytest.raises(DefinitionError, match="domain-order-unlisted|membership only"):
+        domain(accepts=lambda *, candidate: True, order=lambda values: values)
