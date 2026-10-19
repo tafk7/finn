@@ -49,23 +49,18 @@ from core.space.reference_harness import Row, walks
 from core.space.reference_harness.engine import Point
 from core.space.reference_harness.forms import (
     AnswerForm,
-    ChangeForm,
     Form,
-    OutcomeForm,
-    PossibleForm,
     RuleForm,
     StateForm,
     ValidityForm,
 )
 from core.space.reference_harness.walks import (
-    UNCLASSIFIED,
     Pair,
     Question,
     Structure,
     below,
     bind_problems,
     check_change,
-    classify,
     counted_pairs,
     differences,
     generate,
@@ -105,12 +100,11 @@ def test_the_gates_walks_exercise_every_invariant() -> None:
 
 def test_a_walk_is_the_same_for_the_same_seed() -> None:
     first, second = walk(5, 12), walk(5, 12)
-    assert (first.steps, first.accepted, first.checks, first.by_question, first.by_kind) == (
+    assert (first.steps, first.accepted, first.checks, first.by_question) == (
         second.steps,
         second.accepted,
         second.checks,
         second.by_question,
-        second.by_kind,
     )
 
 
@@ -176,52 +170,10 @@ def test_with_no_milestone_pending_every_disagreement_fails_its_walk(
     for tally in (strict, without):
         assert tally.failed == "disagreement" and tally.failure is not None
         first = tally.failure.splitlines()[0]
-        assert first.startswith("seed 0, step 0: the engine disagrees (state")
+        assert first == "seed 0, step 0: the engine disagrees (state)"
         assert "description:" in tally.failure and "| engine" in tally.failure
     with pytest.raises(ValueError, match="no such milestone"):
         pending(("lane 10",))
-
-
-def test_a_disagreement_is_told_by_one_simple_rule_or_left_unclassified() -> None:
-    assert classify(PossibleForm(((1, OutcomeForm("possible")),)), PossibleForm(None)) == (
-        "viable-per-choice"
-    )
-    assert classify(ChangeForm(True, dormant=frozenset({"p"})), ChangeForm(True)) == (
-        "no-dormant-report"
-    )
-    assert classify(AnswerForm("unresolved"), AnswerForm("value", 1)) == "forced-value"
-    out_of_play, guard_false = RuleForm("inapplicable"), RuleForm("false", frozenset({("o", "d")}))
-    assert classify(out_of_play, guard_false, reference.Presence.REFUSED) == "refused-guard"
-    assert classify(out_of_play, guard_false, reference.Presence.ABSENT) == UNCLASSIFIED
-    assert classify(StateForm("set", 1), StateForm("set", 2)) == UNCLASSIFIED
-    # a case an inner selector does not select, its outer selector open: out of play in the
-    # model (§ 16.21), open on the outer selector in the engine
-    on_outer = frozenset({"s"})
-    assert classify(StateForm("dormant", 1), StateForm("waiting", 1, on_outer)) == (
-        "unselected-under-open"
-    )
-    assert classify(StateForm("absent"), StateForm("open", blockers=on_outer)) == (
-        "unselected-under-open"
-    )
-    assert classify(AnswerForm("inapplicable"), AnswerForm("unresolved", blockers=on_outer)) == (
-        "unselected-under-open"
-    )
-    assert classify(out_of_play, RuleForm("unknown", blockers=on_outer)) == "unselected-under-open"
-    # a reader of a stored value waiting on a fact: the model names the fact, the engine the
-    # choice; not where the choice the engine names is not waiting in the model
-    on_fact, on_choice = RuleForm("unknown", blockers=frozenset({"f"})), frozenset({"c"})
-    engine_on_choice = RuleForm("unknown", blockers=on_choice)
-    assert classify(on_fact, engine_on_choice, waiting=on_choice) == "waiting-blocker"
-    assert classify(on_fact, engine_on_choice) == UNCLASSIFIED
-    open_on_fact = ValidityForm("open", blockers=frozenset({"f"}))
-    open_on_both = ValidityForm("open", blockers=frozenset({"c", "f"}))
-    assert classify(open_on_fact, open_on_both, waiting=on_choice) == "waiting-blocker"
-    # a case's rule under a selector the engine forced: unknown on both sides, the model's
-    # scope unknown, the blockers disjoint
-    on_selector = RuleForm("unknown", blockers=on_outer)
-    engine_on_fact = RuleForm("unknown", blockers=frozenset({"f"}))
-    assert classify(on_selector, engine_on_fact, reference.Presence.UNKNOWN) == "forced-value"
-    assert classify(on_selector, engine_on_fact, reference.Presence.PRESENT) == UNCLASSIFIED
 
 
 def test_the_summary_names_the_mode_and_the_checks(monkeypatch: pytest.MonkeyPatch) -> None:

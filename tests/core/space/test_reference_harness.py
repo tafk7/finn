@@ -3,9 +3,8 @@
 
 """The harness comparing the engine with its reference model, held to its own rules: the
 model imports the standard library only, every row of the acceptance matrix has exactly
-one witness and every expected failure a row, the walks tell disagreements only by the
-kinds the rows name, and the comparison reads blockers as a subset and everything else
-exactly. The walks' own checks are ``test_reference_walks``'s."""
+one witness and every expected failure a row, and the comparison reads blockers as a
+subset and everything else exactly. The walks' own checks are ``test_reference_walks``'s."""
 
 from __future__ import annotations
 
@@ -50,7 +49,6 @@ from core.space.reference_harness.compare import (
     validity_form,
 )
 from core.space.reference_harness.matrix import problems
-from core.space.reference_harness.walks import CLASSIFIED, UNCLASSIFIED, pending
 from finn.core.space import inspection
 
 
@@ -98,14 +96,6 @@ def test_the_matrix_check_finds_a_row_without_its_witness(tmp_path: Path) -> Non
     found = problems([elsewhere])
     assert f"test_reference_cases::{witness}: an expected failure with no row" in found
     assert any(item.startswith(f"{ROWS[0].id}: witnessed by []") for item in found)
-
-
-def test_the_walks_tell_disagreements_only_by_kinds_the_rows_name() -> None:
-    # A walk tallies each disagreement under a row's kind, or as unclassified: never a kind
-    # no row names. The walks count while a milestone with rows is pending, which is now.
-    assert set(CLASSIFIED) <= {row.kind for row in ROWS}
-    assert UNCLASSIFIED not in {row.kind for row in ROWS}
-    assert pending() and all(any(row.milestone == m for row in ROWS) for m in pending())
 
 
 def test_the_matrix_prints_as_a_markdown_table_in_milestone_order() -> None:

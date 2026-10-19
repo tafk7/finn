@@ -48,8 +48,7 @@ the model reaches, and the same change at every step. Its own **permanent checks
 strict always: the walked engine configuration answers every question, and every change,
 as one built from nothing (``support.space_walk.fresh``). A disagreement with the model is
 **counted, not failed, while a milestone with rows is pending** (:func:`pending`): tallied
-by question and by the row kind a small rule tells it by (:func:`classify`; ``unclassified``
-otherwise). With every milestone's rows taken as removed (``--without "engine core"``, or
+by question. With every milestone's rows taken as removed (``--without "engine core"``, or
 once the matrix has none) every disagreement fails the walk. An engine error always fails.
 Refinement on the engine side (its answers over an addition, in the same order) is a
 disagreement like any other where the model holds. Where the engine refuses a change the
@@ -1238,24 +1237,6 @@ def bind_problems(
 
 # --- the engine comparison: counted while a milestone is pending ----------------------------------
 
-UNCLASSIFIED = "unclassified"
-
-#: the row kinds :func:`classify` tells, each one the acceptance matrix's rows name
-CLASSIFIED = (
-    "forced-value",
-    "refused-guard",
-    "no-viable-case",
-    "viable-per-choice",
-    "inactive-refused",
-    "no-dormant-report",
-    "change-breaks-rule",
-    "assignment-type-check",
-    "provisional-code",
-    "legacy-validity",
-    "unselected-under-open",
-    "waiting-blocker",
-)
-
 
 def pending(without: Iterable[str] = ()) -> tuple[str, ...]:
     """The milestones whose rows are pending, ``without`` those taken as removed. While any
@@ -1268,107 +1249,6 @@ def pending(without: Iterable[str] = ()) -> tuple[str, ...]:
         milestone
         for milestone in MILESTONES
         if milestone not in removed and any(row.milestone == milestone for row in ROWS)
-    )
-
-
-#: the codes only one side may carry for the same piece: the model's provisional names and
-#: today's engine's
-_PROVISIONAL = {"domain-empty", "guard-refused", "decision-no-viable-case"}
-
-#: what an answer that is still open reads as, on either side
-_OPEN = {"unresolved", "unknown", "open", "waiting"}
-
-#: what the model answers out of play: a choice, a value, a rule
-_OUT_OF_PLAY = {"absent", "dormant", "inapplicable"}
-
-
-def _verdict(form: Form) -> str:
-    kind = getattr(form, "kind", None)
-    return str(kind if kind is not None else getattr(form, "verdict", ""))
-
-
-def _codes(form: Form) -> frozenset[tuple[str, str]]:
-    found: frozenset[tuple[str, str]] = getattr(form, "codes", getattr(form, "false", frozenset()))
-    return found
-
-
-def _blockers(form: Form) -> frozenset[str]:
-    found: frozenset[str] = getattr(form, "blockers", frozenset())
-    return found
-
-
-def classify(
-    expected: Form,
-    engine: Form,
-    scope: model.Presence | None = None,
-    waiting: frozenset[str] = frozenset(),
-) -> str:
-    """The row kind a disagreement most plausibly belongs to, by one simple rule on the
-    two answers (and, for a rule, ``scope``: its scope's presence in the model; ``waiting``:
-    the choices the model reports waiting), or ``unclassified``: a tally, never a filter.
-    The rules, in order: a rule the model leaves out of play
-    under a refused guard that the engine finds false (``refused-guard``); a possible-values
-    answer; a change by its refusals; the provisional codes; the engine deciding what the
-    model leaves open (forcing gave it a value, ``forced-value``); a refusal where the model
-    waits (a selector forcing refused, ``no-viable-case``); a rule both sides leave unknown
-    under a selector the model leaves open, waiting on nothing the model names (forcing
-    selected its case, ``forced-value``); what the model has out of play the engine leaves
-    open (an unselected case under an open selector, ``unselected-under-open``); both sides
-    open, the engine waiting on a choice the model reports waiting (``waiting-blocker``)."""
-    if (
-        isinstance(expected, RuleForm)
-        and isinstance(engine, RuleForm)
-        and (expected.kind, engine.kind, scope) == ("inapplicable", "false", model.Presence.REFUSED)
-    ):
-        return "refused-guard"
-    if isinstance(engine, PossibleForm):
-        return "viable-per-choice"
-    if isinstance(expected, ChangeForm) and isinstance(engine, ChangeForm):
-        if any(("inactive", item.subject) in item.codes for item in engine.refusals):
-            return "inactive-refused"
-        if expected.accepted and engine.accepted:
-            return "no-dormant-report"
-        if any(item.kind == "assignment" for item in expected.refusals):
-            return "assignment-type-check"
-        if not expected.accepted and engine.accepted:
-            return "change-breaks-rule"
-        return UNCLASSIFIED
-    if {code for code, _ in _codes(expected) ^ _codes(engine)} & _PROVISIONAL:
-        return "provisional-code"
-    if (
-        isinstance(expected, ValidityForm)
-        and expected.verdict == "valid"
-        and _verdict(engine) == "open"
-    ):
-        return "legacy-validity"
-    if _verdict(expected) in _OPEN and _verdict(engine) in ("false", "refused"):
-        return "no-viable-case"
-    if _verdict(expected) in _OPEN and _verdict(engine) not in _OPEN:
-        return "forced-value"
-    if (
-        isinstance(expected, RuleForm)
-        and isinstance(engine, RuleForm)
-        and (expected.kind, engine.kind, scope) == ("unknown", "unknown", model.Presence.UNKNOWN)
-        and not expected.blockers & engine.blockers
-    ):
-        return "forced-value"
-    if _verdict(expected) in _OUT_OF_PLAY and _verdict(engine) in _OPEN:
-        return "unselected-under-open"
-    if (
-        _verdict(expected) in _OPEN
-        and _verdict(engine) in _OPEN
-        and (_blockers(engine) - _blockers(expected)) & waiting
-    ):
-        return "waiting-blocker"
-    return UNCLASSIFIED
-
-
-def waiting_choices(forms: Mapping[Question, Form]) -> frozenset[str]:
-    """The choices whose state in ``forms`` is waiting."""
-    return frozenset(
-        path
-        for (what, path), form in forms.items()
-        if what == "state" and isinstance(form, StateForm) and form.kind == "waiting"
     )
 
 
@@ -1396,9 +1276,8 @@ class Tally:
     compared: int = 0
     rebound: int = 0
     out_of_step: int = 0
-    #: disagreements with the engine, by question and by row kind
+    #: disagreements with the engine (counted while a milestone is pending), by question
     by_question: Counter[str] = field(default_factory=Counter)
-    by_kind: Counter[str] = field(default_factory=Counter)
     engine_errors: int = 0
     #: binds refused by rules clear-only steps revealed (§ 16.16), as invariant 1 allows
     binds_refused: int = 0
@@ -1467,27 +1346,15 @@ class _Walk:
         if problems:
             self.fail(name, "invariant " + "\n".join(problems))
 
-    def disagree(
-        self,
-        what: str,
-        label: str,
-        expected: Form,
-        engine: Form,
-        scope: model.Presence | None = None,
-        waiting: frozenset[str] = frozenset(),
-    ) -> None:
-        """Count a disagreement with the engine, or fail the walk on it (strict). ``scope``:
-        for a rule, its scope's presence in the model; ``waiting``: the choices the model
-        reports waiting."""
-        kind = classify(expected, engine, scope, waiting)
+    def disagree(self, what: str, label: str, expected: Form, engine: Form) -> None:
+        """Fail the walk on a disagreement with the engine (strict), or count it."""
         if self.strict:
             self.fail(
                 "disagreement",
-                f"the engine disagrees ({what}, told as {kind})\n"
+                f"the engine disagrees ({what})\n"
                 + Disagreement("walk", label, expected, engine).describe(),
             )
         self.tally.by_question[what] += 1
-        self.tally.by_kind[kind] += 1
 
     def on_engine(self, call: Callable[[], T]) -> T:
         try:
@@ -1547,25 +1414,11 @@ class _Walk:
             )
         return forms
 
-    def compare(
-        self,
-        solution: model.Solution,
-        forms: Mapping[Question, Form],
-        engine: Mapping[Question, Form],
-    ) -> None:
+    def compare(self, forms: Mapping[Question, Form], engine: Mapping[Question, Form]) -> None:
         self.tally.compared += 1
-        waiting = waiting_choices(forms)
         for question in self.engine_asked:
             if not agrees(forms[question], engine[question]):
-                what, path = question
-                scope = (
-                    solution.presence(solution.index.constraints[path][1])
-                    if what == "rule"
-                    else None
-                )
-                self.disagree(
-                    what, ask(question), forms[question], engine[question], scope, waiting
-                )
+                self.disagree(question[0], ask(question), forms[question], engine[question])
 
     def engine_change(self, point: Point, edit: model.Change) -> tuple[ChangeForm, Point | None]:
         """``edit`` on the engine; its permanent check: as on a configuration built from
@@ -1605,13 +1458,11 @@ class _Walk:
         self.tally.engine_checks["refinement"] += 1
         found = order_problems(before.engine, engine, edit.commit)
         for question, move in sorted(found.items()):
-            # told by the answers that disagree: after the step, or else before it
-            pair, waiting = (forms[question], engine[question]), waiting_choices(forms)
+            # shown by the answers that disagree: after the step, or else before it
+            pair = (forms[question], engine[question])
             if agrees(*pair):
                 pair = (before.forms[question], before.engine[question])
-                waiting = waiting_choices(before.forms)
-            label = f"{ask(question)} moves down: {move}"
-            self.disagree("refinement", label, *pair, waiting=waiting)
+            self.disagree("refinement", f"{ask(question)} moves down: {move}", *pair)
 
     # -- drawing
 
@@ -1710,7 +1561,7 @@ class _Walk:
         self.history_independence(configuration, forms)
         engine = self.engine_state(point) if point is not None else None
         if engine is not None:
-            self.compare(solution, forms, engine)
+            self.compare(forms, engine)
         return _State(configuration, solution, forms, point, engine)
 
     def run(self) -> Tally:
@@ -1794,7 +1645,7 @@ class _Walk:
             tally.out_of_step += point is None
         engine_forms_ = self.engine_state(point) if point is not None else None
         if engine_forms_ is not None:
-            self.compare(solution, forms, engine_forms_)
+            self.compare(forms, engine_forms_)
             if addition and successor is not None and state.engine is not None:
                 self.engine_refinement(state, forms, engine_forms_, edit)
         return _State(result.configuration, solution, forms, point, engine_forms_)
@@ -1830,11 +1681,11 @@ def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
     """The walks' summary: a line per seed, then the totals."""
     lines = [
         "| seed | steps | accepted | invariant checks | failed | engine's own checks | "
-        "disagreements by question | by kind | engine errors | seconds | result |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "disagreements by question | engine errors | seconds | result |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     totals: dict[str, Counter[str]] = {
-        name: Counter() for name in ("checks", "engine_checks", "by_question", "by_kind", "skipped")
+        name: Counter() for name in ("checks", "engine_checks", "by_question", "skipped")
     }
     for tally in tallies:
         for name, counter in totals.items():
@@ -1843,7 +1694,7 @@ def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
             f"| {tally.seed} | {tally.steps} | {tally.accepted} | "
             f"{sum(tally.checks.values())} | {tally.failed or '-'} | "
             f"{sum(tally.engine_checks.values())} | {_counts(tally.by_question)} | "
-            f"{_counts(tally.by_kind)} | {tally.engine_errors} | {tally.seconds:.2f} | "
+            f"{tally.engine_errors} | {tally.seconds:.2f} | "
             f"{'FAILED' if tally.failure else 'ok'} |"
         )
 
@@ -1870,7 +1721,6 @@ def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
         f"{summed('compared')}, engine rebound to the model's {summed('rebound')}, out of step "
         f"{summed('out_of_step')}",
         f"engine disagreements ({mode}) by question: {_counts(totals['by_question'])}",
-        f"engine disagreements by kind: {_counts(totals['by_kind'])}",
         f"engine errors: {summed('engine_errors')}",
     ]
     return "\n".join(lines)
@@ -1883,9 +1733,7 @@ def seeds(text: str) -> Iterator[int]:
 
 
 __all__ = [
-    "CLASSIFIED",
     "FACT_VALUES",
-    "UNCLASSIFIED",
     "Checked",
     "Generated",
     "Pair",
@@ -1898,7 +1746,6 @@ __all__ = [
     "bind_problems",
     "check_change",
     "added_pairs",
-    "classify",
     "clear_only",
     "counted_pairs",
     "differences",
@@ -1909,6 +1756,5 @@ __all__ = [
     "questions",
     "seeds",
     "table",
-    "waiting_choices",
     "walk",
 ]
