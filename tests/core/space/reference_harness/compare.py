@@ -51,6 +51,8 @@ CODES: Mapping[reference.ReasonKind, str] = {
     # Provisional: today's engine names an empty list "decision-no-viable-case" (forcing's
     # word); the engine core adopts this name, or both rename.
     reference.ReasonKind.EMPTY_DOMAIN: "domain-empty",
+    # § 16.17: a present choice's membership input that does not apply
+    reference.ReasonKind.INPUT_ABSENT: "domain-input-absent",
 }
 
 #: Provisional, as ``domain-empty``: the code of a guard's validity piece, a guard refused

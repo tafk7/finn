@@ -824,10 +824,33 @@ def _known(answers: Mapping[str, model.Answer]) -> dict[str, Any] | None:
     return None
 
 
+def _existence(index: model.Index, facts: model.FactsOnly, choice: str) -> model.Answer:
+    """Whether every membership input of ``choice`` exists over the facts (§ 16.17, read
+    through the model's facts reader): ``Known(False)`` when one does not apply."""
+    info = index.choices[choice]
+    answers = [facts.applies(read, info.scope) for read in info.domain.reads]
+    if any(answer == model.Known(False) for answer in answers):
+        return model.Known(False)
+    if any(isinstance(answer, model.Refused) for answer in answers):
+        return model.Refused(())
+    if any(isinstance(answer, model.Unresolved) for answer in answers):
+        return model.Unresolved(())
+    return model.Known(True)
+
+
+def input_absent(index: model.Index, facts: model.FactsOnly, choice: str) -> bool:
+    """Whether a membership input of ``choice`` does not apply for these facts (§ 16.17)."""
+    return _existence(index, facts, choice) == model.Known(False)
+
+
 def listing(index: model.Index, facts: model.FactsOnly, choice: str) -> model.Answer:
     """A listed domain's membership list over the facts: ``Known`` of a tuple, else what
-    keeps it from being made (a refused input: ``Refused``; a missing fact: unresolved)."""
+    keeps it from being made (an input refused or not applying: ``Refused``; a missing
+    fact: unresolved)."""
     domain = index.choices[choice].domain
+    existence = _existence(index, facts, choice)
+    if existence != model.Known(True):
+        return existence if isinstance(existence, model.Unresolved) else model.Refused(())
     answers = {read: facts.value(read) for read in domain.reads}
     if any(isinstance(answer, model.Refused) for answer in answers.values()):
         return model.Refused(())
@@ -843,8 +866,12 @@ def listing(index: model.Index, facts: model.FactsOnly, choice: str) -> model.An
 
 def outside(index: model.Index, facts: model.FactsOnly, choice: str, value: object) -> bool:
     """Whether ``value`` is not of ``choice``'s type over ``facts``: outside its domain, or
-    its membership reads a refused input. A membership waiting on a missing fact is not."""
+    its membership reads a refused input or one that does not apply. A membership waiting
+    on a missing fact is not."""
     domain = index.choices[choice].domain
+    existence = _existence(index, facts, choice)
+    if existence != model.Known(True):
+        return not isinstance(existence, model.Unresolved)
     answers = {read: facts.value(read) for read in domain.reads}
     if any(isinstance(answer, model.Refused) for answer in answers.values()):
         return True
@@ -865,13 +892,16 @@ def false_on_its_own(
     """Whether ``origin`` is false on its own values in ``solution``'s configuration: its
     declared inputs all known (from the solution, or from the facts alone for a derived value
     over facts, as membership reads it), and its predicate false or its body refusing; or,
-    for a listed domain, its choice present and its list empty."""
+    for a listed domain, its choice present and its list empty, or an input of it not
+    applying (§ 16.17)."""
     index = solution.index
     scope = structure.scope(origin)
     present = solution.presence(scope) is model.Presence.PRESENT
     if kind == "empty-domain":
-        found = listing(index, model.FactsOnly(index, solution.configuration.facts), origin)
-        return present and isinstance(found, model.Known) and not found.value
+        facts = model.FactsOnly(index, solution.configuration.facts)
+        found = listing(index, facts, origin)
+        empty = isinstance(found, model.Known) and not found.value
+        return present and (empty or input_absent(index, facts, origin))
     reads = structure.reads(origin)
     if kind == "derived" and structure.over_facts(origin):
         facts = model.FactsOnly(index, solution.configuration.facts)

@@ -648,19 +648,14 @@ def test_reading_5_clearing_a_selector_leaves_its_cases_choices_waiting() -> Non
 
 
 def capped() -> Space:
-    """``lanes`` divides the fact ``n``; a rule caps it at 2. ``j``'s domain reads a
-    derived value over facts in the case ``a``."""
+    """``lanes`` divides the fact ``n``; a rule caps it at 2."""
 
-    a = Scope("a", derived=(Derived("span", ("n",), lambda r: r["n"]),))
     return Space(
         ("n",),
         Scope(
             "",
-            choices=(
-                Choice("lanes", computed(lambda r: divisors(r["n"]), ("n",))),
-                Choice("j", computed(lambda r: tuple(range(r["mode.a.span"])), ("mode.a.span",))),
-            ),
-            selectors=(Selector("mode", (a, Scope("b"))),),
+            choices=(Choice("lanes", computed(lambda r: divisors(r["n"]), ("n",))),),
+            selectors=(Selector("mode", (Scope("a"), Scope("b"))),),
             constraints=(Constraint("cap", ("lanes",), lambda r: r["lanes"] <= 2, "wide"),),
         ),
     )
@@ -696,15 +691,74 @@ def test_reading_3_a_value_the_facts_change_lets_be_read_refuses_by_its_rule() -
     )
 
 
-def test_reading_6_membership_is_over_the_facts_whatever_its_inputs_presence() -> None:
-    """``j``'s domain reads ``mode.a.span``, a derived value over facts in the case ``a``:
-    with ``b`` selected the type check still reads it."""
+def guarded_input() -> Space:
+    """``lanes`` divides ``extra.size`` (the fact ``n``), a derived value of the scope
+    ``extra``, present while the fact ``on`` holds; ``extra.p`` reads it from inside."""
 
-    base = Configuration(capped(), {"n": 3}, {"mode": "b"})
-    result = accepted(change(base, Change(commit={"j": 1})))
-    assert result.configuration.solve().state("j") == Set(1)
-    assert result.configuration.solve().read("mode.a.span") == Inapplicable()
-    assert rejected(change(base, Change(commit={"j": 3}))).refusals == (outside("j"),)
+    extra = Scope(
+        "extra",
+        when=When(("on",), lambda r: bool(r["on"])),
+        derived=(Derived("size", ("n",), lambda r: r["n"]),),
+        choices=(Choice("p", computed(lambda r: divisors(r["extra.size"]), ("extra.size",))),),
+    )
+    lanes = Choice("lanes", computed(lambda r: divisors(r["extra.size"]), ("extra.size",)))
+    return Space(("on", "n"), Scope("", choices=(lanes,), children=(extra,)))
+
+
+ABSENT_SIZE = Reason(ReasonKind.INPUT_ABSENT, "lanes", "", related=("extra.size",))
+
+
+def test_reading_6_a_membership_input_that_does_not_apply_refuses_the_assignment() -> None:
+    """§ 16.17: with ``on`` false, ``extra.size`` does not exist for these facts: an
+    assignment to ``lanes`` is refused naming it, and so are new facts making it absent
+    while a value is stored."""
+
+    off = Configuration(guarded_input(), {"on": False, "n": 4})
+    assert rejected(change(off, Change(commit={"lanes": 2}))) == Rejected(
+        (AssignmentRefusal("lanes", (ABSENT_SIZE,)),), None
+    )
+    on = accepted(
+        change(Configuration(guarded_input(), {"on": True, "n": 4}), Change(commit={"lanes": 2}))
+    )
+    assert on.configuration.solve().state("lanes") == Set(2)
+    assert rejected(change(on.configuration, Change(facts={"on": False}))) == Rejected(
+        (AssignmentRefusal("lanes", (ABSENT_SIZE,)),), None
+    )
+    with pytest.raises(ConfigurationError):
+        Configuration(guarded_input(), {"on": False, "n": 4}, {"lanes": 2})
+
+
+def test_reading_13_an_unset_choice_whose_input_does_not_apply_is_a_false_piece() -> None:
+    """§ 16.17: the list of the unset, present ``lanes`` cannot be made, so its domain
+    piece is false through the absent input, the domain its origin: new facts making the
+    input absent are refused at it (reading 9), nothing standing."""
+
+    off = solve(guarded_input(), {"on": False, "n": 4})
+    assert off.validity().false == (
+        Piece(PieceKind.EMPTY_DOMAIN, "", "lanes", F, reasons=(ABSENT_SIZE,)),
+    )
+    assert off.possible("lanes") is None
+    on = Configuration(guarded_input(), {"on": True, "n": 4})
+    assert rejected(change(on, Change(facts={"on": False}))).refusals == (
+        RuleRefusal("lanes", "empty-domain", (ABSENT_SIZE,), ()),
+    )
+
+
+def test_reading_6_an_omitted_fact_leaves_the_input_waiting_and_own_guards_are_not_asked() -> None:
+    """§ 16.17: with ``on`` omitted the input's existence waits on it, and so does a value
+    set; ``extra.p`` reads ``extra.size`` under its own guard, which holds whenever it is
+    present: set while ``extra`` is absent, it is accepted and dormant."""
+
+    unknown = Configuration(guarded_input(), {"n": 4})
+    waiting = accepted(change(unknown, Change(commit={"lanes": 2})))
+    assert waiting.configuration.solve().state("lanes") == Waiting(2, ("on",))
+    assert waiting.validity.verdict is U
+    off = Configuration(guarded_input(), {"on": False, "n": 4})
+    dormant = accepted(change(off, Change(commit={"extra.p": 2})))
+    assert dormant.configuration.solve().state("extra.p") == Dormant(2)
+    assert rejected(change(off, Change(commit={"extra.p": 3}))).refusals == (
+        outside("extra.p", "extra"),
+    )
 
 
 def even_width(r: Reads) -> Any:
@@ -1510,6 +1564,23 @@ def test_a_domain_whose_membership_reaches_a_choice_is_a_definition_error() -> N
             "d", derived=(Derived("d", ("n", "x"), lambda r: r["n"] + r["x"]),)
         ),
         ("y", "v"): domain_reading("v", views=(View("v", ("n",), lambda r: r["n"]),)),
+        # § 16.17: an input whose existence a choice decides beyond the choice's own guards
+        ("y", "s.a.d", "s"): domain_reading(
+            "s.a.d",
+            selectors=(
+                Selector("s", (Scope("a", derived=(Derived("d", ("n",), lambda r: r["n"]),)),)),
+            ),
+        ),
+        ("y", "g.d", "g", "x"): domain_reading(
+            "g.d",
+            children=(
+                Scope(
+                    "g",
+                    when=When(("x",), lambda r: r["x"] > 1),
+                    derived=(Derived("d", ("n",), lambda r: r["n"]),),
+                ),
+            ),
+        ),
     }
     for path, space in cases.items():
         with pytest.raises(DefinitionError) as raised:

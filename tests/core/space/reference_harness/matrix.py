@@ -237,11 +237,30 @@ ROWS: tuple[Row, ...] = (
         "legacy-validity",
     ),
     Row(
-        "guarded-input-set",
+        "guarded-input-commit",
         _CORE,
-        "membership is read over the facts whatever its input's presence: a value whose "
-        "membership input is out of play is set, not waiting",
-        f"{_CASES}::test_a_choice_whose_membership_input_is_out_of_play_is_set",
+        "a membership input that does not apply for these facts (a guard over facts beyond the "
+        "choice's own is false) refuses the assignment, naming it (domain-input-absent, § 16.17)",
+        f"{_CASES}::test_a_commit_whose_membership_input_does_not_apply_is_refused_naming_it",
+        "assignment-type-check",
+    ),
+    Row(
+        "guarded-input-validity",
+        _CORE,
+        "an unset present choice whose membership input does not apply has a list that cannot "
+        "be made: its domain piece is false through the input (§ 16.17)",
+        f"{_CASES}::test_an_unset_choice_whose_membership_input_does_not_apply_refuses_the_"
+        "configuration",
+        "assignment-type-check",
+        "today the list is made over the facts whatever the input's presence: valid",
+    ),
+    Row(
+        "guarded-input-facts",
+        _CORE,
+        "new facts putting a stored value's membership input out of play are refused by that "
+        "value's type check (domain-input-absent, § 16.17)",
+        f"{_CASES}::test_new_facts_putting_a_stored_choices_membership_input_out_of_play_are_"
+        "refused",
         "assignment-type-check",
     ),
     Row(

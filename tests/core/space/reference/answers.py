@@ -48,6 +48,9 @@ class ReasonKind(enum.Enum):
     EMPTY_DOMAIN = "empty-domain"
     #: an input the node reads is refused
     INPUT_REFUSED = "input-refused"
+    #: a present choice's membership input does not apply: a guard over facts beyond the
+    #: choice's own is false (§ 16.17); ``related`` names the inputs
+    INPUT_ABSENT = "input-absent"
     #: a view's body refused, with its own code
     VIEW_BODY = "view-body"
     #: a derived value's function refused, with its own code

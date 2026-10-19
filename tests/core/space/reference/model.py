@@ -19,9 +19,10 @@ membership reads a refused input, is no configuration (:class:`ConfigurationErro
 a stored set breaking a rule is one, and reads refused.
 
 **Domains.** Membership reads facts only, so it is a type check fixed once the facts
-are given: a value is a member, outside, waiting on a missing fact, or refused through
-a refused input. A listed domain's membership list is its listed values that are
-members, in listed order; its ``order`` ranks that list and checks nothing.
+are given: a value is a member, outside, waiting on a missing fact, refused through a
+refused input, or refused because an input does not apply (reading 6). A listed
+domain's membership list is its listed values that are members, in listed order; its
+``order`` ranks that list and checks nothing.
 
 **Presence.** A scope is present; absent (another case selected, or its ``when``
 false); unknown (its selector open, or a ``when`` input waiting); or refused (its
@@ -133,7 +134,15 @@ corpus; § 16 holds the readings its author gave for this model.
    waiting (never read as a value) and the facts change supplying it checks its type; a
    refusing input refuses the assignment, and a facts change making it refuse while a
    value is stored. Membership is evaluated over the facts alone: a derived value it
-   reads is computed from its reads whatever its own scope's presence.
+   reads is computed from its reads whatever its own scope's presence. *An input that
+   does not apply is refused* (§ 16.17, ``INPUT_ABSENT``, the choice's reason naming the
+   input), not unresolved: only a change of facts could settle it. Its existence is
+   decided over the facts alone: the choice's own existence guards (its scope's and
+   those above it) hold whenever it is present, and are not asked; any other guard on
+   the input's scopes (or on those of the derived values it reads) is a ``when`` over
+   facts, a selector or a ``when`` reaching a choice being ``domain-reads-choice``. A
+   false one makes the input absent, a waiting one leaves membership waiting, a refused
+   one refuses it through that guard's input. An omitted fact stays a missing one.
 7. *The constructor* (§ 16.7) refuses a stored value outside its domain or whose
    membership input refuses, dormant ones included; a stored set breaking a rule is a
    legal configuration that reads refused. Only :func:`change` refuses it.
@@ -161,9 +170,12 @@ corpus; § 16 holds the readings its author gave for this model.
     when its list is empty and its choice present (the origin), unknown when it is
     empty under a guard that waits; unknown while the list waits on a missing fact, and
     false through the input when its membership reads a refused input (the list cannot
-    be made; blamed at that input's origin). A list with a value adds no piece, whatever
-    its presence: an open selector whose case holds a listed choice and no rules leaves
-    the configuration valid. A membership-only domain has no piece.
+    be made; blamed at that input's origin). When an input does not apply (§ 16.17,
+    reading 6) the list cannot be made either and the piece is false through it; the
+    origin is the domain itself, as for an empty list (reading 9 decides it alike). A
+    list with a value adds no piece, whatever its presence: an open selector whose case
+    holds a listed choice and no rules leaves the configuration valid. A membership-only
+    domain has no piece.
 14. *A stored choice waits on what it waits on*: an unknown presence's waits and its
     membership's missing facts, never on itself. An open choice also waits on itself.
 15. *A ``when`` reading an input that does not apply* leaves its scope unknown,
@@ -295,6 +307,7 @@ class FactsOnly:
         self.index = index
         self.facts = facts
         self._values: dict[str, Answer] = {}
+        self._applies: dict[tuple[str, str], Answer] = {}
 
     def value(self, path: str) -> Answer:
         """A fact, or a derived value over facts."""
@@ -320,16 +333,72 @@ class FactsOnly:
     def inputs(self, reads: tuple[str, ...]) -> _Inputs:
         return _inputs({path: self.value(path) for path in reads})
 
+    def applies(self, path: str, within: str) -> Answer:
+        """Whether the membership read ``path`` exists for a choice of the scope ``within``
+        (reading 6, § 16.17): ``Known(True)``; ``Known(False)`` when a guard over facts
+        beyond the choice's own existence guards is false; ``Unresolved`` while such a
+        guard waits on a missing fact; ``Refused`` when it reads a refused input. A fact
+        exists; a derived value exists when its scope does and every value it reads does.
+        The choice's own guards (its scope's and those above it) hold whenever it is
+        present, so they are not asked."""
+
+        key = (path, within)
+        if key not in self._applies:
+            self._applies[key] = self._applies_now(path, within)
+        return self._applies[key]
+
+    def _applies_now(self, path: str, within: str) -> Answer:
+        if path in self.index.facts:
+            return Known(True)
+        derived, scope = self.index.derived[path]
+        answers = [self.applies(read, within) for read in derived.reads]
+        current: str | None = scope
+        while current is not None and not self.index.within(within, current):
+            info = self.index.scopes[current]
+            assert info.selector is None, (path, current)  # domain-reads-choice
+            if info.when is not None:
+                answers.extend(self.applies(read, within) for read in info.when.reads)
+                inputs = self.inputs(info.when.reads)
+                if inputs.refused:
+                    reason = Reason(
+                        ReasonKind.INPUT_REFUSED, current, current, related=inputs.refused
+                    )
+                    answers.append(Refused((reason,)))
+                elif inputs.values is None:
+                    answers.append(Unresolved(tuple(sorted(inputs.waits))))
+                else:
+                    answers.append(Known(bool(info.when.test(inputs.values))))
+            current = info.parent
+        if Known(False) in answers:
+            return Known(False)
+        refused = [r for answer in answers if isinstance(answer, Refused) for r in answer.reasons]
+        if refused:
+            return Refused(sorted_reasons(refused))
+        waits = {w for answer in answers if isinstance(answer, Unresolved) for w in answer.waits}
+        return Unresolved(tuple(sorted(waits))) if waits else Known(True)
+
     def _domain_inputs(self, choice: str) -> _Inputs | Refused:
         info = self.index.choices[choice]
-        inputs = self.inputs(info.domain.reads)
-        if inputs.refused:
-            reasons = [Reason(ReasonKind.INPUT_REFUSED, choice, info.scope, related=inputs.refused)]
-            for path in inputs.refused:
-                answer = self.value(path)
+        reads = info.domain.reads
+        applies = {read: self.applies(read, info.scope) for read in reads}
+        absent = tuple(read for read in reads if applies[read] == Known(False))
+        if absent:
+            return Refused((Reason(ReasonKind.INPUT_ABSENT, choice, info.scope, related=absent),))
+        guarded = [read for read in reads if isinstance(applies[read], Refused)]
+        inputs = self.inputs(reads)
+        if inputs.refused or guarded:
+            related = tuple(sorted({*inputs.refused, *guarded}))
+            reasons = [Reason(ReasonKind.INPUT_REFUSED, choice, info.scope, related=related)]
+            for path in related:
+                answer = self.value(path) if path in inputs.refused else applies[path]
                 assert isinstance(answer, Refused)
                 reasons.extend(answer.reasons)
             return Refused(sorted_reasons(reasons))
+        waits = {
+            w for answer in applies.values() if isinstance(answer, Unresolved) for w in answer.waits
+        }
+        if waits:
+            return _Inputs(None, waits=frozenset(waits) | inputs.waits)
         return inputs
 
     def listing(self, choice: str) -> Answer | None:
@@ -695,12 +764,23 @@ class _Evaluation:
                         self._read_origins(read, origins)
             elif piece.kind is PieceKind.EMPTY_DOMAIN:
                 listing = self.facts.listing(piece.subject)
-                if isinstance(listing, Known):
+                absent = isinstance(listing, Refused) and any(
+                    r.kind is ReasonKind.INPUT_ABSENT for r in listing.reasons
+                )
+                if isinstance(listing, Known) or absent:
                     origins[piece.subject] = ("empty-domain", piece.reasons)
                 else:
+                    assert isinstance(listing, Refused)
                     reads = self.index.choices[piece.subject].domain.reads
                     for read in self.facts.inputs(reads).refused:
                         self.facts.origins(read, origins)
+                    for reason in listing.reasons:  # a refused guard of an input
+                        if (
+                            reason.kind is ReasonKind.INPUT_REFUSED
+                            and reason.subject in self.index.scopes
+                        ):
+                            for read in reason.related:
+                                self.facts.origins(read, origins)
             else:
                 for read in self.parts(piece.subject)[2].guards:
                     self._read_origins(read, origins)

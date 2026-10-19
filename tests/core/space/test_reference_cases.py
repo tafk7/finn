@@ -640,7 +640,8 @@ def test_a_choice_whose_membership_input_waits_on_a_fact_waits_on_it() -> None:
 
 # A domain reading a derived value over facts in a guarded scope: ``size``, a value of
 # ``extra``, present when the fact ``on`` holds, and ``lanes`` over its divisors among 1, 2
-# and 4. Membership is a function of the facts, read whatever its input's presence.
+# and 4. With ``on`` false the input does not exist for these facts: it is refused
+# (``domain-input-absent``, § 16.17), not unresolved.
 
 GUARDED_INPUT = Case(
     "a domain reading a value in a guarded scope",
@@ -670,19 +671,21 @@ GUARDED_INPUT = Case(
 )
 
 
-def test_a_commit_whose_membership_input_is_out_of_play_is_accepted() -> None:
+@expected("guarded-input-commit")
+def test_a_commit_whose_membership_input_does_not_apply_is_refused_naming_it() -> None:
     GUARDED_INPUT.start({"on": False, "n": 4}).check_change(Change(commit={"lanes": 2}))
 
 
-@expected("guarded-input-set")
-def test_a_choice_whose_membership_input_is_out_of_play_is_set() -> None:
-    GUARDED_INPUT.start({"on": False, "n": 4}, {"lanes": 2}).check_state("lanes")
+@expected("guarded-input-validity")
+def test_an_unset_choice_whose_membership_input_does_not_apply_refuses_the_configuration() -> None:
+    GUARDED_INPUT.start({"on": False, "n": 4}).check_validity()
 
 
 def test_a_choice_whose_membership_input_is_in_play_is_set() -> None:
     GUARDED_INPUT.start({"on": True, "n": 4}, {"lanes": 2}).check_state("lanes")
 
 
-def test_new_facts_putting_a_membership_input_out_of_play_are_accepted() -> None:
+@expected("guarded-input-facts")
+def test_new_facts_putting_a_stored_choices_membership_input_out_of_play_are_refused() -> None:
     point = GUARDED_INPUT.start({"on": True, "n": 4}, {"lanes": 2})
     point.check_change(Change(facts={"on": False}))

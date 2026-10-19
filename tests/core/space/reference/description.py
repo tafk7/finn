@@ -39,14 +39,16 @@ reads nothing else.
 
 :meth:`Space.validate` rejects a malformed description (an unknown or unreadable
 read, a duplicate name, a malformed domain or guard), a domain whose membership reads
-anything but facts (``"domain-reads-choice"``: a relation to another choice is a
+anything but facts, or an input whose existence a choice decides other than through the
+choice's own guards (``"domain-reads-choice"``: a relation to another choice is a
 constraint) and a **cycle**. The rule for cycles: the definition's dependencies form a
 graph in which
 
 - a value depends on its scope's presence; a choice's value also on its membership,
-  which depends on the functions of the derived values it reads (never on their
-  presence: membership is a function of the facts); a derived value's and a view's on
-  their reads; a view's also on its Space's validity;
+  which depends on the functions of the derived values it reads and on the ``when``
+  guards over facts that decide whether they exist beyond the choice's own (§ 16.17:
+  those guards read facts only, so they close no cycle and are not drawn); a derived
+  value's and a view's on their reads; a view's also on its Space's validity;
 - a constraint depends on its reads and its scope's presence;
 - a scope's presence depends on its parent's, its selector's value and its guard's
   reads;
@@ -385,11 +387,15 @@ class Index:
     def _check_domains(self) -> None:
         """Membership reads facts only: facts, and derived values reading, through
         derived values, facts only. Anything else reaches a choice (a view through its
-        Space's validity)."""
+        Space's validity). So does a derived value whose existence depends on a choice
+        other than through the choice's own existence guards (§ 16.17): a selector of
+        one of its scopes that does not hold the choice, or a ``when`` there reading
+        anything but facts in this sense."""
 
         for path in sorted(self.choices):
+            own = self.choices[path].scope
             seen: set[str] = set()
-            # depth-first, keeping the derived values read through
+            # depth-first, keeping the derived values and guarded scopes read through
             stack: list[tuple[str, tuple[str, ...]]] = [
                 (read, ()) for read in reversed(self.choices[path].domain.reads)
             ]
@@ -406,8 +412,22 @@ class Index:
                         "a domain's membership reads facts only; "
                         "a relation to another choice is a constraint",
                     )
-                derived = self.derived[read][0]
+                derived, scope = self.derived[read]
                 stack.extend((inner, (*through, read)) for inner in reversed(derived.reads))
+                current: str | None = scope
+                while current is not None and not self.within(own, current):
+                    info = self.scopes[current]
+                    if info.selector is not None:
+                        raise DefinitionError(
+                            "domain-reads-choice",
+                            (path, *through, read, info.selector),
+                            "a domain's membership input exists under the choice's own "
+                            "guards or under facts; one under another selector reaches it",
+                        )
+                    if info.when is not None:
+                        guarded = (*through, read, current)
+                        stack.extend((inner, guarded) for inner in reversed(info.when.reads))
+                    current = info.parent
 
     # -- queries
 
