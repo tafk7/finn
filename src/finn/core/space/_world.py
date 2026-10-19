@@ -589,7 +589,13 @@ class World:
     ) -> tuple[bool | None, ReadSet]:
         """A guard's own condition, read while a guard above it is undecided or refused:
         false where a case's selector stores another case, or a ``when`` reads false;
-        ``None`` where it holds or is not known."""
+        ``None`` where it holds or is not known.
+
+        A ``when``'s condition computed in the scope it is written in (a derived value,
+        an alias) carries that scope's guard, the one undecided here: it is evaluated past
+        that guard (``_unguarded``), its reads recorded as this guard's own. What it reads
+        keeps its own presence: a choice of a case still open reads unknown, and so does
+        a condition that is such a choice."""
         evaluator = self.evaluator
         held = evaluator.reads.cases.get(node.index)
         if held is not None:
@@ -599,9 +605,24 @@ class World:
             return (None if value is None or value.value == case else False), reads
         if node.output is None:
             return None, reads
-        condition, reads = self.read(trace, node.output, reads)
-        answer = condition.result
+        condition = evaluator.nodes[node.output]
+        if (
+            condition.guard is None
+            or condition.kind in _OWN_BIT
+            or not guard_implies(evaluator.nodes, condition.guard, node.guard)
+        ):
+            entry, reads = self.read(trace, node.output, reads)
+        else:
+            entry = self._unguarded(condition)
+            trace.extend(entry.trace)
+            reads |= entry.reads
+        answer = entry.result
         return (False if isinstance(answer, Available) and answer.value is False else None), reads
+
+    def _unguarded(self, node: Node) -> Entry:
+        """``node`` evaluated here as if its own guard held (its frame alone, kept nowhere):
+        what it reads, read as usual."""
+        return _FRAMES[node.kind](self, node, [], 0)
 
     def _cut(self, previous: Entry) -> Entry | None:
         """Early cutoff: ``previous`` (a parent's entry of the node) stands, the same answer

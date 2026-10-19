@@ -625,6 +625,90 @@ def test_presence_is_the_and_over_the_whole_path_above_a_choice() -> None:
     assert isinstance(away.instance.query(lanes), Inapplicable)
 
 
+class Behind(Space):
+    x: int = Decision(values=(1,))
+
+
+class Threshold(Space):
+    """``g`` applies where ``k`` is at least 3: a condition computed in this case, so it
+    carries the case's guard."""
+
+    k: int = Param()
+
+    @derived
+    def big(self) -> bool:
+        return self.k >= 3
+
+    g: Behind = Behind(when=big)
+
+
+class Over(Space):
+    k: int = Param()
+    s: Threshold | Bare = Decision({"a": Threshold(k=k), "b": Bare()})
+
+
+class OverChoice(Space):
+    k: int = Decision(values=(0, 5))
+    s: Threshold | Bare = Decision({"a": Threshold(k=k), "b": Bare()})
+
+
+def test_a_false_when_beneath_an_open_selector_makes_its_scope_absent() -> None:
+    """Presence is the AND over the path: the ``when`` reads false whatever the selector
+    above it will hold, so its choice is absent, not open waiting on the selector."""
+    states = dict(inspection.states(design_space(Over(k=0))))
+    assert states == {"s": Open(), "s.a.g.x": Absent()}
+    assert dict(inspection.states(design_space(Over(k=5))))["s.a.g.x"] == Open(("s",))
+
+
+def test_turning_a_when_off_beneath_an_open_selector_puts_its_choice_dormant() -> None:
+    point = commit(design_space(OverChoice()), {"k": 5, "s.a.g.x": 1})
+    assert dict(inspection.states(point))["s.a.g.x"] == Waiting(1, ("s",))
+    k = handle(point, "k")
+    (possible,) = inspection.viable(point, [k])
+    assert possible.values == (
+        Possible(0, dormant=("s.a.g.x",)),
+        Possible(5),
+    )
+    off = keyed(point, {"k": 0})
+    assert off.accepted and off.dormant == ("s.a.g.x",)
+    assert dict(inspection.states(off.instance))["s.a.g.x"] == Dormant(1)
+    # Back on, it waits on the selector again: not present, so not in play.
+    on = keyed(off.instance, {"k": 5})
+    assert (on.dormant, on.in_play) == ((), ())
+    assert dict(inspection.states(on.instance))["s.a.g.x"] == Waiting(1, ("s",))
+
+
+class OwnGate(Space):
+    c: int = Decision(values=(0, 5))
+
+    @derived
+    def big(self) -> bool:
+        return self.c >= 3
+
+    g: Behind = Behind(when=big)
+
+
+class Switched(Space):
+    c: bool = Decision(values=(False, True))
+    g: Behind = Behind(when=c)
+
+
+class OverOwn(Space):
+    s: OwnGate | Switched | Bare = Decision({"a": OwnGate(), "w": Switched(), "b": Bare()})
+
+
+@pytest.mark.parametrize(("case", "stored"), [("a", 0), ("w", False)])
+def test_a_when_reading_a_choice_of_its_own_open_case_waits_on_the_selector(
+    case: str, stored: object
+) -> None:
+    """The condition reads a choice whose own presence waits on the selector, directly
+    or through a derived value: the scope stays open, whatever the stored value."""
+    point = commit(design_space(OverOwn()), {f"s.{case}.c": stored})
+    states = dict(inspection.states(point))
+    assert states[f"s.{case}.c"] == Waiting(stored, ("s",))
+    assert states[f"s.{case}.g.x"] == Open(("s",))
+
+
 class Waits(Space):
     extent: int = Param(required=False)
     lanes: int = Decision(domain=divisors_of(extent))

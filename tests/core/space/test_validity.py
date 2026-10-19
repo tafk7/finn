@@ -241,11 +241,12 @@ def test_the_pieces_of_a_placed_space_whose_presence_waits_are_unknown_each_unde
     None
 ):
     # A placed Space is not one piece: each constraint inside is unknown, waiting on the
-    # selector, whatever its body would answer (``never_applies`` too: its own guard is not
-    # read while the Space's presence waits). ``plain`` holds no piece: it adds nothing.
+    # selector, whatever its body would answer. ``never_applies`` is no piece: its own
+    # guard reads false, and presence is the AND over the path, so it does not apply
+    # whatever the selector holds. ``plain`` holds no piece: it adds nothing.
     validity = inspection.validity(design_space(Either(width=8)))
     assert validity.status == "open"
-    assert owners(validity) == ["compute.core.divides", "compute.core.never_applies"]
+    assert owners(validity) == ["compute.core.divides"]
     for piece in validity.pieces:
         assert {(f.code, f.owner) for f in piece.result.findings} == {
             ("decision-unassigned", "compute")
