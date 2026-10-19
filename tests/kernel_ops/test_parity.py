@@ -74,7 +74,7 @@ from finn.harness.reference import platform_rows
 from finn.platform.capabilities import DspBlock
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors
-from finn.transformation.kernels.cut import BaselineChoices
+from finn.transformation.kernels.cut import MakeCutChoices
 from finn.util.draws import Integers, boundary_inputs, graph_inputs
 
 # -- the models ------------------------------------------------------------------------
@@ -331,7 +331,7 @@ def test_the_versal_points_take_its_dsp58_core_and_ultraram() -> None:
     UltraRAM takes initial contents (``uram_init``)."""
     assert VERSAL.platform.dsp is DspBlock.DSP58 and VERSAL.platform.uram
     assert VERSAL.platform.uram_init
-    model = persisted(matmul(VERSAL), ON_VERSAL["matmul"]).transform(BaselineChoices())
+    model = persisted(matmul(VERSAL), ON_VERSAL["matmul"]).transform(MakeCutChoices())
     point, _ = configured_network(model, "versal")
     assert type(point.network.member("first").compute).__name__ == "Int8Dsp58DotpKernel"
     styles = {

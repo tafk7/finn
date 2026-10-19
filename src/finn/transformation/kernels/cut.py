@@ -40,7 +40,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, PARTITION_DOMAIN, PARTITION_OP
 from finn.core.reporting.findings import Finding
 from finn.custom_op.kernels.network import PARTITION
-from finn.custom_op.kernels.shell import baseline_choices
+from finn.custom_op.kernels.shell import make_cut_choices
 from finn.transformation.kernels.convert import between_kernel_ops
 
 #: The partition PartitionFromLambda puts the KernelOps in; every other node stays on
@@ -52,10 +52,10 @@ def _kernel_ops_together(node: NodeProto) -> str | int:
     return _KERNEL_OPS if node.domain == KERNEL_OPS_DOMAIN else -1
 
 
-class BaselineChoices(Transformation):
+class MakeCutChoices(Transformation):
     """What the cut does to the body it makes, for a body made by hand: the channels'
     choices made, the nodes' stored choices bound in context, and a node choice the body
-    leaves open set by conversion's policies (``shell.baseline_choices``). ``dropped``
+    leaves open set by conversion's policies (``shell.make_cut_choices``). ``dropped``
     lists the stored choices dropped as stale, ``late`` the node choices set late and
     ``unset`` the choices no value could be set for, by owner and key
     (``MatMul_0.compute.packed.pe``), each with its findings."""
@@ -67,7 +67,7 @@ class BaselineChoices(Transformation):
         self.unset: dict[str, tuple[Finding, ...]] = {}
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        made = baseline_choices(model)
+        made = make_cut_choices(model)
         self.dropped, self.late, self.unset = dict(made.stale), dict(made.late), dict(made.unset)
         return model, False
 
@@ -77,7 +77,7 @@ class CutKernelPartition(Transformation):
     ``directory`` with its channels' choices made (see the module docstring). Refuses a
     model that holds a partition already or no KernelOps, one with host nodes between
     KernelOps or storing channel choices, and one with a host node named ``PARTITION``.
-    ``dropped``, ``late`` and ``unset``: as ``BaselineChoices``'."""
+    ``dropped``, ``late`` and ``unset``: as ``MakeCutChoices``'."""
 
     def __init__(self, directory: Path) -> None:
         super().__init__()
@@ -136,7 +136,7 @@ class CutKernelPartition(Transformation):
         op = getCustomOp(node)
         cut_file = Path(str(op.get_nodeattr("model")))
         body = ModelWrapper(str(cut_file))
-        made = baseline_choices(body)
+        made = make_cut_choices(body)
         self.dropped, self.late, self.unset = dict(made.stale), dict(made.late), dict(made.unset)
         body_file = self.directory / f"{PARTITION}.onnx"
         body.save(str(body_file))
@@ -146,4 +146,4 @@ class CutKernelPartition(Transformation):
         return parent, False
 
 
-__all__ = ["BaselineChoices", "CutKernelPartition"]
+__all__ = ["CutKernelPartition", "MakeCutChoices"]

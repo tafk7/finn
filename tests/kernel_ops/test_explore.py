@@ -8,7 +8,7 @@ replay after a fact change, the report as a log of the exploration.
 On the Chain as a model (MatMul ``first``, Thresholding ``activate``, MatMul
 ``second``; three rows of four) for Ultra96 without a shell: as conversion leaves it, its
 channels' choices not made (a body no cut created, ``kernel_model``), or as the cut leaves
-it (``cut_model``: ``BaselineChoices``, each channel's choices by the interim channel
+it (``cut_model``: ``MakeCutChoices``, each channel's choices by the interim channel
 rule); and an INT8 MatMul retargeted from Ultra96 to a VCK190.
 """
 
@@ -62,7 +62,7 @@ from finn.transformation.kernels import (
     explore_kernel_choices,
     kernel_choices_config,
 )
-from finn.transformation.kernels.cut import BaselineChoices, CutKernelPartition
+from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
 
 VCK190 = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=5.0)
 
@@ -79,9 +79,9 @@ def seam_of(model: ModelWrapper) -> tuple[Seam, Partition]:
 
 def cut_model() -> ModelWrapper:
     """The Chain as the cut leaves it: ``kernel_model`` with each channel's choices made
-    by the interim channel rule (``BaselineChoices``, what the cut does to a body made by
+    by the interim channel rule (``MakeCutChoices``, what the cut does to a body made by
     hand)."""
-    return kernel_model().transform(BaselineChoices())
+    return kernel_model().transform(MakeCutChoices())
 
 
 def test_a_choice_is_keyed_by_the_node_or_tensor_that_persists_it() -> None:

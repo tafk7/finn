@@ -62,7 +62,7 @@ In the verifying mode a hit is bound again with no cache open and compared.
 
 A partition's resources (``Partition.own_resources``) are its members'. The shell's
 budgets and resources over a network (its members', its ends' and its static region's),
-and the cut's choices (``baseline_choices``: the channels' by the interim channel rule) on
+and the cut's choices (``make_cut_choices``: the channels' by the interim channel rule) on
 the network in its shell, are ``finn.custom_op.kernels.shell``'s.
 """
 

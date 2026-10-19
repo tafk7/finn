@@ -52,7 +52,7 @@ from finn.transformation.kernels import (
     ToKernelOps,
     kernel_choices_config,
 )
-from finn.transformation.kernels.cut import BaselineChoices, CutKernelPartition
+from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
 from finn.transformation.kernels.integration import (
     Address,
     Connection,
@@ -71,11 +71,11 @@ def chain(shell: str = "ip") -> ModelWrapper:
     """The Chain, x and the streamed w2 crossing its boundary, its choices saved, for
     Ultra96 on ``shell`` (the default ``ip``, or ``pynq``, w2 presenting one row-major
     pass a frame: ``streamed_w2_model``, one row, each boundary's end made as the cut
-    makes it, ``BaselineChoices``)."""
+    makes it, ``MakeCutChoices``)."""
     if shell == "pynq":
         model = streamed_w2_model()
         write_target(model, ZYNQ)
-        model = model.transform(BaselineChoices())
+        model = model.transform(MakeCutChoices())
     else:
         model = kernel_model(second_weights=False)
     choose_memories(model)
@@ -309,7 +309,7 @@ def test_an_iodma_end_refuses_w2_repeated_or_tiled_by_name() -> None:
             # A folding the shell refuses at its end: w2's end, open, can take no value
             # under it, so the interim channel rule sets none.
             configured(model, {"second": folding})
-        cut = BaselineChoices()
+        cut = MakeCutChoices()
         model = model.transform(cut)
         ((code, causes),) = [(f.code, f.causes) for f in cut.unset["w2.end"]]
         assert code == "choice-no-valid-value"

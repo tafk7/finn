@@ -43,7 +43,7 @@ from finn.custom_op.kernels.network import network, persist
 from finn.kernels.channels import Channel
 from finn.kernels.explore import Defaults, ExploreError, Hold, Ranked
 from finn.transformation.kernels import explore_kernel_choices, kernel_choices_config
-from finn.transformation.kernels.cut import BaselineChoices, CutKernelPartition
+from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
 
 FIFO: dict[str, object] = {"transport": "fifo", "transport.fifo.buffer.depth": 8}
 
@@ -201,9 +201,9 @@ def test_the_cut_moves_a_channels_choices_into_the_body(tmp_path: Path) -> None:
     assert not network(body, body.graph.node).stale
 
 
-def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path: Path) -> None:
+def test_make_cut_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path: Path) -> None:
     """A body made by hand (the Chain's KernelOps, converted, no cut) states its nodes'
-    choices, created at conversion, and no channel's. ``BaselineChoices`` creates each
+    choices, created at conversion, and no channel's. ``MakeCutChoices`` creates each
     channel's by the interim channel rule on its tensor, keeps the nodes', and leaves
     nothing open; a node's choice its facts refuse in context (written raw) is dropped,
     named, and left open for a strategy (emission refuses it until one sets it), as the
@@ -211,9 +211,9 @@ def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
     model = open_model()
     nodes = kernel_choices_config(model)
     assert list(nodes) == ["first", "activate", "second"] and not model.tensors_stating(CHANNEL)
-    baselining = BaselineChoices()
-    model = model.transform(baselining)
-    assert baselining.dropped == {}
+    making = MakeCutChoices()
+    model = model.transform(making)
+    assert making.dropped == {}
     config = kernel_choices_config(model)
     assert list(config) == ["x", "w1", "first", "hidden", "activate", "levels", "w2", "second", "y"]
     assert {name: config[name] for name in nodes} == nodes
@@ -221,11 +221,11 @@ def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
     assert explore_kernel_choices(model).report["open"] == []
     write_raw(model, "first", "compute.packed.simd", 2)  # past the space, as another tool wrote it
     write_raw(model, "first", "compute.packed.pe", 3)
-    model = model.transform(baselining)
+    model = model.transform(making)
     # Its input buffer's channel waits on the open pe, its stored choices with it.
-    assert sorted(baselining.dropped) == ["first.compute.packed.pe"]
+    assert sorted(making.dropped) == ["first.compute.packed.pe"]
     # Its own domain refuses 3: nothing else stands beside it.
-    assert {(f.code, f.owner) for f in baselining.dropped["first.compute.packed.pe"]} == {
+    assert {(f.code, f.owner) for f in making.dropped["first.compute.packed.pe"]} == {
         ("domain-membership", "compute.packed.pe"),
     }
     first = kernel_op(model, model.graph.node[0])
@@ -247,7 +247,7 @@ def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
 def test_the_defaults_strategy_resets_the_bodys_channel_choices_too() -> None:
     """To start over, the ``Defaults`` strategy: what the body states, nodes' and
     channels' alike, goes back to its default, the values the cut gives a body stating
-    nothing (``BaselineChoices``: conversion's policies late, the interim channel rule)."""
+    nothing (``MakeCutChoices``: conversion's policies late, the interim channel rule)."""
     model = kernel_model()
     assert model.tensors_stating(CHANNEL)
     explored = explore_kernel_choices(model, Defaults())
@@ -258,7 +258,7 @@ def test_the_defaults_strategy_resets_the_bodys_channel_choices_too() -> None:
         for key in list(kernel_op(cleared, node).choices()):
             write_raw(cleared, node.name, key, None)
     clear_channel_choices(cleared)
-    cleared = cleared.transform(BaselineChoices())
+    cleared = cleared.transform(MakeCutChoices())
     assert kernel_choices_config(model) == kernel_choices_config(cleared)
 
 

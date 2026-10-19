@@ -52,7 +52,7 @@ from finn.toolchain.launcher import (
 )
 from finn.toolchain.vivado import hierarchical_utilization
 from finn.transformation.kernels import PackagePartition
-from finn.transformation.kernels.cut import BaselineChoices
+from finn.transformation.kernels.cut import MakeCutChoices
 from finn.transformation.kernels.package import (
     ElaboratePartition,
     ip_key,
@@ -76,7 +76,7 @@ def test_the_partition_packages_its_nodes_choices() -> None:
 
 def test_a_choice_never_created_refuses_packaging_and_is_named() -> None:
     # A body made by hand with no cut (conversion only): no channel's choices are made, so
-    # emission fills nothing in and refuses each, named; once BaselineChoices has made
+    # emission fills nothing in and refuses each, named; once MakeCutChoices has made
     # them (as the cut does), the body packages.
     model = converted_model()
     with refused(
@@ -84,14 +84,14 @@ def test_a_choice_never_created_refuses_packaging_and_is_named() -> None:
         error=KernelOpError,
         owner="configured_network",
         node="sdp_1",
-        message=r"open choices, refused at emission: .*not set: the cut, BaselineChoices, or a "
+        message=r"open choices, refused at emission: .*not set: the cut, MakeCutChoices, or a "
         r"strategy sets it",
     ) as left:
         configured_network(model, "sdp_1")
     channels = {"x", "w1", "hidden", "levels", "w2", "y"}
     keys = cast(KernelOpError, left.error).keys
     assert keys and {key.split(".")[0] for key in keys} <= channels
-    module = configured_network(model.transform(BaselineChoices()), "sdp_1")[0].module
+    module = configured_network(model.transform(MakeCutChoices()), "sdp_1")[0].module
     assert module.stem == "finn_partition"
 
 
@@ -124,11 +124,11 @@ def test_a_choice_waiting_on_an_open_one_is_saved_and_emission_names_the_open_on
 
 
 def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:
-    # A FIFO saved with no depth, its style created (BaselineChoices): the depth is
+    # A FIFO saved with no depth, its style created (MakeCutChoices): the depth is
     # required, and no strategy set it.
     configure_partition(model := kernel_model())
     configured(model, {"levels": {"transport": "fifo"}})
-    model = model.transform(BaselineChoices())
+    model = model.transform(MakeCutChoices())
     with refused(
         "choices-open",
         error=KernelOpError,

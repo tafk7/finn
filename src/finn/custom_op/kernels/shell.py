@@ -26,7 +26,7 @@ check of its FIFOs against their streams before emission (a strategy may call th
 check too, ``Seam.check_fifos``), and records the design it verified on the body; emission
 (packaging, the shell's integration, the testbench) compares it (``refuse_unverified``),
 and refuses a design never verified or changed since. Simulation and elaboration only
-bind. The cut makes a body's channel choices (``baseline_choices``) on its network in its
+bind. The cut makes a body's channel choices (``make_cut_choices``) on its network in its
 shell, which alone holds both of a boundary channel's ends, by the interim channel rule
 (``finn.kernels.network.interim_channel_defaults``: first valid, replaced by the ends
 pass), and writes them with ``persist``.
@@ -251,7 +251,7 @@ def configured_network(
     nothing is completed here. A stale choice; an open choice in play, each by name: one no
     value of which is possible (each refused value's rules), a required one no strategy set
     ("required: run step_size_fifos or step_placeholder_choices"), any other one never set
-    ("not set: the cut, BaselineChoices, or a strategy sets it"; one finding,
+    ("not set: the cut, MakeCutChoices, or a strategy sets it"; one finding,
     ``choices-open``); a network over the shell's budgets (``budget_refusal``), or whose
     module or cycles its members refuse; or graph inputs and outputs out of port order
     refuse, named. A dormant choice (stored under a case not selected) is not open, and
@@ -296,7 +296,7 @@ def configured_network(
             if key in impossible
             else f"{dotted(key)} (required: run step_size_fifos or step_placeholder_choices)"
             if key in required
-            else f"{dotted(key)} (not set: the cut, BaselineChoices, or a strategy sets it)"
+            else f"{dotted(key)} (not set: the cut, MakeCutChoices, or a strategy sets it)"
             for key in open_keys
         ]
         text = f"{label}: open choices, refused at emission: " + "; ".join(named)
@@ -416,7 +416,7 @@ def refuse_unverified(model: ModelWrapper, label: str) -> None:
 
 @dataclass(frozen=True)
 class CutChoices:
-    """What the cut did to a body's choices (``baseline_choices``), by dotted key: the
+    """What the cut did to a body's choices (``make_cut_choices``), by dotted key: the
     stored choices the bind dropped as stale, each a value outside its domain, with the
     kernel's findings (``stale``: a kernel's stays open, for a strategy to set, and
     emission refuses it until one does; a channel's is derived again by the interim
@@ -441,7 +441,7 @@ def _late(key: str, value: object) -> Finding:
     )
 
 
-def baseline_choices(model: ModelWrapper) -> CutChoices:
+def make_cut_choices(model: ModelWrapper) -> CutChoices:
     """The cut's choices of a partition's body, ``model``, persisted, each owner's whole
     (``persist``), on the network of its KernelOps bound in its shell (``in_shell``), their
     stored choices set as it binds (a value outside its domain dropped as stale):
@@ -512,7 +512,7 @@ __all__ = [
     "CutChoices",
     "InShell",
     "ShellResources",
-    "baseline_choices",
+    "make_cut_choices",
     "budget_refusal",
     "configured_network",
     "in_shell",

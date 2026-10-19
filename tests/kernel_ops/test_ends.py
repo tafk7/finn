@@ -71,7 +71,7 @@ from finn.transformation.kernels import (
     explore_kernel_choices,
     kernel_choices_config,
 )
-from finn.transformation.kernels.cut import BaselineChoices, CutKernelPartition
+from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
 
 # -- an end's arithmetic -------------------------------------------------------------------
 
@@ -203,11 +203,11 @@ def chain_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None
 
 def cut_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None) -> InShell:
     """The Chain's network in the shell of ``target``, its channels' choices made there as
-    the cut makes them (``BaselineChoices``: the ends the shell offers set by the interim
+    the cut makes them (``MakeCutChoices``: the ends the shell offers set by the interim
     channel rule)."""
     model = kernel_model() if model is None else model
     write_target(model, target)
-    model = model.transform(BaselineChoices())
+    model = model.transform(MakeCutChoices())
     return in_shell(model, model.graph.node, name="chain")
 
 
@@ -223,7 +223,7 @@ def test_the_network_takes_the_ends_it_is_offered_and_states_its_members_resourc
     model = kernel_model()
     configure_partition(model)
     write_target(model, ULTRA96)
-    model = model.transform(BaselineChoices())
+    model = model.transform(MakeCutChoices())
     plain = network(model, model.graph.node, name="chain")
     assert plain.ends == () and not plain.member("x").ended
     offered = network(model, model.graph.node, name="chain", ends=(iodma_hls(128),))
@@ -314,7 +314,7 @@ def test_an_end_binds_no_rtl() -> None:
 def test_an_ended_network_persists_and_replays_as_itself() -> None:
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(BaselineChoices())
+    model = model.transform(MakeCutChoices())
     bound = chain_network(ULTRA96, model=model)
     held = persist(model, bound)
     assert {name: values["end"] for name, values in held.items() if "end" in values} == {

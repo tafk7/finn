@@ -125,7 +125,7 @@ from finn.transformation.kernels import (
     kernel_choices_config,
     shell_bottleneck,
 )
-from finn.transformation.kernels.cut import BaselineChoices, CutKernelPartition
+from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
 from finn.transformation.kernels.integration import Address, Connection, integration
 from finn.transformation.kernels.package import boundary_facts
 
@@ -713,7 +713,7 @@ def test_an_output_is_listed_after_the_outputs_it_is_made_from(tmp_path: Path) -
         assert failed_checks(config(tmp_path, steps=steps)) == {}
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(BaselineChoices())  # its ends, as the cut makes them
+    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -739,7 +739,7 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     code."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(BaselineChoices())  # its ends, as the cut makes them
+    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -832,7 +832,7 @@ def test_the_bitfiles_objective_is_the_target_its_partition_records(
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(BaselineChoices())  # its ends, as the cut makes them
+    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -878,7 +878,7 @@ def test_the_bitfiles_clock_findings_are_noted(
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(BaselineChoices())  # its ends, as the cut makes them
+    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -941,7 +941,7 @@ def test_a_step_that_moves_the_target_s_folding_leaves_the_bitfile_no_objective(
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(BaselineChoices())  # its ends, as the cut makes them
+    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     settings: dict[str, dict[str, Any]] = {
@@ -1215,7 +1215,7 @@ def test_a_partitions_bottleneck_is_read_from_its_saved_choices() -> None:
     # point as it is built.
     made = kernel_model()
     expected = explore_kernel_choices(kernel_model()).cost.bottleneck
-    assert shell_bottleneck(made.transform(BaselineChoices())) == expected
+    assert shell_bottleneck(made.transform(MakeCutChoices())) == expected
 
 
 #: Z0's strategy steps and their setting: the Zynq landing's baseline build explored TFC
@@ -1703,7 +1703,7 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
     so is a parent graph that states no bitfile."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(BaselineChoices())  # its ends, as the cut makes them
+    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -1753,7 +1753,7 @@ def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     bitfile, the partition and both designs or keys, before anything is written."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(BaselineChoices())  # its ends, as the cut makes them
+    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
