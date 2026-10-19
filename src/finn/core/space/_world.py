@@ -155,7 +155,9 @@ class Entry:
     view's or a constraint's (and a validity node's). ``own_refusal``: it refused on
     its own values (a constraint false, a derived value or a view's body refusing),
     not through a refused input. ``via``: a method's reads of a forwarding alias that
-    went to its source, as (alias, source)."""
+    went to its source, as (alias, source). ``existence``: what a method read only to
+    know whether something exists (a selector, to find its candidate; a guard, for
+    ``present``), never as a value."""
 
     result: QueryResult[object]
     reads: ReadSet
@@ -163,6 +165,7 @@ class Entry:
     assessment: Assessment | None = None
     own_refusal: bool = False
     via: tuple[tuple[NodeId, NodeId], ...] = ()
+    existence: frozenset[NodeId] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +176,7 @@ class Called:
     assessment: Assessment | None = None
     own_refusal: bool = False
     via: tuple[tuple[NodeId, NodeId], ...] = ()
+    existence: frozenset[NodeId] = frozenset()
 
 
 class Evaluator:
@@ -620,6 +624,7 @@ class World:
             previous.assessment,
             previous.own_refusal,
             previous.via,
+            previous.existence,
         )
 
     def same(self, node: NodeId, left: QueryResult[object], right: QueryResult[object]) -> bool:
@@ -1052,7 +1057,15 @@ def _finish(node: Node, returned: object) -> Called:
 
 
 def _entry(called: Called, reads: ReadSet, trace: Trace) -> Entry:
-    return Entry(called.result, reads, trace, called.assessment, called.own_refusal, called.via)
+    return Entry(
+        called.result,
+        reads,
+        trace,
+        called.assessment,
+        called.own_refusal,
+        called.via,
+        called.existence,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1260,9 +1273,12 @@ class MethodReader:
     method's source may read (``_reads``, always on: an undeclared read is the method's
     failure), and is refused outside the method's own call (another computation's
     receiver, a value transformation). A read of a forwarding alias goes to its source
-    where the alias applies whenever the method does, recorded in ``via``."""
+    where the alias applies whenever the method does, recorded in ``via``. What it reads
+    only to know whether something exists (``existence``: a selector, for its candidate;
+    a guard or a source's presence, for ``present``) is told apart from what it reads as
+    a value (``valued``)."""
 
-    __slots__ = ("world", "node", "call", "trace", "reads", "via")
+    __slots__ = ("world", "node", "call", "trace", "reads", "via", "existence", "valued")
 
     def __init__(self, world: World, node: Node, call: Call) -> None:
         self.world = world
@@ -1271,6 +1287,8 @@ class MethodReader:
         self.trace: list[tuple[NodeId, QueryResult[object]]] = []
         self.reads: ReadSet = 0
         self.via: list[tuple[NodeId, NodeId]] = []
+        self.existence: set[NodeId] = set()
+        self.valued: set[NodeId] = set()
 
     # -- the read boundary -------------------------------------------------------------
 
@@ -1323,8 +1341,10 @@ class MethodReader:
         return entry
 
     def _answer(self, index: NodeId) -> QueryResult[object]:
-        """``index``'s answer, checked and recorded; a non-value does not halt."""
+        """``index``'s answer, checked and recorded, read to know whether something exists;
+        a non-value does not halt."""
         self._check(index)
+        self.existence.add(index)
         return self._take(index).result
 
     def _value(self, index: NodeId) -> object:
@@ -1362,6 +1382,7 @@ class MethodReader:
         ):
             self.via.append((index, source))
             index = source
+        self.valued.add(index)
         return self._value(index)
 
     def present(self, point: Space, node: object) -> bool:
@@ -1468,6 +1489,7 @@ class MethodReader:
         self._enter()
         choice = self._choice(point._scope, decision)
         self._check(choice.selector)
+        self.existence.add(choice.selector)
         case = self._value(choice.selector)
         for key, candidate in choice.cases:
             if key == case:
@@ -1551,11 +1573,14 @@ def _call_method(world: World, node: Node) -> tuple[Called, MethodReader]:
         cast(_Run, world.evaluator.run).abandoned.add((world, node.index))
         raise
     via = tuple(reader.via)
+    existence = frozenset(reader.existence - reader.valued)
     if isinstance(outcome, _Halted):
         blocked = cast(NonValue, _blocked(outcome.results))
-        return Called(blocked, _guard_assessment(node, blocked), via=via), reader
+        called = Called(blocked, _guard_assessment(node, blocked), via=via, existence=existence)
+        return called, reader
     finished = _finished(node, outcome.value)
-    return Called(finished.result, finished.assessment, finished.own_refusal, via), reader
+    called = Called(finished.result, finished.assessment, finished.own_refusal, via, existence)
+    return called, reader
 
 
 # -- domains ----------------------------------------------------------------------------

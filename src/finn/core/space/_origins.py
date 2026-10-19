@@ -22,8 +22,11 @@ A configuration's **pairs** are each false piece of its root's validity with eac
 it is false through. A change that sets a new value is refused where the configuration it
 would publish holds a pair its receiver does not (``_assign``). The refusal names the
 origin and the stored choices standing in its way: the choices the origin read as values,
-through derived values and views' bodies, that the change does not name, less every
-choice deciding whether the origin, or anything it read, exists.
+through derived values and views' bodies, that the change does not name, less the
+choices deciding whether the origin itself exists. A choice read only to know whether
+something exists (a selector, to find its candidate; a guard, for ``present``) is no
+value read; one read as a value stands, even where it also decides whether something
+else the origin read exists.
 """
 
 from __future__ import annotations
@@ -130,10 +133,12 @@ def _origins(world: World, starts: Iterable[NodeId]) -> dict[NodeId, Origin]:
 def standing(world: World, origin: NodeId, named: frozenset[NodeId]) -> tuple[str, ...]:
     """The stored choices standing in an origin's way, by key: those it read as values,
     through derived values and views' bodies (never a view's Space validity), that the
-    change does not name (``named``), less every choice deciding whether the origin, or
-    anything it read, exists (the selectors and ``when`` reads of the guards above them).
-    An empty domain has none: its membership reads facts only. Two present sources of a
-    formal: the choices deciding the presence of each source."""
+    change does not name (``named``), less the choices deciding whether the origin itself
+    exists (the selectors and ``when`` reads of the guards above it). A read made only to
+    know whether something exists is no value read: a node's own guard, a selection's
+    selector, a method's reads for its candidates and ``present``. An empty domain has
+    none: its membership reads facts only. Two present sources of a formal: the choices
+    deciding the presence of each source."""
     return world.run(lambda: _standing(world, origin, named))
 
 
@@ -144,7 +149,6 @@ def _standing(world: World, origin: NodeId, named: frozenset[NodeId]) -> tuple[s
     if node.kind == "decision":
         return ()
     read: set[NodeId] = set()
-    deciders: set[NodeId] = set()
 
     def decided(index: NodeId) -> set[NodeId]:
         """The choices and facts deciding whether ``index`` exists."""
@@ -153,7 +157,7 @@ def _standing(world: World, origin: NodeId, named: frozenset[NodeId]) -> tuple[s
             return set()
         return set(evaluator.bits.nodes(world._get(guard).reads))
 
-    deciders |= decided(origin)
+    deciders = decided(origin)
     if node.kind == "present":
         entry = world._get(origin)
         for target, answer in entry.trace:
@@ -164,16 +168,21 @@ def _standing(world: World, origin: NodeId, named: frozenset[NodeId]) -> tuple[s
         while pending:
             index = pending.pop()
             spec = nodes[index]
-            trace = world._get(index).trace
+            entry = world._get(index)
+            trace = entry.trace
             if spec.guard is not None and trace and trace[0][0] == spec.guard:
                 trace = trace[1:]  # its own guard: whether it exists, not what it reads
-            space = spec.constraints[0] if spec.kind == "view" else None
+            # Neither a view's Space validity nor a read for existence alone is followed.
+            skipped = set(entry.existence)
+            if spec.kind == "view":
+                skipped.add(spec.constraints[0])
+            elif spec.kind == "select" and spec.selector is not None:
+                skipped.add(spec.selector)
             for dependency, _ in trace:
-                if dependency in seen or dependency == space:
+                if dependency in seen or dependency in skipped:
                     continue
                 seen.add(dependency)
                 kind = nodes[dependency].kind
-                deciders |= decided(dependency)
                 if kind == "decision":
                     read.add(dependency)
                 elif kind not in ("param", "const", "validity"):

@@ -224,6 +224,56 @@ def test_a_new_value_is_refused_with_every_stored_choice_it_reads_standing() -> 
     assert point.with_choices(a=3, b=3).a == 3
 
 
+class Gate(Space):
+    c: int = Decision(values=(1, 2))
+
+
+class Gated(Space):
+    s: str = Decision(values=("a", "b"))
+
+    @derived
+    def is_b(self) -> bool:
+        return self.s == "b"
+
+    g = Gate(when=is_b)
+
+    @constraint
+    def r(self) -> bool:
+        return self.s != "b" or self.g.c <= 1
+
+
+def test_a_choice_the_rule_reads_as_a_value_stands_though_it_decides_what_else_exists() -> None:
+    # ``r`` reads ``s`` as a value, and reads ``g.c``, which exists because ``s`` is "b":
+    # ``s`` stands. Only a read made for existence alone does not.
+    point = design_space(Gated()).with_choices(s="b")
+    assert broken(keyed(point, {"g.c": 2})) == [("r", ("s",))]
+    (c,) = inspection.viable(point, [handle(point, "g.c")])
+    assert [
+        (item.value, [(rule.rule, rule.standing) for rule in item.broken])
+        for item in c.values or ()
+        if isinstance(item, Refused)
+    ] == [(2, [("r", ("s",))])]
+    assert point.with_choices({handle(point, "g.c"): 1}).g.c == 1
+
+
+class Alternative(Space):
+    p: int = Decision(values=(1, 2))
+
+
+class Selected(Space):
+    s: Alternative | Plain = Decision({"a": Alternative, "b": Plain})
+
+    @constraint
+    def q(self) -> bool:
+        return not isinstance(self.s, Alternative) or self.s.p <= 1
+
+
+def test_a_selector_read_only_to_find_its_candidate_does_not_stand() -> None:
+    # ``q`` reads ``s`` only to find the candidate whose ``p`` it reads: nothing stands.
+    point = commit(design_space(Selected()), {"s": "a"})
+    assert broken(keyed(point, {"s.a.p": 2})) == [("q", ())]
+
+
 # -- a rule already false, and a refusing value nothing rules on --------------------------
 
 
