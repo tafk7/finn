@@ -25,7 +25,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, fields
 
 from core.space import reference
-from core.space.reference.model import _Facts, same
+from core.space.reference.model import same
 
 from .engine import Engine, Point, Spelling, build, definition
 from .forms import (
@@ -210,7 +210,7 @@ def refusal_form(
     """One refusal of a change whose configuration has ``facts``. An assignment refusal's
     refused inputs are read over the facts alone, as membership reads them; a rule
     refusal's reasons are its origin's own."""
-    read = _Facts(index, facts).value
+    read = reference.FactsOnly(index, facts).value
     if isinstance(refusal, reference.AssignmentRefusal):
         return RefusalForm("assignment", refusal.choice, _codes(refusal.reasons, read))
     codes = _codes(refusal.reasons, read)

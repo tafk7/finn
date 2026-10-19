@@ -267,9 +267,13 @@ def _inputs(answers: Mapping[str, Answer]) -> _Inputs:
 # --- the facts alone: membership, lists ---------------------------------------------
 
 
-class _Facts:
+class FactsOnly:
     """What the facts alone decide: membership, membership lists, and the derived
-    values they read, computed from their reads whatever their scope's presence."""
+    values they read, computed from their reads whatever their scope's presence.
+
+    Public for the harness, which reads a refused membership input as membership does
+    (reading 6): ``FactsOnly(index, facts).value(path)``, ``.listing(choice)`` and
+    ``.membership(choice, value)``."""
 
     def __init__(self, index: Index, facts: Mapping[str, Any]) -> None:
         self.index = index
@@ -405,7 +409,7 @@ class _Evaluation:
 
     def __init__(self, index: Index, facts: Mapping[str, Any], stored: Mapping[str, Any]) -> None:
         self.index = index
-        self.facts = _Facts(index, facts)
+        self.facts = FactsOnly(index, facts)
         self.stored = stored
         self._memo: dict[tuple[str, str], Any] = {}
 
@@ -731,7 +735,7 @@ class Configuration:
                 raise ConfigurationError(f"unknown choice {path}")
         object.__setattr__(self, "facts", dict(self.facts))
         object.__setattr__(self, "stored", dict(self.stored))
-        checker = _Facts(index, self.facts)
+        checker = FactsOnly(index, self.facts)
         for path in sorted(self.stored):
             if _assignment(checker, path, self.stored[path]):
                 raise ConfigurationError(f"{path}: {self.stored[path]!r} is not of its type")
@@ -772,7 +776,7 @@ class Rejected:
     validity: Validity | None
 
 
-def _assignment(checker: _Facts, path: str, value: Any) -> tuple[Reason, ...]:
+def _assignment(checker: FactsOnly, path: str, value: Any) -> tuple[Reason, ...]:
     """Why ``value`` is not of ``path``'s type, or nothing."""
 
     member = checker.membership(path, value)
@@ -827,7 +831,7 @@ def change(configuration: Configuration, edit: Change) -> Accepted | Rejected:
         return Accepted(configuration, (), (), (), Solution(configuration).validity())
 
     # 1. assignment: the named values, and every stored value under new facts
-    checker = _Facts(index, facts)
+    checker = FactsOnly(index, facts)
     checked = sorted(stored) if facts_changed else sorted(edit.commit)
     assignments = [
         AssignmentRefusal(path, reasons)
