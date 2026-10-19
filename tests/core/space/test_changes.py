@@ -227,9 +227,10 @@ def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -
     failed = base.try_with_choices(*edits)
     assert not failed.accepted
     assert failed.instance is base
-    # The model's memo answers the limit, a function of the same fact, as before.
+    # The model's memo answers the limit, a function of the same fact, as before, and the
+    # membership of every value the first batch checked: equal values, by their semantics.
     assert limits == []
-    assert len(admitted) == len(members)
+    assert admitted == [-1]
     assert [outcome.status for outcome in failed.outcomes].count("checked") == len(members) - 1
     assert all(isinstance(base.query(member), Unresolved) for member in members)
 

@@ -3,9 +3,11 @@
 """The bit table and the memo every world of one model shares.
 
 A bit is allocated for a choice or a fact the first time it is read or changed. An
-authored function's outcome is kept across worlds by what it read: an explicit
-function by its arguments' answers (their identities, the answers held), a method by
-its traces.
+authored function's outcome is kept across worlds by what it read, one rule for
+every function: its trace (an explicit function's arguments' answers, a method's
+reads), the answers held, found again where each read answers the same (the same
+object, else equal by value semantics); a few traces a function, and a budget of them
+a model, the least recently used dropped first.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from core.space._world_support import node, open_world, successor
 from finn.core.space import Available, Decision, Param, Space, derived
 from finn.core.space._memo import TRACES_KEPT, BitTable, Counters, Memo
 from finn.core.space._world import Called, World
+from finn.core.space.results import QueryResult
 
 
 def test_bits_are_allocated_on_first_use_and_decoded_in_order() -> None:
@@ -37,28 +40,36 @@ def test_a_model_allocates_bits_only_for_what_it_reads() -> None:
     assert len(world.evaluator.bits) == 2
 
 
-def test_explicit_memo_matches_identities_and_holds_the_answers() -> None:
+def test_a_memo_keeps_a_few_traces_a_function_newest_first_holding_their_answers() -> None:
     memo: Memo[Called] = Memo()
-    first, second = Available(1), Available(2)
-    memo.keep_explicit(5, "call", (first, second), Called(Available(3)))
-    held = memo.explicit(5, "call", (first, second))
-    assert held is not None and held.outcome.result == Available(3)
-    assert memo.explicit(5, "call", (Available(1), second)) is None  # equal, not the same
-    assert memo.explicit(5, "membership", (first, second)) is None
-    assert held.answers[0] is first  # held, so its identity is never reused
-
-
-def test_method_traces_are_kept_newest_first_and_bounded() -> None:
-    memo: Memo[Called] = Memo()
+    first: QueryResult[object] = Available(1)
+    memo.keep((5, "call"), ((1, first),), Called(Available(3)))
+    (kept,) = memo.kept((5, "call"))
+    assert kept.outcome.result == Available(3) and kept.trace[0][1] is first  # held
+    assert memo.kept((5, "membership")) == ()
     for number in range(TRACES_KEPT + 2):
-        memo.keep_method(4, ((1, Available(number)),), Called(Available(number)))
-    traces = memo.traces(4)
-    assert len(traces) == TRACES_KEPT
-    assert [called.result for _, called in traces][:2] == [
+        answer: QueryResult[object] = Available(number)
+        memo.keep((4, "call"), ((1, answer),), Called(answer))
+    traces = memo.kept((4, "call"))
+    assert len(traces) == TRACES_KEPT and len(memo) == TRACES_KEPT + 1
+    assert [each.outcome.result for each in traces][:2] == [
         Available(TRACES_KEPT + 1),
         Available(TRACES_KEPT),
     ]
-    assert memo.traces(5) == ()
+
+
+def test_a_memo_keeps_its_budget_dropping_the_least_recently_used() -> None:
+    memo: Memo[Called] = Memo(budget=3)
+    for index in range(3):
+        memo.keep((index, "call"), (), Called(Available(index)))
+    (oldest,) = memo.kept((0, "call"))
+    memo.used(oldest)  # found again: the most recently used
+    memo.keep((3, "call"), (), Called(Available(3)))
+    assert len(memo) == 3 and memo.kept((1, "call")) == ()
+    assert memo.kept((0, "call")) == (oldest,)
+    memo.budget = 1  # lowered: the least recently used go at once
+    assert len(memo) == 1 and memo.kept((3, "call")) != ()
+    memo.used(oldest)  # dropped meanwhile: nothing to move
 
 
 calls: list[str] = []
@@ -97,22 +108,27 @@ def test_sibling_worlds_share_what_either_called() -> None:
     assert counters.calls["derived"] == 3 and counters.hits["derived"] == 1  # second's scaled
 
 
-def test_counters_count_calls_and_hits_by_kind_and_reset() -> None:
+def test_counters_count_calls_and_hits_by_kind_and_node_and_reset() -> None:
     counters = Counters()
-    counters.call("derived")
-    counters.call("derived")
-    counters.hit("constraint")
+    counters.call("derived", 4)
+    counters.call("derived", 5)
+    counters.hit("constraint", 4)
     counters.evaluated += 3
     assert counters.calls == {"derived": 2} and counters.hits == {"constraint": 1}
+    assert counters.calls_at == {4: 1, 5: 1} and counters.hits_at == {4: 1}
     counters.reset()
     assert counters == Counters()
 
 
-def test_worlds_started_apart_share_no_answer_objects() -> None:
-    """The memo's keys are answer identities: a world started on its own makes its own
-    answer objects, so it finds nothing another world started apart called."""
+def test_worlds_started_apart_share_what_they_compute_alike() -> None:
+    """A world started on its own makes its own answer objects; the memo finds what
+    another world called where each argument is equal by its value semantics."""
     calls.clear()
     world = open_world(Pair(width=4), {"left": 2, "right": 1})
     other = World.start(world.evaluator, world.facts, world.stored)
     assert world.result(node(world, "total")) == other.result(node(other, "total"))
-    assert calls == ["scaled", "total", "scaled", "total"]
+    assert calls == ["scaled", "total"]
+    counters = world.evaluator.counters
+    assert counters.hits["derived"] == 2 and counters.semantic >= 2
+    # The other world's answer is the kept outcome, the same object.
+    assert world.result(node(world, "total")) is other.result(node(other, "total"))

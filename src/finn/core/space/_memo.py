@@ -8,16 +8,23 @@ over the model's choices (``decision`` nodes) and facts (root ``param`` nodes). 
 is allocated the first time a node is read or changed (``BitTable``), so a model pays
 only for the choices and facts it reads or changes.
 
-An authored function is pure: it answers from what it reads alone. So its answer is
-kept across every world of the model (``Memo``): an explicit function by the answers
-of its arguments, a ``self`` method by its **trace** (each read it made, in order, with
-the answer it got). Answers are compared by identity: a world shares the answer
-objects of what it did not change, and early cutoff keeps an answer object when what
-it read answers the same, so a key built of identities keeps finding its entry.
+An authored function is pure: it answers from what it reads alone. So its outcome is
+kept across every world of the model (``Memo``), with the **trace** it was found from:
+each read it made, in order, with the answer it got. One rule serves every authored
+function: an explicit function's trace is its arguments' answers (a domain's, its
+inputs'), a ``self`` method's the reads it made. A caller finds a kept outcome where
+every read of its trace answers the same in its world: the same answer object (the fast
+path: a world shares the answer objects of what it did not change, and early cutoff and
+the memo keep an answer object where what it read answers the same), else equal by the
+read node's value semantics. So two configurations bound apart share what they compute
+alike. Each function keeps a few traces (``TRACES_KEPT``), and the model's memo a budget
+of them in all (``BUDGET``), the least recently used dropped first; a trace holds its
+answers, so an identity reused after they are collected never matches.
 """
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Generic, TypeAlias, TypeVar
@@ -31,10 +38,17 @@ ReadSet: TypeAlias = int
 # What an evaluation read, in order, with the answer each read got.
 Trace: TypeAlias = tuple[tuple[NodeId, QueryResult[object]], ...]
 
+# What a memo keeps outcomes of: a node, and what its function is called for (its call;
+# a Decision's domain membership, listing, enumeration or order).
+Key: TypeAlias = tuple[NodeId, str]
+
 T = TypeVar("T")
 
-# How many traces a method's memo keeps, newest last.
+# How many traces one function keeps, newest first.
 TRACES_KEPT = 8
+
+# How many traces a model's memo keeps in all, the least recently used dropped first.
+BUDGET = 100_000
 
 
 class BitTable:
@@ -78,7 +92,8 @@ class Counters:
     """The work of one model's evaluations: nodes evaluated, entries taken from a parent
     world, entries kept by early cutoff (and how the answers were compared), and calls
     of authored functions and memo hits, by the kind of what was called (a node's kind,
-    or a domain's membership or listing)."""
+    or a domain's membership, listing, enumeration or order) and by node (``calls_at``,
+    ``hits_at``: a report tells apart where the nodes sit)."""
 
     evaluated: int = 0
     inherited: int = 0
@@ -88,69 +103,98 @@ class Counters:
     semantic: int = 0
     calls: dict[str, int] = field(default_factory=dict)
     hits: dict[str, int] = field(default_factory=dict)
+    calls_at: dict[NodeId, int] = field(default_factory=dict)
+    hits_at: dict[NodeId, int] = field(default_factory=dict)
 
-    def call(self, kind: str) -> None:
+    def call(self, kind: str, node: NodeId) -> None:
         self.calls[kind] = self.calls.get(kind, 0) + 1
+        self.calls_at[node] = self.calls_at.get(node, 0) + 1
 
-    def hit(self, kind: str) -> None:
+    def hit(self, kind: str, node: NodeId) -> None:
         self.hits[kind] = self.hits.get(kind, 0) + 1
+        self.hits_at[node] = self.hits_at.get(node, 0) + 1
 
     def reset(self) -> None:
         self.evaluated = self.inherited = self.cut = 0
         self.compared = self.identical = self.semantic = 0
         self.calls.clear()
         self.hits.clear()
+        self.calls_at.clear()
+        self.hits_at.clear()
 
 
-@dataclass(frozen=True, slots=True)
-class _Held(Generic[T]):
-    """A memo entry: the answers it was found from (held, so an identity reused after
-    they are collected never matches) and what was found."""
+@dataclass(slots=True, eq=False)
+class Kept(Generic[T]):
+    """One outcome a memo keeps: the function's key, the trace it was found from (its
+    answers held), and the outcome."""
 
-    answers: tuple[object, ...]
+    key: Key
+    trace: Trace
     outcome: T
 
 
 class Memo(Generic[T]):
-    """Authored functions' outcomes across every world of one model, by what they read.
+    """Authored functions' outcomes across every world of one model, by the traces they
+    were found from: per function (``Key``), its newest ``TRACES_KEPT``; in all, at most
+    ``budget``, the least recently used (kept or found) dropped first."""
 
-    ``explicit``: a function of its arguments, by the identities of their answers, per
-    node and purpose (its call; a Decision's domain membership or listing). ``methods``:
-    a ``self`` method's traces, newest last, each with its outcome; a caller replays a
-    trace in its world, read by read, and takes the outcome where every read answers the
-    same."""
+    __slots__ = ("_kept", "_recent", "_budget")
 
-    __slots__ = ("_explicit", "_methods")
+    def __init__(self, budget: int = BUDGET) -> None:
+        self._kept: dict[Key, list[Kept[T]]] = {}
+        self._recent: OrderedDict[Kept[T], None] = OrderedDict()
+        self._budget = budget
 
-    def __init__(self) -> None:
-        self._explicit: dict[tuple[NodeId, str], dict[tuple[int, ...], _Held[T]]] = {}
-        self._methods: dict[NodeId, list[tuple[Trace, T]]] = {}
+    @property
+    def budget(self) -> int:
+        """How many traces the memo keeps in all; lowering it drops the least recently
+        used at once."""
+        return self._budget
 
-    def explicit(self, node: NodeId, purpose: str, answers: tuple[object, ...]) -> _Held[T] | None:
-        """What ``node``'s function found for these very answers, if it was called on them."""
-        table = self._explicit.get((node, purpose))
-        if table is None:
-            return None
-        held = table.get(tuple(map(id, answers)))
-        if held is None or any(a is not b for a, b in zip(held.answers, answers)):
-            return None
-        return held
+    @budget.setter
+    def budget(self, budget: int) -> None:
+        self._budget = budget
+        self._trim()
 
-    def keep_explicit(
-        self, node: NodeId, purpose: str, answers: tuple[object, ...], outcome: T
-    ) -> None:
-        table = self._explicit.setdefault((node, purpose), {})
-        table[tuple(map(id, answers))] = _Held(answers, outcome)
+    def __len__(self) -> int:
+        return len(self._recent)
 
-    def traces(self, node: NodeId) -> tuple[tuple[Trace, T], ...]:
-        """A method's kept traces and outcomes, newest first."""
-        return tuple(reversed(self._methods.get(node, ())))
+    def kept(self, key: Key) -> tuple[Kept[T], ...]:
+        """A function's kept traces and outcomes, newest first."""
+        return tuple(reversed(self._kept.get(key, ())))
 
-    def keep_method(self, node: NodeId, trace: Trace, outcome: T) -> None:
-        traces = self._methods.setdefault(node, [])
-        traces.append((trace, outcome))
+    def used(self, kept: Kept[T]) -> None:
+        """``kept`` was found: the most recently used (unless it was dropped meanwhile)."""
+        if kept in self._recent:
+            self._recent.move_to_end(kept)
+
+    def keep(self, key: Key, trace: Trace, outcome: T) -> None:
+        """Keep an outcome and its trace: the function's newest, the most recently used."""
+        kept = Kept(key, trace, outcome)
+        traces = self._kept.setdefault(key, [])
+        traces.append(kept)
+        self._recent[kept] = None
         if len(traces) > TRACES_KEPT:
-            del traces[0]
+            del self._recent[traces.pop(0)]
+        self._trim()
+
+    def _trim(self) -> None:
+        while len(self._recent) > self._budget:
+            oldest, _ = self._recent.popitem(last=False)
+            traces = self._kept[oldest.key]
+            traces.remove(oldest)
+            if not traces:
+                del self._kept[oldest.key]
 
 
-__all__ = ["TRACES_KEPT", "BitTable", "Counters", "Memo", "ReadSet", "Trace"]
+__all__ = [
+    "BUDGET",
+    "TRACES_KEPT",
+    "BitTable",
+    "Counters",
+    "Key",
+    "Kept",
+    "Memo",
+    "ReadSet",
+    "Trace",
+]

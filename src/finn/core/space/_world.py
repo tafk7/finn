@@ -18,10 +18,12 @@ value semantics, the parent's answer stands, the same object, so what read it is
 in turn.
 
 Authored functions are pure, so their outcomes are kept across every world of the
-model (``_memo.Memo``): an explicit function by its arguments' answers, a ``self``
-method by its traces. A ``self`` method is a plain call; its receiver reads through a
-``MethodReader`` on the world it runs in, which records each read and checks it
-against the reads inferred from the method's source (``_reads``).
+model (``_memo.Memo``), each with the trace it was found from (an explicit function's
+arguments' answers, a ``self`` method's reads), and found again where every read of the
+trace answers the same: the same answer object, else equal by value semantics. A
+``self`` method is a plain call; its receiver reads through a ``MethodReader`` on the
+world it runs in, which records each read and checks it against the reads inferred
+from the method's source (``_reads``).
 
 Each driver demand (``World.entry``) is a **run**. Its authored calls each run in a
 copy of the context the driver entered with, and fail as ``_failure`` says (the first
@@ -72,7 +74,7 @@ from ._failure import (
     remember_exception,
     remember_failure,
 )
-from ._memo import BitTable, Counters, Memo, ReadSet, Trace
+from ._memo import BitTable, Counters, Kept, Key, Memo, ReadSet, Trace
 from ._nodes import NodeDecl, unwrap
 from ._reads import ModelReads, infer, presence_readers
 from .declarations import Param, declared_path
@@ -1117,9 +1119,11 @@ def _callback(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
     if blocked is not None:
         return Entry(blocked, reads, tuple(trace), _guard_assessment(node, blocked))
     evaluator = world.evaluator
-    held = evaluator.memo.explicit(node.index, "call", tuple(answers))
+    key = (node.index, "call")
+    called_on = _inputs(node.arguments, answers)
+    held = _recall(world, key, called_on)
     if held is not None:
-        evaluator.counters.hit(node.kind)
+        evaluator.counters.hit(node.kind, node.index)
         return _entry(held.outcome, reads, tuple(trace))
     arguments = {
         argument.name: _clone(
@@ -1130,11 +1134,43 @@ def _callback(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
         )
         for argument, answer in zip(node.arguments, answers)
     }
-    evaluator.counters.call(node.kind)
+    evaluator.counters.call(node.kind, node.index)
     outcome = _authored(world, Call(node.owner, node.kind), node.function, (), arguments)
     called = _finished(node, cast(_Returned, outcome).value)
-    evaluator.memo.keep_explicit(node.index, "call", tuple(answers), called)
+    evaluator.memo.keep(key, called_on, called)
     return _entry(called, reads, tuple(trace))
+
+
+def _inputs(arguments: Sequence[Argument], answers: Sequence[QueryResult[object]]) -> Trace:
+    """An explicit function's trace: each argument's node, with the answer it got."""
+    return tuple(zip((argument.node for argument in arguments), answers))
+
+
+def _recall(world: World, key: Key, trace: Trace) -> Kept[Called] | None:
+    """An outcome the memo keeps for ``key``'s function whose trace answers as ``trace``:
+    every read the same answer object (tried first), else equal by its node's value
+    semantics."""
+    memo = world.evaluator.memo
+    kept = memo.kept(key)
+    found = next((each for each in kept if _identical(each.trace, trace)), None)
+    if found is None:
+        found = next((each for each in kept if _alike(world, each.trace, trace)), None)
+    if found is not None:
+        memo.used(found)
+    return found
+
+
+def _identical(kept: Trace, trace: Trace) -> bool:
+    return len(kept) == len(trace) and all(
+        node == other and answer is found for (node, answer), (other, found) in zip(kept, trace)
+    )
+
+
+def _alike(world: World, kept: Trace, trace: Trace) -> bool:
+    return len(kept) == len(trace) and all(
+        node == other and world.same(node, answer, found)
+        for (node, answer), (other, found) in zip(kept, trace)
+    )
 
 
 def _finished(node: Node, returned: object) -> Called:
@@ -1406,22 +1442,24 @@ def _method(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
     by its traces. A kept trace whose every read answers the same here gives its
     outcome without a call (a read that fails here leaves it to the call)."""
     evaluator = world.evaluator
-    for recorded, called in evaluator.memo.traces(node.index):
+    key = (node.index, "call")
+    for kept in evaluator.memo.kept(key):
         more = 0
         try:
-            for dependency, answer in recorded:
+            for dependency, answer in kept.trace:
                 found = world._get(dependency)
                 if not world.same(dependency, found.result, answer):
                     break
                 more |= found.reads
             else:
-                evaluator.counters.hit(node.kind)
-                return _entry(called, reads | more, (*trace, *recorded))
+                evaluator.memo.used(kept)
+                evaluator.counters.hit(node.kind, node.index)
+                return _entry(kept.outcome, reads | more, (*trace, *kept.trace))
         except Failing:
             break
     call = Call(node.owner, node.kind)
     reader = MethodReader(world, node, call)
-    evaluator.counters.call(node.kind)
+    evaluator.counters.call(node.kind, node.index)
     outcome = _authored(
         world, call, cast(Callable[..., object], node.function), (receiver(reader, node.scope),)
     )
@@ -1433,7 +1471,7 @@ def _method(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
         finished = _finished(node, outcome.value)
         called = Called(finished.result, finished.assessment, finished.own_refusal, via)
     recorded = tuple(reader.trace)
-    evaluator.memo.keep_method(node.index, recorded, called)
+    evaluator.memo.keep(key, recorded, called)
     return _entry(called, reads | reader.reads, (*trace, *recorded))
 
 
@@ -1516,13 +1554,14 @@ def _type_check(
     if blocked is not None:
         return blocked, reads
     evaluator = world.evaluator
-    key = (value, *answers)
-    held = evaluator.memo.explicit(node.index, "membership", key)
+    key = (node.index, "membership")
+    called_on = ((node.index, value), *_inputs(membership_arguments(node), answers))
+    held = _recall(world, key, called_on)
     if held is not None:
-        evaluator.counters.hit("domain membership")
+        evaluator.counters.hit("domain membership", node.index)
         return held.outcome.result, reads
     candidate = _clone(node, value.value, owner=node.owner, role="domain candidate snapshot")
-    evaluator.counters.call("domain membership")
+    evaluator.counters.call("domain membership", node.index)
     outcome = _authored(
         world,
         Call(node.owner, "domain membership"),
@@ -1531,7 +1570,7 @@ def _type_check(
         {"semantics": semantics, "owner": node.owner},
     )
     result = cast(QueryResult[object], cast(_Returned, outcome).value)
-    evaluator.memo.keep_explicit(node.index, "membership", key, Called(result))
+    evaluator.memo.keep(key, called_on, Called(result))
     return result, reads
 
 
@@ -1567,11 +1606,13 @@ def _listed(
     if domain.candidates is None:
         return Available(None), reads
     evaluator = world.evaluator
-    held = evaluator.memo.explicit(node.index, "listing", answers)
+    key = (node.index, "listing")
+    called_on = _inputs(membership_arguments(node), answers)
+    held = _recall(world, key, called_on)
     if held is not None:
-        evaluator.counters.hit("domain listing")
+        evaluator.counters.hit("domain listing", node.index)
         return held.outcome.result, reads
-    evaluator.counters.call("domain listing")
+    evaluator.counters.call("domain listing", node.index)
     listed = _enumerate(world, node, answers)
     if isinstance(listed, Available) and domain._finite_values is None:
         kept = _authored(
@@ -1582,7 +1623,7 @@ def _listed(
             {"semantics": semantics, "owner": node.owner},
         )
         listed = Available(cast(_Returned, kept).value)
-    evaluator.memo.keep_explicit(node.index, "listing", answers, Called(listed))
+    evaluator.memo.keep(key, called_on, Called(listed))
     return listed, reads
 
 
@@ -1620,10 +1661,11 @@ def _lists_a_value(
     if domain.candidates is None:
         return Available(None), reads
     evaluator = world.evaluator
+    called_on = _inputs(membership_arguments(node), answers)
     for purpose in ("listing", "lists a value"):
-        held = evaluator.memo.explicit(node.index, purpose, answers)
+        held = _recall(world, (node.index, purpose), called_on)
         if held is not None:
-            evaluator.counters.hit("domain listing")
+            evaluator.counters.hit("domain listing", node.index)
             found = held.outcome.result
             if purpose == "listing" and isinstance(found, Available):
                 found = Available(found.value != ())
@@ -1643,7 +1685,7 @@ def _lists_a_value(
                 {"semantics": semantics, "owner": node.owner},
             )
             result = Available(cast(_Returned, kept).value)
-    evaluator.memo.keep_explicit(node.index, "lists a value", answers, Called(result))
+    evaluator.memo.keep((node.index, "lists a value"), called_on, Called(result))
     return result, reads
 
 
@@ -1684,12 +1726,18 @@ def _enumerated(world: World, node: Node) -> QueryResult[object]:
     enumerated = _enumerate(world, node, answers)
     if domain.order is None or not isinstance(enumerated, Available):
         return enumerated
-    return _ranked(world, node, enumerated)
+    return _ranked(world, node, answers, enumerated)
 
 
-def _ranked(world: World, node: Node, enumerated: Available[object]) -> QueryResult[object]:
-    """An enumeration as the domain's order ranks it, over the order's own inputs
-    (memoized on the enumeration's and the inputs' answers)."""
+def _ranked(
+    world: World,
+    node: Node,
+    inputs: tuple[QueryResult[object], ...],
+    enumerated: Available[object],
+) -> QueryResult[object]:
+    """An enumeration (found from the membership inputs' answers ``inputs``) as the
+    domain's order ranks it, over the order's own inputs (memoized on both inputs'
+    answers)."""
     domain, semantics = node.domain, node.semantics
     assert domain is not None and semantics is not None
     arguments = order_arguments(node)
@@ -1698,12 +1746,16 @@ def _ranked(world: World, node: Node, enumerated: Available[object]) -> QueryRes
     if blocked is not None:
         return blocked
     evaluator = world.evaluator
-    key = (enumerated, *answers)
-    held = evaluator.memo.explicit(node.index, "order", key)
+    key = (node.index, "order")
+    called_on = (
+        *_inputs(membership_arguments(node), inputs),
+        *_inputs(arguments, answers),
+    )
+    held = _recall(world, key, called_on)
     if held is not None:
-        evaluator.counters.hit("domain order")
+        evaluator.counters.hit("domain order", node.index)
         return held.outcome.result
-    evaluator.counters.call("domain order")
+    evaluator.counters.call("domain order", node.index)
     ranked = _authored(
         world,
         Call(node.owner, "domain order"),
@@ -1712,7 +1764,7 @@ def _ranked(world: World, node: Node, enumerated: Available[object]) -> QueryRes
         {"semantics": semantics, "owner": node.owner},
     )
     result: QueryResult[object] = Available(cast(_Returned, ranked).value)
-    evaluator.memo.keep_explicit(node.index, "order", key, Called(result))
+    evaluator.memo.keep(key, called_on, Called(result))
     return result
 
 
@@ -1724,11 +1776,13 @@ def _enumerate(
     domain, semantics = node.domain, node.semantics
     assert domain is not None and semantics is not None
     evaluator = world.evaluator
-    held = evaluator.memo.explicit(node.index, "enumeration", answers)
+    key = (node.index, "enumeration")
+    called_on = _inputs(membership_arguments(node), answers)
+    held = _recall(world, key, called_on)
     if held is not None:
-        evaluator.counters.hit("domain enumeration")
+        evaluator.counters.hit("domain enumeration", node.index)
         return held.outcome.result
-    evaluator.counters.call("domain enumeration")
+    evaluator.counters.call("domain enumeration", node.index)
     enumerated = _authored(
         world,
         Call(node.owner, "domain enumeration"),
@@ -1737,7 +1791,7 @@ def _enumerate(
         {"semantics": semantics, "owner": node.owner},
     )
     result = cast(QueryResult[object], cast(_Returned, enumerated).value)
-    evaluator.memo.keep_explicit(node.index, "enumeration", answers, Called(result))
+    evaluator.memo.keep(key, called_on, Called(result))
     return result
 
 

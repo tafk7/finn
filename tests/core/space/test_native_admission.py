@@ -435,11 +435,11 @@ def test_configurations_and_failed_computations_are_reclaimed() -> None:
     assert inspection.model(example) is model
 
 
-@pytest.mark.xfail(
-    strict=True, reason="until P4: the model's memo keeps outputs, released past its budget"
-)
-def test_cached_outputs_of_discarded_configurations_are_reclaimed() -> None:
+def test_cached_outputs_of_discarded_configurations_are_reclaimed_past_the_memo_budget() -> None:
     example = _reclaimed_example()
+    # With a budget of one the model's memo keeps only what it kept last: the membership
+    # of the refused value, after every output.
+    inspection.model(example).evaluator.memo.budget = 1
     states: list[ReferenceType[State]] = []
     outputs: list[ReferenceType[Payload]] = []
     _exercise(example, states, outputs)
