@@ -10,7 +10,9 @@ what inspection answered of it (``answers``), by question and scope.
 
 A stored choice is **present** where its guard holds (or it has none), **absent** where
 its guard is false or refused (its scope is not in play: a stored value there is
-dormant), and of **unknown** presence while its guard waits.
+dormant), and of **unknown** presence while its guard waits. Presence is the AND over
+every guard above the choice: one that does not hold makes it absent, whatever is still
+undecided above it (a case not selected under a selector still open).
 """
 
 from __future__ import annotations

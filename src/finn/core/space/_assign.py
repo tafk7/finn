@@ -39,7 +39,7 @@ A change is **assignment**. In order:
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, TypeVar, cast
 
 from ._configuration import Space
@@ -61,6 +61,17 @@ _MISSING = object()
 
 
 @dataclass(frozen=True, slots=True)
+class Moved:
+    """What an accepted change moves, by key: the stored choices it puts out of play
+    (present or waiting before, absent after), those it brings into play (not present
+    before, present after), and the open choices it brings into presence."""
+
+    dormant: tuple[str, ...] = ()
+    in_play: tuple[str, ...] = ()
+    opened: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class Assigned:
     """What a change came to: the configuration it publishes (the receiver's state
     where it changes nothing; ``None`` where it is refused); each item's outcome, in
@@ -71,6 +82,7 @@ class Assigned:
     state: State | None
     outcomes: tuple[ChangeOutcome, ...]
     broken: tuple[BrokenRule, ...] = ()
+    moved: Moved = field(default_factory=lambda: Moved())
 
     @property
     def accepted(self) -> bool:
@@ -175,6 +187,33 @@ def _pairs(state: State) -> Pairs:
     return cast(Pairs, found)
 
 
+def _moved(before: World, after: World, sources: set[NodeId]) -> Moved:
+    """What a change moves: for each choice whose presence may read a choice or fact the
+    change moved (``sources``), its presence before and after (``presence``: refused
+    guards count as absent)."""
+    evaluator = after.evaluator
+    linked = evaluator.linked
+    candidates = {choice for source in sources for choice in evaluator.presence_readers(source)}
+    dormant: list[NodeId] = []
+    in_play: list[NodeId] = []
+    opened: list[NodeId] = []
+    for index in sorted(candidates, key=linked.ranks.__getitem__):
+        was, now = presence(before, index)[0], presence(after, index)[0]
+        if index in after.stored:
+            if was != "absent" and now == "absent":
+                dormant.append(index)
+            if was != "present" and now == "present":
+                in_play.append(index)
+        elif was != "present" and now == "present":
+            opened.append(index)
+    keys = linked.nodes
+    return Moved(
+        tuple(keys[index].key for index in dormant),
+        tuple(keys[index].key for index in in_play),
+        tuple(keys[index].key for index in opened),
+    )
+
+
 def _broken(current: State, world: World, named: frozenset[NodeId]) -> tuple[BrokenRule, ...]:
     """The rules a change would break: each origin through which ``world`` (the
     configuration it would publish) holds a false piece that ``current`` does not hold
@@ -267,9 +306,21 @@ def assign(
         checks = {
             index: check(world, index) for index, item in normalized.items() if not item.remove
         }
+        sources = set(changed_facts) | {
+            index
+            for index in normalized
+            if held.get(index, _MISSING) is not stored.get(index, _MISSING)
+        }
+        evaluator = world.evaluator
+        # Only a choice whose presence reads something the change moves can come into play.
+        reached = (
+            stored
+            if changed_facts
+            else {choice for source in sources for choice in evaluator.presence_readers(source)}
+        )
         retained: dict[NodeId, QueryResult[bool]] = {}
-        for index in sorted(stored, key=linked.ranks.__getitem__):
-            if index in normalized:
+        for index in sorted(reached, key=linked.ranks.__getitem__):
+            if index in normalized or index not in stored:
                 continue
             if changed_facts or _into_play(current.world, world, index):
                 retained[index] = check(world, index)
@@ -308,6 +359,7 @@ def assign(
                 ),
             )
             return Assigned(None, refused_outcomes, broken)
+        moved = _moved(current.world, world, sources)
         if world.depth > FLATTEN:
             world.flatten()
         published = [
@@ -326,7 +378,7 @@ def assign(
             published.append(
                 ChangeOutcome(nodes[index].owner, checks.get(index, Available(True)), final)
             )
-        return Assigned(State(current.model, world), tuple(published))
+        return Assigned(State(current.model, world), tuple(published), (), moved)
 
 
 # -- the configuration's change methods ------------------------------------------------
@@ -395,8 +447,15 @@ def _report(point: S, assigned: Assigned) -> ConfigurationResult[S]:
         return ConfigurationResult(point, False, assigned.outcomes, assigned.broken)
     if assigned.state is state(point):
         return ConfigurationResult(point, True, assigned.outcomes)
+    moved = assigned.moved
     return ConfigurationResult(
-        cast(S, attach(assigned.state, point._scope)), True, assigned.outcomes
+        cast(S, attach(assigned.state, point._scope)),
+        True,
+        assigned.outcomes,
+        (),
+        moved.dormant,
+        moved.in_play,
+        moved.opened,
     )
 
 

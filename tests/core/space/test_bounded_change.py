@@ -39,10 +39,6 @@ from finn.core.space import (
 )
 from finn.core.space.inspection import candidate
 
-# Until a change is refused by the rules it breaks, a walk's steps are refused only by a
-# value's type check, which its listed values never fail: these walks refuse nothing.
-REFUSED = False
-
 # The chain's domains read choices (a unit's lanes, through the link's widths): a value
 # stored under one width is not checked again when a later change moves the width, so a
 # walk over it finds a configuration built from nothing refusing what the walk kept. The
@@ -54,7 +50,7 @@ until_domain_rule = pytest.mark.xfail(
 
 @until_domain_rule
 def test_a_chain_walked_from_nothing() -> None:
-    check(walk(design_space(Pipeline(width=10)), seed=1, steps=250), refused=REFUSED)
+    check(walk(design_space(Pipeline(width=10)), seed=1, steps=250))
 
 
 @until_domain_rule
@@ -62,7 +58,7 @@ def test_a_chain_walked_from_a_configured_start() -> None:
     start = replay(
         design_space(Pipeline(width=10)), {"u0.compute": "packed", "probe.enabled": True}
     )
-    check(walk(start, seed=4, steps=250), refused=REFUSED)
+    check(walk(start, seed=4, steps=250))
 
 
 @pytest.mark.parametrize("stages_first", [True, False])
@@ -78,11 +74,11 @@ def test_a_chain_whose_changes_reach_far(stages_first: bool) -> None:
 
 
 def test_the_house() -> None:
-    check(walk(design_space(House(budget=400)), seed=1, steps=250), refused=REFUSED)
+    check(walk(design_space(House(budget=400)), seed=1, steps=250))
 
 
 def test_a_house_whose_budget_refuses() -> None:
-    check(walk(design_space(House(budget=60)), seed=2, steps=250), refused=REFUSED)
+    check(walk(design_space(House(budget=60)), seed=2, steps=250))
 
 
 # -- a published choice's evidence --------------------------------------------------------
@@ -117,9 +113,10 @@ def decisions_read(point: Space, reference: object) -> set[str]:
 
 
 def test_a_walk_over_a_guarded_decision_answers_as_a_recomputation() -> None:
-    # Every answer, recorded read and validity agrees.
+    # Every answer, recorded read and validity agrees. The host has no rule: nothing
+    # refuses a step.
     for seed in (1, 2, 3):
-        check(walk(design_space(Host()), seed=seed, steps=150), refused=REFUSED)
+        check(walk(design_space(Host()), seed=seed, steps=150), refused=False)
 
 
 def test_a_published_choice_records_its_guards_decisions() -> None:
@@ -132,7 +129,7 @@ def test_a_published_choice_records_its_guards_decisions() -> None:
 @until_domain_rule
 def test_a_retained_choice_under_a_selector_the_change_opened_answers_as_a_recomputation() -> None:
     report = walk(design_space(Pipeline(width=10)), seed=2, steps=250)
-    check(report, refused=REFUSED)
+    check(report)
 
 
 def test_a_gearbox_change_after_a_warm_chain_answers_as_a_recomputation() -> None:

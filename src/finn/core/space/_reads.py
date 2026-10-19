@@ -542,6 +542,55 @@ def case_guards(linked: LinkedModel) -> dict[NodeId, tuple[NodeId, str]]:
     return found
 
 
+def presence_readers(
+    linked: LinkedModel, methods: Mapping[NodeId, frozenset[NodeId] | None]
+) -> dict[NodeId, tuple[NodeId, ...]]:
+    """For each choice and fact, the choices whose presence may read it: those whose
+    guards (their own and every enclosing one's) may read it, through what each guard
+    reads (a selector's value, a ``when``'s value and what that reads), found from the
+    model's structure and its methods' inferred reads (``methods``). A dynamic method may
+    read any choice or fact. A change can move the presence of these choices only."""
+    nodes = linked.nodes
+    sources = frozenset(
+        (*linked.parameters, *(node.index for node in nodes if node.kind == "decision"))
+    )
+    reached: dict[NodeId, frozenset[NodeId]] = {}
+
+    def reach(start: NodeId) -> frozenset[NodeId]:
+        found: set[NodeId] = set()
+        seen, pending = {start}, [start]
+        while pending:
+            index = pending.pop()
+            if index != start and index in reached:
+                found |= reached[index]
+                continue
+            node = nodes[index]
+            if index in sources:
+                found.add(index)
+            following = list(node.dependencies)
+            if node.call_style == "self" and node.function is not None:
+                read = methods.get(index)
+                if read is None:
+                    return sources
+                following.extend(read)
+            for dependency in following:
+                if dependency not in seen:
+                    seen.add(dependency)
+                    pending.append(dependency)
+        return frozenset(found)
+
+    readers: dict[NodeId, list[NodeId]] = {}
+    guarded = [node for node in nodes if node.kind == "decision" and node.guard is not None]
+    # Outer guards first, so an inner guard's walk takes what an outer one reaches.
+    for node in sorted(guarded, key=lambda item: len(existence_guards(linked, item.index))):
+        guard = cast(NodeId, node.guard)
+        if guard not in reached:
+            reached[guard] = reach(guard)
+        for source in reached[guard]:
+            readers.setdefault(source, []).append(node.index)
+    return {source: tuple(found) for source, found in readers.items()}
+
+
 def infer(linked: LinkedModel) -> ModelReads:
     """What every ``self`` method of ``linked`` may read, every node's existence guards,
     and which of them are a selector's cases."""
@@ -584,4 +633,12 @@ def summary(linked: LinkedModel, reads: ModelReads) -> dict[str, object]:
     }
 
 
-__all__ = ["ModelReads", "Path", "case_guards", "existence_guards", "infer", "summary"]
+__all__ = [
+    "ModelReads",
+    "Path",
+    "case_guards",
+    "existence_guards",
+    "infer",
+    "presence_readers",
+    "summary",
+]

@@ -39,6 +39,11 @@ from finn.core.space.edits import ConfigurationResult
 from finn.core.space.occurrence import state
 
 
+def handle(point: Any, key: str) -> Any:
+    """The reference of the choice keyed ``key``."""
+    return {item.key: item.reference for item in inspection.decisions(point)}[key]
+
+
 def keyed(point: Any, choices: dict[str, object]) -> ConfigurationResult[Any]:
     """``point`` tried with ``choices`` set, by key."""
     owned = {item.key: item.reference for item in inspection.decisions(point)}
@@ -445,3 +450,144 @@ def test_an_addition_never_moves_a_view_down() -> None:
             assert report.instance.timing == (12 // lanes, 4)
         else:
             assert report.broken
+
+
+# -- what a change puts dormant, brings into play and opens ------------------------------
+
+
+class Store(Space):
+    ultra: bool = Param()
+    style: str = Decision(values=("block", "ultra"))
+    depth: int = Decision(values=(1, 2))
+
+    @constraint
+    def has_ultra(self) -> bool | Rejected:
+        if self.style == "ultra" and not self.ultra:
+            return reject("ultra-absent", "the platform has no UltraRAM")
+        return True
+
+
+class Wire(Space):
+    taps: int = Decision(values=(1, 2))
+
+
+class Sourced(Space):
+    ultra: bool = Param()
+    source: Store | Wire = Decision({"memory": Store(ultra=ultra), "wire": Wire})
+
+
+def test_a_selector_switched_away_and_back_keeps_its_cases_choices_dormant() -> None:
+    point = commit(
+        design_space(Sourced(ultra=False)),
+        {"source": "memory", "source.memory.style": "block", "source.memory.depth": 2},
+    )
+    away = point.try_with_choices({Sourced.source: "wire"})
+    assert away.accepted
+    assert away.dormant == ("source.memory.style", "source.memory.depth")
+    assert away.in_play == () and away.opened == ("source.wire.taps",)
+    wire = away.instance
+    assert isinstance(wire.query(handle(wire, "source.memory.style")), Inapplicable)
+    back = wire.try_with_choices({Sourced.source: "memory"})
+    assert back.accepted and back.dormant == ()
+    assert back.in_play == ("source.memory.style", "source.memory.depth")
+    assert back.instance.source.style == "block"
+
+
+def test_a_switch_back_is_refused_by_a_restored_choice_breaking_its_rule() -> None:
+    wire = commit(design_space(Sourced(ultra=False)), {"source": "wire"})
+    # Set while its case is not selected: dormant, and no rule of an absent case counts.
+    dormant = keyed(wire, {"source.memory.style": "ultra"})
+    assert dormant.accepted and dormant.dormant == () and dormant.in_play == ()
+    report = dormant.instance.try_with_choices({Sourced.source: "memory"})
+    assert broken(report) == [("source.memory.has_ultra", ("source.memory.style",))]
+    # Set again in the same change, the switch is accepted.
+    fixed = keyed(dormant.instance, {"source": "memory", "source.memory.style": "block"})
+    assert fixed.accepted and fixed.in_play == ("source.memory.style",)
+    assert fixed.opened == ("source.memory.depth",) and fixed.dormant == ()
+
+
+def test_a_choice_under_an_open_selector_waits_and_clearing_the_selector_reports_nothing() -> None:
+    base = design_space(Sourced(ultra=True))
+    style = handle(base, "source.memory.style")
+    waiting = base.try_with_choices({style: "ultra"})
+    assert waiting.accepted and (waiting.dormant, waiting.in_play) == ((), ())
+    assert isinstance(waiting.instance.query(style), Unresolved)
+    chosen = waiting.instance.try_with_choices({Sourced.source: "memory"})
+    assert chosen.in_play == ("source.memory.style",)
+    assert chosen.opened == ("source.memory.depth",)
+    # Clearing the selector leaves its cases' stored choices waiting: neither list.
+    cleared = chosen.instance.try_with_choices(chosen.instance.field(Sourced.source).clear())
+    assert cleared.accepted
+    assert (cleared.dormant, cleared.in_play, cleared.opened) == ((), (), ())
+    assert isinstance(cleared.instance.query(style), Unresolved)
+
+
+class Optional(Space):
+    enabled: bool = Decision(values=(False, True))
+    lanes: int = Decision(values=(1, 2), when=enabled)
+
+
+def test_a_when_guard_puts_its_choices_dormant_and_back_into_play() -> None:
+    point = design_space(Optional()).with_choices(enabled=True, lanes=2)
+    off = point.try_with_choices(enabled=False)
+    assert off.dormant == ("lanes",) and off.in_play == ()
+    on = off.instance.try_with_choices(enabled=True)
+    assert on.in_play == ("lanes",) and on.instance.lanes == 2
+    unset = design_space(Optional()).with_choices(enabled=False)
+    assert unset.try_with_choices(enabled=True).opened == ("lanes",)
+
+
+class Leaf(Space):
+    lanes: int = Decision(values=(1, 2))
+
+    @constraint
+    def two(self) -> bool:
+        return self.lanes == 2
+
+
+class Bare(Space):
+    pass
+
+
+class Middle(Space):
+    inner: Leaf | Bare = Decision({"leaf": Leaf, "bare": Bare})
+
+
+class Outer(Space):
+    outer: Middle | Bare = Decision({"middle": Middle, "bare": Bare})
+
+
+def test_presence_is_the_and_over_the_whole_path_above_a_choice() -> None:
+    # The outer selector is open; the inner one stores another case: the leaf is absent.
+    point = commit(design_space(Outer()), {"outer.middle.inner": "bare"})
+    lanes = handle(point, "outer.middle.inner.leaf.lanes")
+    assert isinstance(point.query(lanes), Inapplicable)  # not waiting on ``outer``
+    # Its rule does not apply: nothing waits on it.
+    assert "outer.middle.inner.leaf.two" not in [
+        piece.owner for piece in inspection.validity(point).pieces
+    ]
+    stored = commit(design_space(Outer()), {"outer.middle.inner.leaf.lanes": 1})
+    away = keyed(stored, {"outer.middle.inner": "bare"})
+    assert away.dormant == ("outer.middle.inner.leaf.lanes",)
+    assert isinstance(away.instance.query(lanes), Inapplicable)
+
+
+class Waits(Space):
+    extent: int = Param(required=False)
+    lanes: int = Decision(domain=divisors_of(extent))
+
+    @derived
+    def doubled(self) -> int:
+        return 2 * self.lanes
+
+
+def test_a_stored_value_waiting_on_a_missing_fact_names_the_fact() -> None:
+    point = design_space(Waits()).with_choices(lanes=5)
+    for reference in (Waits.lanes, Waits.doubled):
+        answer = point.query(reference)
+        assert isinstance(answer, Unresolved)
+        assert {(f.code, f.owner) for f in answer.findings} == {("input-missing", "extent")}
+    # The facts change that supplies it brings no choice into play: its presence did not
+    # move (section 16.19), only its type check was made.
+    supplied = point.try_with_facts({Waits.extent: 10})
+    assert supplied.accepted and supplied.in_play == () and supplied.instance.doubled == 10

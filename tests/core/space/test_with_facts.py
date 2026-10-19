@@ -44,10 +44,6 @@ from finn.core.space import (
     supplied,
 )
 
-# Until a change is refused by the rules it breaks, a walk refuses only a value its
-# domain no longer holds under new facts.
-REFUSED = False
-
 # The chain's domains read choices (a unit's lanes, through the link's widths): a walk over
 # it keeps a value its later changes leave outside its domain, which a configuration built
 # from nothing refuses. The chain is reshaped with the rule that refuses such a domain.
@@ -67,15 +63,14 @@ def test_a_chain_walked_through_other_widths() -> None:
         report = walk(
             design_space(Pipeline(width=10)), seed=seed, steps=120, facts={"width": WIDTHS}
         )
-        check(report, refused=REFUSED, facts=True)
+        check(report, facts=True)
 
 
-@until_domain_rule
 def test_a_chain_walked_through_other_widths_from_a_configured_start() -> None:
     start = replay(
         design_space(Pipeline(width=10)), {"u0.compute": "packed", "probe.enabled": True}
     )
-    check(walk(start, seed=4, steps=120, facts={"width": WIDTHS}), refused=REFUSED, facts=True)
+    check(walk(start, seed=4, steps=120, facts={"width": WIDTHS}), facts=True)
 
 
 def test_the_house_walked_through_other_budgets() -> None:
@@ -86,7 +81,7 @@ def test_the_house_walked_through_other_budgets() -> None:
             steps=120,
             facts={"budget": (60, 100, 150, 300, 400, 500)},
         )
-        check(report, refused=REFUSED, facts=True)
+        check(report, facts=True)
 
 
 # -- an optional formal: its presence is a fact an evaluation reads ---------------------------

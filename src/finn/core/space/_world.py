@@ -70,7 +70,7 @@ from ._failure import (
 )
 from ._memo import BitTable, Counters, Memo, ReadSet, Trace
 from ._nodes import NodeDecl, unwrap
-from ._reads import ModelReads, infer
+from ._reads import ModelReads, infer, presence_readers
 from .declarations import Param, declared_path
 from .errors import EvaluationError, RequestError, ValueUnavailableError
 from .graph import Located
@@ -151,7 +151,18 @@ class Evaluator:
     model's lock (worlds share their parents' entries and the memo, so evaluation of
     one model is serialized)."""
 
-    __slots__ = ("model", "linked", "nodes", "reads", "bits", "memo", "counters", "lock", "run")
+    __slots__ = (
+        "model",
+        "linked",
+        "nodes",
+        "reads",
+        "bits",
+        "memo",
+        "counters",
+        "lock",
+        "run",
+        "_presence",
+    )
 
     def __init__(self, model: Model[Space]) -> None:
         self.model = model
@@ -164,6 +175,15 @@ class Evaluator:
         self.lock = RLock()
         # The run in progress (under the lock), if any.
         self.run: _Run | None = None
+        self._presence: Mapping[NodeId, tuple[NodeId, ...]] | None = None
+
+    def presence_readers(self, source: NodeId) -> tuple[NodeId, ...]:
+        """The choices whose presence may read the choice or fact ``source`` (found once
+        per model, on first use: ``_reads.presence_readers``)."""
+        with self.lock:
+            if self._presence is None:
+                self._presence = presence_readers(self.linked, self.reads.methods)
+            return self._presence.get(source, ())
 
 
 class Deeper(BaseException):
@@ -395,7 +415,13 @@ class World:
     def _evaluate(self, index: NodeId, previous: Entry | None) -> Entry:
         evaluator = self.evaluator
         node = evaluator.nodes[index]
-        if previous is not None and node.kind not in _OWN_BIT and not _refused_view(previous):
+        cases = evaluator.reads.cases
+        if (
+            previous is not None
+            and node.kind not in _OWN_BIT
+            and index not in cases  # a case reads its selector's stored value: never cut
+            and not _refused_view(previous)
+        ):
             cut = self._cut(previous)
             if cut is not None:
                 return cut
@@ -405,6 +431,14 @@ class World:
         if node.guard is not None:
             guard, reads = self.read(trace, node.guard, reads)
             inactive = _guard_result(node, guard.result)
+            if isinstance(inactive, (Unresolved, Rejected)) and (
+                node.kind == "guard" or index in cases
+            ):
+                # Presence is the AND over the whole path: a condition that does not hold
+                # makes its scope absent, whatever is still undecided or refused above it.
+                held, reads = self._holds_here(node, trace, reads)
+                if held is False:
+                    return Entry(Available(False), reads, tuple(trace))
             if node.kind == "constraint" and isinstance(inactive, Rejected):
                 # Under a guard refused through an input its scope is not in play: the
                 # constraint does not apply, and the guard's piece stands for it.
@@ -416,6 +450,25 @@ class World:
             ):
                 return Entry(inactive, reads, tuple(trace), _guard_assessment(node, inactive))
         return _FRAMES[node.kind](self, node, trace, reads)
+
+    def _holds_here(
+        self, node: Node, trace: list[tuple[NodeId, QueryResult[object]]], reads: ReadSet
+    ) -> tuple[bool | None, ReadSet]:
+        """A guard's own condition, read while a guard above it is undecided or refused:
+        false where a case's selector stores another case, or a ``when`` reads false;
+        ``None`` where it holds or is not known."""
+        evaluator = self.evaluator
+        held = evaluator.reads.cases.get(node.index)
+        if held is not None:
+            selector, case = held
+            reads |= evaluator.bits.bit(selector)
+            value = self.values.get(selector)
+            return (None if value is None or value.value == case else False), reads
+        if node.output is None:
+            return None, reads
+        condition, reads = self.read(trace, node.output, reads)
+        answer = condition.result
+        return (False if isinstance(answer, Available) and answer.value is False else None), reads
 
     def _cut(self, previous: Entry) -> Entry | None:
         """Early cutoff: ``previous`` (a parent's entry of the node) stands, the same answer

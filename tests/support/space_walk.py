@@ -6,13 +6,17 @@ recomputation.
 A successor built by ``try_with_choices`` takes what its world can from its base's
 (the entries that read nothing the change touched, others kept by early cutoff) and
 shares the model's memo of authored functions. A recomputation shares nothing of the
-history: a binding of the same model and facts with the successor's stored choices
-(dormant ones included) committed as one batch. A configuration is its facts and stored
+history: the configuration of the same model, facts and stored choices (dormant ones
+included), built directly in a world of its own. A configuration is its facts and stored
 choices, so the two must answer alike: every step compares the successor with its
 recomputation (the stored choices, every node's answer and the choices and facts each
 read, and the validity), and the step's report with the report of the same change on
-the recomputation of its base. Every difference is reported with the step, the change
-and the first keys that differ; the tallies say what the walk exercised.
+the recomputation of its base: accepted or refused, the values refused, the rules
+broken with the choices standing in each one's way, and the choices put dormant,
+brought into play and opened. A step that sets a new value and is accepted holds no
+false piece through an origin its base did not hold it through. Every difference is
+reported with the step, the change and the first keys that differ; the tallies say what
+the walk exercised.
 
 A step sets a choice, stored or open, to one of its domain's listed values (in play,
 waiting on a selector still open, or dormant under a case not selected), or clears a
@@ -32,9 +36,19 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import cast
 
-from finn.core.space import Available, DecisionHandle, Space, ValueHandle, inspection, occurrence
+from finn.core.space import (
+    Available,
+    DecisionHandle,
+    Rejected,
+    Space,
+    ValueHandle,
+    inspection,
+    occurrence,
+)
+from finn.core.space._assign import check as type_check
+from finn.core.space._origins import pairs
 from finn.core.space._state import State
-from finn.core.space._world import listed_values
+from finn.core.space._world import World, listed_values
 from finn.core.space.edits import Change, ConfigurationResult
 from finn.core.space.ir import NodeId
 
@@ -51,15 +65,21 @@ def same(left: object, right: object) -> bool:
 
 
 def fresh(point: Space) -> Space:
-    """The recomputation: ``point``'s model and facts, with its stored choices committed
-    as one batch on a fresh binding, which must accept what ``point`` holds."""
+    """The recomputation: the configuration of ``point``'s model, facts and stored
+    choices, built directly in a world of its own (no rule is checked: a configuration is
+    its facts and stored choices); each stored value must pass its type check there."""
     current = occurrence.state(point)
-    linked = current.linked
-    empty = occurrence.bind(current.model, dict(current.facts))
-    values = {DecisionHandle[object](linked, i): v for i, v in current.stored.items()}
-    report = empty.try_with_choices(values)
-    assert report.accepted, [(o.owner, o.status, o.result) for o in report.outcomes]
-    return occurrence.attach(occurrence.state(report.instance), point._scope)
+    world = World.start(current.evaluator, dict(current.facts), dict(current.stored))
+    for index in world.stored:
+        found = type_check(world, index)
+        assert not isinstance(found, Rejected), (current.linked.nodes[index].key, found)
+    return occurrence.attach(State(current.model, world), point._scope)
+
+
+def held(point: Space) -> set[tuple[str, NodeId]]:
+    """Each false piece of the root's validity with each origin it is false through."""
+    world = occurrence.state(point).world
+    return {(piece, origin) for (piece, _), found in pairs(world).items() for origin in found}
 
 
 @dataclass(frozen=True)
@@ -83,6 +103,9 @@ class Tallies:
     fact_steps: int = 0  # steps that changed a root formal
     facts_changed: int = 0  # of those, the accepted ones
     facts_refused: int = 0  # of those, the refused ones
+    broken: int = 0  # refused steps that broke a rule
+    dormant: int = 0  # accepted steps that put a stored choice out of play
+    in_play: int = 0  # accepted steps that brought one back into play
 
 
 @dataclass
@@ -164,17 +187,17 @@ class _Walk:
         return point.try_with_facts(facts, values, *changes)
 
     def oracle(self, base: Space, drawn: Draw) -> ConfigurationResult[Space]:
-        """The same change on a configuration built from nothing: a fresh binding of the
-        model with the new facts and every choice the change leaves, committed as one
-        batch."""
+        """The same change on the recomputation of its base."""
+        return self.apply(fresh(base), drawn)
+
+    def sets(self, base: Space, drawn: Draw) -> bool:
+        """Whether a change sets a new value: a fact or a choice to a value it does not
+        have (a clear, or a commit of the value stored, sets nothing)."""
         current = occurrence.state(base)
-        if not self.by_facts:
-            return self.apply(fresh(base), drawn)
-        merged = {i: v for i, v in current.stored.items() if i not in drawn.clear}
-        merged.update(drawn.values)
-        empty = occurrence.bind(current.model, {**current.facts, **drawn.facts})
-        values = {self.handles[i]: value for i, value in merged.items()}
-        return empty.try_with_facts({}, values)
+        missing = object()
+        return any(
+            not same(current.facts.get(i, missing), v) for i, v in drawn.facts.items()
+        ) or any(not same(current.stored.get(i, missing), v) for i, v in drawn.values.items())
 
     # -- comparing ----------------------------------------------------------------------
 
@@ -201,6 +224,14 @@ class _Walk:
         ]
         if wrong:
             self.differ("refusal results", wrong)
+        rules = {(rule.rule, rule.standing) for rule in got.broken}
+        expected_rules = {(rule.rule, rule.standing) for rule in want.broken}
+        if rules != expected_rules:
+            self.differ("broken rules", (rule for rule, _ in rules ^ expected_rules))
+        for name in ("dormant", "in_play", "opened"):
+            moved, expected_moved = set(getattr(got, name)), set(getattr(want, name))
+            if moved != expected_moved:
+                self.differ(name, moved ^ expected_moved)
 
     def compare_successor(self, successor: Space) -> None:
         """The successor against its recomputation: the stored choices; every node it
@@ -265,10 +296,15 @@ class _Walk:
             self.compare_reports(result, self.oracle(base, drawn))
             if not result.accepted:
                 tallies.refused += 1
+                tallies.broken += bool(result.broken)
                 tallies.facts_refused += bool(drawn.facts)
                 continue
             tallies.accepted += 1
             tallies.facts_changed += bool(drawn.facts)
+            tallies.dormant += bool(result.dormant)
+            tallies.in_play += bool(result.in_play)
+            if self.sets(base, drawn) and not held(result.instance) <= held(base):
+                self.differ("a false piece through a new origin, accepted", ())
             self.compare_successor(result.instance)
             self.point = result.instance
         return self.report

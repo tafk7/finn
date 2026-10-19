@@ -81,12 +81,18 @@ class BrokenRule:
 class ConfigurationResult(Generic[S]):
     """A change's report: the configuration it publishes (the receiver where it changes
     nothing, or is refused), whether it was accepted, and each item's outcome. A change
-    refused by the rules it would break names each in ``broken``."""
+    refused by the rules it would break names each in ``broken``. An accepted change
+    names, by key, the stored choices it puts out of play (``dormant``: present or
+    waiting before, absent after), those it brings into play (``in_play``: not present
+    before, present after) and the open choices it brings into presence (``opened``)."""
 
     instance: S
     accepted: bool
     outcomes: tuple[ChangeOutcome, ...]
     broken: tuple[BrokenRule, ...] = ()
+    dormant: tuple[str, ...] = ()
+    in_play: tuple[str, ...] = ()
+    opened: tuple[str, ...] = ()
 
 
 __all__ = [
