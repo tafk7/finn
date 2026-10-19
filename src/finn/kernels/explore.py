@@ -449,7 +449,7 @@ class Seam:
         only ``keys`` where named), ranked, with its possible values in its domain's order
         (``finn.kernels.defaults.ranked``), every one offered: one possible value is a
         choice as several are. One whose order is not known yet (it reads a value still
-        open) is offered as one whose list is: with no values."""
+        open) is offered with no values (``Choice.cases`` None), as one whose list waits."""
         names = None if members is None else set(members)
         wanted = [
             key
