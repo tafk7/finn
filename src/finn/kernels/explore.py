@@ -6,27 +6,34 @@
 A ``Seam`` answers what an exploration asks of a network (``finn.kernels.network``,
 immutable like a point), each choice keyed by a pair ``(owner, key)``: a member by name (a
 kernel's node, a channel's tensor) and the decision key in its space (``("first",
-"compute.packed.pe")``, ``("y", "transport")``). ``choices`` gives each open Decision
-with its viable cases (a forced one is never a choice); ``set`` is the one change, which
-drops what it makes stale and names it, or refuses with findings, the engine's or the
-seam's own (``SEAM_CODES``); ``cost`` gives each member's cycles a frame, buffering and
-resources, and the bottleneck; ``resources`` what the network uses as far as it is
-stated. The engine decides validity; an explorer only proposes and prefers.
+"compute.packed.pe")``, ``("y", "transport")``). ``choices`` gives each open choice in
+play with its possible values, every one offered, whether one value is possible or many;
+``set`` is the one change, one change of the network's (``Network.trial``), accepted or
+refused with findings: the engine's, each rule it would break with the stored choices
+standing in its way, or the seam's own (``SEAM_CODES``); ``cost`` gives each member's
+cycles a frame, buffering and resources, and the bottleneck; ``resources`` what the
+network uses as far as it is stated. The engine decides validity; an explorer only
+proposes and prefers.
 
-A network is complete when every choice with cases that is not required holds a value,
-its baseline until a strategy sets another; a required Decision (a FIFO's depth) stays
-open until a strategy sets it. ``baseline``, ``reopen`` and ``settle`` keep a network
-complete, in rank order: kernels first, then channels in the order the wiring reads them.
-``held`` maps the keys no strategy changes to their values: those a ``Hold`` strategy
-fixes, and those the build seeds from its partition's body (``HELD``,
-``finn.transformation.kernels.choose``).
+Nothing fills a value in after conversion but a strategy: a choice is set by conversion's
+policies (a kernel's) or by the cut's interim channel rule (a channel's), and from then on
+only by what a strategy sets. The one exception is the interim channel rule where a change
+rebuilds a channel from new facts (``Network.trial``): the stored channel choices the new
+facts refuse are derived again, each named (``Accepted.rederived``). ``held`` maps the
+keys no strategy changes to their values: those a ``Hold`` strategy fixes, and those the
+build seeds from its partition's body (``HELD``, ``finn.transformation.kernels.choose``).
+A change that would replace a held choice, derive it again, or put it out of play
+(dormant) is refused (``held``).
 
 An ``Explorer`` (``explore(seam, network) -> network``) proposes batches, and may keep,
 compare and backtrack over networks; nothing persists until the explorers return.
 Explorers chain (``explore``), each saying what it did (``report``, which names a value
 by its owner and key joined, ``first.compute.packed.pe``). A strategy runs through
-``Seam.run``: it reopens its scope (the choices it decides, none held), explores and
-settles, so a value it does not decide keeps what an earlier strategy set.
+``Seam.run``: it reopens its scope (the stored choices it decides, none held: one clear),
+searches, and restores the prior value of each reopened choice the search left open, as
+one batch; where a prior value is refused there, the strategy sets that choice by its
+policy, and says so (``Run.by_policy``). A value it does not decide keeps what an earlier
+strategy set.
 
 The strategies, each an objective and its constraints searched through the seam:
 
@@ -34,9 +41,9 @@ The strategies, each an objective and its constraints searched through the seam:
   a kernel's under its node, a channel's under its tensor), set as one batch and held;
 - ``TargetThroughput(fps)``: the least parallelism meeting ``fps`` frames a
   second at the target's clock (``TargetCycles``, a budget of cycles a frame),
-  folding through an unordered choice its cycles wait on by trying each case (a
-  MatMul's ``compute`` on a DSP58 part), and stating the bottleneck reached and
-  whether it meets the budget;
+  folding through an unordered choice its cycles wait on by trying each possible value
+  (a MatMul's ``compute``), and stating the bottleneck reached and whether it meets the
+  budget;
 - ``MaxThroughput(within)``: the fewest cycles a frame at the bottleneck whose
   resources, as far as they are stated, stay within a fraction of the platform's part,
   for each resource named (bisection on ``TargetCycles``' budget; the best point tried
@@ -45,20 +52,21 @@ The strategies, each an objective and its constraints searched through the seam:
   both ends' beat patterns (``finn.kernels.fifo_sizing``), ``direct`` or a FIFO
   of the least depth that keeps each producer within its idle time, proposed in
   one batch, at the stored folding: it runs after the strategies that fold;
-- ``Rebaseline()`` (``baseline``): every choice not held back at its baseline;
+- ``Defaults()`` (``defaults``): every choice not held back to the value conversion's
+  policies give a kernel's and the interim channel rule a channel's;
 - ``DebugPlaceholder()`` (``placeholder``, for debugging): every open required choice
-  at its first viable case, ``DEBUG: set by placeholder``; one known by membership
+  at its first possible value, ``DEBUG: set by placeholder``; one known by membership
   only (a FIFO's depth) is refused, by name;
 - ``Ranked(policy)``: any rank-style policy as an explorer.
 
 A FIFO's depth is sized at one bottleneck period, and a fold anywhere in the network may
 change the period or its ends after it. Nothing records what it was sized against: a
 stored transport can be checked against its stream again (``check_fifos``: sizing's own
-model at the network's period), a tool a strategy calls or does not; ``checked`` drops,
-names and leaves open each FIFO, not held, that no longer keeps its producer within its
-idle time, the step a strategy composes before sizing again. A held one is kept and named
-(a limitation), and so is a ``direct`` that throttles its producer. An exploration checks
-nothing of itself: the build checks once, before emission
+model at the network's period), a tool a strategy calls or does not; ``checked`` clears,
+names and leaves open each FIFO's depth, not held, that no longer keeps its producer
+within its idle time, the step a strategy composes before sizing again. A held one is kept
+and named (a limitation), and so is a ``direct`` that throttles its producer. An
+exploration checks nothing of itself: the build checks once, before emission
 (``finn.custom_op.kernels.shell.verify_partition``).
 """
 
@@ -73,6 +81,7 @@ from typing import Any, Generic, Protocol, TypeVar
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.space import (
     Available,
+    BrokenRule,
     Inapplicable,
     QueryResult,
     Rejected,
@@ -83,6 +92,7 @@ from finn.core.space import (
 )
 from finn.kernels.base import BUFFERING, CYCLES, RESOURCES
 from finn.kernels.configure import refusal
+from finn.kernels.defaults import Fixed, Policy, policies, ranked, unset
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import FRAMES, NotModelled, Sized, holds, size
 from finn.kernels.network import Key, Trial, dotted
@@ -95,9 +105,10 @@ T = TypeVar("T")
 class Composition(Protocol):
     """What the seam explores: a ``finn.kernels.network.Network`` (the graph's binds one,
     ``finn.custom_op.kernels.shell.in_shell``, in its shell). Its members by name, ranked,
-    its channels among them, and per member its point, its exports, its Decisions, what
-    of them is viable, open, forced and stored, its validity, and a change (``trial``);
-    its own statement of what it uses, where it makes one (``own_resources``)."""
+    its channels among them, and per member its point, its exports, its Decisions, every
+    choice's state, the possible values of those asked, what is open and stored, its
+    validity, and a change (``trial``); its own statement of what it uses, where it makes
+    one (``own_resources``)."""
 
     @property
     def members(self) -> tuple[str, ...]: ...
@@ -115,15 +126,13 @@ class Composition(Protocol):
 
     def decision(self, key: Key) -> inspection.DecisionInfo[object] | None: ...
 
-    def viable(
+    def states(
         self, names: Iterable[str] | None = None
-    ) -> tuple[tuple[Key, inspection.Viable], ...]: ...
+    ) -> tuple[tuple[Key, inspection.ChoiceState], ...]: ...
 
-    def open(
-        self, names: Iterable[str] | None = None
-    ) -> tuple[tuple[Key, inspection.Open], ...]: ...
+    def viable(self, keys: Iterable[Key]) -> tuple[tuple[Key, inspection.Viable], ...]: ...
 
-    def forced(self, names: Iterable[str] | None = None) -> Mapping[Key, object]: ...
+    def undecided(self) -> tuple[Key, ...]: ...
 
     def chosen(self, names: Iterable[str] | None = None) -> Mapping[Key, object]: ...
 
@@ -145,10 +154,10 @@ S = TypeVar("S", bound=Composition)
 
 class ExploreError(Refusal):
     """An exploration that cannot go on, and why: its one finding (``findings``), owned by
-    who refused: a Decision none of whose cases is viable or accepted, by its key; a
-    hold the seam refuses, by the strategy that states it; a strategy's own setting or need,
-    by the strategy. What the seam or the engine found against it are the finding's
-    causes. Its message is the finding's line."""
+    who refused: a choice no value can be set for, by its key; a hold the seam refuses,
+    by the strategy that states it; a strategy's own setting or need, by the strategy.
+    What the seam or the engine found against it are the finding's causes. Its message is
+    the finding's line."""
 
     def __init__(
         self,
@@ -163,33 +172,50 @@ class ExploreError(Refusal):
 
 
 @dataclass
-class Choice:
-    """An open Decision of a network, as the seam offers it, by key (its owner and the
-    key there).
+class Refused:
+    """A change the network refuses: why, by key, its findings: a value outside its domain
+    or one the seam refuses (``SEAM_CODES``), by the choice's key; a rule the change would
+    break, by the rule's key (a member's own refusal by ``(name, "")``). ``standing``: for
+    each rule, the stored choices standing in its way, by key (none where the values named
+    and the facts alone break it), which a strategy sets in the same batch or clears
+    first."""
 
-    ``cases``: the viable cases, in domain order (several; none when the Decision is
-    refused, ``refused`` then naming why for each); ``None`` for a Decision known by
-    membership only, whose value an explorer proposes. ``ordered``: the domain states
-    an order of its cases (``divisors_of``, an integer range). ``required``: it has
-    no safe baseline (``Decision(required=True)``), so no baseline but the debug
-    placeholder's takes its first case.
+    why: Mapping[Key, tuple[Finding, ...]]
+    standing: Mapping[Key, tuple[Key, ...]] = field(default_factory=dict)
+
+
+@dataclass
+class Choice:
+    """An open choice in play of a network, as the seam offers it, by key (its owner and
+    the key there).
+
+    ``cases``: its possible values, in its domain's order (its ranking where the domain
+    states one): those setting it alone would be accepted (one or several; none when every
+    value is refused, ``refused`` then naming why for each); ``None`` for a choice known by
+    membership only, or whose list or order waits on a value not known, whose value an
+    explorer proposes. ``refused``: each listed value setting
+    it alone would refuse, with why (``Refused``: each rule and the stored choices
+    standing in its way). ``ordered``: the domain states an order of its values
+    (``divisors_of``, an integer range). ``required``: no policy gives it a value
+    (``Decision(required=True)``), a strategy sets it.
     """
 
     key: Key
     space_type: type[Space] | None
     cases: tuple[object, ...] | None
     ordered: bool
-    refused: Mapping[str, str] = field(default_factory=dict)
+    refused: Mapping[object, Refused] = field(default_factory=dict)
     required: bool = False
 
 
 @dataclass
 class Accepted(Generic[S]):
-    """A change the network accepts: the network it reaches, and what it dropped as stale,
-    each with why (each settled again)."""
+    """A change the network accepts: the network it reaches, and the stored channel
+    choices the interim channel rule derived again as it rebuilt a channel from new facts,
+    each with why (``choice-rederived``: its old value, its new one)."""
 
     network: S
-    dropped: Mapping[Key, tuple[Finding, ...]] = field(default_factory=dict)
+    rederived: Mapping[Key, tuple[Finding, ...]] = field(default_factory=dict)
 
 
 #: How a strategy step judged its FIFOs, as its report states it (``fifos_judged``): by
@@ -225,15 +251,6 @@ class FifoCheck:
             "stale": [dotted(key) for key in self.stale],
             "findings": [finding.record() for finding in self.findings],
         }
-
-
-@dataclass
-class Refused:
-    """A change the network refuses: why, by key (one of the batch, a Decision the batch
-    leaves without a viable case, a held choice it would drop, or a member that refuses
-    itself, by ``(name, "")``), its findings."""
-
-    why: Mapping[Key, tuple[Finding, ...]]
 
 
 @dataclass(frozen=True)
@@ -295,54 +312,43 @@ class Stated:
 
 
 @dataclass
-class Settled(Generic[S]):
-    """A network settled (``Seam.settle``): the network, and each value settling set, by
-    key, in order: ``kept``, its prior value (or its held one) still accepted;
-    ``baselined``, its baseline, the prior value refused or none."""
+class Restored(Generic[S]):
+    """A network whose reopened choices the search left open were given back their prior
+    values (``Seam.restore``): the network; each restored to its prior value (``kept``);
+    each whose prior value it refuses, set by its policy instead (``by_policy``); and each
+    no value could be set for, left open, with why (``unset``)."""
 
     network: S
-    kept: dict[Key, object]
-    baselined: dict[Key, object]
+    kept: dict[Key, object] = field(default_factory=dict)
+    by_policy: dict[Key, object] = field(default_factory=dict)
+    unset: dict[Key, tuple[Finding, ...]] = field(default_factory=dict)
 
 
 @dataclass
 class Run:
     """What one strategy's run through the seam did (``Seam.run``): the strategy's name,
-    every key it reopened (its scope, widened to what the engine names as reading it),
-    and what settling kept and re-baselined after it explored."""
+    every key it reopened (its scope, the stored choices among it), those whose prior
+    value it restored (``kept``), those it set by their policy where the prior value is
+    refused (``by_policy``: "set by <strategy>, its policy"), those it left open with why
+    (``unset``); and what the interim channel rule did on its way, as the network rebuilt
+    channels from new facts: the stored choices outside its scope it derived again, with
+    why (``rederived``), and the choices it set that the new facts brought into play
+    (``interim``), none named by a change of the run's."""
 
     strategy: str
     reopened: tuple[Key, ...]
-    kept: dict[Key, object]
-    baselined: dict[Key, object]
-
-
-class Unsettled(ExploreError):
-    """A held key that settling cannot bring back to its held value
-    (``pin-unsettled``, owned by the key): the change that reached it is refused."""
-
-    def __init__(self, key: Key, why: str, causes: Iterable[Finding] = ()) -> None:
-        super().__init__("pin-unsettled", dotted(key), why, causes=causes)
-        self.key = key
-        self.why = why
+    kept: dict[Key, object] = field(default_factory=dict)
+    by_policy: dict[Key, object] = field(default_factory=dict)
+    unset: dict[Key, tuple[Finding, ...]] = field(default_factory=dict)
+    rederived: dict[Key, tuple[Finding, ...]] = field(default_factory=dict)
+    interim: dict[Key, object] = field(default_factory=dict)
 
 
 #: No value: a key absent from a mapping of values.
 _ABSENT = object()
 
 #: The codes of the seam's own refusals, each owned by the key it refuses.
-SEAM_CODES = frozenset(
-    {
-        "not-a-decision",
-        "held",
-        "forced",
-        "case-not-viable",
-        "request-refused",
-        "refused-together",
-        "inapplicable",
-        "decision-no-viable-case",
-    }
-)
+SEAM_CODES = frozenset({"not-a-decision", "held", "request-refused"})
 
 
 def _refusal(key: Key, code: str, message: str) -> tuple[Finding, ...]:
@@ -361,9 +367,18 @@ def _text(key: Key, findings: Iterable[Finding]) -> str:
     )
 
 
-def _reasons(why: Mapping[Key, Iterable[Finding]]) -> str:
-    """Each key's reasons as text (``_text``), in ``why``'s order."""
-    return "; ".join(f"{dotted(key)}: {_text(key, found)}" for key, found in why.items())
+def _reasons(refused: Refused) -> str:
+    """Each key's reasons as text (``_text``), in order, each rule with the stored choices
+    standing in its way."""
+    return "; ".join(
+        f"{dotted(key)}: {_text(key, found)}"
+        + (
+            f" (standing: {', '.join(map(dotted, refused.standing[key]))})"
+            if refused.standing.get(key)
+            else ""
+        )
+        for key, found in refused.why.items()
+    )
 
 
 def _all(why: Mapping[Any, Iterable[Finding]]) -> tuple[Finding, ...]:
@@ -383,12 +398,22 @@ def _records(why: Mapping[str, Iterable[Finding]]) -> dict[str, list[dict[str, A
     return {key: [finding.record() for finding in found] for key, found in why.items()}
 
 
+def _broken(owner: str, broken: Iterable[BrokenRule]) -> Refused:
+    """Each rule member ``owner`` would break, by the rule's key in the network, with the
+    stored choices standing in its way."""
+    rules = tuple(broken)
+    return Refused(
+        {(owner, rule.rule): rule.result.findings for rule in rules},
+        {(owner, rule.rule): tuple((owner, key) for key in rule.standing) for rule in rules},
+    )
+
+
 class Seam:
     """The seam over the networks of one exploration: the ``platform`` its kernels are
     built for (its clock, which a throughput reads). ``attempts`` counts the changes tried
     through it; ``held`` maps each held key to its value; ``runs`` records each
     strategy's run, in order; ``checks`` each check of the FIFOs a caller made through it
-    (``check_fifos``), in order, and ``dropped`` each FIFO's depth ``checked`` dropped,
+    (``check_fifos``), in order, and ``dropped`` each FIFO's depth ``checked`` cleared,
     with why."""
 
     def __init__(self, platform: Platform | None = None) -> None:
@@ -398,9 +423,14 @@ class Seam:
         self.runs: list[Run] = []
         self.checks: list[FifoCheck] = []
         self.dropped: dict[Key, tuple[Finding, ...]] = {}
+        # Each stored channel choice the interim channel rule derived again in a change
+        # this seam accepted, with why, and every key a change it accepted named: what a
+        # run reports of what the network's rebuilds did on its way.
+        self._rederived: dict[Key, tuple[Finding, ...]] = {}
+        self._named: set[Key] = set()
 
     def declared(self, network: Composition) -> Mapping[Key, type[Space] | None]:
-        """Every Decision of the network by key, open or not, applicable or not (one nested
+        """Every Decision of the network by key, open or not, in play or not (one nested
         under a selector's case that is not selected), with the Space class that
         declares it: what lies under a choice's cases, found by structure (each member's
         from the engine's table of its class)."""
@@ -409,240 +439,249 @@ class Seam:
     # -- the three questions --------------------------------------------------------------
 
     def choices(
-        self, network: Composition, members: Iterable[str] | None = None
+        self,
+        network: Composition,
+        members: Iterable[str] | None = None,
+        *,
+        keys: Collection[Key] | None = None,
     ) -> tuple[Choice, ...]:
-        """Each open Decision (only ``members``' where named): the enumerable ones in rank
-        order, then those known by membership only."""
-        names = None if members is None else tuple(members)
+        """Each open choice in play (``Network.undecided``; only ``members``' where named,
+        only ``keys`` where named), ranked, with its possible values in its domain's order
+        (``finn.kernels.defaults.ranked``), every one offered: one possible value is a
+        choice as several are. One whose order is not known yet (it reads a value still
+        open) is offered as one whose list is: with no values."""
+        names = None if members is None else set(members)
+        wanted = [
+            key
+            for key in network.undecided()
+            if (names is None or key[0] in names) and (keys is None or key in keys)
+        ]
+        listed = [key for key in wanted if _info(network, key).listed]
+        viable = dict(network.viable(listed)) if listed else {}
         found: list[Choice] = []
-        for key, item in network.viable(names):
-            info = network.decision(key)
-            assert info is not None
-            found.append(
-                Choice(key, info.space_type, item.cases, info.ordered, item.refused, info.required)
+        for key in wanted:
+            info = _info(network, key)
+            item = viable.get(key)
+            values = (
+                None
+                if item is None or item.values is None
+                else ranked(network.member(key[0]), info.reference, item.values)
             )
-        for key, other in network.open(names):
-            info = network.decision(key)
-            assert info is not None
-            found.append(Choice(key, info.space_type, None, other.ordered, required=info.required))
+            if not isinstance(values, tuple):
+                found.append(Choice(key, info.space_type, None, info.ordered, {}, info.required))
+                continue
+            cases = tuple(each.value for each in values if isinstance(each, inspection.Possible))
+            refused = {
+                each.value: _broken(key[0], each.broken)
+                for each in values
+                if isinstance(each, inspection.Refused)
+            }
+            found.append(Choice(key, info.space_type, cases, info.ordered, refused, info.required))
         return tuple(found)
 
     def set(self, network: S, changes: Mapping[Key, object]) -> Accepted[S] | Refused:
-        """``changes`` committed on ``network``: ``Accepted(network', dropped)`` or
-        ``Refused({key: findings})``.
+        """``changes`` set on ``network`` as one change of the network's
+        (``Network.trial``): ``Accepted(network', rederived)`` or ``Refused(why,
+        standing)``.
 
-        A batch is refused where a key is no Decision, is forced or held (``held``) to
-        another value, or a value of an open choice is not one of its viable cases (a
-        membership-only value, or a value replacing a stored one, is its domain's to
-        check); where the engine refuses it (a key nested under a selector the same batch
-        commits is the engine's to accept); where it leaves a Decision of a member it
-        touches without a viable case, or such a member refused (its validity). It is
-        otherwise committed, and what it makes stale is dropped: a stored choice of a
-        kernel the engine refuses beside it, or a channel's that replay refuses once the
-        kernel's ends change (``Network.trial``), one kept unchecked as any other. Each one
-        dropped is named with why (``Accepted.dropped``) and settled again. A held choice
-        is never dropped: the change is refused, naming it.
-        """
+        A batch is refused where a key is no Decision or is held (``held``) to another
+        value; where the engine refuses it: a value outside its domain, by the choice's
+        key, or a rule it would make newly false, by the rule's key, with the stored
+        choices standing in its way (a key nested under a selector the same batch sets is
+        the engine's to accept); or where a channel rebuilt from new facts is refused. A
+        change that would derive a held choice again (``Accepted.rederived``) or put it
+        out of play (dormant) is refused (``held``): a hold keeps its value and its case
+        in play."""
         self.attempts += 1
         changes = self._typed(network, changes)
         why = self._screen(network, changes)
         if why:
             return Refused(why)
-        clear: set[Key] = set()
-        cleared: dict[Key, tuple[Finding, ...]] = {}
-        while True:
-            trial: Trial[S] = network.trial(changes, sorted(clear))
-            if trial.accepted:
-                break
-            stored = network.chosen({key[0] for key in trial.refused})
-            dependents = {key for key in trial.refused if key in stored and key not in changes}
-            if not dependents or set(trial.refused) - dependents or dependents <= clear:
-                return Refused(trial.refused)
-            cleared |= {key: trial.refused[key] for key in dependents}
-            clear |= dependents
-        dropped = {**cleared, **trial.dropped}
-        held = {key: why for key, why in dropped.items() if key in self.held}
+        trial: Trial[S] = network.trial(changes)
+        if not trial.accepted:
+            return Refused(trial.refused, trial.standing)
+        held = self._held_moved(network, trial)
         if held:
-            return Refused(
-                {
-                    key: _refusal(
-                        key,
-                        "held",
-                        f"held to {self.held[key]!r}, dropped by the change: " + _text(key, why),
-                    )
-                    for key, why in held.items()
-                }
-            )
-        reached = trial.network
-        if dropped:
-            reached = self._settle(reached, {}, keys=dropped).network
-        return Accepted(reached, dropped)
+            return Refused(held)
+        self._rederived.update(trial.rederived)
+        self._named.update(changes)
+        return Accepted(trial.network, trial.rederived)
 
-    def _screen(self, network: S, batch: Mapping[Key, object]) -> dict[Key, tuple[Finding, ...]]:
-        """The seam's own refusals of ``batch``: a key that is no Decision, held or forced
-        to another value, or a value that is not one of its open choice's viable cases."""
-        offered = {choice.key: choice for choice in self.choices(network, {k[0] for k in batch})}
+    def _screen(
+        self, network: Composition, batch: Mapping[Key, object]
+    ) -> dict[Key, tuple[Finding, ...]]:
+        """The seam's own refusals of ``batch``: a key that is no Decision, or held to
+        another value."""
         why: dict[Key, tuple[Finding, ...]] = {}
-        forced: Mapping[Key, object] | None = None
         for key, value in batch.items():
-            choice = offered.get(key)
             held = self.held.get(key, _ABSENT)
             if network.decision(key) is None:
                 why[key] = _refusal(key, "not-a-decision", "not a Decision of this network")
             elif held is not _ABSENT and held != value:
                 why[key] = _refusal(key, "held", f"held to {held!r}")
-            elif choice is None:
-                if forced is None:
-                    forced = network.forced({k[0] for k in batch})
-                if key in forced:
-                    why[key] = _refusal(key, "forced", f"forced to {forced[key]!r}, never a choice")
-            elif choice.cases is not None and value not in choice.cases:
-                reason = choice.refused.get(str(value)) or choice.refused.get(repr(value))
-                why[key] = _refusal(
-                    key,
-                    "case-not-viable",
-                    f"{value!r} is not viable" + (f": {reason}" if reason else ""),
-                )
-        if why and forced is not None and set(why) <= set(forced) and len(why) < len(batch):
-            # A key forced here may be a choice once the rest of the batch replaces what
-            # forces it (pumping, once SIMD is 2): it is forced only if it still is there.
-            rest = network.trial(
-                {key: value for key, value in batch.items() if key not in why}, check=False
-            )
-            if rest.accepted:
-                still = rest.network.forced({k[0] for k in why})
-                why = {key: reason for key, reason in why.items() if key in still}
         return why
 
-    # -- keeping a network complete -------------------------------------------------------
+    def _held_moved(
+        self, network: Composition, trial: Trial[Any]
+    ) -> dict[Key, tuple[Finding, ...]]:
+        """Each held choice ``trial`` would derive again (the interim channel rule, its
+        finding the cause) or put out of play, refused (``held``)."""
+        if not self.held:
+            return {}
+        why: dict[Key, tuple[Finding, ...]] = {}
+        for key, found in trial.rederived.items():
+            if key in self.held:
+                message = f"held to {self.held[key]!r}, derived again by the change: "
+                message += "; ".join(finding.message for finding in found)
+                why[key] = (
+                    Finding(FindingKind.REJECTION, "held", dotted(key), message, causes=found),
+                )
+        owners = {key[0] for key in self.held}
+        before = dict(network.states(owners))
+        after = dict(trial.network.states(owners))
+        for key, value in self.held.items():
+            if key in why or not isinstance(after.get(key), inspection.Dormant):
+                continue
+            if not isinstance(before.get(key), inspection.Dormant):
+                why[key] = _refusal(
+                    key, "held", f"held to {value!r}, put out of play (dormant) by the change"
+                )
+        return why
 
-    def baseline(self, network: S) -> S:
-        """``network`` with every open choice that has cases and is not required at its
-        baseline, its first viable case the seam accepts, in rank order (a held key at
-        its held value): ``settle`` with no prior value."""
-        return self.settle(network, {})
+    # -- a strategy's run -------------------------------------------------------------------
 
     def reopen(self, network: S, keys: Iterable[Key]) -> tuple[S, tuple[Key, ...]]:
-        """``network`` with the stored ``keys`` cleared, and every key cleared: where the
-        engine refuses the clear because a stored choice reads one of them (it would be
-        left refused or inapplicable), that choice is cleared too, and the clear tried
-        again; a channel replay refuses after it is cleared too. A stored choice the clear
-        only leaves waiting on them (one under a selector cleared, or whose own check reads
-        a choice cleared) is not in the reach: the engine keeps it unchecked, and checks it
-        again once what it waits on is chosen. A held key in
-        the reach is cleared, for ``settle`` to bring back. A refusal that names no stored
-        choice is an ``ExploreError``."""
-        stored = network.chosen()
-        clear = {key for key in keys if key in stored}
+        """``network`` with the stored ``keys`` cleared, one clear, and the keys cleared,
+        ranked. Clearing never breaks a rule: what reads a cleared choice waits on it (a
+        channel whose facts read it is unbound, its stored choices held with it). A clear
+        a channel's rebuild refuses, or one that would derive a held choice again or put it
+        out of play, is an ``ExploreError``."""
+        wanted = set(keys)
+        clear = tuple(key for key in network.chosen() if key in wanted)
         if not clear:
             return network, ()
-        while True:
-            trial: Trial[S] = network.trial({}, sorted(clear), check=False)
-            if trial.accepted:
-                reach = clear | set(trial.dropped)
-                return trial.network, tuple(key for key in stored if key in reach)
-            reach = {key for key in trial.refused if key in stored} - clear
-            if not reach:
-                raise ExploreError(
-                    "reopen-refused",
-                    "reopen",
-                    "reopening is refused: "
-                    + "; ".join(
-                        f"{dotted(key)}: " + "; ".join(map(str, why))
-                        for key, why in trial.refused.items()
-                    ),
-                    causes=_all(trial.refused),
-                )
-            clear |= reach
+        trial: Trial[S] = network.trial({}, clear, check=False)
+        why = dict(trial.refused) or self._held_moved(network, trial)
+        if why:
+            refused = Refused(why, trial.standing)
+            raise ExploreError(
+                "reopen-refused",
+                "reopen",
+                "reopening is refused: " + _reasons(refused),
+                causes=_all(why),
+            )
+        self._rederived.update(trial.rederived)
+        return trial.network, clear
 
-    def settle(
-        self, network: S, prior: Mapping[Key, object], members: Collection[str] | None = None
-    ) -> S:
-        """``network`` settled: every open choice (only ``members``' where named), in rank
-        order, at its ``prior`` value where the seam accepts it (a held key at its held
-        value, or ``Unsettled``), else, one with cases that is not required, at its
-        baseline, the first viable case accepted; a required choice or one known by
-        membership only whose prior value is refused, or that has none, stays open."""
-        return self._settle(network, prior, members).network
-
-    def _settle(
+    def restore(
         self,
         network: S,
         prior: Mapping[Key, object],
-        members: Collection[str] | None = None,
-        keys: Collection[Key] | None = None,
-    ) -> Settled[S]:
-        kept: dict[Key, object] = {}
-        baselined: dict[Key, object] = {}
-        passed: set[Key] = set()
-        wanted = set(network.members if members is None else members)
-        if keys is not None:
-            wanted &= {key[0] for key in keys}
-        # A change reaches its member and the members ranked after it (facts flow one
-        # way: kernels first, then each channel after what it reads), so settling moves
-        # forward a member at a time, in rank order, and never looks back.
-        order = [name for name in network.members if name in wanted]
-        index = 0
-        while index < len(order):
-            choice = next(
+        strategy: str = "",
+    ) -> Restored[S]:
+        """``network`` with each choice of ``prior`` it leaves open given back its prior
+        value, all as one batch: one open (in play, or waiting on its presence), or one of
+        a channel unbound there (its kernels' values in the batch bind it). Where the
+        batch is refused, each is given back alone, ranked: a prior value refused there is
+        replaced by the choice's policy (``by_policy``: conversion's for a kernel's
+        choice, the interim channel rule's, first valid, for a channel's), or, where its
+        policy sets nothing (a required choice) or no value can be set, it is left open,
+        with why (``unset``). A choice not in play (its scope absent) is not given back.
+        Then each open choice in play that is not required, never in ``prior``, and nested
+        under a choice of ``prior`` (a case's choices under a selector given another
+        value) is set by its policy (``by_policy``). ``strategy`` names who sets by
+        policy, in a refusal's message."""
+        wanted = {key: value for key, value in prior.items() if _left_open(network, key)}
+        restored = Restored(network)
+        if wanted:
+            outcome = self.set(network, wanted)
+            if isinstance(outcome, Accepted):
+                restored = Restored(outcome.network, dict(wanted))
+            else:
+                rank = {name: index for index, name in enumerate(network.members)}
+                for key in sorted(wanted, key=lambda key: rank[key[0]]):
+                    if not _left_open(restored.network, key):
+                        continue
+                    alone = self.set(restored.network, {key: wanted[key]})
+                    if isinstance(alone, Accepted):
+                        restored.network, restored.kept[key] = alone.network, wanted[key]
+                        continue
+                    self._set_by_policy(restored, key, strategy)
+        self._opened_under(restored, prior, strategy)
+        return restored
+
+    def _set_by_policy(self, restored: Restored[S], key: Key, strategy: str) -> None:
+        """``restored`` with choice ``key`` set by its policy (``by_policy``), or why no
+        value can be (``unset``)."""
+        done = self._by_policy(restored.network, key, strategy)
+        if isinstance(done, Finding):
+            restored.unset[key] = (done,)
+        else:
+            restored.network, restored.by_policy[key] = done
+
+    def _opened_under(
+        self, restored: Restored[S], prior: Mapping[Key, object], strategy: str
+    ) -> None:
+        """``restored`` with each open choice in play that is not required, not in
+        ``prior``, and one of a case's choices under a selector of ``prior`` (whose
+        existence that reopened choice decides), set by its policy, ranked, until none is
+        left that was not tried. A choice brought into play otherwise (a channel's, by its
+        rebuild: the interim channel rule's) is not one."""
+        selectors = [key for key in prior if _info(restored.network, key).selector]
+        tried: set[Key] = set()
+        while True:
+            key = next(
                 (
-                    choice
-                    for choice in self.choices(network, (order[index],))
-                    if choice.key not in passed
-                    and (keys is None or choice.key in keys)
-                    and (
-                        choice.key in self.held
-                        or choice.key in prior
-                        or (choice.cases is not None and not choice.required)
+                    key
+                    for key in restored.network.undecided()
+                    if key not in tried
+                    and key not in prior
+                    and not _info(restored.network, key).required
+                    and any(
+                        owner == key[0] and key[1].startswith(f"{name}.")
+                        for owner, name in selectors
                     )
                 ),
                 None,
             )
-            if choice is None:
-                index += 1
-                continue
-            passed.add(choice.key)
-            held = self.held.get(choice.key, _ABSENT)
-            if held is not _ABSENT:
-                outcome = self.set(network, {choice.key: held})
-                if isinstance(outcome, Refused):
-                    raise Unsettled(
-                        choice.key,
-                        f"held to {held!r}, refused after the change: " + _reasons(outcome.why),
-                        _all(outcome.why),
-                    )
-                network, kept[choice.key] = outcome.network, held
-                continue
-            want = prior.get(choice.key, _ABSENT)
-            if want is not _ABSENT:
-                outcome = self.set(network, {choice.key: want})
-                if isinstance(outcome, Accepted):
-                    network, kept[choice.key] = outcome.network, want
-                    continue
-            if choice.cases is None or choice.required:
-                continue
-            network, baselined[choice.key] = _first_case(self, network, choice, choice.cases)
-        if members is None and keys is None:
-            self._check_held(network)
-        return Settled(network, kept, baselined)
+            if key is None:
+                return
+            tried.add(key)
+            self._set_by_policy(restored, key, strategy)
 
-    def _check_held(self, network: Composition) -> None:
-        """``Unsettled`` for the first held key ``network`` does not hold at its value (one
-        a change left forced to another value, or inapplicable). One kept unchecked at its
-        value holds: a hold waits with its choice."""
-        if not self.held:
-            return
-        values = network.chosen()
-        forced: Mapping[Key, object] | None = None
-        for key, value in self.held.items():
-            if values.get(key, _ABSENT) == value:
-                continue
-            if forced is None:
-                forced = network.forced()
-            found = values.get(key, forced.get(key, _ABSENT))
-            if found != value:
-                now = "inapplicable or open" if found is _ABSENT else f"now {found!r}"
-                raise Unsettled(key, f"held to {value!r}, {now} after the change")
+    def policy(self, network: Composition, key: Key) -> Policy:
+        """Choice ``key``'s policy: a kernel's, its class's (``finn.kernels.defaults``:
+        fixed, first valid, or None where it is required); a channel's, the interim
+        channel rule's, first valid unless it is required."""
+        if key[0] in network.channels:
+            return None if _info(network, key).required else "first valid"
+        return policies(type(network.member(key[0])))[key[1]]
+
+    def _by_policy(self, network: S, key: Key, strategy: str) -> tuple[S, object] | Finding:
+        """``network`` with choice ``key`` set by its policy (``policy``) and the value
+        set, or why none can be (``choice-no-valid-value``, owned by the key, each value's
+        refusal its causes)."""
+        policy = self.policy(network, key)
+        by = f" by {strategy}" if strategy else ""
+        if policy is None:
+            return unset(
+                dotted(key),
+                "none",
+                f"required: no policy gives it a value{by}; a strategy sets it",
+                (),
+            )
+        tried: tuple[S, object] | Mapping[object, Refused]
+        if isinstance(policy, Fixed):
+            name, tried = "fixed", _try_cases(self, network, key, (policy.value,))
+        else:
+            name = str(policy)
+            offered = self.choices(network, keys=(key,))
+            if not offered or offered[0].cases is None:
+                return unset(dotted(key), name, f"its values are not listed{by}", ())
+            tried = _try_cases(self, network, key, offered[0].cases) or offered[0].refused
+        if isinstance(tried, tuple):
+            return tried
+        return unset(dotted(key), name, _values_text(tried), _values_causes(tried))
 
     def run(
         self,
@@ -651,18 +690,43 @@ class Seam:
         search: Callable[[S, Mapping[Key, object]], S],
         strategy: str,
         *,
-        keep: bool = True,
+        restore: bool = True,
     ) -> S:
-        """One strategy's run: ``scope`` reopened (``reopen``), ``search(network, prior)``
-        from there (``prior``: the network's values before), and what it returns settled
-        from ``prior`` (with ``keep`` false, from no prior value: every reopened choice
-        not held at its baseline); recorded in ``runs``."""
-        prior = dict(network.chosen())
+        """One strategy's run: ``scope`` reopened (``reopen``: the stored choices among
+        it cleared, one clear), ``search(network, prior)`` from there (``prior``: the
+        values of the keys reopened, before), and the prior values of those the search
+        left open given back (``restore``; with ``restore`` false, none: the search sets
+        what it decides). Recorded in ``runs``, with what the interim channel rule did on
+        its way (``Run.rederived``, ``Run.interim``)."""
+        self._named = set()
+        before = dict(network.chosen())
         opened, reopened = self.reopen(network, scope)
+        prior = {key: before[key] for key in reopened}
         found = search(opened, prior)
-        settled = self._settle(found, prior if keep else {})
-        self.runs.append(Run(strategy, reopened, settled.kept, settled.baselined))
-        return settled.network
+        restored = self.restore(found, prior, strategy) if restore else Restored(found)
+        after = restored.network.chosen()
+        rederived = {
+            key: self._rederived.get(key, ())
+            for key, value in before.items()
+            if key not in prior and after.get(key, _ABSENT) != value
+        }
+        interim = {
+            key: value
+            for key, value in after.items()
+            if key not in before and key not in prior and key not in self._named
+        }
+        self.runs.append(
+            Run(
+                strategy,
+                reopened,
+                restored.kept,
+                restored.by_policy,
+                restored.unset,
+                rederived,
+                interim,
+            )
+        )
+        return restored.network
 
     def transports(self, network: Composition) -> Mapping[Key, str]:
         """Every transport the network declares, by key, with its FIFO case: a Decision
@@ -768,19 +832,16 @@ class Seam:
         return FifoCheck(period, stale, tuple(findings), tuple(checked), not_modelled)
 
     def checked(self, network: S) -> tuple[S, FifoCheck]:
-        """``network`` with each stale FIFO's depth dropped (``check_fifos``): cleared and
-        left open, a required choice no strategy set, so emission refuses it until
-        ``SizeFifos`` sizes it again; what else the clear reaches is settled back to its
-        value. With what the check found; what it dropped is recorded (``dropped``). A tool
-        a strategy composes (drop what the model calls too small, then size again); no
-        exploration calls it of itself."""
+        """``network`` with each stale FIFO's depth cleared (``check_fifos``), one clear,
+        and left open, a required choice no strategy set, so emission refuses it until
+        ``SizeFifos`` sizes it again. With what the check found; what it cleared is recorded
+        (``dropped``). A tool a strategy composes (drop what the model calls too small,
+        then size again); no exploration calls it of itself."""
         found = self.check_fifos(network)
         if not found.stale:
             return network, found
         self.dropped.update(found.stale)
-        prior = {key: value for key, value in network.chosen().items() if key not in found.stale}
-        opened, reopened = self.reopen(network, found.stale)
-        return self._settle(opened, prior, keys=reopened).network, found
+        return self.reopen(network, found.stale)[0], found
 
     def refusals(
         self, network: Composition, members: Iterable[str] | None = None
@@ -912,8 +973,24 @@ def _fifo_words(network: Composition, depth: Key) -> int | None:
     return storage.value.capacity if isinstance(storage, Available) else None
 
 
+def _info(network: Composition, key: Key) -> inspection.DecisionInfo[object]:
+    """The Decision ``key`` names on ``network``, which must name one."""
+    info = network.decision(key)
+    assert info is not None, key
+    return info
+
+
+def _left_open(network: Composition, key: Key) -> bool:
+    """Whether choice ``key`` is open on ``network``: unset in play or waiting on its
+    presence, or not stored by a channel that is unbound there."""
+    state = dict(network.states((key[0],))).get(key)
+    if state is None:
+        return key not in network.chosen((key[0],))
+    return isinstance(state, inspection.Open)
+
+
 def _unheld(seam: Seam, network: Composition) -> list[Key]:
-    """Every stored key of ``network`` not held: what ``Ranked`` and ``Rebaseline`` reopen."""
+    """Every stored key of ``network`` not held: what ``Ranked`` and ``Defaults`` reopen."""
     return [key for key in seam.chosen(network) if key not in seam.held]
 
 
@@ -929,30 +1006,45 @@ def _transport_of(transports: Mapping[Key, str], key: Key) -> Key | None:
 
 
 def _folding(seam: Seam, network: Composition) -> list[Key]:
-    """The scope of a strategy that folds: every stored key not held and not a
-    transport's (a transport, or a FIFO's choice under it, is ``SizeFifos``')."""
-    transports = seam.transports(network)
-    return [
-        key
-        for key in seam.chosen(network)
-        if key not in seam.held and _transport_of(transports, key) is None
-    ]
+    """The scope of a strategy that folds: every stored kernel choice not held. A
+    channel's choices are not a fold's: a transport, or a FIFO's choice under it, is
+    ``SizeFifos``'; the others are the interim channel rule's, which derives again, as
+    the network rebuilds a channel, what a fold makes its new facts refuse."""
+    channels = set(network.channels)
+    return [key for key in seam.chosen(network) if key not in seam.held and key[0] not in channels]
+
+
+def _next_choice(
+    seam: Seam, network: Composition, wanted: Callable[[inspection.DecisionInfo[object]], bool]
+) -> Choice | None:
+    """The first open choice in play, ranked, whose Decision is ``wanted`` and whose
+    values are listed (``Choice.cases`` not None), with its possible values; None where
+    there is none. Only that one's possible values are asked."""
+    for key in network.undecided():
+        info = _info(network, key)
+        if not info.listed or not wanted(info):
+            continue
+        (choice,) = seam.choices(network, keys=(key,))
+        if choice.cases is not None:
+            return choice
+    return None
 
 
 # -- rank-style policies -------------------------------------------------------------------
 
 
 class RankPolicy(Protocol):
-    """Ranks an open Decision's viable cases, most preferred first."""
+    """Ranks an open choice's possible values, most preferred first."""
 
     def rank(self, choice: Choice) -> Sequence[object]: ...
 
 
 class Ranked:
     """A rank-style policy as an explorer: it reopens every choice not held, then takes
-    the first enumerable open choice in rank order at the policy's first case the seam
-    accepts, until none is open, and settles. Choices known by membership only are left
-    to settling (their earlier value, if still accepted) or the next explorer."""
+    the first open choice in play whose values are listed, ranked, at the policy's first
+    value the seam accepts, until none is open; every one is offered, one possible value
+    or many. Choices known by membership only are left open, given back their earlier
+    value where the network still takes it (``Seam.run``), or to the next explorer."""
 
     strategy = "ranked"
 
@@ -969,7 +1061,7 @@ class Ranked:
 
     def _rank(self, seam: Seam, network: S) -> S:
         while True:
-            choice = next((item for item in seam.choices(network) if item.cases is not None), None)
+            choice = _next_choice(seam, network, lambda _: True)
             if choice is None:
                 return network
             network = self._commit(seam, network, choice)
@@ -980,79 +1072,129 @@ class Ranked:
     def _commit(self, seam: Seam, network: S, choice: Choice) -> S:
         assert choice.cases is not None
         if not choice.cases:
-            raise _no_viable_case(choice)
+            raise _no_valid_value(choice.key, choice.refused)
         ranked = list(self.policy.rank(choice))
         if not ranked or any(case not in choice.cases for case in ranked):
             raise ExploreError(
                 "policy-case-not-viable",
                 type(self.policy).__name__,
-                f"{dotted(choice.key)}: the policy ranked {ranked}, not among the viable "
+                f"{dotted(choice.key)}: the policy ranked {ranked}, not among the possible "
                 f"{list(choice.cases)}",
                 kind=FindingKind.AUTHORING,
             )
-        return _first_accepted(seam, network, choice, ranked)
+        return _first_case(seam, network, choice.key, ranked)[0]
 
 
-def _first_accepted(seam: Seam, network: S, choice: Choice, cases: Sequence[object]) -> S:
-    """``network`` with ``choice`` committed to the first of ``cases`` the seam accepts."""
-    return _first_case(seam, network, choice, cases)[0]
-
-
-def _no_viable_case(choice: Choice) -> ExploreError:
-    """The refusal of ``choice``, none of whose cases is viable, owned by its key."""
-    detail = "; ".join(f"{case}: {why}" for case, why in choice.refused.items())
-    return ExploreError(
-        "decision-no-viable-case", dotted(choice.key), f"no case is viable: {detail}"
+def _values_text(refused: Mapping[object, Refused]) -> str:
+    """Why each value of ``refused`` is refused, as text."""
+    return "; ".join(f"{value!r}: {_reasons(why)}" for value, why in refused.items()) or (
+        "its domain lists no value"
     )
 
 
-def _first_case(
-    seam: Seam, network: S, choice: Choice, cases: Sequence[object]
-) -> tuple[S, object]:
-    """``network`` with ``choice`` committed to the first of ``cases`` the seam accepts, and
-    that case."""
-    if not cases:
-        raise _no_viable_case(choice)
-    refusals: list[str] = []
-    causes: list[Finding] = []
+def _values_causes(refused: Mapping[object, Refused]) -> tuple[Finding, ...]:
+    """The findings of every value's refusal, each once."""
+    return _all({key: found for why in refused.values() for key, found in why.why.items()})
+
+
+def _no_valid_value(key: Key, refused: Mapping[object, Refused]) -> ExploreError:
+    """The refusal of choice ``key``, none of whose values can be set
+    (``choice-no-valid-value``), owned by its key, each value's refusal its causes."""
+    return ExploreError(
+        "choice-no-valid-value",
+        dotted(key),
+        f"no value can be set: {_values_text(refused)}",
+        causes=_values_causes(refused),
+    )
+
+
+def _try_cases(
+    seam: Seam, network: S, key: Key, cases: Sequence[object]
+) -> tuple[S, object] | dict[object, Refused]:
+    """``network`` with choice ``key`` set to the first of ``cases`` the seam accepts, and
+    that value; or, where it accepts none, each value's refusal."""
+    refused: dict[object, Refused] = {}
     for case in cases:
-        outcome = seam.set(network, {choice.key: case})
+        outcome = seam.set(network, {key: case})
         if isinstance(outcome, Accepted):
             return outcome.network, case
-        refusals.append(f"{case!r}: " + _reasons(outcome.why))
-        causes.extend(_all(outcome.why))
-    raise ExploreError(
-        "decision-no-accepted-case",
-        dotted(choice.key),
-        "no case is accepted: " + "; ".join(refusals),
-        causes=causes,
-    )
+        refused[case] = outcome
+    return refused
 
 
-# -- resetting and the debug placeholder ---------------------------------------------------
+def _first_case(seam: Seam, network: S, key: Key, cases: Sequence[object]) -> tuple[S, object]:
+    """``network`` with choice ``key`` set to the first of ``cases`` the seam accepts, and
+    that value; or none is (``choice-no-valid-value``, owned by the key, each value's
+    refusal its causes)."""
+    tried = _try_cases(seam, network, key, cases)
+    if isinstance(tried, dict):
+        raise _no_valid_value(key, tried)
+    return tried
 
 
-class Rebaseline:
-    """Every choice not held back at its baseline (``baseline``): written first, it
-    starts an exploration over from the kernels' baselines, the holds kept."""
+# -- the defaults and the debug placeholder ------------------------------------------------
 
-    strategy = "baseline"
+
+def _set_by_policy(
+    seam: Seam, network: S, strategy: str, wanted: Callable[[inspection.DecisionInfo[object]], bool]
+) -> tuple[S, dict[Key, object], dict[Key, tuple[Finding, ...]]]:
+    """``network`` with every open choice in play whose Decision is ``wanted`` set by its
+    policy (``Seam.policy``), one at a time, ranked (each member's in its flow order, so
+    a choice comes after what its presence, its list and its facts read); the values set
+    by key; and each that no value could be set for, left open, with why."""
+    found: dict[Key, object] = {}
+    left: dict[Key, tuple[Finding, ...]] = {}
+    while True:
+        key = next(
+            (key for key in network.undecided() if key not in left and wanted(_info(network, key))),
+            None,
+        )
+        if key is None:
+            return network, found, left
+        done = seam._by_policy(network, key, strategy)
+        if isinstance(done, Finding):
+            left[key] = (done,)
+            continue
+        network, found[key] = done
+
+
+class Defaults:
+    """Every choice not held back to its default (``defaults``): reopened, then each
+    open choice in play that is not required set by its policy, ranked: a kernel's by
+    conversion's (``finn.kernels.defaults``: fixed or first valid), a channel's by the
+    interim channel rule (first valid). Written first, it starts an exploration over from
+    the values conversion and the cut give, the holds kept; a required choice (a FIFO's
+    depth) is left open for a strategy. ``report`` names what it set (``set``) and what
+    no value could be set for (``unset``)."""
+
+    strategy = "defaults"
+
+    def __init__(self) -> None:
+        self.set: dict[Key, object] = {}
+        self.unset: dict[Key, tuple[Finding, ...]] = {}
 
     def explore(self, seam: Seam, network: S) -> S:
-        return seam.run(
-            network, _unheld(seam, network), lambda opened, _: opened, self.strategy, keep=False
-        )
+        def search(opened: S, _: Mapping[Key, object]) -> S:
+            reached, self.set, self.unset = _set_by_policy(
+                seam, opened, self.strategy, lambda info: not info.required
+            )
+            return reached
+
+        return seam.run(network, _unheld(seam, network), search, self.strategy, restore=False)
 
     def report(self) -> dict[str, object]:
-        return {"strategy": self.strategy}
+        return {
+            "strategy": self.strategy,
+            "unset": {dotted(key): [f.record() for f in why] for key, why in self.unset.items()},
+        }
 
 
 class DebugPlaceholder:
     """The debug placeholder (``placeholder``): every open required choice at its first
-    viable case, in rank order, so that a design can be generated while the strategy
-    that should make that choice does not exist yet; each is logged ``DEBUG: set by
+    possible value, ranked, so that a design can be generated while the strategy that
+    should make that choice does not exist yet; each is logged ``DEBUG: set by
     placeholder`` (``label``). A required choice known by membership only (a FIFO's
-    depth that no strategy sized) has no first case: it is refused, by name."""
+    depth that no strategy sized) has no first value: it is refused, by name."""
 
     strategy = "placeholder"
     label = "DEBUG: set by placeholder"
@@ -1066,18 +1208,20 @@ class DebugPlaceholder:
 
     def _place(self, seam: Seam, network: S) -> S:
         while True:
-            required = [choice for choice in seam.choices(network) if choice.required]
-            choice = next((each for each in required if each.cases is not None), None)
+            choice = _next_choice(seam, network, lambda info: info.required)
             if choice is None:
+                required = [key for key in network.undecided() if _info(network, key).required]
                 if required:
                     raise ExploreError(
                         "placeholder-no-case",
                         self.strategy,
-                        "the placeholder has no case to take for a required choice known by "
-                        "membership only: " + ", ".join(dotted(each.key) for each in required),
+                        "the placeholder has no value to take for a required choice known by "
+                        "membership only: " + ", ".join(map(dotted, required)),
                     )
                 return network
-            network, case = _first_case(seam, network, choice, choice.cases or ())
+            if not choice.cases:
+                raise _no_valid_value(choice.key, choice.refused)
+            network, case = _first_case(seam, network, choice.key, choice.cases)
             self.set[dotted(choice.key)] = case
 
     def report(self) -> dict[str, object]:
@@ -1090,12 +1234,13 @@ class DebugPlaceholder:
 class Hold:
     """Fixed choices by owner and key (``values``, ``{graph name: {key: value}}``: a
     kernel's under its node, a channel's under its tensor), set as one batch and held
-    (``Seam.held``): no strategy after it changes them. Holds go first, so that the
-    strategies after them fold around them. A choice already at the same value is not in
-    the batch, and held all the same; anything the seam refuses (an owner or key that is
-    no choice here, a value it does not take, a key another hold keeps at another value:
-    ``already held``) is refused, named, its owner ``held``. ``held`` keeps the keys it
-    held, with their values."""
+    (``Seam.held``): no strategy after it changes them, derives them again or puts them
+    out of play. Holds go first, so that the strategies after them fold around them. A
+    choice already at the same value is not in the batch, and held all the same; anything
+    the seam refuses (an owner or key that is no choice here, a value it does not take, a
+    rule the batch would break, with the stored choices standing in its way, a key
+    another hold keeps at another value: ``already held``) is refused, named, its owner
+    ``held``. ``held`` keeps the keys it held, with their values."""
 
     strategy = "held"
 
@@ -1126,7 +1271,7 @@ def _hold(
         if key in seam.held and seam.held[key] != value
     }
     if refused:
-        raise _pins_refused(owner, refused)
+        raise _pins_refused(owner, Refused(refused))
     return wanted
 
 
@@ -1141,25 +1286,20 @@ def _held_run(seam: Seam, network: S, wanted: Mapping[Key, object], owner: str, 
             return opened
         outcome = seam.set(opened, batch)
         if isinstance(outcome, Refused):
-            raise _pins_refused(owner, outcome.why)
+            raise _pins_refused(owner, outcome)
         return outcome.network
 
     seam.held.update(wanted)
-    try:
-        return seam.run(network, (), hold, strategy)
-    except Unsettled as error:
-        raise ExploreError(
-            "pin-refused", owner, f"refused choices: {error}", causes=error.findings
-        ) from error
+    return seam.run(network, (), hold, strategy)
 
 
-def _named(why: Mapping[Key, tuple[Finding, ...]]) -> str:
-    return _reasons(dict(sorted(why.items())))
-
-
-def _pins_refused(path: str, why: Mapping[Key, tuple[Finding, ...]]) -> ExploreError:
-    """The refusal of the holds ``path`` states, the seam's reasons by key its causes."""
-    return ExploreError("pin-refused", path, "refused choices: " + _named(why), causes=_all(why))
+def _pins_refused(path: str, refused: Refused) -> ExploreError:
+    """The refusal of the holds ``path`` states, the seam's reasons by key (each rule with
+    the stored choices standing in its way) its causes."""
+    ordered = Refused(dict(sorted(refused.why.items())), refused.standing)
+    return ExploreError(
+        "pin-refused", path, "refused choices: " + _reasons(ordered), causes=_all(refused.why)
+    )
 
 
 # -- throughput ----------------------------------------------------------------------------
@@ -1187,25 +1327,30 @@ class TargetCycles:
     members are folded again to it, from what the first fold already asked (``_Asked``).
 
     A member whose cycles wait first on an unordered open choice of its own (a
-    MatMul's ``compute`` on a DSP58 part: ``packed`` or ``int8_dsp58``) is folded in
-    each of its viable cases, and the case kept is the one that meets the budget with
-    the least parallelism: the most cycles within the budget (the fewest where no case
-    meets it), then, between cases tied on cycles, the least resources the seam states
-    for the member (where they wait on its open choices, of the member settled,
-    ``Seam.settle``): against the platform's part totals where it
-    states them, the highest share first; otherwise only a case that uses no more of
-    any resource is lighter, and cases no count orders are kept in their listing
-    order, which the report says. No order is imposed on the cases: each is tried.
-    ``report`` names each such choice, the case taken and why (``cases``).
+    MatMul's ``compute``: ``packed``, or on a DSP58 part ``int8_dsp58`` too) is folded in
+    each of its possible values, one or several, and the value kept is the one that meets
+    the budget with the least parallelism: the most cycles within the budget (the fewest
+    where none meets it), then, between values tied on cycles, the least resources the
+    seam states for the member, as the run would keep it where they wait on its open
+    choices: its reopened choices given back, and the value's case's other choices, never
+    stored, set by their policy (``Seam.restore``). Resources are compared against the
+    platform's part totals where it states them, the highest share first; otherwise only a
+    value that
+    uses no more of any resource is lighter, and values no count orders are kept in their
+    listing order, which the report says. No order is imposed on the values: each is
+    tried. ``report`` names each such choice, the value taken and why (``cases``).
 
-    Its scope (``Seam.run``) is every member's own stored choices, not held and not a
-    transport's: reopened, its scaling axes are found as above; what it does not fold
-    settles back. A member whose cycles wait on any other Decision that is not an
-    ordered open choice of its own is left to settling (``unfolded``, with why); so is
-    every Decision its cycles do not read. ``report`` always states the bottleneck
-    reached, of the folded network or, where a member's cycles are left open there, of
-    the network settled (``bottleneck_of``), and whether it meets the budget asked
-    (``met``); where even the settled network's cycles are not known, ``met`` is ``None``
+    Its scope (``Seam.run``) is every stored kernel choice not held (a channel's choices
+    are ``SizeFifos``' or the interim channel rule's): reopened, its scaling axes are found
+    as above; what it does not fold is given back its prior value, or, where that is
+    refused, set by its policy, and a case's choices it brought into play under a selector
+    it reopened are set by their policy (``Seam.restore``). A member
+    whose cycles wait on any other Decision that is not an ordered open choice of its own
+    is left so (``unfolded``, with why); so is every Decision its cycles do not read.
+    ``report`` always states the bottleneck reached, of the folded network or, where a
+    member's cycles are left open there, of the network with its reopened choices given
+    back (``bottleneck_of``: ``folded`` or ``restored``), and whether it meets the budget
+    asked (``met``); where even that network's cycles are not known, ``met`` is ``None``
     and ``unknown`` says why.
     """
 
@@ -1243,7 +1388,7 @@ class TargetCycles:
     def _explore(self, seam: Seam, network: S, asked: _Asked, prior: Mapping[Key, object]) -> S:
         """The fold of ``network``, its scope reopened, asking the seam through ``asked``:
         what folds of the same seam asked before (``MaxThroughput``'s budgets); ``prior``
-        the values before the reopen, which settling keeps."""
+        the reopened choices' values before, which ``Seam.restore`` gives back."""
         self._asked, self._prior = asked, prior
         folded = self._fold_all(seam, network, self.cycles)
         reached = seam.cost(folded).bottleneck
@@ -1253,9 +1398,9 @@ class TargetCycles:
             reached = seam.cost(folded).bottleneck
         self.of, self.unknown = "folded", None
         if reached is None:
-            self.of = "settled"
+            self.of = "restored"
             reached, self.unknown = asked.ask(
-                folded, "settled bottleneck", lambda: _settled_bottleneck(seam, folded, prior)
+                folded, "restored bottleneck", lambda: _restored_bottleneck(seam, folded, prior)
             )
         self.reached, self._asked = reached, _Asked()
         return folded
@@ -1306,9 +1451,12 @@ class TargetCycles:
         return self._fold_axes(seam, network, name, axes, budget)
 
     def _axes(self, seam: Seam, network: S, name: str) -> list[Choice] | Choice | str:
-        """The member's scaling axes, found by committing each Decision its cycles wait
-        on to its first case, in turn; the unordered open choice of its own its cycles
-        wait on first, whose cases are each folded; or why it is left unfolded."""
+        """The member's scaling axes, found by setting each open choice its cycles wait
+        on to its first possible value, in turn; the unordered open choice of its own its
+        cycles wait on first, whose possible values are each folded; or why it is left
+        unfolded. An open choice of its own its cycles wait on, no value of which is
+        possible, refuses the fold (``choice-no-valid-value``, owned by its key, each
+        value's refusal its causes)."""
         return self._asked.ask(
             network, ("axes", name), lambda: self._find_axes(seam, network, name)
         )
@@ -1321,8 +1469,15 @@ class TargetCycles:
             if name not in cost.waiting:
                 return axes
             waited = cost.waiting[name]
-            offered = {c.key: c for c in seam.choices(probe, {key[0] for key in waited})}
+            offered = {c.key: c for c in seam.choices(probe, keys=waited)}
             waits = {key: offered.get(key) for key in waited}
+            # An open choice of its own no value of which is possible: a dead end.
+            dead = next(
+                (c for c in waits.values() if c is not None and c.cases == () and c.key[0] == name),
+                None,
+            )
+            if dead is not None:
+                raise _no_valid_value(dead.key, dead.refused)
             own = {
                 key: choice
                 for key, choice in waits.items()
@@ -1340,7 +1495,7 @@ class TargetCycles:
                 return f"its cycles wait on {other}: no ordered open choice of its own"
             outcome = seam.set(probe, {choice.key: (choice.cases or ())[0] for choice in usable})
             if isinstance(outcome, Refused):
-                return "its scaling axes' first cases are refused: " + _reasons(outcome.why)
+                return "its scaling axes' first values are refused: " + _reasons(outcome)
             axes += usable
             probe = outcome.network
 
@@ -1388,9 +1543,9 @@ class TargetCycles:
     def _fold_cases(
         self, seam: Seam, network: S, name: str, choice: Choice, budget: int
     ) -> _Folded:
-        """The member folded in each viable case of ``choice``, an unordered open choice
-        of its own its cycles wait on, and the case that meets ``budget`` with the least
-        parallelism kept (the class docstring)."""
+        """The member folded in each possible value of ``choice``, an unordered open
+        choice of its own its cycles wait on, and the value that meets ``budget`` with the
+        least parallelism kept (the class docstring)."""
         folds: dict[object, _Folded] = {}
         refused: dict[str, str] = {}
         for case in choice.cases or ():
@@ -1398,7 +1553,7 @@ class TargetCycles:
                 network, ("case", choice.key, case), lambda: seam.set(network, {choice.key: case})
             )
             if isinstance(outcome, Refused):
-                refused[str(case)] = _reasons(outcome.why)
+                refused[str(case)] = _reasons(outcome)
                 continue
             folded = self._fold(seam, outcome.network, name, budget)
             if folded.cycles is None:
@@ -1443,43 +1598,50 @@ class TargetCycles:
     def _member_resources(
         self, seam: Seam, network: S, name: str
     ) -> Resources | tuple[Finding, ...]:
-        """What member ``name`` uses at ``network``, or else with its own open choices
-        settled (where its resources wait on them), or why it states none, its
-        findings."""
+        """What member ``name`` uses at ``network``, or else as the run would keep it
+        (where its resources wait on its open choices): its reopened choices given back,
+        and its case's choices never stored set by their policy (``Seam.restore``); or why
+        it states none, its findings."""
 
         def find() -> Resources | tuple[Finding, ...]:
             cost = seam.cost(network, (name,))
             if name in cost.resources:
                 return cost.resources[name]
-            settled = seam.cost(seam.settle(network, self._prior, (name,)), (name,))
-            return settled.resources.get(name) or settled.unstated[name]
+            prior = {key: value for key, value in self._prior.items() if key[0] == name}
+            kept = seam.restore(network, prior, self.strategy).network
+            restored = seam.cost(kept, (name,))
+            return restored.resources.get(name) or restored.unstated[name]
 
         return self._asked.ask(network, ("resources", name), find)
 
 
-def _settled_bottleneck(
-    seam: Seam, network: Composition, prior: Mapping[Key, object]
+def _restored_bottleneck(
+    seam: Seam, network: S, prior: Mapping[Key, object]
 ) -> tuple[Bottleneck | None, str | None]:
-    """The bottleneck of ``network`` settled from ``prior`` (for a report), or why it is not
-    known."""
-    try:
-        settled = seam.settle(network, prior)
-    except ExploreError as error:
-        return None, f"settling refuses: {error}"
-    cost = seam.cost(settled)
+    """The bottleneck of ``network`` with ``prior``'s values given back (``Seam.restore``,
+    for a report), or why it is not known."""
+    restored = seam.restore(network, prior)
+    cost = seam.cost(restored.network)
     if cost.bottleneck is not None:
         return cost.bottleneck, None
-    return None, _unknown(cost, "waits on ")
+    return None, _unknown(cost, "waits on ", restored)
 
 
-def _unknown(cost: Cost, waits: str = "") -> str:
+def _unknown(cost: Cost, waits: str = "", restored: Restored[Any] | None = None) -> str:
     """Why ``cost``'s bottleneck is not known, as text: each member whose cycles wait on
-    open choices, naming them (after ``waits``), or are refused, with why."""
+    open choices, naming them (after ``waits``), or are refused, with why; and each choice
+    ``restored`` could give no value, with why."""
     unknown = {
         **{name: waits + ", ".join(map(dotted, keys)) for name, keys in cost.waiting.items()},
         **{name: "; ".join(map(str, why)) for name, why in cost.refused.items()},
     }
-    return "; ".join(f"{name}: {why}" for name, why in unknown.items())
+    left = {} if restored is None else restored.unset
+    return "; ".join(
+        [
+            *(f"{name}: {why}" for name, why in unknown.items()),
+            *(f"{dotted(key)}: " + "; ".join(f.message for f in why) for key, why in left.items()),
+        ]
+    )
 
 
 def _lightest(
@@ -1604,7 +1766,7 @@ class _Asked:
 @dataclass
 class _Tried:
     """One budget ``MaxThroughput`` tried (``None``: no budget, the least parallelism),
-    what ``TargetCycles`` relaxed it to, the bottleneck its settled network reached,
+    what ``TargetCycles`` relaxed it to, the bottleneck its restored network reached,
     the network's resources there as far as they are stated (``Seam.resources``), and
     whether they fit."""
 
@@ -1638,12 +1800,13 @@ class MaxThroughput:
     the fastest bottleneck the folding reaches) and, if that does not fit, no budget
     (the least parallelism); then the least budget between their bottlenecks whose
     network fits. Its scope is ``TargetCycles``' (``Seam.run``), reopened once; each
-    budget's network is costed settled (``Seam.settle``: what the fold does not decide at
-    its earlier value or its baseline), by the network's resources as far as they are
-    stated (``Seam.resources``: a shell's adds its ends' and its static region's). Of
-    every network tried, it keeps the one that fits with the fewest cycles, ties to the
-    least resources (the highest use-to-budget ratio first, then
-    the next; then the first tried), and returns it, settled. Fewer cycles, more
+    budget's network is costed with its reopened choices given back (``Seam.restore``:
+    what the fold does not decide at its prior value, or where that is refused by its
+    policy), by the network's resources as far as they are stated (``Seam.resources``: a
+    shell's adds its ends' and its static region's). Of every network tried, it keeps the
+    one that fits with the fewest cycles, ties to the least resources (the highest
+    use-to-budget ratio first, then the next; then the first tried), and returns it,
+    restored as it was costed. Fewer cycles, more
     resources is the assumption, as ``TargetCycles``' is; where a budget's network
     departs from it (a larger budget reaching fewer cycles or using more, or a budget
     relaxed above itself: an end's converter), the report states it, and the
@@ -1657,7 +1820,7 @@ class MaxThroughput:
 
     Its folds share what they ask of the seam (``_Asked``): a budget whose fold agrees
     with an earlier budget's on its first members reaches the same networks there without
-    asking again, and a network already costed is not settled and costed again. Each
+    asking again, and a network already costed is not restored and costed again. Each
     budget's network is the one ``TargetCycles`` alone folds it to.
 
     It refuses nothing: where even the least parallelism does not fit, it returns
@@ -1842,7 +2005,7 @@ class MaxThroughput:
         prior: Mapping[Key, object],
     ) -> _Tried:
         """``network`` folded by ``TargetCycles`` at ``cycles`` (None: no budget), and its
-        settled network's bottleneck and resources, asking the seam through ``asked``."""
+        restored network's bottleneck and resources, asking the seam through ``asked``."""
         folder = TargetCycles(_UNBOUNDED if cycles is None else cycles)
         folded = folder._explore(seam, network, asked, prior)
         reached, stated = asked.ask(folded, "costed", lambda: self._cost(seam, folded, prior))
@@ -1855,16 +2018,18 @@ class MaxThroughput:
         self, seam: Seam, folded: Composition, prior: Mapping[Key, object]
     ) -> tuple[Bottleneck, Stated]:
         """The bottleneck and the network's resources, as far as they are stated, of
-        ``folded`` settled from ``prior``."""
-        settled = seam.settle(folded, prior)
-        cost = seam.cost(settled)
-        reached, used = cost.bottleneck, seam.resources(settled)
+        ``folded`` with ``prior``'s values given back (``Seam.restore``); where a member's
+        cycles are not known, why: each refused member's findings and each choice no value
+        could be given back for, its causes."""
+        restored = seam.restore(folded, prior, self.strategy)
+        cost = seam.cost(restored.network)
+        reached, used = cost.bottleneck, seam.resources(restored.network)
         if reached is None:
             raise ExploreError(
                 "cycles-unknown",
                 self.strategy,
-                "max_throughput needs every member's cycles: " + _unknown(cost),
-                causes=_all(cost.refused),
+                "max_throughput needs every member's cycles: " + _unknown(cost, restored=restored),
+                causes=(*_all(cost.refused), *_all(restored.unset)),
             )
         if not isinstance(used, Stated):
             raise ExploreError(
@@ -1918,7 +2083,7 @@ _UNBOUNDED = 1 << 62
 class _Transport:
     """An open transport the strategy sizes: its choice, the channel member it belongs
     to, its direct and FIFO cases, the FIFO's depth and memory keys under the latter, and
-    why the FIFO case is not viable, if it is not."""
+    why the FIFO case is not possible, if it is not."""
 
     choice: Choice
     channel: str
@@ -1966,11 +2131,11 @@ class SizeFifos:
     the channel's ends (``finn.kernels.fifo_sizing.size``: the least depth keeping the
     producer within its idle time) and proposes, all in one batch, ``direct`` or
     the FIFO case with its depth (the least DEPTH whose storage holds the least words
-    plus ``margin``, in the storage of the style the FIFO is built in). ``ram_style``
-    ``None``, the default, leaves the FIFO's style to settling (its held value, else its
-    earlier value, else its baseline, ``auto``: FinnLib's own selection by depth and
-    width), and the depth is sized for the style settling gives it (``_style``); a style
-    named is committed with the depth. A channel the model does not read (a
+    plus ``margin``, in the storage of the style the FIFO is built in), the style
+    committed with the depth: ``ram_style`` where named; with ``None``, the default, its
+    held value (kept, not committed), else its earlier value, else the interim channel
+    rule's, ``auto`` (FinnLib's own selection by depth and width) (``_style``). A channel
+    the model does not read (a
     boundary without an end, a memory source) is direct, with why. Where the seam refuses
     a channel's FIFO, that channel falls back to direct, its refusal reported, and the
     batch is attempted again.
@@ -2025,7 +2190,7 @@ class SizeFifos:
 
     def search(self, seam: Seam, network: S, prior: Mapping[Key, object]) -> S:
         """The open transports of ``network`` sized at its folding, in one batch;
-        ``prior``, the values before its scope was reopened, which settling keeps."""
+        ``prior``, the values of its scope before it was reopened."""
         cost = seam.cost(network)
         bottleneck = cost.bottleneck
         if bottleneck is None:
@@ -2057,8 +2222,8 @@ class SizeFifos:
                 if proposals[transport.channel].placed:
                     batch[transport.choice.key] = transport.fifo
                     batch[transport.depth] = proposals[transport.channel].sized.depth
-                    if self.ram_style is not None:
-                        batch[transport.ram_style] = self.ram_style
+                    if transport.ram_style not in seam.held:
+                        batch[transport.ram_style] = self._style(seam, transport, prior)
                 else:
                     batch[transport.choice.key] = transport.direct
             outcome = seam.set(network, batch)
@@ -2074,24 +2239,25 @@ class SizeFifos:
                         proposals[channel].refused = f"{dotted(key)}: {_text(key, why)}"
                         dropped = True
             if not dropped:
+                ordered = Refused(dict(sorted(outcome.why.items())), outcome.standing)
                 raise ExploreError(
                     "fifos-refused",
                     self.strategy,
-                    "sizing FIFOs: refused: " + _named(outcome.why),
+                    "sizing FIFOs: refused: " + _reasons(ordered),
                     causes=_all(outcome.why),
                 )
         return network
 
     def _style(self, seam: Seam, transport: _Transport, prior: Mapping[Key, object]) -> str:
         """The style ``transport``'s FIFO is built in, which its depth is sized for: the
-        one named, committed with the depth; else the one settling gives it
-        (``Seam.settle``), its held value, else its earlier value, else its baseline,
-        ``auto``. A held value is not checked until settling (a ``Hold`` or the graph's held
-        choices may state ``None``, which settling refuses): ``None`` is sized as ``auto``."""
+        one named; else its held value, else its earlier value, else the interim channel
+        rule's, the first a FIFO's style lists, ``auto``. A held value is the hold's, not
+        committed here (a ``Hold`` or the graph's held choices may state ``None``, which the
+        change then refuses): ``None`` is sized as ``auto``."""
         if self.ram_style is not None:
             return self.ram_style
         style = seam.held.get(transport.ram_style, prior.get(transport.ram_style))
-        return "auto" if style is None else str(style)
+        return _FIFO_STYLE if style is None else str(style)
 
     def report(self) -> dict[str, object]:
         proposals = self.proposals.values()
@@ -2115,8 +2281,14 @@ class SizeFifos:
     def transports(self, seam: Seam, network: Composition) -> list[_Transport]:
         """The open transports it sizes on ``network``."""
         declared = seam.declared(network)
-        found = (_transport(seam, network, choice, declared) for choice in seam.choices(network))
+        offered = seam.choices(network, keys=set(seam.transports(network)))
+        found = (_transport(seam, network, choice, declared) for choice in offered)
         return [transport for transport in found if transport is not None]
+
+
+#: The interim channel rule's style for a FIFO a strategy places: the first its domain
+#: lists, FinnLib's own selection by depth and width.
+_FIFO_STYLE = "auto"
 
 
 def _transport(
@@ -2133,8 +2305,8 @@ def _transport(
     owner, selector = choice.key
     if "." in selector or owner not in network.channels:
         return None
-    # Every case with Decisions under it, viable or not (a FIFO its channel
-    # refuses is still a FIFO), and every viable case.
+    # Every case with Decisions under it, possible or not (a FIFO its channel
+    # refuses is still a FIFO), and every possible case.
     prefix = f"{selector}."
     below = {key[1]: space_type for key, space_type in declared.items() if key[0] == owner}
     under = {key[len(prefix) :].partition(".")[0] for key in below if key.startswith(prefix)}
@@ -2167,9 +2339,8 @@ def _transport(
         return None
     refused = None
     if fifos[0] not in choice.cases:
-        refused = (
-            choice.refused.get(repr(fifos[0])) or choice.refused.get(str(fifos[0])) or "not viable"
-        )
+        why = choice.refused.get(fifos[0])
+        refused = "not possible" if why is None else _reasons(why)
     return _Transport(
         choice, owner, directs[0], fifos[0], fifo["depth"], fifo["ram_style"], refused
     )
@@ -2206,6 +2377,7 @@ __all__ = [
     "Choice",
     "Cost",
     "DebugPlaceholder",
+    "Defaults",
     "ExploreError",
     "Explorer",
     "FIFOS_BY_MODEL",
@@ -2215,16 +2387,14 @@ __all__ = [
     "MaxThroughput",
     "RankPolicy",
     "Ranked",
-    "Rebaseline",
     "Refused",
+    "Restored",
     "Run",
     "SEAM_CODES",
     "Seam",
-    "Settled",
     "SizeFifos",
     "Stated",
     "TargetCycles",
     "TargetThroughput",
-    "Unsettled",
     "explore",
 ]

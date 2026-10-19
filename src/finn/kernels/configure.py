@@ -9,17 +9,15 @@ reports: a structural Decision such as ``"compute"``, or a candidate-local choic
 ``"compute.packed.pe"`` or ``"w.source.memstream.ram_style"``. All choices are committed
 in one atomic batch. Refusals are raised as ``ValueError`` with their findings.
 
-A Decision whose one viable case is forced needs no commitment (the engine's
-``inspection.forced``); ``inspection.validity`` answers whether a configuration is valid,
-``refusal`` why it is refused, and ``refusals`` the same with the causes of each Decision
-left without a viable case. ``undecided`` names the open Decisions: neither
-committed nor forced; ``chosen`` the committed ones, the choices made on purpose.
+Nothing is set but what is committed: the engine fills nothing in.
+``inspection.validity`` answers whether a configuration is valid, and ``refusal`` why it is
+refused. ``undecided`` names the open choices in play; ``chosen`` the stored ones, those
+out of play (dormant) included: what saving writes.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import replace
 from fnmatch import fnmatchcase
 from typing import Any, TypeVar
 
@@ -49,57 +47,14 @@ def describe(results: Iterable[QueryResult[Any]]) -> str:
 
 def refusal(validity: inspection.Validity) -> tuple[Finding, ...]:
     """Why a configuration is refused (its ``inspection.validity``): the findings of its
-    false pieces, each once; none where it is valid or undecided."""
+    false pieces, each once; none where it is valid or open."""
     return validity.result.findings if isinstance(validity.result, Rejected) else ()
 
 
-def refusals(point: Space) -> tuple[Finding, ...]:
-    """Why ``point``'s configuration is refused (``refusal``), each open Decision over
-    nodes with no viable case (``decision-no-viable-case``) given why each case was
-    refused as its causes (``candidate_refusals``); none where it is valid or
-    undecided."""
-    found = refusal(inspection.validity(point))
-    if not found:
-        return ()
-    cases = {item.key: tuple(item.refused) for item in inspection.viable(point) if not item.cases}
-    return tuple(
-        replace(finding, causes=candidate_refusals(point, finding.owner, cases[finding.owner]))
-        if finding.code == "decision-no-viable-case" and finding.owner in cases
-        else finding
-        for finding in found
-    )
-
-
-def candidate_refusals(point: Space, key: str, cases: tuple[str, ...]) -> tuple[Finding, ...]:
-    """Why each of ``cases`` of the selector ``key`` is refused on ``point``: the
-    validity of the case's candidate once the case is committed, each finding once. A
-    decision over values gives none: its own finding says why."""
-    decisions = {item.key: item for item in inspection.decisions(point)}
-    if not decisions[key].selector:
-        return ()
-    selectors = {name for name, item in decisions.items() if item.selector}
-    found: list[Finding] = []
-    for case in cases:
-        report = point.try_with_choices({decisions[key].reference: case})
-        if not report.accepted:
-            for outcome in report.outcomes:
-                if isinstance(outcome.result, Rejected):
-                    found.extend(outcome.result.findings)
-            continue
-        candidate: Any = report.instance
-        walked: list[str] = []
-        for part in key.split("."):
-            # A key names a case after its selector (compute.packed.pe): the selector's
-            # member is already that case's candidate.
-            if ".".join(walked) not in selectors:
-                candidate = getattr(candidate, part)
-            walked.append(part)
-        found.extend(refusal(inspection.validity(candidate)))
-    return tuple(dict.fromkeys(found))
-
-
 def commit(point: S, choices: Mapping[str, object]) -> S:
-    """Commit choices named by their stable decision keys, atomically."""
+    """Commit choices named by their stable decision keys, atomically; a refusal names
+    each value outside its domain, or each rule the choices would break with the stored
+    choices standing in its way."""
     owned = {item.key: item.reference for item in inspection.decisions(point)}
     unknown = sorted(choices.keys() - owned.keys())
     if unknown:
@@ -109,32 +64,32 @@ def commit(point: S, choices: Mapping[str, object]) -> S:
     except (RequestError, ConfigurationError) as error:
         raise ValueError(str(error)) from error
     if not report.accepted:
+        rules = "; ".join(
+            f"{rule.rule}: "
+            + "; ".join(map(str, rule.result.findings))
+            + (f" (standing: {', '.join(rule.standing)})" if rule.standing else "")
+            for rule in report.broken
+        )
         raise ValueError(
             f"{type(point).__name__} choices are not accepted: "
-            + describe(outcome.result for outcome in report.outcomes)
+            + (describe(outcome.result for outcome in report.outcomes) or rules)
         )
     return report.instance
 
 
 def undecided(point: Space, pattern: str) -> list[str]:
-    """Keys matching ``pattern`` (``fnmatch``) of applicable Decisions that are open:
-    neither committed nor forced."""
-    forced = {item.key for item in inspection.forced(point)}
-    found = []
-    for item in inspection.decisions(point):
-        if not fnmatchcase(item.key, pattern) or item.key in forced:
-            continue
-        state = point.field(item.reference).state
-        if isinstance(state, Available) and state.value.status != "committed":
-            found.append(item.key)
-    return found
+    """Keys matching ``pattern`` (``fnmatch``) of the open choices in play: unset in a
+    scope that is present (``inspection.Open``, waiting on nothing), in the flow order."""
+    return [
+        key
+        for key, state in inspection.states(point)
+        if isinstance(state, inspection.Open) and not state.waits and fnmatchcase(key, pattern)
+    ]
 
 
 def chosen(point: Space) -> dict[str, object]:
-    """Every Decision ``point`` commits, by key, with its stored value: the choices made on
-    purpose (a forced Decision is never committed), whatever a read of one answers. A choice
-    kept unchecked (its own check cannot conclude yet: ``inspection.unchecked``) is one, a
-    commitment whose evidence is pending: what saving writes."""
+    """Every choice ``point`` stores, by key, with its stored value, whatever its state
+    (set, waiting, or dormant: out of play, kept): what saving writes."""
     found: dict[str, object] = {}
     for item in inspection.decisions(point):
         state = point.field(item.reference).state
@@ -144,11 +99,9 @@ def chosen(point: Space) -> dict[str, object]:
 
 
 __all__ = [
-    "candidate_refusals",
     "chosen",
     "commit",
     "describe",
     "refusal",
-    "refusals",
     "undecided",
 ]
