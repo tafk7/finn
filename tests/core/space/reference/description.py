@@ -8,8 +8,10 @@ A description is a tree of scopes. Each scope holds:
 - **choices**: a name and a domain. A domain is *listed* (a tuple, or a function of
   declared reads that returns one, possibly empty), optionally narrowed by a
   membership predicate, or *membership-only* (a predicate of the value and declared
-  reads, never enumerated). A required choice has no safe default; it stays open
-  until something commits it.
+  reads, never enumerated). Membership reads facts only: facts, and derived values
+  whose reads are, through derived values, facts only. A domain may also carry an
+  ``order``, a function of other declared reads (choices too) that ranks the listed
+  values and checks nothing. A required choice has no safe value; no flow defaults it.
 - **selectors**: a choice whose cases are named child scopes; only the selected case
   is present. Its value is the case's name.
 - **derived** values: a function of declared reads, which returns a value or a
@@ -36,40 +38,51 @@ Every function receives one mapping, from each declared read's path to its value
 reads nothing else.
 
 :meth:`Space.validate` rejects a malformed description (an unknown or unreadable
-read, a duplicate name, a malformed domain or guard) and a **cycle**. The rule for
-cycles: the definition's dependencies form a graph in which
+read, a duplicate name, a malformed domain or guard), a domain whose membership reads
+anything but facts (``"domain-reads-choice"``: a relation to another choice is a
+constraint) and a **cycle**. The rule for cycles: the definition's dependencies form a
+graph in which
 
-- a value (a choice's readable value, a derived value, a view) depends on its reads
-  and on its scope's presence; a choice's value also on its own check, which depends
-  on its domain's reads; a view also on its Space's validity;
+- a value depends on its scope's presence; a choice's value also on its membership,
+  which depends on the functions of the derived values it reads (never on their
+  presence: membership is a function of the facts); a derived value's and a view's on
+  their reads; a view's also on its Space's validity;
 - a constraint depends on its reads and its scope's presence;
 - a scope's presence depends on its parent's, its selector's value and its guard's
   reads;
-- a Space's validity depends on every constraint and every choice's own check in its
-  scope and below.
+- a listed domain's piece (does it list a value?) depends on its choice's presence
+  and membership; a guard's piece on its scope's presence;
+- a Space's validity depends on every constraint, listed domain's piece and guard's
+  piece in its scope and below.
 
 Any cycle in that graph is an error naming its path. So a constraint reading a view
 of its own Space, or of any Space above it (whose validity counts that constraint),
 directly or through derived values and other views, is a cycle; reading a child's
-view is not. A choice's own check reading a view of its own Space is a cycle too.
-Forcing adds no edge: a forced value follows from the constraints that read the
-choice, by propagation over one configuration, not from a definition's dependency.
+view is not. A guard reading a view of its own Space or of a Space above it is a cycle
+too (its piece counts in that validity). A domain's ``order`` is no node of the graph:
+nothing depends on it (validity and refusals never read it), so it cannot close a
+cycle, and it may read any readable path, a view of its own Space included.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 #: what every function of a description receives: each declared read's value by path
 Reads = Mapping[str, Any]
 
+#: a domain's ranking: the membership list and the order's reads, to a permutation
+Order = Callable[[tuple[Any, ...], Reads], Sequence[Any]]
+
 
 class DefinitionError(Exception):
     """A malformed description. ``kind`` is one of ``"malformed"``, ``"duplicate"``,
-    ``"unknown-read"``, ``"unreadable"`` and ``"cycle"``; ``path`` names the nodes
-    involved (for a cycle, the nodes around it, the first repeated at the end)."""
+    ``"unknown-read"``, ``"unreadable"``, ``"domain-reads-choice"`` and ``"cycle"``;
+    ``path`` names the nodes involved (for a domain, the choice, the derived values
+    read through, and the read that is not a fact; for a cycle, the nodes around it,
+    the first repeated at the end)."""
 
     def __init__(self, kind: str, path: tuple[str, ...], detail: str = "") -> None:
         super().__init__(f"{kind}: {' -> '.join(path)}{': ' + detail if detail else ''}")
@@ -82,12 +95,18 @@ class Domain:
     """A choice's values. ``values`` lists them, or ``enumerate`` computes the list
     from ``reads``; ``member`` narrows a listed domain, or alone makes a
     membership-only domain. A listed domain lists all its values: a value outside the
-    list is not a member, and every listed value is also checked by ``member``."""
+    list is not a member, and every listed value is also checked by ``member``.
+    ``reads`` are membership's, facts only.
+
+    ``order``, over ``order_reads`` (anything readable), ranks the membership list: it
+    receives the list and returns a permutation of it, and checks nothing."""
 
     values: tuple[Any, ...] | None = None
     enumerate: Callable[[Reads], Sequence[Any]] | None = None
     member: Callable[[Any, Reads], bool] | None = None
     reads: tuple[str, ...] = ()
+    order: Order | None = None
+    order_reads: tuple[str, ...] = ()
 
     @property
     def listed(self) -> bool:
@@ -98,25 +117,33 @@ def listed(
     *values: Any,
     member: Callable[[Any, Reads], bool] | None = None,
     reads: tuple[str, ...] = (),
+    order: Order | None = None,
+    order_reads: tuple[str, ...] = (),
 ) -> Domain:
     """A fixed list of values, optionally narrowed by a membership predicate over
-    ``reads``."""
+    ``reads``, optionally ranked by ``order`` over ``order_reads``."""
 
-    return Domain(values=tuple(values), member=member, reads=reads)
+    return Domain(
+        values=tuple(values), member=member, reads=reads, order=order, order_reads=order_reads
+    )
 
 
 def computed(
     enumerate: Callable[[Reads], Sequence[Any]],
     reads: tuple[str, ...],
     member: Callable[[Any, Reads], bool] | None = None,
+    order: Order | None = None,
+    order_reads: tuple[str, ...] = (),
 ) -> Domain:
     """A list computed from declared reads."""
 
-    return Domain(enumerate=enumerate, member=member, reads=reads)
+    return Domain(
+        enumerate=enumerate, member=member, reads=reads, order=order, order_reads=order_reads
+    )
 
 
 def membership(member: Callable[[Any, Reads], bool], reads: tuple[str, ...] = ()) -> Domain:
-    """A domain known only by membership: checked, never enumerated or forced."""
+    """A domain known only by membership: checked, never enumerated."""
 
     return Domain(member=member, reads=reads)
 
@@ -153,7 +180,8 @@ class Derived:
 
 @dataclass(frozen=True)
 class Refuse:
-    """What a view's body returns to refuse, with its code."""
+    """What a derived value's function or a view's body returns to refuse, with its
+    code."""
 
     code: str
 
@@ -189,21 +217,10 @@ class Selector:
 @dataclass(frozen=True)
 class Space:
     """A description: the facts a configuration gives, and the root scope (whose own
-    name is not part of any path).
-
-    ``trials_count_retained_checks`` sets how far a value case's trial reaches. Off
-    (the default), a value choice's case is tried against its own check and the
-    constraints that read it (a selector's case also against the stored choices of
-    that case), so a forced value may make a retained choice's own check false, which
-    refuses the change. On, the trial also counts every other stored choice's own check
-    that reads the choice, so forcing never picks such a value, and a retained choice's
-    own check found false under forced values at forcing's final check starts a
-    conflict (the change is never refused through a value nobody committed).
-    """
+    name is not part of any path)."""
 
     facts: tuple[str, ...]
     root: Scope
-    trials_count_retained_checks: bool = False
 
     def validate(self) -> Index:
         """The description's index, or :class:`DefinitionError`."""
@@ -238,8 +255,8 @@ class ChoiceInfo:
     cases: tuple[str, ...] | None
 
 
-#: a node of the dependency graph: (kind, path), kind one of "value", "check",
-#: "constraint", "presence", "validity"
+#: a node of the dependency graph: (kind, path), kind one of "value", "membership",
+#: "function", "constraint", "presence", "domain", "guard", "validity"
 Node = tuple[str, str]
 
 
@@ -255,12 +272,6 @@ class Index:
     views: dict[str, tuple[View, str]] = field(default_factory=dict)
     constraints: dict[str, tuple[Constraint, str]] = field(default_factory=dict)
     facts: frozenset[str] = frozenset()
-    #: the choices each constraint's answer depends on (``reads_choices``)
-    constraint_reads: dict[str, frozenset[str]] = field(default_factory=dict)
-    #: the choices each choice's own check depends on, other than its own value
-    check_reads: dict[str, frozenset[str]] = field(default_factory=dict)
-    #: for each choice, the constraints whose answer depends on it, sorted
-    readers: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         names: set[str] = set()
@@ -274,17 +285,8 @@ class Index:
             raise DefinitionError("malformed", ("",), "the root scope has no guard")
         self._add_scope(self.space.root, "", None, None, None, names)
         self._check_reads()
+        self._check_domains()
         self._check_cycles()
-        self.constraint_reads = {
-            name: self.reads_choices(("constraint", name)) for name in sorted(self.constraints)
-        }
-        self.check_reads = {
-            name: self.reads_choices(("check", name)) - {name} for name in sorted(self.choices)
-        }
-        self.readers = {
-            choice: tuple(name for name, reads in self.constraint_reads.items() if choice in reads)
-            for choice in sorted(self.choices)
-        }
 
     # -- building
 
@@ -317,6 +319,8 @@ class Index:
                 raise DefinitionError("malformed", (node,), "a domain lists or computes")
             if not domain.listed and domain.member is None:
                 raise DefinitionError("malformed", (node,), "a domain needs values")
+            if domain.order is not None and not domain.listed:
+                raise DefinitionError("malformed", (node,), "only a listed domain is ordered")
             self.choices[node] = ChoiceInfo(node, path, domain, choice.required, None)
         for selector_ in scope.selectors:
             self._name_ok(selector_.name, path)
@@ -367,6 +371,7 @@ class Index:
     def _declared_reads(self) -> Iterator[tuple[str, tuple[str, ...]]]:
         for path, info in self.choices.items():
             yield path, info.domain.reads
+            yield path, info.domain.order_reads
         for path, (derived, _) in self.derived.items():
             yield path, derived.reads
         for path, (view, _) in self.views.items():
@@ -376,6 +381,33 @@ class Index:
         for path, scope in self.scopes.items():
             if scope.when is not None:
                 yield path, scope.when.reads
+
+    def _check_domains(self) -> None:
+        """Membership reads facts only: facts, and derived values reading, through
+        derived values, facts only. Anything else reaches a choice (a view through its
+        Space's validity)."""
+
+        for path in sorted(self.choices):
+            seen: set[str] = set()
+            # depth-first, keeping the derived values read through
+            stack: list[tuple[str, tuple[str, ...]]] = [
+                (read, ()) for read in reversed(self.choices[path].domain.reads)
+            ]
+            while stack:
+                read, through = stack.pop()
+                kind = self.kind(read)
+                if kind == "fact" or read in seen:
+                    continue
+                seen.add(read)
+                if kind != "derived":
+                    raise DefinitionError(
+                        "domain-reads-choice",
+                        (path, *through, read),
+                        "a domain's membership reads facts only; "
+                        "a relation to another choice is a constraint",
+                    )
+                derived = self.derived[read][0]
+                stack.extend((inner, (*through, read)) for inner in reversed(derived.reads))
 
     # -- queries
 
@@ -411,36 +443,90 @@ class Index:
             current = self.scopes[current].parent
         return False
 
-    def common_scope(self, paths: Sequence[str]) -> str:
-        """The lowest scope holding every node of ``paths``."""
-
-        chains = []
-        for path in paths:
-            chain = []
-            current: str | None = self.scope_of(path)
-            while current is not None:
-                chain.append(current)
-                current = self.scopes[current].parent
-            chains.append(list(reversed(chain)))
-        common = ""
-        for level in zip(*chains, strict=False):
-            if all(item == level[0] for item in level):
-                common = level[0]
-            else:
-                break
-        return common
-
     def ordered_choices(self) -> list[str]:
         """Every choice and selector, sorted by path."""
 
         return sorted(self.choices)
 
+    def reads_of(self, path: str) -> tuple[str, ...]:
+        """A constraint's, a derived value's or a view's declared reads; a choice's
+        membership reads."""
+
+        if path in self.constraints:
+            return self.constraints[path][0].reads
+        if path in self.derived:
+            return self.derived[path][0].reads
+        if path in self.views:
+            return self.views[path][0].reads
+        return self.choices[path].domain.reads
+
+    # -- read closures, what a change reaches and what stands in its way
+
+    def _followed(self, path: str) -> bool:
+        """Whether a closure follows ``path``'s reads: a constraint's (a seed), a
+        derived value's or a view's body; never a choice's membership."""
+
+        return path in self.constraints or path in self.derived or path in self.views
+
+    def through_bodies(self, seeds: Iterable[str]) -> frozenset[str]:
+        """``seeds`` followed through constraints', derived values' and views' bodies
+        (a view's Space's validity not followed): every path met, facts and choices
+        included."""
+
+        found: set[str] = set()
+        stack = list(seeds)
+        while stack:
+            path = stack.pop()
+            if path in found:
+                continue
+            found.add(path)
+            if self._followed(path):
+                stack.extend(self.reads_of(path))
+        return frozenset(found)
+
+    def presence_seeds(self, scope: str) -> frozenset[str]:
+        """The selector and the ``when`` reads of ``scope`` and of every scope above it."""
+
+        seeds: set[str] = set()
+        current: str | None = scope
+        while current is not None:
+            info = self.scopes[current]
+            if info.selector is not None:
+                seeds.add(info.selector)
+            if info.when is not None:
+                seeds.update(info.when.reads)
+            current = info.parent
+        return frozenset(seeds)
+
+    def dependencies(self, seeds: Iterable[str]) -> frozenset[str]:
+        """``seeds`` followed as :meth:`through_bodies` does, adding the presence seeds
+        of the scope of every node met, to closure."""
+
+        found: set[str] = set()
+        stack = list(seeds)
+        while stack:
+            path = stack.pop()
+            if path in found:
+                continue
+            found.add(path)
+            if self._followed(path):
+                stack.extend(self.reads_of(path))
+            if path not in self.facts:
+                stack.extend(self.presence_seeds(self.scope_of(path)))
+        return frozenset(found)
+
+    def deciders(self, scope: str) -> frozenset[str]:
+        """The choices deciding whether ``scope`` exists: the selectors above it, its
+        own included, and the choices its guards' reads depend on."""
+
+        return frozenset(
+            path for path in self.dependencies(self.presence_seeds(scope)) if path in self.choices
+        )
+
     # -- dependencies
 
-    def edges(self, node: Node, definition: bool) -> list[Node]:
-        """What ``node`` depends on. With ``definition`` a choice's value also depends
-        on its own check (the graph cycles are found in); without it a choice's value
-        is taken as given (what a trial on one frozen state reads)."""
+    def edges(self, node: Node) -> list[Node]:
+        """What ``node`` depends on, in the definition's graph (module docstring)."""
 
         kind, path = node
         out: list[Node] = []
@@ -450,17 +536,15 @@ class Index:
                 return out
             out.append(("presence", self.scope_of(path)))
             if what == "choice":
-                if definition:
-                    out.append(("check", path))
-            elif what == "derived":
-                out.extend(("value", read) for read in self.derived[path][0].reads)
+                out.append(("membership", path))
             else:
-                out.extend(("value", read) for read in self.views[path][0].reads)
-                out.append(("validity", self.views[path][1]))
-        elif kind == "check":
-            info = self.choices[path]
-            out.extend(("value", read) for read in info.domain.reads)
-            out.append(("presence", info.scope))
+                out.extend(("value", read) for read in self.reads_of(path))
+                if what == "view":
+                    out.append(("validity", self.views[path][1]))
+        elif kind == "membership":
+            out.extend(("function", read) for read in self.reads_of(path) if read in self.derived)
+        elif kind == "function":
+            out.extend(("function", read) for read in self.reads_of(path) if read in self.derived)
         elif kind == "constraint":
             constraint, scope = self.constraints[path]
             out.extend(("value", read) for read in constraint.reads)
@@ -473,6 +557,11 @@ class Index:
                 out.append(("value", info_.selector))
             if info_.when is not None:
                 out.extend(("value", read) for read in info_.when.reads)
+        elif kind == "domain":
+            out.append(("presence", self.choices[path].scope))
+            out.append(("membership", path))
+        elif kind == "guard":
+            out.append(("presence", path))
         else:  # validity
             out.extend(
                 ("constraint", name)
@@ -480,35 +569,23 @@ class Index:
                 if self.within(scope, path)
             )
             out.extend(
-                ("check", name)
+                ("domain", name)
                 for name, info in sorted(self.choices.items())
-                if self.within(info.scope, path)
+                if info.domain.listed and self.within(info.scope, path)
+            )
+            out.extend(
+                ("guard", name)
+                for name, info__ in sorted(self.scopes.items())
+                if info__.when is not None and self.within(name, path)
             )
         return out
-
-    def reads_choices(self, node: Node) -> frozenset[str]:
-        """The choices whose value or own check ``node``'s answer depends on, through
-        derived values, views, validity and presence, on one frozen state."""
-
-        seen: set[Node] = set()
-        stack = [node]
-        found: set[str] = set()
-        while stack:
-            current = stack.pop()
-            if current in seen:
-                continue
-            seen.add(current)
-            kind, path = current
-            if kind == "check" or (kind == "value" and path in self.choices):
-                found.add(path)
-            stack.extend(self.edges(current, definition=False))
-        return frozenset(found)
 
     def _check_cycles(self) -> None:
         nodes: list[Node] = (
             [("value", path) for path in sorted(self.choices)]
-            + [("check", path) for path in sorted(self.choices)]
+            + [("membership", path) for path in sorted(self.choices)]
             + [("value", path) for path in sorted(self.derived)]
+            + [("function", path) for path in sorted(self.derived)]
             + [("value", path) for path in sorted(self.views)]
             + [("constraint", path) for path in sorted(self.constraints)]
             + [("presence", path) for path in sorted(self.scopes)]
@@ -519,9 +596,7 @@ class Index:
             if start in done:
                 continue
             # iterative depth-first search keeping the current path
-            stack: list[tuple[Node, Iterator[Node]]] = [
-                (start, iter(self.edges(start, definition=True)))
-            ]
+            stack: list[tuple[Node, Iterator[Node]]] = [(start, iter(self.edges(start)))]
             on_path = {start: 0}
             while stack:
                 current, children = stack[-1]
@@ -537,4 +612,4 @@ class Index:
                 if child in done:
                     continue
                 on_path[child] = len(stack)
-                stack.append((child, iter(self.edges(child, definition=True))))
+                stack.append((child, iter(self.edges(child))))

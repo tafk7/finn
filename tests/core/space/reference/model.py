@@ -5,246 +5,197 @@
 
 Written from the semantics, not from the engine: it imports nothing of ``finn`` and
 nothing outside the standard library. It is slow on purpose. Every answer is
-recomputed from scratch for each configuration, by exhaustive enumeration of small
-listed domains. One evaluation of one state memoizes its own answers while it runs;
-nothing survives from one state to the next, and nothing is reused across
-configurations.
+recomputed from scratch for each configuration; one evaluation of one configuration
+memoizes its own answers while it runs, and nothing survives from one configuration
+to the next. A change evaluates its predecessor and its successor each from nothing.
 
 The rules it states
 ===================
 
-**Guards.** A scope's presence is one of four: present; absent (another case
-selected, or its ``when`` false); unknown (its selector open, or a ``when`` input
-waiting); refused (its selector refused, by forcing or by its own check, or a ``when``
-reading a refused choice). A refused guard gains no case without a revision, so
-nothing waits on it.
+**A configuration** is its facts and its stored choices, dormant ones included: the
+same two give the same answers, whatever the history. Nothing gives a choice a value:
+a choice is set, or open. A stored value outside its domain, or whose domain's
+membership reads a refused input, is no configuration (:class:`ConfigurationError`);
+a stored set breaking a rule is one, and reads refused.
 
-**Pieces and validity.** A Space's validity is the strong three-valued AND
-(:func:`~.answers.kleene_and`) of its pieces: every constraint of every scope at or
-below it that is present (absent: true; unknown: unknown, whatever its predicate);
-every stored choice's own check; every open choice with an exhaustive list and no
-possible case; every conflict forcing finds. A scope under a refused guard adds no
-constraint pieces of its own: the guard's own piece refuses, and its stored choices'
-own checks still count. A constraint reading an input that is refused answers false;
-one that waits, unknown; one in a scope that is absent, true (it does not apply).
+**Domains.** Membership reads facts only, so it is a type check fixed once the facts
+are given: a value is a member, outside, waiting on a missing fact, or refused through
+a refused input. A listed domain's membership list is its listed values that are
+members, in listed order; its ``order`` ranks that list and checks nothing.
 
-**Under a refused guard** a constraint's, a derived value's or a view's body is not
-evaluated. Inside trials, forcing's final check and own checks it reads unresolved, so
-the refusal is blamed once, at the guard's piece; in the published configuration it
-reads refused (input-refused, with the guard's reasons), queried directly or read from
-outside. A stored choice there whose own check holds is admitted (never unchecked; a
-change keeping it is accepted); it reads as its value only where its guard holds (a
-trial assuming its case), and published it reads refused through its guard. An open
-choice there reads refused through its guard, and its own pieces (no possible value)
-add nothing: it is blamed at the guard.
+**Presence.** A scope is present; absent (another case selected, or its ``when``
+false); unknown (its selector open, or a ``when`` input waiting); or refused (its
+``when`` reads a refused input: a derived value or a view refusing). A scope under a
+refused guard is not in play: its stored choices are dormant, its open choices
+absent, its constraints add nothing, and every value in it reads refused through the
+guard.
 
-**A choice's own check** is membership of its stored value in its domain, with its
-presence. Under a guard false on known information (another case committed or forced,
-a ``when`` false on facts) the key does not exist: the choice is inactive and its own
-check is not evaluated; named, it refuses the change as inactive. Otherwise membership
-is the type check, evaluated with its guard's cases assumed: a value outside its domain
-is false under an unknown or refused guard too, and that is its own reason only. A
-value inside its domain is: under an unknown guard, unknown (**unchecked**, waiting on
-the guard); under a refused guard, true. Forcing never reads a stored choice whose own
-check is false, so a guard never goes false because forcing read the bad value.
+**A choice** is set (stored, in play, read as its value), waiting (stored, its
+presence unknown or its membership waiting on a missing fact; never read as a value),
+dormant (stored, its scope absent or not in play), open (unset, its scope present or
+unknown) or absent (unset, its scope absent or not in play).
 
-**Readable.** A stored choice is read as its value only when its own check is true; an
-unchecked choice reads as unresolved and is never used as a value, by any rule or by
-forcing, when its own check cannot conclude on its own inputs. One that waits only on
-its presence is not unknown in a world that settles that presence: in a trial assuming
-a case, or in the world an own check assumes, a stored choice made present there whose
-own check holds there reads as its value (so a rule of a selector's case refusing it
-makes the case not possible).
+**Reads.** A fact is known, or unresolved when not given. A derived value or a view
+reads its inputs: all known, its body answers (a :class:`~.description.Refuse` is a
+refusal at its origin); an input refused, it is refused through it; an input waiting,
+it waits; an input inapplicable, it is inapplicable. A view also refuses, through,
+when its Space's validity is false.
 
-**Possible cases.** A listed case of an open choice is possible unless, with the case
-assumed on a copy of the state (a trial), a piece turns false among: the choice's own
-check; every constraint whose answer depends on the choice (through its reads, derived
-values, views and the presence of what it reads); for a selector, the own checks of the
-stored choices of the selected case. Unknown counts as possible. Another choice having
-no possible case is not one of those pieces.
+**Validity** of a scope is the strong three-valued AND
+(:func:`~.answers.kleene_and`) of the pieces at or below it: each constraint (absent
+or not in play: true, not applying; an input refused: false through it; an input
+waiting: unknown; an input inapplicable: true, not applying; else its predicate on its
+own values, false at its origin); each listed domain (false when it lists no value);
+each guard refused through an input (false). A piece of a scope whose presence is
+unknown is unknown, whatever it would answer. No choice is otherwise a piece.
 
-**The trial's reach** is a switch of the description
-(:attr:`~.description.Space.trials_count_retained_checks`). Off (the default), the
-above: a forced value may make a retained choice's own check false, and the change is
-refused. On, a value case's trial also counts every other stored choice's own check
-that depends on the choice (through its domain or its presence), so forcing never picks
-a value under which a retained choice's own check is false; and a retained choice's own
-check found false at forcing's final check starts a conflict, so a change is never
-refused through a value nobody committed.
+**A change** (commit or replace choices, clear choices, set or unset facts, as one
+batch) is assignment: the successor is published whole, or refused with each refusal
+and the original kept.
 
-**Forcing** runs in frozen rounds. Each round trials every open choice that is present
-and has an exhaustive list against one state; an open choice with exactly one possible
-case is forced, and every value a round forces is installed together for the next
-round, until a round forces nothing. A choice whose presence is not known is not
-forced. Then one check: every constraint (and, with the trial's reach on, every
-stored choice's own check) is evaluated under the forced values, and each false one,
-with every no-case proof,
-starts a support (the valued choices it read; a no-case proof's choice with the choices
-its refused cases read). A support is expanded backwards through the evidence that
-forced each forced choice in it, and supports that overlap are merged into components.
-A component holding a forced choice is a **conflict**: its uncommitted participants
-(forced, or with no possible case) are refused, each naming the others, and forced
-values are withdrawn; forcing then runs again from the same commitments with the
-refused ones left out, until no new conflict appears. A component without a forced
-value has nothing to withdraw: a choice in it with no possible case is a **plain
-refusal**, naming each case's reason, with no conflict and no peers. A committed
-participant keeps its value while its own check holds; the configuration reads refused,
-naming the conflict.
-A selector refused by forcing is a refused guard for its cases. Forcing never searches:
-it propagates one choice at a time.
+1. *Assignment.* Each committed value is checked against its domain; a change of facts
+   re-checks every stored value, dormant ones included. A value outside its domain, or
+   whose membership reads a refused input, refuses the change
+   (:class:`~.answers.AssignmentRefusal`). A value whose membership waits on a missing
+   fact is accepted, and waits.
+2. *Origins.* In the successor: a constraint false on its own values; a derived value
+   or a view refusing on its own values; a present choice whose listed domain lists no
+   value. An origin counts when it feeds a false piece of the root's validity: it is
+   that piece, or the piece is false through refused inputs leading back to it.
+3. *Reach.* A counted origin is reached when its dependencies hold a choice the change
+   commits with a new value, a stored choice the change brings to be read as its value,
+   or a fact the change sets to a new value. Clearing choices and unsetting facts
+   reach nothing.
+4. *Refusal.* Each counted, reached origin refuses the change
+   (:class:`~.answers.RuleRefusal`), naming the stored choices standing in its way.
+   A rule false only through a refused input is never itself a refusal.
+5. *Accepted*, the change reports the stored choices it puts dormant or brings into
+   play and the open choices it brings into presence. A change that changes nothing
+   returns the same configuration.
 
-**A change** (commit, replace or clear choices; set or unset facts) builds the
-configuration it would publish, forcing included, and type-checks every stored choice's
-own check against it: a false check, or a stored choice that would be inactive,
-refuses the change (``named`` when the change names the choice, ``reached``
-otherwise); an unknown check keeps the choice unchecked. A constraint never refuses a
-change; the configuration's validity is reported beside the result.
+**Possible values** of a choice with a known membership list are one change per member
+value, in membership's list order: possible (with what moves) or impossible (with
+each refusal). The ranking is a separate answer; validity and refusals never read it.
 
 Readings chosen where the semantics leave room
 ==============================================
 
-1. *Readability is the least fixed point, recomputed each round from nothing
-   readable.* A round forces from the readable choices, evaluates every stored
-   choice's own check against the readable and forced values, and gives the choices
-   whose check is true; the iteration starts from none and stops when a round gives
-   back its input (:func:`settle_readable`). Nothing carries from one round to the
-   next: a round's intermediate state is no configuration anyone held, and a mark
-   taken from a value forced on too little would disagree with a build from scratch.
-   The other reading, a greatest fixed point, would make two choices whose checks read
-   each other readable together. A round that revisits an earlier set is reported as
-   :class:`NonConvergence`, with the choices that move and the sets visited, never
-   settled by an added rule (no test or random walk has reached one).
-2. *A change re-checks every stored choice.* The semantics say the named and the
-   reached ones. A retained choice whose check reads nothing the change touches has
-   the same answer before and after, so the two readings agree on every
-   configuration a change could have published; they differ only for a base that
-   already holds a stored choice whose own check is false or inactive (no change
-   publishes one), which this model refuses as ``reached`` on any change.
-3. *Cycles* are the dependency rule written at :mod:`.description`: a constraint
-   reading a view of its own Space or of a Space above it, directly or through
-   derived values or other views; a view, derived value or guard closing a loop
-   through validity; an own check reading a view of its own Space, or a cycle among
-   own checks. Reading a child's view is not a cycle.
-4. *"No possible value"*: an open choice that is present, with an exhaustive list
-   (including an empty one) and no possible case, is refused; the piece is the
-   choice's own (kind ``no-possible-value``, owned by the choice's scope) and counts
-   in validity. It is also a conflict start: alone when its refused cases read no
-   other valued choice, else with them. A stored value under an empty list is simply
-   outside its domain (its own check false).
-5. *Three guard states* (above): under a refused selector a stored choice is refused
-   for a value outside its domain (its own reason), and admitted for a value inside
-   it, read refused through its guard when published; the selector's own piece is the
-   configuration's refusal, reported beside it.
-6. Others:
+The note is ``records/space-semantics-defaults-2026-10-18/NOTE.md`` in the design
+corpus; § 16 holds the readings its author gave for this model.
 
-   a. *An unknown guard answers unknown* for every piece under it, not Kleene's
-      implication (which would make a true predicate under an unknown guard true).
-   b. *With the trial's reach on, a false own check in forcing's final check starts a
-      conflict*, as a false constraint does: when its support holds a forced value,
-      that value is refused and withdrawn, and the stored choice waits on it
-      (unchecked) rather than refusing the change. Without a forced value in its
-      support it is a plain false own check, which refuses the change. Only a set of
-      values forced together in one round makes one false: a value forced alone in a
-      later round sees the earlier ones in its own trial.
-   c. *Refused choices in checks and forcing*: a choice refused by forcing (no case,
-      conflict) reads as unresolved inside trials, the final check and own checks, so
-      a refusal is blamed once and never refuses a change through another choice's
-      own check; as a guard it is a refused guard. In the published configuration it
-      reads as refused, and a constraint reading it answers false, naming the input.
-      Its counterpart for a stored choice whose own check is false: that refusal is
-      blamed once, at its own piece. Inside trials, forcing's final check and own
-      checks nothing is false only through it: its value reads unresolved, its
-      Space's validity counts the piece as unknown, and the views of that Space (and
-      of any Space above it), with whatever reads them, read unresolved. Pieces false
-      on their own still refuse the Space. The false own check itself refuses the
-      change, named or reached. So committing a value outside its domain never pushes
-      a guard to another case through a view of its own Space.
-   d. *Dependents of withdrawn values* are recomputed: after a conflict, forcing runs
-      again without the refused participants, so a value forced only because of a
-      withdrawn one is no longer forced.
-   e. *Blame is conservative*: supports are the valued choices a false piece's answer
-      depends on (through views, that includes everything below the view's Space);
-      overlapping supports merge, so a committed choice already refused by a plain
-      constraint can be named as a peer when its support meets a conflict's.
-   f. *A choice whose presence is unknown or refused* is never forced and never
-      refused for having no case. Under an unknown guard it is open, its possible cases
-      those whose own membership is not false; under a refused guard it reads refused
-      through the guard.
-   g. *An own check whose domain input is refused, or does not apply.* Only
-      membership refuses a value, so neither refuses the commit. An input refused on
-      facts (a derived value or a view refusing; not by forcing) gets the refused
-      guard's treatment: the choice is kept, never read as a value, and not listed as
-      waiting, since no commitment can settle it; inside trials, forcing's final check
-      and other own checks its piece is unknown, so the refusal is blamed once, at the
-      input; published, its piece is false, refused through the input with the input's
-      own reasons, so the configuration reads refused. Applicability comes first:
-      under a refused guard, a check that cannot conclude only through a refused input
-      has no answer of its own; the choice is refused through its guard, with the
-      guard's reasons only, and adds nothing to validity beside the guard's piece (a
-      value outside its domain there still has its own piece). An input refused by
-      forcing reads unresolved there, as in (c); a fact not supplied leaves the check
-      waiting on it; an input that does not apply leaves it waiting on what decides
-      that input's presence (its scope's selector, or its ``when``'s reads), not on the
-      input. A ``when`` guard reading a refused choice directly is a refused guard;
-      reading one through a derived value, an unknown guard.
+1. *A view's body refusing on its own values is an origin* (§ 16.1), as a derived
+   value's is. A view refused because its Space is refused is refused through, never an
+   origin: its Space's false pieces are counted on their own.
+2. *Only an origin feeding a false piece refuses* (§ 16.2). The origins are found from
+   the false pieces of the root's validity, following refused inputs back through
+   derived values, views, and choices and values refused through a guard (to the
+   guard's refused reads). A refusing derived value or view nothing rules on reads
+   refused where it is asked and refuses no change.
+3. *What reaches an origin* (§ 16.3): its **dependencies**, its declared reads
+   followed through derived values' and views' bodies (never a view's Space's
+   validity), with the selector and the ``when`` reads of every scope above each node
+   met, the origin's own scope included, followed the same way. So a rule in a case is
+   reached by switching to that case, and a rule reading a child's view by switching to
+   the case holding that view. A listed domain's dependencies are its membership's
+   reads and its choice's scopes' selectors and ``when`` reads. "Brought into play" is
+   read as "read as its value after the change and not before": a stored choice whose
+   scope becomes present, or whose membership waited on a fact the change supplies
+   (otherwise that facts change could leave a reached rule false).
+4. *What stands in the way* (§ 16.4): the stored choices among the origin's declared
+   reads followed through derived values' and views' bodies (not its presence's
+   reads), less every choice the change names (committed or cleared) and every choice
+   deciding the origin's existence: the selectors of the scopes above it, its own
+   included, and the choices its guards' ``when`` reads depend on. An empty domain has
+   nothing standing (membership reads facts only).
+5. *In play, waiting, dormant* (§ 16.5), by presence before and after, over the
+   successor's stored choices: ``in_play``, not present before and present after;
+   ``dormant``, present or unknown before and absent or not in play after; ``opened``,
+   the open choices not present before and present after. Clearing a selector leaves
+   its cases' stored choices waiting. An unset choice not in play is
+   :class:`~.answers.Absent`, a state the note's table lacks.
+6. *Membership that cannot be decided* (§ 16.6): a missing fact leaves a stored value
+   waiting (never read as a value) and the facts change supplying it checks its type; a
+   refusing input refuses the assignment, and a facts change making it refuse while a
+   value is stored. Membership is evaluated over the facts alone: a derived value it
+   reads is computed from its reads whatever its own scope's presence.
+7. *The constructor* (§ 16.7) refuses a stored value outside its domain or whose
+   membership input refuses, dormant ones included; a stored set breaking a rule is a
+   legal configuration that reads refused. Only :func:`change` refuses it.
+8. *A guard refused through an input* (§ 16.8) is one ``GUARD`` piece, owned by the
+   guarded scope, at the highest such guard (scopes under it add nothing). A refused
+   ``when`` below a selector or a parent that is still unknown leaves the scope unknown
+   and its piece unknown: refused takes effect once all above it is present.
+9. *A facts change emptying a present choice's listed domain is refused* (§ 16.9),
+   naming the ``EMPTY_DOMAIN`` origin with nothing standing; so is any change reaching
+   such a domain (a switch to the case holding it). **Not yet ruled on by the human.**
+   The single switch is :data:`EMPTY_DOMAIN_REFUSES`; off, an empty domain never
+   refuses a change and the configuration reads refused.
+10. *A domain's order* (§ 16.10) ranks the membership list over ``order_reads``, which
+    may read choices: :meth:`Solution.ordered` is the ranking, known, or waiting while a
+    read waits. Possible values are answered in membership's list order.
+11. *An unknown guard answers unknown* for every piece under it (constraints, listed
+    domains, guards), not Kleene's implication (the canon's text in § 11: "a scope
+    whose guard waits counts each of its pieces as unknown").
+12. *Assignment comes first* (§ 5.1): a change with an assignment refusal reports those
+    alone, and its ``validity`` is ``None``: a value of the wrong type makes no
+    configuration whose rules could be read.
+13. *A listed domain's piece* (§ 4) is false when its list is empty (the origin),
+    unknown while the list waits on a missing fact, and false through the input when
+    its membership reads a refused input (the list cannot be made; blamed at that
+    input's origin). A membership-only domain has no piece.
+14. *A stored choice waits on what it waits on*: an unknown presence's waits and its
+    membership's missing facts, never on itself. An open choice also waits on itself.
+15. *A ``when`` reading an input that does not apply* leaves its scope unknown,
+    waiting on that input (a guard over a value that does not exist neither holds nor
+    refuses).
+16. *Cycles* are the dependency rule written at :mod:`.description`.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import enum
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, TypeVar
+from typing import Any
 
 from .answers import (
+    Absent,
     Answer,
-    CaseReasons,
-    Check,
+    AssignmentRefusal,
+    ChangeRefusal,
     ChoiceState,
-    Conflict,
-    Forced,
-    GuardRefused,
-    Inactive,
+    Dormant,
+    Impossible,
     Inapplicable,
-    InputRefused,
     Known,
     Open,
     Piece,
     PieceKind,
-    Readable,
+    Possible,
     Reason,
     ReasonKind,
     Refused,
-    RefusedChoice,
-    Unchecked,
+    RuleRefusal,
+    Set,
     Unresolved,
     Validity,
     Verdict,
+    Waiting,
     kleene_and,
     piece_key,
+    refusal_key,
     sorted_reasons,
 )
-from .description import Index, Refuse, Space, join
+from .description import Index, Refuse, Space
 
-_T = TypeVar("_T")
+#: Reading 9 (§ 16.9), not yet ruled on by the human: a change reaching a present
+#: choice's empty listed domain is refused. The one place the reading is decided.
+EMPTY_DOMAIN_REFUSES = True
 
 
 class ConfigurationError(ValueError):
-    """A configuration or change naming a choice or fact the description lacks."""
-
-
-class NonConvergence(Exception):
-    """Readability's iteration revisited an earlier readable set without settling.
-
-    Reported, never resolved: ``choices`` are the stored choices readable in some sets
-    of the loop and not in others, ``visited`` the readable sets of the loop in order.
-    """
-
-    def __init__(self, choices: tuple[str, ...], visited: tuple[tuple[str, ...], ...]) -> None:
-        super().__init__(f"readability does not settle: {', '.join(choices)} over {visited}")
-        self.choices = choices
-        self.visited = visited
+    """A configuration or change naming a choice or fact the description lacks, or a
+    configuration storing a value that is not of its choice's type."""
 
 
 def same(a: Any, b: Any) -> bool:
@@ -253,16 +204,501 @@ def same(a: Any, b: Any) -> bool:
     return type(a) is type(b) and bool(a == b)
 
 
-def _contains(values: Iterable[Any], value: Any) -> bool:
+def _contains(values: tuple[Any, ...], value: Any) -> bool:
     return any(same(item, value) for item in values)
 
 
-def _distinct(values: Iterable[Any]) -> tuple[Any, ...]:
+def _distinct(values: tuple[Any, ...]) -> tuple[Any, ...]:
     out: list[Any] = []
     for value in values:
-        if not _contains(out, value):
+        if not _contains(tuple(out), value):
             out.append(value)
     return tuple(out)
+
+
+def _same_mapping(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
+    return a.keys() == b.keys() and all(same(a[key], b[key]) for key in a)
+
+
+def _permutation(ranked: tuple[Any, ...], values: tuple[Any, ...]) -> bool:
+    rest = list(values)
+    for value in ranked:
+        position = next((i for i, item in enumerate(rest) if same(item, value)), None)
+        if position is None:
+            return False
+        del rest[position]
+    return not rest
+
+
+@dataclass(frozen=True)
+class _Inputs:
+    """A node's declared reads: their values when all are known, else what blocks."""
+
+    values: dict[str, Any] | None
+    refused: tuple[str, ...] = ()
+    waits: frozenset[str] = frozenset()
+    inapplicable: tuple[str, ...] = ()
+
+
+def _inputs(answers: Mapping[str, Answer]) -> _Inputs:
+    values: dict[str, Any] = {}
+    refused: list[str] = []
+    waits: set[str] = set()
+    inapplicable: list[str] = []
+    for path, answer in answers.items():
+        if isinstance(answer, Known):
+            values[path] = answer.value
+        elif isinstance(answer, Refused):
+            refused.append(path)
+        elif isinstance(answer, Unresolved):
+            waits.update(answer.waits)
+        else:
+            inapplicable.append(path)
+    if refused or waits or inapplicable:
+        return _Inputs(None, tuple(sorted(refused)), frozenset(waits), tuple(sorted(inapplicable)))
+    return _Inputs(values)
+
+
+# --- the facts alone: membership, lists ---------------------------------------------
+
+
+class _Facts:
+    """What the facts alone decide: membership, membership lists, and the derived
+    values they read, computed from their reads whatever their scope's presence."""
+
+    def __init__(self, index: Index, facts: Mapping[str, Any]) -> None:
+        self.index = index
+        self.facts = facts
+        self._values: dict[str, Answer] = {}
+
+    def value(self, path: str) -> Answer:
+        """A fact, or a derived value over facts."""
+
+        if path not in self._values:
+            self._values[path] = self._value(path)
+        return self._values[path]
+
+    def _value(self, path: str) -> Answer:
+        if path in self.index.facts:
+            return Known(self.facts[path]) if path in self.facts else Unresolved((path,))
+        derived, scope = self.index.derived[path]
+        inputs = self.inputs(derived.reads)
+        if inputs.refused:
+            return Refused((Reason(ReasonKind.INPUT_REFUSED, path, scope, related=inputs.refused),))
+        if inputs.values is None:
+            return Unresolved(tuple(sorted(inputs.waits)))
+        output = derived.compute(inputs.values)
+        if isinstance(output, Refuse):
+            return Refused((Reason(ReasonKind.DERIVED_BODY, path, scope, code=output.code),))
+        return Known(output)
+
+    def inputs(self, reads: tuple[str, ...]) -> _Inputs:
+        return _inputs({path: self.value(path) for path in reads})
+
+    def _domain_inputs(self, choice: str) -> _Inputs | Refused:
+        info = self.index.choices[choice]
+        inputs = self.inputs(info.domain.reads)
+        if inputs.refused:
+            reasons = [Reason(ReasonKind.INPUT_REFUSED, choice, info.scope, related=inputs.refused)]
+            for path in inputs.refused:
+                answer = self.value(path)
+                assert isinstance(answer, Refused)
+                reasons.extend(answer.reasons)
+            return Refused(sorted_reasons(reasons))
+        return inputs
+
+    def listing(self, choice: str) -> Answer | None:
+        """A listed domain's membership list (``Known`` of a tuple), waiting on missing
+        facts, or refused through an input; ``None`` for a membership-only domain."""
+
+        domain = self.index.choices[choice].domain
+        if not domain.listed:
+            return None
+        inputs = self._domain_inputs(choice)
+        if isinstance(inputs, Refused):
+            return inputs
+        if inputs.values is None:
+            return Unresolved(tuple(sorted(inputs.waits)))
+        if domain.values is not None:
+            values = _distinct(domain.values)
+        else:
+            assert domain.enumerate is not None
+            values = _distinct(tuple(domain.enumerate(inputs.values)))
+        if domain.member is not None:
+            member = domain.member
+            reads = inputs.values
+            values = tuple(value for value in values if member(value, reads))
+        return Known(values)
+
+    def membership(self, choice: str, value: Any) -> Answer:
+        """``Known(True)`` for a member, ``Known(False)`` outside, ``Unresolved`` on
+        missing facts, ``Refused`` through a refused input."""
+
+        domain = self.index.choices[choice].domain
+        if domain.listed:
+            listing = self.listing(choice)
+            assert listing is not None
+            if isinstance(listing, Known):
+                return Known(_contains(listing.value, value))
+            return listing
+        inputs = self._domain_inputs(choice)
+        if isinstance(inputs, Refused):
+            return inputs
+        if inputs.values is None:
+            return Unresolved(tuple(sorted(inputs.waits)))
+        assert domain.member is not None
+        return Known(bool(domain.member(value, inputs.values)))
+
+    def origins(self, path: str, found: dict[str, tuple[str, tuple[Reason, ...]]]) -> None:
+        """The derived values a refused ``path`` (over facts) is refused through, at
+        their origin."""
+
+        answer = self.value(path)
+        if not isinstance(answer, Refused) or path in self.index.facts:
+            return
+        inputs = self.inputs(self.index.derived[path][0].reads)
+        if inputs.refused:
+            for read in inputs.refused:
+                self.origins(read, found)
+        else:
+            found[path] = ("derived", answer.reasons)
+
+
+# --- one configuration's evaluation --------------------------------------------------
+
+
+class Presence(enum.Enum):
+    """A scope's presence. ``REFUSED``: its ``when`` reads a refused input; the scope is
+    not in play."""
+
+    PRESENT = "present"
+    ABSENT = "absent"
+    UNKNOWN = "unknown"
+    REFUSED = "refused"
+
+
+@dataclass(frozen=True)
+class _Presence:
+    state: Presence
+    #: what an unknown presence waits on
+    waits: frozenset[str] = frozenset()
+    #: a refused guard's refused reads, and their reasons
+    guards: tuple[str, ...] = ()
+    reasons: tuple[Reason, ...] = ()
+
+
+_PRESENT = _Presence(Presence.PRESENT)
+_ABSENT = _Presence(Presence.ABSENT)
+_OUT = (Presence.ABSENT, Presence.REFUSED)
+
+#: an origin's kind and its own reasons, by path
+_Origins = dict[str, tuple[str, tuple[Reason, ...]]]
+
+
+class _Evaluation:
+    """Every answer of one configuration (its facts and stored choices)."""
+
+    def __init__(self, index: Index, facts: Mapping[str, Any], stored: Mapping[str, Any]) -> None:
+        self.index = index
+        self.facts = _Facts(index, facts)
+        self.stored = stored
+        self._memo: dict[tuple[str, str], Any] = {}
+
+    def _memoized(self, kind: str, path: str, compute: Callable[[str], Any]) -> Any:
+        key = (kind, path)
+        if key not in self._memo:
+            self._memo[key] = compute(path)
+        return self._memo[key]
+
+    # -- presence
+
+    def presence(self, scope: str) -> _Presence:
+        found: _Presence = self._memoized("presence", scope, self._presence)
+        return found
+
+    def parts(self, scope: str) -> tuple[_Presence, _Presence, _Presence]:
+        """A scope's parent's presence, its selector's part and its guard's part."""
+
+        found: tuple[_Presence, _Presence, _Presence] = self._memoized("parts", scope, self._parts)
+        return found
+
+    def _parts(self, scope: str) -> tuple[_Presence, _Presence, _Presence]:
+        info = self.index.scopes[scope]
+        assert info.parent is not None
+        parent = self.presence(info.parent)
+        selector = _PRESENT
+        if info.selector is not None:
+            if info.selector in self.stored:
+                held = same(self.stored[info.selector], info.case)
+                selector = _PRESENT if held else _ABSENT
+            else:
+                selector = _Presence(Presence.UNKNOWN, frozenset({info.selector}))
+        when = _PRESENT
+        if info.when is not None and Presence.ABSENT not in (parent.state, selector.state):
+            inputs = self.inputs(info.when.reads)
+            if inputs.values is not None:
+                when = _PRESENT if info.when.test(inputs.values) else _ABSENT
+            elif inputs.refused:
+                reasons: list[Reason] = []
+                for read in inputs.refused:
+                    answer = self.read(read)
+                    assert isinstance(answer, Refused)
+                    reasons.extend(answer.reasons)
+                when = _Presence(
+                    Presence.REFUSED, guards=inputs.refused, reasons=sorted_reasons(reasons)
+                )
+            elif inputs.waits:
+                when = _Presence(Presence.UNKNOWN, inputs.waits)
+            else:
+                when = _Presence(Presence.UNKNOWN, frozenset(inputs.inapplicable))
+        return parent, selector, when
+
+    def _presence(self, scope: str) -> _Presence:
+        if self.index.scopes[scope].parent is None:
+            return _PRESENT
+        parts = self.parts(scope)
+        parent, _, when = parts
+        states = {part.state for part in parts}
+        if Presence.ABSENT in states:
+            return _ABSENT
+        if parent.state is Presence.REFUSED:
+            return parent
+        if Presence.UNKNOWN in states:
+            waits = frozenset().union(*(p.waits for p in parts if p.state is Presence.UNKNOWN))
+            return _Presence(Presence.UNKNOWN, waits)
+        if when.state is Presence.REFUSED:
+            return when
+        return _PRESENT
+
+    # -- values
+
+    def inputs(self, reads: tuple[str, ...]) -> _Inputs:
+        return _inputs({path: self.read(path) for path in reads})
+
+    def read(self, path: str) -> Answer:
+        found: Answer = self._memoized("read", path, self._read)
+        return found
+
+    def _read(self, path: str) -> Answer:
+        kind = self.index.kind(path)
+        if kind == "fact":
+            return self.facts.value(path)
+        scope = self.index.scope_of(path)
+        presence = self.presence(scope)
+        if presence.state is Presence.ABSENT:
+            return Inapplicable()
+        if presence.state is Presence.REFUSED:
+            reason = Reason(ReasonKind.INPUT_REFUSED, path, scope, related=presence.guards)
+            return Refused(sorted_reasons((reason, *presence.reasons)))
+        if kind == "choice":
+            if path not in self.stored:
+                return Unresolved(tuple(sorted(presence.waits | {path})))
+            waits = set(presence.waits)
+            member = self.facts.membership(path, self.stored[path])
+            if isinstance(member, Unresolved):
+                waits.update(member.waits)
+            else:
+                assert member == Known(True), (path, member)
+            if waits:
+                return Unresolved(tuple(sorted(waits)))
+            return Known(self.stored[path])
+        if presence.state is Presence.UNKNOWN:
+            return Unresolved(tuple(sorted(presence.waits)))
+        inputs = self.inputs(self.index.reads_of(path))
+        body: Answer
+        if inputs.refused:
+            body = Refused((Reason(ReasonKind.INPUT_REFUSED, path, scope, related=inputs.refused),))
+        elif inputs.waits:
+            body = Unresolved(tuple(sorted(inputs.waits)))
+        elif inputs.values is None:
+            body = Inapplicable()
+        else:
+            if kind == "derived":
+                output = self.index.derived[path][0].compute(inputs.values)
+                reason_kind = ReasonKind.DERIVED_BODY
+            else:
+                output = self.index.views[path][0].body(inputs.values)
+                reason_kind = ReasonKind.VIEW_BODY
+            if isinstance(output, Refuse):
+                body = Refused((Reason(reason_kind, path, scope, code=output.code),))
+            else:
+                body = Known(output)
+        if kind == "derived":
+            return body
+        reasons = list(body.reasons) if isinstance(body, Refused) else []
+        if self.validity(scope).verdict is Verdict.FALSE:
+            reasons.append(Reason(ReasonKind.SPACE_REFUSED, path, scope))
+        if reasons:
+            return Refused(sorted_reasons(reasons))
+        return body
+
+    # -- pieces
+
+    def constraint(self, path: str) -> Piece:
+        found: Piece = self._memoized("constraint", path, self._constraint)
+        return found
+
+    def _constraint(self, path: str) -> Piece:
+        rule, scope = self.index.constraints[path]
+        kind = PieceKind.CONSTRAINT
+        presence = self.presence(scope)
+        if presence.state in _OUT:
+            return Piece(kind, scope, path, Verdict.TRUE, applies=False)
+        if presence.state is Presence.UNKNOWN:
+            return Piece(kind, scope, path, Verdict.UNKNOWN, waits=tuple(sorted(presence.waits)))
+        inputs = self.inputs(rule.reads)
+        if inputs.refused:
+            reason = Reason(ReasonKind.INPUT_REFUSED, path, scope, rule.code, inputs.refused)
+            return Piece(kind, scope, path, Verdict.FALSE, reasons=(reason,))
+        if inputs.waits:
+            return Piece(kind, scope, path, Verdict.UNKNOWN, waits=tuple(sorted(inputs.waits)))
+        if inputs.values is None:
+            return Piece(kind, scope, path, Verdict.TRUE, applies=False)
+        if rule.predicate(inputs.values):
+            return Piece(kind, scope, path, Verdict.TRUE)
+        reason = Reason(ReasonKind.CONSTRAINT, path, scope, rule.code)
+        return Piece(kind, scope, path, Verdict.FALSE, reasons=(reason,))
+
+    def domain(self, choice: str) -> Piece:
+        """A listed domain's piece: does it list a value?"""
+
+        scope = self.index.choices[choice].scope
+        kind = PieceKind.EMPTY_DOMAIN
+        presence = self.presence(scope)
+        if presence.state in _OUT:
+            return Piece(kind, scope, choice, Verdict.TRUE, applies=False)
+        listing = self.facts.listing(choice)
+        assert listing is not None
+        if presence.state is Presence.UNKNOWN:
+            waits = set(presence.waits)
+            if isinstance(listing, Unresolved):
+                waits.update(listing.waits)
+            return Piece(kind, scope, choice, Verdict.UNKNOWN, waits=tuple(sorted(waits)))
+        if isinstance(listing, Unresolved):
+            return Piece(kind, scope, choice, Verdict.UNKNOWN, waits=listing.waits)
+        if isinstance(listing, Refused):
+            return Piece(kind, scope, choice, Verdict.FALSE, reasons=listing.reasons)
+        assert isinstance(listing, Known)
+        if listing.value:
+            return Piece(kind, scope, choice, Verdict.TRUE)
+        reason = Reason(ReasonKind.EMPTY_DOMAIN, choice, scope)
+        return Piece(kind, scope, choice, Verdict.FALSE, reasons=(reason,))
+
+    def guard(self, scope: str) -> Piece | None:
+        """The piece of a guard refused through an input, at the highest such guard."""
+
+        info = self.index.scopes[scope]
+        if info.parent is None or info.when is None:
+            return None
+        parent, selector, when = self.parts(scope)
+        if (
+            when.state is not Presence.REFUSED
+            or parent.state in _OUT
+            or selector.state is Presence.ABSENT
+        ):
+            return None
+        kind = PieceKind.GUARD
+        unknown = [part for part in (parent, selector) if part.state is Presence.UNKNOWN]
+        if unknown:
+            waits = frozenset().union(*(part.waits for part in unknown))
+            return Piece(kind, scope, scope, Verdict.UNKNOWN, waits=tuple(sorted(waits)))
+        reason = Reason(ReasonKind.INPUT_REFUSED, scope, scope, related=when.guards)
+        return Piece(
+            kind, scope, scope, Verdict.FALSE, reasons=sorted_reasons((reason, *when.reasons))
+        )
+
+    # -- validity
+
+    def validity(self, scope: str) -> Validity:
+        found: Validity = self._memoized("validity", scope, self._validity)
+        return found
+
+    def _validity(self, scope: str) -> Validity:
+        index = self.index
+        pieces = [
+            self.constraint(name)
+            for name, (_, owner) in sorted(index.constraints.items())
+            if index.within(owner, scope)
+        ]
+        pieces.extend(
+            self.domain(name)
+            for name, info in sorted(index.choices.items())
+            if info.domain.listed and index.within(info.scope, scope)
+        )
+        for name in sorted(index.scopes):
+            if index.within(name, scope):
+                guard = self.guard(name)
+                if guard is not None:
+                    pieces.append(guard)
+        verdict = kleene_and(piece.verdict for piece in pieces)
+        false = tuple(sorted((p for p in pieces if p.verdict is Verdict.FALSE), key=piece_key))
+        unknown = tuple(sorted((p for p in pieces if p.verdict is Verdict.UNKNOWN), key=piece_key))
+        return Validity(verdict, false, unknown)
+
+    # -- choices
+
+    def state(self, choice: str) -> ChoiceState:
+        info = self.index.choices[choice]
+        presence = self.presence(info.scope)
+        if choice not in self.stored:
+            if presence.state in _OUT:
+                return Absent()
+            return Open(tuple(sorted(presence.waits)), info.required)
+        value = self.stored[choice]
+        if presence.state in _OUT:
+            return Dormant(value)
+        read = self.read(choice)
+        if isinstance(read, Unresolved):
+            return Waiting(value, read.waits)
+        return Set(value)
+
+    # -- origins
+
+    def origins(self) -> _Origins:
+        """Every origin feeding a false piece of the root's validity (reading 2)."""
+
+        found: _Origins = {}
+        for piece in self.validity("").false:
+            if piece.kind is PieceKind.CONSTRAINT:
+                own = tuple(r for r in piece.reasons if r.kind is ReasonKind.CONSTRAINT)
+                if own:
+                    found[piece.subject] = ("constraint", own)
+                else:
+                    for read in self.inputs(self.index.reads_of(piece.subject)).refused:
+                        self._read_origins(read, found)
+            elif piece.kind is PieceKind.EMPTY_DOMAIN:
+                listing = self.facts.listing(piece.subject)
+                if isinstance(listing, Known):
+                    found[piece.subject] = ("empty-domain", piece.reasons)
+                else:
+                    reads = self.index.choices[piece.subject].domain.reads
+                    for read in self.facts.inputs(reads).refused:
+                        self.facts.origins(read, found)
+            else:
+                for read in self.parts(piece.subject)[2].guards:
+                    self._read_origins(read, found)
+        return found
+
+    def _read_origins(self, path: str, found: _Origins) -> None:
+        answer = self.read(path)
+        if not isinstance(answer, Refused):
+            return
+        presence = self.presence(self.index.scope_of(path))
+        if presence.state is Presence.REFUSED:
+            for read in presence.guards:
+                self._read_origins(read, found)
+            return
+        kind = self.index.kind(path)
+        assert kind in ("derived", "view"), (path, kind)
+        inputs = self.inputs(self.index.reads_of(path))
+        if inputs.refused:
+            for read in inputs.refused:
+                self._read_origins(read, found)
+            return
+        body = (ReasonKind.DERIVED_BODY, ReasonKind.VIEW_BODY)
+        own = tuple(r for r in answer.reasons if r.kind in body and r.subject == path)
+        if own:
+            found[path] = (kind, own)
 
 
 # --- configurations and changes ---------------------------------------------------
@@ -271,7 +707,7 @@ def _distinct(values: Iterable[Any]) -> tuple[Any, ...]:
 @dataclass(frozen=True)
 class Configuration:
     """A description, its facts (a missing fact is unknown) and its commitments
-    (choice path to stored value)."""
+    (choice path to stored value), dormant ones included."""
 
     space: Space
     facts: Mapping[str, Any] = field(default_factory=dict)
@@ -290,6 +726,10 @@ class Configuration:
                 raise ConfigurationError(f"unknown choice {path}")
         object.__setattr__(self, "facts", dict(self.facts))
         object.__setattr__(self, "stored", dict(self.stored))
+        checker = _Facts(index, self.facts)
+        for path in sorted(self.stored):
+            if _assignment(checker, path, self.stored[path]):
+                raise ConfigurationError(f"{path}: {self.stored[path]!r} is not of its type")
 
     def solve(self) -> Solution:
         return Solution(self)
@@ -307,31 +747,60 @@ class Change:
 
 
 @dataclass(frozen=True)
-class ChangeRefusal:
-    """A choice that refuses a change: ``kind`` is ``"named"`` when the change names
-    it, ``"reached"`` when it is retained and the change only reaches it."""
-
-    choice: str
-    kind: str
-    reasons: tuple[Reason, ...]
-
-
-@dataclass(frozen=True)
 class Accepted:
+    """The published configuration; the stored choices put dormant and brought into
+    play, and the open choices brought into presence; its validity."""
+
     configuration: Configuration
-    unchecked: tuple[str, ...]
+    dormant: tuple[str, ...]
+    in_play: tuple[str, ...]
+    opened: tuple[str, ...]
     validity: Validity
 
 
 @dataclass(frozen=True)
 class Rejected:
+    """Each refusal, sorted; the would-be configuration's validity, ``None`` when an
+    assignment refusal leaves no configuration (reading 12)."""
+
     refusals: tuple[ChangeRefusal, ...]
-    validity: Validity
+    validity: Validity | None
+
+
+def _assignment(checker: _Facts, path: str, value: Any) -> tuple[Reason, ...]:
+    """Why ``value`` is not of ``path``'s type, or nothing."""
+
+    member = checker.membership(path, value)
+    if isinstance(member, Refused):
+        return member.reasons
+    if member == Known(False):
+        return (Reason(ReasonKind.OUTSIDE_DOMAIN, path, checker.index.choices[path].scope),)
+    return ()
+
+
+def _origin_dependencies(index: Index, origin: str, kind: str) -> frozenset[str]:
+    """What reaches an origin (reading 3)."""
+
+    if kind == "empty-domain":
+        return index.through_bodies(index.reads_of(origin)) | index.dependencies((origin,))
+    return index.dependencies((origin,))
+
+
+def _standing(
+    index: Index, origin: str, kind: str, stored: Mapping[str, Any], named: set[str]
+) -> tuple[str, ...]:
+    """The stored choices standing in an origin's way (reading 4)."""
+
+    if kind == "empty-domain":
+        return ()
+    reads = index.through_bodies(index.reads_of(origin))
+    deciders = index.deciders(index.scope_of(origin))
+    return tuple(sorted(path for path in reads if path in stored and path not in named | deciders))
 
 
 def change(configuration: Configuration, edit: Change) -> Accepted | Rejected:
-    """Apply ``edit``: accepted with the configuration it publishes and the choices it
-    keeps unchecked, or refused with each refusing choice."""
+    """Apply ``edit`` as assignment: accepted with the configuration it publishes and
+    what moved, or refused with each refusal."""
 
     index = configuration.index
     for path in (*edit.commit, *edit.clear):
@@ -348,838 +817,70 @@ def change(configuration: Configuration, edit: Change) -> Accepted | Rejected:
     for name in edit.unset:
         facts.pop(name, None)
     facts.update(edit.facts)
+    facts_changed = not _same_mapping(facts, configuration.facts)
+    if not facts_changed and _same_mapping(stored, configuration.stored):
+        return Accepted(configuration, (), (), (), Solution(configuration).validity())
+
+    # 1. assignment: the named values, and every stored value under new facts
+    checker = _Facts(index, facts)
+    checked = sorted(stored) if facts_changed else sorted(edit.commit)
+    assignments = [
+        AssignmentRefusal(path, reasons)
+        for path in checked
+        if (reasons := _assignment(checker, path, stored[path]))
+    ]
+    if assignments:
+        return Rejected(tuple(assignments), None)
+
     successor = Configuration(configuration.space, facts, stored)
-    solution = Solution(successor)
-    refusals = []
-    for path in sorted(stored):
-        kind = "named" if path in edit.commit else "reached"
-        state = solution.state(path)
-        if isinstance(state, RefusedChoice):
-            refusals.append(ChangeRefusal(path, kind, state.reasons))
-        elif isinstance(state, Inactive):
-            reason = Reason(ReasonKind.INACTIVE, path, index.scope_of(path))
-            refusals.append(ChangeRefusal(path, kind, (reason,)))
-    if refusals:
-        return Rejected(tuple(refusals), solution.validity())
-    return Accepted(successor, solution.unchecked(), solution.validity())
-
-
-# --- one state's evaluation ----------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class _Inputs:
-    """A node's declared reads: their values when all are known, else what blocks."""
-
-    values: dict[str, Any] | None
-    refused: tuple[str, ...] = ()
-    waits: frozenset[str] = frozenset()
-    inapplicable: tuple[str, ...] = ()
-
-
-class Guard(enum.Enum):
-    """A scope's presence. ``REFUSED``: a guard that can never hold without a revision
-    (its selector refused by forcing or by its own check, or a ``when`` reading such a
-    choice)."""
-
-    PRESENT = "present"
-    ABSENT = "absent"
-    UNKNOWN = "unknown"
-    REFUSED = "refused"
-
-
-@dataclass(frozen=True)
-class _Presence:
-    state: Guard
-    #: what an unknown presence waits on
-    waits: frozenset[str] = frozenset()
-    #: the refused guards (selectors or a guard's refused reads) and their reasons
-    guards: tuple[str, ...] = ()
-    reasons: tuple[Reason, ...] = ()
-
-
-_PRESENT = _Presence(Guard.PRESENT)
-_ABSENT = _Presence(Guard.ABSENT)
-
-
-class _Evaluation:
-    """Every answer under one fixed state: ``values`` (the usable values: readable
-    stored choices and forced ones) and ``refused`` (choices refused by forcing, with
-    why; in the published configuration also stored choices whose own check is false).
-
-    ``published`` selects how something refused reads to constraints, derived values
-    and views: as refused (the published configuration) or as unresolved (trials,
-    forcing's final check), so a refusal is blamed once, at its own piece. Own checks
-    read it as unresolved always. A guard reads it as a refused guard always.
-    ``checks`` overrides the stored choices' own checks; ``extra`` adds forcing's
-    pieces to validity in the published configuration.
-    """
-
-    def __init__(
-        self,
-        index: Index,
-        facts: Mapping[str, Any],
-        stored: Mapping[str, Any],
-        values: Mapping[str, Any],
-        refused: Mapping[str, tuple[Reason, ...]],
-        published: bool,
-        checks: Mapping[str, Check] | None = None,
-        extra: tuple[Piece, ...] = (),
-    ) -> None:
-        self.index = index
-        self.facts = facts
-        self.stored = stored
-        self.values = values
-        self.refused = refused
-        self.published = published
-        self.checks = checks
-        self.extra = extra
-        self._memo: dict[tuple[str, str, bool], Any] = {}
-
-    # -- presence
-
-    def presence(self, scope: str) -> _Presence:
-        key = ("presence", scope, False)
-        if key not in self._memo:
-            self._memo[key] = self._presence(scope)
-        found: _Presence = self._memo[key]
-        return found
-
-    def refusal(self, choice: str) -> tuple[Reason, ...] | None:
-        """Why ``choice`` is refused (by forcing, or by its own check), else ``None``."""
-
-        if choice in self.values:
-            return None
-        if choice in self.refused:
-            return self.refused[choice]
-        if choice in self.stored:
-            check = self.check(choice, self.stored[choice])
-            if check.verdict is Verdict.FALSE or check.refused_input:
-                return check.reasons
-        return None
-
-    def _presence(self, scope: str) -> _Presence:
-        info = self.index.scopes[scope]
-        if info.parent is None:
-            return _PRESENT
-        parts = [self.presence(info.parent)]
-        if parts[0].state is Guard.ABSENT:
-            return _ABSENT
-        if info.selector is not None:
-            selector = info.selector
-            if selector in self.values:
-                held = same(self.values[selector], info.case)
-                parts.append(_PRESENT if held else _ABSENT)
-            else:
-                reasons = self.refusal(selector)
-                if reasons is not None:
-                    parts.append(_Presence(Guard.REFUSED, guards=(selector,), reasons=reasons))
-                else:
-                    waits = parts[0].waits | {selector}
-                    parts.append(_Presence(Guard.UNKNOWN, frozenset(waits)))
-        if info.when is not None:
-            inputs = self.inputs(info.when.reads, published=False)
-            if inputs.values is not None:
-                parts.append(_PRESENT if info.when.test(inputs.values) else _ABSENT)
-            else:
-                refused = {
-                    read: reasons
-                    for read in info.when.reads
-                    if self.index.kind(read) == "choice"
-                    and (reasons := self.refusal(read)) is not None
-                }
-                if refused:
-                    parts.append(
-                        _Presence(
-                            Guard.REFUSED,
-                            guards=tuple(sorted(refused)),
-                            reasons=tuple(r for read in sorted(refused) for r in refused[read]),
-                        )
-                    )
-                else:
-                    blockers = inputs.waits | set(inputs.refused) | set(inputs.inapplicable)
-                    parts.append(_Presence(Guard.UNKNOWN, frozenset(blockers)))
-        states = {part.state for part in parts}
-        if Guard.ABSENT in states:
-            return _ABSENT
-        if Guard.REFUSED in states:
-            refused_parts = [part for part in parts if part.state is Guard.REFUSED]
-            return _Presence(
-                Guard.REFUSED,
-                guards=tuple(sorted({g for part in refused_parts for g in part.guards})),
-                reasons=sorted_reasons(r for part in refused_parts for r in part.reasons),
-            )
-        if Guard.UNKNOWN in states:
-            waits = frozenset().union(*(part.waits for part in parts))
-            return _Presence(Guard.UNKNOWN, waits)
-        return _PRESENT
-
-    def _guard_refused(self, path: str, scope: str, presence: _Presence) -> Answer:
-        """A node under a refused guard: refused when published (with the guard's
-        reasons), unresolved inside trials and forcing's check."""
-
-        if self.published:
-            reason = Reason(ReasonKind.INPUT_REFUSED, path, scope, related=presence.guards)
-            return Refused(sorted_reasons((reason, *presence.reasons)))
-        return Unresolved(presence.guards)
-
-    # -- values
-
-    def inputs(self, reads: tuple[str, ...], published: bool) -> _Inputs:
-        values: dict[str, Any] = {}
-        refused: list[str] = []
-        waits: set[str] = set()
-        inapplicable: list[str] = []
-        for path in reads:
-            answer = self.read(path, published)
-            if isinstance(answer, Known):
-                values[path] = answer.value
-            elif isinstance(answer, Refused):
-                refused.append(path)
-            elif isinstance(answer, Unresolved):
-                waits.update(answer.waits)
-            else:
-                inapplicable.append(path)
-        if refused or waits or inapplicable:
-            return _Inputs(
-                None, tuple(sorted(refused)), frozenset(waits), tuple(sorted(inapplicable))
-            )
-        return _Inputs(values)
-
-    def read(self, path: str, published: bool | None = None) -> Answer:
-        mode = self.published if published is None else published
-        key = ("read", path, mode)
-        if key not in self._memo:
-            self._memo[key] = self._read(path, mode)
-        found: Answer = self._memo[key]
-        return found
-
-    def _read(self, path: str, published: bool) -> Answer:
-        kind = self.index.kind(path)
-        if kind == "fact":
-            if path in self.facts:
-                return Known(self.facts[path])
-            return Unresolved((path,))
-        scope = self.index.scope_of(path)
-        presence = self.presence(scope)
-        if presence.state is Guard.ABSENT:
-            return Inapplicable()
-        if kind == "choice":
-            if presence.state is Guard.UNKNOWN:
-                return Unresolved(tuple(sorted(presence.waits | {path})))
-            if presence.state is Guard.REFUSED and path not in self.stored:
-                # an open choice under a refused guard is blamed at the guard
-                if published:
-                    return self._guard_refused(path, scope, presence)
-                return Unresolved(tuple(sorted({*presence.guards, path})))
-            reasons = self.refusal(path)
-            if reasons is not None:
-                if published:
-                    return Refused(reasons)
-                return Unresolved((path,))
-            if presence.state is Guard.REFUSED:
-                # admitted, but read as its value only where its guard holds
-                if published:
-                    return self._guard_refused(path, scope, presence)
-                return Unresolved(tuple(sorted({*presence.guards, path})))
-            if path in self.values:
-                return Known(self.values[path])
-            return Unresolved((path,))
-        if presence.state is Guard.UNKNOWN:
-            return Unresolved(tuple(sorted(presence.waits)))
-        if presence.state is Guard.REFUSED:
-            return (
-                self._guard_refused(path, scope, presence)
-                if published
-                else Unresolved(presence.guards)
-            )
-        if kind == "derived":
-            derived = self.index.derived[path][0]
-            inputs = self.inputs(derived.reads, published)
-            if inputs.values is None:
-                return self._blocked(path, scope, inputs)
-            output = derived.compute(inputs.values)
-            if isinstance(output, Refuse):
-                return Refused((Reason(ReasonKind.DERIVED_BODY, path, scope, code=output.code),))
-            return Known(output)
-        return self._view(path, scope, published)
-
-    @staticmethod
-    def _blocked(path: str, scope: str, inputs: _Inputs) -> Answer:
-        if inputs.refused:
-            reason = Reason(ReasonKind.INPUT_REFUSED, path, scope, related=inputs.refused)
-            return Refused((reason,))
-        if inputs.waits:
-            return Unresolved(tuple(sorted(inputs.waits)))
-        return Inapplicable()
-
-    def _view(self, path: str, scope: str, published: bool) -> Answer:
-        view = self.index.views[path][0]
-        inputs = self.inputs(view.reads, published)
-        body: Answer
-        if inputs.values is None:
-            body = self._blocked(path, scope, inputs)
-        else:
-            output = view.body(inputs.values)
-            if isinstance(output, Refuse):
-                body = Refused((Reason(ReasonKind.VIEW_BODY, path, scope, code=output.code),))
-            else:
-                body = Known(output)
-        reasons = list(body.reasons) if isinstance(body, Refused) else []
-        space = self.validity(scope, published)
-        if space.verdict is Verdict.FALSE:
-            reasons.append(Reason(ReasonKind.SPACE_REFUSED, path, scope))
-        if reasons:
-            return Refused(sorted_reasons(reasons))
-        if not published:
-            # inside trials and forcing, a view of a Space a false own check would
-            # refuse reads unresolved, and so does whatever reads it
-            through = self._false_checks(scope)
-            if through:
-                waits = set(through)
-                if isinstance(body, Unresolved):
-                    waits.update(body.waits)
-                return Unresolved(tuple(sorted(waits)))
-        return body
-
-    def _false_checks(self, scope: str) -> tuple[str, ...]:
-        """The stored choices at or below ``scope`` whose own check is false."""
-
-        return tuple(
-            name
-            for name in sorted(self.stored)
-            if self.index.within(self.index.choices[name].scope, scope)
-            and self.check_piece(name).verdict is Verdict.FALSE
-        )
-
-    # -- checks
-
-    def check(self, choice: str, value: Any) -> Check:
-        """``choice``'s own check with ``value`` stored."""
-
-        key = ("check", f"{choice}\0{type(value).__name__}\0{value!r}", False)
-        if key not in self._memo:
-            self._memo[key] = self._check(choice, value)
-        found: Check = self._memo[key]
-        return found
-
-    def _check(self, choice: str, value: Any) -> Check:
-        info = self.index.choices[choice]
-        presence = self.presence(info.scope)
-        if presence.state is Guard.ABSENT:
-            # a guard false on known information: the key does not exist here, and its
-            # own check is not evaluated
-            return Check(None)
-        member, found, through = self.membership(choice, value, promote=True)
-        waits = set(found)
-        if through and presence.state is Guard.REFUSED:
-            # applicability first: under a refused guard the guard's refusal is its
-            # answer; the refused input adds nothing
-            return Check(Verdict.UNKNOWN, through_guard=True)
-        if through:
-            # an input refused on facts: no commitment can settle it; unknown inside,
-            # refused through the input when published (the commit still accepted)
-            return Check(Verdict.UNKNOWN, through, refused_input=True)
-        if member is Verdict.FALSE:
-            # its own reason only, under an unknown or refused guard too
-            return Check(Verdict.FALSE, (Reason(ReasonKind.OUTSIDE_DOMAIN, choice, info.scope),))
-        if presence.state is Guard.UNKNOWN:
-            waits |= presence.waits
-        if member is Verdict.UNKNOWN or presence.state is Guard.UNKNOWN:
-            return Check(Verdict.UNKNOWN, waits=tuple(sorted(waits)))
-        # present, or under a refused guard: a refused guard never gains a case
-        # without a revision, so the choice is checked on its value alone
-        return Check(Verdict.TRUE)
-
-    def membership(
-        self, choice: str, value: Any, promote: bool
-    ) -> tuple[Verdict, frozenset[str], tuple[Reason, ...]]:
-        """Whether ``value`` is one of ``choice``'s domain's values, what an unknown
-        answer waits on, and, when an input of the domain is refused (other than by
-        forcing, which reads unresolved here), why: the input-refused reason with the
-        input's own. The type check: evaluated in the world assuming its guard's cases
-        when its scope is not present (``promote`` reading there, as their values, the
-        stored choices whose presence that world settles)."""
-
-        info = self.index.choices[choice]
-        domain = info.domain
-        reader: _Evaluation = self
-        if domain.reads and self.presence(info.scope).state is not Guard.PRESENT:
-            reader = self.world(self._guard_cases(info.scope), promote)
-        inputs = reader.inputs(domain.reads, published=False)
-        if inputs.values is None:
-            if inputs.refused:
-                reasons = [
-                    Reason(ReasonKind.INPUT_REFUSED, choice, info.scope, related=inputs.refused)
-                ]
-                for path in inputs.refused:
-                    answer = reader.read(path, published=False)
-                    if isinstance(answer, Refused):
-                        reasons.extend(answer.reasons)
-                return Verdict.UNKNOWN, frozenset(), sorted_reasons(reasons)
-            waits = set(inputs.waits)
-            for path in inputs.inapplicable:
-                waits |= reader.absence_reads(path)
-            return Verdict.UNKNOWN, frozenset(waits), ()
-        if domain.values is not None:
-            held = _contains(domain.values, value)
-        elif domain.enumerate is not None:
-            held = _contains(domain.enumerate(inputs.values), value)
-        else:
-            held = True
-        if held and domain.member is not None:
-            held = bool(domain.member(value, inputs.values))
-        return (Verdict.TRUE if held else Verdict.FALSE), frozenset(), ()
-
-    def world(self, assumed: Mapping[str, Any], promote: bool = True) -> _Evaluation:
-        """This state with ``assumed`` values (a trial's case, or a guard's cases).
-
-        With ``promote``, a stored choice that is unchecked here only because its
-        presence waits reads as its value in that world when the world makes it present
-        and its own check holds there: its membership holds with its guard assumed, so
-        nothing but its presence was unknown. A choice whose own check cannot conclude
-        on its own inputs is never read so.
-        """
-
-        values = dict(self.values)
-        values.update(assumed)
-        world = _Evaluation(self.index, self.facts, self.stored, values, self.refused, False)
-        if not promote:
-            return world
-        while True:
-            added = {}
-            for name in sorted(self.stored):
-                if name in values or name in self.refused:
-                    continue
-                scope = self.index.choices[name].scope
-                if world.presence(scope).state is not Guard.PRESENT:
-                    continue
-                stored = self.stored[name]
-                if self.membership(name, stored, promote=False)[0] is not Verdict.TRUE:
-                    continue
-                if world.check(name, stored).verdict is Verdict.TRUE:
-                    added[name] = stored
-            if not added:
-                return world
-            values.update(added)
-            world = _Evaluation(self.index, self.facts, self.stored, values, self.refused, False)
-
-    def absence_reads(self, path: str) -> frozenset[str]:
-        """What decides that ``path``'s scope is absent: the selector of each case
-        another value leaves out, and the reads of each ``when`` that is false (``path``
-        itself when none is found)."""
-
-        if self.index.kind(path) == "fact":
-            return frozenset({path})
-        found: set[str] = set()
-        current: str | None = self.index.scope_of(path)
-        while current is not None:
-            info = self.index.scopes[current]
-            parent = info.parent
-            if (
-                parent is not None
-                and self.presence(current).state is Guard.ABSENT
-                and self.presence(parent).state is not Guard.ABSENT
-            ):
-                if info.selector is not None:
-                    found.add(info.selector)
-                if info.when is not None:
-                    found.update(info.when.reads)
-            current = parent
-        return frozenset(found) if found else frozenset({path})
-
-    def _guard_cases(self, scope: str) -> dict[str, Any]:
-        """Each selector above ``scope`` set to the case holding it."""
-
-        cases: dict[str, Any] = {}
-        current: str | None = scope
-        while current is not None:
-            info = self.index.scopes[current]
-            if info.selector is not None:
-                cases[info.selector] = info.case
-            current = info.parent
-        return cases
-
-    def check_piece(self, choice: str) -> Piece:
-        if self.checks is not None and choice in self.checks:
-            check = self.checks[choice]
-        else:
-            check = self.check(choice, self.stored[choice])
-        scope = self.index.choices[choice].scope
-        if (
-            check.verdict is None
-            or check.through_guard
-            or self.presence(scope).state is Guard.ABSENT
-        ):
-            # an absent scope contributes nothing, its stored values included (one
-            # outside its domain is still refused with its own reason by a change)
-            return Piece(PieceKind.OWN_CHECK, scope, choice, Verdict.TRUE, applies=False)
-        if check.refused_input:
-            if self.published:
-                return Piece(PieceKind.OWN_CHECK, scope, choice, Verdict.FALSE, True, check.reasons)
-            refused = tuple(r for reason in check.reasons for r in reason.related)
-            return Piece(
-                PieceKind.OWN_CHECK, scope, choice, Verdict.UNKNOWN, waits=tuple(sorted(refused))
-            )
-        return Piece(
-            PieceKind.OWN_CHECK, scope, choice, check.verdict, True, check.reasons, check.waits
-        )
-
-    def constraint(self, path: str, published: bool | None = None) -> Piece:
-        mode = self.published if published is None else published
-        key = ("constraint", path, mode)
-        if key not in self._memo:
-            self._memo[key] = self._constraint(path, mode)
-        found: Piece = self._memo[key]
-        return found
-
-    def _constraint(self, path: str, published: bool) -> Piece:
-        rule, scope = self.index.constraints[path]
-        kind = PieceKind.CONSTRAINT
-        presence = self.presence(scope)
-        if presence.state is Guard.ABSENT:
-            return Piece(kind, scope, path, Verdict.TRUE, applies=False)
-        if presence.state is Guard.UNKNOWN:
-            return Piece(kind, scope, path, Verdict.UNKNOWN, waits=tuple(sorted(presence.waits)))
-        if presence.state is Guard.REFUSED:
-            # its body is not evaluated; blamed at the guard's own piece
-            answer = self._guard_refused(path, scope, presence)
-            if isinstance(answer, Refused):
-                return Piece(kind, scope, path, Verdict.FALSE, reasons=answer.reasons)
-            return Piece(kind, scope, path, Verdict.UNKNOWN, waits=presence.guards)
-        inputs = self.inputs(rule.reads, published)
-        if inputs.refused:
-            reason = Reason(ReasonKind.INPUT_REFUSED, path, scope, rule.code, inputs.refused)
-            return Piece(kind, scope, path, Verdict.FALSE, reasons=(reason,))
-        if inputs.waits:
-            return Piece(kind, scope, path, Verdict.UNKNOWN, waits=tuple(sorted(inputs.waits)))
-        if inputs.values is None:
-            return Piece(kind, scope, path, Verdict.TRUE, applies=False)
-        if rule.predicate(inputs.values):
-            return Piece(kind, scope, path, Verdict.TRUE)
-        reason = Reason(ReasonKind.CONSTRAINT, path, scope, rule.code)
-        return Piece(kind, scope, path, Verdict.FALSE, reasons=(reason,))
-
-    # -- validity
-
-    def validity(self, scope: str, published: bool | None = None) -> Validity:
-        mode = self.published if published is None else published
-        key = ("validity", scope, mode)
-        if key not in self._memo:
-            self._memo[key] = self._validity(scope, mode)
-        found: Validity = self._memo[key]
-        return found
-
-    def _validity(self, scope: str, published: bool) -> Validity:
-        index = self.index
-        # a scope under a refused guard adds no constraint pieces of its own: the
-        # guard's piece refuses, and its stored choices' own checks still count
-        pieces = [
-            self.constraint(name, published)
-            for name, (_, owner) in sorted(index.constraints.items())
-            if index.within(owner, scope) and self.presence(owner).state is not Guard.REFUSED
-        ]
-        for name in sorted(self.stored):
-            if not index.within(index.choices[name].scope, scope):
-                continue
-            piece = self.check_piece(name)
-            if not published and piece.verdict is Verdict.FALSE:
-                # blamed once, at its own piece: inside trials and forcing nothing is
-                # false only through it, its Space's validity included
-                piece = dataclasses.replace(piece, verdict=Verdict.UNKNOWN, waits=(name,))
-            pieces.append(piece)
-        if published:
-            pieces.extend(piece for piece in self.extra if index.within(piece.owner, scope))
-        verdict = kleene_and(piece.verdict for piece in pieces)
-        false = tuple(sorted((p for p in pieces if p.verdict is Verdict.FALSE), key=piece_key))
-        unknown = tuple(sorted((p for p in pieces if p.verdict is Verdict.UNKNOWN), key=piece_key))
-        return Validity(verdict, false, unknown)
-
-
-# --- trials and forcing -------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class _Trial:
-    """One open choice's cases tried against one state."""
-
-    presence: Guard
-    #: the listed cases in domain order, or None when they cannot be listed
-    cases: tuple[Any, ...] | None
-    waits: frozenset[str]
-    possible: tuple[Any, ...] = ()
-    impossible: tuple[CaseReasons, ...] = ()
-    #: the valued choices, other than this one, that the refused cases' pieces read
-    support: frozenset[str] = frozenset()
-
-
-@dataclass(frozen=True)
-class _Derivation:
-    """A forced choice's value, or a choice with no possible case, with its evidence."""
-
-    value: Any
-    cases: tuple[CaseReasons, ...]
-    support: frozenset[str]
-
-
-@dataclass(frozen=True)
-class _State:
-    """The inputs every evaluation of one configuration shares."""
-
-    index: Index
-    facts: Mapping[str, Any]
-    stored: Mapping[str, Any]
-
-    def evaluation(
-        self,
-        values: Mapping[str, Any],
-        refused: Mapping[str, tuple[Reason, ...]],
-        published: bool = False,
-        checks: Mapping[str, Check] | None = None,
-        extra: tuple[Piece, ...] = (),
-    ) -> _Evaluation:
-        return _Evaluation(
-            self.index, self.facts, self.stored, values, refused, published, checks, extra
-        )
-
-
-def _trial(
-    state: _State,
-    values: Mapping[str, Any],
-    refused: Mapping[str, tuple[Reason, ...]],
-    choice: str,
-) -> _Trial:
-    index = state.index
-    info = index.choices[choice]
-    base = state.evaluation(values, refused)
-    presence = base.presence(info.scope)
-    blockers = presence.waits | set(presence.guards)
-    domain = info.domain
-    if not domain.listed:
-        return _Trial(presence.state, None, blockers)
-    inputs = base.inputs(domain.reads, published=False)
-    if inputs.values is None:
-        waits = blockers | inputs.waits | set(inputs.refused) | set(inputs.inapplicable)
-        return _Trial(presence.state, None, frozenset(waits))
-    if domain.values is not None:
-        cases = _distinct(domain.values)
-    else:
-        assert domain.enumerate is not None
-        cases = _distinct(domain.enumerate(inputs.values))
-    reach = index.space.trials_count_retained_checks
-    false_alone: dict[str, bool] = {}
-
-    def already_false(name: str) -> bool:
-        if name not in false_alone:
-            check = base.check(name, state.stored[name])
-            false_alone[name] = check.verdict is Verdict.FALSE
-        return false_alone[name]
-
-    possible: list[Any] = []
-    impossible: list[CaseReasons] = []
-    support: set[str] = set()
-    for case in cases:
-        trial = base.world({choice: case})
-        reasons: list[Reason] = []
-        reads: set[str] = set()
-        subjects: set[str] = set()
-        check = trial.check(choice, case)
-        if check.verdict is Verdict.FALSE:
-            reasons.extend(check.reasons)
-            reads |= index.check_reads[choice]
-        for name in index.readers[choice]:
-            piece = trial.constraint(name)
-            if piece.verdict is Verdict.FALSE:
-                reasons.extend(piece.reasons)
-                reads |= index.constraint_reads[name]
-        # stored choices' own checks: on the switch, every one that reads this choice
-        # (through its domain or its presence); off, a selector's selected case's. A
-        # stored choice whose own check is already false is never read by forcing.
-        for name in sorted(state.stored):
-            if name == choice:
-                continue
-            if reach:
-                counted = choice in index.check_reads[name]
-            else:
-                counted = info.cases is not None and index.within(
-                    index.choices[name].scope, join(choice, case)
-                )
-            if counted and not already_false(name):
-                piece = trial.check_piece(name)
-                if piece.verdict is Verdict.FALSE:
-                    reasons.extend(piece.reasons)
-                    reads |= index.check_reads[name]
-                    subjects.add(name)
-        if reasons:
-            impossible.append((case, sorted_reasons(reasons)))
-            support |= subjects | {name for name in reads if name != choice and name in values}
-        else:
-            possible.append(case)
-    return _Trial(
-        presence.state, cases, blockers, tuple(possible), tuple(impossible), frozenset(support)
+    before = Solution(configuration)
+    after = Solution(successor)
+
+    # 3. what the change touches: new values, values read anew, new facts
+    old = configuration.stored
+    touched = {
+        path for path, value in edit.commit.items() if path not in old or not same(old[path], value)
+    }
+    touched.update(
+        path
+        for path in stored
+        if isinstance(after.state(path), Set) and not isinstance(before.state(path), Set)
+    )
+    touched.update(
+        name
+        for name, value in edit.facts.items()
+        if name not in configuration.facts or not same(configuration.facts[name], value)
     )
 
+    # 2 and 4. each counted origin the change reaches refuses it
+    named = set(edit.commit) | set(edit.clear)
+    refusals: list[ChangeRefusal] = []
+    for origin, (kind, reasons) in sorted(after.evaluation.origins().items()):
+        if kind == "empty-domain" and not EMPTY_DOMAIN_REFUSES:
+            continue
+        if not _origin_dependencies(index, origin, kind) & touched:
+            continue
+        standing = _standing(index, origin, kind, stored, named)
+        refusals.append(RuleRefusal(origin, kind, reasons, standing))
+    if refusals:
+        return Rejected(tuple(sorted(refusals, key=refusal_key)), after.validity())
 
-def _rounds(
-    state: _State,
-    readable: Mapping[str, Any],
-    refused: Mapping[str, tuple[Reason, ...]],
-) -> tuple[dict[str, _Derivation], dict[str, _Derivation], dict[str, Any]]:
-    """Frozen rounds to quiescence: the forced choices, the ones with no possible case
-    (of the last round), and the values (readable and forced)."""
-
-    values = dict(readable)
-    forced: dict[str, _Derivation] = {}
-    while True:
-        proposals: dict[str, _Derivation] = {}
-        no_case: dict[str, _Derivation] = {}
-        for choice in state.index.ordered_choices():
-            if choice in state.stored or choice in values or choice in refused:
-                continue
-            trial = _trial(state, values, refused, choice)
-            if trial.presence is not Guard.PRESENT or trial.cases is None:
-                continue
-            if len(trial.possible) == 1:
-                proposals[choice] = _Derivation(trial.possible[0], trial.impossible, trial.support)
-            elif not trial.possible:
-                no_case[choice] = _Derivation(None, trial.impossible, trial.support)
-        if not proposals:
-            return forced, no_case, values
-        for choice in sorted(proposals):
-            values[choice] = proposals[choice].value
-            forced[choice] = proposals[choice]
-
-
-def _merge(groups: Iterable[frozenset[str]]) -> list[frozenset[str]]:
-    """Overlapping groups merged, in a canonical order."""
-
-    merged: list[set[str]] = []
-    for group in groups:
-        current = set(group)
-        rest = []
-        for other in merged:
-            if other & current:
-                current |= other
-            else:
-                rest.append(other)
-        merged = [*rest, current]
-    return sorted((frozenset(group) for group in merged), key=lambda g: tuple(sorted(g)))
-
-
-@dataclass
-class _Forcing:
-    values: dict[str, Any]
-    forced: dict[str, _Derivation]
-    #: uncommitted participants refused by a conflict, with their derivation
-    refused: dict[str, _Derivation] = field(default_factory=dict)
-    #: of those, the ones with no possible case
-    no_case: set[str] = field(default_factory=set)
-    components: list[frozenset[str]] = field(default_factory=list)
-
-
-def _force(state: _State, readable: Mapping[str, Any]) -> _Forcing:
-    """Forcing from the readable choices: rounds, the final check, conflicts; again
-    without the refused participants until no new conflict appears."""
-
-    index = state.index
-    refused: dict[str, _Derivation] = {}
-    no_case_refused: set[str] = set()
-    components: list[frozenset[str]] = []
-    while True:
-        blocked: dict[str, tuple[Reason, ...]] = {name: () for name in refused}
-        forced, no_case, values = _rounds(state, readable, blocked)
-        final = state.evaluation(values, blocked)
-        starts: list[frozenset[str]] = []
-        for name in sorted(index.constraints):
-            if final.constraint(name).verdict is Verdict.FALSE:
-                starts.append(frozenset(c for c in index.constraint_reads[name] if c in values))
-        for name in sorted(state.stored) if index.space.trials_count_retained_checks else ():
-            if final.check_piece(name).verdict is Verdict.FALSE:
-                reads = index.check_reads[name]
-                starts.append(frozenset({name} | {c for c in reads if c in values}))
-        for name in sorted(no_case):
-            starts.append(frozenset({name}) | no_case[name].support)
-        fresh_found = False
-        for group in _merge(_expand(start, forced) for start in starts):
-            fresh = sorted(c for c in group if c in forced or c in no_case)
-            if not fresh:
-                continue
-            fresh_found = True
-            if not any(c in forced for c in group):
-                # no forced value to withdraw: a plain refusal, no conflict, no peers
-                for name in fresh:
-                    refused[name] = no_case[name]
-                    no_case_refused.add(name)
-                continue
-            components.append(group)
-            for name in fresh:
-                if name in no_case:
-                    refused[name] = no_case[name]
-                    no_case_refused.add(name)
-                else:
-                    refused[name] = forced[name]
-        if not fresh_found:
-            return _Forcing(values, forced, refused, no_case_refused, _merge(components))
-
-
-def _expand(start: frozenset[str], forced: Mapping[str, _Derivation]) -> frozenset[str]:
-    """``start`` with the evidence of every forced choice in it, to closure."""
-
-    found = set(start)
-    expanded: set[str] = set()
-    while True:
-        pending = sorted(name for name in found if name in forced and name not in expanded)
-        if not pending:
-            return frozenset(found)
-        for name in pending:
-            expanded.add(name)
-            found |= forced[name].support
-
-
-@dataclass
-class _Settled:
-    readable: dict[str, Any]
-    forcing: _Forcing
-    checks: dict[str, Check]
-
-
-def settle_readable(round_: Callable[[frozenset[str]], tuple[frozenset[str], _T]]) -> _T:
-    """Readability's least fixed point: from nothing readable, apply ``round_`` (which
-    gives, from the readable set, the next one and what that round found) until a round
-    reproduces its input, and return what that round found. A round revisiting an
-    earlier set raises :class:`NonConvergence`."""
-
-    readable: frozenset[str] = frozenset()
-    history: list[frozenset[str]] = []
-    while True:
-        following, found = round_(readable)
-        if following == readable:
-            return found
-        if following in history:
-            loop = [*history[history.index(following) :], readable]
-            moving = frozenset().union(*loop) - frozenset.intersection(*loop)
-            raise NonConvergence(tuple(sorted(moving)), tuple(tuple(sorted(item)) for item in loop))
-        history.append(readable)
-        readable = following
-
-
-def _settle(state: _State) -> _Settled:
-    """The least fixed point of readability (decision 1 of the module docstring)."""
-
-    stored = state.stored
-
-    def round_(names: frozenset[str]) -> tuple[frozenset[str], _Settled]:
-        readable = {name: stored[name] for name in sorted(names)}
-        forcing = _force(state, readable)
-        blocked = {name: () for name in forcing.refused}
-        evaluation = state.evaluation(forcing.values, blocked)
-        checks = {name: evaluation.check(name, stored[name]) for name in sorted(stored)}
-        following = frozenset(
-            name for name, check in checks.items() if check.verdict is Verdict.TRUE
-        )
-        return following, _Settled(readable, forcing, checks)
-
-    return settle_readable(round_)
+    # 5. what moved
+    dormant: list[str] = []
+    in_play: list[str] = []
+    opened: list[str] = []
+    for path in index.ordered_choices():
+        scope = index.choices[path].scope
+        was = before.presence(scope)
+        now = after.presence(scope)
+        if path in stored:
+            if was not in _OUT and now in _OUT:
+                dormant.append(path)
+            if was is not Presence.PRESENT and now is Presence.PRESENT:
+                in_play.append(path)
+        elif was is not Presence.PRESENT and now is Presence.PRESENT:
+            opened.append(path)
+    return Accepted(successor, tuple(dormant), tuple(in_play), tuple(opened), after.validity())
 
 
 # --- a configuration's answers -------------------------------------------------------
@@ -1189,181 +890,97 @@ class Solution:
     """Every answer of one configuration, computed from scratch."""
 
     def __init__(self, configuration: Configuration) -> None:
-        index = configuration.index
         self.configuration = configuration
-        self.index = index
-        self._state = _State(index, configuration.facts, configuration.stored)
-        settled = _settle(self._state)
-        self._settled = settled
-        forcing = settled.forcing
-        self._peers: dict[str, tuple[str, ...]] = {}
-        for group in forcing.components:
-            for name in group:
-                self._peers[name] = tuple(sorted(group - {name}))
-        refused: dict[str, tuple[Reason, ...]] = {}
-        for name, check in settled.checks.items():
-            if check.verdict is Verdict.FALSE:
-                refused[name] = check.reasons
-        extra: list[Piece] = []
-        values = {name: v for name, v in forcing.values.items() if name not in forcing.refused}
-        guards = self._state.evaluation(values, refused, True, settled.checks)
-        for name in sorted(forcing.refused):
-            scope = index.choices[name].scope
-            reasons: list[Reason] = []
-            under_refused = guards.presence(scope).state is Guard.REFUSED
-            if name in forcing.no_case and not under_refused:
-                reason = Reason(ReasonKind.NO_POSSIBLE_VALUE, name, scope)
-                reasons.append(reason)
-                extra.append(
-                    Piece(
-                        PieceKind.NO_POSSIBLE_VALUE, scope, name, Verdict.FALSE, reasons=(reason,)
-                    )
-                )
-            peers = self._peers.get(name, ())
-            if peers:
-                owner = index.common_scope(tuple(sorted({name, *peers})))
-                reasons.append(Reason(ReasonKind.CONFLICT, name, owner, related=peers))
-            refused[name] = sorted_reasons(reasons)
-        self._conflicts: list[Conflict] = []
-        for group in forcing.components:
-            participants = tuple(sorted(group))
-            refused_here = tuple(name for name in participants if name in forcing.refused)
-            if len(participants) < 2 and not any(name in forcing.forced for name in participants):
-                continue
-            owner = index.common_scope(participants)
-            kept = tuple(name for name in participants if name not in forcing.refused)
-            self._conflicts.append(Conflict(owner, participants, refused_here, kept))
-            reason = Reason(ReasonKind.CONFLICT, "", owner, related=participants)
-            extra.append(
-                Piece(
-                    PieceKind.CONFLICT,
-                    owner,
-                    "",
-                    Verdict.FALSE,
-                    reasons=(reason,),
-                    related=participants,
-                )
-            )
-        self._values = values
-        self._refused = refused
-        self._published = self._state.evaluation(
-            self._values, refused, True, settled.checks, tuple(extra)
-        )
-        self._frozen_refused: dict[str, tuple[Reason, ...]] = {name: () for name in forcing.refused}
+        self.index = configuration.index
+        self.evaluation = _Evaluation(self.index, configuration.facts, configuration.stored)
 
-    # -- the questions
-
-    def own_check(self, choice: str) -> Check | None:
-        """A stored choice's own check; ``None`` for a choice nothing is stored for."""
-
+    def _choice(self, choice: str) -> None:
         if choice not in self.index.choices:
             raise ConfigurationError(f"unknown choice {choice}")
-        return self._settled.checks.get(choice)
+
+    def presence(self, scope: str) -> Presence:
+        if scope not in self.index.scopes:
+            raise ConfigurationError(f"unknown scope {scope}")
+        return self.evaluation.presence(scope).state
 
     def state(self, choice: str) -> ChoiceState:
-        index = self.index
-        if choice not in index.choices:
-            raise ConfigurationError(f"unknown choice {choice}")
-        info = index.choices[choice]
-        stored = self.configuration.stored
-        forcing = self._settled.forcing
-        if choice in stored:
-            value = stored[choice]
-            check = self._settled.checks[choice]
-            if check.verdict is None:
-                return Inactive(True, value)
-            if check.verdict is Verdict.TRUE:
-                presence = self._published.presence(info.scope)
-                if presence.state is Guard.REFUSED:
-                    answer = self._published.read(choice)
-                    assert isinstance(answer, Refused)
-                    return GuardRefused(value, answer.reasons, self._peers.get(choice, ()))
-                return Readable(value, self._peers.get(choice, ()))
-            if check.through_guard:
-                answer = self._published.read(choice)
-                assert isinstance(answer, Refused)
-                return GuardRefused(value, answer.reasons, self._peers.get(choice, ()))
-            if check.refused_input:
-                return InputRefused(value, check.reasons)
-            if check.verdict is Verdict.UNKNOWN:
-                return Unchecked(value, check.waits)
-            return RefusedChoice(check.reasons, True, value)
-        presence = self._published.presence(info.scope)
-        if presence.state is Guard.ABSENT:
-            return Inactive()
-        if presence.state is Guard.REFUSED:
-            # blamed at its guard: refused through it, its own pieces adding nothing
-            answer = self._published.read(choice)
-            assert isinstance(answer, Refused)
-            return RefusedChoice(answer.reasons)
-        if choice in forcing.refused:
-            return RefusedChoice(
-                self._refused[choice],
-                cases=forcing.refused[choice].cases,
-                peers=self._peers.get(choice, ()),
-            )
-        if choice in forcing.forced:
-            derivation = forcing.forced[choice]
-            return Forced(derivation.value, derivation.cases)
-        trial = _trial(self._state, self._values, self._frozen_refused, choice)
-        if trial.cases is None:
-            return Open(None, (), tuple(sorted(trial.waits)), info.required)
-        return Open(trial.possible, trial.impossible, tuple(sorted(trial.waits)), info.required)
+        self._choice(choice)
+        return self.evaluation.state(choice)
 
     def states(self) -> dict[str, ChoiceState]:
         return {name: self.state(name) for name in self.index.ordered_choices()}
 
+    def dormant(self) -> tuple[str, ...]:
+        """The stored choices out of play, sorted."""
+
+        return tuple(name for name, s in self.states().items() if isinstance(s, Dormant))
+
+    def waiting(self) -> tuple[str, ...]:
+        """The stored choices waiting, sorted."""
+
+        return tuple(name for name, s in self.states().items() if isinstance(s, Waiting))
+
     def validity(self, scope: str = "") -> Validity:
         if scope not in self.index.scopes:
             raise ConfigurationError(f"unknown scope {scope}")
-        return self._published.validity(scope)
+        return self.evaluation.validity(scope)
 
     def read(self, path: str) -> Answer:
         """A fact's, a choice's, a derived value's or a view's answer."""
 
         if self.index.kind(path) is None:
             raise ConfigurationError(f"unreadable {path}")
-        return self._published.read(path)
+        return self.evaluation.read(path)
 
     def view(self, path: str) -> Answer:
         if path not in self.index.views:
             raise ConfigurationError(f"unknown view {path}")
-        return self._published.read(path)
+        return self.evaluation.read(path)
 
     def piece(self, constraint: str) -> Piece:
-        """A constraint's piece in the published configuration."""
+        """A constraint's piece."""
 
-        return self._published.constraint(constraint)
+        if constraint not in self.index.constraints:
+            raise ConfigurationError(f"unknown constraint {constraint}")
+        return self.evaluation.constraint(constraint)
 
-    def possible(self, choice: str) -> tuple[Any, ...] | None:
-        """The possible cases of a choice nothing is stored for: its forced value, its
-        open cases (``None`` when they cannot be listed), or none when refused."""
+    def possible(self, choice: str) -> tuple[tuple[Any, Possible | Impossible], ...] | None:
+        """Each member value of ``choice``'s listed domain, in membership's list order,
+        with what setting it alone answers; ``None`` when the list cannot be made (a
+        membership-only domain, or a list waiting on a missing fact or refused through
+        an input)."""
 
-        state = self.state(choice)
-        if isinstance(state, Forced):
-            return (state.value,)
-        if isinstance(state, Open):
-            return state.possible
-        if isinstance(state, RefusedChoice) and not state.stored:
-            return ()
-        return None
+        self._choice(choice)
+        listing = self.evaluation.facts.listing(choice)
+        if not isinstance(listing, Known):
+            return None
+        out: list[tuple[Any, Possible | Impossible]] = []
+        for value in listing.value:
+            result = change(self.configuration, Change(commit={choice: value}))
+            if isinstance(result, Accepted):
+                out.append((value, Possible(result.dormant, result.in_play, result.opened)))
+            else:
+                out.append((value, Impossible(result.refusals)))
+        return tuple(out)
 
-    def forced(self) -> dict[str, Any]:
-        forcing = self._settled.forcing
-        return {
-            name: forcing.forced[name].value
-            for name in sorted(forcing.forced)
-            if name not in forcing.refused
-        }
+    def ordered(self, choice: str) -> Answer | None:
+        """The membership list ranked by the domain's order: known, waiting while the
+        list or an order read waits, refused through a refused input, inapplicable when
+        an order read does not apply; ``None`` for a membership-only domain."""
 
-    def unchecked(self) -> tuple[str, ...]:
-        return tuple(
-            name
-            for name, check in sorted(self._settled.checks.items())
-            if check.verdict is Verdict.UNKNOWN
-            and not check.refused_input
-            and not check.through_guard
-        )
-
-    def conflicts(self) -> tuple[Conflict, ...]:
-        return tuple(self._conflicts)
+        self._choice(choice)
+        info = self.index.choices[choice]
+        listing = self.evaluation.facts.listing(choice)
+        if not isinstance(listing, Known) or info.domain.order is None:
+            return listing
+        inputs = self.evaluation.inputs(info.domain.order_reads)
+        if inputs.refused:
+            reason = Reason(ReasonKind.INPUT_REFUSED, choice, info.scope, related=inputs.refused)
+            return Refused((reason,))
+        if inputs.waits:
+            return Unresolved(tuple(sorted(inputs.waits)))
+        if inputs.values is None:
+            return Inapplicable()
+        ranked = tuple(info.domain.order(listing.value, inputs.values))
+        assert _permutation(ranked, listing.value), (choice, ranked, listing.value)
+        return Known(ranked)

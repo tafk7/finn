@@ -5,63 +5,61 @@
 
 Each test is one rule on a small synthetic Space; the expected answers are written
 out, not computed. The model is the oracle the engine's tests compare against, so
-these tests are what the oracle is held to.
+these tests are what the oracle is held to. "§" cites the semantics note
+(``records/space-semantics-defaults-2026-10-18/NOTE.md`` in the design corpus).
 """
 
 from __future__ import annotations
 
-import dataclasses
-import itertools
-import random
-from collections.abc import Callable
 from typing import Any
 
 import pytest
 
 from core.space.reference import (
+    EMPTY_DOMAIN_REFUSES,
+    Absent,
     Accepted,
+    AssignmentRefusal,
     Change,
-    ChangeRefusal,
-    Check,
     Choice,
     Configuration,
-    Conflict,
+    ConfigurationError,
     Constraint,
     DefinitionError,
     Derived,
-    Forced,
-    GuardRefused,
-    Inactive,
+    Dormant,
+    Impossible,
     Inapplicable,
-    InputRefused,
     Known,
-    NonConvergence,
     Open,
+    Piece,
     PieceKind,
-    Readable,
+    Possible,
+    Presence,
     Reads,
     Reason,
     ReasonKind,
     Refuse,
     Refused,
-    RefusedChoice,
     Rejected,
+    RuleRefusal,
     Scope,
     Selector,
+    Set,
     Solution,
     Space,
-    Unchecked,
     Unresolved,
     Verdict,
     View,
+    Waiting,
     When,
     change,
     computed,
     kleene_and,
     listed,
     membership,
+    same,
 )
-from core.space.reference.model import same, settle_readable
 
 T, F, U = Verdict.TRUE, Verdict.FALSE, Verdict.UNKNOWN
 
@@ -88,14 +86,22 @@ def constraint_reason(name: str, code: str, owner: str = "") -> Reason:
     return Reason(ReasonKind.CONSTRAINT, name, owner, code)
 
 
-def reaching(space: Space) -> Space:
-    """``space`` with value trials counting other stored choices' own checks."""
+def rule(name: str, code: str, owner: str = "", standing: tuple[str, ...] = ()) -> RuleRefusal:
+    """A constraint false at its origin, refusing a change."""
 
-    return dataclasses.replace(space, trials_count_retained_checks=True)
+    return RuleRefusal(name, "constraint", (constraint_reason(name, code, owner),), standing)
+
+
+def outside(choice: str, owner: str = "") -> AssignmentRefusal:
+    return AssignmentRefusal(choice, (Reason(ReasonKind.OUTSIDE_DOMAIN, choice, owner),))
 
 
 def false_kinds(solution: Solution, scope: str = "") -> set[tuple[PieceKind, str]]:
     return {(piece.kind, piece.subject) for piece in solution.validity(scope).false}
+
+
+def divisors(n: int) -> tuple[int, ...]:
+    return tuple(d for d in range(1, n + 1) if n % d == 0)
 
 
 # --- the three-valued AND --------------------------------------------------------------
@@ -108,274 +114,926 @@ def test_kleene_and_lets_false_beat_unknown_and_unknown_beat_true() -> None:
     assert kleene_and([]) is T
 
 
-# --- typed membership -------------------------------------------------------------------
+# --- § 11, DESIGN § 3: Tiles and Pair ----------------------------------------------------
+
+
+def tiles(name: str) -> Scope:
+    lanes, cycles = f"{name}.lanes", f"{name}.cycles"
+    return Scope(
+        name,
+        choices=(Choice("lanes", computed(lambda r: divisors(r["extent"]), ("extent",))),),
+        derived=(Derived("cycles", ("extent", lanes), lambda r: r["extent"] // r[lanes]),),
+        constraints=(
+            Constraint("within_budget", (cycles,), lambda r: r[cycles] <= 4, "over-budget"),
+        ),
+    )
+
+
+def pair() -> Space:
+    return Space(
+        ("extent",),
+        Scope(
+            "",
+            children=(tiles("left"), tiles("right")),
+            constraints=(
+                Constraint(
+                    "right_not_slower",
+                    ("right.cycles", "left.cycles"),
+                    lambda r: r["right.cycles"] <= r["left.cycles"],
+                    "right-slower",
+                ),
+            ),
+            views=(
+                View(
+                    "timing",
+                    ("left.cycles", "right.cycles"),
+                    lambda r: (r["left.cycles"], r["right.cycles"]),
+                ),
+            ),
+        ),
+    )
+
+
+BUDGET = RuleRefusal(
+    "left.within_budget",
+    "constraint",
+    (constraint_reason("left.within_budget", "over-budget", "left"),),
+    (),
+)
+RIGHT_STANDS = rule("right_not_slower", "right-slower", standing=("right.lanes",))
+
+
+def test_tiles_nothing_set_is_open_then_both_set_is_valid() -> None:
+    base = Configuration(pair(), {"extent": 12})
+    validity = base.solve().validity()
+    assert validity.verdict is U
+    assert [(p.subject, p.waits) for p in validity.unknown] == [
+        ("right_not_slower", ("left.lanes", "right.lanes")),
+        ("left.within_budget", ("left.lanes",)),
+        ("right.within_budget", ("right.lanes",)),
+    ]
+    point = accepted(change(base, Change(commit={"left.lanes": 3, "right.lanes": 3})))
+    assert (point.dormant, point.in_play, point.opened) == ((), (), ())
+    assert point.validity.verdict is T
+    assert point.configuration.solve().view("timing") == Known((4, 4))
+
+
+def test_tiles_left_alone_at_six_is_refused_naming_the_rule_and_right() -> None:
+    point = Configuration(pair(), {"extent": 12}, {"left.lanes": 3, "right.lanes": 3})
+    result = rejected(change(point, Change(commit={"left.lanes": 6})))
+    assert result.refusals == (RIGHT_STANDS,)
+    assert result.validity is not None
+    assert [p.subject for p in result.validity.false] == ["right_not_slower"]
+    faster = accepted(change(point, Change(commit={"left.lanes": 6, "right.lanes": 6})))
+    assert faster.configuration.solve().view("timing") == Known((2, 2))
+
+
+def test_tiles_possible_values_of_left_beside_right_at_three() -> None:
+    """1, 2: left's own budget, nothing standing (it reads only left's values); 3: the
+    value held; 4, 6, 12: ``right_not_slower``, with ``right.lanes`` standing."""
+
+    point = Configuration(pair(), {"extent": 12}, {"left.lanes": 3, "right.lanes": 3})
+    assert point.solve().possible("left.lanes") == (
+        (1, Impossible((BUDGET,))),
+        (2, Impossible((BUDGET,))),
+        (3, Possible()),
+        (4, Impossible((RIGHT_STANDS,))),
+        (6, Impossible((RIGHT_STANDS,))),
+        (12, Impossible((RIGHT_STANDS,))),
+    )
+
+
+# --- § 11, DESIGN § 4.6: Memory -----------------------------------------------------------
+
+
+def memory() -> Space:
+    return Space(
+        ("uram",),
+        Scope(
+            "",
+            choices=(Choice("style", listed("block", "ultra")),),
+            constraints=(
+                Constraint(
+                    "ultra_needs_uram",
+                    ("style", "uram"),
+                    lambda r: r["style"] != "ultra" or r["uram"],
+                    "uram-absent",
+                ),
+            ),
+        ),
+    )
+
+
+def test_memory_ultra_is_refused_by_the_facts_alone_with_nothing_standing() -> None:
+    bare = Configuration(memory(), {"uram": False})
+    refusal = rule("ultra_needs_uram", "uram-absent")
+    assert bare.solve().possible("style") == (
+        ("block", Possible()),
+        ("ultra", Impossible((refusal,))),
+    )
+    assert rejected(change(bare, Change(commit={"style": "ultra"}))).refusals == (refusal,)
+
+
+# --- § 12's hand cases --------------------------------------------------------------------
+
+
+def odd_product() -> Space:
+    return Space(
+        (),
+        Scope(
+            "",
+            choices=(Choice("x", listed(1, 2, 3)), Choice("y", listed(1, 2))),
+            derived=(
+                Derived(
+                    "width",
+                    ("x", "y"),
+                    lambda r: Refuse("odd") if (r["x"] * r["y"]) % 2 else r["x"] * r["y"],
+                ),
+            ),
+            constraints=(Constraint("fits", ("width",), lambda r: r["width"] <= 4, "too-wide"),),
+            views=(View("shown", ("width",), lambda r: r["width"]),),
+        ),
+    )
+
+
+def test_a_refusal_through_a_refused_input_is_blamed_at_its_origin_only() -> None:
+    """``x = 3`` makes ``width`` refuse on its own values; ``fits`` is false only through
+    it, so the change names ``width`` alone, with ``y`` standing."""
+
+    base = Configuration(odd_product(), {}, {"x": 2, "y": 1})
+    assert base.solve().validity().verdict is T
+    result = rejected(change(base, Change(commit={"x": 3})))
+    assert result.refusals == (
+        RuleRefusal(
+            "width", "derived", (Reason(ReasonKind.DERIVED_BODY, "width", "", "odd"),), ("y",)
+        ),
+    )
+    assert result.validity is not None
+    assert result.validity.false == (
+        Piece(
+            PieceKind.CONSTRAINT,
+            "",
+            "fits",
+            F,
+            reasons=(Reason(ReasonKind.INPUT_REFUSED, "fits", "", "too-wide", ("width",)),),
+        ),
+    )
+
+
+def cores() -> Space:
+    """``compute``: the ``packed`` core, or ``dsp58``, which a rule over facts alone
+    allows only on a part with DSP58; ``dsp58``'s rule never names its selector."""
+
+    packed = Scope("packed", choices=(Choice("pe", listed(1, 2)),))
+    dsp58 = Scope(
+        "dsp58",
+        choices=(Choice("pe", listed(1, 2, 4)),),
+        constraints=(
+            Constraint("supported", ("has_dsp58",), lambda r: r["has_dsp58"], "no-dsp58"),
+        ),
+    )
+    return Space(("has_dsp58",), Scope("", selectors=(Selector("compute", (packed, dsp58)),)))
+
+
+def test_a_rule_in_a_case_that_never_names_its_selector_is_reached_by_switching() -> None:
+    base = Configuration(
+        cores(), {"has_dsp58": False}, {"compute": "packed", "compute.packed.pe": 2}
+    )
+    assert base.solve().validity().verdict is T
+    result = rejected(change(base, Change(commit={"compute": "dsp58"})))
+    assert result.refusals == (rule("compute.dsp58.supported", "no-dsp58", "compute.dsp58"),)
+    # on a part with DSP58 the switch is accepted: packed's pe dormant, dsp58's opened
+    able = Configuration(
+        cores(), {"has_dsp58": True}, {"compute": "packed", "compute.packed.pe": 2}
+    )
+    switched = accepted(change(able, Change(commit={"compute": "dsp58"})))
+    assert switched.dormant == ("compute.packed.pe",)
+    assert switched.in_play == ()
+    assert switched.opened == ("compute.dsp58.pe",)
+
+
+def budget() -> Space:
+    return Space(
+        (),
+        Scope(
+            "",
+            choices=tuple(Choice(name, listed(1, 2, 3, 4, 5, 6)) for name in ("a", "b", "c")),
+            constraints=(
+                Constraint(
+                    "budget", ("a", "b", "c"), lambda r: r["a"] + r["b"] + r["c"] <= 10, "over"
+                ),
+            ),
+        ),
+    )
+
+
+def test_a_new_value_breaking_a_sum_names_the_other_two_standing() -> None:
+    base = Configuration(budget(), {}, {"a": 1, "b": 4, "c": 4})
+    assert rejected(change(base, Change(commit={"a": 5}))).refusals == (
+        rule("budget", "over", standing=("b", "c")),
+    )
+    # setting one of them in the same batch leaves the other standing alone
+    assert rejected(change(base, Change(commit={"a": 5, "b": 3}))).refusals == (
+        rule("budget", "over", standing=("c",)),
+    )
+    assert accepted(change(base, Change(commit={"a": 2, "b": 2}))).validity.verdict is T
+    # clearing what stands in the way first: clearing never refuses
+    cleared = accepted(change(base, Change(clear=("b", "c"))))
+    assert cleared.validity.verdict is U
+    assert accepted(change(cleared.configuration, Change(commit={"a": 5}))).validity.verdict is U
+
+
+def two_kinds() -> Space:
+    packed = Scope("packed", choices=(Choice("pe", listed(1, 2, 4)), Choice("simd", listed(1, 2))))
+    serial = Scope("serial", choices=(Choice("lanes", listed(1, 2)),))
+    return Space((), Scope("", selectors=(Selector("compute", (packed, serial)),)))
+
+
+PE2, SIMD2, LANES2 = "compute.packed.pe", "compute.packed.simd", "compute.serial.lanes"
+
+
+def test_a_selector_switched_away_and_back_puts_its_choices_dormant_then_restores_them() -> None:
+    base = Configuration(two_kinds(), {}, {"compute": "packed", PE2: 2, SIMD2: 1})
+    away = accepted(change(base, Change(commit={"compute": "serial"})))
+    assert (away.dormant, away.in_play, away.opened) == ((PE2, SIMD2), (), (LANES2,))
+    solution = away.configuration.solve()
+    assert solution.state(PE2) == Dormant(2)
+    assert solution.state(SIMD2) == Dormant(1)
+    assert solution.state(LANES2) == Open()
+    assert solution.dormant() == (PE2, SIMD2)
+    assert solution.read(PE2) == Inapplicable()
+    lanes = accepted(change(away.configuration, Change(commit={LANES2: 2})))
+    back = accepted(change(lanes.configuration, Change(commit={"compute": "packed"})))
+    assert (back.dormant, back.in_play, back.opened) == ((LANES2,), (PE2, SIMD2), ())
+    solution = back.configuration.solve()
+    assert solution.state(PE2) == Set(2)
+    assert solution.state(LANES2) == Dormant(2)
+    assert back.configuration.stored == {"compute": "packed", PE2: 2, SIMD2: 1, LANES2: 2}
+
+
+def fitted() -> Space:
+    packed = Scope(
+        "packed",
+        choices=(Choice("pe", listed(1, 2, 4)),),
+        constraints=(
+            Constraint(
+                "pe_fits",
+                ("compute.packed.pe", "w"),
+                lambda r: r["w"] % r["compute.packed.pe"] == 0,
+                "pe-misfit",
+            ),
+        ),
+    )
+    return Space(
+        (),
+        Scope(
+            "",
+            choices=(Choice("w", listed(4, 6)),),
+            selectors=(Selector("compute", (packed, Scope("serial"))),),
+        ),
+    )
+
+
+def test_a_switch_back_is_refused_by_a_restored_choice() -> None:
+    """``pe = 4`` dormant while ``w`` moves to 6; switching back brings ``pe`` into play,
+    where ``pe_fits`` is false: ``pe`` and ``w`` stand in the way, ``compute`` (named,
+    and the rule's own selector) does not."""
+
+    base = Configuration(fitted(), {}, {"w": 4, "compute": "packed", "compute.packed.pe": 4})
+    away = accepted(change(base, Change(commit={"compute": "serial"})))
+    moved = accepted(change(away.configuration, Change(commit={"w": 6})))
+    assert moved.validity.verdict is T
+    result = rejected(change(moved.configuration, Change(commit={"compute": "packed"})))
+    assert result.refusals == (
+        rule("compute.packed.pe_fits", "pe-misfit", "compute.packed", ("compute.packed.pe", "w")),
+    )
+    fixed = accepted(
+        change(moved.configuration, Change(commit={"compute": "packed", "compute.packed.pe": 2}))
+    )
+    assert (fixed.dormant, fixed.in_play, fixed.opened) == ((), ("compute.packed.pe",), ())
+
+
+def sized() -> Space:
+    a = Scope("a", choices=(Choice("depth", computed(lambda r: divisors(r["n"]), ("n",))),))
+    return Space(
+        ("n",),
+        Scope(
+            "",
+            choices=(Choice("lanes", computed(lambda r: divisors(r["n"]), ("n",))),),
+            selectors=(Selector("mode", (a, Scope("b"))),),
+        ),
+    )
+
+
+def test_a_facts_change_is_refused_by_a_stored_value_outside_its_new_domain() -> None:
+    """Every stored value is re-checked, the dormant ``mode.a.depth`` included."""
+
+    base = Configuration(sized(), {"n": 8}, {"lanes": 4, "mode": "b", "mode.a.depth": 8})
+    assert rejected(change(base, Change(facts={"n": 12}))) == Rejected(
+        (outside("mode.a.depth", "mode.a"),), None
+    )
+    assert rejected(change(base, Change(facts={"n": 6}))).refusals == (
+        outside("lanes"),
+        outside("mode.a.depth", "mode.a"),
+    )
+    assert accepted(change(base, Change(facts={"n": 16}))).validity.verdict is T
+    # the caller clears what stands in the way in the same change
+    assert accepted(change(base, Change(facts={"n": 12}, clear=("mode.a.depth",))))
+
+
+def two_cores() -> Space:
+    a = Scope("a", choices=(Choice("p", listed(1, 2)),))
+    b = Scope("b", choices=(Choice("q", listed(5, 6)),))
+    return Space((), Scope("", selectors=(Selector("mode", (a, b)),)))
+
+
+def test_a_named_choice_under_an_open_selector_waits() -> None:
+    first = accepted(change(Configuration(two_cores()), Change(commit={"mode.a.p": 2})))
+    assert (first.dormant, first.in_play, first.opened) == ((), (), ())
+    # each case's domain piece waits on the selector (reading 11)
+    assert (first.validity.verdict, first.validity.waits) == (U, ("mode",))
+    solution = first.configuration.solve()
+    assert solution.state("mode.a.p") == Waiting(2, ("mode",))
+    assert solution.read("mode.a.p") == Unresolved(("mode",))
+    assert solution.state("mode.b.q") == Open(("mode",))
+    assert solution.waiting() == ("mode.a.p",)
+    settled = accepted(change(first.configuration, Change(commit={"mode": "a"})))
+    assert (settled.dormant, settled.in_play, settled.opened) == ((), ("mode.a.p",), ())
+    assert settled.configuration.solve().state("mode.a.p") == Set(2)
+    assert settled.configuration.solve().state("mode.b.q") == Absent()
+    assert settled.validity.verdict is T
+    # a value outside its domain is refused there too, by its type alone
+    assert rejected(change(Configuration(two_cores()), Change(commit={"mode.a.p": 3}))) == Rejected(
+        (outside("mode.a.p", "mode.a"),), None
+    )
+
+
+# --- § 16's readings ----------------------------------------------------------------------
+
+
+def staged() -> Space:
+    stage = Scope(
+        "stage",
+        choices=(Choice("depth", listed(1, 2, 3, 4)),),
+        constraints=(
+            Constraint("small", ("stage.depth",), lambda r: r["stage.depth"] <= 3, "too-deep"),
+        ),
+        views=(
+            View(
+                "half",
+                ("stage.depth",),
+                lambda r: Refuse("odd") if r["stage.depth"] % 2 else r["stage.depth"] // 2,
+            ),
+        ),
+    )
+    return Space(
+        (),
+        Scope(
+            "",
+            children=(stage,),
+            constraints=(
+                Constraint("fits", ("stage.half",), lambda r: r["stage.half"] >= 1, "none"),
+            ),
+        ),
+    )
+
+
+def test_reading_1_a_view_refusing_on_its_own_values_is_an_origin() -> None:
+    base = Configuration(staged(), {}, {"stage.depth": 2})
+    assert base.solve().validity().verdict is T
+    odd = rejected(change(base, Change(commit={"stage.depth": 3})))
+    assert odd.refusals == (
+        RuleRefusal(
+            "stage.half", "view", (Reason(ReasonKind.VIEW_BODY, "stage.half", "stage", "odd"),), ()
+        ),
+    )
+    # refused through its Space, the view is no origin: the child's rule is
+    deep = rejected(change(base, Change(commit={"stage.depth": 4})))
+    assert deep.refusals == (rule("stage.small", "too-deep", "stage"),)
+    after = solve_at(staged(), {"stage.depth": 4})
+    assert after.view("stage.half") == Refused(
+        (Reason(ReasonKind.SPACE_REFUSED, "stage.half", "stage"),)
+    )
+    assert false_kinds(after) == {
+        (PieceKind.CONSTRAINT, "fits"),
+        (PieceKind.CONSTRAINT, "stage.small"),
+    }
+
+
+def facts_refused() -> Space:
+    return Space(
+        ("w",),
+        Scope(
+            "",
+            choices=(Choice("x", listed(1, 2)),),
+            derived=(
+                Derived("d", ("w",), lambda r: Refuse("bad") if r["w"] % 2 else r["w"]),
+                Derived("e", ("x",), lambda r: Refuse("two") if r["x"] == 2 else r["x"]),
+            ),
+            constraints=(Constraint("c", ("d", "x"), lambda r: r["d"] >= r["x"], "small"),),
+        ),
+    )
+
+
+def test_reading_2_only_an_origin_feeding_a_false_piece_and_reached_refuses() -> None:
+    """``c`` reads ``d`` (refusing on the facts alone) and the open ``x``: setting ``x``
+    does not reach ``d``, so it is accepted. ``e`` refuses on ``x = 2``, and nothing
+    rules on it: it reads refused where asked, and refuses no change."""
+
+    broken = Configuration(facts_refused(), {"w": 3})
+    assert broken.solve().validity().verdict is F
+    kept = accepted(change(broken, Change(commit={"x": 1})))
+    assert kept.validity.verdict is F
+    sound = Configuration(facts_refused(), {"w": 4})
+    two = accepted(change(sound, Change(commit={"x": 2})))
+    assert two.validity.verdict is T
+    assert two.configuration.solve().read("e") == Refused(
+        (Reason(ReasonKind.DERIVED_BODY, "e", "", "two"),)
+    )
+    # a facts change reaching d is refused at d, nothing standing
+    assert rejected(change(two.configuration, Change(facts={"w": 5}))).refusals == (
+        RuleRefusal("d", "derived", (Reason(ReasonKind.DERIVED_BODY, "d", "", "bad"),), ()),
+    )
+
+
+def guarded_by(read: str) -> Scope:
+    return Scope(
+        "g",
+        when=When((read,), lambda r: bool(r[read])),
+        choices=(Choice("n", listed(1, 2, 3)),),
+        constraints=(Constraint("small", ("g.n",), lambda r: r["g.n"] <= 2, "big"),),
+    )
+
+
+def test_reading_3_a_when_read_reaches_the_rules_it_guards() -> None:
+    space = Space(("wide",), Scope("", children=(guarded_by("wide"),)))
+    base = Configuration(space, {"wide": False}, {"g.n": 3})
+    assert base.solve().state("g.n") == Dormant(3)
+    assert base.solve().validity().verdict is T
+    result = rejected(change(base, Change(facts={"wide": True})))
+    assert result.refusals == (rule("g.small", "big", "g", ("g.n",)),)
+    cleared = accepted(change(base, Change(facts={"wide": True}, clear=("g.n",))))
+    assert (cleared.dormant, cleared.in_play, cleared.opened) == ((), (), ("g.n",))
+
+
+def deciding() -> Space:
+    g = Scope(
+        "g",
+        when=When(("v",), lambda r: r["v"] == 1),
+        choices=(Choice("n", listed(1, 2, 3)),),
+        constraints=(Constraint("bound", ("v", "g.n"), lambda r: r["g.n"] <= 1 + r["v"], "over"),),
+    )
+    a = Scope(
+        "a",
+        choices=(Choice("p", listed(1, 2, 3)),),
+        constraints=(
+            Constraint(
+                "cap", ("mode", "mode.a.p"), lambda r: r["mode"] != "a" or r["mode.a.p"] <= 2, "cap"
+            ),
+        ),
+    )
+    return Space(
+        (),
+        Scope(
+            "",
+            choices=(Choice("v", listed(0, 1)),),
+            selectors=(Selector("mode", (a, Scope("b"))),),
+            children=(g,),
+        ),
+    )
+
+
+def test_reading_4_what_decides_a_rules_existence_never_stands_in_its_way() -> None:
+    """``bound`` reads ``v``, its guard's read; ``cap`` reads ``mode``, its selector:
+    both stored, neither named, neither standing."""
+
+    base = Configuration(deciding(), {}, {"v": 1, "g.n": 1, "mode": "a", "mode.a.p": 1})
+    assert rejected(change(base, Change(commit={"g.n": 3}))).refusals == (
+        rule("g.bound", "over", "g"),
+    )
+    assert rejected(change(base, Change(commit={"mode.a.p": 3}))).refusals == (
+        rule("mode.a.cap", "cap", "mode.a"),
+    )
+
+
+def test_reading_5_clearing_a_selector_leaves_its_cases_choices_waiting() -> None:
+    base = Configuration(two_kinds(), {}, {"compute": "packed", PE2: 2, SIMD2: 1})
+    result = accepted(change(base, Change(clear=("compute",))))
+    assert (result.dormant, result.in_play, result.opened) == ((), (), ())
+    solution = result.configuration.solve()
+    assert solution.state(PE2) == Waiting(2, ("compute",))
+    assert solution.state(SIMD2) == Waiting(1, ("compute",))
+    assert solution.state(LANES2) == Open(("compute",))
+    assert solution.waiting() == (PE2, SIMD2)
+    assert solution.dormant() == ()
+    assert solution.presence("compute.packed") is Presence.UNKNOWN
+
+
+def capped() -> Space:
+    """``lanes`` divides the fact ``n``; a rule caps it at 2. ``j``'s domain reads a
+    derived value over facts in the case ``a``."""
+
+    a = Scope("a", derived=(Derived("span", ("n",), lambda r: r["n"]),))
+    return Space(
+        ("n",),
+        Scope(
+            "",
+            choices=(
+                Choice("lanes", computed(lambda r: divisors(r["n"]), ("n",))),
+                Choice("j", computed(lambda r: tuple(range(r["mode.a.span"])), ("mode.a.span",))),
+            ),
+            selectors=(Selector("mode", (a, Scope("b"))),),
+            constraints=(Constraint("cap", ("lanes",), lambda r: r["lanes"] <= 2, "wide"),),
+        ),
+    )
+
+
+def test_reading_6_a_value_waiting_on_a_missing_fact_is_checked_when_it_comes() -> None:
+    base = Configuration(capped(), {}, {"mode": "b"})
+    waiting = accepted(change(base, Change(commit={"lanes": 2})))
+    solution = waiting.configuration.solve()
+    assert solution.state("lanes") == Waiting(2, ("n",))
+    assert solution.read("lanes") == Unresolved(("n",))
+    assert (waiting.validity.verdict, waiting.validity.waits) == (U, ("n",))
+    assert rejected(change(waiting.configuration, Change(facts={"n": 9}))) == Rejected(
+        (outside("lanes"),), None
+    )
+    supplied = accepted(change(waiting.configuration, Change(facts={"n": 8})))
+    assert supplied.configuration.solve().state("lanes") == Set(2)
+    assert supplied.in_play == ()
+    # unsetting the fact never refuses: the value waits again
+    unset = accepted(change(supplied.configuration, Change(unset=("n",))))
+    assert unset.configuration.solve().state("lanes") == Waiting(2, ("n",))
+
+
+def test_reading_3_a_value_the_facts_change_lets_be_read_reaches_its_rules() -> None:
+    """``lanes = 4`` waits on ``n``; the facts change supplying ``n`` makes it read as
+    its value, which reaches ``cap``: refused, with ``lanes`` standing."""
+
+    waiting = Configuration(capped(), {}, {"lanes": 4})
+    assert waiting.solve().piece("cap").verdict is U
+    assert rejected(change(waiting, Change(facts={"n": 8}))).refusals == (
+        rule("cap", "wide", standing=("lanes",)),
+    )
+
+
+def test_reading_6_membership_is_over_the_facts_whatever_its_inputs_presence() -> None:
+    """``j``'s domain reads ``mode.a.span``, a derived value over facts in the case ``a``:
+    with ``b`` selected the type check still reads it."""
+
+    base = Configuration(capped(), {"n": 3}, {"mode": "b"})
+    result = accepted(change(base, Change(commit={"j": 1})))
+    assert result.configuration.solve().state("j") == Set(1)
+    assert result.configuration.solve().read("mode.a.span") == Inapplicable()
+    assert rejected(change(base, Change(commit={"j": 3}))).refusals == (outside("j"),)
+
+
+def even_width(r: Reads) -> Any:
+    return Refuse("bad-width") if r["w"] % 2 else r["w"]
+
+
+def lanes_over_width() -> Space:
+    return Space(
+        ("w",),
+        Scope(
+            "",
+            choices=(Choice("lanes", computed(lambda r: divisors(r["width"]), ("width",))),),
+            derived=(Derived("width", ("w",), even_width),),
+        ),
+    )
+
+
+THROUGH_WIDTH = (
+    Reason(ReasonKind.DERIVED_BODY, "width", "", "bad-width"),
+    Reason(ReasonKind.INPUT_REFUSED, "lanes", "", related=("width",)),
+)
+
+
+def test_reading_6_a_refusing_membership_input_refuses_the_assignment() -> None:
+    odd = Configuration(lanes_over_width(), {"w": 7})
+    assert rejected(change(odd, Change(commit={"lanes": 1}))) == Rejected(
+        (AssignmentRefusal("lanes", THROUGH_WIDTH),), None
+    )
+    # a facts change making it refuse while a value is stored, alike
+    stored = Configuration(lanes_over_width(), {"w": 8}, {"lanes": 4})
+    assert rejected(change(stored, Change(facts={"w": 7}))) == Rejected(
+        (AssignmentRefusal("lanes", THROUGH_WIDTH),), None
+    )
+
+
+def test_reading_13_a_list_refused_through_its_input_is_a_false_piece_blamed_at_the_input() -> None:
+    odd = Configuration(lanes_over_width(), {"w": 7}).solve()
+    assert odd.validity().false == (
+        Piece(PieceKind.EMPTY_DOMAIN, "", "lanes", F, reasons=THROUGH_WIDTH),
+    )
+    assert odd.possible("lanes") is None
+    even = Configuration(lanes_over_width(), {"w": 8})
+    assert rejected(change(even, Change(facts={"w": 7}))).refusals == (
+        RuleRefusal("width", "derived", (THROUGH_WIDTH[0],), ()),
+    )
 
 
 def two_numbers() -> Space:
-    return Space((), Scope("", choices=(Choice("x", listed(1, 2)),)))
+    return Space((), Scope("", choices=(Choice("x", listed(1, 2)), Choice("z", listed(1, 2)))))
 
 
-def test_a_value_outside_its_domain_is_refused_at_commit_with_its_own_reason() -> None:
-    base = Configuration(two_numbers())
-    result = rejected(change(base, Change(commit={"x": 3})))
-    assert result.refusals == (
-        ChangeRefusal("x", "named", (Reason(ReasonKind.OUTSIDE_DOMAIN, "x", ""),)),
+def linked() -> Space:
+    return Space(
+        (),
+        Scope(
+            "",
+            choices=(
+                Choice("a", listed(1, 2, 3)),
+                Choice("b", listed(1, 2, 3)),
+                Choice("z", listed(1)),
+            ),
+            constraints=(
+                Constraint("linked", ("a", "b"), lambda r: r["b"] <= r["a"], "b-above-a"),
+            ),
+        ),
     )
-    assert accepted(change(base, Change(commit={"x": 2}))).unchecked == ()
+
+
+def test_reading_7_the_constructor_checks_types_and_a_broken_rule_is_legal() -> None:
+    with pytest.raises(ConfigurationError):
+        Configuration(two_numbers(), {}, {"x": 3})
+    with pytest.raises(ConfigurationError):
+        Configuration(two_cores(), {}, {"mode": "b", "mode.a.p": 3})  # dormant, still typed
+    with pytest.raises(ConfigurationError):
+        Configuration(lanes_over_width(), {"w": 7}, {"lanes": 1})
+    with pytest.raises(ConfigurationError):
+        Configuration(two_numbers(), {"nowhere": 1})
+    assert Configuration(capped(), {}, {"lanes": 5}).solve().state("lanes") == Waiting(5, ("n",))
+    broken = Configuration(linked(), {}, {"a": 1, "b": 3})
+    assert false_kinds(broken.solve()) == {(PieceKind.CONSTRAINT, "linked")}
+    # a change that does not reach the rule is accepted, the configuration still refused
+    assert accepted(change(broken, Change(commit={"z": 1}))).validity.verdict is F
+    # the same stored set as a change from nothing is refused (the engine's bind)
+    assert rejected(change(Configuration(linked()), Change(commit={"a": 1, "b": 3}))).refusals == (
+        rule("linked", "b-above-a"),
+    )
+
+
+def gated() -> Space:
+    """``g`` is present while the derived ``gate`` exceeds 2; ``gate`` refuses an odd
+    fact ``w``. ``g.h`` is guarded by ``gate`` too. A root rule reads ``g.n``."""
+
+    h = Scope("h", when=When(("gate",), lambda r: r["gate"] > 4), choices=(Choice("k", listed(1)),))
+    g = Scope(
+        "g",
+        when=When(("gate",), lambda r: r["gate"] > 2),
+        choices=(Choice("n", listed(1, 2)), Choice("m", listed(1, 2))),
+        constraints=(Constraint("small", ("g.n",), lambda r: r["g.n"] <= 1, "big"),),
+        children=(h,),
+    )
+    return Space(
+        ("w",),
+        Scope(
+            "",
+            derived=(Derived("gate", ("w",), lambda r: Refuse("odd") if r["w"] % 2 else r["w"]),),
+            children=(g,),
+            constraints=(Constraint("uses", ("g.n",), lambda r: r["g.n"] >= 1, "unused"),),
+        ),
+    )
+
+
+GATE = Reason(ReasonKind.DERIVED_BODY, "gate", "", "odd")
+
+
+def test_reading_8_a_refused_guard_is_one_piece_and_its_scope_is_not_in_play() -> None:
+    solution = solve_at(gated(), {"g.n": 2}, {"w": 3})
+    assert solution.presence("g") is Presence.REFUSED
+    assert solution.presence("g.h") is Presence.REFUSED
+    assert solution.state("g.n") == Dormant(2)
+    assert solution.state("g.m") == Absent()
+    assert solution.state("g.h.k") == Absent()
+    assert solution.read("g.n") == Refused(
+        (GATE, Reason(ReasonKind.INPUT_REFUSED, "g.n", "g", related=("gate",)))
+    )
+    # g.small (2 <= 1 is false) adds nothing; g.h has no piece of its own
+    assert solution.piece("g.small") == Piece(
+        PieceKind.CONSTRAINT, "g", "g.small", T, applies=False
+    )
+    assert solution.validity().false == (
+        Piece(
+            PieceKind.CONSTRAINT,
+            "",
+            "uses",
+            F,
+            reasons=(Reason(ReasonKind.INPUT_REFUSED, "uses", "", "unused", ("g.n",)),),
+        ),
+        Piece(
+            PieceKind.GUARD,
+            "g",
+            "g",
+            F,
+            reasons=(GATE, Reason(ReasonKind.INPUT_REFUSED, "g", "g", related=("gate",))),
+        ),
+    )
+    # the facts change refusing the guard is refused at the guard's input
+    present = Configuration(gated(), {"w": 4}, {"g.n": 1})
+    assert present.solve().validity().verdict is T
+    assert rejected(change(present, Change(facts={"w": 3}))).refusals == (
+        RuleRefusal("gate", "derived", (GATE,), ()),
+    )
+
+
+def test_reading_8_a_refused_guard_under_an_open_selector_waits_on_it() -> None:
+    """Refused takes effect once all above the guard is present: until ``mode`` is set
+    the scope and its guard's piece are unknown. Setting ``mode`` does not reach
+    ``gate``, the origin, so it is accepted and the configuration reads refused."""
+
+    g = Scope(
+        "g", when=When(("gate",), lambda r: r["gate"] > 2), choices=(Choice("n", listed(1, 2)),)
+    )
+    space = Space(
+        ("w",),
+        Scope(
+            "",
+            derived=(Derived("gate", ("w",), lambda r: Refuse("odd") if r["w"] % 2 else r["w"]),),
+            selectors=(Selector("mode", (Scope("a", children=(g,)), Scope("b"))),),
+        ),
+    )
+    base = Configuration(space, {"w": 3}, {"mode.a.g.n": 1})
+    solution = base.solve()
+    assert solution.presence("mode.a.g") is Presence.UNKNOWN
+    assert solution.state("mode.a.g.n") == Waiting(1, ("mode",))
+    assert solution.validity().unknown[-1] == Piece(
+        PieceKind.GUARD, "mode.a.g", "mode.a.g", U, waits=("mode",)
+    )
+    result = accepted(change(base, Change(commit={"mode": "a"})))
+    assert (result.dormant, result.in_play, result.opened) == (("mode.a.g.n",), (), ())
+    assert result.validity.false == (
+        Piece(
+            PieceKind.GUARD,
+            "mode.a.g",
+            "mode.a.g",
+            F,
+            reasons=(
+                GATE,
+                Reason(ReasonKind.INPUT_REFUSED, "mode.a.g", "mode.a.g", related=("gate",)),
+            ),
+        ),
+    )
+
+
+def counted() -> Space:
+    return Space(
+        ("n",), Scope("", choices=(Choice("x", computed(lambda r: tuple(range(r["n"])), ("n",))),))
+    )
+
+
+def test_reading_9_a_facts_change_emptying_a_domain_is_refused_not_yet_ruled_on() -> None:
+    """devi-2's reading, not yet ruled on by the human: the single switch is on."""
+
+    assert EMPTY_DOMAIN_REFUSES is True
+    base = Configuration(counted(), {"n": 2})
+    result = rejected(change(base, Change(facts={"n": 0})))
+    assert result.refusals == (
+        RuleRefusal("x", "empty-domain", (Reason(ReasonKind.EMPTY_DOMAIN, "x", ""),), ()),
+    )
+
+
+def test_an_empty_list_is_a_false_piece_and_a_waiting_list_an_unknown_one() -> None:
+    empty = solve(counted(), {"n": 0})
+    assert empty.state("x") == Open()
+    assert empty.validity().false == (
+        Piece(
+            PieceKind.EMPTY_DOMAIN, "", "x", F, reasons=(Reason(ReasonKind.EMPTY_DOMAIN, "x", ""),)
+        ),
+    )
+    assert empty.possible("x") == ()
+    unknown = solve(counted())
+    assert unknown.validity().unknown == (Piece(PieceKind.EMPTY_DOMAIN, "", "x", U, waits=("n",)),)
+    assert unknown.possible("x") is None
+    assert solve(counted(), {"n": 2}).possible("x") == ((0, Possible()), (1, Possible()))
+
+
+def ranked() -> Space:
+    def order(values: tuple[Any, ...], r: Reads) -> tuple[Any, ...]:
+        return tuple(reversed(values)) if r["size"] == "large" else values
+
+    return Space(
+        (),
+        Scope(
+            "",
+            choices=(
+                Choice("size", listed("small", "large")),
+                Choice("style", listed("block", "ultra", order=order, order_reads=("size",))),
+                Choice("depth", membership(lambda v, r: v > 0)),
+            ),
+        ),
+    )
+
+
+def test_reading_10_the_ranking_is_its_own_answer_and_possible_keeps_list_order() -> None:
+    both = (("block", Possible()), ("ultra", Possible()))
+    open_size = solve(ranked())
+    assert open_size.ordered("style") == Unresolved(("size",))
+    assert open_size.possible("style") == both
+    large = solve(ranked(), size="large")
+    assert large.ordered("style") == Known(("ultra", "block"))
+    assert large.possible("style") == both
+    assert solve(ranked(), size="small").ordered("style") == Known(("block", "ultra"))
+    assert large.ordered("size") == Known(("small", "large"))
+    assert large.ordered("depth") is None
+    assert large.possible("depth") is None
+
+
+# --- assignment ---------------------------------------------------------------------------
 
 
 def test_membership_tells_true_from_one() -> None:
     space = Space((), Scope("", choices=(Choice("flag", listed(True, False)),)))
-    assert rejected(change(Configuration(space), Change(commit={"flag": 1})))
+    assert rejected(change(Configuration(space), Change(commit={"flag": 1}))).refusals == (
+        outside("flag"),
+    )
+    assert same(True, True) and not same(True, 1)
 
 
-def refused_selector() -> Space:
-    """``mode`` has two cases, and a root rule refuses each: no possible case."""
+def test_a_listed_value_the_membership_predicate_rejects_is_not_offered() -> None:
+    space = Space((), Scope("", choices=(Choice("x", listed(1, 2, member=lambda v, r: v != 2)),)))
+    assert solve(space).possible("x") == ((1, Possible()),)
+    assert rejected(change(Configuration(space), Change(commit={"x": 2}))).refusals == (
+        outside("x"),
+    )
 
-    a = Scope("a", choices=(Choice("p", listed(1, 2)),))
+
+def test_a_membership_only_domain_is_checked_never_listed() -> None:
+    space = Space((), Scope("", choices=(Choice("depth", membership(lambda v, r: v > 0)),)))
+    assert solve(space).state("depth") == Open()
+    assert solve(space).possible("depth") is None
+    assert solve(space, depth=8).state("depth") == Set(8)
+    assert rejected(change(Configuration(space), Change(commit={"depth": 0}))).refusals == (
+        outside("depth"),
+    )
+
+
+def test_a_change_that_changes_nothing_returns_the_same_configuration() -> None:
+    base = Configuration(two_numbers(), {}, {"x": 1})
+    for edit in (Change(commit={"x": 1}), Change(clear=("z",)), Change()):
+        result = accepted(change(base, edit))
+        assert result.configuration is base
+        assert (result.dormant, result.in_play, result.opened) == ((), (), ())
+    with pytest.raises(ConfigurationError):
+        change(base, Change(commit={"nowhere": 1}))
+
+
+# --- additions move answers only up the information order (§ 5, end) ----------------------
+
+
+def additive() -> Space:
+    on = Scope(
+        "on",
+        choices=(Choice("q", listed(0, 1)),),
+        constraints=(
+            Constraint("inner", ("mode.on.q", "a"), lambda r: r["mode.on.q"] <= r["a"], "inner"),
+        ),
+    )
     return Space(
         (),
         Scope(
             "",
-            selectors=(Selector("mode", (a, Scope("b"))),),
-            constraints=(
-                Constraint("not_a", ("mode",), lambda r: r["mode"] != "a", "no-a"),
-                Constraint("not_b", ("mode",), lambda r: r["mode"] != "b", "no-b"),
+            choices=(Choice("a", listed(1, 2)), Choice("b", listed(1, 2))),
+            selectors=(Selector("mode", (on, Scope("off"))),),
+            constraints=(Constraint("sum", ("a", "b"), lambda r: r["a"] + r["b"] <= 3, "over"),),
+            views=(
+                View("pair", ("a", "b"), lambda r: (r["a"], r["b"])),
+                View("half", ("b",), lambda r: Refuse("odd") if r["b"] % 2 else r["b"] // 2),
             ),
         ),
     )
 
 
-def test_a_selector_whose_every_case_a_rule_refuses_has_no_possible_value() -> None:
-    state = solve(refused_selector()).state("mode")
-    assert state == RefusedChoice(
-        (Reason(ReasonKind.NO_POSSIBLE_VALUE, "mode", ""),),
-        cases=(
-            ("a", (constraint_reason("not_a", "no-a"),)),
-            ("b", (constraint_reason("not_b", "no-b"),)),
-        ),
-    )
+def test_an_addition_moves_answers_only_from_unknown_to_known() -> None:
+    """Every answer before the addition is unknown or already known; after it each
+    unknown one is known (true, a value, or refused), and no known one changed."""
 
-
-def test_a_value_outside_its_domain_keeps_its_own_reason_under_a_refused_selector() -> None:
-    result = rejected(change(Configuration(refused_selector()), Change(commit={"mode.a.p": 3})))
-    assert result.refusals == (
-        ChangeRefusal(
-            "mode.a.p", "named", (Reason(ReasonKind.OUTSIDE_DOMAIN, "mode.a.p", "mode.a"),)
-        ),
-    )
-    # the selector's refusal is the configuration's, reported beside the choice's own
-    assert (PieceKind.NO_POSSIBLE_VALUE, "mode") in {
-        (piece.kind, piece.subject) for piece in result.validity.false
+    base = Configuration(additive(), {}, {"a": 1, "mode.on.q": 1})
+    before = base.solve()
+    assert before.validity().verdict is U
+    # pieces sort by kind, owner, subject: the constraints, then the domain piece
+    assert [p.subject for p in before.validity().unknown] == ["sum", "mode.on.inner", "mode.on.q"]
+    assert before.validity().waits == ("b", "mode")
+    assert before.states() == {
+        "a": Set(1),
+        "b": Open(),
+        "mode": Open(),
+        "mode.on.q": Waiting(1, ("mode",)),
     }
+    assert before.view("pair") == Unresolved(("b",))
+    assert before.view("half") == Unresolved(("b",))
+    result = accepted(change(base, Change(commit={"b": 1, "mode": "on"})))
+    assert (result.dormant, result.in_play, result.opened) == ((), ("mode.on.q",), ())
+    after = result.configuration.solve()
+    assert after.validity().verdict is T
+    assert after.states() == {"a": Set(1), "b": Set(1), "mode": Set("on"), "mode.on.q": Set(1)}
+    assert after.view("pair") == Known((1, 1))
+    # a view refusing on its own values that no rule reads refuses no change
+    assert after.view("half") == Refused((Reason(ReasonKind.VIEW_BODY, "half", "", "odd"),))
 
 
-def test_a_value_inside_its_domain_under_a_refused_selector_is_admitted() -> None:
-    """A refused selector gains no case without a revision, so the choice under it is
-    not left waiting: its own check holds, the change is accepted, and published it
-    reads refused through its guard, the selector's own piece refusing the Space."""
-
-    result = accepted(change(Configuration(refused_selector()), Change(commit={"mode.a.p": 2})))
-    assert result.unchecked == ()
-    assert result.validity.verdict is F
-    solution = result.configuration.solve()
-    through_guard = (
-        Reason(ReasonKind.INPUT_REFUSED, "mode.a.p", "mode.a", related=("mode",)),
-        Reason(ReasonKind.NO_POSSIBLE_VALUE, "mode", ""),
-    )
-    assert solution.own_check("mode.a.p") == Check(T)
-    assert solution.state("mode.a.p") == GuardRefused(2, through_guard)
-    assert solution.read("mode.a.p") == Refused(through_guard)
-
-
-def three_guards() -> Space:
-    """``mode.a`` holds ``p`` with a rule and a view; root rules allow each case by a fact."""
-
-    a = Scope(
-        "a",
-        choices=(Choice("p", listed(1, 2)),),
-        constraints=(Constraint("small", ("mode.a.p",), lambda r: r["mode.a.p"] < 2, "too-big"),),
-        views=(View("shown", ("mode.a.p",), lambda r: r["mode.a.p"]),),
-    )
-    return Space(
-        ("a_ok", "b_ok"),
-        Scope(
-            "",
-            selectors=(Selector("mode", (a, Scope("b"))),),
-            constraints=(
-                Constraint(
-                    "a_allowed", ("mode", "a_ok"), lambda r: r["mode"] != "a" or r["a_ok"], "no-a"
-                ),
-                Constraint(
-                    "b_allowed", ("mode", "b_ok"), lambda r: r["mode"] != "b" or r["b_ok"], "no-b"
-                ),
-            ),
-        ),
-    )
-
-
-def test_three_guard_states_side_by_side() -> None:
-    """False: inactive. Unknown: unchecked, waiting. Refused: admitted; the scope's rule
-    and view are not evaluated, read refused when published, and add no false piece."""
-
-    false_guard = solve_at(
-        three_guards(), {"mode": "b", "mode.a.p": 1}, {"a_ok": True, "b_ok": True}
-    )
-    assert false_guard.state("mode.a.p") == Inactive(True, 1)
-    assert false_guard.piece("mode.a.small").applies is False
-    assert false_guard.view("mode.a.shown") == Inapplicable()
-
-    unknown_guard = solve_at(three_guards(), {"mode.a.p": 1})
-    assert unknown_guard.state("mode.a.p") == Unchecked(1, ("mode",))
-    small = unknown_guard.piece("mode.a.small")
-    assert (small.verdict, small.waits) == (U, ("mode",))
-    assert unknown_guard.view("mode.a.shown") == Unresolved(("mode",))
-    assert unknown_guard.validity().verdict is U
-
-    refused_guard = solve_at(three_guards(), {"mode.a.p": 1}, {"a_ok": False, "b_ok": False})
-    mode_refused = Reason(ReasonKind.NO_POSSIBLE_VALUE, "mode", "")
-    assert isinstance(refused_guard.state("mode"), RefusedChoice)
-    assert refused_guard.own_check("mode.a.p") == Check(T)
-    assert refused_guard.state("mode.a.p") == GuardRefused(
-        1, (Reason(ReasonKind.INPUT_REFUSED, "mode.a.p", "mode.a", related=("mode",)), mode_refused)
-    )
-    small = refused_guard.piece("mode.a.small")
-    assert small.verdict is F
-    assert small.reasons == (
-        Reason(ReasonKind.INPUT_REFUSED, "mode.a.small", "mode.a", related=("mode",)),
-        mode_refused,
-    )
-    assert refused_guard.view("mode.a.shown") == Refused(
-        (
-            Reason(ReasonKind.INPUT_REFUSED, "mode.a.shown", "mode.a", related=("mode",)),
-            mode_refused,
-        )
-    )
-    validity = refused_guard.validity()
-    assert validity.verdict is F
-    assert "mode.a.small" not in {piece.subject for piece in validity.false}
-    assert (PieceKind.NO_POSSIBLE_VALUE, "mode") in false_kinds(refused_guard)
-
-
-def test_a_choice_under_a_refused_guard_reads_as_its_value_where_its_guard_holds() -> None:
-    """``p = 2`` is read in the trial assuming ``mode = a``: the scope's own rule refuses
-    the case, so ``mode`` has no possible case; only committed choices refuse it, so it
-    is a plain refusal, no conflict. ``p`` is admitted."""
-
-    solution = solve_at(three_guards(), {"mode.a.p": 2}, {"a_ok": True, "b_ok": False})
-    assert solution.state("mode") == RefusedChoice(
-        (Reason(ReasonKind.NO_POSSIBLE_VALUE, "mode", ""),),
-        cases=(
-            ("a", (constraint_reason("mode.a.small", "too-big", "mode.a"),)),
-            ("b", (constraint_reason("b_allowed", "no-b"),)),
-        ),
-    )
-    assert solution.conflicts() == ()
-    state = solution.state("mode.a.p")
-    assert isinstance(state, GuardRefused)
-    assert (state.value, state.conflict) == (2, ())
-
-
-def test_an_open_choice_under_a_refused_selector_is_refused_through_its_guard() -> None:
-    """The one-case ``mode`` is forced; its case's rule then leaves ``r`` no possible
-    value, through ``mode``: a conflict refuses both. ``r``, under the refused ``mode``,
-    reads refused through it; its own no-possible-value piece adds nothing."""
-
-    a = Scope(
-        "a",
-        choices=(Choice("r", listed(1)),),
-        constraints=(Constraint("never", ("mode.a.r",), lambda v: v["mode.a.r"] != 1, "one"),),
-    )
-    space = Space((), Scope("", selectors=(Selector("mode", (a,)),)))
-    solution = solve(space)
-    assert solution.conflicts() == (Conflict("", ("mode", "mode.a.r"), ("mode", "mode.a.r"), ()),)
-    through = Refused(
-        (
-            Reason(ReasonKind.CONFLICT, "mode", "", related=("mode.a.r",)),
-            Reason(ReasonKind.INPUT_REFUSED, "mode.a.r", "mode.a", related=("mode",)),
-        )
-    )
-    assert solution.state("mode.a.r") == RefusedChoice(through.reasons)
-    assert solution.read("mode.a.r") == through
-    assert false_kinds(solution) == {(PieceKind.CONFLICT, "")}
-
-
-def test_a_selector_refused_by_a_conflict_is_a_refused_guard() -> None:
-    """``x`` and the one-case ``mode`` are both forced and exclude each other: both are
-    refused, and ``mode``'s case is a refused guard for the choice committed in it."""
-
-    space = Space(
-        (),
-        Scope(
-            "",
-            choices=(Choice("x", listed(1)),),
-            selectors=(Selector("mode", (Scope("a", choices=(Choice("p", listed(1, 2)),)),)),),
-            constraints=(
-                Constraint(
-                    "exclusive",
-                    ("x", "mode"),
-                    lambda r: not (r["x"] == 1 and r["mode"] == "a"),
-                    "both",
-                ),
-            ),
-        ),
-    )
-    result = accepted(change(Configuration(space), Change(commit={"mode.a.p": 1})))
-    assert result.unchecked == ()
-    solution = result.configuration.solve()
-    assert solution.conflicts() == (Conflict("", ("mode", "x"), ("mode", "x"), ()),)
-    assert solution.own_check("mode.a.p") == Check(T)
-    assert solution.state("mode.a.p") == GuardRefused(
-        1,
-        (
-            Reason(ReasonKind.CONFLICT, "mode", "", related=("x",)),
-            Reason(ReasonKind.INPUT_REFUSED, "mode.a.p", "mode.a", related=("mode",)),
-        ),
-    )
-
-
-def test_a_case_trial_reads_a_choice_waiting_only_on_its_presence_as_its_value() -> None:
-    """``p = 2`` waits only on ``mode``; the trial assuming ``mode = a`` settles that, so
-    it reads ``p`` as 2, the case's rule refuses it, and ``b`` is forced. Clearing the
-    committed ``mode = a`` is therefore refused: it would leave ``p`` inactive."""
-
-    base = Configuration(three_guards(), {"a_ok": True, "b_ok": True}, {"mode": "a", "mode.a.p": 2})
-    assert base.solve().validity().verdict is F
-    result = rejected(change(base, Change(clear=("mode",))))
-    assert result.refusals == (
-        ChangeRefusal("mode.a.p", "reached", (Reason(ReasonKind.INACTIVE, "mode.a.p", "mode.a"),)),
-    )
-    cold = solve_at(three_guards(), {"mode.a.p": 2}, {"a_ok": True, "b_ok": True})
-    assert cold.state("mode") == Forced(
-        "b", (("a", (constraint_reason("mode.a.small", "too-big", "mode.a"),)),)
-    )
-    assert cold.state("mode.a.p") == Inactive(True, 2)
-    # where its value fits the case's rule, it stays waiting on the selector
-    fits = solve_at(three_guards(), {"mode.a.p": 1}, {"a_ok": True, "b_ok": True})
-    assert fits.state("mode") == Open(("a", "b"))
-    assert fits.state("mode.a.p") == Unchecked(1, ("mode",))
-
-
-def test_a_readability_round_that_revisits_a_set_is_reported_not_resolved() -> None:
-    """The detector, with a stubbed round flipping between two readable sets."""
-
-    flips = {frozenset(): frozenset({"x"}), frozenset({"x"}): frozenset()}
-
-    def round_(readable: frozenset[str]) -> tuple[frozenset[str], str]:
-        return flips[readable], "unsettled"
-
-    with pytest.raises(NonConvergence) as raised:
-        settle_readable(round_)
-    assert raised.value.choices == ("x",)
-    assert raised.value.visited == ((), ("x",))
-
-    def settles(readable: frozenset[str]) -> tuple[frozenset[str], str]:
-        return frozenset({"x", "y"}), f"settled at {sorted(readable)}"
-
-    assert settle_readable(settles) == "settled at ['x', 'y']"
-
-
-# --- guards -----------------------------------------------------------------------------
+# --- guards ---------------------------------------------------------------------------------
 
 
 def guarded() -> Space:
@@ -392,613 +1050,65 @@ def guarded() -> Space:
     )
 
 
-def test_a_rule_under_an_unselected_case_reads_true() -> None:
+def test_a_rule_under_an_unselected_case_does_not_apply() -> None:
     solution = solve(guarded(), {"wide": False}, mode="a")
-    piece = solution.piece("mode.b.never")
-    assert (piece.verdict, piece.applies) == (T, False)
+    assert solution.piece("mode.b.never") == Piece(
+        PieceKind.CONSTRAINT, "mode.b", "mode.b.never", T, applies=False
+    )
     assert solution.validity().verdict is T
 
 
 def test_a_rule_under_an_unknown_guard_reads_unknown_whatever_its_predicate() -> None:
     solution = solve(guarded(), {"wide": False})
-    # mode is open: a and c are possible, b is not (its rule refuses)
-    assert solution.state("mode") == Open(
-        ("a", "c"), (("b", (constraint_reason("mode.b.never", "always-refuses", "mode.b"),)),)
-    )
     always = solution.piece("mode.a.always")
     assert (always.verdict, always.waits) == (U, ("mode",))
+    never = solution.piece("mode.b.never")
+    assert (never.verdict, never.waits) == (U, ("mode",))
     # a guard that reads a missing fact
     refuses = solve(guarded()).piece("extra.refuses")
     assert (refuses.verdict, refuses.waits) == (U, ("wide",))
     assert solve(guarded(), {"wide": True}, mode="a").piece("extra.refuses").verdict is F
 
 
-# --- listed and empty domains -----------------------------------------------------------
+# --- views and validity -----------------------------------------------------------------
 
 
-def test_a_listed_value_the_domain_rejects_is_never_possible_or_forced() -> None:
-    odd_out = Reason(ReasonKind.OUTSIDE_DOMAIN, "x", "")
-    space = Space(
-        (),
+def viewed() -> Space:
+    return Space(
+        ("limit", "name"),
         Scope(
             "",
-            choices=(
-                Choice("x", listed(1, 2, member=lambda v, r: v != 2)),
-                Choice("y", listed(1, 2, 4, member=lambda v, r: v % 2 == 0)),
+            choices=(Choice("x", listed(1, 2)),),
+            constraints=(
+                Constraint("under", ("x", "limit"), lambda r: r["x"] <= r["limit"], "over"),
+            ),
+            views=(
+                View("doubled", ("x",), lambda r: 2 * r["x"]),
+                View("title", ("name",), lambda r: f"unit {r['name']}"),
+                View("half", ("x",), lambda r: Refuse("odd") if r["x"] % 2 else r["x"] // 2),
             ),
         ),
     )
-    solution = solve(space)
-    assert solution.state("x") == Forced(1, ((2, (odd_out,)),))
-    assert solution.state("y") == Open(
-        (2, 4), ((1, (Reason(ReasonKind.OUTSIDE_DOMAIN, "y", ""),)),)
-    )
 
 
-def counted() -> Space:
-    return Space(
-        ("n",), Scope("", choices=(Choice("x", computed(lambda r: tuple(range(r["n"])), ("n",))),))
-    )
-
-
-def test_an_empty_list_refuses_as_no_possible_value() -> None:
-    solution = solve(counted(), {"n": 0})
-    assert solution.state("x") == RefusedChoice((Reason(ReasonKind.NO_POSSIBLE_VALUE, "x", ""),))
+def test_a_view_refuses_when_its_space_is_refused() -> None:
+    solution = solve(viewed(), {"limit": 1, "name": "u"}, x=2)
     assert solution.validity().verdict is F
-    assert false_kinds(solution) == {(PieceKind.NO_POSSIBLE_VALUE, "x")}
-    # a stored value under the empty list is outside its domain
-    assert solve(counted(), {"n": 0}, x=0).state("x") == RefusedChoice(
-        (Reason(ReasonKind.OUTSIDE_DOMAIN, "x", ""),), stored=True, value=0
-    )
+    assert solution.view("doubled") == Refused((Reason(ReasonKind.SPACE_REFUSED, "doubled", ""),))
 
 
-def test_a_list_that_waits_is_open_and_not_enumerated() -> None:
-    assert solve(counted()).state("x") == Open(None, (), ("n",))
-    assert solve(counted(), {"n": 2}).state("x") == Open((0, 1))
-
-
-def test_a_membership_only_domain_is_checked_never_forced() -> None:
-    space = Space((), Scope("", choices=(Choice("depth", membership(lambda v, r: v > 0)),)))
-    assert solve(space).state("depth") == Open(None)
-    assert solve(space, depth=8).state("depth") == Readable(8)
-    assert rejected(change(Configuration(space), Change(commit={"depth": 0})))
-
-
-# --- unchecked choices ------------------------------------------------------------------
-
-
-def two_cores() -> Space:
-    a = Scope("a", choices=(Choice("p", listed(1, 2)),))
-    b = Scope("b", choices=(Choice("q", listed(5, 6)),))
-    return Space((), Scope("", selectors=(Selector("mode", (a, b)),)))
-
-
-def test_a_choice_committed_under_an_open_selector_is_kept_unchecked() -> None:
-    result = accepted(change(Configuration(two_cores()), Change(commit={"mode.a.p": 2})))
-    assert result.unchecked == ("mode.a.p",)
-    assert result.validity.verdict is U
-    solution = result.configuration.solve()
-    assert solution.state("mode.a.p") == Unchecked(2, ("mode",))
-    read = solution.read("mode.a.p")
-    assert isinstance(read, Unresolved) and "mode" in read.waits
-
-
-def test_an_unchecked_choice_is_checked_when_its_selector_settles_on_its_case() -> None:
-    base = accepted(change(Configuration(two_cores()), Change(commit={"mode.a.p": 2})))
-    settled = accepted(change(base.configuration, Change(commit={"mode": "a"})))
-    assert settled.unchecked == ()
-    solution = settled.configuration.solve()
-    assert solution.state("mode.a.p") == Readable(2)
-    assert solution.read("mode.a.p") == Known(2)
-    assert settled.validity.verdict is T
-
-
-def test_a_change_settling_the_selector_elsewhere_is_refused() -> None:
-    base = accepted(change(Configuration(two_cores()), Change(commit={"mode.a.p": 2})))
-    result = rejected(change(base.configuration, Change(commit={"mode": "b"})))
-    assert result.refusals == (
-        ChangeRefusal("mode.a.p", "reached", (Reason(ReasonKind.INACTIVE, "mode.a.p", "mode.a"),)),
-    )
-
-
-def test_an_unchecked_choice_is_never_used_as_a_value() -> None:
-    a = Scope("a", choices=(Choice("p", listed(1, 2)),))
-    space = Space(
-        (),
-        Scope(
-            "",
-            selectors=(Selector("mode", (a, Scope("b"))),),
-            derived=(Derived("twice", ("mode.a.p",), lambda r: 2 * r["mode.a.p"]),),
-        ),
-    )
-    read = solve_at(space, {"mode.a.p": 2}).read("twice")
-    assert isinstance(read, Unresolved)
-    assert solve_at(space, {"mode.a.p": 2, "mode": "a"}).read("twice") == Known(4)
-    assert solve_at(space, {"mode": "b"}).read("twice") == Inapplicable()
-
-
-# --- a linking rule as a constraint -----------------------------------------------------
-
-
-def linked() -> Space:
-    return Space(
-        (),
-        Scope(
-            "",
-            choices=(Choice("a", listed(1, 2, 3)), Choice("b", listed(1, 2, 3))),
-            constraints=(
-                Constraint("linked", ("a", "b"), lambda r: r["b"] <= r["a"], "b-above-a"),
-            ),
-        ),
-    )
-
-
-def test_a_linking_rule_never_refuses_a_commit_and_refuses_the_configuration() -> None:
-    first = accepted(change(Configuration(linked()), Change(commit={"b": 2})))
-    assert first.configuration.solve().state("a") == Open(
-        (2, 3), ((1, (constraint_reason("linked", "b-above-a"),)),)
-    )
-    second = accepted(change(first.configuration, Change(commit={"a": 1})))
-    assert second.validity.verdict is F
-    assert [(p.kind, p.subject, p.reasons) for p in second.validity.false] == [
-        (PieceKind.CONSTRAINT, "linked", (constraint_reason("linked", "b-above-a"),))
-    ]
-    assert second.configuration.solve().conflicts() == ()
-
-
-def test_a_linking_rule_forces_the_open_choice() -> None:
-    reason = (constraint_reason("linked", "b-above-a"),)
-    solution = solve(linked(), a=1)
-    assert solution.state("b") == Forced(1, ((2, reason), (3, reason)))
-    assert solution.read("b") == Known(1)
-    assert solution.validity().verdict is T
-
-
-# --- a requirement as a constraint ------------------------------------------------------
-
-
-def styled() -> Space:
-    return Space(
-        ("has_big",),
-        Scope(
-            "",
-            choices=(Choice("style", listed("small", "big")),),
-            constraints=(
-                Constraint(
-                    "big_needs_support",
-                    ("style", "has_big"),
-                    lambda r: r["style"] != "big" or r["has_big"],
-                    "big-unsupported",
-                ),
-            ),
-        ),
-    )
-
-
-def test_a_case_needing_a_missing_capability_is_not_possible() -> None:
-    reason = constraint_reason("big_needs_support", "big-unsupported")
-    assert solve(styled(), {"has_big": False}).state("style") == Forced(
-        "small", (("big", (reason,)),)
-    )
-    # unknown counts as possible
-    assert solve(styled()).state("style") == Open(("small", "big"))
-
-
-def test_committing_a_case_a_requirement_refuses_is_accepted_and_refuses_the_configuration() -> (
-    None
-):
-    base = Configuration(styled(), {"has_big": False})
-    result = accepted(change(base, Change(commit={"style": "big"})))
-    assert result.validity.verdict is F
-    assert {(p.kind, p.subject) for p in result.validity.false} == {
-        (PieceKind.CONSTRAINT, "big_needs_support")
-    }
-
-
-# --- forcing conflicts ------------------------------------------------------------------
-
-
-def exclusive_pair() -> Space:
-    return Space(
-        (),
-        Scope(
-            "",
-            choices=(Choice("x", listed(1)), Choice("y", listed(1))),
-            constraints=(
-                Constraint("exclusive", ("x", "y"), lambda r: r["x"] + r["y"] <= 1, "both"),
-            ),
-        ),
-    )
-
-
-def test_two_forced_choices_excluding_each_other_are_both_refused_naming_each_other() -> None:
-    solution = solve(exclusive_pair())
-    assert solution.state("x") == RefusedChoice(
-        (Reason(ReasonKind.CONFLICT, "x", "", related=("y",)),), peers=("y",)
-    )
-    assert solution.state("y") == RefusedChoice(
-        (Reason(ReasonKind.CONFLICT, "y", "", related=("x",)),), peers=("x",)
-    )
-    assert solution.forced() == {}
-    assert solution.conflicts() == (Conflict("", ("x", "y"), ("x", "y"), ()),)
-    assert (PieceKind.CONFLICT, "") in false_kinds(solution)
-    assert solution.validity().verdict is F
-
-
-def test_no_conflict_without_a_forced_value_a_plain_refusal() -> None:
-    """``y`` has no possible case because of the committed ``x`` alone: nothing forced to
-    withdraw, so ``y`` is refused naming its case's reason, with no peers."""
-
-    result = accepted(change(Configuration(exclusive_pair()), Change(commit={"x": 1})))
-    assert result.validity.verdict is F
-    solution = result.configuration.solve()
-    assert solution.state("x") == Readable(1)
-    assert solution.read("x") == Known(1)
-    assert solution.state("y") == RefusedChoice(
-        (Reason(ReasonKind.NO_POSSIBLE_VALUE, "y", ""),),
-        cases=((1, (constraint_reason("exclusive", "both"),)),),
-    )
-    assert solution.conflicts() == ()
-
-
-def test_a_committed_participant_keeps_its_value() -> None:
-    """``f`` is forced to 1; ``a = 1`` forces ``y`` to 0, which ``y >= f`` refuses: a
-    conflict refusing ``f`` and ``y``; the committed ``a`` keeps its value."""
-
-    space = Space(
-        (),
-        Scope(
-            "",
-            choices=(Choice("a", listed(0, 1)), Choice("f", listed(1)), Choice("y", listed(0, 1))),
-            constraints=(
-                Constraint("above", ("f", "y"), lambda r: r["y"] >= r["f"], "below"),
-                Constraint("room", ("a", "y"), lambda r: r["a"] + r["y"] <= 1, "full"),
-            ),
-        ),
-    )
-    solution = solve(space, a=1)
-    assert solution.conflicts() == (Conflict("", ("a", "f", "y"), ("f", "y"), ("a",)),)
-    assert solution.state("a") == Readable(1, conflict=("f", "y"))
-    assert solution.forced() == {}
-
-
-def four_choices(choice_order: tuple[int, ...], rule_order: tuple[int, ...]) -> Space:
-    choices = (
-        Choice("x", listed(1)),
-        Choice("y", listed(1)),
-        Choice("z", listed(1)),
-        Choice("d", listed(0, 1)),
-    )
-    rules = (
-        Constraint("pair", ("x", "y"), lambda r: r["x"] + r["y"] <= 1, "pair"),
-        Constraint("copy", ("d", "y"), lambda r: r["d"] == r["y"], "copy"),
-        Constraint("triple", ("y", "d", "z"), lambda r: r["y"] + r["d"] + r["z"] <= 2, "triple"),
-    )
-    return Space(
-        (),
-        Scope(
-            "",
-            choices=tuple(choices[i] for i in choice_order),
-            constraints=tuple(rules[i] for i in rule_order),
-        ),
-    )
-
-
-def test_the_four_choice_conflict_takes_all_four_participants() -> None:
-    solution = solve(four_choices((0, 1, 2, 3), (0, 1, 2)))
-    everyone = ("d", "x", "y", "z")
-    assert solution.conflicts() == (Conflict("", everyone, everyone, ()),)
-    for name in everyone:
-        state = solution.state(name)
-        assert isinstance(state, RefusedChoice)
-        assert state.peers == tuple(other for other in everyone if other != name)
-    assert solution.state("d") == RefusedChoice(
-        (
-            Reason(ReasonKind.CONFLICT, "d", "", related=("x", "y", "z")),
-            Reason(ReasonKind.NO_POSSIBLE_VALUE, "d", ""),
-        ),
-        cases=(
-            (0, (constraint_reason("copy", "copy"),)),
-            (1, (constraint_reason("triple", "triple"),)),
-        ),
-        peers=("x", "y", "z"),
-    )
-
-
-def answers(solution: Solution) -> tuple[object, ...]:
-    return (solution.states(), solution.validity(), solution.conflicts(), solution.forced())
-
-
-def test_conflicts_are_the_same_for_every_declaration_order() -> None:
-    expected = answers(solve(four_choices((0, 1, 2, 3), (0, 1, 2))))
-    for choice_order in itertools.permutations(range(4)):
-        for rule_order in itertools.permutations(range(3)):
-            assert answers(solve(four_choices(choice_order, rule_order))) == expected
-
-
-def test_forcing_does_not_search() -> None:
-    space = Space(
-        (),
-        Scope(
-            "",
-            choices=(Choice("x", listed(1, 2, 3)), Choice("y", listed(1, 2, 3))),
-            constraints=(
-                Constraint("ordered", ("x", "y"), lambda r: r["x"] < r["y"], "unordered"),
-            ),
-        ),
-    )
-    solution = solve(space)
-    assert solution.state("x") == Open((1, 2, 3))
+def test_a_view_answers_while_its_space_is_open() -> None:
+    solution = solve(viewed(), {"name": "u"})
     assert solution.validity().verdict is U
+    assert solution.view("title") == Known("unit u")
+    assert solution.view("doubled") == Unresolved(("x",))
 
 
-def test_a_value_forced_from_a_withdrawn_one_is_withdrawn_too() -> None:
-    """``w`` follows ``x``; ``x`` is refused by a conflict, so ``w`` is open again."""
-
-    space = Space(
-        (),
-        Scope(
-            "",
-            choices=(Choice("x", listed(1)), Choice("y", listed(1)), Choice("w", listed(1, 2))),
-            constraints=(
-                Constraint("exclusive", ("x", "y"), lambda r: r["x"] + r["y"] <= 1, "both"),
-                Constraint("follows", ("w", "x"), lambda r: r["w"] == r["x"], "differs"),
-            ),
-        ),
-    )
-    solution = solve(space)
-    assert solution.forced() == {}
-    assert solution.state("w") == Open((1, 2))
-
-
-# --- own checks in trials, and the configuration the change would publish ---------------
-
-
-def divisor_of_forced() -> Space:
-    """``w`` is forced to the fact ``n``; ``c``'s own domain is the divisors of ``w``."""
-
-    return Space(
-        ("n",),
-        Scope(
-            "",
-            choices=(
-                Choice("w", computed(lambda r: (r["n"],), ("n",))),
-                Choice("c", membership(lambda v, r: r["w"] % v == 0, ("w",))),
-            ),
-        ),
-    )
-
-
-def test_a_forced_value_refusing_a_retained_choice_refuses_the_change_by_default() -> None:
-    """Off (the default): ``w`` is forced to 6 whatever ``c`` holds; ``c``'s own check is
-    false against the configuration the change would publish, so the change is refused,
-    as a build from scratch refuses ``c``."""
-
-    base = Configuration(divisor_of_forced(), {"n": 8}, {"c": 4})
-    assert base.solve().state("w") == Forced(8, ())
-    assert base.solve().state("c") == Readable(4)
-    result = rejected(change(base, Change(facts={"n": 6})))
-    assert result.refusals == (
-        ChangeRefusal("c", "reached", (Reason(ReasonKind.OUTSIDE_DOMAIN, "c", ""),)),
-    )
-    cold = Configuration(divisor_of_forced(), {"n": 6}, {"c": 4}).solve()
-    assert cold.state("w") == Forced(6, ())
-    assert cold.state("c") == RefusedChoice(
-        (Reason(ReasonKind.OUTSIDE_DOMAIN, "c", ""),), stored=True, value=4
-    )
-    assert accepted(change(base, Change(facts={"n": 12}))).unchecked == ()
-
-
-def test_a_case_that_refuses_a_retained_choice_is_not_possible_when_trials_reach_it() -> None:
-    """On: ``w``'s only case would make ``c``'s own check false, so ``w`` has no possible
-    case, a plain refusal naming ``c``'s reason (only committed choices refuse it); ``c``
-    waits on it, unchecked; the change is accepted and the configuration reads refused,
-    as a build from scratch does."""
-
-    base = Configuration(reaching(divisor_of_forced()), {"n": 8}, {"c": 4})
-    assert base.solve().state("c") == Readable(4)
-    result = accepted(change(base, Change(facts={"n": 6})))
-    assert result.unchecked == ("c",)
-    assert result.validity.verdict is F
-    after = result.configuration.solve()
-    assert after.state("c") == Unchecked(4, ("w",))
-    assert after.state("w") == RefusedChoice(
-        (Reason(ReasonKind.NO_POSSIBLE_VALUE, "w", ""),),
-        cases=((6, (Reason(ReasonKind.OUTSIDE_DOMAIN, "c", ""),)),),
-    )
-    cold = Configuration(reaching(divisor_of_forced()), {"n": 6}, {"c": 4}).solve()
-    assert cold.states() == after.states()
-    assert cold.validity() == after.validity()
-
-
-def cores_and_depth() -> Space:
-    """``lanes`` decides the core: at 128 only ``stub``, at 3 only ``packed``. ``depth``'s
-    domain follows the core: ``stub`` allows 1 or 2, ``packed`` only 1."""
-
-    return Space(
-        (),
-        Scope(
-            "",
-            choices=(
-                Choice("lanes", listed(3, 128)),
-                Choice(
-                    "depth",
-                    computed(lambda r: (1, 2) if r["compute"] == "stub" else (1,), ("compute",)),
-                ),
-            ),
-            selectors=(
-                Selector(
-                    "compute",
-                    (
-                        Scope(
-                            "packed",
-                            constraints=(
-                                Constraint("narrow", ("lanes",), lambda r: r["lanes"] < 64, "wide"),
-                            ),
-                        ),
-                        Scope(
-                            "stub",
-                            constraints=(
-                                Constraint(
-                                    "wide", ("lanes",), lambda r: r["lanes"] >= 64, "narrow"
-                                ),
-                            ),
-                        ),
-                    ),
-                ),
-            ),
-        ),
-    )
-
-
-def test_a_core_forced_by_a_commit_refusing_a_retained_choice_refuses_the_change() -> None:
-    """Off (the default): ``lanes = 3`` forces ``packed``, under which the retained
-    ``depth = 2`` is outside its domain: the change is refused, ``depth`` reached; a build
-    from scratch refuses ``depth`` the same way."""
-
-    base = Configuration(cores_and_depth(), {}, {"lanes": 128, "depth": 2})
-    assert base.solve().state("compute") == Forced(
-        "stub",
-        (("packed", (constraint_reason("compute.packed.narrow", "wide", "compute.packed"),)),),
-    )
-    assert base.solve().state("depth") == Readable(2)
-    result = rejected(change(base, Change(commit={"lanes": 3})))
-    depth_out = Reason(ReasonKind.OUTSIDE_DOMAIN, "depth", "")
-    assert result.refusals == (ChangeRefusal("depth", "reached", (depth_out,)),)
-    cold = Configuration(cores_and_depth(), {}, {"lanes": 3, "depth": 2}).solve()
-    assert cold.state("compute") == Forced(
-        "packed", (("stub", (constraint_reason("compute.stub.wide", "narrow", "compute.stub"),)),)
-    )
-    assert cold.state("depth") == RefusedChoice((depth_out,), stored=True, value=2)
-
-
-def test_a_core_that_would_refuse_a_retained_choice_is_not_possible_when_trials_reach_it() -> None:
-    """On: ``packed`` would refuse ``depth``, ``stub`` is refused by ``lanes = 3``, so
-    ``compute`` has no possible case, a plain refusal; ``depth`` waits unchecked; the
-    change is accepted and the configuration reads refused, as a build from scratch."""
-
-    base = Configuration(reaching(cores_and_depth()), {}, {"lanes": 128, "depth": 2})
-    result = accepted(change(base, Change(commit={"lanes": 3})))
-    assert result.unchecked == ("depth",)
-    assert result.validity.verdict is F
-    after = result.configuration.solve()
-    assert after.state("compute") == RefusedChoice(
-        (Reason(ReasonKind.NO_POSSIBLE_VALUE, "compute", ""),),
-        cases=(
-            ("packed", (Reason(ReasonKind.OUTSIDE_DOMAIN, "depth", ""),)),
-            ("stub", (constraint_reason("compute.stub.wide", "narrow", "compute.stub"),)),
-        ),
-    )
-    assert after.state("depth") == Unchecked(2, ("compute",))
-    assert after.conflicts() == ()
-    cold = Configuration(reaching(cores_and_depth()), {}, {"lanes": 3, "depth": 2}).solve()
-    assert cold.states() == after.states()
-    assert cold.validity() == after.validity()
-
-
-def test_forcing_never_chooses_a_value_that_would_refuse_a_retained_choice() -> None:
-    """On: a stored choice whose domain reads an open choice is unchecked until the open
-    choice is forced; forcing skips the case under which the check would be false. Off,
-    both cases stay possible and the stored choice waits."""
-
-    plain = Space(
-        (),
-        Scope(
-            "",
-            choices=(
-                Choice("w", listed(6, 8)),
-                Choice("c", membership(lambda v, r: r["w"] % v == 0, ("w",))),
-            ),
-        ),
-    )
-    space = reaching(plain)
-    solution = solve(space, c=4)
-    assert solution.state("w") == Forced(8, ((6, (Reason(ReasonKind.OUTSIDE_DOMAIN, "c", ""),)),))
-    assert solution.state("c") == Readable(4)
-    assert solve(space, c=5).state("c") == Unchecked(5, ("w",))
-    assert solve(plain, c=4).state("w") == Open((6, 8))
-    assert solve(plain, c=4).state("c") == Unchecked(4, ("w",))
-
-
-@pytest.mark.parametrize("reach", [False, True], ids=["default", "reaching"])
-def test_a_named_value_outside_its_domain_is_refused_with_its_own_reason_only(reach: bool) -> None:
-    """Its own check is its type check, evaluated first with its guard's case assumed;
-    forcing never reads it, so it does not push its selector to the other case."""
-
-    space = reaching(two_cores()) if reach else two_cores()
-    result = rejected(change(Configuration(space), Change(commit={"mode.a.p": 3})))
-    assert result.refusals == (
-        ChangeRefusal(
-            "mode.a.p", "named", (Reason(ReasonKind.OUTSIDE_DOMAIN, "mode.a.p", "mode.a"),)
-        ),
-    )
-    held = solve_at(space, {"mode.a.p": 3})
-    assert held.state("mode") == Open(("a", "b"))
-
-
-def test_a_value_under_a_guard_false_on_known_information_is_inactive() -> None:
-    """Another case committed, or a ``when`` false on facts: the key does not exist in
-    this configuration, so its own check is not evaluated; named, it refuses the change
-    as inactive, even outside its domain."""
-
-    committed = Configuration(two_cores(), {}, {"mode": "b"})
-    result = rejected(change(committed, Change(commit={"mode.a.p": 3})))
-    assert result.refusals == (
-        ChangeRefusal("mode.a.p", "named", (Reason(ReasonKind.INACTIVE, "mode.a.p", "mode.a"),)),
-    )
-    assert solve_at(two_cores(), {"mode": "b", "mode.a.p": 3}).own_check("mode.a.p") == Check(None)
-    space = Space(
-        ("wide",),
-        Scope(
-            "",
-            children=(
-                Scope(
-                    "extra",
-                    when=When(("wide",), lambda r: bool(r["wide"])),
-                    choices=(Choice("n", listed(1, 2)),),
-                ),
-            ),
-        ),
-    )
-    result = rejected(change(Configuration(space, {"wide": False}), Change(commit={"extra.n": 7})))
-    assert result.refusals == (
-        ChangeRefusal("extra.n", "named", (Reason(ReasonKind.INACTIVE, "extra.n", "extra"),)),
-    )
-
-
-def test_a_retained_choice_false_in_the_published_configuration_refuses_the_change() -> None:
-    """``c``'s own check reads the committed ``a``: replacing ``a`` is type-checked
-    against the configuration it would publish, where ``c`` no longer divides ``a``."""
-
-    space = Space(
-        (),
-        Scope(
-            "",
-            choices=(
-                Choice("a", listed(6, 8)),
-                Choice("c", membership(lambda v, r: r["a"] % v == 0, ("a",))),
-            ),
-        ),
-    )
-    base = Configuration(space, {}, {"a": 8, "c": 4})
-    result = rejected(change(base, Change(commit={"a": 6})))
-    assert result.refusals == (
-        ChangeRefusal("c", "reached", (Reason(ReasonKind.OUTSIDE_DOMAIN, "c", ""),)),
-    )
-
-
-def test_a_retained_choice_whose_check_waits_is_kept_unchecked() -> None:
-    base = Configuration(divisor_of_forced(), {"n": 8}, {"c": 4})
-    result = accepted(change(base, Change(unset=("n",))))
-    assert result.unchecked == ("c",)
-    assert result.configuration.solve().state("c") == Unchecked(4, ("w",))
-
-
-# --- a derived value that refuses, and an own check reading it --------------------------
-
-
-def even_width(r: Reads) -> Any:
-    return Refuse("bad-width") if r["w"] % 2 else r["w"]
+def test_a_view_body_refusing_refuses_the_view_not_the_space() -> None:
+    solution = solve(viewed(), {"limit": 2, "name": "u"}, x=1)
+    assert solution.validity().verdict is T
+    assert solution.view("half") == Refused((Reason(ReasonKind.VIEW_BODY, "half", "", "odd"),))
+    assert solve(viewed(), {"limit": 2, "name": "u"}, x=2).view("half") == Known(1)
 
 
 def width_read() -> Space:
@@ -1033,287 +1143,97 @@ def test_a_derived_value_may_refuse_and_its_readers_receive_a_refused_input() ->
     assert even.validity().verdict is T
 
 
-def lanes_over_width(reach: bool = False) -> Space:
-    """``lanes``'s domain is the divisors of the derived ``width``, which refuses an odd
-    fact ``w``; ``k`` is an open choice the domain also reads."""
-
-    return Space(
-        ("w",),
-        Scope(
-            "",
-            choices=(
-                Choice(
-                    "lanes",
-                    computed(
-                        lambda r: tuple(d for d in (1, 2, 4, 8) if r["width"] % (d * r["k"]) == 0),
-                        ("width", "k"),
-                    ),
-                ),
-                Choice("k", listed(1, 2)),
-            ),
-            derived=(Derived("width", ("w",), even_width),),
-        ),
-        trials_count_retained_checks=reach,
-    )
-
-
-THROUGH_WIDTH = (
-    Reason(ReasonKind.DERIVED_BODY, "width", "", "bad-width"),
-    Reason(ReasonKind.INPUT_REFUSED, "lanes", "", related=("width",)),
-)
-
-
-def test_an_own_check_reading_an_input_refused_on_facts_is_refused_through_it() -> None:
-    """At an odd width the commit is accepted; ``lanes`` is kept, never read as a value
-    and not waiting; the configuration reads refused, blamed once, at ``width``."""
-
-    result = accepted(
-        change(Configuration(lanes_over_width(), {"w": 7}), Change(commit={"lanes": 1}))
-    )
-    assert result.unchecked == ()
-    assert result.validity.verdict is F
-    assert [(p.kind, p.subject, p.reasons) for p in result.validity.false] == [
-        (PieceKind.OWN_CHECK, "lanes", THROUGH_WIDTH)
-    ]
-    solution = result.configuration.solve()
-    assert solution.state("lanes") == InputRefused(1, THROUGH_WIDTH)
-    assert solution.own_check("lanes") == Check(U, THROUGH_WIDTH, refused_input=True)
-    assert solution.read("lanes") == Refused(THROUGH_WIDTH)
-
-
-def test_an_own_check_reading_an_even_width_is_the_ordinary_answer() -> None:
-    base = Configuration(lanes_over_width(), {"w": 8}, {"k": 1})
-    readable = accepted(change(base, Change(commit={"lanes": 4})))
-    assert readable.configuration.solve().state("lanes") == Readable(4)
-    assert readable.validity.verdict is T
-    assert rejected(change(base, Change(commit={"lanes": 3}))).refusals == (
-        ChangeRefusal("lanes", "named", (Reason(ReasonKind.OUTSIDE_DOMAIN, "lanes", ""),)),
-    )
-
-
-def test_an_own_check_reading_a_derived_value_whose_fact_is_absent_waits_on_it() -> None:
-    result = accepted(
-        change(Configuration(lanes_over_width(), {}, {"k": 1}), Change(commit={"lanes": 1}))
-    )
-    assert result.unchecked == ("lanes",)
-    assert result.configuration.solve().state("lanes") == Unchecked(1, ("w",))
-
-
-@pytest.mark.parametrize("reach", [False, True], ids=["default", "reaching"])
-def test_a_check_refused_through_its_input_is_blamed_once_inside_trials(reach: bool) -> None:
-    """``k``'s trials see ``lanes``'s check as unknown, so neither case of ``k`` is refused
-    through it, with the trial's reach on or off."""
-
-    solution = solve(lanes_over_width(reach), {"w": 7}, lanes=1)
-    assert solution.state("k") == Open((1, 2))
-    assert [p.subject for p in solution.validity().false] == ["lanes"]
-
-
-def cores_over_lanew() -> Space:
-    """``compute``: ``packed`` (``width <= 64``) or ``stub`` (``width`` even); ``packed``'s
-    ``pe`` divides the derived ``lanew``, which refuses an odd fact ``w``."""
-
-    packed = Scope(
-        "packed",
-        choices=(
-            Choice(
-                "pe",
-                computed(
-                    lambda r: tuple(d for d in (1, 2, 4, 8) if r["lanew"] % d == 0), ("lanew",)
-                ),
-            ),
-        ),
-        constraints=(Constraint("narrow", ("width",), lambda r: r["width"] <= 64, "too-wide"),),
-    )
-    stub = Scope(
-        "stub",
-        constraints=(Constraint("even", ("width",), lambda r: r["width"] % 2 == 0, "odd"),),
-    )
-    return Space(
-        ("width", "w"),
-        Scope(
-            "",
-            selectors=(Selector("compute", (packed, stub)),),
-            derived=(Derived("lanew", ("w",), even_lanew),),
-        ),
-    )
-
-
-def even_lanew(r: Reads) -> Any:
-    return Refuse("bad-width") if r["w"] % 2 else r["w"]
-
-
-PE_ = "compute.packed.pe"
-
-
-def test_a_refused_input_under_a_refused_guard_is_refused_through_the_guard_only() -> None:
-    """Applicability first: at width 99 neither core is possible; ``pe``'s input also
-    refuses, but under the refused guard ``pe`` is refused through the guard only, and
-    validity's only false piece is the selector's."""
-
-    base = Configuration(cores_over_lanew(), {"width": 9, "w": 8}, {PE_: 4})
-    assert base.solve().state(PE_) == Readable(4)
-    result = accepted(change(base, Change(facts={"width": 99, "w": 7})))
-    assert result.unchecked == ()
-    assert {(p.kind, p.subject) for p in result.validity.false} == {
-        (PieceKind.NO_POSSIBLE_VALUE, "compute")
-    }
-    solution = result.configuration.solve()
-    assert solution.state(PE_) == GuardRefused(
-        4,
-        (
-            Reason(ReasonKind.INPUT_REFUSED, PE_, "compute.packed", related=("compute",)),
-            Reason(ReasonKind.NO_POSSIBLE_VALUE, "compute", ""),
-        ),
-    )
-    back = accepted(change(result.configuration, Change(facts={"width": 9, "w": 8})))
-    assert back.configuration.solve().state(PE_) == Readable(4)
-
-
-def test_a_refused_input_where_the_guard_holds_is_refused_through_the_input() -> None:
-    solution = solve_at(cores_over_lanew(), {PE_: 4}, {"width": 9, "w": 7})
-    assert solution.state("compute") == Forced(
-        "packed", (("stub", (constraint_reason("compute.stub.even", "odd", "compute.stub"),)),)
-    )
-    assert solution.state(PE_) == InputRefused(
-        4,
-        (
-            Reason(ReasonKind.DERIVED_BODY, "lanew", "", "bad-width"),
-            Reason(ReasonKind.INPUT_REFUSED, PE_, "compute.packed", related=("lanew",)),
-        ),
-    )
-
-
-def test_a_value_outside_its_domain_under_a_refused_guard_keeps_its_own_piece() -> None:
-    solution = solve_at(cores_over_lanew(), {PE_: 3}, {"width": 99, "w": 8})
-    own = Reason(ReasonKind.OUTSIDE_DOMAIN, PE_, "compute.packed")
-    assert solution.state(PE_) == RefusedChoice((own,), stored=True, value=3)
-    assert (PieceKind.OWN_CHECK, PE_) in false_kinds(solution)
-
-
-def guarded_even(selector: bool) -> Space:
-    """``g`` is present when ``s`` is ``b`` (a selector) or ``v`` is 1 (a value choice);
-    it holds ``c5`` (even) and a view ``w`` of it; a root rule reads the view."""
-
-    test = (lambda r: r["s"] == "b") if selector else (lambda r: r["v"] == 1)
-    g = Scope(
-        "g",
-        when=When(("s",) if selector else ("v",), test),
-        choices=(Choice("c5", membership(lambda v, r: v % 2 == 0)),),
-        views=(View("w", ("g.c5",), lambda r: r["g.c5"] * 2),),
-    )
-    guard: dict[str, Any] = (
-        {"selectors": (Selector("s", (Scope("a"), Scope("b"))),)}
-        if selector
-        else {"choices": (Choice("v", listed(0, 1)),)}
-    )
-    choices = (Choice("c0", listed(0, 1, 2)), *guard.get("choices", ()))
-    return Space(
-        (),
-        Scope(
-            "",
-            choices=choices,
-            selectors=guard.get("selectors", ()),
-            children=(g,),
-            constraints=(Constraint("r8", ("c0", "g.w"), lambda r: r["c0"] <= r["g.w"], "r8"),),
-        ),
-    )
-
-
-@pytest.mark.parametrize("selector", [True, False], ids=["selector", "value"])
-def test_a_false_own_check_is_blamed_once_at_its_own_piece(selector: bool) -> None:
-    """Committing ``g.c5 = 1`` (odd) while the guard is open: inside the guard's trial
-    nothing is false only through it (its Space's view reads unresolved, so ``r8`` does
-    too), so the guard stays open and the change is refused with ``c5``'s own reason."""
-
-    space = guarded_even(selector)
-    guard = "s" if selector else "v"
-    base = Configuration(space, {}, {"c0": 1})
-    result = rejected(change(base, Change(commit={"g.c5": 1})))
-    assert result.refusals == (
-        ChangeRefusal("g.c5", "named", (Reason(ReasonKind.OUTSIDE_DOMAIN, "g.c5", "g"),)),
-    )
-    held = solve_at(space, {"c0": 1, "g.c5": 1})
-    assert held.state(guard) == Open(("a", "b") if selector else (0, 1))
-
-
-def test_a_choice_whose_domain_input_does_not_apply_waits_on_that_inputs_guard() -> None:
-    """The input's scope is absent: the choice waits on what decides its presence (a
-    fact read by a ``when``, or a selector), not on the input."""
-
-    extra = Scope(
-        "extra",
-        when=When(("wide",), lambda r: bool(r["wide"])),
-        derived=(Derived("size", ("n",), lambda r: r["n"]),),
-    )
-    a = Scope("a", derived=(Derived("span", ("n",), lambda r: r["n"]),))
-    space = Space(
-        ("wide", "n"),
-        Scope(
-            "",
-            choices=(
-                Choice("k", computed(lambda r: tuple(range(r["extra.size"])), ("extra.size",))),
-                Choice("j", computed(lambda r: tuple(range(r["mode.a.span"])), ("mode.a.span",))),
-            ),
-            selectors=(Selector("mode", (a, Scope("b"))),),
-            children=(extra,),
-        ),
-    )
-    base = Configuration(space, {"wide": False, "n": 3}, {"mode": "b"})
-    result = accepted(change(base, Change(commit={"k": 1, "j": 1})))
-    assert result.unchecked == ("j", "k")
-    solution = result.configuration.solve()
-    assert solution.state("k") == Unchecked(1, ("wide",))
-    assert solution.state("j") == Unchecked(1, ("mode",))
-
-
-# --- views and validity -----------------------------------------------------------------
-
-
-def viewed() -> Space:
-    return Space(
-        ("limit", "name"),
-        Scope(
-            "",
-            choices=(Choice("x", listed(1, 2)),),
-            constraints=(
-                Constraint("under", ("x", "limit"), lambda r: r["x"] <= r["limit"], "over"),
-            ),
-            views=(
-                View("doubled", ("x",), lambda r: 2 * r["x"]),
-                View("title", ("name",), lambda r: f"unit {r['name']}"),
-                View("half", ("x",), lambda r: Refuse("odd") if r["x"] % 2 else r["x"] // 2),
-            ),
-        ),
-    )
-
-
-def test_a_view_refuses_when_its_space_is_refused() -> None:
-    solution = solve(viewed(), {"limit": 1, "name": "u"}, x=2)
-    assert solution.validity().verdict is F
-    assert solution.view("doubled") == Refused((Reason(ReasonKind.SPACE_REFUSED, "doubled", ""),))
-
-
-def test_a_view_answers_while_its_space_is_undecided() -> None:
-    solution = solve(viewed(), {"name": "u"})
-    assert solution.validity().verdict is U
-    assert solution.view("title") == Known("unit u")
-    assert solution.view("doubled") == Unresolved(("x",))
-
-
-def test_a_view_body_refusing_refuses_the_view_not_the_space() -> None:
-    solution = solve(viewed(), {"limit": 2, "name": "u"}, x=1)
-    assert solution.validity().verdict is T
-    assert solution.view("half") == Refused((Reason(ReasonKind.VIEW_BODY, "half", "", "odd"),))
-    assert solve(viewed(), {"limit": 2, "name": "u"}, x=2).view("half") == Known(1)
-
-
 def stage(name: str) -> Scope:
     return Scope(
         name,
         choices=(Choice("depth", listed(1, 2, 4)),),
         views=(View("storage", (f"{name}.depth",), lambda r: 8 * next(iter(r.values()))),),
     )
+
+
+def test_a_parent_reading_its_childrens_views_is_not_a_cycle() -> None:
+    space = Space(
+        (),
+        Scope(
+            "",
+            children=(stage("first"), stage("second")),
+            constraints=(
+                Constraint(
+                    "fits",
+                    ("first.storage", "second.storage"),
+                    lambda r: r["first.storage"] + r["second.storage"] <= 40,
+                    "too-deep",
+                ),
+            ),
+        ),
+    )
+    space.validate()
+    refusal = rule("fits", "too-deep", standing=("first.depth",))
+    assert solve_at(space, {"first.depth": 4}).possible("second.depth") == (
+        (1, Possible()),
+        (2, Impossible((refusal,))),
+        (4, Impossible((refusal,))),
+    )
+    refused = solve_at(space, {"first.depth": 4, "second.depth": 4})
+    assert refused.validity().verdict is F
+    # the child is valid on its own; its view answers while the parent is refused
+    assert refused.validity("first").verdict is T
+    assert refused.view("first.storage") == Known(32)
+
+
+# --- definitions: reads, domains, cycles -------------------------------------------------
+
+
+def test_reading_an_unknown_path_or_a_constraint_is_a_definition_error() -> None:
+    unknown = Space(
+        (), Scope("", constraints=(Constraint("c", ("nowhere",), lambda r: True, "c"),))
+    )
+    with pytest.raises(DefinitionError) as raised:
+        unknown.validate()
+    assert (raised.value.kind, raised.value.path) == ("unknown-read", ("c", "nowhere"))
+    rule_ = Constraint("c", (), lambda r: True, "c")
+    unreadable = Space(
+        (), Scope("", constraints=(rule_, Constraint("d", ("c",), lambda r: True, "d")))
+    )
+    with pytest.raises(DefinitionError) as raised:
+        unreadable.validate()
+    assert raised.value.kind == "unreadable"
+    duplicate = Space((), Scope("", choices=(Choice("x", listed(1)), Choice("x", listed(2)))))
+    with pytest.raises(DefinitionError) as raised:
+        duplicate.validate()
+    assert (raised.value.kind, raised.value.path) == ("duplicate", ("x",))
+
+
+def domain_reading(read: str, **members: Any) -> Space:
+    return Space(
+        ("n",),
+        Scope(
+            "",
+            choices=(
+                Choice("x", listed(1, 2)),
+                Choice("y", computed(lambda r: (r[read],), (read,))),
+            ),
+            **members,
+        ),
+    )
+
+
+def test_a_domain_whose_membership_reaches_a_choice_is_a_definition_error() -> None:
+    cases = {
+        ("y", "x"): domain_reading("x"),
+        ("y", "y"): domain_reading("y"),
+        ("y", "d", "x"): domain_reading(
+            "d", derived=(Derived("d", ("n", "x"), lambda r: r["n"] + r["x"]),)
+        ),
+        ("y", "v"): domain_reading("v", views=(View("v", ("n",), lambda r: r["n"]),)),
+    }
+    for path, space in cases.items():
+        with pytest.raises(DefinitionError) as raised:
+            space.validate()
+        assert (raised.value.kind, raised.value.path) == ("domain-reads-choice", path)
+    # facts, and derived values over facts, are allowed; an order may read a choice
+    domain_reading("d", derived=(Derived("d", ("n",), lambda r: r["n"]),)).validate()
+    ranked().validate()
 
 
 def test_a_constraint_reading_a_view_of_its_own_space_is_a_cycle() -> None:
@@ -1354,58 +1274,20 @@ def test_a_constraint_reading_a_view_of_the_space_above_is_a_cycle() -> None:
     assert "constraint:inner.fits" in raised.value.path
 
 
-def test_a_parent_reading_its_childrens_views_is_not_a_cycle() -> None:
+def test_a_guard_reading_a_view_of_the_space_above_is_a_cycle() -> None:
     space = Space(
         (),
         Scope(
             "",
-            children=(stage("first"), stage("second")),
-            constraints=(
-                Constraint(
-                    "fits",
-                    ("first.storage", "second.storage"),
-                    lambda r: r["first.storage"] + r["second.storage"] <= 40,
-                    "too-deep",
-                ),
-            ),
+            choices=(Choice("depth", listed(1, 2)),),
+            views=(View("total", ("depth",), lambda r: 8 * r["depth"]),),
+            children=(Scope("extra", when=When(("total",), lambda r: r["total"] > 8)),),
         ),
     )
-    space.validate()
-    reason = constraint_reason("fits", "too-deep")
-    solution = solve_at(space, {"first.depth": 4})
-    assert solution.state("second.depth") == Forced(1, ((2, (reason,)), (4, (reason,))))
-    refused = solve_at(space, {"first.depth": 4, "second.depth": 4})
-    assert refused.validity().verdict is F
-    # the child is valid on its own; its view answers while the parent is refused
-    assert refused.validity("first").verdict is T
-    assert refused.view("first.storage") == Known(32)
-
-
-def test_reading_an_unknown_path_or_a_constraint_is_a_definition_error() -> None:
-    unknown = Space(
-        (), Scope("", constraints=(Constraint("c", ("nowhere",), lambda r: True, "c"),))
-    )
-    with pytest.raises(DefinitionError) as raised:
-        unknown.validate()
-    assert (raised.value.kind, raised.value.path) == ("unknown-read", ("c", "nowhere"))
-    rule = Constraint("c", (), lambda r: True, "c")
-    unreadable = Space(
-        (), Scope("", constraints=(rule, Constraint("d", ("c",), lambda r: True, "d")))
-    )
-    with pytest.raises(DefinitionError) as raised:
-        unreadable.validate()
-    assert raised.value.kind == "unreadable"
-    duplicate = Space((), Scope("", choices=(Choice("x", listed(1)), Choice("x", listed(2)))))
-    with pytest.raises(DefinitionError) as raised:
-        duplicate.validate()
-    assert (raised.value.kind, raised.value.path) == ("duplicate", ("x",))
-
-
-def test_a_domain_reading_its_own_choice_is_a_cycle() -> None:
-    space = Space((), Scope("", choices=(Choice("x", computed(lambda r: (r["x"],), ("x",))),)))
     with pytest.raises(DefinitionError) as raised:
         space.validate()
     assert raised.value.kind == "cycle"
+    assert {"guard:extra", "value:total", "validity:"} <= set(raised.value.path)
 
 
 # --- nested selectors: an outer kernel, an inner kernel, cores --------------------------
@@ -1451,66 +1333,33 @@ def nested() -> Space:
 
 PE = "kernel.inner.compute.packed.pe"
 COMPUTE = "kernel.inner.compute"
+ALLOWED = {"plain_ok": True, "serial_ok": True, "width": 4}
 
 
-def test_a_commit_three_deep_under_two_open_selectors_is_kept_unchecked() -> None:
-    result = accepted(change(Configuration(nested()), Change(commit={PE: 2})))
-    assert result.unchecked == (PE,)
-    assert result.configuration.solve().state(PE) == Unchecked(2, ("kernel", COMPUTE))
-    outer = accepted(change(result.configuration, Change(commit={"kernel": "inner"})))
-    assert outer.unchecked == (PE,)
-    assert outer.configuration.solve().state(PE) == Unchecked(2, (COMPUTE,))
+def test_a_commit_three_deep_waits_on_both_selectors_and_goes_dormant_with_the_outer() -> None:
+    first = accepted(change(Configuration(nested(), ALLOWED), Change(commit={PE: 2})))
+    assert first.configuration.solve().state(PE) == Waiting(2, ("kernel", COMPUTE))
+    outer = accepted(change(first.configuration, Change(commit={"kernel": "inner"})))
+    assert (outer.in_play, outer.opened) == ((), (COMPUTE,))
+    assert outer.configuration.solve().state(PE) == Waiting(2, (COMPUTE,))
     both = accepted(change(outer.configuration, Change(commit={COMPUTE: "packed"})))
-    assert both.unchecked == ()
-    assert both.configuration.solve().state(PE) == Readable(2)
-    # settling the outer selector elsewhere refuses the change
-    elsewhere = rejected(change(both.configuration, Change(commit={"kernel": "plain"})))
-    assert [(r.choice, r.kind) for r in elsewhere.refusals] == [
-        (COMPUTE, "reached"),
-        (PE, "reached"),
-    ]
+    assert both.in_play == (PE,)
+    assert both.configuration.solve().state(PE) == Set(2)
+    assert both.validity.verdict is T
+    elsewhere = accepted(change(both.configuration, Change(commit={"kernel": "plain"})))
+    assert elsewhere.dormant == (COMPUTE, PE)
+    assert elsewhere.configuration.solve().dormant() == (COMPUTE, PE)
 
 
 def test_presence_follows_both_selectors() -> None:
-    facts = {"plain_ok": True, "serial_ok": True, "width": 4}
-    open_both = solve(nested(), facts)
+    open_both = solve(nested(), ALLOWED)
     assert open_both.piece("kernel.inner.compute.packed.pe_fits").waits == ("kernel", COMPUTE)
-    inner_only = solve(nested(), facts, kernel="inner")
+    inner_only = solve(nested(), ALLOWED, kernel="inner")
     assert inner_only.piece("kernel.inner.compute.packed.pe_fits").waits == (COMPUTE,)
-    plain = solve(nested(), facts, kernel="plain")
+    plain = solve(nested(), ALLOWED, kernel="plain")
     assert plain.piece("kernel.inner.compute.packed.pe_fits").applies is False
-    assert plain.state(PE) == Inactive()
-
-
-def test_forcing_runs_through_both_selectors() -> None:
-    solution = solve(nested(), {"plain_ok": False, "serial_ok": False, "width": 6})
-    assert solution.forced() == {"kernel": "inner", COMPUTE: "packed"}
-    assert solution.state("kernel") == Forced(
-        "inner", (("plain", (constraint_reason("plain_allowed", "no-plain"),)),)
-    )
-    assert solution.state(COMPUTE) == Forced(
-        "packed",
-        (
-            (
-                "serial",
-                (
-                    constraint_reason(
-                        "kernel.inner.compute.serial.serial_ok",
-                        "no-serial",
-                        "kernel.inner.compute.serial",
-                    ),
-                ),
-            ),
-        ),
-    )
-    misfit = constraint_reason(
-        "kernel.inner.compute.packed.pe_fits", "pe-misfit", "kernel.inner.compute.packed"
-    )
-    assert solution.state(PE) == Open((1, 2), ((4, (misfit,)),))
-    # a value committed three deep is readable through the forced selectors
-    assert solve(nested(), {"plain_ok": False, "serial_ok": False, "width": 6}, **{PE: 2}).state(
-        PE
-    ) == Readable(2)
+    assert plain.state(PE) == Absent()
+    assert plain.presence("kernel.inner.compute.packed") is Presence.ABSENT
 
 
 def test_validity_counts_a_rule_three_deep() -> None:
@@ -1525,236 +1374,3 @@ def test_validity_counts_a_rule_three_deep() -> None:
     assert valid.validity().verdict is T
     waiting = solve_at(nested(), stored, {"plain_ok": True, "serial_ok": True})
     assert (waiting.validity().verdict, waiting.validity().waits) == (U, ("width",))
-
-
-def test_a_choice_three_deep_keeps_its_value_in_a_conflict_with_the_forced_selectors() -> None:
-    """``pe = 4`` with width 6 refuses ``packed``; ``serial`` is refused by its fact, so
-    ``compute`` has no possible case, and ``kernel`` was forced to ``inner`` only because
-    ``plain`` is refused. The conflict refuses the two selectors and keeps ``pe``: its
-    own check holds, it is never unchecked, and published it reads refused through its
-    guards."""
-
-    solution = solve(nested(), {"plain_ok": False, "serial_ok": False, "width": 6}, **{PE: 4})
-    assert solution.conflicts() == (
-        Conflict("", ("kernel", COMPUTE, PE), ("kernel", COMPUTE), (PE,)),
-    )
-    assert solution.own_check(PE) == Check(T)
-    state = solution.state(PE)
-    assert isinstance(state, GuardRefused)
-    assert (state.value, state.conflict) == (4, ("kernel", COMPUTE))
-    assert (
-        Reason(
-            ReasonKind.INPUT_REFUSED, PE, "kernel.inner.compute.packed", related=("kernel", COMPUTE)
-        )
-        in state.reasons
-    )
-    assert solution.unchecked() == ()
-    assert solution.forced() == {}
-    assert solution.validity().verdict is F
-
-
-# --- a look-ahead against a choice with no possible value -------------------------------
-
-
-def realized(with_rule: bool) -> Space:
-    fast = Scope(
-        "fast",
-        constraints=(Constraint("needs_fast", ("fast_ok",), lambda r: r["fast_ok"], "no-fast"),),
-    )
-    slow = Scope(
-        "slow",
-        constraints=(Constraint("needs_slow", ("slow_ok",), lambda r: r["slow_ok"], "no-slow"),),
-    )
-    native = Scope(
-        "native_impl",
-        when=When(("realization",), lambda r: r["realization"] == "native"),
-        selectors=(Selector("compute", (fast, slow)),),
-    )
-    rules = (
-        (
-            Constraint(
-                "native_needs_core",
-                ("realization", "fast_ok", "slow_ok"),
-                lambda r: r["realization"] != "native" or any((r["fast_ok"], r["slow_ok"])),
-                "no-core",
-            ),
-        )
-        if with_rule
-        else ()
-    )
-    return Space(
-        ("fast_ok", "slow_ok"),
-        Scope(
-            "",
-            choices=(Choice("realization", listed("native", "other")),),
-            children=(native,),
-            constraints=rules,
-        ),
-    )
-
-
-NO_CORES = {"fast_ok": False, "slow_ok": False}
-
-
-def test_a_case_is_not_tried_against_another_choice_having_no_possible_value() -> None:
-    solution = solve(realized(with_rule=False), NO_CORES)
-    assert solution.state("realization") == Open(("native", "other"))
-    # once native is committed, the selector under it has no possible case
-    committed = solve(realized(with_rule=False), NO_CORES, realization="native")
-    assert isinstance(committed.state("native_impl.compute"), RefusedChoice)
-    assert committed.validity().verdict is F
-
-
-def test_a_parent_rule_over_the_capabilities_makes_the_case_impossible() -> None:
-    solution = solve(realized(with_rule=True), NO_CORES)
-    assert solution.state("realization") == Forced(
-        "other", (("native", (constraint_reason("native_needs_core", "no-core"),)),)
-    )
-    assert solution.state("native_impl.compute") == Inactive()
-
-
-# --- refinement: commits only, no answer moves down the information order ----------------
-
-
-def relate(relation: Callable[[int, int], bool], left: str, right: str) -> Callable[[Reads], bool]:
-    return lambda r: relation(r[left], r[right])
-
-
-def random_space(rng: random.Random, reach: bool) -> tuple[Space, list[tuple[str, Any]]]:
-    """Three value choices with small lists, a selector whose case holds a choice and a
-    rule reading a root choice, and one to three random rules over the root choices."""
-
-    names = ("a", "b", "c")
-    choices = tuple(
-        Choice(name, listed(*sorted(rng.sample((0, 1, 2), rng.randint(1, 3))))) for name in names
-    )
-    relations: dict[str, Callable[[int, int], bool]] = {
-        "le": lambda x, y: x <= y,
-        "lt": lambda x, y: x < y,
-        "ne": lambda x, y: x != y,
-        "sum": lambda x, y: x + y <= 2,
-    }
-    rules = []
-    for index in range(rng.randint(1, 3)):
-        left, right = rng.sample(names, 2)
-        relation = relations[rng.choice(sorted(relations))]
-        rules.append(
-            Constraint(
-                f"rule{index}",
-                (left, right),
-                relate(relation, left, right),
-                f"code{index}",
-            )
-        )
-    on = Scope(
-        "on",
-        choices=(Choice("q", listed(0, 1)),),
-        constraints=(
-            Constraint("inner", ("mode.on.q", "a"), lambda r: r["mode.on.q"] <= r["a"], "inner"),
-        ),
-    )
-    below = Choice("d", membership(lambda v, r: v <= r["b"], ("b",)))
-    gated = Choice("e", membership(lambda v, r: v <= r["gate"], ("gate",)))
-    gate = Derived("gate", ("c",), lambda r: Refuse("one") if r["c"] == 1 else r["c"])
-    space = Space(
-        (),
-        Scope(
-            "",
-            choices=(*choices, below, gated),
-            selectors=(Selector("mode", (on, Scope("off"))),),
-            derived=(gate,),
-            constraints=tuple(rules),
-        ),
-        trials_count_retained_checks=reach,
-    )
-    commits = [(choice.name, value) for choice in choices for value in choice.domain.values or ()]
-    commits += [("mode", "on"), ("mode", "off"), ("mode.on.q", 0), ("mode.on.q", 1)]
-    commits += [("d", 0), ("d", 1), ("d", 2), ("e", 0), ("e", 2)]
-    return space, commits
-
-
-def refinement_violations(before: Solution, after: Solution, committed: str) -> list[str]:
-    """What moved down the information order from ``before`` to ``after``, where
-    ``after`` adds one commitment, ``committed``.
-
-    The property: a refused configuration stays refused; a valid one never becomes
-    undecided; a readable choice (or one admitted under a refused guard) becomes
-    unchecked only in a refused configuration; a forced value stays forced or becomes
-    refused; and, stricter than that, an open choice refused stays refused unless the
-    configuration reads refused. Exceptions the semantics allow:
-
-    - committing a case that was not possible (a value other than a choice's forced
-      one, a case its trial refused, or any case of a choice with no possible case):
-      the configuration must read refused, and what followed from the old evidence may
-      move (a choice forced through it, or refused through it, reads open again);
-    - inside a refused configuration, a choice forced or refused through a forced
-      value's evidence may read open again once that forced value is itself refused (a
-      refusal is blamed once, and a refused choice reads unresolved to the others'
-      trials). With the trial's reach on, a commit can refuse a forced value this way
-      (its only case would refuse the newly committed choice), and the choices forced
-      through it read open again.
-    """
-
-    found = []
-    was, now = before.validity().verdict, after.validity().verdict
-    prior = before.state(committed)
-    value = after.configuration.stored[committed]
-    impossible = (
-        (isinstance(prior, Forced) and not same(prior.value, value))
-        or isinstance(prior, RefusedChoice)
-        or (isinstance(prior, Open) and any(same(case, value) for case, _ in prior.impossible))
-    )
-    if impossible:
-        # a case that was not possible: the configuration reads refused, and what
-        # followed from the forced value may move
-        return [] if now is F else [f"{committed}: an impossible case left {now}"]
-    if was is F and now is not F:
-        found.append(f"validity {was} -> {now}")
-    if was is T and now is U:
-        found.append("validity settled -> undecided")
-    for name, old in before.states().items():
-        new = after.state(name)
-        if (
-            isinstance(old, (Readable, GuardRefused))
-            and isinstance(new, Unchecked)
-            and now is not F
-        ):
-            found.append(f"{name}: readable -> unchecked")
-        if isinstance(old, Forced):
-            if name == committed:
-                continue
-            if isinstance(new, Forced) and new.value == old.value:
-                continue  # its reasons may grow: they are observed, not minimal
-            if isinstance(new, RefusedChoice) and not new.stored:
-                continue
-            if now is F and isinstance(new, Open):
-                continue  # forced through a value now refused, in a refused configuration
-            found.append(f"{name}: forced {old.value} -> {new}")
-        if isinstance(old, RefusedChoice) and not old.stored and name != committed:
-            if not isinstance(new, RefusedChoice) and now is not F:
-                found.append(f"{name}: refused -> {new}")
-    return found
-
-
-@pytest.mark.parametrize("reach", [False, True], ids=["default", "reaching"])
-def test_refinement_moves_no_answer_down_the_information_order(reach: bool) -> None:
-    """Commits only (no replace, clear or fact change), over small random Spaces from a
-    fixed seed, in both positions of the trial's reach; the property and its exceptions
-    are :func:`refinement_violations`."""
-
-    rng = random.Random(20261017)
-    for _ in range(60):
-        space, commits = random_space(rng, reach)
-        configuration = Configuration(space)
-        before = configuration.solve()
-        for _ in range(4):
-            name, value = rng.choice(commits)
-            if name in configuration.stored:
-                continue
-            result = change(configuration, Change(commit={name: value}))
-            if isinstance(result, Rejected):
-                continue
-            after = result.configuration.solve()
-            violations = refinement_violations(before, after, name)
-            assert not violations, (configuration.stored, name, value, violations)
-            configuration, before = result.configuration, after

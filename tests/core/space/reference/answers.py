@@ -19,7 +19,7 @@ from typing import Any
 
 
 class Verdict(enum.Enum):
-    """A check's truth in three values: unknown can still become true or false."""
+    """A piece's truth in three values: unknown can still become true or false."""
 
     TRUE = "true"
     FALSE = "false"
@@ -40,12 +40,12 @@ def kleene_and(verdicts: Iterable[Verdict]) -> Verdict:
 class ReasonKind(enum.Enum):
     """Why something is false or refused."""
 
-    #: a constraint's predicate answered false
+    #: a constraint's predicate answered false on its own values
     CONSTRAINT = "constraint"
-    #: a stored value is not one of its domain's values
+    #: a value is not one of its domain's values
     OUTSIDE_DOMAIN = "outside-domain"
-    #: a stored choice sits in a scope that is not present
-    INACTIVE = "inactive"
+    #: a present choice's listed domain lists no value
+    EMPTY_DOMAIN = "empty-domain"
     #: an input the node reads is refused
     INPUT_REFUSED = "input-refused"
     #: a view's body refused, with its own code
@@ -54,20 +54,16 @@ class ReasonKind(enum.Enum):
     DERIVED_BODY = "derived-body"
     #: a view's Space is refused
     SPACE_REFUSED = "space-refused"
-    #: an open choice with an exhaustive list of which no case is possible
-    NO_POSSIBLE_VALUE = "no-possible-value"
-    #: forced or impossible choices whose evidence meets in a false piece
-    CONFLICT = "conflict"
 
 
 @dataclass(frozen=True)
 class Reason:
     """One structured reason.
 
-    ``subject`` is the node the reason is about (a constraint, a choice, a view;
-    empty for a conflict), ``owner`` the scope that owns it (empty for the root),
-    ``code`` a constraint's or a view body's own code, and ``related`` the other
-    paths involved: the refused inputs, or a conflict's participants.
+    ``subject`` is the node the reason is about (a constraint, a choice, a derived
+    value, a view, a guarded scope), ``owner`` the scope that owns it (empty for the
+    root), ``code`` a constraint's or a body's own code, and ``related`` the other
+    paths involved: the refused inputs.
     """
 
     kind: ReasonKind
@@ -99,8 +95,8 @@ class Known:
 
 @dataclass(frozen=True)
 class Unresolved:
-    """The value waits: ``waits`` lists the open or unchecked choices, the missing
-    facts and the open selectors it waits on."""
+    """The value waits: ``waits`` lists the open choices, the missing facts and the
+    open selectors (or a guard's waiting reads) it waits on."""
 
     waits: tuple[str, ...]
 
@@ -114,31 +110,33 @@ class Refused:
 
 @dataclass(frozen=True)
 class Inapplicable:
-    """The value's scope is not present."""
+    """The value's scope is absent."""
 
 
 Answer = Known | Unresolved | Refused | Inapplicable
 
 
-# --- checks and validity -------------------------------------------------------------
+# --- validity ------------------------------------------------------------------------
 
 
 class PieceKind(enum.Enum):
     """The pieces whose AND is a Space's validity."""
 
+    #: a constraint of a present scope
     CONSTRAINT = "constraint"
-    OWN_CHECK = "own-check"
-    NO_POSSIBLE_VALUE = "no-possible-value"
-    CONFLICT = "conflict"
+    #: a present choice's listed domain, false when it lists no value
+    EMPTY_DOMAIN = "empty-domain"
+    #: a guard refused through a refused input, owned by the guarded scope
+    GUARD = "guard"
 
 
 @dataclass(frozen=True)
 class Piece:
     """One piece of validity and its answer.
 
-    ``applies`` is false when the piece's scope is not present: it then counts as
-    true. ``waits`` is set when the verdict is unknown, ``reasons`` when it is false.
-    A conflict's ``related`` lists its participants.
+    ``applies`` is false when the piece's scope is absent, or not in play under a
+    refused guard: it then counts as true. ``waits`` is set when the verdict is
+    unknown, ``reasons`` when it is false.
     """
 
     kind: PieceKind
@@ -148,17 +146,16 @@ class Piece:
     applies: bool = True
     reasons: tuple[Reason, ...] = ()
     waits: tuple[str, ...] = ()
-    related: tuple[str, ...] = ()
 
 
-def piece_key(piece: Piece) -> tuple[str, str, str, tuple[str, ...]]:
-    return (piece.kind.value, piece.owner, piece.subject, piece.related)
+def piece_key(piece: Piece) -> tuple[str, str, str]:
+    return (piece.kind.value, piece.owner, piece.subject)
 
 
 @dataclass(frozen=True)
 class Validity:
     """A Space's validity: valid (``TRUE``), refused (``FALSE``, with the false
-    pieces) or undecided (``UNKNOWN``, with the unknown pieces and what they wait on).
+    pieces) or open (``UNKNOWN``, with the unknown pieces and what they wait on).
     Both lists are filled whatever the verdict."""
 
     verdict: Verdict
@@ -170,140 +167,98 @@ class Validity:
         return tuple(sorted({wait for piece in self.unknown for wait in piece.waits}))
 
 
-@dataclass(frozen=True)
-class Check:
-    """A stored choice's own check: its value is one of its domain's, and it is present.
-
-    ``verdict`` is ``None`` when the choice is inactive (its scope is not present).
-    Membership is evaluated whatever the presence: a value outside its domain is
-    false even under an unknown or refused guard; a value inside it is unknown under
-    an unknown guard, waiting on the guard, and true under a refused one.
-
-    ``refused_input`` marks a check whose domain reads an input refused other than by
-    forcing (a derived value or view refusing on its facts): it cannot conclude, and
-    never will without a revision, so ``verdict`` is unknown inside trials and forcing
-    (blamed once, at the input) while ``reasons`` say why; published, its piece reads
-    refused through that input. Under a refused guard the guard comes first: such a
-    check has ``through_guard`` set, no reasons and no waits, and the choice is
-    refused through its guard only.
-    """
-
-    verdict: Verdict | None
-    reasons: tuple[Reason, ...] = ()
-    waits: tuple[str, ...] = ()
-    refused_input: bool = False
-    #: under a refused guard, a check that cannot conclude only through a refused
-    #: input: its answer is its guard's (no reasons of its own, nothing in validity)
-    through_guard: bool = False
-
-
 # --- a choice's state ----------------------------------------------------------------
 
-#: one case of a listed domain and why it is not possible
-CaseReasons = tuple[Any, tuple[Reason, ...]]
-
 
 @dataclass(frozen=True)
-class Readable:
-    """Committed and checked: the stored value is read as the choice's value.
-    ``conflict`` lists the other participants of a conflict this committed choice
-    takes part in; it keeps its value while its own check holds."""
+class Set:
+    """Stored and in play: read as its value."""
 
     value: Any
-    conflict: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
-class GuardRefused:
-    """Committed, its own check true, under a refused guard (a selector refused by
-    forcing or by its own check): admitted, never unchecked, a change keeping it is
-    accepted. Where its guard holds (a trial assuming its case) it reads as its value;
-    in the published configuration it reads as refused through its guard, with the
-    guard's reasons in ``reasons``. ``conflict`` lists the other participants of a
-    conflict it takes part in, as for :class:`Readable`."""
-
-    value: Any
-    reasons: tuple[Reason, ...]
-    conflict: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class InputRefused:
-    """Committed, its own check refused through an input of its domain that is refused
-    on facts (not by forcing): the commit is accepted (only membership refuses a value),
-    the choice is kept, never read as a value, and not waiting on anything a commitment
-    could settle; published it reads refused through that input, ``reasons`` naming the
-    input and its own reasons."""
-
-    value: Any
-    reasons: tuple[Reason, ...]
-
-
-@dataclass(frozen=True)
-class Unchecked:
-    """Committed, its own check unknown: kept, read as unresolved, never used as a
-    value; ``waits`` is what the check waits on."""
+class Waiting:
+    """Stored, never read as a value: its presence is unknown, or its membership waits
+    on a missing fact. ``waits`` is what it waits on."""
 
     value: Any
     waits: tuple[str, ...]
 
 
 @dataclass(frozen=True)
-class Forced:
-    """Open, with exactly one possible case of an exhaustive list. ``others`` gives
-    each other case with why it is not possible. Never stored."""
+class Dormant:
+    """Stored, out of play: its scope is absent, or under a refused guard. Kept, and
+    back in play when its scope is present again."""
 
     value: Any
-    others: tuple[CaseReasons, ...]
 
 
 @dataclass(frozen=True)
 class Open:
-    """Open. ``possible`` lists its possible cases in domain order, or is ``None``
-    when they cannot be listed (a membership-only domain, or a listed domain whose
-    list waits on something); ``impossible`` gives the other listed cases with why.
-    ``waits`` is set when its presence or its list is unknown."""
+    """Unset, in a scope that is present or whose presence is unknown. ``waits`` is
+    what its presence waits on, empty when present."""
 
-    possible: tuple[Any, ...] | None
-    impossible: tuple[CaseReasons, ...] = ()
     waits: tuple[str, ...] = ()
     required: bool = False
 
 
 @dataclass(frozen=True)
-class RefusedChoice:
-    """Refused. A stored choice whose own check is false (``stored`` true, its value
-    in ``value``), or an open choice with no possible case or in a conflict: then
-    ``cases`` gives each case's reason and ``peers`` the conflict's other
-    participants. A forced value of a conflict's participant is withdrawn."""
+class Absent:
+    """Unset, its scope absent or under a refused guard: not in play."""
 
+
+ChoiceState = Set | Waiting | Dormant | Open | Absent
+
+
+# --- what a change, or a trial of one value, answers ---------------------------------
+
+
+@dataclass(frozen=True)
+class AssignmentRefusal:
+    """A value that is not of its choice's type: outside its domain, or its domain's
+    membership reads a refused input. Named by the change, or stored and re-checked
+    against the facts the change sets."""
+
+    choice: str
     reasons: tuple[Reason, ...]
-    stored: bool = False
-    value: Any = None
-    cases: tuple[CaseReasons, ...] = ()
-    peers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
-class Inactive:
-    """Its scope is not present. A stored inactive choice keeps its value here and
-    refuses any change that would publish it."""
+class RuleRefusal:
+    """A rule the change reaches, false at its origin. ``origin`` is the node where the
+    failure starts; ``kind`` is ``"constraint"``, ``"derived"``, ``"view"`` or
+    ``"empty-domain"`` (``origin`` then the choice whose listed domain lists no
+    value); ``reasons`` its own reason; ``standing`` the stored choices standing in the
+    way, which the caller sets in the same change or clears first."""
 
-    stored: bool = False
-    value: Any = None
+    origin: str
+    kind: str
+    reasons: tuple[Reason, ...]
+    standing: tuple[str, ...]
 
 
-ChoiceState = (
-    Readable | GuardRefused | InputRefused | Unchecked | Forced | Open | RefusedChoice | Inactive
-)
+ChangeRefusal = AssignmentRefusal | RuleRefusal
+
+
+def refusal_key(refusal: ChangeRefusal) -> tuple[int, str]:
+    if isinstance(refusal, AssignmentRefusal):
+        return (0, refusal.choice)
+    return (1, refusal.origin)
 
 
 @dataclass(frozen=True)
-class Conflict:
-    """A conflict component: its participants, the uncommitted ones refused, the
-    committed ones kept; ``owner`` is the lowest scope holding them all."""
+class Possible:
+    """A value nothing refuses, with the choices setting it would put dormant, bring
+    into play and open."""
 
-    owner: str
-    participants: tuple[str, ...]
-    refused: tuple[str, ...]
-    kept: tuple[str, ...]
+    dormant: tuple[str, ...] = ()
+    in_play: tuple[str, ...] = ()
+    opened: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Impossible:
+    """A value whose setting is refused, with each refusal."""
+
+    refusals: tuple[ChangeRefusal, ...]
