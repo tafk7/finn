@@ -20,7 +20,6 @@ from finn.core.space import (
 )
 from finn.core.space.edits import ChangeRequest
 from finn.core.space.errors import (
-    ConfigurationError,
     DefinitionError,
     EvaluationError,
     RequestError,
@@ -217,7 +216,7 @@ def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -
     assert len(admitted) == len(members)
     assert all(outcome.status == "changed" for outcome in report.outcomes)
     assert report.instance.query(limit) == Available(100)
-    assert limits == [100]  # the successor keeps the trial's evaluation: it read no Decision
+    assert limits == [100]  # the successor keeps the change's evaluation: it read no choice
 
     limits.clear()
     admitted.clear()
@@ -226,9 +225,10 @@ def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -
     failed = base.try_with_choices(*edits)
     assert not failed.accepted
     assert failed.instance is base
-    assert limits == [100]
+    # The model's memo answers the limit, a function of the same fact, as before.
+    assert limits == []
     assert len(admitted) == len(members)
-    assert [outcome.status for outcome in failed.outcomes].count("admissible") == len(members) - 1
+    assert [outcome.status for outcome in failed.outcomes].count("checked") == len(members) - 1
     assert all(isinstance(base.query(member), Unresolved) for member in members)
 
 
@@ -268,7 +268,7 @@ def test_dependent_batch_is_order_independent_without_precommitting_candidates()
         assert item.result.findings == primary.findings
 
 
-def test_selector_and_nested_edit_share_atomic_order_and_inactive_edits_refuse() -> None:
+def test_selector_and_nested_edit_share_atomic_order_and_inactive_edits_are_dormant() -> None:
     class Child(Space):
         value: int = Decision(values=(1, 2))
 
@@ -285,12 +285,18 @@ def test_selector_and_nested_edit_share_atomic_order_and_inactive_edits_refuse()
     assert selected is not None and selected.query(Child.value) == Available(2)
     inactive = candidate(report.instance, Root.implementation, "b")
     assert inactive is not None
-    failed = report.instance.try_with_choices(inactive.field(Child.value).change(1))
-    assert not failed.accepted
-    assert isinstance(failed.outcomes[0].result, Inapplicable)
-    assert failed.instance is report.instance
-    with pytest.raises(ConfigurationError):
-        report.instance.with_choices({selector: "b"})
+    # Set under the case not selected, the value is checked there and kept, dormant.
+    dormant = report.instance.try_with_choices(inactive.field(Child.value).change(1))
+    assert dormant.accepted
+    other = candidate(dormant.instance, Root.implementation, "b")
+    assert other is not None and isinstance(other.query(Child.value), Inapplicable)
+    # Switching to it puts a's value out of play and brings b's in.
+    switched = dormant.instance.with_choices({selector: "b"})
+    assert candidate(switched, Root.implementation, "b").query(Child.value) == Available(1)  # type: ignore[union-attr]
+    assert isinstance(
+        candidate(switched, Root.implementation, "a").query(Child.value),  # type: ignore[union-attr]
+        Inapplicable,
+    )
 
 
 def test_enumerated_candidates_still_pass_membership_before_commitment() -> None:
@@ -309,8 +315,8 @@ def test_enumerated_candidates_still_pass_membership_before_commitment() -> None
     report = base.try_with_choices(base.field(Trial.value).change(-1))
     assert not report.accepted
     assert seen == [-1]
-    # Every listed value is checked by membership: -1 is no case, so 1 is forced.
-    assert base.query(Trial.value) == Available(1)
+    # Nothing is filled in, though one listed value alone passes membership.
+    assert isinstance(base.query(Trial.value), Unresolved)
 
 
 def test_programmer_failure_after_provisional_admission_never_publishes_a_successor() -> None:

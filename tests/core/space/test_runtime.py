@@ -120,7 +120,7 @@ def test_atomic_refinement_follows_dependencies_and_never_publishes_partial_stat
     )
     assert not failure.accepted
     assert failure.instance is base
-    assert {x.status for x in failure.outcomes} == {"refused", "admissible"}
+    assert {x.status for x in failure.outcomes} == {"refused", "checked"}
     assert isinstance(base.query(Tiles.extent), Unresolved)
     with pytest.raises(RequestError):
         base.try_with_choices(

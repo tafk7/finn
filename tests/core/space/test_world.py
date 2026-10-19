@@ -3,8 +3,8 @@
 """The evaluation core's worlds: how each kind of node reads, validity's pieces, what a
 world takes from its parent, and early cutoff by value semantics.
 
-The core (``finn.core.space._world``) is not wired to ``Space`` yet: each test opens a
-world of a root declaration's facts and stored choices (``core.space._world_support``).
+Each test opens a world of a root declaration's facts and stored choices, on an evaluator
+of its own (``core.space._world_support``).
 A choice reads its stored value through its type check over facts, or unassigned, or
 (under a scope not in play) inapplicable; nothing is forced. Validity's pieces are the
 constraints, present children, a present choice whose listed domain lists no value,
@@ -339,7 +339,7 @@ class Assembly(Space):
 
 
 @pytest.mark.parametrize("budget", (40, 10))
-def test_every_node_answers_as_the_current_evaluator_where_nothing_is_forced(budget: int) -> None:
+def test_every_node_answers_as_a_published_configuration(budget: int) -> None:
     choices = {
         "extra": True,
         "first.finish": 1,

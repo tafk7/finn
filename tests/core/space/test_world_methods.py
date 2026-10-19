@@ -92,7 +92,7 @@ class Outer(Space):
         return 0
 
 
-def test_house_answers_as_the_current_evaluator() -> None:
+def test_house_answers_as_a_published_configuration() -> None:
     choices = {
         "want_garage": True,
         "heating": "heat_pump",

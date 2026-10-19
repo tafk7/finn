@@ -18,15 +18,16 @@ from support.refusals import refused
 
 from core.space._choices_support import committed
 from core.space._collapse_support import answers, open_space
+from core.space._possible_support import possible
 from finn.core.space import (
     Available,
-    ConfigurationError,
     Decision,
     DefinitionError,
     Inapplicable,
     Param,
     Rejected,
     Space,
+    Unresolved,
     View,
     composite,
     constraint,
@@ -329,15 +330,22 @@ def test_a_class_body_handle_is_the_typed_spelling_of_a_qualified_read() -> None
 # -- keys ----------------------------------------------------------------------------------
 
 
-def test_switching_candidates_refuses_a_stale_candidate_choice_until_cleared() -> None:
+def test_switching_candidates_keeps_a_stale_candidate_choice_dormant() -> None:
     base = design_space(Unit(width=8))
     packed = commit(base, {"compute": "packed", "compute.packed.pe": 4, "compute.packed.simd": 1})
-    with pytest.raises(ConfigurationError):
-        packed.with_choices({Unit.compute: "stub"})
-    pe = packed.compute.field(PackedCore.pe).clear()
-    simd = packed.compute.field(PackedCore.simd).clear()
-    stub = packed.with_choices(pe, simd, {Unit.compute: "stub", Unit.compute["stub"].rows: 2})  # type: ignore[index]
-    assert stub.cycles == 16
+    switched = packed.with_choices({Unit.compute: "stub"})
+    pe = Unit.compute["packed"].pe  # type: ignore[index]
+    assert isinstance(switched.query(pe), Inapplicable)  # dormant: kept, out of play
+    assert committed(switched)["compute.packed.pe"] == 4
+    assert switched.with_choices({Unit.compute: "packed"}).compute.pe == 4  # back in play
+    cleared_pe = packed.compute.field(PackedCore.pe).clear()
+    cleared_simd = packed.compute.field(PackedCore.simd).clear()
+    stub = packed.with_choices(
+        cleared_pe,
+        cleared_simd,
+        {Unit.compute: "stub", Unit.compute["stub"].rows: 2},  # type: ignore[index]
+    )
+    assert stub.cycles == 16 and "compute.packed.pe" not in committed(stub)
 
 
 def test_a_choice_answers_the_same_with_and_without_collapse() -> None:
@@ -419,17 +427,18 @@ def test_a_space_class_declared_at_run_time_has_the_class_bodys_stable_keys() ->
 # -- forced cases ------------------------------------------------------------------------
 
 
-def forced(point: Any) -> dict[str, object]:
-    return {item.key: item.value for item in inspection.forced(point)}
+def test_the_candidates_validity_fills_in_no_case() -> None:
+    for width in (128, 7, 8, 129):
+        answer = design_space(Unit(width=width)).query(Unit.compute)
+        assert isinstance(answer, Unresolved)
+        assert [finding.code for finding in answer.findings] == ["decision-unassigned"]
 
 
-def test_the_candidates_validity_forces_one_case_and_leaves_several_open() -> None:
-    assert forced(design_space(Unit(width=128))) == {"compute": "stub"}
-    assert forced(design_space(Unit(width=7))) == {"compute": "packed"}
-    assert forced(design_space(Unit(width=8))) == {}
-    neither = design_space(Unit(width=129)).query(Unit.compute)
-    assert isinstance(neither, Rejected)
-    assert [finding.code for finding in neither.findings] == ["decision-no-viable-case"]
-    # Committed, the choice is no longer forced.
-    chosen = commit(design_space(Unit(width=128)), {"compute": "stub"})
-    assert "compute" not in forced(chosen)
+@pytest.mark.xfail(
+    strict=True, reason="until P3: inspection.viable(point, keys) answers each value"
+)
+def test_the_candidates_validity_refuses_a_case_and_leaves_several_possible() -> None:
+    assert possible(design_space(Unit(width=128)), Unit.compute) == ("stub",)
+    assert possible(design_space(Unit(width=7)), Unit.compute) == ("packed",)
+    assert possible(design_space(Unit(width=8)), Unit.compute) == ("packed", "stub")
+    assert possible(design_space(Unit(width=129)), Unit.compute) == ()

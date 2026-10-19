@@ -77,7 +77,10 @@ def test_inspection_does_not_run_domains_or_evaluators() -> None:
         assert isinstance(result, Available)
         scores.append((result.value, value))
     assert min(scores, key=lambda item: item[0]) == (3, 4)
-    assert calls.count("membership") == 3
+    # Membership runs once for each value set, and once for each listed value when the
+    # view's validity asks whether the domain lists any (the empty-domain piece): shared by
+    # every trial, as the enumeration is with ``candidates()``.
+    assert calls.count("membership") == 6
     assert calls.count("candidates") == 1
     assert isinstance(point.query(Example.lanes), Unresolved)
 
@@ -218,11 +221,8 @@ def test_singleton_choice_metadata_exposes_an_ordinary_editable_selector() -> No
         ("some", "optional.some", Child),
     ]
     point = design_space(Root())
-    # Its one case is forced: read as that case, never committed.
-    assert point.query(Root.implementation.value) == Available(1)
-    assert [(item.key, item.value, item.refused) for item in inspection.forced(point)] == [
-        ("implementation", "only", {})
-    ]
+    # Its one case is not filled in: the choice is open until set.
+    assert isinstance(point.query(Root.implementation.value), Unresolved)
     chosen = point.with_choices({implementation.selector: "only", optional.selector: "none"})
     assert isinstance(chosen.implementation, Child) and chosen.implementation.value == 1
     assert chosen.optional is None

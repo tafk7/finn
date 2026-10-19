@@ -97,8 +97,9 @@ def test_false_outer_scope_suppresses_inner_commitments_and_callbacks() -> None:
     assert isinstance(point.child.query(Guarded.raw), Inapplicable)
     assert isinstance(point.child.inspect(Guarded.physical).accepted_result, Inapplicable)
     assert calls == []
-    with pytest.raises(ConfigurationError):
-        point.child.with_choices(lanes=1)
+    # A choice under a guard that never holds is kept, dormant: never read.
+    dormant = point.child.with_choices(lanes=1)
+    assert isinstance(dormant.query(Guarded.lanes), Inapplicable)
     assert calls == []
 
 
@@ -149,10 +150,9 @@ def test_selected_view_preserves_direct_refusal_and_skips_other_alternatives() -
     assert calls == []
 
 
-def test_singleton_choice_is_forced_and_respects_its_outer_guard() -> None:
-    # A singleton choice is an ordinary Decision whose one viable case reads as that
-    # case (forced), never committed: its state stays unassigned. Committing it is
-    # still a choice like any other.
+def test_singleton_choice_is_open_and_respects_its_outer_guard() -> None:
+    # A singleton choice is an ordinary Decision: open until a change sets it, though it
+    # has one case. Setting it is a choice like any other.
     class Only(Space):
         output = Const(7)
         physical = View(output)
@@ -164,12 +164,9 @@ def test_singleton_choice_is_forced_and_respects_its_outer_guard() -> None:
         accepted = View(implementation.physical)
 
     active = design_space(Root(enabled=True))
-    assert active.query(Root.accepted) == Available(7)
+    assert isinstance(active.query(Root.accepted), Unresolved)
     state = active.field(Root.implementation).state
     assert isinstance(state, Available) and state.value.status == "unassigned"
-    assert [(item.key, item.value) for item in inspection.forced(active)] == [
-        ("implementation", "only")
-    ]
     (choice,) = inspection.choices(active)
     assert [case.name for case in choice.cases] == ["only"]
     chosen = active.with_choices(implementation="only")
@@ -177,8 +174,9 @@ def test_singleton_choice_is_forced_and_respects_its_outer_guard() -> None:
     assert chosen.with_choices(implementation="only") is chosen
     inactive = design_space(Root(enabled=False))
     assert isinstance(inactive.query(Root.accepted), Inapplicable)
-    with pytest.raises(ConfigurationError):
-        inactive.with_choices(implementation="only")
+    # Set while its guard does not hold, it is kept, dormant.
+    dormant = inactive.with_choices(implementation="only")
+    assert isinstance(dormant.query(Root.accepted), Inapplicable)
 
 
 def test_nested_choice_selection_retains_its_owning_scope() -> None:

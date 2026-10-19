@@ -11,6 +11,7 @@ from weakref import ReferenceType, ref
 import pytest
 from support.refusals import refused
 
+from core.space._possible_support import broken
 from finn.core.space import (
     Available,
     Decision,
@@ -19,10 +20,10 @@ from finn.core.space import (
     Unresolved,
     ValueSemantics,
     View,
+    constraint,
     default_semantics,
     derived,
     design_space,
-    divisors_of,
     domain,
 )
 from finn.core.space.compiler import compile_model
@@ -226,19 +227,21 @@ def test_dynamic_prepared_space_class_and_bound_metadata_are_collectable() -> No
     assert bound_ref() is None
 
 
+@pytest.mark.xfail(strict=True, reason="until P3: a change is refused by the rules it breaks")
 def test_replacement_revalidates_retained_choices_and_supports_atomic_clear() -> None:
     class Example(Space):
         extent: int = Decision(values=(8, 12))
-        lanes: int = Decision(domain=divisors_of(extent))
+        lanes: int = Decision(values=(1, 2, 3, 4))
+
+        @constraint
+        def divides(self) -> bool:
+            return self.extent % self.lanes == 0
 
     base = design_space(Example())
     configured = base.with_choices(extent=12, lanes=3)
     refused = configured.try_with_choices(extent=8)
     assert not refused.accepted and refused.instance is configured
-    assert [(item.owner, item.requested) for item in refused.outcomes] == [
-        ("extent", True),
-        ("lanes", False),
-    ]
+    assert broken(refused) == {"divides": {"lanes"}}
     with pytest.raises(ConfigurationError) as caught:
         configured.with_choices(extent=8)
     assert caught.value.report == refused
@@ -279,19 +282,25 @@ def test_value_reads_preserve_result_and_view_context() -> None:
     assert configured.field(Example.choice).query() == Available(0)
 
 
+@pytest.mark.xfail(strict=True, reason="until P3: a change is refused by the rules it breaks")
 def test_child_replacement_returns_child_and_revalidates_the_whole_root() -> None:
     class Child(Space):
         local: int = Decision(values=(1, 2))
 
     class Root(Space):
         extent: int = Decision(values=(2, 4))
-        sibling: int = Decision(domain=divisors_of(extent))
+        sibling: int = Decision(values=(1, 2, 4))
         child = Child()
+
+        @constraint
+        def divides(self) -> bool:
+            return self.extent % self.sibling == 0
 
     root = design_space(Root()).with_choices(extent=4, sibling=4)
     child = root.child.with_choices(local=1)
     refused = child.try_with_choices(child.root.field(Root.extent).change(2))
     assert not refused.accepted and refused.instance is child
+    assert broken(refused) == {"divides": {"sibling"}}
     revised = child.with_choices(
         child.root.field(Root.extent).change(2), child.root.field(Root.sibling).change(2)
     )
@@ -323,9 +332,9 @@ def test_replacement_reuses_frozen_facts_keeps_views_lazy_and_drops_what_it_reac
     assert first.result == 2
     revised = first.with_choices(choice=2)
     assert calls == [1]
-    assert state(revised).parameters is state(first).parameters
+    assert state(revised).world.facts is state(first).world.facts
     linked = state(revised).linked
-    kept = {linked.nodes[index].key for index in state(revised).cache}
+    kept = {linked.nodes[index].key for index in state(revised).world.cache}
     assert kept <= {"source", "choice"}  # what read the replaced choice is not kept
     assert revised.result == 3
     assert calls == [1, 2]

@@ -4,7 +4,7 @@
 
 On a configuration ``point.kitchen.cost`` is the accepted value (a read of a
 view that is not accepted raises ``ValueUnavailableError`` carrying its
-result): refused with its Space, and answering while its Space is undecided. On a
+result): refused with its Space, and answering while its Space is open. On a
 declaration ``kitchen.cost`` is a reference to that value: it supplies a formal.
 Assessment and query are explicit calls on the configuration:
 ``point.inspect(Hall.total)`` and ``point.query(Hall.total)``.
@@ -150,12 +150,12 @@ def test_a_view_reference_supplies_a_formal_by_assignment_and_at_the_call() -> N
     assert big.hall.area == 36 and isinstance(big.query(Hall.hall.cost), Rejected)
 
 
-def test_a_view_refuses_with_its_space_and_answers_while_it_is_undecided_in_both_forms() -> None:
+def test_a_view_refuses_with_its_space_and_answers_while_it_is_open_in_both_forms() -> None:
     point = chosen()
     # The garage's presence waits on its Decision: its constraint is unknown under it, the
-    # hall is undecided, and its views answer.
+    # hall is open, and its views answer.
     validity = inspection.validity(point)
-    assert validity.status == "undecided"
+    assert validity.status == "open"
     assert [piece.owner for piece in validity.pieces] == ["garage.small_enough"]
     assert point.checked == 16 and point.total == 40
     assert point.inspect(Hall.checked).validity == validity.result

@@ -2,14 +2,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """The failure contract on the evaluation core (``finn.core.space._world``, ``_failure``).
 
-Each test mirrors the public test that pins the contract on the current evaluator,
-named in its docstring, with the configuration's reads replaced by a world's entries
-(the core is not wired to ``Space`` yet). An authored function raising is its owner's
-error, never cached; a failure reaches a reading method through its read, so its
-cleanup runs and may read; the first failure is primary and sticky; later ones are
-cleanup failures, in order; a cancellation keeps its identity. The current
-evaluator's interruption points (its dispatcher's lines) are replaced by the core's:
-before a call starts, a read inside a method, publishing an entry, recording a
+Each test mirrors a public test that pins the contract (named in its docstring), on a
+world's entries. An authored function raising is its owner's error, never cached; a
+failure reaches a reading method through its read, so its cleanup runs and may read; the
+first failure is primary and sticky; later ones are cleanup failures, in order; a
+cancellation keeps its identity. Where an interruption lands is one of the core's own
+points: before a call starts, a read inside a method, publishing an entry, recording a
 failure, delivering one.
 """
 

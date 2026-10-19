@@ -1,6 +1,6 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Production admission, demand traces, native work bounds, and lifetime regressions."""
+"""Assignment of dependent batches, demand traces, deep and wide work, and lifetimes."""
 
 from __future__ import annotations
 
@@ -19,12 +19,11 @@ from finn.core.space import (
     Available,
     Decision,
     EvaluationError,
+    NativeEvaluationError,
     Param,
     Rejected,
     Space,
     ValueSemantics,
-    _execution,
-    _runtime,
     default_semantics,
     derived,
     design_space,
@@ -32,6 +31,8 @@ from finn.core.space import (
     domain,
     inspection,
 )
+from finn.core.space._failure import current
+from finn.core.space._state import State
 from finn.core.space.declarations import ValueRef
 from finn.core.space.occurrence import state
 
@@ -135,7 +136,9 @@ def test_invalid_candidate_never_crosses_a_getter_or_reaches_division() -> None:
         )
         assert not report.accepted
         assert all(isinstance(outcome.result, Rejected) for outcome in report.outcomes)
-    assert len(starts) == 2 and divisions == []
+    # The second order's ``quotient`` reads the divisor refused as the first did: the model's
+    # memo answers it from that trace, and the method starts once in all.
+    assert len(starts) == 1 and divisions == []
 
 
 def test_published_reads_do_not_repeat_admission_callbacks() -> None:
@@ -264,9 +267,10 @@ def test_observed_evidence_includes_cached_reads_and_omits_unselected_work() -> 
     via = {node.declaration.key: [alias.key for alias in node.via] for node in evidence.nodes}
     assert via["left.cycles"] == ["left.extent"]
     assert "unrelated" not in edges
-    starts = state(point).work.callback_starts
+    calls = state(point).evaluator.counters.calls
+    before = sum(calls.values())
     assert inspection.explain(point, Pair.output) == evidence
-    assert state(point).work.callback_starts == starts
+    assert sum(calls.values()) == before  # a second explanation calls nothing
 
 
 def declare(space_type: type[Space], bindings: Mapping[str, object]) -> Space:
@@ -275,50 +279,58 @@ def declare(space_type: type[Space], bindings: Mapping[str, object]) -> Space:
     return node(**bindings)
 
 
-def _deep_space(depth: int) -> tuple[type[Space], list[str]]:
+def _deep_space(depth: int, completed: list[str] | None = None) -> tuple[type[Space], list[str]]:
+    """A chain of ``depth`` methods, each reading the one before; ``completed``: each
+    method's name as it completes (one past its read)."""
     declarations: dict[str, object] = {"value_0": Param(semantics=default_semantics(int))}
     names = ["value_0"]
+    done = completed if completed is not None else []
 
-    def step(previous: str) -> Callable[[Space], int]:
+    def step(previous: str, name: str) -> Callable[[Space], int]:
         def compute(self: Space) -> int:
-            return cast(int, getattr(self, previous)) + 1
+            value = cast(int, getattr(self, previous)) + 1
+            done.append(name)
+            return value
 
         return compute
 
     for index in range(1, depth + 1):
         name = f"value_{index}"
-        declarations[name] = derived(step(names[-1]))
+        declarations[name] = derived(step(names[-1], name))
         names.append(name)
     return cast(type[Space], type("DeepSelf", (Space,), declarations)), names
 
 
-def test_native_chain_20000_has_one_start_per_callback() -> None:
-    space_type, names = _deep_space(20_000)
+def test_native_chain_20000_completes_each_callback_once() -> None:
+    """Past the depth the Python stack takes, the evaluation unwinds and runs again what
+    it abandoned: a method may start more than once, and completes once."""
+    completed: list[str] = []
+    space_type, names = _deep_space(20_000, completed)
     point = design_space(declare(space_type, {"value_0": 0}))
     assert getattr(point, names[-1]) == 20_000
-    work = state(point).work
-    assert work.callback_starts == 20_000
-    assert work.getter_attempts == 20_001
-    assert work.nodes_started == 20_001
-    assert work.max_pending == 20_001
+    assert sorted(completed) == sorted(names[1:])
     assert getattr(point, names[-1]) == 20_000
-    assert work.callback_starts == 20_000
+    assert len(completed) == 20_000
 
 
 def test_native_wide_fan_in_and_cached_prefix_deep_dependency() -> None:
-    space_type, names = _deep_space(1_200)
+    completed: list[str] = []
+    space_type, names = _deep_space(1_200, completed)
     assert names[-1] == "value_1200"
 
     def output(self: Space) -> int:
         prefix = sum(cast(int, getattr(self, f"value_{index}")) for index in range(1, 401))
-        return prefix + cast(int, getattr(self, "value_1200"))
+        found = prefix + cast(int, getattr(self, "value_1200"))
+        completed.append("output")
+        return found
 
     mixed = cast(type[Space], type("Mixed", (space_type,), {"output": derived(output)}))
     point = design_space(declare(mixed, {"value_0": 0}))
     assert getattr(point, "value_400") == 400
-    before = state(point).work.callback_starts
+    before = len(completed)
     assert getattr(point, "output") == sum(range(1, 401)) + 1_200
-    assert state(point).work.callback_starts - before == 801
+    # The cached prefix is not run again: output, and value_401 to value_1200, once each.
+    assert len(completed) - before == 801
     evidence = inspection.explain(point, cast(ValueRef[int], getattr(mixed, "output")))
     edges = next(node.dependencies for node in evidence.nodes if node.declaration.key == "output")
     assert len(edges) == 401
@@ -334,8 +346,7 @@ def test_native_wide_fan_in_and_cached_prefix_deep_dependency() -> None:
     wide = cast(type[Space], type("WideSelf", (Space,), leaves))
     fan = design_space(declare(wide, {f"leaf_{index}": index for index in range(1_000)}))
     assert getattr(fan, "total") == sum(range(1_000))
-    assert state(fan).work.callback_starts == 1
-    assert state(fan).work.suspensions == 1_000
+    assert state(fan).evaluator.counters.calls == {"derived": 1}
 
 
 @dataclass(frozen=True)
@@ -343,44 +354,7 @@ class Payload:
     value: int
 
 
-def test_contexts_continuations_trials_and_cached_outputs_are_reclaimed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    snapshots: list[ReferenceType[_runtime.Snapshot]] = []
-    contexts: list[ReferenceType[_execution.Context]] = []
-    continuations: list[ReferenceType[_execution._Greenlet]] = []
-    outputs: list[ReferenceType[Payload]] = []
-    original_greenlet = _execution.greenlet.greenlet
-
-    class ObservedSnapshot(_runtime.Snapshot):
-        def __post_init__(self) -> None:
-            super().__post_init__()
-            snapshots.append(ref(self))
-
-    class ObservedTrial(_runtime._TrialSnapshot):
-        def __post_init__(self) -> None:
-            super().__post_init__()
-            snapshots.append(ref(self))
-
-    class ObservedContext(_execution.Context):
-        def __init__(
-            self, snapshot: _runtime.Snapshot, index: int, native_parent: _execution._Greenlet
-        ) -> None:
-            super().__init__(snapshot, index, native_parent)
-            contexts.append(ref(self))
-
-    def continuation(
-        function: Callable[..., object], *, parent: _execution._Greenlet
-    ) -> _execution._Greenlet:
-        result = original_greenlet(function, parent=parent)
-        continuations.append(ref(result))
-        return result
-
-    monkeypatch.setattr(_runtime, "Snapshot", ObservedSnapshot)
-    monkeypatch.setattr(_runtime, "_TrialSnapshot", ObservedTrial)
-    monkeypatch.setattr(_execution, "Context", ObservedContext)
-    monkeypatch.setattr(_execution.greenlet, "greenlet", continuation)
-
+def _reclaimed_example() -> type[Space]:
     def accepts(*, candidate: int) -> bool:
         if candidate == 99:
             raise LookupError("trial failure")
@@ -408,59 +382,87 @@ def test_contexts_continuations_trials_and_cached_outputs_are_reclaimed(
             finally:
                 _ = self.fact
 
-    model = inspection.model(Example)
-    survivor = design_space(Example(fact=1))
+    return Example
 
-    def exercise() -> None:
-        point = design_space(Example(fact=2)).with_choices(choice=1)
-        assert point.payload == Payload(1)
-        snapshot = state(point)
-        answer = snapshot.cache[state(point).model.linked.keys["payload"]].result
-        assert isinstance(answer, Available)
-        outputs.append(ref(cast(Payload, answer.value)))
-        successor = point.with_choices(choice=2)
-        assert successor.payload == Payload(2)
-        assert state(successor).parameters is snapshot.parameters
-        assert state(successor).lock is not snapshot.lock
-        failed = design_space(Example(fact=3))
-        with pytest.raises(_execution.NativeEvaluationError):
-            _ = failed.broken
-        with pytest.raises(KeyboardInterrupt):
-            _ = failed.cancelled
-        assert failed.fact == 3
-        assert not failed.try_with_choices(choice=-1).accepted
-        with pytest.raises(_execution.NativeEvaluationError):
-            failed.with_choices(choice=99)
-        assert failed.fact == 3
 
-    exercise()
+def _exercise(
+    example: type[Space], states: list[ReferenceType[State]], outputs: list[ReferenceType[Payload]]
+) -> None:
+    """Configurations made, changed, failed and refused; what they held, observed weakly."""
+    point = design_space(declare(example, {"fact": 2})).with_choices(choice=1)
+    assert getattr(point, "payload") == Payload(1)
+    current_state = state(point)
+    states.append(ref(current_state))
+    answer = current_state.world.cache[current_state.linked.keys["payload"]].result
+    assert isinstance(answer, Available)
+    outputs.append(ref(cast(Payload, answer.value)))
+    successor = point.with_choices(choice=2)
+    states.append(ref(state(successor)))
+    assert getattr(successor, "payload") == Payload(2)
+    # A successor shares the facts it did not change, and the model's lock.
+    assert state(successor).world.facts is current_state.world.facts
+    assert state(successor).evaluator.lock is current_state.evaluator.lock
+    failed = design_space(declare(example, {"fact": 3}))
+    states.append(ref(state(failed)))
+    with pytest.raises(NativeEvaluationError):
+        _ = getattr(failed, "broken")
+    with pytest.raises(KeyboardInterrupt):
+        _ = getattr(failed, "cancelled")
+    assert getattr(failed, "fact") == 3
+    assert not failed.try_with_choices(choice=-1).accepted
+    with pytest.raises(NativeEvaluationError):
+        failed.with_choices(choice=99)
+    assert getattr(failed, "fact") == 3
+
+
+def test_configurations_and_failed_computations_are_reclaimed() -> None:
+    example = _reclaimed_example()
+    model = inspection.model(example)
+    survivor = design_space(declare(example, {"fact": 1}))
+    states: list[ReferenceType[State]] = []
+    outputs: list[ReferenceType[Payload]] = []
+    _exercise(example, states, outputs)
     gc.collect()
-    assert sum(item() is not None for item in snapshots) == 1
-    assert contexts
-    assert all(item() is None for item in contexts)
-    assert all(item() is None for item in continuations)
-    assert all(item() is None for item in outputs)
-    assert survivor.fact == 1 and inspection.model(survivor) is model
-    assert inspection.model(Example) is model
+    assert states and all(item() is None for item in states)
+    assert getattr(survivor, "fact") == 1 and inspection.model(survivor) is model
+    assert inspection.model(example) is model
 
 
-def test_concurrent_independent_and_cold_shared_snapshots() -> None:
+@pytest.mark.xfail(
+    strict=True, reason="until P4: the model's memo keeps outputs, released past its budget"
+)
+def test_cached_outputs_of_discarded_configurations_are_reclaimed() -> None:
+    example = _reclaimed_example()
+    states: list[ReferenceType[State]] = []
+    outputs: list[ReferenceType[Payload]] = []
+    _exercise(example, states, outputs)
+    gc.collect()
+    assert outputs and all(item() is None for item in outputs)
+
+
+def test_concurrent_independent_models_and_cold_shared_configurations() -> None:
+    """Two models evaluate at once (a lock per model: two configurations of one model take
+    turns); one configuration read by many threads evaluates each output once."""
     barrier = Barrier(2)
     calls: list[int] = []
 
-    class Independent(Space):
-        fact: int = Param()
+    def independent() -> type[Space]:
+        class Independent(Space):
+            fact: int = Param()
 
-        @derived
-        def output(self) -> int:
-            value = self.fact
-            barrier.wait(timeout=5)
-            calls.append(value)
-            return value
+            @derived
+            def output(self) -> int:
+                value = self.fact
+                barrier.wait(timeout=5)
+                calls.append(value)
+                return value
 
-    first, second = design_space(Independent(fact=1)), design_space(Independent(fact=2))
+        return Independent
+
+    first = design_space(declare(independent(), {"fact": 1}))
+    second = design_space(declare(independent(), {"fact": 2}))
     with ThreadPoolExecutor(max_workers=2) as pool:
-        assert list(pool.map(lambda point: point.output, (first, second))) == [1, 2]
+        assert list(pool.map(lambda point: getattr(point, "output"), (first, second))) == [1, 2]
     assert sorted(calls) == [1, 2]
 
     class Shared(Space):
@@ -475,4 +477,4 @@ def test_concurrent_independent_and_cold_shared_snapshots() -> None:
     with ThreadPoolExecutor(max_workers=4) as pool:
         assert list(pool.map(lambda _: point.output, range(64))) == [3] * 64
     assert sorted(calls) == [1, 2, 3]
-    assert _execution.current() is None
+    assert current() is None

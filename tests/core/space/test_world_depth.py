@@ -5,9 +5,8 @@
 The evaluation core evaluates on the Python stack to ``_world.DEPTH`` evaluations;
 past it the evaluations in flight are abandoned and the run evaluates the deep node
 first, then again what it abandoned. Authored functions are pure, so a function run
-again answers the same: each completes once (one abandoned may have started before;
-the current evaluator's "one start per callback" becomes "each callback completes
-once"). The recursion limit is never raised.
+again answers the same: each completes once (one abandoned may have started before). The
+recursion limit is never raised.
 """
 
 from __future__ import annotations

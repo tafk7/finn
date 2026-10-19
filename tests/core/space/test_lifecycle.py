@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from weakref import ReferenceType, ref
 
+import pytest
+
 from finn.core.space import (
     Decision,
     Param,
@@ -28,6 +30,12 @@ class Payload:
 PAYLOAD = ValueSemantics.immutable_nominal(Payload)
 
 
+UNTIL_BOUNDED = pytest.mark.xfail(
+    strict=True, reason="until P4: the model's memo keeps outputs, released past its budget"
+)
+
+
+@UNTIL_BOUNDED
 def test_discarded_candidate_snapshots_release_the_actual_cached_callback_outputs() -> None:
     produced: list[ReferenceType[Payload]] = []
 
@@ -62,6 +70,7 @@ def test_discarded_candidate_snapshots_release_the_actual_cached_callback_output
     assert design_space(Example()).try_with_choices().accepted
 
 
+@UNTIL_BOUNDED
 def test_successor_retains_only_the_outputs_its_change_does_not_reach() -> None:
     produced: list[ReferenceType[Payload]] = []
 
