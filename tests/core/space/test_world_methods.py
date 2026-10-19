@@ -82,11 +82,14 @@ class Outer(Space):
 
     @derived
     def hidden(self) -> int:
-        child = self.leaf
-        try:
-            return child.width
-        except EvaluationError:
-            return 0
+        # A loop's name is no path from the receiver: what is read through it is not
+        # inferred (a local bound once to a path is).
+        for child in (self.leaf,):
+            try:
+                return child.width
+            except EvaluationError:
+                return 0
+        return 0
 
 
 def test_house_answers_as_the_current_evaluator() -> None:

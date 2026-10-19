@@ -16,6 +16,8 @@ from typing import Any, Generic, Literal, TypeVar, cast, overload
 from . import _execution, _forcing, _runtime
 from ._configuration import Space
 from ._forcing import Forced, Open, Viable
+from ._state import State, copy_assessment, copy_result, decision_state
+from ._world import Entry, World
 from .compiler import Model, compile_model
 from .declarations import (
     Constraint,
@@ -24,7 +26,7 @@ from .declarations import (
     View,
 )
 from .errors import RequestError
-from .ir import LinkedModel, NodeKind
+from .ir import LinkedModel, NodeId, NodeKind
 from .occurrence import candidate as _candidate
 from .occurrence import state
 from .references import DecisionHandle, ValueHandle, decision_key
@@ -410,7 +412,7 @@ class Validity:
     ``Rejected``, ``Unresolved``; ``Inapplicable`` for a Space that is absent, a
     candidate not selected, which counts as valid)."""
 
-    status: Literal["valid", "refused", "undecided"]
+    status: Literal["valid", "refused", "undecided", "open"]
     pieces: tuple[Piece, ...]
     result: QueryResult[bool]
 
@@ -463,6 +465,110 @@ def validity(point: Space) -> Validity:
 
 def _ordered(pieces: list[Piece]) -> tuple[Piece, ...]:
     return tuple(sorted(pieces, key=lambda piece: piece.owner))
+
+
+def _pieces_in(
+    world: World, index: NodeId, wanted: type[object], answer: QueryResult[bool] | None = None
+) -> list[Piece]:
+    """The pieces of the validity node ``index`` in ``world`` whose answer is a ``wanted``,
+    a placed Space's own pieces in place of its validity (inside a run). ``answer``: the
+    answer its parent's validity holds for it (a guard piece, where its guard is
+    refused)."""
+    linked = world.evaluator.linked
+    found: list[Piece] = []
+    entry = world._get(index)
+    assessment = entry.assessment
+    if not isinstance(assessment, ConstraintAssessment) or not assessment.results:
+        # The Space's presence waits or is refused: its guard's answer stands for it.
+        held = entry.result if answer is None else cast(QueryResult[object], answer)
+        if isinstance(held, (Rejected, Unresolved)) and isinstance(held, wanted):
+            name = linked.scopes[linked.nodes[index].scope].name
+            found.append(Piece(name, held))
+        return found
+    for key, result in assessment.results.items():
+        piece = linked.keys[key]
+        if linked.nodes[piece].kind == "validity":
+            found.extend(_pieces_in(world, piece, wanted, result))
+        elif isinstance(result, (Rejected, Unresolved)) and isinstance(result, wanted):
+            found.append(Piece(key, result))
+    return found
+
+
+def _validity_of(current: State, scope: int) -> Validity:
+    """The validity of ``scope``'s Space in a configuration's world (``validity``)."""
+    index = current.linked.scopes[scope].validity
+    assert index is not None, "every scope has a validity node"
+    world = current.world
+
+    def walk() -> Validity:
+        answer = cast(QueryResult[bool], world._get(index).result)
+        if isinstance(answer, Rejected):
+            return Validity("refused", _ordered(_pieces_in(world, index, Rejected)), answer)
+        if isinstance(answer, Unresolved):
+            return Validity("open", _ordered(_pieces_in(world, index, Unresolved)), answer)
+        return Validity("valid", (), answer)
+
+    return world.run(walk)
+
+
+def _evidence(current: State, root: NodeId) -> QueryEvidence[object]:
+    """The evidence of ``root``'s query in a configuration (``explain``): each node it
+    read, through what each of those read, as the entries' traces record it."""
+    linked, world = current.linked, current.world
+    selectors = linked.selector_choices
+
+    def walk() -> tuple[Entry, dict[NodeId, Entry]]:
+        found = world._get(root)
+        pending = [root]
+        visited: dict[NodeId, Entry] = {}
+        while pending:
+            index = pending.pop()
+            if index in visited:
+                continue
+            entry = visited[index] = world._get(index)
+            pending.extend(dependency for dependency, _ in entry.trace)
+        return found, visited
+
+    with current.evaluator.lock:
+        result, visited = world.run(walk)
+        guard_nodes = {
+            linked.nodes[index].guard for index in visited if linked.nodes[index].guard is not None
+        }
+        evidence: list[EvidenceNode] = []
+        for index in sorted(visited, key=lambda item: linked.nodes[item].key):
+            node, entry = linked.nodes[index], visited[index]
+            demanded = tuple(dict.fromkeys(dependency for dependency, _ in entry.trace))
+            aliases = dict.fromkeys(
+                alias for alias, source in (*node.via, *entry.via) if source in demanded
+            )
+            active = True
+            if node.guard is not None:
+                guard = visited[node.guard].result
+                active = isinstance(guard, Available) and guard.value is True
+            presence: Literal["supplied", "omitted"] | None = None
+            if node.kind == "param" and active:
+                presence = "supplied" if index in current.facts else "omitted"
+            evidence.append(
+                EvidenceNode(
+                    _node_info(linked, index),
+                    copy_result(linked, index, entry.result),
+                    tuple(ValueHandle[object](linked, target) for target in demanded),
+                    presence,
+                    decision_state(current, index) if node.kind == "decision" else None,
+                    index in selectors,
+                    index in guard_nodes,
+                    tuple(_node_info(linked, alias) for alias in aliases),
+                )
+            )
+        assessment = (
+            None if result.assessment is None else copy_assessment(linked, root, result.assessment)
+        )
+        return QueryEvidence(
+            _node_info(linked, root),
+            copy_result(linked, root, result.result),
+            tuple(evidence),
+            assessment,
+        )
 
 
 def forced(point: Space) -> tuple[Forced, ...]:

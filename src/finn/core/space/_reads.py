@@ -7,10 +7,11 @@ Space through its receiver, and what it may read is **declared by use**: found o
 from its source. A method reads through attribute paths (``self.extents``,
 ``self.x.contract``, ``self.compute.x_end``), through its helper methods and properties
 (``self.bound_schedule(...)``, read in turn, in the scope they are reached through),
-through ``getattr(self, name)`` with a name its source or its closure fixes, and through
-``self.present(...)`` (the guards and selectors presence reads). Each path resolves, in
-the compiled model, to the nodes it may read: a member, a child's member, a member of
-each candidate a selector may place, with the selector.
+through ``getattr(self, name)`` with a name its source or its closure fixes, through
+``self.present(...)`` (the guards and selectors presence reads), and through a local
+name bound once to such a path (``core = self.compute``, then ``core.width``). Each path
+resolves, in the compiled model, to the nodes it may read: a member, a child's member, a
+member of each candidate a selector may place, with the selector.
 
 A method whose source does not fix what it reads (``getattr(self, name)`` over a
 computed name, ``self`` handed to another function, source that cannot be read) is
@@ -32,6 +33,7 @@ import textwrap
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import CodeType, MappingProxyType
+from typing import cast
 
 from .ir import Argument, LinkedModel, NodeId
 
@@ -124,12 +126,20 @@ def _closure(function: Callable[..., object]) -> dict[str, object]:
 
 
 class _Visitor(ast.NodeVisitor):
-    """Collects what a function body reads through ``receiver``."""
+    """Collects what a function body reads through ``receiver``, and through each local
+    name bound once to a path from it (``core = self.compute``; ``aliases``)."""
 
-    def __init__(self, receiver: str, constants: Mapping[str, object], uses: _Uses) -> None:
+    def __init__(
+        self,
+        receiver: str,
+        constants: Mapping[str, object],
+        uses: _Uses,
+        aliases: Mapping[str, Path] | None = None,
+    ) -> None:
         self.receiver = receiver
         self.constants = constants
         self.uses = uses
+        self.aliases: Mapping[str, Path] = aliases or {}
 
     def _name(self, node: ast.expr) -> str | None:
         """A string the source fixes: a literal, or a name its closure holds."""
@@ -166,8 +176,12 @@ class _Visitor(ast.NodeVisitor):
                 current = current.args[0]
                 continue
             break
-        if isinstance(current, ast.Name) and current.id == self.receiver:
-            return tuple(reversed(names))
+        if isinstance(current, ast.Name):
+            if current.id == self.receiver:
+                return tuple(reversed(names))
+            held = self.aliases.get(current.id)
+            if held is not None:
+                return (*held, *reversed(names))
         return None
 
     def _presence(self, argument: ast.expr) -> None:
@@ -238,6 +252,45 @@ class _Visitor(ast.NodeVisitor):
         if node.id == self.receiver and isinstance(node.ctx, ast.Load):
             # The receiver itself handed on (to a module function): it may read anything.
             self.uses.dynamic = True
+        elif node.id in self.aliases and isinstance(node.ctx, ast.Load):
+            # A local bound to a path, read on its own: a read of that path.
+            self.uses.paths.add(self.aliases[node.id])
+
+
+def _aliases(
+    receiver: str, body: list[ast.stmt], constants: Mapping[str, object]
+) -> dict[str, Path]:
+    """The local names bound once, by a plain assignment, to a path from ``receiver``
+    (``core = self.compute``, ``width = core.width``), in source order. A name bound
+    anywhere else too (another assignment, a loop, a ``with``, a nested function), or
+    the receiver rebound, is no alias."""
+    stores: dict[str, int] = {}
+    for node in (item for statement in body for item in ast.walk(statement)):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            stores[node.id] = stores.get(node.id, 0) + 1
+        elif isinstance(node, ast.arg):
+            stores[node.arg] = stores.get(node.arg, 0) + 1
+    if stores.get(receiver):
+        return {}
+    found: dict[str, Path] = {}
+    assignments = sorted(
+        (
+            node
+            for statement in body
+            for node in ast.walk(statement)
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and stores.get(node.targets[0].id) == 1
+        ),
+        key=lambda node: (node.lineno, node.col_offset),
+    )
+    for node in assignments:
+        target = cast(ast.Name, node.targets[0])
+        path = _Visitor(receiver, constants, _Uses(), found)._chain(node.value)
+        if path:
+            found[target.id] = path
+    return found
 
 
 def _uses(function: Callable[..., object]) -> _Uses:
@@ -250,9 +303,15 @@ def _uses(function: Callable[..., object]) -> _Uses:
     if tree is None or not tree.args.args:
         return _Uses(dynamic=True)
     uses = _Uses()
-    visitor = _Visitor(tree.args.args[0].arg, _closure(function), uses)
-    body = tree.body if isinstance(tree.body, list) else [tree.body]
-    for statement in body:
+    receiver, constants = tree.args.args[0].arg, _closure(function)
+    if isinstance(tree.body, list):
+        body: list[ast.stmt] = tree.body
+        aliases = _aliases(receiver, body, constants)
+        statements: list[ast.AST] = list(body)
+    else:
+        aliases, statements = {}, [tree.body]
+    visitor = _Visitor(receiver, constants, uses, aliases)
+    for statement in statements:
         visitor.visit(statement)
     return uses
 

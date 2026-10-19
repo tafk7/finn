@@ -32,6 +32,7 @@ from .results import (
     ReadinessAssessment,
     Unresolved,
     ViewAssessment,
+    require_value,
 )
 from .semantics import recognize, unrecognized
 from .semantics import snapshot as snapshot_value
@@ -98,6 +99,55 @@ def bind(model: Model[Space], facts: Mapping[NodeId, object]) -> State:
     """The design space of ``model`` over ``facts`` (recognized and frozen): every choice
     open."""
     return State(model, World.start(model.evaluator, facts, {}))
+
+
+def answer(state: State, node: NodeId) -> QueryResult[object]:
+    """A node's answer in a configuration, detached from its entry."""
+    return copy_result(state.linked, node, state.world.result(node))
+
+
+def value(state: State, node: NodeId) -> object:
+    """A node's value in a configuration, detached; a non-value raises
+    ``ValueUnavailableError`` carrying it."""
+    return require_value(answer(state, node), context=state.linked.nodes[node].owner)
+
+
+def source_applies(state: State, node: NodeId) -> bool | NodeId:
+    """Whether a source applies at ``node`` (a value input is supplied), or the node whose
+    answer still decides it. The walk follows the edges a read of the value would follow,
+    reading only what decides presence (guards, the choices that select a candidate's
+    member, whether an input was given at start), never a computation: a source that
+    applies is supplied whatever its value then answers."""
+    spec = state.linked.nodes[node]
+    if spec.guard is not None:
+        holds = _holds(state, spec.guard)
+        if holds is not True:
+            return holds
+    if spec.kind == "param":
+        return isinstance(state.world.result(node), Available)  # given at start
+    if spec.kind in ("alias", "guard", "view"):
+        return source_applies(state, cast(NodeId, spec.output))
+    if spec.kind == "select":
+        selector = cast(NodeId, spec.selector)
+        case = state.world.result(selector)
+        if not isinstance(case, Available):
+            return False if isinstance(case, Inapplicable) else selector
+        target = cast(Mapping[str, NodeId], spec.selection_index).get(cast(str, case.value))
+        return False if target is None else source_applies(state, target)
+    if spec.kind == "present":
+        answers = [source_applies(state, target) for _, target in spec.alternatives]
+        if any(found is True for found in answers):  # a node may be 1
+            return True
+        return next((found for found in answers if found is not False), False)
+    return True  # a const, a decision, a computation: the source itself
+
+
+def _holds(state: State, guard: NodeId) -> bool | NodeId:
+    """Whether a guard holds (inapplicable: it does not), or the guard while undecided."""
+    found = state.world.result(guard)
+    if isinstance(found, Available):
+        return found.value is True
+    return False if isinstance(found, Inapplicable) else guard
 
 
 def presence(world: World, node: NodeId) -> tuple[Presence, QueryResult[object]]:
@@ -186,10 +236,13 @@ def copy_assessment(linked: LinkedModel, node: NodeId, assessment: Assessment) -
 __all__ = [
     "Presence",
     "State",
+    "answer",
     "bind",
     "copy_assessment",
     "copy_result",
     "decision_state",
     "prepare",
     "presence",
+    "source_applies",
+    "value",
 ]

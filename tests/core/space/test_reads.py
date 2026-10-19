@@ -6,7 +6,8 @@ The evaluation core checks every read a ``self`` method makes against these read
 (``finn.core.space._reads``), so each way a method reads its Space is pinned here: a
 member, a child's member, a candidate's member through its selector, ``getattr`` with a
 fixed name, a helper method or property (in the scope it is reached through),
-``present()``, declared ``__reads__``, and what makes a method dynamic.
+``present()``, a local bound once to a path, declared ``__reads__``, and what makes a
+method dynamic.
 """
 
 from __future__ import annotations
@@ -178,6 +179,44 @@ def test_dynamic_methods_and_declared_reads() -> None:
     assert found["dynamic"] == 2 and found["dynamic_by_class"] == {
         "Dynamic": ["computed", "handed_on"]
     }
+
+
+class Aliased(Space):
+    width: int = Param()
+    leaf = Leaf(width=width)
+    mode: Leaf | Wide = Decision({"leaf": Leaf(width=width), "wide": Wide(width=width)})
+
+    @derived
+    def through_a_local(self) -> int:
+        leaf = self.leaf
+        bits = leaf.bits
+        return bits + leaf.width
+
+    @derived
+    def through_a_local_selection(self) -> int:
+        core = self.mode
+        return core.width
+
+    @derived
+    def rebound(self) -> int:
+        core: Leaf | Wide = self.leaf
+        if core.width > 4:
+            core = self.mode
+        return core.width
+
+
+def test_a_local_bound_once_to_a_path_reads_through_that_path() -> None:
+    linked = compile_model(Aliased).linked
+    reads = infer(linked)
+    assert _reads(linked, reads, "through_a_local") == {"leaf.bits", "leaf.width"}
+    assert _reads(linked, reads, "through_a_local_selection") == {
+        "mode",
+        "mode.leaf.width",
+        "mode.wide.width",
+    }
+    # Bound twice, a local is no path: what is read through it is not inferred (the read
+    # check refuses it when the method runs); the selector read to bind it is.
+    assert _reads(linked, reads, "rebound") == {"mode"}
 
 
 def test_unresolved_paths_are_kept_as_a_diagnostic() -> None:
