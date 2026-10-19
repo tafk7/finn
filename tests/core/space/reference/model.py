@@ -127,7 +127,10 @@ corpus; § 16 holds the readings its author gave for this model.
    reads), less every choice the change names (committed or cleared) and every choice
    deciding the origin's existence: the selectors of the scopes above it, its own
    included, and the choices its guards' ``when`` reads depend on. An empty domain has
-   nothing standing (membership reads facts only).
+   nothing standing (membership reads facts only). A choice deciding only whether
+   something the origin reads exists (``s`` for a root rule reading ``s.a.p``) is no
+   declared read, so never stands (§ 16.15); one the origin also reads as a value
+   stands like any other read (§ 16.22).
 5. *In play, waiting, dormant* (§ 16.5), by presence before and after, over the
    successor's stored choices: ``in_play``, not present before and present after;
    ``dormant``, present or unknown before and absent or not in play after; ``opened``,

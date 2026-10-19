@@ -1166,12 +1166,14 @@ def _standing(
     refusal: model.RuleRefusal,
     after: model.Solution,
 ) -> list[str]:
-    """The standing choices by clearing: for each stored choice the change does not name and
-    that decides neither the origin's existence nor that of anything it reads, adding its
-    clearing to the change makes the origin no longer false exactly when it is named
-    standing; and then the model's change, so cleared, no longer names the origin. A choice
-    that only decides whether something the origin reads exists is never standing (§ 16.4:
-    standing are among the reads followed through bodies), whatever clearing it does."""
+    """The standing choices by clearing: for each stored choice the change does not name,
+    that does not decide the origin's own existence, and that the origin reads as a value
+    (among its body reads), adding its clearing to the change makes the origin no longer
+    false exactly when it is named standing; and then the model's change, so cleared, no
+    longer names the origin. A choice that only decides whether something the origin reads
+    exists (in its closure, not among its body reads) is never standing (§ 16.4, § 16.15),
+    whatever clearing it does; one read as a value is a candidate even when it also decides
+    such an existence (§ 16.22)."""
     problems: list[str] = []
     named = set(edit.commit) | set(edit.clear)
     closure = structure.closure({origin})

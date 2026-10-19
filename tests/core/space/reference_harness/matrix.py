@@ -405,6 +405,16 @@ ROWS: tuple[Row, ...] = (
         "change-breaks-rule",
     ),
     Row(
+        "value-read-decider-stands",
+        _CORE,
+        "a choice the origin reads as a value stands in its way even when it also decides whether "
+        "something else the origin reads exists: a root rule reading a selector and a choice of "
+        "its case names both standing (§ 16.22)",
+        f"{_RULES}::test_a_selector_a_rule_reads_as_a_value_stands_beside_the_choice_it_decides",
+        "change-breaks-rule",
+        "today the change is accepted",
+    ),
+    Row(
         "switch-away",
         _CORE,
         "switching a selector away is accepted, its case's choices dormant and the new case's "

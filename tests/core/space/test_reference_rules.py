@@ -392,6 +392,38 @@ def test_a_value_once_what_stood_in_its_way_is_cleared_is_accepted() -> None:
     BUDGET.start({}, SPENT).step(Change(clear=("b", "c"))).check_change(Change(commit={"a": 5}))
 
 
+# A root rule reading the selector ``s`` as a value and ``s.a.p``, whose existence ``s``
+# decides: ``s.a.p + x <= 3`` once ``s`` is ``a``. A choice read as a value stands, even when
+# it also decides whether something else the rule reads exists (the semantics note, § 16.22).
+
+SELECTOR_READ = Case(
+    "a root rule reading a selector as a value",
+    Space(
+        (),
+        Scope(
+            "",
+            choices=(Choice("x", listed(1, 2, 3)),),
+            selectors=(
+                Selector("s", (Scope("a", choices=(Choice("p", listed(1, 2, 3)),)), Scope("b"))),
+            ),
+            constraints=(
+                Constraint(
+                    "fits",
+                    ("s", "s.a.p", "x"),
+                    lambda r: r["s"] != "a" or r["s.a.p"] + r["x"] <= 3,
+                    "over",
+                ),
+            ),
+        ),
+    ),
+)
+
+
+@expected("value-read-decider-stands")
+def test_a_selector_a_rule_reads_as_a_value_stands_beside_the_choice_it_decides() -> None:
+    SELECTOR_READ.start({}, {"s": "a", "s.a.p": 1, "x": 1}).check_change(Change(commit={"x": 3}))
+
+
 # A selector switched away and back: the old case's choices go dormant and come back.
 
 PE2, SIMD2, LANES2 = "compute.packed.pe", "compute.packed.simd", "compute.serial.lanes"

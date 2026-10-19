@@ -634,6 +634,52 @@ def test_reading_4_what_decides_a_rules_existence_never_stands_in_its_way() -> N
     )
 
 
+def selector_read(as_value: bool) -> Space:
+    """The root's ``fits`` reads ``s.a.p``, whose existence the selector ``s`` decides, and
+    ``x``: ``s.a.p + x <= 3``. ``as_value``: it reads ``s`` as a value too, holding when
+    ``s`` is not ``a``."""
+
+    def holds(r: Reads) -> bool:
+        return bool((as_value and r["s"] != "a") or r["s.a.p"] + r["x"] <= 3)
+
+    reads = ("s", "s.a.p", "x") if as_value else ("s.a.p", "x")
+    a = Scope("a", choices=(Choice("p", listed(1, 2, 3)),))
+    return Space(
+        (),
+        Scope(
+            "",
+            choices=(Choice("x", listed(1, 2, 3)),),
+            selectors=(Selector("s", (a, Scope("b"))),),
+            constraints=(Constraint("fits", reads, holds, "over"),),
+        ),
+    )
+
+
+def test_reading_4_a_choice_read_as_a_value_stands_though_it_decides_existence() -> None:
+    """§ 16.22: with ``s = "a"``, ``s.a.p = 1`` and ``x = 1``, ``x = 3`` makes ``fits``
+    false (``1 + 3 > 3``), a new pair. ``fits`` reads ``s`` as a value, so ``s`` stands
+    beside ``s.a.p``, though it also decides whether ``s.a.p`` exists; ``s.a.p = 3`` names
+    ``s`` and ``x``. Read only for the existence of ``s.a.p``, ``s`` does not stand
+    (§ 16.15): ``s.a.p`` alone."""
+
+    stored = {"s": "a", "s.a.p": 1, "x": 1}
+    base = Configuration(selector_read(as_value=True), {}, stored)
+    assert rejected(change(base, Change(commit={"x": 3}))).refusals == (
+        rule("fits", "over", standing=("s", "s.a.p")),
+    )
+    assert rejected(change(base, Change(commit={"s.a.p": 3}))).refusals == (
+        rule("fits", "over", standing=("s", "x")),
+    )
+    # clearing either one in the same change leaves the rule waiting on it
+    for path in ("s", "s.a.p"):
+        cleared = accepted(change(base, Change(commit={"x": 3}, clear=(path,))))
+        assert cleared.validity.verdict is U
+    existence = Configuration(selector_read(as_value=False), {}, stored)
+    assert rejected(change(existence, Change(commit={"x": 3}))).refusals == (
+        rule("fits", "over", standing=("s.a.p",)),
+    )
+
+
 def test_reading_5_clearing_a_selector_leaves_its_cases_choices_waiting() -> None:
     base = Configuration(two_kinds(), {}, {"compute": "packed", PE2: 2, SIMD2: 1})
     result = accepted(change(base, Change(clear=("compute",))))
