@@ -41,7 +41,7 @@ from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
 from finn.kernels.channels import Channel
-from finn.kernels.explore import ExploreError, Hold, Ranked, Rebaseline
+from finn.kernels.explore import Defaults, ExploreError, Hold, Ranked
 from finn.transformation.kernels import explore_kernel_choices, kernel_choices_config
 from finn.transformation.kernels.cut import BaselineChoices, CutKernelPartition
 
@@ -84,15 +84,26 @@ def test_the_namespace_is_generated_from_the_channels_decisions() -> None:
 
 
 def test_a_channels_choices_are_typed_entries_of_its_tensor() -> None:
+    """Each choice an entry of its tensor, typed: those set, and those the interim channel
+    rule makes beside them (its adapter, which the folding needs, its memory, and the FIFO's
+    style)."""
     model = kernel_model()
     configured(model, {"levels": FIFO})
     assert entries(model, "levels") == {
         "finn.channel/@version": "1",
         "finn.channel/@follow": "true",
+        "finn.channel/adapter": "input_gen",
+        "finn.channel/adapter.input_gen.input_gen.ram_style": "distributed",
         "finn.channel/transport": "fifo",
         "finn.channel/transport.fifo.buffer.depth": "8",
+        "finn.channel/transport.fifo.buffer.ram_style": "auto",
     }
-    assert channel_choices(model, "levels") == FIFO
+    assert channel_choices(model, "levels") == {
+        **FIFO,
+        "adapter": "input_gen",
+        "adapter.input_gen.input_gen.ram_style": "distributed",
+        "transport.fifo.buffer.ram_style": "auto",
+    }
     # Beside qonnx's own annotation of the tensor, which it leaves alone.
     assert model.get_tensor_datatype("levels").name == "UINT2"
     # A node holds its kernel's choices only.
@@ -105,7 +116,8 @@ def test_the_writer_is_checked_by_replaying_the_network() -> None:
     """Only the network holds both of a channel's ends: a choice it refuses, a key no
     channel declares, a value of another type and a tensor that is no channel are
     refused, by the seam's code, and nothing is written; a choice is cleared on its tensor (the
-    seam has no clearing)."""
+    seam has no clearing). (A choice under an adapter not selected is no refusal: it is
+    stored, out of play.)"""
     model = kernel_model()
     before = kernel_choices_config(model)
     rejections: list[tuple[str, str, dict[str, dict[str, object]]]] = [
@@ -113,11 +125,6 @@ def test_the_writer_is_checked_by_replaying_the_network() -> None:
             "domain-membership",
             "transport.fifo.buffer.depth",
             {"levels": {**FIFO, "transport.fifo.buffer.depth": 1}},
-        ),
-        (
-            "inapplicable",
-            "adapter.input_gen_vpc.input_gen.ram_style",
-            {"x": {"adapter.input_gen_vpc.input_gen.ram_style": "auto"}},
         ),
         ("not-a-decision", "levels.memory", {"levels": {"memory": "auto"}}),
         (
@@ -131,7 +138,7 @@ def test_the_writer_is_checked_by_replaying_the_network() -> None:
         with refused(code, owner=owner):
             configured(model, {"hidden": FIFO, **choices})
         assert kernel_choices_config(model) == before
-    model.clear(CHANNEL, tensor="levels")  # its one choice, transport; the seam has no clearing
+    model.clear(CHANNEL, tensor="levels")  # every choice it states; the seam has no clearing
     assert "levels" not in kernel_choices_config(model)
 
 
@@ -171,8 +178,8 @@ def test_the_cut_moves_a_channels_choices_into_the_body(tmp_path: Path) -> None:
     """Cases 2 and 4: cutting a model of KernelOps, which is a body already, moves its
     channels' choices into the body the cut makes, its boundary's (x, y) too; the parent's copy of
     a boundary tensor states none, and keeps its datatype. The cut keeps every value the
-    model states and gives what it leaves open its baseline (an adapter's memory, a
-    FIFO's style)."""
+    model states; what it leaves open the interim channel rule sets (here nothing: the
+    helper made them, the adapter, its memory and the FIFO's style)."""
     model = kernel_model()
     configured(model, {"levels": FIFO})
     stated = kernel_choices_config(model)
@@ -187,6 +194,7 @@ def test_the_cut_moves_a_channels_choices_into_the_body(tmp_path: Path) -> None:
     assert all(config[name].items() >= held.items() for name, held in stated.items())
     assert config["levels"] == {
         **FIFO,
+        "adapter": "input_gen",
         "adapter.input_gen.input_gen.ram_style": "distributed",
         "transport.fifo.buffer.ram_style": "auto",
     }
@@ -196,9 +204,10 @@ def test_the_cut_moves_a_channels_choices_into_the_body(tmp_path: Path) -> None:
 def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path: Path) -> None:
     """A body made by hand (the Chain's KernelOps, converted, no cut) states its nodes'
     choices, created at conversion, and no channel's. ``BaselineChoices`` creates each
-    channel's at its baseline on its tensor, keeps the nodes', and leaves nothing for
-    the exploration to baseline; a node's choice its facts refuse in context (written
-    raw) is dropped, named, and re-baselined, as the cut does."""
+    channel's by the interim channel rule on its tensor, keeps the nodes', and leaves
+    nothing open; a node's choice its facts refuse in context (written raw) is dropped,
+    named, and left open for a strategy (emission refuses it until one sets it), as the
+    cut does."""
     model = open_model()
     nodes = kernel_choices_config(model)
     assert list(nodes) == ["first", "activate", "second"] and not model.tensors_stating(CHANNEL)
@@ -209,45 +218,47 @@ def test_baseline_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
     assert list(config) == ["x", "w1", "first", "hidden", "activate", "levels", "w2", "second", "y"]
     assert {name: config[name] for name in nodes} == nodes
     assert all(held["transport"] == "direct" for name, held in config.items() if name not in nodes)
-    assert explore_kernel_choices(model).report["baselined"] == []
+    assert explore_kernel_choices(model).report["open"] == []
     write_raw(model, "first", "compute.packed.simd", 2)  # past the space, as another tool wrote it
     write_raw(model, "first", "compute.packed.pe", 3)
     model = model.transform(baselining)
-    # Its input buffer's memory, which reads the folding, waits with it: the channel's
-    # ends wait on the reopened pe, and its stored memory is replayed once the baseline
-    # chooses one, where it still applies.
+    # Its input buffer's channel waits on the open pe, its stored choices with it.
     assert sorted(baselining.dropped) == ["first.compute.packed.pe"]
-    # Its own domain refuses 3, and its selector, left with no viable case, stands beside it.
+    # Its own domain refuses 3: nothing else stands beside it.
     assert {(f.code, f.owner) for f in baselining.dropped["first.compute.packed.pe"]} == {
         ("domain-membership", "compute.packed.pe"),
-        ("decision-no-viable-case", "compute"),
     }
     first = kernel_op(model, model.graph.node[0])
     assert first.choices() == {
-        **nodes["first"],
+        **{key: value for key, value in nodes["first"].items() if key != "compute.packed.pe"},
         "compute.packed.simd": 2,
-        "compute.packed.compute_pumping": 0,
     }
-    # The cut is the same step: the body it makes from the model holds the same values.
-    parent = model.transform(CutKernelPartition(tmp_path))
-    assert kernel_choices_config(partition_body(parent)[1]) == kernel_choices_config(model)
+    # The cut is the same step: the body it makes from the model holds the same values,
+    # but for the PE left open, which a body that never had it set the cut sets late, by
+    # conversion's policy (first valid, 1), reported.
+    cut = CutKernelPartition(tmp_path)
+    parent = model.transform(cut)
+    assert list(cut.late) == ["first.compute.packed.pe"]
+    expected = kernel_choices_config(model)
+    expected["first"] = {**expected["first"], "compute.packed.pe": 1}
+    assert kernel_choices_config(partition_body(parent)[1]) == expected
 
 
-def test_the_baseline_strategy_resets_the_bodys_channel_choices_too() -> None:
-    """To start over, the ``baseline`` strategy: what the body states, nodes' and
-    channels' alike, goes back to its baseline, the values a body stating nothing is
-    baselined to."""
+def test_the_defaults_strategy_resets_the_bodys_channel_choices_too() -> None:
+    """To start over, the ``Defaults`` strategy: what the body states, nodes' and
+    channels' alike, goes back to its default, the values the cut gives a body stating
+    nothing (``BaselineChoices``: conversion's policies late, the interim channel rule)."""
     model = kernel_model()
     assert model.tensors_stating(CHANNEL)
-    explored = explore_kernel_choices(model, Rebaseline())
+    explored = explore_kernel_choices(model, Defaults())
     reset = explored.report["strategy"]
-    assert reset["strategy"] == "baseline" and reset["changed"]
+    assert reset["strategy"] == "defaults" and reset["changed"]
     cleared = kernel_model()
     for node in cleared.graph.node:
         for key in list(kernel_op(cleared, node).choices()):
             write_raw(cleared, node.name, key, None)
     clear_channel_choices(cleared)
-    explore_kernel_choices(cleared)
+    cleared = cleared.transform(BaselineChoices())
     assert kernel_choices_config(model) == kernel_choices_config(cleared)
 
 
@@ -380,15 +391,16 @@ def test_choices_on_a_tensor_that_is_no_channel_are_dropped_and_cleared() -> Non
     assert not network(model, model.graph.node).stale
 
 
-def test_a_channel_choice_kept_unchecked_is_saved_and_replayed_as_unchecked() -> None:
-    """A FIFO's depth stored while the channel's transport is open waits on the transport:
-    it is kept unchecked, and saving writes it on the tensor, as it writes a checked one.
-    The model read again holds it unchecked, waiting on the same transport."""
+def test_a_channel_choice_out_of_play_is_saved_and_replayed_out_of_play() -> None:
+    """A FIFO's depth stored while the channel's transport is open; the interim channel
+    rule takes ``direct``, the first: the depth is kept out of play (dormant), and saving
+    writes it on the tensor, as it writes one in play. The model read again holds it
+    dormant, back in play with a FIFO."""
     model = kernel_model()
     model.clear(CHANNEL, tensor="levels")
     configured(model, {"levels": {"transport.fifo.buffer.depth": 8}})
     assert entries(model, "levels")["finn.channel/transport.fifo.buffer.depth"] == "8"
+    assert channel_choices(model, "levels")["transport"] == "direct"
     point = network(model, model.graph.node).member("levels")
-    assert inspection.unchecked(point) == (
-        inspection.Unchecked("transport.fifo.buffer.depth", 8, ("transport",)),
-    )
+    states = dict(inspection.states(point))
+    assert states["transport.fifo.buffer.depth"] == inspection.Dormant(8)

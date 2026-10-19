@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 from support import chain
+from support.configure import with_defaults
 from support.helpers import FULL_DSP48E2, keyed
 from support.refusals import refused
 from support.xsim import requires_xsim
@@ -36,6 +37,7 @@ from finn.kernels.explore import (
     Accepted,
     ExploreError,
     FifoCheck,
+    Hold,
     Refused,
     Seam,
     SizeFifos,
@@ -210,9 +212,11 @@ def test_a_fifo_s_depth_is_the_least_whose_storage_holds_the_words() -> None:
 
 
 def _folded() -> tuple[Seam, Network]:
+    """The Chain as conversion and the cut leave it (``with_defaults``), folded to 12
+    cycles a frame."""
     explorer = Seam(FULL_DSP48E2)
     explorer.held.update(chain.HELD)
-    return explorer, TargetCycles(12).explore(explorer, chain.network())
+    return explorer, TargetCycles(12).explore(explorer, with_defaults(chain.network()))
 
 
 def chosen(explorer: Seam, network: Network) -> dict[str, object]:
@@ -257,11 +261,11 @@ def test_size_fifos_proposes_every_transport_in_one_batch_and_says_why() -> None
     assert {
         key: value for key, value in chosen(explorer, sized).items() if key.endswith(".transport")
     } == {f"{name}.transport": "direct" for name in transports}
-    # It reopened every transport (each stored direct by the fold's settling) and
-    # settled nothing else.
+    # It reopened every transport (each stored direct by the cut's interim channel rule)
+    # and gave back nothing else.
     (_, run) = explorer.runs
     assert set(run.reopened) == {(name, "transport") for name in transports}
-    assert run.kept == run.baselined == {}
+    assert run.kept == run.by_policy == {}
     report = strategy.report()
     assert report["period"] == 12 and report["fifo_bits"] == 0
     assert {name: row["why"] for name, row in strategy.channels().items()} == {
@@ -275,13 +279,13 @@ def test_size_fifos_proposes_every_transport_in_one_batch_and_says_why() -> None
 
 
 def test_it_sizes_at_the_stored_folding_and_refuses_a_point_whose_cycles_are_unknown() -> None:
-    """No ``before folding`` path: it reads the stored folding (the baseline folding, on a
-    point at its baselines); where a member's cycles wait on an open choice, it refuses,
-    naming it."""
+    """No ``before folding`` path: it reads the stored folding (conversion's, on a point
+    as conversion and the cut leave it); where a member's cycles wait on an open choice,
+    it refuses, naming it."""
     explorer = Seam(FULL_DSP48E2)
     explorer.held.update(chain.HELD)
     point = chain.network()
-    base = explorer.baseline(point)
+    base = with_defaults(point)
     strategy = SizeFifos()
     sized = strategy.explore(explorer, base)
     assert strategy.report()["period"] == explorer.cost(base).bottleneck.cycles  # type: ignore[union-attr]
@@ -291,7 +295,7 @@ def test_it_sizes_at_the_stored_folding_and_refuses_a_point_whose_cycles_are_unk
     with refused(
         "cycles-unknown",
         error=ExploreError,
-        message="needs every member's cycles: .*first.compute.packed.pe",
+        message="needs every member's cycles: .*first.compute",
     ):
         SizeFifos().explore(explorer, point)
 
@@ -335,9 +339,10 @@ def test_a_fifo_is_proposed_with_its_depth_and_memory_in_the_same_batch(
     values = chosen(explorer, found)
     assert values["hidden.transport"] == "fifo"
     assert values["hidden.transport.fifo.buffer.depth"] == 8
-    # Its style is not proposed: settling gives it its baseline, FinnLib's ``auto``.
+    # Its style, never stored, is committed with its depth: the interim channel rule's,
+    # FinnLib's ``auto``. Nothing is given back or set by policy after.
     assert values["hidden.transport.fifo.buffer.ram_style"] == "auto"
-    assert explorer.runs[-1].baselined == {("hidden", "transport.fifo.buffer.ram_style"): "auto"}
+    assert explorer.runs[-1].kept == explorer.runs[-1].by_policy == {}
     assert strategy.report()["ram_style"] is None
     assert strategy.channels()["hidden"]["bits"] == 8 * 24
     assert strategy.report()["fifo_bits"] == 8 * 24
@@ -360,8 +365,9 @@ def test_a_style_named_is_committed_with_the_depth(monkeypatch: pytest.MonkeyPat
 def test_a_depth_is_sized_for_the_style_its_fifo_is_built_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Sizing without a style sizes each FIFO for the style settling gives it: its held
-    style, else its earlier one, else ``auto``. Above 257 words ``auto`` is block RAM,
+    """Sizing without a style sizes each FIFO for the style it is built in: its held
+    style, else its earlier one, else ``auto`` (the interim channel rule's). Above 257
+    words ``auto`` is block RAM,
     which holds more than its DEPTH, and ``distributed`` holds DEPTH words: a FIFO stored
     ``distributed`` before is sized at the words it needs, which the check keeps."""
 
@@ -402,12 +408,12 @@ def test_a_depth_is_sized_for_the_style_its_fifo_is_built_in(
         assert found.stale == {} and found.findings == ()
 
 
-def test_a_style_held_as_none_is_sized_as_auto_and_settling_refuses_it(
+def test_a_style_held_as_none_is_sized_as_auto_and_left_to_its_hold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A held value is not checked until settling: a style held as ``None`` (a pin, or the
-    graph's held choices, stating null) is sized as ``auto``, never as a style named
-    "None", and settling refuses it, naming it."""
+    """A held style is the hold's, never committed by the sizing: one held as ``None`` is
+    sized as ``auto``, never as a style named "None", and the stored style is left as it
+    is. A ``Hold`` stating ``None`` is refused where it is set: no value of the style."""
     sized: dict[str, str] = {}
 
     def sizing(channel: Channel, period: int, **options: Any) -> Sized:
@@ -428,15 +434,19 @@ def test_a_style_held_as_none_is_sized_as_auto_and_settling_refuses_it(
     )
     assert isinstance(placed, Accepted)
     explorer.held[("hidden", "transport.fifo.buffer.ram_style")] = None
-    with refused(
-        "pin-unsettled",
-        error=ExploreError,
-        owner="hidden.transport.fifo.buffer.ram_style",
-        message="held to None",
-    ):
-        SizeFifos().explore(explorer, placed.network)
+    found = SizeFifos().explore(explorer, placed.network)
     assert sized["first.compute.packed.y"] == "auto"
     assert set(sized.values()) == {"auto"}
+    assert chosen(explorer, found)["hidden.transport.fifo.buffer.ram_style"] == "distributed"
+    with refused(
+        "pin-refused",
+        error=ExploreError,
+        owner="held",
+        message="hidden.transport.fifo.buffer.ram_style: .*request-refused",
+    ):
+        Hold({"hidden": {"transport.fifo.buffer.ram_style": None}}).explore(
+            Seam(FULL_DSP48E2), placed.network
+        )
 
 
 MARKERS = Finding(

@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """ExploreKernelChoices with a rank-style policy (``Ranked``): every open choice of a
-model's KernelOps, committed by a policy that only ranks what the engine says is viable,
-persisted on their owners: a kernel's on its node, a channel's on its tensor.
+model's KernelOps, one possible value or several, committed by a policy that only ranks
+what the engine says is possible, persisted on their owners: a kernel's on its node, a
+channel's on its tensor.
 
 On the Chain (``support.chain``) as a model (MatMul, Thresholding, MatMul) for Ultra96 without
 a shell: no UltraRAM, a doubled clock (nothing states it away).
@@ -36,11 +37,11 @@ def ranked(policy: RankPolicy) -> ExploreKernelChoices:
     return ExploreKernelChoices(Ranked(policy))
 
 
-def offer(key: str, cases: tuple[object, ...], why: dict[str, str]) -> Choice:
-    """An open Decision with ``cases``, as the seam offers it (``key``: its owner and the
+def offer(key: str, cases: tuple[object, ...]) -> Choice:
+    """An open choice with ``cases``, as the seam offers it (``key``: its owner and the
     key there, joined)."""
     owner, _, below = key.partition(".")
-    return Choice((owner, below), None, cases, False, why)
+    return Choice((owner, below), None, cases, False)
 
 
 class Recording:
@@ -77,7 +78,7 @@ def test_the_test_policy_folds_to_its_lanes_or_the_largest_factor() -> None:
     assert list(policy.rank(fold)) == [4, 8, 2, 1]
     odd = Choice(("x", "simd"), None, (1, 3), True)
     assert list(policy.rank(odd)) == [3, 1] and list(Lanes().rank(odd)) == [1, 3]
-    memory = offer("w.source.memstream.ram_style", ("block", "auto"), {})
+    memory = offer("w.source.memstream.ram_style", ("block", "auto"))
     assert list(policy.rank(memory)) == ["block", "auto"]
 
 
@@ -102,26 +103,31 @@ def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path)
     again = ModelWrapper(str(tmp_path / "chosen.onnx"))
     bound = network(again, again.graph.node)
     assert bound.undecided() == () and not bound.stale
-    assert bound.viable() == ()
     # A second pass reopens every choice and ranks it again: the same policy makes the
     # same choices, another replaces them.
     assert choices(again.transform(ranked(Lanes(2)))) == saved
     assert choices(again.transform(ranked(Lanes())))["first"]["compute.packed.pe"] == 1
 
 
-def test_the_policy_is_offered_viable_cases_only_and_no_forced_decision() -> None:
+def test_the_policy_is_offered_every_open_choice_its_possible_values_only() -> None:
+    """Every open choice is offered, one possible value or several: nothing is set because
+    one value is possible. Each is stored."""
     policy = Recording(Lanes())
     model = kernel_model().transform(ranked(policy))
     offered = {dotted(choice.key): choice.cases or () for choice in policy.offered}
-    assert offered and all(len(cases) > 1 for cases in offered.values())
-    # Ultra96 has no UltraRAM: ultra is never offered; DSP48E2 forces the packed core.
+    assert offered and all(cases for cases in offered.values())
+    # Ultra96 has no UltraRAM: ultra is never offered; on DSP48E2 the packed core is the
+    # one possible, and offered so.
     memories = [cases for key, cases in offered.items() if key.endswith("memstream.ram_style")]
     assert memories and all("ultra" not in cases for cases in memories)
-    assert not any(key.endswith(".compute") for key in offered)
-    # Forced Decisions are derived on every read, never stored.
+    assert {key: cases for key, cases in offered.items() if key.endswith(".compute")} == {
+        "first.compute": ("packed",),
+        "second.compute": ("packed",),
+    }
+    assert offered["w1.source"] == ("memstream",)
+    # Stored, each of them, as any choice.
     stored = {key for node in choices(model).values() for key in node}
-    assert not {"compute", "source", "adapter"} & stored
-    assert "ultra_stages" not in stored  # one viable count without UltraRAM
+    assert {"compute", "source", "adapter", "ultra_stages"} <= stored
 
 
 def test_a_refused_case_is_never_picked_even_when_preferred() -> None:

@@ -6,8 +6,10 @@ persistence of every value, pins that hold for every later exploration of the bo
 replay after a fact change, the report as a log of the exploration.
 
 On the Chain as a model (MatMul ``first``, Thresholding ``activate``, MatMul
-``second``; three rows of four) for Ultra96 without a shell, and an INT8 MatMul
-retargeted from Ultra96 to a VCK190.
+``second``; three rows of four) for Ultra96 without a shell: as conversion leaves it, its
+channels' choices not made (a body no cut created, ``kernel_model``), or as the cut leaves
+it (``cut_model``: ``BaselineChoices``, each channel's choices by the interim channel
+rule); and an INT8 MatMul retargeted from Ultra96 to a VCK190.
 """
 
 from __future__ import annotations
@@ -36,16 +38,17 @@ from finn.core.graph.annotations.platform import read_target, write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import FindingKind
+from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import Partition, network
 from finn.custom_op.kernels.shell import configured_network, verify_partition
 from finn.kernels.explore import (
     Accepted,
     DebugPlaceholder,
+    Defaults,
     ExploreError,
     Hold,
     Ranked,
-    Rebaseline,
     Seam,
     SizeFifos,
     TargetThroughput,
@@ -59,7 +62,7 @@ from finn.transformation.kernels import (
     explore_kernel_choices,
     kernel_choices_config,
 )
-from finn.transformation.kernels.cut import CutKernelPartition
+from finn.transformation.kernels.cut import BaselineChoices, CutKernelPartition
 
 VCK190 = resolve_target(part="xcvc1902-vsva2197-2MP-e-S", period_ns=5.0)
 
@@ -72,6 +75,13 @@ def keys_of(held: Mapping[str, Any]) -> dict[str, list[str]]:
 
 def seam_of(model: ModelWrapper) -> tuple[Seam, Partition]:
     return Seam(read_target(model).platform), network(model, model.graph.node)
+
+
+def cut_model() -> ModelWrapper:
+    """The Chain as the cut leaves it: ``kernel_model`` with each channel's choices made
+    by the interim channel rule (``BaselineChoices``, what the cut does to a body made by
+    hand)."""
+    return kernel_model().transform(BaselineChoices())
 
 
 def test_a_choice_is_keyed_by_the_node_or_tensor_that_persists_it() -> None:
@@ -90,8 +100,8 @@ def test_a_choice_is_keyed_by_the_node_or_tensor_that_persists_it() -> None:
 def test_the_seam_reads_each_member_by_name() -> None:
     """Cost and refusals read the network's members by name, and a change checks the
     members its keys belong to. A kernel's cycles are known from conversion on (its own
-    choices at their baselines); a channel's resources wait on its open members' choices
-    (its transport, its adapter's memory) on a body no cut created."""
+    choices set by conversion's policies); a channel's resources wait on its open choices
+    (its transport, its adapter) on a body no cut created."""
     explorer, network = seam_of(kernel_model())
     cost = explorer.cost(network)
     assert set(cost.waiting) | set(cost.cycles) == set(network.members)
@@ -99,7 +109,7 @@ def test_the_seam_reads_each_member_by_name() -> None:
     # Each finding is owned in its member's space; the member names it.
     assert {(f.code, f.owner) for f in cost.unstated["levels"]} == {
         ("decision-unassigned", "transport"),
-        ("decision-unassigned", "adapter.input_gen.input_gen.ram_style"),
+        ("decision-unassigned", "adapter"),
     }
     hidden = explorer.cost(network, ("hidden",))
     assert {*hidden.cycles, *hidden.waiting} == {"hidden"}
@@ -150,7 +160,7 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     assert json.loads(json.dumps(report)) == report
     # The model replays to the explored network: nothing open, nothing stale.
     bound = network(model, model.graph.node)
-    assert bound.viable() == () and not bound.stale
+    assert bound.undecided() == () and not bound.stale
 
 
 def test_a_point_over_the_part_s_resources_is_a_finding_naming_the_binding_resource() -> None:
@@ -186,35 +196,46 @@ def test_a_point_over_the_part_s_resources_is_a_finding_naming_the_binding_resou
 def test_resources_are_a_total_only_once_every_member_states_them() -> None:
     """A member whose resources wait on an open choice (a transport, a memory style, a
     folding) says so, and the seam states no total from the others: a partial sum is
-    never a total. Baselined, every member states its own. On a body no cut created, the
-    kernels state theirs (their choices stored at conversion) and the channels wait."""
+    never a total. As the cut leaves it, every member states its own. On a body no cut
+    created, the kernels state theirs (their choices stored at conversion) and the
+    channels wait."""
     seam, network = seam_of(kernel_model())
     cost = seam.cost(network)
     assert cost.used is None and set(cost.resources) == {"first", "activate", "second"}
     assert {(f.code, f.owner) for f in cost.unstated["x"]} == {
         ("decision-unassigned", "transport"),
-        ("decision-unassigned", "adapter.input_gen.input_gen.ram_style"),
+        ("decision-unassigned", "adapter"),
     }
     assert "activate" not in cost.unstated
-    based = seam.cost(seam.baseline(network))
+    based = seam.cost(seam_of(cut_model())[1])
     assert based.unstated == {}
     assert based.used == sum(based.resources.values(), Resources())
 
 
-def test_what_the_body_leaves_open_takes_its_baseline_and_every_value_is_saved() -> None:
-    """With no strategy, every choice the body leaves open takes its baseline and is
-    saved: the model holds every value (dense), the report names each as the
-    baseline's, and hardware generation replays the same values, nothing open. On
-    a body no cut created (``BaselineChoices`` not run), the KernelOps' own choices
-    were stored at conversion and its channels' are open: the exploration baselines
-    those."""
-    model = kernel_model()
+def test_exploring_with_no_strategy_sets_nothing_and_every_value_is_saved() -> None:
+    """With no strategy, nothing is set: on a body no cut created, its KernelOps' choices
+    were stored at conversion and its channels' are open, named in the report's ``open``
+    (emission refuses them). As the cut leaves it, every value is stated, the report names
+    each as the body's, and hardware generation replays the same values, nothing open."""
+    bare = kernel_model()
+    report = explore_kernel_choices(bare).report
+    assert report["strategy"] is None and "baselined" not in report
+    assert {key.split(".")[0] for key in report["open"]} == {
+        "x",
+        "w1",
+        "hidden",
+        "levels",
+        "w2",
+        "y",
+    }
+    assert {e["by"] for held in report["choices"].values() for e in held.values()} == {"saved"}
+    model = cut_model()
     explored = explore_kernel_choices(model)
     report = explored.report
     saved = choices(model)
-    # The baseline: the least folding, the adder tree, each memory in the explicit style
-    # its size orders first (the Chain's, all small: LUTRAM; never auto, last), every
-    # transport direct (no size_fifos: nothing sized).
+    # Conversion's and the cut's: the least folding, the adder tree, each memory in the
+    # explicit style its size orders first (the Chain's, all small: LUTRAM; never auto,
+    # last), every transport direct (no size_fifos: nothing sized).
     assert saved["first"]["compute.packed.pe"] == saved["first"]["compute.packed.simd"] == 1
     assert saved["first"]["compute.packed.reducer"] == "tree"
     assert saved["w1"]["source.memstream.ram_style"] == "distributed"
@@ -223,28 +244,7 @@ def test_what_the_body_leaves_open_takes_its_baseline_and_every_value_is_saved()
     assert saved["levels"]["transport"] == "direct"
     assert report["fifos"] == "not sized here (no size_fifos): each transport as it was"
     assert report["strategy"] is None and report["open"] == [] and report["held"] == {}
-    by = {
-        f"{node}.{attribute}": entry["by"]
-        for node, held in report["choices"].items()
-        for attribute, entry in held.items()
-    }
-    assert set(by.values()) == {"saved", "baseline"}
-    assert sorted(key for key, who in by.items() if who == "baseline") == sorted(
-        report["baselined"]
-    )
-    assert {key.split(".")[0] for key, who in by.items() if who == "saved"} == {
-        "first",
-        "activate",
-        "second",
-    }
-    assert {key.split(".")[0] for key in report["baselined"]} == {
-        "x",
-        "w1",
-        "hidden",
-        "levels",
-        "w2",
-        "y",
-    }
+    assert {e["by"] for held in report["choices"].values() for e in held.values()} == {"saved"}
     values = {
         f"{node}.{attribute}": value
         for node, held in saved.items()
@@ -255,42 +255,41 @@ def test_what_the_body_leaves_open_takes_its_baseline_and_every_value_is_saved()
         for node, held in report["choices"].items()
         for attribute, entry in held.items()
     } == values
-    # Nothing is left open, where it is explored or generated.
-    assert report["open"] == []
     point, _ = configured_network(model, "the chain")
     assert {
         f"{node}.{attribute}": value for (node, attribute), value in point.network.chosen().items()
     } == values
-    assert explored.network.viable() == ()
-    # Explored again, the body is the same and nothing is baselined.
-    again = explore_kernel_choices(model).report
-    assert again["baselined"] == [] and choices(model) == saved
-    assert {e["by"] for held in again["choices"].values() for e in held.values()} == {"saved"}
+    assert explored.network.undecided() == ()
+    # Explored again, the body is the same.
+    assert explore_kernel_choices(model).report["choices"] == report["choices"]
+    assert choices(model) == saved
 
 
-def test_the_report_logs_what_each_strategy_changed_kept_and_re_baselined() -> None:
+def test_the_report_logs_what_each_strategy_changed_kept_and_set() -> None:
     """A log of the exploration (provenance is logged, never stored): each value its
-    strategy changed, before and after, how many it reopened and settling kept, the ones
-    settling re-baselined (here each MatMul's pumping, a choice once SIMD is 2), and who
-    set each value: the body, the baseline or the strategy."""
-    model = kernel_model()
+    strategy changed, before and after, how many it reopened and gave back, those it set by
+    their policy (none here), and who set each value: the body, the strategy, or the
+    interim channel rule (a channel's value its rebuild gave it: the levels' output adapter
+    the fold brings into play)."""
+    model = cut_model()
     report = explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 6))).report
     target = report["strategy"]
     assert target["changed"]["first.compute.packed.pe"] == [1, 2]
     assert target["changed"]["first.compute.packed.simd"] == [1, 4]
-    assert target["changed"]["first.compute.packed.compute_pumping"] == [None, False]
+    # Pumping, stored at conversion, is given back at SIMD 4: unchanged.
+    assert "first.compute.packed.compute_pumping" not in target["changed"]
+    assert target["changed"]["levels.output_adapter"] == [None, "vpc"]
     assert target["committed"] == len(target["changed"])
-    assert target["re-baselined"] == [
-        "first.compute.packed.compute_pumping",
-        "second.compute.packed.compute_pumping",
-    ]
+    assert (target["by_policy"], target["unset"], target["rederived"]) == ([], {}, {})
+    assert target["interim"] == ["levels.output_adapter"]
     assert target["reopened"] > target["kept"] > 0 and "held" not in target
     entries = report["choices"]
     assert entries["first"]["compute.packed.pe"] == {"value": 2, "by": "target_throughput"}
-    # The reducer, which the strategy does not decide, keeps the baseline conversion
-    # stored; the transports, on a body no cut created, the exploration's baseline.
+    # The reducer, which the strategy does not decide, keeps what conversion stored; the
+    # transports, what the cut stored.
     assert entries["first"]["compute.packed.reducer"] == {"value": "tree", "by": "saved"}
-    assert entries["levels"]["transport"] == {"value": "direct", "by": "baseline"}
+    assert entries["levels"]["transport"] == {"value": "direct", "by": "saved"}
+    assert entries["levels"]["output_adapter"] == {"value": "vpc", "by": "interim channel rule"}
     assert json.loads(json.dumps(report)) == report
     # Sizing next, a second exploration: it reopens the 6 transports and changes none (the
     # Chain needs no FIFO here); what the target set is now the body's.
@@ -304,7 +303,8 @@ def test_the_report_logs_what_each_strategy_changed_kept_and_re_baselined() -> N
 def test_a_hold_is_committed_held_in_the_body_and_the_rest_explored() -> None:
     """A hold is committed in one batch and recorded in the body (``HELD``), so a later
     exploration of the body holds it: the ranked policy, which reopens everything else,
-    keeps it."""
+    keeps it. On a body no cut created, the ranked policy sets every open choice, the
+    channels' too."""
     held: dict[str, dict[str, object]] = {
         "first": {"compute.packed.pe": 1},
         "levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8},
@@ -376,18 +376,18 @@ def test_a_memory_saved_or_pinned_auto_is_kept_and_stated_as_vivado_s(tmp_path: 
     report = explore_kernel_choices(saved).report
     assert report["dropped"] == {} and auto(saved) == AUTO
     stated_auto(report)
-    fresh = kernel_model()
+    fresh = cut_model()
     report = explore_kernel_choices(fresh, Hold(AUTO)).report
     assert auto(fresh) == AUTO
     assert report["strategy"]["committed"] == 2
     stated_auto(report)
 
 
-def test_a_strategy_changes_what_it_decides_and_baseline_starts_over() -> None:
+def test_a_strategy_changes_what_it_decides_and_the_defaults_start_over() -> None:
     """Explored again, a saved value is replaced where a strategy decides it (no choice
-    is closed once saved), and kept where none does; ``baseline`` resets every value not
-    held."""
-    model = kernel_model()
+    is closed once saved), and kept where none does; ``Defaults`` resets every value not
+    held to conversion's policies and the interim channel rule's."""
+    model = cut_model()
     explore_kernel_choices(model, Ranked(Lanes(2)))
     assert choices(model)["first"]["compute.packed.pe"] == 2
     # 6 cycles a frame (the activation's) folds each MatMul to PE 2, SIMD 4; the reducer,
@@ -397,9 +397,10 @@ def test_a_strategy_changes_what_it_decides_and_baseline_starts_over() -> None:
     assert choices(compressor)["first"]["compute.packed.simd"] == 4
     assert choices(compressor)["second"]["compute.packed.reducer"] == "compressor"
     assert resumed.report["choices"]["second"]["compute.packed.reducer"]["by"] == "saved"
-    # The baseline strategy: every value back at its baseline.
-    explore_kernel_choices(compressor, Rebaseline())
-    assert choices(compressor) == choices(explored_at_baseline())
+    # The defaults: every value back at conversion's and the cut's (the levels' output
+    # adapter, brought into play by the fold, reopened and out of play again).
+    explore_kernel_choices(compressor, Defaults())
+    assert choices(compressor) == choices(cut_model())
 
 
 def save_choice(model: ModelWrapper, node: str, key: str, value: object) -> ModelWrapper:
@@ -407,34 +408,27 @@ def save_choice(model: ModelWrapper, node: str, key: str, value: object) -> Mode
     return configured(model, {node: {key: value}})
 
 
-def explored_at_baseline() -> ModelWrapper:
-    """The Chain explored by nothing: every value at its baseline."""
-    model = kernel_model()
-    explore_kernel_choices(model)
-    return model
-
-
 def test_a_hold_holds_for_every_later_exploration_of_the_body() -> None:
     """A hold recorded in the body holds for every later exploration of it, as one run of
-    several strategies held it: a fold, FIFO sizing and going back to the baselines keep
+    several strategies held it: a fold, FIFO sizing and going back to the defaults keep
     a held FIFO and a held folding, and holding a held key at another value is
     refused, naming the value it is held to."""
     pins: dict[str, dict[str, object]] = {
         "first": {"compute.packed.simd": 1},
         "levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8},
     }
-    model = kernel_model()
+    model = cut_model()
     explore_kernel_choices(model, Hold(pins))
     # 6 cycles a frame folds each MatMul to PE 2, SIMD 4 unpinned (the report test above).
     folded = explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 6))).report
     assert folded["held"] == pins
     assert choices(model)["first"]["compute.packed.simd"] == 1
     assert choices(model)["second"]["compute.packed.simd"] == 4
-    for strategy in (SizeFifos(), Rebaseline()):
+    for strategy in (SizeFifos(), Defaults()):
         explore_kernel_choices(model, strategy)
         assert choices(model)["first"]["compute.packed.simd"] == 1
         assert choices(model)["levels"]["transport.fifo.buffer.depth"] == 8
-    assert choices(model)["second"]["compute.packed.simd"] == 1  # back at its baseline
+    assert choices(model)["second"]["compute.packed.simd"] == 1  # back at its first valid
     assert model.get(HELD) == keys_of(pins)
     with refused(
         "pin-refused",
@@ -464,11 +458,11 @@ def test_a_second_hold_at_another_value_is_refused() -> None:
 
 
 def test_a_held_key_the_bound_network_does_not_state_is_refused_by_name() -> None:
-    """The mark holds ``first``'s PE, but the node's attribute states a value its facts
-    refuse (written past the writer, standing for a graph FINN did not write): replay
-    drops it at bind, and the exploration is refused, naming the node and the key, the
-    replay's findings its causes. The held value is not dropped and re-baselined."""
-    model = explored_at_baseline()
+    """The mark holds ``first``'s PE, but the node's attribute states a value its domain
+    refuses (written past the writer, standing for a graph FINN did not write): the bind
+    drops it, and the exploration is refused, naming the node and the key, the bind's
+    findings its causes. The held value is not dropped and set another way."""
+    model = cut_model()
     write_raw(model, "first", "compute.packed.simd", 2)
     write_raw(model, "first", "compute.packed.pe", 3)
     # SIMD is held too, and stated: only the refused key is the error's.
@@ -482,11 +476,9 @@ def test_a_held_key_the_bound_network_does_not_state_is_refused_by_name() -> Non
         keys=("compute.packed.pe",),
     ) as caught:
         explore_kernel_choices(model)
-    # The replay's own finding, with the selector's (``compute`` left with no viable case)
-    # beside it.
+    # The bind's own finding, its domain's: nothing else stands beside it.
     assert {(cause.code, cause.owner) for cause in caught.finding.causes} == {
         ("domain-membership", "compute.packed.pe"),
-        ("decision-no-viable-case", "compute"),
     }
     assert isinstance(caught.error, KernelOpError)
     assert caught.error.keys == ("first.compute.packed.pe",)
@@ -543,7 +535,7 @@ def test_an_exploration_checks_its_fifos_only_where_its_strategy_does(
     report's ``dropped`` and leaves it open, which emission refuses, its report saying the
     model judged them; sizing says so too. A held depth is the user's, kept and built,
     and the verification names it, a limitation."""
-    model = kernel_model()
+    model = cut_model()
     explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 6)))
     configured(model, {"levels": LEVELS_FIFO})
     folded = explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 12)))
@@ -592,7 +584,7 @@ def test_an_exploration_checks_its_fifos_only_where_its_strategy_does(
     ]
     assert check.stale == {} and "levels" in check.checked
     # Sizing judges by the model, and checks nothing.
-    sized = explore_kernel_choices(kernel_model(), SizeFifos()).report
+    sized = explore_kernel_choices(cut_model(), SizeFifos()).report
     assert sized["fifos_judged"] == sized["strategy"]["fifos_judged"] == "model"
     assert "fifo_check" not in sized
 
@@ -601,7 +593,7 @@ def test_the_target_s_frames_a_second_go_when_an_exploration_changes_a_kernel_s_
     """A target throughput records its frames a second (``OBJECTIVE_FPS``); an exploration
     that changes no kernel's choice (FIFO sizing, a hold of a channel's) keeps it, and one
     that changes any (whatever its strategy) removes it."""
-    model = kernel_model()
+    model = cut_model()
     explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 6)))
     assert model.get(OBJECTIVE_FPS) == 1_000_000_000 // (5 * 6)
     explore_kernel_choices(model, SizeFifos())
@@ -621,60 +613,46 @@ def int8_matmul() -> ModelWrapper:
     return model.transform(InferKernelTensors())
 
 
-def test_a_retarget_drops_the_stale_folding_explores_it_again_and_clears_it() -> None:
-    """An INT8 MatMul explored on Ultra96 (DSP48E2: the packed core forced, its folding
-    saved nested under it), retargeted to a VCK190 (DSP58: the core open): the folding
-    waits on the core, kept unchecked, not stale. A core that does not hold it drops it,
-    named with why; exploring chooses the core and its folding again, and saving clears the
-    stale attributes."""
+def test_a_retarget_keeps_the_folding_and_another_core_puts_it_out_of_play() -> None:
+    """An INT8 MatMul explored on Ultra96 (DSP48E2: the packed core the one possible, its
+    folding saved nested under it), retargeted to a VCK190 (DSP58: the INT8 core possible
+    too): the stored core and folding bind as they are, nothing stale, nothing open. The
+    other core puts the packed folding out of play, kept (dormant), and opens its own; a
+    hold of it leaves those open for a strategy, which sets them, reopening the dormant
+    folding, no longer in play, gone."""
     model = int8_matmul()
     explore_kernel_choices(model, Ranked(Lanes()))
     saved = kernel_op(model, model.graph.node[0]).choices()
-    assert "compute.packed.pe" in saved and "compute" not in saved
+    assert saved["compute"] == "packed" and "compute.packed.pe" in saved
     write_target(model, VCK190)
     model = model.transform(InferKernelTensors())
     bound = network(model, model.graph.node)
-    folding = {("first", key): value for key, value in saved.items()}
-    assert not bound.stale
-    assert {key: (item.value, item.blockers) for key, item in bound.unchecked()} == {
-        key: (value, ("compute",)) for key, value in folding.items()
-    }
-    assert ("first", "compute") in {key for key, _ in bound.viable()}
-    # The core settled on the other case, the folding under the first is dropped with why.
+    assert not bound.stale and bound.undecided() == ()
+    assert bound.chosen(("first",)) == {("first", key): value for key, value in saved.items()}
+    # The other core: the packed folding out of play, kept, the INT8 core's open.
     elsewhere = Seam(VCK190.platform).set(bound, {("first", "compute"): "int8_dsp58"})
-    assert isinstance(elsewhere, Accepted)
-    assert {key: [f.code for f in why] for key, why in elsewhere.dropped.items()} == {
-        key: ["inapplicable"] for key in folding
+    assert isinstance(elsewhere, Accepted) and not elsewhere.rederived
+    states = dict(elsewhere.network.states(("first",)))
+    assert states[("first", "compute.packed.pe")] == inspection.Dormant(saved["compute.packed.pe"])
+    assert set(elsewhere.network.undecided()) == {
+        ("first", "compute.int8_dsp58.pe"),
+        ("first", "compute.int8_dsp58.simd"),
+        ("first", "compute.int8_dsp58.compute_pumping"),
     }
-    # Explored, the core is set, its folding chosen again, the packed one's attributes gone.
-    explore_kernel_choices(model, Hold({"first": {"compute": "int8_dsp58"}}))
+    # Held, the core is set and its folding left open; explored, the folding is chosen,
+    # the packed one's dormant attributes reopened and gone.
+    report = explore_kernel_choices(model, Hold({"first": {"compute": "int8_dsp58"}})).report
+    assert set(report["open"]) == {
+        "first.compute.int8_dsp58.pe",
+        "first.compute.int8_dsp58.simd",
+        "first.compute.int8_dsp58.compute_pumping",
+    }
+    explore_kernel_choices(model, Ranked(Lanes()))
     held = kernel_op(model, model.graph.node[0]).choices()
     assert held["compute"] == "int8_dsp58" and "compute.int8_dsp58.pe" in held
     assert not any(key.startswith("compute.packed.") for key in held)
     again = network(model, model.graph.node)
-    assert not again.stale and again.viable() == () and not again.unchecked()
-
-
-def test_a_hold_on_a_folding_a_retarget_leaves_waiting_waits_with_it() -> None:
-    """The INT8 MatMul's folding held, then retargeted to a VCK190: the held PE is kept
-    unchecked, waiting on the core, and the hold waits with it (not ``held-not-taken``).
-    Exploring takes the core's baseline, under which the folding is checked: the body's
-    values are kept, by the body, and only the core is baselined."""
-    model = int8_matmul()
-    explore_kernel_choices(model, Ranked(Lanes()))
-    saved = kernel_op(model, model.graph.node[0]).choices()
-    model.set(HELD, {"first": ["compute.packed.pe"]})
-    write_target(model, VCK190)
-    model = model.transform(InferKernelTensors())
-    explored = explore_kernel_choices(model, Ranked(Lanes()))
-    assert explored.report["held"] == {"first": {"compute.packed.pe": saved["compute.packed.pe"]}}
-    assert explored.report["baselined"] == ["first.compute"]
-    assert {key: row["by"] for key, row in explored.report["choices"]["first"].items()} == {
-        "compute": "baseline",
-        **{key: "saved" for key in saved},
-    }
-    assert kernel_op(model, model.graph.node[0]).choices() == {"compute": "packed", **saved}
-    assert model.get(HELD) == {"first": ["compute.packed.pe"]}
+    assert not again.stale and again.undecided() == ()
 
 
 @pytest.mark.slow
@@ -707,30 +685,50 @@ def test_target_throughput_folds_tfc_through_each_matmul_s_core_on_a_dsp58_part(
         assert held[f"compute.{row['taken']}.simd"]["by"] == "target_throughput"
 
 
+#: What conversion, the cut and the fold store on TFC beside ``TFC_BUILT`` (forcing left
+#: them unstored): each MatMul's core (conversion's first valid), each Thresholding's
+#: AXI-Lite and UltraRAM stages (conversion's), each weight's source and each
+#: activation's adapter (the interim channel rule's one possible), the end of each
+#: boundary channel the pynq row offers one, and the output adapter the fold brings into
+#: play on each activation and on the first MatMul's output (the interim channel rule's).
+STORED: dict[str, dict[str, object]] = {
+    **{f"MatMul_{index}": {"compute": "packed"} for index in range(4)},
+    **{f"MultiThreshold_{index}": {"use_axilite": 0, "ultra_stages": 0} for index in range(4)},
+    **{f"MatMul_{index}_param0": {"source": "memstream"} for index in range(4)},
+    **{
+        f"MultiThreshold_{index}_out0": {"adapter": "input_gen", "output_adapter": "vpc"}
+        for index in range(4)
+    },
+    "MatMul_0_out0": {"output_adapter": "vpc"},
+    "Reshape_0_out0": {"end": "iodma_hls"},
+    "MatMul_3_out0": {"end": "iodma_hls"},
+}
+
+
 @pytest.mark.slow
 def test_tfc_at_a_million_frames_a_second_is_saved_as_the_57_values_it_is_built_with(
     tfc: ModelWrapper,
 ) -> None:
     """TFC's body explored by target_throughput 1e6, then size_fifos, saves the 57 values
     it was built with when exploration left choices open and a completion policy
-    completed them on a copy (``TFC_BUILT``): the target reopens the folding, the engine
-    widens it to the four input buffers' memories, settling keeps the rest and gives
-    each MatMul's pumping, a choice at SIMD 2 and more, its baseline; sizing places no
-    FIFO."""
+    completed them on a copy (``TFC_BUILT``), and the 27 conversion, the cut and the
+    fold now store beside them (``STORED``, which forcing left unstored): the target
+    reopens the kernels' choices, folds and gives the rest back; sizing places no FIFO."""
     model = ModelWrapper(tfc.model.__deepcopy__())
     target = explore_kernel_choices(model, TargetThroughput(1e6)).report["strategy"]
     report = explore_kernel_choices(model, SizeFifos()).report
-    assert kernel_choices_config(model) == TFC_BUILT
-    assert sum(map(len, TFC_BUILT.values())) == 57
+    found = kernel_choices_config(model)
+    assert found == {
+        owner: {**TFC_BUILT.get(owner, {}), **STORED.get(owner, {})} for owner in found
+    }
+    assert sum(map(len, TFC_BUILT.values())) == 57 and sum(map(len, found.values())) == 84
     sizing = report["strategy"]
-    assert target["re-baselined"] == [
-        f"MatMul_{index}.compute.packed.compute_pumping" for index in range(4)
-    ]
+    assert (target["by_policy"], target["unset"], target["rederived"]) == ([], {}, {})
     assert (sizing["reopened"], sizing["changed"], sizing["fifo_bits"]) == (13, {}, 0)
     assert report["open"] == []
     # Emission replays the saved choices: the configured network is the explored one.
     point, _ = configured_network(model, "the partition")
-    assert point.network.viable() == () and len(point.network.decisions()) > 57
+    assert point.network.undecided() == () and len(point.network.decisions()) > 79
 
 
 def test_exploration_reads_a_partitions_body_and_refuses_any_other_node() -> None:

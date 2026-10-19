@@ -4,9 +4,9 @@
 """The platform a KernelOp binds: its model's target (``read_target(model).platform``).
 
 A KernelOp binds it to its kernel, and the network to every channel, so a value
-case that requires a capability (``requires``) is refused, by name, on a device
-without it and viable on one with it; the DSP block is the platform's. A bare
-kernel, with no model, has no platform: its caller must state one.
+that requires a capability is refused, by the rule that says so, on a device without it
+and possible on one with it; the DSP block is the platform's. A bare kernel, with no
+model, has no platform: its caller must state one.
 """
 
 from __future__ import annotations
@@ -21,12 +21,13 @@ from support.models import MATMUL, TARGET, matmul_model, thresholding_model
 from support.refusals import refused
 
 from finn.core.graph.annotations.platform import write_target
-from finn.core.space import DefinitionError, Rejected, design_space, inspection
+from finn.core.space import DefinitionError, design_space, inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import InShell, in_shell
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform.capabilities import DspBlock, Platform
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
@@ -64,11 +65,11 @@ def test_a_node_binds_the_models_platform_and_its_dsp_block() -> None:
 def test_a_memory_case_the_device_cannot_build_is_refused_by_name() -> None:
     ultra = {"w": {"source.memstream.ram_style": "ultra"}}
     ultra96 = matmul_model()  # TARGET: Ultra96, no UltraRAM
-    # Its weight channel's ends wait on the MatMul's folding: nothing to check yet.
-    with refused("decision-unassigned", owner="compute.packed.pe"):
+    # Its weight channel's ends wait on the MatMul's core: nothing to check yet.
+    with refused("decision-unassigned", owner="compute"):
         configured(ultra96, ultra)
     configured(ultra96, {"first": MATMUL})
-    with refused("case-not-viable", owner="w.source.memstream.ram_style", message="uram-absent"):
+    with refused("uram-absent", owner="source.memstream.uram_present"):
         configured(ultra96, ultra)
     uram = targeted(matmul_model(), URAM)
     configured(uram, {"first": MATMUL})
@@ -89,13 +90,21 @@ def test_a_doubled_clock_is_the_shells_not_the_platforms() -> None:
 
 
 def test_runtime_writable_thresholds_need_a_control_bus() -> None:
-    # A KernelOp places no control bus to present its AXI-Lite interface through: the choice
-    # is forced False, its reason ``threshold-control`` on the op's own choice, and the seam
-    # refuses it as forced.
+    # A KernelOp places no control bus to present its AXI-Lite interface through: of the
+    # choice's values only False is possible, True refused by ``threshold-control``, which
+    # refuses a change setting it.
     model = thresholding_model()
-    (forced,) = [item for item in inspection.forced(op(model).point()) if item.key == "use_axilite"]
-    assert forced.value is False and "threshold-control" in forced.refused["True"]
-    with refused("forced", owner="activate.use_axilite"):
+    (viable,) = inspection.viable(op(model).point(), [ThresholdingAxiKernel.use_axilite])
+    assert viable.cases == (False,)
+    ((value, broken),) = [
+        (item.value, item.broken)
+        for item in viable.values or ()
+        if isinstance(item, inspection.Refused)
+    ]
+    assert value is True and [rule.result.findings[0].code for rule in broken] == [
+        "threshold-control"
+    ]
+    with refused("threshold-control", owner="control_for_writes"):
         configured(model, {"activate": {"use_axilite": True}})
 
 
@@ -126,8 +135,12 @@ def test_a_platform_without_a_dsp_block_is_refused_by_the_cores() -> None:
     platform = replace(URAM.platform, dsp=None)
     node = op(matmul_model())
     arguments = {**node.facts().arguments, "platform": platform}
-    answer = design_space(MatMulKernel(**arguments)).query(MatMulKernel.compute)
-    assert isinstance(answer, Rejected)
-    (finding,) = answer.findings  # no core is viable, each for the same reason
-    for core in ("packed", "int8_dsp58"):
-        assert f"{core}: compute.{core}.dsp: dotp-dsp" in finding.message
+    point = design_space(MatMulKernel(**arguments))
+    (viable,) = inspection.viable(point, [MatMulKernel.compute])
+    # No core is possible, each refused by its own rule for the same reason.
+    assert viable.cases == ()
+    assert {
+        item.value: [(rule.rule, rule.result.findings[0].code) for rule in item.broken]
+        for item in viable.values or ()
+        if isinstance(item, inspection.Refused)
+    } == {core: [(f"compute.{core}.dsp", "dotp-dsp")] for core in ("packed", "int8_dsp58")}

@@ -44,7 +44,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.core.reporting.findings import FindingKind
 from finn.core.rtlsim_bench import pack_lanes, stream_through
-from finn.core.space import Available
+from finn.core.space import Available, inspection
 from finn.custom_op.kernels import shell
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
@@ -108,29 +108,26 @@ def test_a_refold_that_converts_widths_keeps_the_input_side_s_memory() -> None:
     ]
 
 
-def test_a_stale_edge_choice_is_dropped_and_the_forced_adapter_applies() -> None:
+def test_an_edge_choice_under_a_chain_not_taken_is_kept_out_of_play() -> None:
+    """A memory of a chain the levels edge does not take: set or written past the seam,
+    it is kept out of play (dormant), nothing stale, and the adapter the edge takes
+    applies."""
     model = kernel_model()
     configure_partition(model)
-    # A memory of a chain the levels edge does not take: the seam refuses it, so it is
-    # written past it.
     other = {"adapter.input_gen_vpc.input_gen.ram_style": "auto"}
-    with refused("inapplicable", owner="adapter.input_gen_vpc.input_gen.ram_style"):
-        configured(model, {"levels": other})
-    model.set(CHANNEL_KEYS["adapter.input_gen_vpc.input_gen.ram_style"], "auto", tensor="levels")
+    configured(model, {"levels": other})
     bound = network(model, model.graph.node, name="chain")
-    stale = "levels.adapter.input_gen_vpc.input_gen.ram_style"
-    assert list(bound.stale) == [stale]
-    assert [(f.code, dict(f.details)) for f in bound.stale[stale]] == [
-        ("inapplicable", {"value": "auto"})
-    ]
+    assert not bound.stale
+    key = ("levels", "adapter.input_gen_vpc.input_gen.ram_style")
+    assert dict(bound.states(["levels"]))[key] == inspection.Dormant("auto")
     levels = bound.member("levels")
     assert levels.query(type(levels).adapter).value == "input_gen"
 
 
-def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> None:
+def test_a_lifted_initializers_source_choices_are_out_of_play_in_the_partition() -> None:
     """Weights lifted to a graph input leave the node streamed: its weight channel has no
     value, so no source, and the source's choices, stated on the tensor w, now the
-    weight edge's, are the partition's to replay: it drops them as stale."""
+    weight edge's, are the partition's: it keeps them out of play (dormant)."""
     model = matmul_model()
     configured(model, {"first": MATMUL})  # folded, so its channels' ends are known
     configured(model, {"w": {"source.memstream.ram_style": "block"}})
@@ -156,11 +153,22 @@ def test_a_lifted_initializers_source_choices_are_stale_in_the_partition() -> No
         network(model, model.graph.node)
     model = model.transform(InferKernelTensors())
     streamed = kernel_op(model, model.graph.node[0])
-    # The node replays its own choices only: the weight edge's are the partition's.
-    assert channel_choices(model, "w") == {"source.memstream.ram_style": "block"}
+    # The node replays its own choices only: the weight edge's are the partition's, the
+    # source and its memory's (the interim channel rule's beside the one set).
+    source = {
+        "source": "memstream",
+        "source.memstream.ram_style": "block",
+        "source.memstream.pumped_memory": False,
+    }
+    assert channel_choices(model, "w") == {**source, "transport": "direct"}
     point: Any = streamed.point()
     assert point.compute.pe == 2 and streamed.verify_node() == []
-    assert list(network(model, model.graph.node).stale) == ["w.source.memstream.ram_style"]
+    edge = network(model, model.graph.node)
+    assert not edge.stale
+    states = dict(edge.states(["w"]))
+    assert {key: states[("w", key)] for key in source} == {
+        key: inspection.Dormant(value) for key, value in source.items()
+    }
 
 
 def test_a_stale_output_is_refused_before_its_channel_reads_it() -> None:
@@ -355,17 +363,16 @@ def test_a_parameter_two_nodes_own_is_refused_by_name() -> None:
 
 def test_a_kernel_choice_the_network_refuses_is_dropped_named_and_cleared_by_persist() -> None:
     """A choice written raw (as a graph FINN did not write holds it) reaches the network's
-    replay, which drops it as stale with why; the rest replays, and persisting the network
+    bind, which drops it as stale with why; the rest is bound, and persisting the network
     clears the stale attribute."""
     model = kernel_model()
     write_raw(model, "first", "compute.packed.simd", 2)
     write_raw(model, "first", "compute.packed.pe", 3)
     bound = network(model, model.graph.node, name="chain")
     assert list(bound.stale) == ["first.compute.packed.pe"]
-    # Its own domain refuses 3, and its selector, left with no viable case, stands beside it.
+    # Its own domain refuses 3: nothing else stands beside it.
     assert {(f.code, f.owner) for f in bound.stale["first.compute.packed.pe"]} == {
         ("domain-membership", "compute.packed.pe"),
-        ("decision-no-viable-case", "compute"),
     }
     assert bound.member("first").compute.simd == 2
     # Its pe is open again; once chosen, the node holds the new value, nothing stale.
@@ -377,23 +384,19 @@ def test_a_kernel_choice_the_network_refuses_is_dropped_named_and_cleared_by_per
 def test_a_stale_choice_keeps_the_kernel_s_finding_naming_its_value_and_candidates() -> None:
     """The misfolded MatMul (``pe`` 3, written raw): the network keeps, per key, the
     findings the kernel gave (each code and owner): the key's own, with the value stored and
-    the values the decision could take now (its viable cases), its message naming them, and
-    its selector's beside it."""
+    the values the decision could take now (its possible values), its message naming
+    them."""
     model = kernel_model()
     write_raw(model, "first", "compute.packed.simd", 2)
     write_raw(model, "first", "compute.packed.pe", 3)
     bound = network(model, model.graph.node, name="chain")
     ((key, findings),) = bound.stale.items()
     assert key == "first.compute.packed.pe"
-    # The selector's finding (``compute`` left with no viable case) stands beside its own.
     assert {(f.kind, f.code, f.owner) for f in findings} == {
         (FindingKind.REJECTION, "domain-membership", "compute.packed.pe"),
-        (FindingKind.REJECTION, "decision-no-viable-case", "compute"),
     }
-    (found,) = [f for f in findings if f.code == "domain-membership"]
-    ((_, viable),) = [
-        item for item in bound.viable(["first"]) if item[0] == ("first", "compute.packed.pe")
-    ]
+    (found,) = findings
+    ((_, viable),) = bound.viable([("first", "compute.packed.pe")])
     assert 3 not in viable.cases
     assert dict(found.details) == {"value": 3, "candidates": viable.cases}
     assert found.message == "not one of " + ", ".join(map(str, viable.cases))
@@ -416,21 +419,22 @@ def test_a_stale_choice_is_refused_naming_its_key_once() -> None:
     assert str(stale.error).count("compute.packed.pe") == 1
     assert "first.compute.packed.pe = 3: " in str(stale.error)
     assert "not one of 1, 2, 4 (domain-membership)" in str(stale.error)
-    # The selector's finding (``compute`` left with no viable case) stands beside its own.
     assert {(cause.code, cause.owner) for cause in stale.finding.causes} == {
         ("domain-membership", "compute.packed.pe"),
-        ("decision-no-viable-case", "compute"),
     }
 
 
 def test_persist_clears_what_the_network_does_not_hold() -> None:
+    """A stored value the bind drops (outside its domain) is cleared by persisting; every
+    owner holds what the network holds, out of play (dormant) included."""
     model = kernel_model()
-    bound = network(model, model.graph.node, name="chain")
     model.set(CHANNEL_KEYS["adapter.input_gen_vpc.input_gen.ram_style"], "auto", tensor="levels")
-    stale = network(model, model.graph.node, name="chain")
-    assert list(stale.stale) == ["levels.adapter.input_gen_vpc.input_gen.ram_style"]
-    persist(model, stale)
-    assert "adapter.input_gen_vpc.input_gen.ram_style" not in channel_choices(model, "levels")
+    write_raw(model, "first", "compute.packed.pe", 3)
+    bound = network(model, model.graph.node, name="chain")
+    assert list(bound.stale) == ["first.compute.packed.pe"]
+    persist(model, bound)
+    assert "compute.packed.pe" not in kernel_op(model, model.graph.node[0]).choices()
+    assert channel_choices(model, "levels")["adapter.input_gen_vpc.input_gen.ram_style"] == "auto"
     # Every owner holds what the network holds, by graph name and the key there.
     expected: dict[str, dict[str, object]] = {}
     for (owner, key), value in bound.chosen().items():

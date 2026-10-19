@@ -12,7 +12,7 @@ where a search takes seconds, and one search on TFC_W2A2 for Ultra96 at 5 ns is 
 end-to-end check (bisection over 17 or 18 folds by ``TargetCycles``, minutes each).
 The search on the Chain without the KernelOps is ``tests/kernels/test_explore.py``'s.
 
-Folded by ``TargetCycles`` and settled, the Chain on ip reaches 3 cycles a frame at
+Folded by ``TargetCycles`` and restored, the Chain on ip reaches 3 cycles a frame at
 669 LUT (its fastest), 12 at 359, 24 at 321 and 48 (its least parallelism) at 298. In
 the Zynq shell its ends hold it at 16 cycles at the fastest, and its shell's total is
 about 9 500 LUT more: the ends' and the static region's.
@@ -39,10 +39,10 @@ from finn.core.graph.annotations.platform import write_target
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.custom_op.kernels.shell import verify_partition
 from finn.kernels.explore import (
+    Defaults,
     Explorer,
     Hold,
     MaxThroughput,
-    Rebaseline,
     SizeFifos,
     TargetThroughput,
 )
@@ -74,7 +74,8 @@ def explore_each(
 
 def explored(model: ModelWrapper, target: Target, strategies: list[Explorer]) -> dict[str, Any]:
     """A copy of ``model`` explored for ``target`` by each of ``strategies`` in turn
-    (``Rebaseline()`` first: from every choice's baseline); the report (``explore_each``)."""
+    (``Defaults()`` first: from every choice's default, conversion's and the cut's); the
+    report (``explore_each``)."""
     model = ModelWrapper(model.model.__deepcopy__())
     write_target(model, target)
     return explore_each(model, strategies)[0]
@@ -86,8 +87,8 @@ def explored(model: ModelWrapper, target: Target, strategies: list[Explorer]) ->
 def test_the_search_keeps_the_least_budget_whose_point_fits_and_reports_it() -> None:
     """Half a percent of the part's LUTs (352) on ip: the fastest fold does not fit, the
     least parallelism does, and bisection between them keeps the least budget that
-    fits. The report states the point against the budget, read from settled costs."""
-    report = explored(kernel_model(), TARGET, [Rebaseline(), *within(0.005)])
+    fits. The report states the point against the budget, read from restored costs."""
+    report = explored(kernel_model(), TARGET, [Defaults(), *within(0.005)])
     _, searched, sized = report["strategies"]
     assert searched["within"] == {"lut": 0.005} and searched["budget"] == {"lut": 352}
     tried = searched["tried"]
@@ -103,13 +104,12 @@ def test_the_search_keeps_the_least_budget_whose_point_fits_and_reports_it() -> 
     assert used == report["resources"]["shell"]["partition"]
     assert searched["binding"] == "lut" and searched["ratio"] == {"lut": round(321 / 352, 4)}
     assert searched["monotone"] and searched["departures"] == []
-    # It reopened the folding and settled the rest back: it changed the folding alone.
+    # It reopened the folding and gave the rest back: it changed the folding alone, and
+    # the interim channel rule set what the new folding brings into play on a channel.
     assert searched["reopened"] > searched["kept"] > 0
-    assert {key.rpartition(".")[2] for key in searched["changed"]} <= {
-        "pe",
-        "simd",
-        "compute_pumping",
-    }
+    changed = set(searched["changed"]) - set(searched["interim"])
+    assert {key.rpartition(".")[2] for key in changed} <= {"pe", "simd", "compute_pumping"}
+    assert {key.rpartition(".")[2] for key in searched["interim"]} <= {"output_adapter"}
     assert sized["strategy"] == "size_fifos" and sized["fifo_bits"] == 0
 
 
@@ -165,7 +165,7 @@ def test_in_the_zynq_shell_the_search_costs_the_shell_s_total() -> None:
     """The whole part on pynq: the fastest fold, relaxed to the ends' 16 cycles, fits at
     once, so it is the one fold. What it costs is the shell's total, its ends and its
     static region beside its partition."""
-    report = explored(kernel_model(), ULTRA96, [Rebaseline(), *within(1.0)])
+    report = explored(kernel_model(), ULTRA96, [Defaults(), *within(1.0)])
     searched = report["strategies"][1]
     assert [(row["cycles"], row["relaxed_to"], row["fits"]) for row in searched["tried"]] == [
         (1, 16, True)
@@ -193,7 +193,7 @@ def test_where_nothing_fits_the_search_states_it_and_keeps_the_least_parallelism
     sizing places one on the output, so the report's total is above the search's."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    report, findings = explore_each(model, [Rebaseline(), *within(0.1)])
+    report, findings = explore_each(model, [Defaults(), *within(0.1)])
     _, searched, sized = report["strategies"]
     (budget,) = searched["findings"]
     assert (budget["kind"], budget["code"]) == ("limitation", "resource-budget")
@@ -204,7 +204,7 @@ def test_where_nothing_fits_the_search_states_it_and_keeps_the_least_parallelism
     assert [finding.code for finding in findings] == ["resource-budget"]
     unsized = kernel_model()
     write_target(unsized, ULTRA96)
-    explore_kernel_choices(unsized, Rebaseline())
+    explore_kernel_choices(unsized, Defaults())
     _, check = verify_partition(unsized, "the chain")
     assert [(f.kind, f.code) for f in check.findings] == [
         (FindingKind.LIMITATION, "direct-throttles")
@@ -214,7 +214,7 @@ def test_where_nothing_fits_the_search_states_it_and_keeps_the_least_parallelism
     assert report["bottleneck"]["cycles"] == 48 and searched["bottleneck"]["cycles"] == 48
     assert not searched["monotone"]
     assert searched["departures"] == ["no budget uses more than budget 1: lut 9882 > 9838"]
-    # The least parallelism is every MatMul's baseline: nothing changed, every value saved.
+    # The least parallelism is every MatMul's default: nothing changed, every value saved.
     assert kernel_choices_config(model) and searched["committed"] == 0
     assert sized["fifo_bits"] > 0
     assert report["resources"]["used"]["lut"] > searched["used"]["lut"] == 9882
@@ -245,7 +245,7 @@ def test_a_point_over_the_part_is_a_finding_naming_the_binding_resource() -> Non
     same (RC5)."""
     small = Resources(lut=500, ff=141120, bram18=432, uram=0, dsp=360)
     part = replace(TARGET, platform=replace(TARGET.platform, resources=small))
-    report = explored(kernel_model(), part, [Rebaseline(), TargetThroughput(2e8)])
+    report = explored(kernel_model(), part, [Defaults(), TargetThroughput(2e8)])
     resources = report["resources"]
     assert report["bottleneck"]["cycles"] == 3
     assert resources["binding"] == "lut" and list(resources["over"]) == ["lut"]
@@ -264,7 +264,7 @@ def test_a_member_that_states_no_resources_is_budgeted_as_a_lower_bound() -> Non
     held = {"first": {"compute.packed.reducer": "compressor"}}
     model = ModelWrapper(kernel_model().model.__deepcopy__())
     write_target(model, TARGET)
-    report, findings = explore_each(model, [Rebaseline(), Hold(held), *within(0.005)])
+    report, findings = explore_each(model, [Defaults(), Hold(held), *within(0.005)])
     searched = report["strategies"][2]
     assert searched["lower_bound"] is True and list(searched["unstated"]) == ["first"]
     assert all(record["code"] for record in searched["unstated"]["first"])
