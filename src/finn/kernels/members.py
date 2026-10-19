@@ -5,25 +5,27 @@
 
 A member of a network (``finn.kernels.network``) is a Space class bound to the arguments
 it is given (``Facts``: a kernel's formals and tensors, a channel's facts), with the
-choices it stores replayed on it (``configured``): the point, and what replay dropped
-(refused or inapplicable, each with why) or, for a change, refused. Every bind of a
-network configures each member again, and a new point evaluates again what an equal
-point evaluated before, so the configured member is kept.
+choices it stores set on it (``configured``). Binding a member is one change on its
+design space, from nothing stored (``replayed``): its stored choices, with a change's
+values and less its clears, set together. A stored value outside its domain over the
+member's facts is dropped, with why (stale), and the rest are set again; nothing is filled
+in. A stored set that breaks a rule refuses the bind, naming the rule; a value of the
+change outside its domain refuses it, by key. Every bind of a network configures each
+member again, and a new point evaluates again what an equal point evaluated before, so
+the configured member is kept.
 
 **The key** is what the computation reads: the Space class, its arguments by name, each
 by its exact type and value (``1``, ``1.0`` and ``True`` are three keys, as the engine
-tells them apart; a tuple, list, set or dict by each item's), and the choices replayed in
-their order: those stored, and for a channel in a trial the change and the clears (replay
-falls back to each stored choice alone, in order). A large value is
+tells them apart; a tuple, list, set or dict by each item's), and the choices set in
+their order: those stored, and a change's values and clears. A large value is
 keyed by its digest: an ``IntegerTensorValue`` is equal by its shape and integers'
 sha256, loaded only when read. A value class (a frozen dataclass, a datatype) is keyed by
 its type and its own equality. The class's code and the platform catalog are fixed for a
 process. Arguments that do not hash are not kept.
 
-**The entry** is immutable: the point, and what replay dropped and refused as read-only
-mappings. A member with nothing replayed is the entry with nothing stored, and each
-replay on it starts from that point, so what the arguments alone decide is evaluated
-once.
+**The entry** is immutable: the point, and what the bind dropped and what refuses it as
+read-only mappings. A member with nothing stored is the entry with nothing stored, and each
+bind of it starts from that point, so what the arguments alone decide is evaluated once.
 
 **One cache per build** (``member_cache``): the builder opens one when a build starts and
 drops it when the build ends; it is unbounded inside. A test or a script opens one
@@ -31,9 +33,9 @@ itself. With none open, nothing is kept.
 
 **The verifying mode** (the environment variable ``FINN_VERIFY_MEMBER_CACHE``, any value
 but ``0``): every hit is configured again without the cache and compared with it, by
-what a network reads of a member (its class, its stored choices, what replay dropped and
-refused, its forced, viable and open Decisions, its validity and every export's
-answer); a mismatch raises ``MemberCacheMismatch``, naming the key. Where the variable
+what a network reads of a member (its class, its stored choices, what the bind dropped
+and what refuses it, every choice's state, its validity and every export's answer); a
+mismatch raises ``MemberCacheMismatch``, naming the key. Where the variable
 names a directory, each process writes its counts there when it ends
 (``verification_counts``). The graph's network cache
 (``finn.custom_op.kernels.network``) verifies its hits the same way.
@@ -45,7 +47,7 @@ import atexit
 import json
 import os
 from collections import Counter
-from collections.abc import Callable, Collection, Hashable, Iterator, Mapping
+from collections.abc import Callable, Collection, Hashable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -54,8 +56,9 @@ from typing import Any, cast
 
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
+    ChangeRequest,
     ConfigurationError,
-    Inapplicable,
+    ConfigurationResult,
     Rejected,
     RequestError,
     Space,
@@ -92,35 +95,70 @@ class Facts:
 
 
 class Configured:
-    """A member configured: its ``point`` (None where a change is refused), the stored
-    choices replay ``dropped`` and the change's choices it ``refused``, each by key with
-    why (a record the cache keeps, never changed)."""
+    """A member configured: its ``point`` (None where it is refused), the stored choices the
+    bind ``dropped`` (each a value outside its domain over the member's facts: stale), and
+    what ``refused`` it: a value outside its domain by the choice's key, a rule broken by
+    the rule's key, each with why, and for each rule the stored choices ``standing`` in its
+    way, by key (a record the cache keeps, never changed)."""
 
-    __slots__ = ("dropped", "point", "refused")
+    __slots__ = ("dropped", "point", "refused", "standing")
 
     point: Space | None
     dropped: Mapping[str, tuple[Finding, ...]]
     refused: Mapping[str, tuple[Finding, ...]]
+    standing: Mapping[str, tuple[str, ...]]
 
     def __init__(
         self,
         point: Space | None,
         dropped: Mapping[str, tuple[Finding, ...]] | None = None,
-        refused: Mapping[str, tuple[Finding, ...]] | None = None,
+        refused: Refusal | None = None,
     ) -> None:
         self.point = point
         self.dropped = MappingProxyType(dict(dropped or {}))
-        self.refused = MappingProxyType(dict(refused or {}))
+        self.refused = MappingProxyType(dict(refused.why if refused else {}))
+        self.standing = MappingProxyType(dict(refused.standing if refused else {}))
 
     def __repr__(self) -> str:
-        return f"Configured({self.point!r}, {dict(self.dropped)!r}, {dict(self.refused)!r})"
+        return (
+            f"Configured({self.point!r}, {dict(self.dropped)!r}, {dict(self.refused)!r}, "
+            f"{dict(self.standing)!r})"
+        )
 
 
 class MemberCacheMismatch(AssertionError):
     """A hit of the verifying mode that differs from the member configured again."""
 
 
-# -- replaying choices on a point ------------------------------------------------------------
+# -- a change of a member's choices -----------------------------------------------------------
+
+
+class Refusal:
+    """Why a change of a member is refused: by key, each value outside its domain (the
+    choice's key, the domain's findings) or each rule it would break (the rule's key: a
+    constraint, a derived value, a view, a choice whose domain lists no value; its
+    findings), and for each rule the stored choices standing in its way (``standing``), by
+    key. ``outside`` names the choices refused by their domain: those of the change, and
+    in a change of facts, the stored ones the new facts put outside it."""
+
+    __slots__ = ("outside", "standing", "why")
+
+    why: Mapping[str, tuple[Finding, ...]]
+    standing: Mapping[str, tuple[str, ...]]
+    outside: frozenset[str]
+
+    def __init__(
+        self,
+        why: Mapping[str, tuple[Finding, ...]],
+        standing: Mapping[str, tuple[str, ...]] | None = None,
+        outside: Collection[str] = (),
+    ) -> None:
+        self.why = MappingProxyType(dict(why))
+        self.standing = MappingProxyType(dict(standing or {}))
+        self.outside = frozenset(outside)
+
+    def __repr__(self) -> str:
+        return f"Refusal({dict(self.why)!r}, {dict(self.standing)!r})"
 
 
 def rejection(code: str, owner: str, message: str) -> tuple[Finding, ...]:
@@ -133,49 +171,75 @@ def decision(subject: Space | type[Space], key: str) -> inspection.DecisionInfo[
     return next((item for item in inspection.decisions(subject) if item.key == key), None)
 
 
-def _refusals(point: Space, report: Any, keys: Collection[str]) -> dict[str, tuple[Finding, ...]]:
-    """Each Decision a refused request names, with why (an inapplicable one has no finding
-    of its own, so it is named), or every key of the request refused together."""
-    found: dict[str, tuple[Finding, ...]] = {}
-    for outcome in report.outcomes:
-        if outcome.status != "refused":
-            continue
-        result = outcome.result
-        findings = (
-            result.findings if isinstance(result, (Inapplicable, Rejected, Unresolved)) else ()
+def refusal(report: ConfigurationResult[Any]) -> Refusal:
+    """Why the engine refused a change (``report``): each choice its domain refuses (a
+    value set, or in a change of facts a stored one checked again), by key, with the
+    domain's findings; else each rule it would break, by the rule's key, with its findings
+    and the stored choices standing in its way."""
+    outside = {
+        outcome.owner: outcome.result.findings
+        for outcome in report.outcomes
+        if outcome.status == "refused" and isinstance(outcome.result, (Rejected, Unresolved))
+    }
+    if outside:
+        return Refusal(outside, outside=outside)
+    assert report.broken, "a refused change names a value outside its domain or a rule"
+    return Refusal(
+        {rule.rule: rule.result.findings for rule in report.broken},
+        {rule.rule: rule.standing for rule in report.broken},
+    )
+
+
+def handles(point: Space, keys: Iterable[str]) -> dict[str, object] | Refusal:
+    """The reference of each choice ``keys`` names on ``point``, by key, or each key that
+    names none refused (``not-a-decision``)."""
+    found = {key: decision(point, key) for key in keys}
+    unknown = [key for key, item in found.items() if item is None]
+    if unknown:
+        return Refusal(
+            {
+                key: rejection("not-a-decision", key, "not a Decision of this member")
+                for key in unknown
+            }
         )
-        found[outcome.owner] = (
-            rejection("inapplicable", outcome.owner, "inapplicable")
-            if isinstance(result, Inapplicable) or not findings
-            else findings
-        )
-    return found or {key: rejection("refused-together", key, "refused together") for key in keys}
+    return {
+        key: cast(inspection.DecisionInfo[object], item).reference for key, item in found.items()
+    }
 
 
 def commit(
-    point: Space, values: Mapping[str, object], clear: Collection[str] = ()
-) -> Space | dict[str, tuple[Finding, ...]]:
-    """``point`` with ``values`` committed and ``clear`` cleared, atomically, or each key
-    refused with why."""
-    handles = {key: decision(point, key) for key in (*values, *clear)}
-    unknown = [key for key, item in handles.items() if item is None]
-    if unknown:
-        return {
-            key: rejection("not-a-decision", key, "not a Decision of this member")
-            for key in unknown
-        }
-    found = cast(dict[str, inspection.DecisionInfo[object]], handles)
+    point: Space,
+    values: Mapping[str, object],
+    clear: Collection[str] = (),
+    facts: Mapping[str, object] | None = None,
+) -> Space | Refusal:
+    """``point`` with ``values`` set and ``clear`` cleared (and its formals given ``facts``,
+    by name), as one change of the engine's, or why it is refused (``refusal``; a key
+    that names no choice, ``not-a-decision``; a request the engine refuses as malformed,
+    ``request-refused``)."""
+    found = handles(point, (*values, *clear))
+    if isinstance(found, Refusal):
+        return found
+    changes: tuple[ChangeRequest | Mapping[Any, object], ...] = (
+        {found[key]: value for key, value in values.items()},
+        *(point.field(found[key]).clear() for key in clear),
+    )
     try:
-        report = point.try_with_choices(
-            {found[key].reference: value for key, value in values.items()},
-            *(point.field(found[key].reference).clear() for key in clear),
-        )
+        if facts is None:
+            report = point.try_with_choices(*changes)
+        else:
+            space_type = type(point)
+            report = point.try_with_facts(
+                {getattr(space_type, name): value for name, value in facts.items()}, *changes
+            )
     except (RequestError, ConfigurationError) as error:
-        return {key: rejection("request-refused", key, str(error)) for key in (*values, *clear)}
+        return Refusal(
+            {key: rejection("request-refused", key, str(error)) for key in (*values, *clear)}
+        )
     if report.accepted:
         instance: Space = report.instance
         return instance
-    return _refusals(point, report, (*values, *clear))
+    return refusal(report)
 
 
 def replayed(
@@ -184,40 +248,32 @@ def replayed(
     change: Mapping[str, object] | None = None,
     clear: Collection[str] = (),
 ) -> Configured:
-    """``base`` with its ``stored`` choices replayed and ``change`` committed, ``clear``
-    cleared of either: the point, the stored choices dropped (refused or inapplicable,
-    each with why) and the change's refused, by key. A stored choice ``change`` replaces is
-    not dropped. Nothing to replay is ``base`` itself."""
+    """``base``, a member bound with nothing stored, with its ``stored`` choices and
+    ``change`` set and ``clear`` cleared of them, as one change: a bind (the module
+    docstring). A stored value outside its domain is dropped, with why, and the rest are
+    set again, once; a value of ``change`` outside its domain refuses the bind, by key, and
+    so does a rule the values set together break, by the rule's key, with the stored
+    choices standing in its way (none, since a bind sets them all). A stored choice
+    ``change`` replaces is not dropped. Nothing to set is ``base`` itself."""
     change = change or {}
-    values = {key: value for key, value in stored.items() if key not in clear} | dict(change)
-    if not values and not clear:
+    values = {
+        key: value for key, value in stored.items() if key not in clear and key not in change
+    } | dict(change)
+    if not values:
         return Configured(base)
-    dropped: dict[str, tuple[Finding, ...]] = {}
-    while True:
-        outcome = commit(base, values)
-        if isinstance(outcome, Space):
-            return Configured(outcome, dropped)
-        named = {key: why for key, why in outcome.items() if key in values}
-        refused = {key: why for key, why in named.items() if key in change}
-        if refused:
-            return Configured(None, dropped, refused)
-        if named:
-            dropped |= named
-            values = {key: value for key, value in values.items() if key not in named}
-            continue
-        # Refused naming none of them: the change first, then each stored choice alone.
-        point = commit(base, change)
-        if not isinstance(point, Space):
-            return Configured(None, dropped, point)
-        for key, value in values.items():
-            if key in change:
-                continue
-            alone = commit(point, {key: value})
-            if isinstance(alone, Space):
-                point = alone
-            else:
-                dropped[key] = tuple(finding for why in alone.values() for finding in why)
-        return Configured(point, dropped)
+    outcome = commit(base, values)
+    if isinstance(outcome, Space):
+        return Configured(outcome)
+    stale = {
+        key: why for key, why in outcome.why.items() if key in outcome.outside and key not in change
+    }
+    if not stale or len(stale) < len(outcome.outside):
+        refused = {key: why for key, why in outcome.why.items() if key not in stale}
+        return Configured(None, stale, Refusal(refused, outcome.standing, outcome.outside))
+    again = commit(base, {key: value for key, value in values.items() if key not in stale})
+    if isinstance(again, Space):
+        return Configured(again, stale)
+    return Configured(None, stale, again)
 
 
 # -- the key ---------------------------------------------------------------------------------
@@ -369,7 +425,7 @@ def observed(entry: Configured) -> object:
     """What a network reads of a configured member, to compare in the verifying mode."""
     point = entry.point
     if point is None:
-        return (None, dict(entry.dropped), dict(entry.refused))
+        return (None, dict(entry.dropped), dict(entry.refused), dict(entry.standing))
     exports: dict[str, object] = {}
     for name, handle in sorted(type(point).exports.items(), key=lambda item: str(item[0])):
         try:
@@ -380,10 +436,7 @@ def observed(entry: Configured) -> object:
         type(point),
         chosen(point),
         dict(entry.dropped),
-        dict(entry.refused),
-        inspection.forced(point),
-        inspection.viable(point),
-        inspection.open(point),
+        inspection.states(point),
         inspection.validity(point),
         exports,
     )
@@ -395,8 +448,8 @@ def configured(
     change: Mapping[str, object] | None = None,
     clear: Collection[str] = (),
 ) -> Configured:
-    """The member ``facts`` binds, its ``stored`` choices replayed with ``change``
-    committed and ``clear`` cleared (``replayed``); kept in the open member cache."""
+    """The member ``facts`` binds, its ``stored`` choices and ``change`` set and ``clear``
+    cleared of them, as one change (``replayed``); kept in the open member cache."""
     stored, change = stored or {}, change or {}
     cache = current()
     found = None if cache is None else key(facts, stored, change, clear)
@@ -422,7 +475,7 @@ def _configured(
 ) -> Configured:
     if not stored and not change and not clear:
         return Configured(facts.bind())
-    # Replayed on the binding with nothing stored: its own entry where a cache is open.
+    # Set on the binding with nothing stored: its own entry where a cache is open.
     base = configured(facts).point if cache is not None else facts.bind()
     assert base is not None
     return replayed(base, stored, change, clear)
@@ -451,14 +504,17 @@ __all__ = [
     "Facts",
     "MemberCache",
     "MemberCacheMismatch",
+    "Refusal",
     "check",
     "commit",
     "configured",
     "current",
     "decision",
+    "handles",
     "key",
     "member_cache",
     "observed",
+    "refusal",
     "rejection",
     "replayed",
     "typed",

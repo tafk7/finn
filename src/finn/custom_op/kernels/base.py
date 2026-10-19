@@ -451,14 +451,16 @@ class KernelOp(CustomOp):
         return self._replayed({**self.choices(), **(extra or {})})
 
     def _replayed(self, choices: Mapping[str, object]) -> Kernel:
-        """``point``, with ``choices`` (by attribute) in place of the node's: replayed on
-        its kernel as a network replays a member's stored choices (``configured``)."""
+        """``point``, with ``choices`` (by attribute) in place of the node's: set on its
+        kernel as one change, as a network binds a member's stored choices
+        (``configured``); refused where a value is outside its domain, or a rule they break
+        together, each by name."""
         found = configured(self.facts(), typed(type(self).kernel, choices))
-        if found.dropped:
+        if found.dropped or found.point is None:
             raise refusal(
                 self.op_type,
                 self.label,
-                {key: why(each) for key, each in found.dropped.items()},
+                {key: why(each) for key, each in (*found.dropped.items(), *found.refused.items())},
                 node=self.label,
             )
         point: Kernel = found.point  # type: ignore[assignment]
