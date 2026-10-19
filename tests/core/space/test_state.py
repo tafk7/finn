@@ -9,7 +9,7 @@ from typing import cast
 
 import pytest
 
-from core.space.test_assign import change, codes, key, start
+from core.space._state_support import change, codes, key, start
 from finn.core.space import (
     Available,
     Decision,

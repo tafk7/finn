@@ -15,11 +15,11 @@ rule and the stored choices standing in its way.
 from __future__ import annotations
 
 import random
-from collections.abc import Mapping
 from typing import cast
 
 from support.space_cores import chain
 
+from core.space._state_support import change, codes, key, start
 from finn.core.space import (
     Available,
     Decision,
@@ -27,62 +27,20 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
-    Unresolved,
     constraint,
     derived,
     divisors_of,
     domain,
     reject,
 )
-from finn.core.space._assign import Assigned, assign
-from finn.core.space._state import State, bind, decision_state, prepare
+from finn.core.space._state import State, decision_state
 from finn.core.space._world import BASE_SHARE, FLATTEN, World
-from finn.core.space.compiler import compile_model, root_parameters, root_record
-from finn.core.space.edits import Change
 from finn.core.space.ir import NodeId
 from finn.core.space.results import DecisionState, QueryResult
 
 
-def start(declaration: Space) -> State:
-    """The design space of a root declaration, as a state: its facts bound, every choice
-    open."""
-    record = root_record(declaration)
-    model = compile_model(record.space_type)
-    facts = root_parameters(model, record)
-    return bind(model, prepare(model.linked, {i: (v, "parameter") for i, v in facts.items()}))
-
-
-def key(current: State, name: str) -> NodeId:
-    return current.linked.keys[name]
-
-
-def change(
-    current: State,
-    choices: Mapping[str, object] | None = None,
-    facts: Mapping[str, object] | None = None,
-    clear: tuple[str, ...] = (),
-) -> Assigned:
-    """``current`` with ``choices`` set and ``clear`` cleared (by key), and ``facts``."""
-    nodes = current.linked.nodes
-    requests: list[Change[object]] = [
-        Change(current, nodes[key(current, name)].scope, key(current, name), value)
-        for name, value in (choices or {}).items()
-    ]
-    requests += [
-        Change(current, nodes[key(current, name)].scope, key(current, name), remove=True)
-        for name in clear
-    ]
-    given = {key(current, name): value for name, value in (facts or {}).items()}
-    return assign(current, given, requests)
-
-
 def read(current: State, name: str) -> QueryResult[object]:
     return current.world.result(key(current, name))
-
-
-def codes(result: object) -> list[tuple[str, str]]:
-    assert isinstance(result, (Inapplicable, Rejected, Unresolved))
-    return [(finding.code, finding.owner) for finding in result.findings]
 
 
 class Core(Space):
