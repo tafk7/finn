@@ -18,20 +18,19 @@ this one module, so the engine core's change of API is a port of this file alone
   a ``domain(accepts=, candidates=)``: membership is the model's whole membership, the
   enumeration the listed values. A domain's ``order`` is not built: no compared answer
   reads it.
-- **Questions, today's engine's** (what the engine core's port replaces):
+- **Questions**, each the engine's own answer:
 
-  - a stored choice is set, waiting (``inspection.unchecked``, with what it waits on),
-    dormant (its decision inapplicable), or the legacy ``refused``; an unset one is open,
-    absent, the legacy ``forced`` (``inspection.forced``) or ``refused``;
-  - a change's report names refusals per choice (``ChangeOutcome``, named or reached):
-    one whose own finding is ``domain-membership`` is an ``assignment`` refusal, any other
-    the legacy ``choice``; it reports nothing put dormant, in play or opened;
-  - possible values are ``inspection.viable``'s: an open choice neither stored nor forced,
-    its viable cases (possible, nothing moving) and its other member values (impossible,
-    with no refusal form: their reasons are text);
-  - validity's ``"undecided"`` is ``"open"``;
-  - a definition is refused for a dependency cycle only (``definition``): no domain reading
-    a choice is refused.
+  - a choice's state is ``inspection.states``' (set, waiting with what it waits on,
+    dormant, open with what its presence waits on, absent);
+  - a change's report: refused, its type checks refused (``ChangeOutcome``, status
+    ``"refused"``) as ``assignment`` refusals with their codes, and each ``BrokenRule`` as
+    a ``rule`` refusal (its origin, its result's codes, its standing choices); accepted,
+    what it puts dormant, brings into play and opens;
+  - possible values are ``inspection.viable``'s: ``Possible`` with what it moves,
+    ``Refused`` with its broken rules; ``None`` where the engine lists nothing;
+  - validity is ``inspection.validity`` (``"valid"``, ``"refused"``, ``"open"``);
+  - a definition is refused for a dependency cycle (when building or asked) and for a
+    domain whose membership reads a choice (at compile).
 
 The description becomes one Space class per scope, built with ``composite``. Every member
 keeps the description's path as its key: a choice ``compute.packed.pe`` is the engine's
@@ -43,7 +42,6 @@ are the root's optional formals: a missing fact is an unsupplied one.
 
 from __future__ import annotations
 
-import ast
 import inspect as pyinspect
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -56,7 +54,6 @@ from finn.core.space import (
     Decision,
     DefinitionError,
     EvaluationError,
-    Inapplicable,
     Param,
     QueryResult,
     Rejected,
@@ -73,7 +70,7 @@ from finn.core.space import (
     selected,
     view,
 )
-from finn.core.space.edits import ChangeRequest
+from finn.core.space.edits import BrokenRule, ChangeOutcome, ChangeRequest
 
 from .forms import (
     AnswerForm,
@@ -614,8 +611,8 @@ def definition(
 ) -> DefinitionForm:
     """Whether the engine takes ``description`` as a definition: a dependency cycle reported
     when building the Space, or when asked (its validity, every rule and every view of the
-    configuration with ``facts``), is ``"cycle"``; today's engine reports no domain reading
-    a choice, and answers otherwise (``None``)."""
+    configuration with ``facts``), is ``"cycle"``; a domain whose membership reads a choice,
+    refused at compile, is ``"domain-reads-choice"``; otherwise ``None``."""
     try:
         engine = build(description, spelling, unchecked=True)
         point = engine.open(dict(facts or {}))
@@ -625,8 +622,11 @@ def definition(
         for path in sorted(engine.index.views):
             point.answer(path)
     except DefinitionError as error:
-        if any(finding.code == "cyclic-dependency" for finding in error.findings):
+        codes = {finding.code for finding in error.findings}
+        if "cyclic-dependency" in codes:
             return DefinitionForm("cycle")
+        if "domain-reads-choice" in codes:
+            return DefinitionForm("domain-reads-choice")
         raise
     except EvaluationError as error:
         if error.role == "dependency cycle":
@@ -650,21 +650,10 @@ class Point:
     def _members(self) -> dict[str, Any]:
         return {item.key: item.reference for item in inspection.members(self.point)}
 
-    def unchecked(self) -> dict[str, frozenset[str]]:
-        """The stored choices kept unchecked, by path, each with what it waits on (the
-        engine's list: the choices still open or unchecked, and the inputs not supplied,
-        that its own check and its guard read)."""
-        return {
-            item.key: frozenset(self.engine.path(key) for key in item.blockers) - {item.key}
-            for item in inspection.unchecked(self.point)
-        }
-
     def stored(self) -> dict[str, object]:
-        """The committed choices, by path."""
+        """The committed choices, dormant ones included, by path."""
         current = occurrence.state(self.point)
-        return {
-            current.linked.nodes[index].key: value for index, value in current.assignments.items()
-        }
+        return {current.linked.nodes[index].key: value for index, value in current.stored.items()}
 
     def _query(self, path: str) -> QueryResult[Any]:
         index = self.engine.index
@@ -676,49 +665,23 @@ class Point:
             return self.point.query(self._decisions()[path])
         return self.point.query(self._members()[path])
 
+    def _paths(self, keys: Iterable[str]) -> frozenset[str]:
+        return frozenset(self.engine.path(key) for key in keys)
+
     # -- the questions
 
     def state(self, path: str) -> StateForm:
-        """A choice's state; ``forced`` and ``refused`` are today's engine's only."""
-        engine = self.engine
-        handle = self._decisions()[path]
-        state = self.point.field(handle).state
-        stored = self.stored()
-        if path in stored:
-            if isinstance(state, Inapplicable):
-                return StateForm("dormant", stored[path])
-            unchecked = self.unchecked()
-            if path in unchecked:
-                return StateForm("waiting", stored[path], blockers=unchecked[path])
-            if isinstance(state, Rejected):
-                return StateForm("refused")
-            answer = self._query(path)
-            if isinstance(answer, Available):
-                return StateForm("set", stored[path])
-            if isinstance(answer, Rejected):
-                return StateForm("refused")
-            if isinstance(state, Unresolved) or isinstance(answer, Unresolved):
-                # an engine fault, not a disagreement: stored, read unresolved, not listed
-                raise RuntimeError(f"{path}: stored and unresolved, but not listed unchecked")
-            return StateForm("dormant", stored[path])
-        if isinstance(state, Inapplicable):
-            return StateForm("absent")
-        if isinstance(state, Rejected):
-            return StateForm("refused")
-        if isinstance(state, Unresolved):
-            return StateForm("open", blockers=engine.blockers(state.findings, path))
-        forced = {item.key: item.value for item in inspection.forced(self.point)}
-        if path in forced:
-            return StateForm("forced", forced[path])
-        answer = self._query(path)
-        if isinstance(answer, Rejected):
-            return StateForm("refused")
-        blockers = (
-            engine.blockers(answer.findings, path)
-            if isinstance(answer, Unresolved)
-            else frozenset()
-        )
-        return StateForm("open", blockers=blockers)
+        """A choice's state (``inspection.states``)."""
+        found = dict(inspection.states(self.point))[path]
+        if isinstance(found, inspection.Set):
+            return StateForm("set", found.value)
+        if isinstance(found, inspection.Waiting):
+            return StateForm("waiting", found.value, self._paths(found.waits) - {path})
+        if isinstance(found, inspection.Dormant):
+            return StateForm("dormant", found.value)
+        if isinstance(found, inspection.Open):
+            return StateForm("open", blockers=self._paths(found.waits))
+        return StateForm("absent")
 
     def answer(self, path: str) -> AnswerForm:
         """A fact's, a choice's, a derived value's or a view's answer."""
@@ -744,7 +707,7 @@ class Point:
     def validity(self) -> ValidityForm:
         """The engine's validity of the configuration (``inspection.validity``): refused
         with its false pieces' codes, open with what its unknown pieces wait on (each
-        piece's own key aside; today's ``"undecided"``), or valid."""
+        piece's own key aside), or valid."""
         engine = self.engine
         answer = inspection.validity(self.point)
         if answer.status == "refused":
@@ -752,7 +715,7 @@ class Point:
                 *(engine.codes(piece.result.findings) for piece in answer.pieces)
             )
             return ValidityForm("refused", false)
-        if answer.status == "undecided":
+        if answer.status == "open":
             blockers = frozenset().union(
                 *(
                     engine.blockers(piece.result.findings, engine.path(piece.owner))
@@ -763,40 +726,24 @@ class Point:
         return ValidityForm("valid")
 
     def possible(self, path: str) -> PossibleForm:
-        """A choice's possible values, from today's ``inspection.viable``: listed only for an
-        open choice neither stored nor forced, whose cases are enumerable and whose guard
-        does not wait. Its viable cases are possible, moving nothing (today's engine reports
-        no movement); its other member values (a value outside membership aside) are
-        impossible with no refusal form, since their reasons are text. In the declared list's
-        order where the description fixes one (a selector's cases, a fixed list), else the
-        viable cases before the others."""
-        found = {item.key: item for item in inspection.viable(self.point)}
-        if path not in found:
+        """A choice's possible values (``inspection.viable``): each listed value possible,
+        with what it moves, or impossible, with each rule it breaks; ``None`` where the
+        engine lists nothing."""
+        (found,) = inspection.viable(self.point, [self._decisions()[path]])
+        if found.values is None:
             return PossibleForm(None)
-        item = found[path]
-        info = self.engine.index.choices[path]
-        outcomes: list[tuple[object, OutcomeForm]] = [
-            (case, OutcomeForm("possible")) for case in item.cases
-        ]
-        for key, why in item.refused.items():
-            if _OUTSIDE in why:
-                continue  # not a member: the list holds members only
-            value = key if info.cases is not None else ast.literal_eval(key)
-            outcomes.append((value, OutcomeForm("impossible")))
-        declared = info.cases if info.cases is not None else info.domain.values
-        if declared is not None:
-            order = list(declared)
-
-            def position(entry: tuple[object, OutcomeForm]) -> int:
-                at = [i for i, item in enumerate(order) if same(item, entry[0])]
-                return at[0] if at else len(order)
-
-            outcomes.sort(key=position)
+        outcomes: list[tuple[object, OutcomeForm]] = []
+        for item in found.values:
+            if isinstance(item, inspection.Possible):
+                moved = (self._paths(item.dormant), self._paths(item.in_play))
+                outcome = OutcomeForm("possible", *moved, self._paths(item.opened))
+            else:
+                outcome = OutcomeForm("impossible", refusals=_broken(self.engine, item.broken))
+            outcomes.append((item.value, outcome))
         return PossibleForm(tuple(outcomes))
 
     def change(self, edit: model.Change) -> tuple[ChangeForm, Point | None]:
-        """``edit`` applied: its comparable result, and the configuration it publishes.
-        Today's report moves nothing dormant, in play or opened."""
+        """``edit`` applied: its comparable result, and the configuration it publishes."""
         if edit.unset:
             raise NotTranslatable("the engine cannot set a fact back to unknown")
         engine = self.engine
@@ -812,18 +759,11 @@ class Point:
         else:
             report = self.point.try_with_choices(commits, *clears)
         if not report.accepted:
-            refusals = frozenset(
-                _refusal(engine, outcome.owner, outcome.result)
-                for outcome in report.outcomes
-                if outcome.status == "refused" and outcome.owner in decisions
-            )
+            refusals = _assignments(engine, report.outcomes) | _broken(engine, report.broken)
             return ChangeForm(False, refusals=refusals), None
-        return ChangeForm(True), Point(engine, report.instance)
-
-
-#: an engine finding's text (``owner: code: message``) for a value outside membership,
-#: which ``inspection.viable`` gives as its reason
-_OUTSIDE = ": domain-membership: "
+        moved = (self._paths(report.dormant), self._paths(report.in_play))
+        form = ChangeForm(True, *moved, self._paths(report.opened))
+        return form, Point(engine, report.instance)
 
 
 def _rule(engine: Engine, result: QueryResult[Any]) -> RuleForm:
@@ -836,19 +776,34 @@ def _rule(engine: Engine, result: QueryResult[Any]) -> RuleForm:
     return RuleForm("inapplicable")
 
 
-def _refusal(engine: Engine, owner: str, result: QueryResult[bool]) -> RefusalForm:
-    """A choice refusing a change, named or reached, with its own codes (a refused guard's
-    findings, reported beside them, are compared through validity; ``inactive`` for a
-    choice whose scope is not present): an ``assignment`` refusal where its one own code is
-    ``domain-membership`` (the type check), else the legacy ``choice``."""
-    codes: frozenset[Code] = frozenset()
-    if isinstance(result, Inapplicable):
-        codes = frozenset({("inactive", owner)})
-    elif isinstance(result, (Rejected, Unresolved)):
-        codes = engine.codes(result.findings, only=owner)
-    if codes == {("domain-membership", owner)}:
-        return RefusalForm("assignment", owner, codes)
-    return RefusalForm("choice", owner, codes)
+def _assignments(engine: Engine, outcomes: Iterable[ChangeOutcome]) -> frozenset[RefusalForm]:
+    """A refused change's type-check refusals: each outcome refused (a choice named, or a
+    stored one a facts change checked again), with every code of its type check's answer
+    (a domain input's origin's codes where it refuses through that input)."""
+    found: set[RefusalForm] = set()
+    for outcome in outcomes:
+        if outcome.status != "refused":
+            continue
+        result = outcome.result
+        codes: frozenset[Code] = (
+            engine.codes(result.findings) if isinstance(result, Rejected) else frozenset()
+        )
+        found.add(RefusalForm("assignment", engine.path(outcome.owner), codes))
+    return frozenset(found)
+
+
+def _broken(engine: Engine, broken: Iterable[BrokenRule]) -> frozenset[RefusalForm]:
+    """Each rule a change breaks, at its origin: its own codes and the stored choices
+    standing in its way."""
+    return frozenset(
+        RefusalForm(
+            "rule",
+            engine.path(item.rule),
+            engine.codes(item.result.findings),
+            frozenset(engine.path(key) for key in item.standing),
+        )
+        for item in broken
+    )
 
 
 __all__ = [

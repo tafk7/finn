@@ -11,8 +11,6 @@ three deep, and a value choice whose case puts a selector no case of which holds
 
 from __future__ import annotations
 
-import pytest
-
 from core.space.reference import (
     Change,
     Choice,
@@ -35,7 +33,6 @@ from core.space.reference_harness import (
 )
 
 # Each test runs with the readers index used for every cache, then for none: the same answers.
-pytestmark = pytest.mark.usefixtures("index_path")
 
 
 # -- 9. views and validity -------------------------------------------------------------------------

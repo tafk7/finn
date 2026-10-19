@@ -197,15 +197,6 @@ def test_the_provisional_codes_mark_an_empty_list_and_a_refused_guard() -> None:
     )
 
 
-def test_a_legacy_answer_is_never_the_models() -> None:
-    # A choice with one value is forced today: a kind the model never answers.
-    case = Case("one value", Space((), Scope("", choices=(Choice("x", listed(1)),))))
-    pair = case.start()
-    assert pair.engine.state("x") == StateForm("forced", 1)
-    with pytest.raises(Disagreement):
-        pair.check_state("x")
-
-
 def test_a_disagreement_names_the_case_the_question_and_both_answers() -> None:
     with pytest.raises(Disagreement) as caught:
         LISTED.start().check_state("x", ruled=StateForm("set", 2))
@@ -246,14 +237,12 @@ NESTED = Case(
 )
 
 
-@pytest.mark.usefixtures("index_path")
 def test_every_choice_keeps_its_path_as_its_key() -> None:
     point = NESTED.start({"width": 4}).engine.point
     keys = {item.key for item in inspection.decisions(point)}
     assert keys == {"unit.compute", "unit.compute.packed.pe", "unit.compute.stub.rows"}
 
 
-@pytest.mark.usefixtures("index_path")
 def test_a_selector_is_read_as_its_selected_case() -> None:
     NESTED.start({"width": 4}, {"unit.compute": "stub"}).check_answer("unit.compute")
 

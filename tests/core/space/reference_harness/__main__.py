@@ -3,7 +3,7 @@
 
 """From ``tests``: ``python -m core.space.reference_harness`` prints the acceptance matrix as a
 markdown table; ``python -m core.space.reference_harness walks --seeds 0-99 --steps 40`` runs
-the seeded walks (both index paths unless ``--paths`` says otherwise) and prints their
+the seeded walks and prints their
 summary, then each failed walk whole. While a milestone with rows is pending, the engine's
 disagreements are counted; ``--without "engine core"`` takes that milestone's rows as removed,
 so every disagreement fails its walk (the engine core's engine walked as if it had removed
@@ -22,7 +22,6 @@ def main(argv: list[str]) -> int:
     walks = commands.add_parser("walks", help="the seeded walks against the reference model")
     walks.add_argument("--seeds", default="0-9", help="A-B, inclusive, or one seed")
     walks.add_argument("--steps", type=int, default=30)
-    walks.add_argument("--paths", default="index,scan", help="index, scan or both")
     walks.add_argument(
         "--without",
         default="",
@@ -34,13 +33,8 @@ def main(argv: list[str]) -> int:
         return 0
     from .walks import seeds, table, walk  # noqa: PLC0415
 
-    paths = [path for path in arguments.paths.split(",") if path]
     without = [item.strip() for item in arguments.without.split(",") if item.strip()]
-    tallies = [
-        walk(seed, arguments.steps, path, without)
-        for seed in seeds(arguments.seeds)
-        for path in paths
-    ]
+    tallies = [walk(seed, arguments.steps, without) for seed in seeds(arguments.seeds)]
     print(table(tallies, without))
     failed = [tally for tally in tallies if tally.failure]
     for tally in failed:

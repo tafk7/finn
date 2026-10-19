@@ -7,10 +7,6 @@ never messages.
 A **code** is ``(code, subject)``: the engine's finding code (or a rule's own code) and the
 path of the node it is about. The reference model's reason kinds map to the engine's codes
 in one table, ``compare.CODES``. **Blockers** are the paths an open answer waits on.
-
-Some kinds only today's engine produces (``"forced"`` and ``"refused"`` choices, a
-``"choice"`` refusal): the model never answers them. They exist so a legacy answer shows as
-a disagreement, and go when the engine core lands.
 """
 
 from __future__ import annotations
@@ -21,20 +17,19 @@ from typing import Literal
 #: a reason: its code and the path of the node it is about
 Code = tuple[str, str]
 
-#: the model's five states; ``forced`` and ``refused`` are today's engine's only
-StateKind = Literal["set", "waiting", "dormant", "open", "absent", "forced", "refused"]
+#: the model's five states
+StateKind = Literal["set", "waiting", "dormant", "open", "absent"]
 AnswerKind = Literal["value", "unresolved", "refused", "inapplicable"]
 RuleKind = Literal["true", "false", "unknown", "inapplicable"]
 VerdictKind = Literal["valid", "refused", "open"]
-#: ``choice`` is today's engine's only: a refusal per choice, named or reached
-RefusalKind = Literal["assignment", "rule", "choice"]
+RefusalKind = Literal["assignment", "rule"]
 OutcomeKind = Literal["possible", "impossible"]
 
 
 @dataclass(frozen=True)
 class StateForm:
-    """A choice's state. ``value`` for set, waiting, dormant (and a legacy forced value);
-    ``blockers`` for waiting, and for open while its presence waits."""
+    """A choice's state. ``value`` for set, waiting and dormant; ``blockers`` for waiting,
+    and for open while its presence waits."""
 
     kind: StateKind
     value: object = None
@@ -75,8 +70,7 @@ class ValidityForm:
 class RefusalForm:
     """One refusal of a change. ``assignment``: ``subject`` the choice whose value is not of
     its type; ``rule``: ``subject`` the origin (a constraint, a derived value, a view, or the
-    choice whose listed domain lists no value), ``standing`` the stored choices in its way;
-    ``choice`` (today's engine's only): ``subject`` a choice refused named or reached.
+    choice whose listed domain lists no value), ``standing`` the stored choices in its way.
     ``codes`` are the refusal's own."""
 
     kind: RefusalKind
@@ -113,7 +107,7 @@ class OutcomeForm:
 class PossibleForm:
     """A choice's possible values: each member value with its outcome, in its membership
     list's order; ``None`` where no list is given (a membership-only domain, a list that
-    waits or is refused, and today's engine's choices it does not list)."""
+    waits or is refused)."""
 
     values: tuple[tuple[object, OutcomeForm], ...] | None
 

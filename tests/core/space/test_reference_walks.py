@@ -82,9 +82,9 @@ STEPS = 30
 
 @pytest.mark.parametrize("seed", SEEDS)
 def test_a_seeded_walk_keeps_the_four_invariants_and_the_engines_own_checks(
-    seed: int, index_path: str
+    seed: int,
 ) -> None:
-    tally = walk(seed, STEPS, index_path)
+    tally = walk(seed, STEPS)
     assert tally.failure is None, tally.failure
     assert tally.steps == STEPS and tally.checks["assignment"] == STEPS
     # every configuration the model reaches: the start and each accepted step
@@ -138,15 +138,13 @@ def test_without_the_engine_cores_rows_every_disagreement_fails_its_walk() -> No
     tally = walk(0, 6, without=("engine core",))
     assert tally.failed == "disagreement" and tally.failure is not None
     first = tally.failure.splitlines()[0]
-    assert first == "seed 0, index path, step 0: the engine disagrees (state, told as forced-value)"
+    assert first == "seed 0, step 0: the engine disagrees (state, told as forced-value)"
     assert "description:" in tally.failure and "| engine" in tally.failure
     with pytest.raises(ValueError, match="no such milestone"):
         pending(("lane 9",))
 
 
 def test_a_disagreement_is_told_by_one_simple_rule_or_left_unclassified() -> None:
-    assert classify(StateForm("open"), StateForm("forced", 1)) == "forced-value"
-    assert classify(StateForm("absent"), StateForm("refused")) == "refused-guard"
     assert classify(PossibleForm(((1, OutcomeForm("possible")),)), PossibleForm(None)) == (
         "viable-per-choice"
     )
@@ -197,7 +195,7 @@ def test_the_summary_names_the_mode_and_the_checks() -> None:
     )
     assert "engine disagreements (counted (pending: engine core)) by question:" in text
     assert "excused" not in text
-    assert text.splitlines()[2].startswith("| 0 | index | 3 |")
+    assert text.splitlines()[2].startswith("| 0 | 3 |")
     assert "strict (no milestone with rows pending)" in table(tallies, ("engine core",))
 
 
@@ -207,7 +205,7 @@ def test_a_broken_standing_list_in_the_model_fails_a_walk(monkeypatch: pytest.Mo
     monkeypatch.setattr(reference.model, "_standing", lambda *args: standing(*args)[1:])
     tally = walk(11, 3)
     assert tally.failed == "4 standing" and tally.failure is not None
-    assert tally.failure.startswith("seed 11, index path, step 3: invariant 4 standing: clearing")
+    assert tally.failure.startswith("seed 11, step 3: invariant 4 standing: clearing")
 
 
 # -- invariant 1: history-independence and the bind ------------------------------------------------

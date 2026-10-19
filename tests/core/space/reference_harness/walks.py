@@ -6,7 +6,7 @@ and the engine compared with it.
 
 A seed draws a small description (:func:`generate`) and a walk of changes over it. The
 **model drives the walk**: a change it accepts is applied, one it refuses is not. At every
-step (each change tried, accepted or refused), on both index paths:
+step (each change tried, accepted or refused):
 
 **The model's four invariants** (the semantics note's § 12), strict in every walk:
 
@@ -58,14 +58,13 @@ it refuses that too, it is out of step until a later configuration binds.
 
 A failure prints the seed, the step, the description, the steps so far and the answers
 involved. ``python -m core.space.reference_harness walks`` (from ``tests``) prints a line
-per seed and index path and the totals.
+per seed and the totals.
 """
 
 from __future__ import annotations
 
 import itertools
 import random
-import sys
 import time
 import traceback
 from collections import Counter
@@ -78,7 +77,6 @@ from support.space_walk import fresh
 from core.space import reference as model
 from core.space.reference.description import Order
 from core.space.reference.model import EMPTY_DOMAIN_REFUSES, same
-from finn.core.space import _runtime
 
 from .compare import (
     Disagreement,
@@ -646,8 +644,7 @@ def below(before: Form, after: Form, setting: tuple[object] | None = None) -> st
       sets it or its case is decided; absent when its scope turns out absent); waiting may
       become set or dormant (its presence decided), keeping its value; set and dormant stay
       as they are; absent stays absent, or turns dormant when the step sets it (its scope
-      is absent: the value is kept out of play). Legacy (the engine's today): forced may
-      become set to its value; refused stays refused;
+      is absent: the value is kept out of play);
     - a **value's answer**: unresolved may become anything; a value stays the same value;
       inapplicable stays; refused stays refused, its codes only growing (a view refused
       with its Space carries the Space's false pieces, which an addition may add to);
@@ -692,27 +689,23 @@ def below(before: Form, after: Form, setting: tuple[object] | None = None) -> st
 def _state_below(before: StateForm, after: StateForm, setting: tuple[object] | None) -> str | None:
     if setting is not None:
         (value,) = setting
-        if before.kind not in ("open", "absent", "forced"):
+        if before.kind not in ("open", "absent"):
             return f"{before.kind} before the step set it"
         if after.kind not in ("set", "waiting", "dormant") or not same(after.value, value):
             return f"set to {value!r}, but {after.kind} {after.value!r}"
         if before.kind == "absent" and after.kind != "dormant":
             return f"absent, set: {after.kind}"
-        if before.kind == "forced" and not same(before.value, value):
-            return f"forced {before.value!r}, set to {value!r}"
         return None
     allowed = {
-        "open": ("set", "waiting", "dormant", "open", "absent", "forced", "refused"),
+        "open": ("set", "waiting", "dormant", "open", "absent"),
         "waiting": ("waiting", "set", "dormant"),
         "set": ("set",),
         "dormant": ("dormant",),
         "absent": ("absent",),
-        "forced": ("forced", "set"),
-        "refused": ("refused",),
     }
     if after.kind not in allowed[before.kind]:
         return f"{before.kind} -> {after.kind}"
-    if before.kind not in ("open", "absent", "refused") and not same(before.value, after.value):
+    if before.kind not in ("open", "absent") and not same(before.value, after.value):
         return f"{before.kind} {before.value!r} -> {after.kind} {after.value!r}"
     return None
 
@@ -1313,7 +1306,7 @@ def classify(
     """The row kind a disagreement most plausibly belongs to, by one simple rule on the
     two answers (and, for a rule, ``scope``: its scope's presence in the model; ``waiting``:
     the choices the model reports waiting), or ``unclassified``: a tally, never a filter.
-    The rules, in order: the engine's own legacy forms; a rule the model leaves out of play
+    The rules, in order: a rule the model leaves out of play
     under a refused guard that the engine finds false (``refused-guard``); a possible-values
     answer; a change by its refusals; the provisional codes; the engine deciding what the
     model leaves open (forcing gave it a value, ``forced-value``); a refusal where the model
@@ -1322,11 +1315,6 @@ def classify(
     selected its case, ``forced-value``); what the model has out of play the engine leaves
     open (an unselected case under an open selector, ``unselected-under-open``); both sides
     open, the engine waiting on a choice the model reports waiting (``waiting-blocker``)."""
-    if isinstance(expected, StateForm) and isinstance(engine, StateForm):
-        if engine.kind == "forced":
-            return "forced-value"
-        if engine.kind == "refused":
-            return "refused-guard" if expected.kind == "absent" else "no-viable-case"
     if (
         isinstance(expected, RuleForm)
         and isinstance(engine, RuleForm)
@@ -1392,7 +1380,6 @@ class Tally:
     """What one walk did and met."""
 
     seed: int
-    path: str
     steps: int = 0
     accepted: int = 0
     #: steps the model alone tried (unsetting a fact, which the engine cannot): checked,
@@ -1443,7 +1430,7 @@ class _State:
 
 
 class _Walk:
-    def __init__(self, seed: int, steps: int, path: str, strict: bool) -> None:
+    def __init__(self, seed: int, steps: int, strict: bool) -> None:
         self.rng = random.Random(seed)
         self.steps = steps
         self.strict = strict
@@ -1452,7 +1439,7 @@ class _Walk:
         self.structure = Structure(self.index)
         self.asked = questions(self.index)
         self.engine_asked = [q for q in self.asked if q[0] in ENGINE_QUESTIONS]
-        self.tally = Tally(seed, path, skipped=self.generated.skipped)
+        self.tally = Tally(seed, skipped=self.generated.skipped)
         self.step = 0
         self.history: list[str] = []
         #: each selector's case before a switch, for a switch back
@@ -1464,7 +1451,7 @@ class _Walk:
 
     def fail(self, failed: str, what: str) -> None:
         lines = [
-            f"seed {self.tally.seed}, {self.tally.path} path, step {self.step}: {what}",
+            f"seed {self.tally.seed}, step {self.step}: {what}",
             "description:",
             *(f"  {line}" for line in self.generated.text.splitlines()),
             f"start facts: {dict(self.generated.facts)}",
@@ -1825,18 +1812,11 @@ def _edit(edit: model.Change) -> str:
     return ", ".join(parts) or "(nothing)"
 
 
-def walk(seed: int, steps: int, path: str = "index", without: Iterable[str] = ()) -> Tally:
-    """One seeded walk of ``steps`` changes, the engine reading ``path`` ("index": its
-    readers index for every cache; "scan": for none). ``without``: milestones whose rows are
-    taken as removed; once no milestone with rows is pending, a disagreement fails the walk.
-    It never raises: a failure is in ``Tally.failure``."""
-    strict = not pending(without)
-    previous = _runtime.INDEX_FROM
-    _runtime.INDEX_FROM = 0 if path == "index" else sys.maxsize
-    try:
-        return _Walk(seed, steps, path, strict).run()
-    finally:
-        _runtime.INDEX_FROM = previous
+def walk(seed: int, steps: int, without: Iterable[str] = ()) -> Tally:
+    """One seeded walk of ``steps`` changes. ``without``: milestones whose rows are taken as
+    removed; once no milestone with rows is pending, a disagreement fails the walk. It never
+    raises: a failure is in ``Tally.failure``."""
+    return _Walk(seed, steps, not pending(without)).run()
 
 
 # --- the summary ----------------------------------------------------------------------------------
@@ -1847,11 +1827,11 @@ def _counts(counts: Mapping[str, int]) -> str:
 
 
 def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
-    """The walks' summary: a line per seed and path, then the totals."""
+    """The walks' summary: a line per seed, then the totals."""
     lines = [
-        "| seed | path | steps | accepted | invariant checks | failed | engine's own checks | "
+        "| seed | steps | accepted | invariant checks | failed | engine's own checks | "
         "disagreements by question | by kind | engine errors | seconds | result |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     totals: dict[str, Counter[str]] = {
         name: Counter() for name in ("checks", "engine_checks", "by_question", "by_kind", "skipped")
@@ -1860,7 +1840,7 @@ def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
         for name, counter in totals.items():
             counter.update(getattr(tally, name))
         lines.append(
-            f"| {tally.seed} | {tally.path} | {tally.steps} | {tally.accepted} | "
+            f"| {tally.seed} | {tally.steps} | {tally.accepted} | "
             f"{sum(tally.checks.values())} | {tally.failed or '-'} | "
             f"{sum(tally.engine_checks.values())} | {_counts(tally.by_question)} | "
             f"{_counts(tally.by_kind)} | {tally.engine_errors} | {tally.seconds:.2f} | "

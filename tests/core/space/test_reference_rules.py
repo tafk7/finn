@@ -15,8 +15,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from core.space.reference import (
     Change,
     Choice,
@@ -41,7 +39,6 @@ from core.space.reference_harness import (
 )
 
 # Each test runs with the readers index used for every cache, then for none: the same answers.
-pytestmark = pytest.mark.usefixtures("index_path")
 
 
 def divisors(extent: int) -> tuple[int, ...]:
