@@ -26,8 +26,10 @@ check of its FIFOs against their streams before emission (a strategy may call th
 check too, ``Seam.check_fifos``), and records the design it verified on the body; emission
 (packaging, the shell's integration, the testbench) compares it (``refuse_unverified``),
 and refuses a design never verified or changed since. Simulation and elaboration only
-bind. A body's choices are given their baselines (``baseline_choices``) on its network in
-its shell, which alone holds both of a boundary channel's ends, and written by ``persist``.
+bind. The cut makes a body's channel choices (``baseline_choices``) on its network in its
+shell, which alone holds both of a boundary channel's ends, by the interim channel rule
+(``finn.kernels.network.interim_channel_defaults``: first valid, replaced by the ends
+pass), and writes them with ``persist``.
 """
 
 from __future__ import annotations
@@ -45,7 +47,7 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
 from finn.core.reporting.findings import Finding, FindingKind
-from finn.core.space import Available, Inapplicable, QueryResult, Rejected, Space
+from finn.core.space import Available, Inapplicable, QueryResult, Rejected, Space, inspection
 from finn.custom_op.kernels.network import (
     PARTITION,
     Partition,
@@ -57,10 +59,12 @@ from finn.custom_op.kernels.network import (
 )
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import CYCLES
+from finn.kernels.configure import chosen
+from finn.kernels.defaults import defaulted
 from finn.kernels.ends import END, EndContract
 from finn.kernels.explore import FifoCheck, Seam
 from finn.kernels.members import Facts
-from finn.kernels.network import Wire, dotted
+from finn.kernels.network import Key, Wire, dotted, interim_channel_defaults
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
 from finn.platform.shells import ShellRow, budgets, bus_counts, shell_row
@@ -208,7 +212,7 @@ def _resources(network: InShell) -> QueryResult[ShellResources]:
 @dataclass(frozen=True)
 class Configured:
     """A partition's network as emission builds it (``configured_network``): every choice
-    stored, none open or unchecked, within its shell's budgets; its ``module`` and its
+    in play stored, none open, within its shell's budgets; its ``module`` and its
     ``cycles`` a frame, its slowest member's."""
 
     network: InShell
@@ -240,21 +244,20 @@ def shell_resources(subject: InShell | Configured) -> ShellResources | tuple[Fin
 def configured_network(
     model: ModelWrapper, label: str
 ) -> tuple[Configured, tuple[tuple[str, str], ...]]:
-    """A partition model's network in the shell of its target (``in_shell``), replayed
-    from its nodes' and its tensors' channel choices (a Decision with one viable case is
-    forced, nothing to commit), as emission builds it (``Configured``), and its boundary
-    (tensor, port). Every choice is stored where it is created (a KernelOp's at
-    conversion, a channel's at the cut) and replaced by the strategies, so nothing is
-    completed here. A stale choice; an open choice, each by name: one no case of which is
-    viable (each case's reason), a required one no strategy set ("required: run
-    step_size_fifos or step_placeholder_choices"), any other one never baselined ("not
-    created: BaselineChoices"); a choice kept unchecked, each by name with its stored value
-    and what it waits on (one error names the open and the unchecked together, a finding
-    each: ``choices-open``, ``choices-unchecked``); a network over the shell's budgets
-    (``budget_refusal``), or whose module or cycles its members refuse; or graph inputs
-    and outputs out of port order refuse, named. It only binds: it does not check the
-    FIFOs against their streams (``verify_partition`` does), so a simulation can run a
-    FIFO the model calls too small."""
+    """A partition model's network in the shell of its target (``in_shell``), bound with
+    its nodes' and its tensors' channel choices, as emission builds it (``Configured``),
+    and its boundary (tensor, port). Every choice is stored where it is created (a
+    KernelOp's at conversion, a channel's at the cut) and replaced by the strategies, so
+    nothing is completed here. A stale choice; an open choice in play, each by name: one no
+    value of which is possible (each refused value's rules), a required one no strategy set
+    ("required: run step_size_fifos or step_placeholder_choices"), any other one never set
+    ("not set: the cut, BaselineChoices, or a strategy sets it"; one finding,
+    ``choices-open``); a network over the shell's budgets (``budget_refusal``), or whose
+    module or cycles its members refuse; or graph inputs and outputs out of port order
+    refuse, named. A dormant choice (stored under a case not selected) is not open, and
+    refuses nothing. It only binds: it does not check the FIFOs against their streams
+    (``verify_partition`` does), so a simulation can run a FIFO the model calls too
+    small."""
     bound = in_shell(model, model.graph.node)
     if bound.stale:
         keys = tuple(bound.stale)
@@ -276,50 +279,39 @@ def configured_network(
             ),
         )
     open_keys = bound.undecided()
-    waiting = bound.unchecked()
-    choices: list[tuple[str, str, tuple[str, ...]]] = []
     if open_keys:
         required = {key for key, item in bound.decisions().items() if item.required}
-        unviable = {
-            key: "; ".join(f"{case}: {reason}" for case, reason in item.refused.items())
-            for key, item in bound.viable()
-            if not item.cases
+        listed = bound.viable(key for key in open_keys if key not in required)
+        impossible = {
+            key: "; ".join(
+                f"{item.value!r} breaks " + ", ".join(rule.rule for rule in item.broken)
+                for item in viable.values
+                if isinstance(item, inspection.Refused)
+            )
+            for key, viable in listed
+            if viable.values is not None and not viable.cases
         }
         named = [
-            f"{dotted(key)}: no case is viable: {unviable[key]}"
-            if key in unviable
+            f"{dotted(key)}: no value is possible: {impossible[key] or 'its domain lists none'}"
+            if key in impossible
             else f"{dotted(key)} (required: run step_size_fifos or step_placeholder_choices)"
             if key in required
-            else f"{dotted(key)} (not created: BaselineChoices)"
+            else f"{dotted(key)} (not set: the cut, BaselineChoices, or a strategy sets it)"
             for key in open_keys
         ]
         text = f"{label}: open choices, refused at emission: " + "; ".join(named)
-        choices.append(("choices-open", text, tuple(dotted(key) for key in open_keys)))
-    if waiting:
-        named = [
-            f"{dotted(key)} = {item.value!r}"
-            + (
-                " (waits on " + ", ".join(dotted((key[0], each)) for each in item.blockers) + ")"
-                if item.blockers
-                else ""
-            )
-            for key, item in waiting
-        ]
-        text = f"{label}: unchecked choices, refused at emission: " + "; ".join(named)
-        choices.append(("choices-unchecked", text, tuple(dotted(key) for key, _ in waiting)))
-    if choices:
+        keys = tuple(dotted(key) for key in open_keys)
         raise KernelOpError(
-            "\n".join(text for _, text, _ in choices),
-            tuple(key for _, _, keys in choices for key in keys),
-            findings=tuple(
+            text,
+            keys,
+            findings=(
                 Finding(
                     FindingKind.REJECTION,
-                    code,
+                    "choices-open",
                     "configured_network",
                     text,
                     (("keys", keys), ("node", label)),
-                )
-                for code, text, keys in choices
+                ),
             ),
         )
     over_budget = budget_refusal(bound)
@@ -422,23 +414,102 @@ def refuse_unverified(model: ModelWrapper, label: str) -> None:
 # -- a body's choices, on its network in its shell ---------------------------------------
 
 
-def baseline_choices(model: ModelWrapper) -> dict[str, tuple[Finding, ...]]:
-    """Every choice of a partition's body, ``model``, at its baseline where the body
-    leaves it open, and persisted, each owner's whole (``persist``): the network of its
-    KernelOps bound in its shell (``in_shell``), their stored choices replayed in context,
-    and every open choice with cases that is not required given its first viable case the
-    seam accepts, in rank order (``Seam.baseline``). The channels' choices are created here
-    (a channel has both its ends only in the network), and the nodes' own are re-checked:
-    one replay drops as stale is re-baselined. Returns the dropped choices, by key, with the
-    kernel's findings (``Partition.stale``). A required choice (a FIFO's depth) stays open."""
+@dataclass(frozen=True)
+class CutChoices:
+    """What the cut did to a body's choices (``baseline_choices``), by dotted key: the
+    stored choices the bind dropped as stale, each a value outside its domain, with the
+    kernel's findings (``stale``: a kernel's stays open, for a strategy to set, and
+    emission refuses it until one does; a channel's is derived again by the interim
+    channel rule); the kernel choices it set by conversion's policies, left open by a body
+    that never went through conversion (``late``: one ``choice-converted-late`` finding
+    each, naming the value); and the choices it could set no value for, left open
+    (``unset``: why, ``choice-no-valid-value`` or the change's refusal)."""
+
+    stale: Mapping[str, tuple[Finding, ...]]
+    late: Mapping[str, tuple[Finding, ...]]
+    unset: Mapping[str, tuple[Finding, ...]]
+
+
+def _late(key: str, value: object) -> Finding:
+    return Finding(
+        FindingKind.LIMITATION,
+        "choice-converted-late",
+        key,
+        f"left open by a body that never went through conversion: set at the cut to "
+        f"{value!r} by conversion's policy",
+        (("value", value),) if type(value) in (bool, int, float, str) else (),
+    )
+
+
+def baseline_choices(model: ModelWrapper) -> CutChoices:
+    """The cut's choices of a partition's body, ``model``, persisted, each owner's whole
+    (``persist``), on the network of its KernelOps bound in its shell (``in_shell``), their
+    stored choices set as it binds (a value outside its domain dropped as stale):
+
+    1. each kernel choice the body leaves open, in play and not required, that the bind
+       did not drop, set once by conversion's policies on its kernel
+       (``finn.kernels.defaults.defaulted``): a body never converted for it (one made by
+       hand), reported (``CutChoices.late``); the channels reading it are rebuilt;
+    2. **interim**, until the ends pass: each channel's open choices in play that are not
+       required set to their first valid values (``interim_channel_defaults``), each
+       channel in rank order (a channel created here has both its ends only in the
+       network). A required choice (a FIFO's depth) stays open for a strategy.
+
+    Returns what it dropped, set late and could not set (``CutChoices``)."""
     bound = in_shell(model, model.graph.node)
-    baselined = Seam(read_target(model).platform).baseline(bound)
-    persist(model, baselined)
-    return dict(bound.stale)
+    stale = dict(bound.stale)
+    unset: dict[str, tuple[Finding, ...]] = {}
+    late: dict[Key, object] = {}
+    for name in bound.kernels:
+        point = bound.member(name)
+        dropped = {key for owner, key in bound.dropped if owner == name}
+        done = defaulted(point, kept=dropped)
+        if isinstance(done, tuple):
+            # A kernel refused on its facts is emission's to name; a choice no value can be
+            # set for is reported.
+            unset |= {
+                dotted((name, finding.owner)): (finding,)
+                for finding in done
+                if finding.code == "choice-no-valid-value"
+            }
+            continue
+        before = chosen(point)
+        late |= {(name, key): value for key, value in chosen(done).items() if key not in before}
+    if late:
+        trial = bound.trial(late, check=False)
+        if trial.accepted:
+            bound = trial.network
+        else:
+            unset |= {dotted(key): found for key, found in trial.refused.items()}
+            late = {}
+    for name in bound.channels:
+        if bound.unbound(name) is not None:
+            continue
+        point = bound.member(name)
+        done = interim_channel_defaults(point)
+        if isinstance(done, tuple):
+            unset |= {dotted((name, finding.owner)): (finding,) for finding in done}
+            continue
+        before = chosen(point)
+        values = {(name, key): value for key, value in chosen(done).items() if key not in before}
+        if not values:
+            continue
+        trial = bound.trial(values, check=False)
+        if trial.accepted:
+            bound = trial.network
+        else:
+            unset |= {dotted(key): found for key, found in trial.refused.items()}
+    persist(model, bound)
+    return CutChoices(
+        stale,
+        {dotted(key): (_late(dotted(key), value),) for key, value in late.items()},
+        unset,
+    )
 
 
 __all__ = [
     "Configured",
+    "CutChoices",
     "InShell",
     "ShellResources",
     "baseline_choices",
