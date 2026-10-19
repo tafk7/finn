@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from threading import RLock
-from typing import Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Generic, TypeVar, cast
 
 from ._configuration import Space
 from ._linker import link_space
@@ -40,6 +40,9 @@ from .errors import DefinitionError, RequestError
 from .ir import LinkedModel
 from .references import ValueHandle, resolve_decision, resolve_reference
 
+if TYPE_CHECKING:
+    from ._world import Evaluator
+
 _OWNER = "space.compiler"
 
 S = TypeVar("S", bound=Space)
@@ -48,14 +51,22 @@ S = TypeVar("S", bound=Space)
 @dataclass(frozen=True, slots=True)
 class Model(Generic[S]):
     """A compiled declaration: its structure, with no inputs or choices. What is read
-    of its structure alone (inspection's Decisions below a scope, the runtime's
-    selector case of each case guard) is kept with it (``_read``)."""
+    of its structure alone (inspection's Decisions below a scope) is kept with it
+    (``_read``). Its ``evaluator`` is what every configuration of it shares: what each
+    ``self`` method may read, inferred from its source when the model is made, the memo
+    of authored functions, and the model's lock (``_world.Evaluator``)."""
 
     space_type: type[S]
     linked: LinkedModel
     _read: dict[tuple[str, int], object] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
+    evaluator: Evaluator = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        from ._world import Evaluator
+
+        object.__setattr__(self, "evaluator", Evaluator(cast("Model[Space]", self)))
 
     def resolve(self, scope: int, reference: object) -> int:
         """Resolve a declaration in this exact scope without consulting its class."""

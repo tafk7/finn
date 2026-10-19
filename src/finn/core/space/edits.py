@@ -47,7 +47,7 @@ class ChangeOutcome:
 
     owner: str
     result: QueryResult[bool]
-    status: Literal["unchanged", "admissible", "refused", "changed", "removed"]
+    status: Literal["unchanged", "admissible", "checked", "refused", "changed", "removed"]
     requested: bool = True
     unchecked: bool = False
 

@@ -33,7 +33,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import CodeType, MappingProxyType
 
-from .ir import LinkedModel, NodeId
+from .ir import Argument, LinkedModel, NodeId
 
 # A path from a receiver: the attribute names read in order (``self.x.contract``).
 Path = tuple[str, ...]
@@ -46,11 +46,14 @@ class ModelReads:
     ``methods``: each ``self`` method's possible reads (``None``: dynamic, anything of its
     Space). ``unresolved``: paths a method reads that name nothing compiled (a class
     constant, an attribute of a value), kept as a diagnostic. ``existence``: each guarded
-    node's existence guards, innermost first (a node with no guard has none)."""
+    node's existence guards, innermost first (a node with no guard has none). ``cases``:
+    each guard that holds where a selector is one of its cases (a candidate's
+    selection), with that selector and case."""
 
     methods: Mapping[NodeId, frozenset[NodeId] | None]
     unresolved: Mapping[NodeId, tuple[str, ...]]
     existence: Mapping[NodeId, tuple[NodeId, ...]]
+    cases: Mapping[NodeId, tuple[NodeId, str]] = field(default_factory=dict)
 
     def guards(self, node: NodeId) -> tuple[NodeId, ...]:
         """The guards deciding whether ``node`` exists, innermost first."""
@@ -462,9 +465,27 @@ def existence_guards(linked: LinkedModel, node: NodeId) -> tuple[NodeId, ...]:
     return tuple(found)
 
 
+def case_guards(linked: LinkedModel) -> dict[NodeId, tuple[NodeId, str]]:
+    """Each guard that holds where a selector is one of its cases (the node a case's scope
+    is guarded by, directly or under its ``when``: it reads the selector alone), with
+    that selector and case."""
+    found: dict[NodeId, tuple[NodeId, str]] = {}
+    for choice in linked.choices:
+        selected = (Argument("selected", choice.selector),)
+        for case, scope in choice.cases:
+            guard = None if scope is None else linked.scopes[scope].guard
+            while guard is not None:
+                node = linked.nodes[guard]
+                if node.kind == "derived" and node.arguments == selected:
+                    found[guard] = (choice.selector, case)
+                    break
+                guard = node.guard
+    return found
+
+
 def infer(linked: LinkedModel) -> ModelReads:
-    """What every ``self`` method of ``linked`` may read, and every node's existence
-    guards."""
+    """What every ``self`` method of ``linked`` may read, every node's existence guards,
+    and which of them are a selector's cases."""
     inference = _Inference(linked)
     methods: dict[NodeId, frozenset[NodeId] | None] = {}
     unresolved: dict[NodeId, tuple[str, ...]] = {}
@@ -480,7 +501,10 @@ def infer(linked: LinkedModel) -> ModelReads:
         if missing:
             unresolved[node.index] = tuple(dict.fromkeys(missing))
     return ModelReads(
-        MappingProxyType(methods), MappingProxyType(unresolved), MappingProxyType(existence)
+        MappingProxyType(methods),
+        MappingProxyType(unresolved),
+        MappingProxyType(existence),
+        MappingProxyType(case_guards(linked)),
     )
 
 
@@ -501,4 +525,4 @@ def summary(linked: LinkedModel, reads: ModelReads) -> dict[str, object]:
     }
 
 
-__all__ = ["ModelReads", "Path", "existence_guards", "infer", "summary"]
+__all__ = ["ModelReads", "Path", "case_guards", "existence_guards", "infer", "summary"]

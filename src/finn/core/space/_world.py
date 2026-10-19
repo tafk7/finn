@@ -32,9 +32,11 @@ the run evaluates the deep node first, then again what it abandoned: authored
 functions are pure, so one run again answers the same (it may start more than once;
 it completes once).
 
-Only its own tests evaluate through it yet: the configuration's reads, changes and
-inspection still run on ``_runtime``, and ``occurrence`` routes a receiver's reads here
-only for the methods this core runs.
+A configuration (``_state.State``) is its facts and stored choices and the world they
+read in; a change makes the world of the configuration it would publish from its
+receiver's (``_assign``). A chain of such worlds is kept short: a world published
+``FLATTEN`` changes from its oldest ancestor takes every entry of its ancestors that
+read nothing it reads otherwise, and stands alone (``World.flatten``).
 """
 
 from __future__ import annotations
@@ -106,6 +108,9 @@ _INAPPLICABLE = Inapplicable()
 # How many evaluations deep a run goes on the Python stack before the depth guard
 # unwinds it. Each level through a method's read takes about a dozen Python frames.
 DEPTH = 32
+
+# How many worlds a chain of changes may stack before the newest is flattened.
+FLATTEN = 8
 
 # The nodes that read their own bit (a fact, a choice): they are never cut early.
 _OWN_BIT: frozenset[NodeKind] = frozenset(("param", "decision"))
@@ -233,10 +238,10 @@ class World:
     ``facts`` and ``stored`` (dormant choices included) by node; ``values``: one answer
     object per fact and stored value, shared with the parent for what did not change;
     ``parent`` and ``delta``: the world this one takes entries from, and the bits of the
-    choices and facts it reads otherwise; ``cache``: the entries found here (only ever
-    added to)."""
+    choices and facts it reads otherwise; ``depth``: how many worlds stand above it;
+    ``cache``: the entries found here (only ever added to)."""
 
-    __slots__ = ("evaluator", "facts", "stored", "values", "parent", "delta", "cache")
+    __slots__ = ("evaluator", "facts", "stored", "values", "parent", "delta", "depth", "cache")
 
     def __init__(
         self,
@@ -253,6 +258,7 @@ class World:
         self.values = values
         self.parent = parent
         self.delta = delta
+        self.depth: int = 0 if parent is None else parent.depth + 1
         self.cache: dict[NodeId, Entry] = {}
 
     @classmethod
@@ -292,7 +298,32 @@ class World:
                         del values[node]
         return World(evaluator, new_facts, new_stored, values, self, delta)
 
+    def flatten(self) -> None:
+        """Stand alone: take every entry of the worlds above this one that read nothing
+        this world reads otherwise (nearest first), and drop them, so a chain of worlds
+        made change after change stays short and a lookup never walks far. Only a world
+        nothing has made a successor of yet is flattened (its own entries stay)."""
+        with self.evaluator.lock:
+            reached = 0
+            world: World = self
+            cache = self.cache
+            while world.parent is not None:
+                reached |= world.delta
+                for node, entry in world.parent.cache.items():
+                    if not entry.reads & reached:
+                        cache.setdefault(node, entry)
+                world = world.parent
+            self.parent = None
+            self.delta = 0
+            self.depth = 0
+
     # -- evaluation ----------------------------------------------------------------------
+
+    def run(self, demand: Callable[[], T]) -> T:
+        """``demand`` as one driver demand on this world's model: under the model's lock,
+        its evaluations (``World._get``) in one run. A failure is raised as
+        ``NativeEvaluationError`` (or as its cancellation)."""
+        return _drive(self.evaluator, demand)
 
     def entry(self, node: NodeId) -> Entry:
         """``node``'s entry in this world: the one way to evaluate, from a driver. A
@@ -491,7 +522,7 @@ def _clone(node: Node, value: object, *, owner: str, role: str) -> object:
 
 def public_value(node: Node, answer: Available[object]) -> object:
     """A value as a reader receives it: detached from the entry by its semantics (a
-    validity's verdict is an immutable bool)."""
+    validity's answer is an immutable bool)."""
     if node.kind == "validity" and type(answer.value) is bool:
         return answer.value
     return _clone(node, answer.value, owner=node.owner, role="public value snapshot")
@@ -523,14 +554,15 @@ def _input_missing(node: Node) -> Unresolved:
     )
 
 
-def _inputs_absent(node: Node, absent: list[str]) -> Unresolved:
-    """A present choice's domain whose input does not apply: membership cannot be
-    decided (inputs exist under the choice's own existence guards, so this needs an
-    input guarded by something else)."""
-    return Unresolved(
+def _inputs_absent(node: Node, absent: list[str]) -> Rejected:
+    """A present choice's domain whose input does not apply: the input does not exist
+    for these facts (inputs under the choice's own existence guards are present whenever
+    it is, so it sits under a guard over facts that is false), and nothing the
+    configuration could set would make the domain: refused, naming each input."""
+    return Rejected(
         tuple(
             Finding(
-                FindingKind.BLOCKER,
+                FindingKind.REJECTION,
                 "domain-input-absent",
                 node.owner,
                 "an input of the domain does not apply where the choice is present",
@@ -1352,6 +1384,57 @@ def listed_values(world: World, node: NodeId) -> QueryResult[object]:
     return _drive(world.evaluator, lambda: _listed(world, spec, [], 0)[0])
 
 
+def type_check(world: World, node: NodeId, value: Available[object]) -> QueryResult[object]:
+    """Whether a choice's domain holds ``value``, its inputs read in ``world``, from a
+    driver: ``Available(True)``; refused outside the domain, or through an input refusing
+    or not applying; unresolved while an input waits (a missing fact)."""
+    spec = world.evaluator.nodes[node]
+    if spec.domain is None:
+        return Available(True)
+    return _drive(world.evaluator, lambda: _type_check(world, spec, value, [], 0)[0])
+
+
+def _enumerated(world: World, node: Node) -> QueryResult[object]:
+    """A choice's enumeration as its domain gives it (``Available(None)``: membership
+    only), under its guard: inapplicable where the choice is absent, the guard's answer
+    while it waits or is refused (memoized on the inputs' answers)."""
+    domain, semantics = node.domain, node.semantics
+    if domain is None or semantics is None:
+        raise EvaluationError(node.owner, "domain enumeration", "reference has no domain")
+    if node.guard is not None:
+        inactive = _guard_result(node, world._get(node.guard).result)
+        if inactive is not None:
+            return inactive
+    answers, blocked, _ = _domain_inputs(world, node, [], 0)
+    if blocked is not None:
+        return blocked
+    if domain.candidates is None:
+        return Available(None)
+    evaluator = world.evaluator
+    held = evaluator.memo.explicit(node.index, "enumeration", answers)
+    if held is not None:
+        evaluator.counters.hit("domain enumeration")
+        return held.outcome.result
+    evaluator.counters.call("domain enumeration")
+    enumerated = _authored(
+        world,
+        Call(node.owner, "domain enumeration"),
+        domain.enumerate,
+        (_domain_values(world, node, answers),),
+        {"semantics": semantics, "owner": node.owner},
+    )
+    result = cast(QueryResult[object], cast(_Returned, enumerated).value)
+    evaluator.memo.keep_explicit(node.index, "enumeration", answers, Called(result))
+    return result
+
+
+def enumeration(world: World, node: NodeId) -> QueryResult[object]:
+    """A choice's enumerated values in ``world`` (``Available(None)``: membership only),
+    from a driver: the domain's enumeration, each value still to pass membership."""
+    spec = world.evaluator.nodes[node]
+    return _drive(world.evaluator, lambda: _enumerated(world, spec))
+
+
 _FRAMES: Mapping[NodeKind, Callable[[World, Node, _Trace, ReadSet], Entry]] = {
     "param": _param,
     "const": _const,
@@ -1369,12 +1452,16 @@ _FRAMES: Mapping[NodeKind, Callable[[World, Node, _Trace, ReadSet], Entry]] = {
 
 
 __all__ = [
+    "DEPTH",
+    "FLATTEN",
     "Called",
     "Entry",
     "Evaluator",
     "MethodReader",
     "World",
+    "enumeration",
     "listed_values",
     "public_value",
     "receiver",
+    "type_check",
 ]

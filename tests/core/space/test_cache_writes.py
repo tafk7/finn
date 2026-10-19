@@ -33,6 +33,7 @@ SETDEFAULT_SITES = {
     ("_runtime.py", "publish"): "a trial's evaluations, given to the successor: the checking dict",
     ("_forcing.py", "_publish"): "forcing's last copy, given to its snapshot: the checking dict",
     ("_world.py", "_get"): "the evaluation core's world: the first entry is kept (only added to)",
+    ("_world.py", "flatten"): "a world standing alone takes its ancestors' entries it lacks",
 }
 # The function that gives a snapshot its cache.
 CACHE_SETTERS = {("_runtime.py", "inherit")}
