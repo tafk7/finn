@@ -239,22 +239,27 @@ def _decision_info(
 
 
 def decisions(subject: Space | Model[S] | type[Space]) -> tuple[DecisionInfo[object], ...]:
-    """Discover all owning decisions below this scope, including inactive cases, sorted
-    by key. Read once per compiled model and scope."""
+    """Discover all owning decisions below this scope, including inactive cases, in the
+    flow order (``_flow``). Read once per compiled model and scope."""
 
     compiled, scope = _context(subject)
     found = compiled._read.get(("decisions", scope))
     if found is None:
-        included = _scope_set(compiled.linked, scope)
-        result = (
-            _decision_info(compiled.linked, index)
-            for index in compiled.linked.decisions
-            if compiled.linked.nodes[index].scope in included
-        )
         found = compiled._read[("decisions", scope)] = tuple(
-            sorted(result, key=lambda item: item.key)
+            _decision_info(compiled.linked, index) for index in _flow(compiled, scope)
         )
     return cast(tuple[DecisionInfo[object], ...], found)
+
+
+def _flow(compiled: Model[Space], scope: int) -> tuple[NodeId, ...]:
+    """The choices below ``scope`` in the flow order: each after every choice its
+    presence, its list or its Space's facts read (a selector before the choices its cases
+    hold), ties in declaration order (``_reads.flow_order``)."""
+    linked = compiled.linked
+    included = _scope_set(linked, scope)
+    return tuple(
+        index for index in compiled.evaluator.flow() if linked.nodes[index].scope in included
+    )
 
 
 @overload
@@ -614,17 +619,16 @@ ChoiceState: TypeAlias = Set | Waiting | Dormant | Open | Absent
 
 
 def states(point: Space) -> tuple[tuple[str, ChoiceState], ...]:
-    """Every choice below this scope, by key, with its state, in rank order (a selector
-    before the choices its cases hold)."""
+    """Every choice below this scope, by key, with its state, in the flow order (each
+    after every choice its presence, its list or its Space's facts read: a selector before
+    the choices its cases hold)."""
     driver_only("choice states")
     current = state(point)
-    linked = current.linked
-    included = _scope_set(linked, point._scope)
-    indices = sorted(
-        (index for index in linked.decisions if linked.nodes[index].scope in included),
-        key=linked.ranks.__getitem__,
+    nodes = current.linked.nodes
+    return tuple(
+        (nodes[index].key, _state_of(current, index))
+        for index in _flow(current.model, point._scope)
     )
-    return tuple((linked.nodes[index].key, _state_of(current, index)) for index in indices)
 
 
 def _state_of(current: State, index: NodeId) -> ChoiceState:

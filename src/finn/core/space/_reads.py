@@ -33,9 +33,11 @@ import inspect
 import textwrap
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from heapq import heapify, heappop, heappush
 from types import CodeType, MappingProxyType
 from typing import cast
 
+from .declarations import Param
 from .errors import DefinitionError
 from .ir import Argument, LinkedModel, NodeId
 
@@ -671,6 +673,166 @@ def presence_readers(
     return {source: tuple(found) for source, found in readers.items()}
 
 
+@dataclass(frozen=True, slots=True)
+class Flow:
+    """The model's choices in the flow order (``order``), and its loops (``loops``: each
+    set of choices reading one another, in declaration order)."""
+
+    order: tuple[NodeId, ...]
+    loops: tuple[tuple[NodeId, ...], ...]
+
+
+def flow_order(linked: LinkedModel, reads: ModelReads) -> Flow:
+    """The choices in the **flow order**: each after every choice its presence, its list
+    or its Space's facts read, ties in declaration order (``LinkedModel.decisions``: a
+    Space's own choices in the order it declares them, before those of the Spaces it
+    places). An enclosing selector comes before the choices in its cases: their presence
+    reads it.
+
+    What a choice reads so (``_Upstream``) is followed from its existence guards, its
+    domain's inputs and the formals of its scope and of every enclosing one, through
+    every value each may read, to the first choice on each way. Kahn's algorithm orders
+    the choices by those reads, the next ready choice the first declared. Choices that
+    read one another (a loop) are taken as one, where the first of them declared would
+    be, and in declaration order among themselves."""
+    decisions = linked.decisions
+    ranks = {decision: position for position, decision in enumerate(decisions)}
+    upstream = _Upstream(linked, reads)
+    reading = {decision: upstream(decision) for decision in decisions}
+    loops = _loops(decisions, reading, ranks)
+    unit = {member: loop[0] for loop in loops for member in loop}
+    members = {loop[0]: loop for loop in loops}
+    # The graph over units (a loop's first member stands for it): each unit's readers,
+    # and how many units it waits on.
+    readers: dict[NodeId, set[NodeId]] = {}
+    waiting: dict[NodeId, set[NodeId]] = {}
+    for decision in decisions:
+        own = unit.get(decision, decision)
+        waits = waiting.setdefault(own, set())
+        for source in reading[decision]:
+            source = unit.get(source, source)
+            if source != own:
+                waits.add(source)
+                readers.setdefault(source, set()).add(own)
+    count = {node: len(waits) for node, waits in waiting.items()}
+    ready = [(ranks[node], node) for node, waits in count.items() if not waits]
+    heapify(ready)
+    order: list[NodeId] = []
+    while ready:
+        _, node = heappop(ready)
+        order.extend(members.get(node, (node,)))
+        for reader in readers.get(node, ()):
+            count[reader] -= 1
+            if not count[reader]:
+                heappush(ready, (ranks[reader], reader))
+    return Flow(tuple(order), loops)
+
+
+class _Upstream:
+    """What each choice's presence, list and Space's facts read: the first choices on
+    every way back from its existence guards, its domain's inputs and its scopes' formals
+    (a scope's formals' choices found once, for every choice below it). A way ends at a
+    choice, at a fact and at a Space's validity (a view's Space is not followed). A
+    dynamic method's reads are not known: it adds none."""
+
+    def __init__(self, linked: LinkedModel, reads: ModelReads) -> None:
+        self.linked = linked
+        self.reads = reads
+        self.scopes: dict[int, frozenset[NodeId]] = {}
+
+    def __call__(self, decision: NodeId) -> frozenset[NodeId]:
+        node = self.linked.nodes[decision]
+        found = self.reached((*self.reads.guards(decision), *self.inputs(node.domain_arguments)))
+        return (found | self.formals(node.scope)) - {decision}
+
+    @staticmethod
+    def inputs(arguments: tuple[Argument, ...]) -> tuple[NodeId, ...]:
+        return tuple(argument.node for argument in arguments)
+
+    def formals(self, scope: int) -> frozenset[NodeId]:
+        """The choices the formals of ``scope`` and of every enclosing scope read."""
+        found = self.scopes.get(scope)
+        if found is None:
+            held = self.linked.scopes[scope]
+            own = self.reached(
+                tuple(index for member, index in held.members.items() if isinstance(member, Param))
+            )
+            outer = frozenset() if held.parent is None else self.formals(held.parent)
+            found = self.scopes[scope] = own | outer
+        return found
+
+    def reached(self, starts: tuple[NodeId, ...]) -> frozenset[NodeId]:
+        nodes, methods = self.linked.nodes, self.reads.methods
+        found: set[NodeId] = set()
+        seen: set[NodeId] = set()
+        pending = list(starts)
+        while pending:
+            index = pending.pop()
+            if index in seen:
+                continue
+            seen.add(index)
+            current = nodes[index]
+            if current.kind == "decision":
+                found.add(index)
+                continue
+            if current.kind in ("param", "validity"):
+                continue
+            pending.extend(current.dependencies)
+            pending.extend(source for _, source in current.via)
+            if current.call_style == "self" and current.function is not None:
+                pending.extend(methods.get(index) or ())
+        return frozenset(found)
+
+
+def _loops(
+    decisions: tuple[NodeId, ...],
+    reading: Mapping[NodeId, frozenset[NodeId]],
+    ranks: Mapping[NodeId, int],
+) -> tuple[tuple[NodeId, ...], ...]:
+    """The sets of choices that read one another (strongly connected, more than one), each
+    in declaration order (``ranks``), the sets by their first member's (Tarjan's
+    algorithm, without recursion)."""
+    index: dict[NodeId, int] = {}
+    low: dict[NodeId, int] = {}
+    stack: list[NodeId] = []
+    on_stack: set[NodeId] = set()
+    found: list[tuple[NodeId, ...]] = []
+    for root in decisions:
+        if root in index:
+            continue
+        index[root] = low[root] = len(index)
+        stack.append(root)
+        on_stack.add(root)
+        frames = [(root, iter(sorted(reading[root])))]
+        while frames:
+            node, sources = frames[-1]
+            source = next(sources, None)
+            if source is not None:
+                if source not in index:
+                    index[source] = low[source] = len(index)
+                    stack.append(source)
+                    on_stack.add(source)
+                    frames.append((source, iter(sorted(reading[source]))))
+                elif source in on_stack:
+                    low[node] = min(low[node], index[source])
+                continue
+            frames.pop()
+            if frames:
+                parent = frames[-1][0]
+                low[parent] = min(low[parent], low[node])
+            if low[node] == index[node]:
+                component: list[NodeId] = []
+                while True:
+                    member = stack.pop()
+                    on_stack.discard(member)
+                    component.append(member)
+                    if member == node:
+                        break
+                if len(component) > 1:
+                    found.append(tuple(sorted(component, key=ranks.__getitem__)))
+    return tuple(sorted(found, key=lambda loop: ranks[loop[0]]))
+
+
 def infer(linked: LinkedModel) -> ModelReads:
     """What every ``self`` method of ``linked`` may read, every node's existence guards,
     and which of them are a selector's cases."""
@@ -714,11 +876,13 @@ def summary(linked: LinkedModel, reads: ModelReads) -> dict[str, object]:
 
 
 __all__ = [
+    "Flow",
     "ModelReads",
     "Path",
     "case_guards",
     "check_domains",
     "existence_guards",
+    "flow_order",
     "infer",
     "presence_readers",
     "summary",

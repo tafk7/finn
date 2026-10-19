@@ -32,6 +32,7 @@ from finn.core.space import Available, Unresolved, inspection
 from finn.dataflow.gemm import Form
 from finn.dataflow.plan import Step
 from finn.dataflow.traversal import Traversal
+from finn.kernels.matmul import MatMulKernel
 
 FACTS = dict(
     m=2,
@@ -62,6 +63,14 @@ def point(core="int8_dsp58", **facts):
 
 def parameters(module, label):
     return dict(placed(module, label).parameters)
+
+
+def test_the_realization_comes_before_the_cores_choices():
+    """The cores' facts read the realization (the datapath it gives them): in the flow
+    order it comes before their choices, and, declared first, before ``compute`` too."""
+    keys = [item.key for item in inspection.decisions(MatMulKernel)]
+    assert keys[:2] == ["realization", "compute"]
+    assert all(key.startswith("compute.") for key in keys[2:])
 
 
 def test_depthwise_rows_pass_once_with_a_frame_per_window():

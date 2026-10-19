@@ -44,7 +44,6 @@ from __future__ import annotations
 import atexit
 import json
 import os
-from bisect import bisect_left
 from collections import Counter
 from collections.abc import Callable, Collection, Hashable, Iterator, Mapping
 from contextlib import contextmanager
@@ -129,11 +128,9 @@ def rejection(code: str, owner: str, message: str) -> tuple[Finding, ...]:
 
 
 def decision(subject: Space | type[Space], key: str) -> inspection.DecisionInfo[object] | None:
-    """The Decision ``key`` of a point or a Space class, or None: found in the engine's
-    table of its compiled model, sorted by key."""
-    found = inspection.decisions(subject)
-    at = bisect_left(found, key, key=lambda item: item.key)
-    return found[at] if at < len(found) and found[at].key == key else None
+    """The Decision ``key`` of a point or a Space class, or None: found by its key in the
+    engine's table of its compiled model."""
+    return next((item for item in inspection.decisions(subject) if item.key == key), None)
 
 
 def _refusals(point: Space, report: Any, keys: Collection[str]) -> dict[str, tuple[Finding, ...]]:

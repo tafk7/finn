@@ -302,7 +302,7 @@ class KernelOp(CustomOp):
     @classmethod
     def schema(cls) -> dict[str, tuple[str, tuple[str, ...]]]:
         """The choice attributes: name -> (ONNX type, a selector's cases), its kernel
-        class's decision keys, in key order."""
+        class's decision keys, in the flow order (``inspection.decisions``)."""
         return {
             item.key: (ONNX_TYPES[value_type(item)], item.cases if item.selector else ())
             for item in inspection.decisions(cls.kernel)

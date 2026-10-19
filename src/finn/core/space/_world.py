@@ -61,6 +61,7 @@ from threading import RLock
 from typing import TYPE_CHECKING, TypeAlias, TypeVar, cast
 
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.reporting.manifest import note
 
 from ._collapse import guard_implies
 from ._configuration import Space
@@ -82,7 +83,7 @@ from ._failure import (
 )
 from ._memo import BitTable, Counters, Kept, Key, Memo, ReadSet, Trace
 from ._nodes import NodeDecl, unwrap
-from ._reads import ModelReads, infer, presence_readers
+from ._reads import ModelReads, flow_order, infer, presence_readers
 from .declarations import Param, declared_path
 from .errors import EvaluationError, RequestError, ValueUnavailableError
 from .graph import Located
@@ -181,9 +182,9 @@ class Called:
 
 class Evaluator:
     """What every world of one model shares: its structure and its methods' inferred
-    reads, the bit table, the memo of authored functions, the work counters, and the
-    model's lock (worlds share their parents' entries and the memo, so evaluation of
-    one model is serialized)."""
+    reads, the order its choices flow in, the bit table, the memo of authored functions,
+    the work counters, and the model's lock (worlds share their parents' entries and the
+    memo, so evaluation of one model is serialized)."""
 
     __slots__ = (
         "model",
@@ -196,6 +197,7 @@ class Evaluator:
         "lock",
         "run",
         "_presence",
+        "_flow",
     )
 
     def __init__(self, model: Model[Space]) -> None:
@@ -210,6 +212,29 @@ class Evaluator:
         # The run in progress (under the lock), if any.
         self.run: _Run | None = None
         self._presence: Mapping[NodeId, tuple[NodeId, ...]] | None = None
+        self._flow: tuple[NodeId, ...] | None = None
+
+    def flow(self) -> tuple[NodeId, ...]:
+        """The model's choices in the flow order (found once per model, on first use:
+        ``_reads.flow_order``). Each loop in it is noted, a finding stated without
+        refusing (``flow-loop``): its choices are taken in declaration order."""
+        with self.lock:
+            if self._flow is None:
+                found = flow_order(self.linked, self.reads)
+                for loop in found.loops:
+                    keys = tuple(self.nodes[index].key for index in loop)
+                    note(
+                        Finding(
+                            FindingKind.LIMITATION,
+                            "flow-loop",
+                            keys[0],
+                            "choices whose presence, list or facts read one another: taken "
+                            "in declaration order",
+                            details=(("choices", keys),),
+                        )
+                    )
+                self._flow = found.order
+            return self._flow
 
     def presence_readers(self, source: NodeId) -> tuple[NodeId, ...]:
         """The choices whose presence may read the choice or fact ``source`` (found once
