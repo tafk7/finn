@@ -86,6 +86,7 @@ from finn.kernels.artifacts.module import (
     Module,
 )
 from finn.kernels.control import CONTROL, presented
+from finn.kernels.defaults import Fixed, stated_defaults
 from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import RESOURCES_SEMANTICS, total
 from finn.platform.capabilities import Resources
@@ -248,13 +249,18 @@ def _inputs(pin: Pin) -> tuple[str, ...]:
 
 class Kernel(Space):
     """A named Space class configuring hardware: a ``LeafKernel`` or a ``ComposedKernel``
-    (the module docstring)."""
+    (the module docstring). ``defaults`` fixes the default of a choice it declares, by its
+    key (``finn.kernels.defaults``): every other choice is first valid, but a required one,
+    which has none."""
 
     id: ClassVar[str] = ""
     version: ClassVar[int] = 1
+    defaults: ClassVar[Mapping[str, Fixed]] = {}
 
     def __init_subclass__(cls, *, protocol: bool = False, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
+        if "defaults" in vars(cls):
+            stated_defaults(cls, cls.defaults)
         if protocol:
             return  # one of the two bases
         if type(cls.id) is not str or not cls.id:
