@@ -22,8 +22,8 @@ from qonnx.core.datatype import DataType
 from support.conformance import (
     KERNEL,
     Sample,
-    _possible,
     _ends,
+    _possible,
     _values,
     _words,
     design_cycles,
