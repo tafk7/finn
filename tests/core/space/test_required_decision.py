@@ -5,7 +5,6 @@ and nothing in the Space's evaluation reads."""
 
 from __future__ import annotations
 
-import pytest
 from support.refusals import refused
 
 from core.space._possible_support import listed, open_now
@@ -61,7 +60,6 @@ def test_inspection_reports_which_decisions_are_required() -> None:
     }
 
 
-@pytest.mark.xfail(strict=True, reason="until P3: inspection.states and viable(point, keys)")
 def test_a_required_decision_evaluates_as_any_other() -> None:
     point = design_space(Core())
     assert listed(point, Core.lanes) == (1, 2, 4)

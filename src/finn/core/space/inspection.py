@@ -1,23 +1,25 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Public metadata, validity and demanded query evidence.
+"""Public metadata, validity, possible values, choice states and demanded query evidence.
 
 Metadata inspection does not invoke evaluators or candidate providers. Validity reads
-a configuration's pieces in its world; explain evaluates one query and follows the
-reads its entries recorded.
+a configuration's pieces in its world; ``viable`` tries each listed value of a choice as a
+change would set it, publishing nothing; ``states`` reads each choice's state; explain
+evaluates one query and follows the reads its entries recorded.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any, Generic, Literal, TypeVar, cast, overload
+from typing import Any, Generic, Literal, TypeAlias, TypeVar, cast, overload
 
+from ._assign import check, placed, tried
 from ._configuration import Space
 from ._failure import driver_only
-from ._state import State, copy_assessment, copy_result, decision_state
-from ._world import Entry, World
+from ._state import State, copy_assessment, copy_result, decision_state, presence
+from ._world import Entry, World, listed_values
 from .compiler import Model, compile_model
 from .declarations import (
     Constraint,
@@ -25,10 +27,11 @@ from .declarations import (
     ValueRef,
     View,
 )
+from .edits import BrokenRule
 from .errors import RequestError
 from .ir import LinkedModel, NodeId, NodeKind
 from .occurrence import candidate as _candidate
-from .occurrence import model_of, state
+from .occurrence import decision_index, model_of, state
 from .references import DecisionHandle, ValueHandle, decision_key
 from .results import (
     Available,
@@ -66,8 +69,9 @@ class DecisionInfo(Generic[T]):
     ``space_type`` is the Space class whose scope declares it (a candidate's, for a
     choice nested under a Decision over nodes); ``ordered``, whether its domain
     states an order of its cases (``Domain.ordered``); ``required``: the Decision
-    has no safe default (``Decision(required=True)``), so setting choices to their
-    first case leaves it open.
+    has no safe value (``Decision(required=True)``): no policy gives it one, a strategy
+    sets it; ``listed``: its domain lists its values (false: it is known by membership
+    only, as a FIFO's depth).
     """
 
     reference: DecisionHandle[T]
@@ -79,6 +83,7 @@ class DecisionInfo(Generic[T]):
     space_type: type[Space] | None = None
     ordered: bool = False
     required: bool = False
+    listed: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +234,7 @@ def _decision_info(
         linked.scopes[node.scope].space_type,
         choice is None and node.domain is not None and node.domain.ordered,
         node.required_choice,
+        node.domain is not None and node.domain.candidates is not None,
     )
 
 
@@ -478,6 +484,168 @@ def _validity_of(current: State, scope: int) -> Validity:
     return world.run(walk)
 
 
+# -- which values are possible --------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Possible:
+    """A value nothing refuses: setting it alone is accepted. ``dormant``, ``in_play`` and
+    ``opened``: the stored choices it would put out of play, those it would bring into
+    play, and the open choices it would bring into presence, by key."""
+
+    value: object
+    dormant: tuple[str, ...] = ()
+    in_play: tuple[str, ...] = ()
+    opened: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Refused:
+    """A value whose setting alone would break a rule: each rule, at its origin, with the
+    stored choices standing in its way (none where the value and the facts alone break
+    it)."""
+
+    value: object
+    broken: tuple[BrokenRule, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Viable:
+    """One choice's listed values, each possible or refused, in its domain's list order.
+    ``values`` is ``None`` where nothing can be listed: a domain known by membership only,
+    or a list that waits on missing facts (``waits``, by key) or is refused through an
+    input of the domain."""
+
+    key: str
+    values: tuple[Possible | Refused, ...] | None
+    waits: tuple[str, ...] = ()
+
+    @property
+    def cases(self) -> tuple[object, ...]:
+        """The possible values, in list order."""
+        if self.values is None:
+            return ()
+        return tuple(item.value for item in self.values if isinstance(item, Possible))
+
+
+def viable(point: Space, keys: Iterable[object]) -> tuple[Viable, ...]:
+    """Each named choice's listed values (its domain over the facts, listed as if the
+    choice existed), each tried alone as a change would set it, publishing nothing:
+    possible, with what it would move, or refused, with each rule it would break and
+    the stored choices standing in its way. A rule waiting on an open choice does not
+    refuse; the value stored is possible (setting it changes nothing). In the order of
+    ``keys``."""
+    driver_only("possible values")
+    current = state(point)
+    indices = [decision_index(point, key) for key in keys]
+    return tuple(_viable(current, index) for index in indices)
+
+
+def _waits(result: object) -> tuple[str, ...]:
+    """What an unresolved answer waits on: its findings' owners (the open choices and the
+    missing facts), by key."""
+    if not isinstance(result, Unresolved):
+        return ()
+    return tuple(sorted({finding.owner for finding in result.findings}))
+
+
+def _viable(current: State, index: NodeId) -> Viable:
+    linked = current.linked
+    node = linked.nodes[index]
+    listed = listed_values(placed(current.world, index), index)
+    if not isinstance(listed, Available) or listed.value is None:
+        return Viable(node.key, None, _waits(listed))
+    copies = _Copies(current)
+    found: list[Possible | Refused] = []
+    for value in cast(tuple[object, ...], listed.value):
+        trial = tried(current, index, value)
+        public = copies(index, value)
+        if trial.accepted:
+            moved = trial.moved
+            found.append(Possible(public, moved.dormant, moved.in_play, moved.opened))
+        else:
+            found.append(Refused(public, trial.broken))
+    return Viable(node.key, tuple(found))
+
+
+# -- every choice's state --------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Set:
+    """Stored and in play: it reads as its value."""
+
+    value: object
+
+
+@dataclass(frozen=True, slots=True)
+class Waiting:
+    """Stored, never read as a value: its presence is unknown, or its domain waits on a
+    missing fact. ``waits``: what it waits on (open choices, missing facts), by key."""
+
+    value: object
+    waits: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Dormant:
+    """Stored, out of play: its scope is absent (a case not selected, a false guard) or
+    under a guard refused through an input. Kept, and back in play with its scope."""
+
+    value: object
+
+
+@dataclass(frozen=True, slots=True)
+class Open:
+    """Unset, in a scope that is present (``waits`` empty) or whose presence is unknown
+    (``waits``: what that presence waits on, by key). ``required``: no policy gives it a
+    value."""
+
+    waits: tuple[str, ...] = ()
+    required: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class Absent:
+    """Unset, its scope absent or under a guard refused through an input: not in play."""
+
+
+ChoiceState: TypeAlias = Set | Waiting | Dormant | Open | Absent
+
+
+def states(point: Space) -> tuple[tuple[str, ChoiceState], ...]:
+    """Every choice below this scope, by key, with its state, in rank order (a selector
+    before the choices its cases hold)."""
+    driver_only("choice states")
+    current = state(point)
+    linked = current.linked
+    included = _scope_set(linked, point._scope)
+    indices = sorted(
+        (index for index in linked.decisions if linked.nodes[index].scope in included),
+        key=linked.ranks.__getitem__,
+    )
+    return tuple((linked.nodes[index].key, _state_of(current, index)) for index in indices)
+
+
+def _state_of(current: State, index: NodeId) -> ChoiceState:
+    world = current.world
+    node = current.linked.nodes[index]
+    found, guard = presence(world, index)
+    if index not in world.stored:
+        if found == "absent":
+            return Absent()
+        return Open(_waits(guard) if found == "unknown" else (), node.required_choice)
+    value = _Copies(current)(index, world.stored[index])
+    if found == "absent":
+        return Dormant(value)
+    if found == "unknown":
+        # Its presence's waits and its domain's missing facts, never itself.
+        waits = {*_waits(guard), *_waits(check(world, index))}
+        return Waiting(value, tuple(sorted(waits)))
+    read = world.result(index)
+    return Waiting(value, _waits(read)) if isinstance(read, Unresolved) else Set(value)
+
+
 def _evidence(current: State, root: NodeId) -> QueryEvidence[object]:
     """The evidence of ``root``'s query in a configuration (``explain``): each node it
     read, through what each of those read, as the entries' traces record it."""
@@ -568,15 +736,24 @@ def candidate(point: Space, decision: object, case: str) -> Space | None:
 
 
 __all__ = [
+    "Absent",
     "CaseInfo",
     "ChoiceInfo",
+    "ChoiceState",
     "DecisionInfo",
+    "Dormant",
     "EvidenceNode",
     "NodeInfo",
     "ModelStatistics",
+    "Open",
     "Piece",
+    "Possible",
     "QueryEvidence",
+    "Refused",
+    "Set",
     "Validity",
+    "Viable",
+    "Waiting",
     "candidate",
     "choices",
     "decision_handle",
@@ -584,7 +761,9 @@ __all__ = [
     "explain",
     "members",
     "model",
+    "states",
     "statistics",
     "validity",
     "value_handle",
+    "viable",
 ]

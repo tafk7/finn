@@ -434,9 +434,6 @@ def test_the_candidates_validity_fills_in_no_case() -> None:
         assert [finding.code for finding in answer.findings] == ["decision-unassigned"]
 
 
-@pytest.mark.xfail(
-    strict=True, reason="until P3: inspection.viable(point, keys) answers each value"
-)
 def test_the_candidates_validity_refuses_a_case_and_leaves_several_possible() -> None:
     assert possible(design_space(Unit(width=128)), Unit.compute) == ("stub",)
     assert possible(design_space(Unit(width=7)), Unit.compute) == ("packed",)

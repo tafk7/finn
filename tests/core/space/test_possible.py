@@ -36,10 +36,6 @@ from finn.core.space import (
     reject,
 )
 
-until_viable = pytest.mark.xfail(
-    strict=True, reason="until P3: inspection.viable(point, keys) answers each value"
-)
-
 
 def unassigned(answer: object) -> bool:
     return isinstance(answer, Unresolved) and {f.code for f in answer.findings} == {
@@ -61,7 +57,6 @@ def test_one_possible_case_is_not_filled_in() -> None:
     assert committed(point) == {}
 
 
-@until_viable
 def test_one_possible_case_and_why_the_other_is_refused() -> None:
     point = design_space(Unit(width=128))
     assert possible(point, Unit.compute) == ("stub",)
@@ -84,7 +79,6 @@ def test_a_choice_stays_open_whatever_its_possible_values() -> None:
     assert unassigned(design_space(Unit(width=129)).query(Unit.compute))
 
 
-@until_viable
 def test_no_possible_value_is_each_value_refused_naming_its_rule() -> None:
     assert possible(design_space(Unit(width=8)), Unit.compute) == ("packed", "stub")
     neither = design_space(Unit(width=129))
@@ -303,7 +297,6 @@ def test_a_successor_keeps_what_its_change_does_not_reach_whichever_order_declar
             assert got.result(node.index) == want.result(node.index), node.key
 
 
-@until_viable
 def test_a_values_trial_keeps_what_the_value_does_not_reach() -> None:
     """Each value's trial is a world one choice away from the configuration's: a value the
     trials share is derived once, not again in every trial."""
@@ -332,7 +325,6 @@ def test_a_values_trial_keeps_what_the_value_does_not_reach() -> None:
     assert derivations == [128]
 
 
-@until_viable
 def test_viable_answers_each_listed_value_of_each_choice_asked() -> None:
     both = design_space(Unit(width=8))
     assert possible(both, Unit.compute) == ("packed", "stub")

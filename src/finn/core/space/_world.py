@@ -868,20 +868,18 @@ def _choice_piece(
         # unknown piece. What that list read is traced as it answered there, so the piece
         # is found again only where those reads answer the same.
         place = world.membership(piece.index)
-        listed, found = _listed(place, piece, [], 0)
+        listed, found = _lists_a_value(place, piece, [], 0)
         bits = place.evaluator.bits
         trace.extend((source, place._get(source).result) for source in bits.nodes(found))
         reads |= found
         if isinstance(listed, Available):
-            return (None if listed.value != () else waiting), reads
+            return (None if listed.value is not False else waiting), reads
         if isinstance(listed, Unresolved):  # it waits on a missing fact too
             return Unresolved(merged_findings((waiting, listed))), reads
         return waiting, reads
-    listed, reads = _listed(world, piece, trace, reads)
-    known = isinstance(listed, Available)
-    values = cast(Available[tuple[object, ...] | None], listed).value if known else None
-    if known:
-        return (_empty_domain(piece) if values == () else None), reads
+    listed, reads = _lists_a_value(world, piece, trace, reads)
+    if isinstance(listed, Available):
+        return (_empty_domain(piece) if listed.value is False else None), reads
     return cast(QueryResult[bool], listed), reads
 
 
@@ -1492,6 +1490,67 @@ def _listed(
         listed = Available(cast(_Returned, kept).value)
     evaluator.memo.keep_explicit(node.index, "listing", answers, Called(listed))
     return listed, reads
+
+
+def _first_member(
+    domain: Domain[object],
+    values: tuple[object, ...],
+    arguments: Mapping[str, object],
+    *,
+    semantics: ValueSemantics[object],
+    owner: str,
+) -> bool:
+    """Whether a domain's membership holds any of ``values``, asked in list order up to
+    the first it holds."""
+    return any(
+        not isinstance(
+            domain.membership(value, arguments, semantics=semantics, owner=owner), Rejected
+        )
+        for value in values
+    )
+
+
+def _lists_a_value(
+    world: World, node: Node, trace: _Trace, reads: ReadSet
+) -> tuple[QueryResult[object], ReadSet]:
+    """Whether a choice's domain lists a value here: ``Available(True)`` or
+    ``Available(False)`` (``Available(None)``: membership only, nothing is listed), or the
+    non-value its inputs answer. Membership is asked up to the first value it holds (the
+    full list, where it was already made, answers at once); memoized on the domain
+    inputs' answers."""
+    domain, semantics = node.domain, node.semantics
+    assert domain is not None and semantics is not None
+    answers, blocked, reads = _domain_inputs(world, node, trace, reads)
+    if blocked is not None:
+        return blocked, reads
+    if domain.candidates is None:
+        return Available(None), reads
+    evaluator = world.evaluator
+    for purpose in ("listing", "lists a value"):
+        held = evaluator.memo.explicit(node.index, purpose, answers)
+        if held is not None:
+            evaluator.counters.hit("domain listing")
+            found = held.outcome.result
+            if purpose == "listing" and isinstance(found, Available):
+                found = Available(found.value != ())
+            return found, reads
+    enumerated = _enumerate(world, node, answers)
+    result: QueryResult[object] = enumerated
+    if isinstance(enumerated, Available):
+        values = cast(tuple[object, ...], enumerated.value)
+        if domain._finite_values is not None or not values:
+            result = Available(bool(values))
+        else:
+            kept = _authored(
+                world,
+                Call(node.owner, "domain membership"),
+                _first_member,
+                (domain, values, _domain_values(world, node, answers)),
+                {"semantics": semantics, "owner": node.owner},
+            )
+            result = Available(cast(_Returned, kept).value)
+    evaluator.memo.keep_explicit(node.index, "lists a value", answers, Called(result))
+    return result, reads
 
 
 def listed_values(world: World, node: NodeId) -> QueryResult[object]:

@@ -6,7 +6,6 @@ only (their values listed as ``None``), whose values a policy proposes."""
 
 from __future__ import annotations
 
-import pytest
 from support.refusals import refused
 
 from core.space._possible_support import listed, open_now
@@ -55,7 +54,6 @@ def test_ordered_applies_to_listed_values_only() -> None:
         Decision(domain=divisors_of(4), ordered=True)  # type: ignore[call-overload]
 
 
-@pytest.mark.xfail(strict=True, reason="until P3: inspection.states and viable(point, keys)")
 def test_a_decision_known_by_membership_only_is_open_until_committed() -> None:
     point = design_space(Core(width=4))
     assert "buffer.depth" in open_now(point)

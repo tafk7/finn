@@ -216,9 +216,12 @@ def assign(
     current: State,
     facts: Mapping[NodeId, object],
     requests: Sequence[Change[object]],
+    *,
+    trial: bool = False,
 ) -> Assigned:
     """The change of ``facts`` (by root formal) and ``requests`` (in the caller's order)
-    from ``current``, under the model's lock."""
+    from ``current``, under the model's lock. A ``trial`` publishes nothing: the
+    configuration it would publish is answered, its world left as made."""
     linked = current.linked
     nodes = linked.nodes
     normalized = normalize(current, requests)
@@ -325,7 +328,7 @@ def assign(
             )
             return Assigned(None, refused_outcomes, broken)
         moved = _moved(current.world, world, sources)
-        if world.depth > FLATTEN:
+        if world.depth > FLATTEN and not trial:
             world.flatten()
         published = [
             ChangeOutcome(
@@ -344,6 +347,13 @@ def assign(
                 ChangeOutcome(nodes[index].owner, checks.get(index, Available(True)), final)
             )
         return Assigned(State(current.model, world), tuple(published), (), moved)
+
+
+def tried(current: State, index: NodeId, value: object) -> Assigned:
+    """The choice ``index`` set to ``value`` alone, from ``current``, as a change would set
+    it, publishing nothing: one value's trial (``inspection.viable``)."""
+    node = current.linked.nodes[index]
+    return assign(current, {}, (Change(current, node.scope, index, value),), trial=True)
 
 
 # -- the configuration's change methods ------------------------------------------------
@@ -467,12 +477,14 @@ def with_facts(
 
 __all__ = [
     "Assigned",
+    "Moved",
     "assign",
     "change",
     "check",
     "clear",
     "normalize",
     "placed",
+    "tried",
     "try_with_choices",
     "try_with_facts",
     "with_choices",

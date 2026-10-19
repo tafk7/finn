@@ -57,11 +57,6 @@ from finn.core.space import (
 )
 from finn.core.space.inspection import Piece, Validity
 
-# ``inspection.viable(point, keys)`` answers each value possible or refused, from the
-# next piece of the engine on.
-until_viable = pytest.mark.xfail(
-    strict=True, reason="until P3: inspection.viable(point, keys) answers each value"
-)
 until_domain_rule = pytest.mark.xfail(
     strict=True, reason="until P3: a domain whose membership reads a choice is a definition error"
 )
@@ -197,7 +192,6 @@ def test_an_open_decision_whose_values_a_constraint_refuses_leaves_the_space_ope
         assert isinstance(point.query(Starved.lanes), Unresolved)
 
 
-@until_viable
 def test_a_value_every_constraint_refuses_is_refused_where_asked() -> None:
     narrow = design_space(Starved(width=1))
     assert possible(narrow, Starved.lanes) == ()
@@ -522,7 +516,6 @@ class Pumped(Space):
         return True
 
 
-@until_viable
 def test_a_value_case_a_constraint_refuses_is_not_possible() -> None:
     point = commit(design_space(Pumped()), {"simd": 1})
     assert possible(point, Pumped.pumping) == (False,)
@@ -553,7 +546,6 @@ class Feeding(Space):
     child = Narrowing(width=width)
 
 
-@until_viable
 def test_a_value_case_is_tried_against_the_constraints_of_the_spaces_it_feeds() -> None:
     point = design_space(Feeding())
     assert isinstance(point.query(Feeding.width), Unresolved)
@@ -576,7 +568,6 @@ class Pair(Space):
         return True
 
 
-@until_viable
 def test_an_ancestors_constraint_reading_a_decision_rules_out_its_cases() -> None:
     point = commit(design_space(Pair()), {"first.factor": 2})
     assert possible(point, Pair.second.factor) == (2,)
@@ -597,7 +588,6 @@ class Wired(Space):
     sink = Narrowing(width=source.width)
 
 
-@until_viable
 def test_a_siblings_constraint_reading_a_decision_through_a_formal_rules_out_its_cases() -> None:
     point = design_space(Wired())
     assert possible(point, Wired.source.width) == (4,)
@@ -617,7 +607,6 @@ class Capped(Space):
         return True
 
 
-@until_viable
 def test_a_value_is_refused_by_what_a_constraint_waited_on_before_reading_it() -> None:
     base = design_space(Capped())
     # While the gate is open the constraint stops there and does not read the factor.
@@ -655,7 +644,6 @@ class Chooser(Space):
         return True
 
 
-@until_viable
 def test_a_selectors_case_is_tried_against_its_owners_constraint_reading_the_selector() -> None:
     point = design_space(Chooser(strict=True))
     # While the other choice is open, the constraint waits for it: both cores are possible.
@@ -667,7 +655,6 @@ def test_a_selectors_case_is_tried_against_its_owners_constraint_reading_the_sel
     assert refusals(report.instance, Chooser.core) == {"small": {"allowed": {"other"}}}
 
 
-@until_viable
 def test_a_selectors_values_are_found_again_under_other_facts_its_owners_constraint_read() -> None:
     point = commit(design_space(Chooser(strict=False)), {"other": 2})
     assert possible(point, Chooser.core) == ("small", "large")
@@ -708,7 +695,6 @@ class Channel(Space):
         return True
 
 
-@until_viable
 def test_an_ancestors_constraint_refuses_its_own_selector_and_a_choice_two_spaces_below() -> None:
     assert possible(design_space(Channel(depth=0)), Channel.transport) == ("queue", "wire")
     shallow = design_space(Channel(depth=8))
@@ -778,7 +764,6 @@ def test_a_value_the_domains_membership_rejects_is_refused_at_the_change() -> No
     assert {finding.code for finding in refused.findings} == {"domain-membership"}
 
 
-@until_viable
 def test_a_listed_value_the_domains_membership_rejects_is_not_listed() -> None:
     point = design_space(Listed(limit=4, other=2))
     assert possible(point, Listed.x) == (1, 3)

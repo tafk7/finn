@@ -21,6 +21,7 @@ from support.space_cores import built, commit
 from finn.core.space import (
     ConfigurationError,
     Decision,
+    Domain,
     Inapplicable,
     Param,
     Rejected,
@@ -30,12 +31,14 @@ from finn.core.space import (
     derived,
     design_space,
     divisors_of,
+    domain,
     inspection,
     reject,
     view,
 )
 from finn.core.space._origins import pairs
 from finn.core.space.edits import ConfigurationResult
+from finn.core.space.inspection import Absent, Dormant, Open, Possible, Refused, Set, Waiting
 from finn.core.space.occurrence import state
 
 
@@ -669,3 +672,94 @@ def test_a_facts_change_leaving_a_domains_input_absent_is_refused() -> None:
     report = stored.try_with_facts({Spanned.wide: False})
     (refused,) = [o for o in report.outcomes if not o.requested]
     assert refused.owner == "lanes" and codes(refused.result) == {"domain-input-absent"}
+
+
+# -- which values are possible, and every choice's state ---------------------------------
+
+
+def test_the_canons_examples_possible_values() -> None:
+    point = design_space(Pair(extent=12)).with_choices({Pair.left.lanes: 3, Pair.right.lanes: 3})
+    (left,) = inspection.viable(point, [Pair.left.lanes])
+    assert left.key == "left.lanes" and left.cases == (3,)
+    # 1, 2: left's own budget; 4, 6, 12: right (3) stands in the way.
+    assert [
+        (item.value, [(rule.rule, rule.standing) for rule in item.broken])
+        for item in left.values or ()
+        if isinstance(item, Refused)
+    ] == [
+        (1, [("left.within_budget", ())]),
+        (2, [("left.within_budget", ())]),
+        (4, [("right_not_slower", ("right.lanes",))]),
+        (6, [("right_not_slower", ("right.lanes",))]),
+        (12, [("right_not_slower", ("right.lanes",))]),
+    ]
+    (style,) = inspection.viable(design_space(Memory(uram=False)), [Memory.style])
+    assert style.cases == ("block",)  # "ultra" is refused by the facts alone
+
+
+def test_a_possible_value_names_what_it_would_move_and_publishes_nothing() -> None:
+    point = commit(
+        design_space(Sourced(ultra=False)),
+        {"source": "memory", "source.memory.style": "block", "source.memory.depth": 2},
+    )
+    (source,) = inspection.viable(point, [Sourced.source])
+    assert source.values == (
+        Possible("memory"),  # the value stored: setting it changes nothing
+        Possible("wire", ("source.memory.style", "source.memory.depth"), (), ("source.wire.taps",)),
+    )
+    assert point.source.depth == 2  # nothing published
+
+
+def test_values_that_cannot_be_listed_and_values_under_an_open_selector() -> None:
+    (lanes,) = inspection.viable(design_space(Waits()), [Waits.lanes])
+    assert lanes.values is None and lanes.waits == ("extent",)  # the list waits on a fact
+    # Under the open selector, the style is listed as if its case were selected; each
+    # value waits with it, nothing refuses.
+    base = design_space(Sourced(ultra=False))
+    (style,) = inspection.viable(base, [handle(base, "source.memory.style")])
+    assert style.cases == ("block", "ultra")
+
+
+def domain_of_positive() -> Domain[int]:
+    """Any positive value: known by membership only."""
+    return domain(accepts=lambda *, candidate: candidate > 0)
+
+
+class States(Space):
+    extent: int = Param(required=False)
+    source: Store | Wire = Decision({"memory": Store(ultra=True), "wire": Wire})
+    enabled: bool = Decision(values=(False, True))
+    lanes: int = Decision(domain=divisors_of(extent))
+    depth: int = Decision(domain=domain_of_positive(), required=True, when=enabled)
+
+
+def test_every_choice_has_one_of_five_states_in_rank_order() -> None:
+    base = design_space(States())
+    point = keyed(
+        base, {"source.memory.style": "block", "enabled": False, "depth": 8, "lanes": 4}
+    ).instance
+    found = dict(inspection.states(point))
+    assert found == {
+        "source": Open((), False),
+        "source.memory.style": Waiting("block", ("source",)),
+        "source.memory.depth": Open(("source",), False),
+        "source.wire.taps": Open(("source",), False),
+        "enabled": Set(False),
+        "lanes": Waiting(4, ("extent",)),
+        "depth": Dormant(8),
+    }
+    keys = [key for key, _ in inspection.states(point)]
+    assert keys.index("source") < keys.index("source.memory.style")
+    assert keys.index("enabled") < keys.index("depth")
+    wire = keyed(point, {"source": "wire"}).instance
+    states = dict(inspection.states(wire))
+    assert states["source.memory.style"] == Dormant("block")
+    assert states["source.memory.depth"] == Absent()
+    assert states["source.wire.taps"] == Open((), False)
+    on = dict(inspection.states(wire.with_choices(enabled=True)))
+    assert on["depth"] == Set(8)
+    cleared = wire.with_choices(wire.field(States.depth).clear(), enabled=True)
+    assert dict(inspection.states(cleared))["depth"] == Open((), True)
+    (depth,) = inspection.viable(cleared, [States.depth])
+    assert depth.values is None  # known by membership only
+    assert [item.key for item in inspection.decisions(cleared) if not item.listed] == ["depth"]
