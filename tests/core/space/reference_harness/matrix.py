@@ -568,6 +568,24 @@ ROWS: tuple[Row, ...] = (
         "today the stored choice waits on the outer selector",
     ),
     Row(
+        "false-when-under-open",
+        _CORE,
+        "a scope whose when is false is absent while a selector above it is open (§ 16.21: "
+        "presence is Kleene's AND over the path): its unset choices absent, waiting on nothing",
+        f"{_SCOPES}::test_a_choice_under_a_false_when_beneath_an_open_selector_is_absent",
+        "unselected-under-open",
+        "today the choice is open, waiting on the selector",
+    ),
+    Row(
+        "false-when-dormant-report",
+        _CORE,
+        "a change making a when false beneath an open selector reports the stored choices under "
+        "it dormant: waiting before, absent after (§ 16.21, § 16.5)",
+        f"{_SCOPES}::test_turning_a_when_off_beneath_an_open_selector_puts_its_choice_dormant",
+        "no-dormant-report",
+        "today the change is accepted reporting nothing dormant",
+    ),
+    Row(
         "look-opened",
         _CORE,
         "a possible value names the choices it opens: native opens the core selector it puts in "

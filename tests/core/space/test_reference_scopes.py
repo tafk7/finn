@@ -363,6 +363,43 @@ def test_a_choice_under_the_inner_case_not_selected_is_dormant_while_the_outer_i
     OUTER.start({"on": 2}, INNER_SET).check_state("outer.a.inner.x.c")
 
 
+# A false ``when`` under an open selector: ``g``, in case ``a`` of ``s``, is present when
+# ``k`` is at least 3. With ``k`` at 0, ``g``'s presence is unknown (``s`` open) and false (its
+# ``when``): Kleene's AND over the path is false (§ 16.21), so ``g`` is absent and its unset
+# choice absent, waiting on nothing. With ``k`` a choice, setting it to 0 puts a stored choice
+# of ``g`` dormant (waiting before, absent after; § 16.5).
+
+
+def false_when(over_choice: bool) -> Space:
+    guarded = Scope(
+        "g",
+        choices=(Choice("x", listed(1)),),
+        when=When(("k",), lambda read: read["k"] >= 3),
+    )
+    return Space(
+        () if over_choice else ("k",),
+        Scope(
+            "",
+            choices=(Choice("k", listed(0, 5)),) if over_choice else (),
+            selectors=(Selector("s", (Scope("a", children=(guarded,)), Scope("b"))),),
+        ),
+    )
+
+
+FALSE_WHEN = Case("a false when over a fact under an open selector", false_when(False))
+FALSE_WHEN_CHOICE = Case("a when over a choice under an open selector", false_when(True))
+
+
+@expected("false-when-under-open")
+def test_a_choice_under_a_false_when_beneath_an_open_selector_is_absent() -> None:
+    FALSE_WHEN.start({"k": 0}).check_state("s.a.g.x")
+
+
+@expected("false-when-dormant-report")
+def test_turning_a_when_off_beneath_an_open_selector_puts_its_choice_dormant() -> None:
+    FALSE_WHEN_CHOICE.start({}, {"k": 5, "s.a.g.x": 1}).check_change(Change(commit={"k": 0}))
+
+
 # -- a case putting a selector in scope whose every case the facts refuse --------------------------
 #
 # ``realization`` is ``native`` or ``other``; ``native`` puts a scope in place whose selector

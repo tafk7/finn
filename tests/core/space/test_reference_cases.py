@@ -373,6 +373,43 @@ def test_a_value_outside_a_membership_only_domain_is_refused_at_commit() -> None
     DOMAINS.start({"n": 6}).check_change(Change(commit={"w": 1}))
 
 
+# A membership-only domain is never a piece of validity (§ 4, § 16.12; reading 13): with the
+# fact its membership reads missing, or with its input a derived value refusing on the facts
+# (a value committed there would be refused by assignment), the configuration is valid.
+
+MEMBERSHIP_ONLY = Case(
+    "a membership-only domain over a fact",
+    Space(
+        ("f",),
+        Scope(
+            "",
+            choices=(Choice("c", membership(lambda value, read: 0 <= value <= read["f"], ("f",))),),
+        ),
+    ),
+)
+MEMBERSHIP_REFUSED = Case(
+    "a membership-only domain over a derived value that refuses",
+    Space(
+        ("f",),
+        Scope(
+            "",
+            choices=(Choice("c", membership(lambda value, read: value <= read["d"], ("d",))),),
+            derived=(
+                Derived("d", ("f",), lambda read: Refuse("big") if read["f"] > 2 else read["f"]),
+            ),
+        ),
+    ),
+)
+
+
+def test_a_membership_only_domain_over_a_missing_fact_leaves_the_configuration_valid() -> None:
+    MEMBERSHIP_ONLY.start({}).check_validity()
+
+
+def test_a_membership_only_domain_over_a_refused_input_leaves_the_configuration_valid() -> None:
+    MEMBERSHIP_REFUSED.start({"f": 5}).check_validity()
+
+
 @expected("empty-list-state")
 def test_a_choice_whose_list_is_empty_is_open() -> None:
     EMPTY.start().check_state("z")
