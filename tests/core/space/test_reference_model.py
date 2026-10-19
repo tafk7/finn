@@ -761,6 +761,48 @@ def test_reading_6_an_omitted_fact_leaves_the_input_waiting_and_own_guards_are_n
     )
 
 
+def guarded_by_a_choice() -> Space:
+    """``extra`` is present while the choice ``wide`` holds; ``extra.p`` divides
+    ``extra.size`` (the fact ``n``), a derived value of its own scope."""
+
+    extra = Scope(
+        "extra",
+        when=When(("wide",), lambda r: bool(r["wide"])),
+        derived=(Derived("size", ("n",), lambda r: r["n"]),),
+        choices=(Choice("p", computed(lambda r: divisors(r["extra.size"]), ("extra.size",))),),
+    )
+    wide = Choice("wide", listed(True, False))
+    return Space(("n",), Scope("", choices=(wide,), children=(extra,)))
+
+
+def test_reading_6_membership_under_a_false_when_over_a_choice_is_checked_as_if_present() -> None:
+    """§ 16.20: membership is evaluated with the choice's existence guards taken as holding,
+    a ``when`` over a choice alike. With ``wide`` stored false ``extra`` is absent, yet
+    ``extra.size`` reads 4: 3 is refused outside its domain; 2 is accepted, dormant."""
+
+    narrow = Configuration(guarded_by_a_choice(), {"n": 4}, {"wide": False})
+    assert rejected(change(narrow, Change(commit={"extra.p": 3}))) == Rejected(
+        (outside("extra.p", "extra"),), None
+    )
+    result = accepted(change(narrow, Change(commit={"extra.p": 2})))
+    assert (result.dormant, result.in_play, result.opened) == ((), (), ())
+    assert result.configuration.solve().state("extra.p") == Dormant(2)
+
+
+def test_reading_6_a_facts_change_putting_a_dormant_value_outside_its_domain_is_refused() -> None:
+    """§ 16.20: a facts change re-checks every stored value as if its choice existed,
+    dormant ones included. ``extra.p = 2`` is dormant (``wide`` false): ``n = 9`` leaves 2
+    outside its divisors and is refused naming it; ``n = 8`` is accepted, 2 still dormant."""
+
+    stored = Configuration(guarded_by_a_choice(), {"n": 4}, {"wide": False, "extra.p": 2})
+    assert stored.solve().state("extra.p") == Dormant(2)
+    assert rejected(change(stored, Change(facts={"n": 9}))) == Rejected(
+        (outside("extra.p", "extra"),), None
+    )
+    kept = accepted(change(stored, Change(facts={"n": 8})))
+    assert kept.configuration.solve().state("extra.p") == Dormant(2)
+
+
 def even_width(r: Reads) -> Any:
     return Refuse("bad-width") if r["w"] % 2 else r["w"]
 

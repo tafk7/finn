@@ -142,7 +142,8 @@ corpus; § 16 holds the readings its author gave for this model.
    does not apply is refused* (§ 16.17, ``INPUT_ABSENT``, the choice's reason naming the
    input), not unresolved: only a change of facts could settle it. Its existence is
    decided over the facts alone: the choice's own existence guards (its scope's and
-   those above it) hold whenever it is present, and are not asked; any other guard on
+   those above it, a ``when`` over a choice alike) are taken as holding, wherever the
+   choice sits (§ 16.20), and are not asked; any other guard on
    the input's scopes (or on those of the derived values it reads) is a ``when`` over
    facts, a selector or a ``when`` reaching a choice being ``domain-reads-choice``. A
    false one makes the input absent, a waiting one leaves membership waiting, a refused
