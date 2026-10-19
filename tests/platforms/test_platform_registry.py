@@ -247,18 +247,17 @@ def test_versal_s_ultraram_takes_initial_contents_so_initialised_ultra_memories_
         thresholding(versal).try_with_choices(ultra_stages=1),
     ):
         assert attempt.accepted and inspection.validity(attempt.instance).status != "refused"
-    # Committed on xczu7ev too (each is a value of its domain): the configuration is
-    # refused by the rule that the UltraRAM takes the contents.
+    # On xczu7ev each is a value of its domain, and the change is refused by the rule that
+    # the UltraRAM takes the contents, with nothing standing in its way.
     for attempt in (
         memstream(zynq).try_with_choices(ram_style="ultra"),
         thresholding(zynq).try_with_choices(ultra_stages=1),
     ):
-        assert attempt.accepted
-        validity = inspection.validity(attempt.instance)
+        assert not attempt.accepted
         assert [
-            (piece.owner, {finding.code for finding in piece.result.findings})
-            for piece in validity.pieces
-        ] == [("uram_init_taken", {"uram-init"})]
+            (broken.rule, {finding.code for finding in broken.result.findings}, broken.standing)
+            for broken in attempt.broken
+        ] == [("uram_init_taken", {"uram-init"}, ())]
 
 
 def test_a_name_the_catalog_lacks_is_refused_with_close_names_none_chosen() -> None:
