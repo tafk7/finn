@@ -3,10 +3,10 @@
 
 """The MatMul KernelOp: facts from the model, the choice schema, persistence and replay.
 
-A node's choice attributes are its own choices, each at its baseline once the node is
-converted, absent on a node made by hand until configured (``support.configure``, which sets
-choices as the compiler does, never a point); a forced Decision is never committed, so it
-is never written; a nested choice applies under its forced selector.
+A node's choice attributes are its own choices, each set by its default policy once the
+node is converted (every choice in play, a selector's case included), absent on a node made
+by hand until configured (``support.configure``, which sets choices as the compiler does,
+never a point); a nested choice applies under its forced selector.
 """
 
 from __future__ import annotations
@@ -17,11 +17,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 from onnx import helper
-from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import get_domain_opset_version, getCustomOp, op_identity
 from support.configure import configured, write_raw
-from support.models import WEIGHTS, X, matmul_model, schema_digest
+from support.models import TARGET, WEIGHTS, X, matmul_model, schema_digest
+from support.op_specs import matmul as spec
 from support.refusals import refused
 
 import finn.custom_op.kernels as domain
@@ -30,10 +30,12 @@ from finn.core.graph.annotations.platform import PLATFORM_KEYS
 from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.core.space import inspection
+from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.conv import Conv
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.network import Partition, network, persist
 from finn.custom_op.kernels.thresholding import Thresholding
+from finn.harness.reference import converted
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -236,14 +238,19 @@ def test_the_weight_sources_choices_persist_on_the_weights_and_the_network_repla
     assert network(model, model.graph.node).member("w").source.ram_style == "block"
 
 
-def test_a_forced_choice_is_never_saved() -> None:
-    """On DSP48E2 compute = packed is forced; only choices made on purpose reach the
-    node, so nothing goes stale on another target."""
-    model = matmul_model()
-    point = op(model).point({"compute.packed.pe": 2})
-    assert point.compute.pe == 2  # under the forced selector
-    configured(model, {"first": {"compute": "packed", "compute.packed.pe": 2}})
-    assert attributes(model) == ["compute.packed.pe"]
+def test_conversion_stores_every_value_its_policies_set() -> None:
+    """Conversion stores each value its policies set on the kernel alone, the core's case
+    and its pumping included (each first valid), so a converted node implies nothing: the
+    choices of the case not selected are not in play, and not stored."""
+    model, _ = converted(spec.matmul(), TARGET)
+    (node,) = model.graph.node
+    assert kernel_op(model, node).choices() == {
+        "compute": "packed",
+        "compute.packed.compute_pumping": 0,
+        "compute.packed.pe": 1,
+        "compute.packed.reducer": "tree",
+        "compute.packed.simd": 1,
+    }
 
 
 def test_a_nested_choice_under_a_case_not_forced_is_refused_by_name() -> None:
@@ -269,17 +276,6 @@ def test_a_choice_goes_stale_when_a_fact_changes() -> None:
     with pytest.raises(KernelOpError) as error:
         op(model).point()
     assert error.value.keys == ("compute.packed.pe",)
-
-
-def test_a_matmul_no_core_takes_is_refused_while_its_choices_are_open() -> None:
-    """INT32 activations: the packed core's DSP input is too narrow and the INT8 core
-    needs a DSP58, so the ``compute`` Decision has no viable case on the facts alone."""
-    model = matmul_model(annotate=(), infer=False)
-    for name in ("x", "w"):
-        model.set_tensor_datatype(name, DataType["INT32"])
-    (problem,) = op(model.transform(InferKernelTensors())).verify_node()
-    assert problem.startswith("first: compute: decision-no-viable-case: no case is viable: ")
-    assert "dotp-activation-width" in problem and "dotp-target" in problem
 
 
 def test_an_unknown_attribute_is_refused() -> None:

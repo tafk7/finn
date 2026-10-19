@@ -6,8 +6,8 @@
 A KernelOp binds its kernel class from its facts, by value: its formals, its input
 tensors at the graph's rank and the values of the initializers it holds. One binding per
 node: its outputs are the kernel's statement, not a fact, so there is no second binding
-for them. Its choice attributes are its kernel class's decision keys, and alone it is a
-network of its kernel and a channel on each ONNX input and output (conversion's).
+for them. Its choice attributes are its kernel class's decision keys, set at conversion by
+each choice's default policy on the kernel alone, with no channel (``KernelOp.defaulted``).
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from qonnx.core.datatype import DataType
 from qonnx.core.ranges import TensorRange
 from support.models import TARGET, WEIGHTS, matmul_model, thresholding_model
 from support.refusals import refused
@@ -34,7 +35,6 @@ from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.kernels.explore import ExploreError, Seam
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.members import (
     VERIFY,
@@ -49,6 +49,7 @@ from finn.kernels.members import (
 )
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
+from finn.transformation.kernels import InferKernelTensors
 from finn.transformation.kernels.infer import infer_node
 
 INT3 = dtype("INT3")
@@ -76,11 +77,12 @@ def test_an_op_made_without_its_model_is_refused_and_points_to_kernel_op() -> No
         MatMul(model.graph.node[0]).model()
 
 
-def test_conversion_accepts_through_accepted_alone() -> None:
-    """``KernelOp.accepted`` is the one way a node is accepted: the network at its
-    baselines or the refusals. ``infer_node`` does not accept, and no second method says
-    the same."""
-    assert not hasattr(KernelOp, "acceptance")
+def test_conversion_accepts_through_defaulted_alone() -> None:
+    """``KernelOp.defaulted`` is the one way a node is accepted: its kernel with its
+    default policies applied, or the refusals. ``infer_node`` does not accept, and no
+    second method says the same; no node is a network of its own (no boundary channels)."""
+    assert not any(hasattr(KernelOp, name) for name in ("acceptance", "accepted", "network"))
+    assert not hasattr(KernelOp, "baselined")
     assert "accept" not in inspect.signature(infer_node).parameters
 
 
@@ -105,8 +107,11 @@ def test_one_binding_per_node_serves_its_outputs_and_its_point() -> None:
     assert op.bound() is bound
     assert kernel_op(model, model.graph.node[0]).bound() is bound  # another op instance
     point: Any = op.point()
-    # its baselines, stored at conversion: the packed core
-    assert type(point.compute).__name__ == "PackedDotpKernel"
+    # A node made by hand stores no choice, so its core is open; conversion's policies
+    # (first valid) take the packed core.
+    assert dict(inspection.states(point))["compute"] == inspection.Open()
+    defaulted: Any = op.defaulted()
+    assert type(defaulted.compute).__name__ == "PackedDotpKernel"
 
 
 def test_a_held_initializer_is_given_as_contents_never_as_a_tensor() -> None:
@@ -168,51 +173,60 @@ def test_a_graph_tensor_that_disagrees_with_the_facts_is_refused() -> None:
     assert {finding.code for finding in rejection.findings} == {"matmul-tensor"}
 
 
-def test_a_node_alone_is_a_network_of_its_kernel_and_its_boundaries() -> None:
-    """Conversion's network: the kernel named as the node, a channel on each ONNX input
-    and output named as the tensor, each a boundary named by its ONNX position; an
-    output's tensor the kernel's statement; a held initializer's the kernel's view."""
+def test_conversion_sets_each_choice_in_play_by_its_policy_on_the_kernel_alone() -> None:
+    """Conversion's answer is the node's kernel, nothing else (no channel): each choice in
+    play, in declaration order, at its first valid value, the selector's case first, then
+    the choices of that case alone; those under the case not selected stay absent."""
     model = matmul_model()
     op = kernel_op(model, model.graph.node[0])
-    alone = op.network()
-    assert alone.kernels == ("first",)
-    assert alone.order == ("x", "w", "first", "y")
-    assert alone.wiring("x").facts["port"] == "in0_V"
-    assert alone.wiring("y").facts["port"] == "out0_V"
-    based = op.baselined()
-    bound: Any = op.bound()
-    assert based.member("y").tensor == bound.y_tensor
-    assert based.member("w").valued
+    point = op.defaulted()
+    assert isinstance(point, MatMulKernel)
+    assert dict(inspection.states(point)) == {
+        "compute": inspection.Set("packed"),
+        "compute.packed.pe": inspection.Set(1),
+        "compute.packed.simd": inspection.Set(1),
+        "compute.packed.compute_pumping": inspection.Set(False),
+        "compute.packed.reducer": inspection.Set("tree"),
+        "compute.int8_dsp58.pe": inspection.Absent(),
+        "compute.int8_dsp58.simd": inspection.Absent(),
+        "compute.int8_dsp58.compute_pumping": inspection.Absent(),
+        "realization": inspection.Absent(),  # a dense MatMul has none
+    }
+    assert inspection.validity(point).status == "valid"
     thresholding = thresholding_model()
-    activate = kernel_op(thresholding, thresholding.graph.node[0]).network()
-    assert activate.order == ("x", "activate", "y")  # thresholds: a fact, no channel
-    assert activate.wiring("x").facts["port"] == "in0_V"
+    activate = kernel_op(thresholding, thresholding.graph.node[0]).defaulted()
+    assert isinstance(activate, ThresholdingAxiKernel)
+    assert {key: state for key, state in inspection.states(activate)} == {
+        "pe": inspection.Set(1),
+        "use_axilite": inspection.Set(False),
+        "deep_pipeline": inspection.Set(False),
+        "ultra_stages": inspection.Set(0),
+        "ram_style": inspection.Set("distributed"),
+        "block_stages": inspection.Set(0),
+    }
 
 
-def test_a_node_without_a_baseline_is_refused_by_the_decision_naming_the_node(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Where the node alone has no baseline, conversion's answer is the exploration's
-    refusal, owned by the refusing Decision's key, the node in its details."""
-    model = matmul_model()
+def test_a_choice_no_value_can_be_set_for_keeps_the_node_on_the_host() -> None:
+    """INT32 activations: no core takes them, so the core has no first valid value. The
+    answer is one finding owned by the choice's key (``choice-no-valid-value``), naming its
+    policy and each value's rule, those rules' findings its causes; with no core chosen,
+    no rule of the kernel is false, so the node made by hand is not refused
+    (``verify_node``), only open."""
+    model = matmul_model(annotate=(), infer=False)
+    for name in ("x", "w"):
+        model.set_tensor_datatype(name, DataType["INT32"])
+    model = model.transform(InferKernelTensors())
     op = kernel_op(model, model.graph.node[0])
-
-    def refuse(self: Seam, network: object) -> object:
-        raise ExploreError("decision-no-viable-case", "compute", "no case is viable: none")
-
-    monkeypatch.setattr(Seam, "baseline", refuse)
-    with refused(
-        "decision-no-viable-case",
-        error=KernelOpError,
-        owner="compute",
-        node="first",
-        message="no case is viable",
-    ):
-        op.baselined()
-    refusals = op.accepted()
-    assert isinstance(refusals, tuple)
-    ((code, owner, details),) = [(f.code, f.owner, dict(f.details)) for f in refusals]
-    assert (code, owner, details) == ("decision-no-viable-case", "compute", {"node": "first"})
+    assert op.verify_node() == []
+    assert inspection.validity(op.point()).status == "open"
+    found = op.defaulted()
+    assert isinstance(found, tuple)
+    (finding,) = found
+    assert (finding.code, finding.owner) == ("choice-no-valid-value", "compute")
+    assert dict(finding.details) == {"policy": "first valid"}
+    assert "'packed' breaks compute.packed." in finding.message
+    assert "'int8_dsp58' breaks compute.int8_dsp58." in finding.message
+    assert {"dotp-activation-width", "dotp-target"} <= {cause.code for cause in finding.causes}
 
 
 def facts(weights: tuple[tuple[int, ...], ...] = STORED, **changed: object) -> Facts:
