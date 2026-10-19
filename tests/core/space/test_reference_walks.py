@@ -5,9 +5,9 @@
 compared with it (``core.space.reference_harness.walks``).
 
 Each seed draws a small description and a walk of changes over it. At every step the
-model's invariants hold strictly (history-independence and the bind, additions moving
-answers only up the information order, no accepted change leaving a rule it reaches false
-at its origin, every refusal naming exactly its origins and their standing choices), and
+model's invariants hold strictly (history-independence and the bind accepted, additions
+moving answers only up the information order, no accepted change adding a (false piece,
+origin) pair, every refusal naming exactly its origins and their standing choices), and
 the engine's own checks hold (its walked configuration against one built from nothing).
 While a milestone with rows is pending the engine's disagreements with the model are
 counted; with them taken as removed, each fails its walk. Every invariant's checker is
@@ -57,13 +57,12 @@ from core.space.reference_harness.forms import (
 )
 from core.space.reference_harness.walks import (
     UNCLASSIFIED,
-    VIEW_SPACE_REFUSED,
-    Question,
     Structure,
     below,
     bind_problems,
     check_change,
     classify,
+    counted_pairs,
     differences,
     generate,
     model_forms,
@@ -71,7 +70,6 @@ from core.space.reference_harness.walks import (
     pending,
     questions,
     table,
-    view_space_refused,
     walk,
 )
 
@@ -156,13 +154,13 @@ def test_a_disagreement_is_told_by_one_simple_rule_or_left_unclassified() -> Non
     assert classify(StateForm("set", 1), StateForm("set", 2)) == UNCLASSIFIED
 
 
-def test_the_summary_names_the_mode_the_checks_and_the_exception() -> None:
+def test_the_summary_names_the_mode_and_the_checks() -> None:
     tallies = [walk(0, 3)]
     text = table(tallies)
     checks = ", ".join(f"{name} {count}" for name, count in sorted(tallies[0].checks.items()))
-    assert f"invariant checks: {checks}; binds refused as expected 0" in text
+    assert f"invariant checks: {checks}\n" in text
     assert "engine disagreements (counted (pending: engine core)) by question:" in text
-    assert f"excused (§ 16.14): {VIEW_SPACE_REFUSED} 0" in text
+    assert "excused" not in text
     assert text.splitlines()[2].startswith("| 0 | index | 3 |")
     assert "strict (no milestone with rows pending)" in table(tallies, ("engine core",))
 
@@ -203,7 +201,7 @@ def test_history_independence_names_each_answer_given_otherwise() -> None:
 def guarded_by_a_stored_choice() -> Space:
     """``d`` refuses an odd ``x``; ``g``, in case ``a`` of ``s``, is guarded by ``d``. Setting
     ``x`` to 1 while ``s`` is open is accepted (nothing in play rules on ``d``); selecting
-    ``a`` then brings the guard into play, refused through ``d``, without reaching ``d``."""
+    ``a`` then makes the guard's piece false through ``d``, a new pair."""
     g = Scope("g", when=When(("d",), lambda r: r["d"] > 0), choices=(Choice("n", listed(1)),))
     return Space(
         (),
@@ -216,30 +214,39 @@ def guarded_by_a_stored_choice() -> Space:
     )
 
 
-def test_a_configuration_not_refused_binds_again_with_the_same_answers() -> None:
+ODD = (Reason(ReasonKind.DERIVED_BODY, "d", "", "odd"),)
+
+
+def test_a_configuration_binds_again_with_the_same_answers() -> None:
     walked = Configuration(linked(), {}, {"a": 2, "b": 1})
-    structure = Structure(walked.index)
     bind = change(Configuration(linked()), Change(commit={"a": 2, "b": 1}))
-    assert bind_problems(structure, walked, bind) == ([], False)
+    assert bind_problems(walked, bind) == []
     refused = Rejected((RuleRefusal("linked", "constraint", (), ()),), None)
-    problems, expected = bind_problems(structure, walked, refused)
-    assert problems and not expected
+    assert bind_problems(walked, refused) == [
+        "1 bind: refused by [('linked', 'constraint')]; what a walk publishes binds again "
+        "unrefused (FN3)"
+    ]
 
 
-def test_a_refused_walk_binds_refused_by_the_origin_its_stored_choice_reaches() -> None:
+def test_a_walk_never_reaches_a_configuration_whose_bind_is_refused() -> None:
+    # § 16.15: the switch that would leave the guard false through ``d`` is refused, with
+    # ``x`` standing, so a walk never holds the configuration; built directly, it is legal
+    # and reads refused, and its bind is refused, which invariant 1 names.
     start = Configuration(guarded_by_a_stored_choice())
     first = change(start, Change(commit={"x": 1}))
     assert isinstance(first, Accepted)
-    walked = change(first.configuration, Change(commit={"s": "a"}))
-    assert isinstance(walked, Accepted)
-    assert walked.validity.verdict is reference.Verdict.FALSE
-    structure = Structure(walked.configuration.index)
+    edit = Change(commit={"s": "a"})
+    switch = change(first.configuration, edit)
+    assert isinstance(switch, Rejected)
+    assert switch.refusals == (RuleRefusal("d", "derived", ODD, ("x",)),)
+    structure = Structure(start.index)
+    assert check_change(structure, first.configuration, edit, switch).problems == []
+    built = Configuration(guarded_by_a_stored_choice(), {}, {"x": 1, "s": "a"})
+    assert built.solve().validity().verdict is reference.Verdict.FALSE
     bind = change(Configuration(guarded_by_a_stored_choice()), Change(commit={"x": 1, "s": "a"}))
-    assert isinstance(bind, Rejected)
-    assert bind_problems(structure, walked.configuration, bind) == ([], True)
-    fake = Accepted(walked.configuration, (), (), (), walked.validity)
-    problems, _ = bind_problems(structure, walked.configuration, fake)
-    assert problems == ["1 bind: accepted, but refused by [('d', 'derived')]"]
+    assert bind_problems(built, bind) == [
+        "1 bind: refused by [('d', 'derived')]; what a walk publishes binds again unrefused (FN3)"
+    ]
 
 
 # -- invariant 2: the information order ------------------------------------------------------------
@@ -327,48 +334,29 @@ def views_of_a_space_refused_by_an_addition() -> Space:
     )
 
 
-def test_a_view_whose_space_an_addition_leaves_refused_is_told_as_the_one_exception() -> None:
-    # § 16.14: selecting ``a`` is accepted (``d`` refuses on the facts alone and is not
-    # reached), the root reads refused, so its view ``v`` moves from a value to refused.
-    # In the child ``k`` the same: selecting ``x`` leaves ``k`` refused, its view ``w``
-    # refused, and the root's rule ``uses`` reading it moves from true to false.
+def test_an_addition_that_would_leave_a_space_refused_is_refused() -> None:
+    # § 16.15 removes § 16.14's exception: selecting ``a`` (or ``k``'s ``x``) makes the guard's
+    # piece false through ``d``, over the facts alone: a new pair, refused with nothing
+    # standing. Were it accepted, the root's view ``v`` (or the rule ``uses``, through ``k``'s
+    # view ``w``) would move down the information order, and invariants 2 and 3 name it.
     start = Configuration(views_of_a_space_refused_by_an_addition(), {"f": 3})
     structure = Structure(start.index)
     asked = questions(start.index)
     before = model_forms(start.solve(), asked)
-    for selector, moved in (("s", ("answer", "v")), ("k.t", ("rule", "uses"))):
-        edit = Change(commit={selector: "a" if selector == "s" else "x"})
+    for selector, case, moved in (("s", "a", ("answer", "v")), ("k.t", "x", ("rule", "uses"))):
+        edit = Change(commit={selector: case})
         result = change(start, edit)
-        assert isinstance(result, Accepted)
-        after_solution = result.configuration.solve()
-        after = model_forms(after_solution, asked)
-
-        def excuse(question: Question) -> bool:
-            return view_space_refused(
-                structure, after_solution, question, before[question], after[question]
-            )
-
-        found, told = order_problems(before, after, edit.commit, excuse)
-        assert found == {} and moved in told
-        strict, _ = order_problems(before, after, edit.commit)
-        assert moved in strict  # without the exception, a move down
+        assert isinstance(result, Rejected)
+        assert result.refusals == (RuleRefusal("d", "derived", ODD, ()),)
+        assert check_change(structure, start, edit, result).problems == []
+        published = Configuration(start.space, {"f": 3}, {selector: case})
+        fake = Accepted(published, (), (), (), published.solve().validity())
+        problems = check_change(structure, start, edit, fake).problems
+        assert len(problems) == 1 and problems[0].startswith("3 accepted: ")
+        assert moved in order_problems(before, model_forms(published.solve(), asked), edit.commit)
 
 
-def test_the_exception_covers_nothing_but_a_view_whose_space_reads_refused() -> None:
-    start = Configuration(views_of_a_space_refused_by_an_addition(), {"f": 3})
-    solution = start.solve()
-    structure = Structure(start.index)
-    # the root is not refused here: no exception
-    assert not view_space_refused(
-        structure, solution, ("answer", "v"), AnswerForm("value", 3), AnswerForm("refused")
-    )
-    # a choice's answer is never one
-    assert not view_space_refused(
-        structure, solution, ("answer", "s"), AnswerForm("value", "a"), AnswerForm("refused")
-    )
-
-
-# -- invariants 3 and 4: no reached origin left false; refusals named exactly ----------------------
+# -- invariants 3 and 4: no pair added; refusals named exactly ------------------------------------
 
 
 def summed() -> Space:
@@ -409,8 +397,8 @@ def test_a_refusal_naming_another_origin_or_none_is_caught() -> None:
     published = Configuration(summed(), {}, {"a": 1, "b": 2, "c": 2})
     fake = Accepted(published, (), (), (), published.solve().validity())
     assert check_change(structure, SUM, NEW_A, fake).problems == [
-        "3 accepted: the change is accepted, but leaves false at their origin rules it reaches: "
-        "[('sum', 'constraint')]"
+        "3 accepted: the change is accepted, but adds (false piece, origin) pairs: "
+        "[(('constraint', 'sum'), 'sum')]"
     ]
 
 
@@ -419,7 +407,7 @@ HIGH = (Reason(ReasonKind.CONSTRAINT, "low", "", "high"),)
 
 
 def case_rule_over_the_root() -> Space:
-    """A rule of case ``a`` reads the root's ``x`` alone: selecting ``a`` reaches it."""
+    """A rule of case ``a`` reads the root's ``x`` alone: selecting ``a`` brings it in."""
     rule = Constraint("small", ("x",), lambda r: r["x"] <= 1, "big")
     return Space(
         (),
@@ -431,7 +419,7 @@ def case_rule_over_the_root() -> Space:
     )
 
 
-def test_an_accepted_switch_leaving_a_case_rule_false_is_caught_through_presence() -> None:
+def test_an_accepted_switch_leaving_a_case_rule_newly_false_is_caught() -> None:
     base = Configuration(case_rule_over_the_root(), {}, {"x": 2})
     edit = Change(commit={"s": "a"})
     result = change(base, edit)
@@ -479,3 +467,36 @@ def test_an_assignment_refusal_is_checked_against_the_type_alone() -> None:
     fake = Rejected((RuleRefusal("sum", "constraint", BIG, ("b", "c")),), None)
     problems = check_change(Structure(SUM.index), SUM, edit, fake).problems
     assert problems == ["assignment: values not of their type ['a'], refused as such []"]
+
+
+def short() -> Space:
+    """``d`` is ``x + z``, refusing an odd sum; ``r`` asks ``d`` to be at least ``y``."""
+    return Space(
+        (),
+        Scope(
+            "",
+            choices=tuple(Choice(name, listed(1, 2, 3, 4)) for name in ("x", "y", "z")),
+            derived=(
+                Derived(
+                    "d",
+                    ("x", "z"),
+                    lambda r: Refuse("odd") if (r["x"] + r["z"]) % 2 else r["x"] + r["z"],
+                ),
+            ),
+            constraints=(Constraint("r", ("d", "y"), lambda r: r["d"] >= r["y"], "short"),),
+        ),
+    )
+
+
+def test_the_counted_pairs_name_each_false_piece_with_the_origins_it_is_false_through() -> None:
+    structure = Structure(Configuration(short()).index)
+    broken = Configuration(short(), {}, {"x": 1, "y": 4, "z": 1}).solve()
+    assert counted_pairs(structure, broken) == {(("constraint", "r"), "r"): "constraint"}
+    odd = Configuration(short(), {}, {"x": 2, "y": 4, "z": 1}).solve()
+    assert counted_pairs(structure, odd) == {(("constraint", "r"), "d"): "derived"}
+    # a broken configuration: a change keeping its pair is accepted, one adding a pair not
+    base = Configuration(short(), {}, {"x": 1, "y": 4, "z": 1})
+    for edit, kind in ((Change(commit={"y": 3}), Accepted), (Change(commit={"x": 2}), Rejected)):
+        result = change(base, edit)
+        assert isinstance(result, kind)
+        assert check_change(structure, base, edit, result).problems == []

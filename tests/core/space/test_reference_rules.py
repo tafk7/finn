@@ -5,7 +5,7 @@
 
 A linking rule and a requirement (cases 5 and 6 of the reference cases; cases 1 to 4 are
 ``test_reference_cases``), the canon's two examples, and the hand cases of the reference
-model's rewrite: a change is assignment, refused where it breaks a rule it reaches, naming
+model's rewrite: a change is assignment, refused where it makes a rule newly false, naming
 the rule at its origin and the stored choices standing in its way; a selector switched
 away puts its case's choices dormant. Each rule is a constraint in the model; the engine
 spells it as it is authored at this commit (``Spelling`` beside each case).
@@ -345,7 +345,7 @@ ON_PACKED = {"compute": "packed", "compute.packed.pe": 2}
 
 
 @expected("switch-reaches-case-rule")
-def test_a_rule_in_a_case_that_never_names_its_selector_is_reached_by_switching() -> None:
+def test_a_rule_in_a_case_that_never_names_its_selector_refuses_a_switch_to_it() -> None:
     DSP58.start({"has_dsp58": False}, ON_PACKED).check_change(Change(commit={"compute": "dsp58"}))
 
 

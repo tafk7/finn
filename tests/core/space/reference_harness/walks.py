@@ -13,31 +13,28 @@ step (each change tried, accepted or refused), on both index paths:
 1. *History-independence.* The walked configuration answers every question (each choice's
    state, each value's answer, each rule, validity, each listed choice's possible values
    and ranking) as ``Configuration(space, facts, stored)`` built from nothing. And the
-   **bind**, ``change(Configuration(space, facts), Change(commit=stored))``, is refused
-   exactly by the counted origins (below) of the walked configuration whose dependencies
-   hold a stored choice, and otherwise accepted with the same answers. Why: a bind commits
-   every stored value from nothing, so it touches every stored choice and no fact; it is
-   refused by what those reach, and by nothing else (every stored value is of its type).
-   So a configuration that does not read refused always binds again (the model's own
-   property). A refused one can bind refused: an addition that brings a rule into play
-   that is false through a refusing derived value over a stored choice does not reach
-   that origin (§ 16.2), but its bind does.
+   **bind**, ``change(Configuration(space, facts), Change(commit=stored))``, is accepted
+   with the same answers, for every walked configuration (FN3: what a step publishes binds
+   again unrefused). Why (§ 16.15): every accepted change leaves the set of counted pairs
+   (3) no larger, so a walked configuration's false pieces are those its facts made false
+   from the start, which the configuration the bind starts from (its facts, nothing
+   stored) counts too.
 2. *Additions move answers only up the information order* (:func:`below`, the order
-   defined in one place) over a step that only sets choices nothing was stored for. The
-   one exception, named and counted, is **view-space-refused** (§ 16.14): a view whose
-   Space the step leaves refused, and what reads it, may move from a value to refused.
-3. *No accepted change leaves a rule it reaches false at its origin.*
-4. *Every refusal names exactly the rules false at their origin, and their standing
+   defined in one place) over a step that only sets choices nothing was stored for, with no
+   exception: no accepted addition leaves a Space newly refused (§ 16.15 removes § 16.14's).
+3. *No accepted change adds a (false piece, origin) pair* (§ 16.15): every pair counted in
+   the published configuration is counted in the one before it.
+4. *Every refusal names exactly the origins of the pairs it would add, and their standing
    choices*, checked by brute force: each named origin is false on its own values in the
-   would-be configuration; the origins named are exactly those false on their own values
-   that feed a false piece and that the change reaches; each origin's standing choices are
-   exactly those whose clearing, added to the change, makes the origin no longer false.
+   would-be configuration; the origins named are exactly those of the pairs counted there
+   and not before; each origin's standing choices are exactly those whose clearing, added
+   to the change, makes the origin no longer false.
 
-For 3 and 4 the module writes the rules' structure again (:class:`Structure`: what reaches
-an origin, what stands in its way, and :func:`counted_origins`: which origins feed a false
-piece), from the model docstring's readings 2-4, so the check is not the model checking
-itself: it reads the model's evaluation of each configuration (its ``Solution``) and never
-its change code.
+For 3 and 4 the module counts a configuration's pairs again (:func:`counted_pairs`, from
+the model docstring's readings 2 and 3: each false piece of the root's validity with the
+origins it is false through) and what stands in an origin's way (:class:`Structure`,
+reading 4), so the check is not the model checking itself: it reads the model's evaluation
+of each configuration (its ``Solution``) and never its change code nor its pairs.
 
 **The engine** (today's, on this branch) answers the same questions at every configuration
 the model reaches, and the same change at every step. Its own **permanent checks** are
@@ -631,10 +628,6 @@ def differences(left: Mapping[Question, Form], right: Mapping[Question, Form]) -
 
 # --- the information order (invariant 2) ---------------------------------------------------------
 
-#: the one named exception to the order (§ 16.14): a view whose Space the step leaves
-#: refused, and what reads it, may move from a value (or true) to refused (or false)
-VIEW_SPACE_REFUSED = "view-space-refused"
-
 
 def below(before: Form, after: Form, setting: tuple[object] | None = None) -> str | None:
     """How ``after`` fails to be at or above ``before`` in the information order, or
@@ -657,8 +650,7 @@ def below(before: Form, after: Form, setting: tuple[object] | None = None) -> st
       refused, its false pieces only growing.
 
     Possible values are not ordered: an added value can stand in another value's way, so
-    a possible value becomes impossible by design. § 16.14's exception is not here: it is
-    :func:`view_space_refused`, told apart by the walk."""
+    a possible value becomes impossible by design."""
     if isinstance(before, StateForm) and isinstance(after, StateForm):
         return _state_below(before, after, setting)
     if isinstance(before, AnswerForm) and isinstance(after, AnswerForm):
@@ -718,85 +710,37 @@ def _state_below(before: StateForm, after: StateForm, setting: tuple[object] | N
     return None
 
 
-def view_space_refused(
-    structure: Structure,
-    after: model.Solution,
-    question: Question,
-    before_form: Form,
-    after_form: Form,
-) -> bool:
-    """§ 16.14's exception, the one place it is decided: ``question`` is a view's answer, or
-    a rule's or a value's that reads a view (directly or through derived values and views),
-    moving from a value (true) to refused (false), and in the configuration after the step
-    that view's Space reads refused."""
-    what, path = question
-    if what == "answer":
-        if not (
-            isinstance(before_form, AnswerForm)
-            and isinstance(after_form, AnswerForm)
-            and before_form.kind == "value"
-            and after_form.kind == "refused"
-        ):
-            return False
-    elif what == "rule":
-        if not (
-            isinstance(before_form, RuleForm)
-            and isinstance(after_form, RuleForm)
-            and before_form.kind == "true"
-            and after_form.kind == "false"
-        ):
-            return False
-    else:
-        return False
-    index = structure.index
-    read = {path, *structure.bodies(path)}
-    return any(
-        after.validity(index.views[view][1]).verdict is model.Verdict.FALSE
-        for view in read
-        if view in index.views
-    )
-
-
 def order_problems(
-    before: Mapping[Question, Form],
-    after: Mapping[Question, Form],
-    committed: Mapping[str, object],
-    excused: Callable[[Question], bool] = lambda question: False,
-) -> tuple[dict[Question, str], list[Question]]:
+    before: Mapping[Question, Form], after: Mapping[Question, Form], committed: Mapping[str, object]
+) -> dict[Question, str]:
     """Over an addition committing ``committed``: the answers that moved down the order
-    (:func:`below`), and those of them ``excused`` (§ 16.14's exception) tells apart."""
+    (:func:`below`)."""
     found: dict[Question, str] = {}
-    told: list[Question] = []
     for question, old in before.items():
         if question not in after or question[0] == "possible":
             continue
         what, path = question
         setting = (committed[path],) if what == "state" and path in committed else None
         move = below(old, after[question], setting)
-        if move is None:
-            continue
-        if excused(question):
-            told.append(question)
-        else:
+        if move is not None:
             found[question] = move
-    return found, told
+    return found
 
 
-# --- the rules' structure, written again (invariants 3 and 4) -------------------------------------
+# --- the counted pairs and what stands in the way, written again (invariants 1, 3 and 4) ---------
 
 
 class Structure:
-    """What reaches an origin and what stands in its way, written again from the model
-    docstring's readings 3 and 4, over the description's tables alone.
+    """What stands in an origin's way, written again from the model docstring's reading 4,
+    over the description's tables alone.
 
     - The **body reads** of a node: its declared reads, followed through derived values'
       and views' bodies (never a view's Space's validity).
     - The **presence reads** of a scope: the selector and the ``when`` reads of it and of
       every scope above it.
-    - The **dependencies** of an origin: the closure of the origin under body reads and
-      the presence reads of the scope of every node met (a fact has no scope). A listed
-      domain's: its membership's reads (through derived values over facts), and the choice
-      with its scope's presence reads, closed the same way.
+    - The **closure** of a node: the closure of the node under body reads and the presence
+      reads of the scope of every node met (a fact has no scope): what it reads, and what
+      decides whether it and what it reads exist.
     - The **deciders** of a scope: the choices among the closure of its presence reads.
     """
 
@@ -853,22 +797,6 @@ class Structure:
             if path not in self.index.facts:
                 stack.extend(self.presence(self.scope(path)))
         return frozenset(found)
-
-    def membership(self, choice: str) -> frozenset[str]:
-        """A choice's membership reads, through the derived values over facts they name."""
-        found: set[str] = set()
-        stack = list(self.index.choices[choice].domain.reads)
-        while stack:
-            read = stack.pop()
-            if read not in found:
-                found.add(read)
-                stack.extend(self.reads(read))
-        return frozenset(found)
-
-    def dependencies(self, origin: str, kind: str) -> frozenset[str]:
-        if kind == "empty-domain":
-            return self.membership(origin) | self.closure({origin})
-        return self.closure({origin})
 
     def deciders(self, scope: str) -> frozenset[str]:
         return frozenset(p for p in self.closure(self.presence(scope)) if p in self.index.choices)
@@ -952,20 +880,27 @@ def false_on_its_own(
     return isinstance(body(values), model.Refuse)
 
 
-def counted_origins(structure: Structure, solution: model.Solution) -> dict[str, str]:
-    """Every origin feeding a false piece of the root's validity, by kind: each false piece
-    is followed back through the inputs it reads that are refused (a guard's piece through
-    its ``when``'s refused reads; a listed domain's through its membership's, over the
-    facts), through derived values, views, and nodes refused through a guard (to that
-    guard's refused reads), to the nodes false on their own values."""
+#: a piece of validity, told by its kind and its subject
+PieceId = tuple[str, str]
+#: a counted pair: a false piece and an origin it is false through
+Pair = tuple[PieceId, str]
+
+
+def counted_pairs(structure: Structure, solution: model.Solution) -> dict[Pair, str]:
+    """The counted pairs of ``solution``'s configuration (readings 2 and 3), with each
+    origin's kind: each false piece of the root's validity with each origin it is false
+    through. A piece is followed back through the inputs it reads that are refused (a
+    guard's piece through its ``when``'s refused reads; a listed domain's through its
+    membership's, over the facts), through derived values, views, and nodes refused through
+    a guard (to that guard's refused reads), to the nodes false on their own values; a
+    constraint or a listed domain false on its own values is its own origin."""
     index = solution.index
     facts = model.FactsOnly(index, solution.configuration.facts)
-    found: dict[str, str] = {}
 
     def node_kind(path: str) -> str:
         return "derived" if path in index.derived else "view"
 
-    def follow(path: str) -> None:
+    def follow(path: str, found: dict[str, str]) -> None:
         if not isinstance(solution.read(path), model.Refused) or path in found:
             return
         scope = structure.scope(path)
@@ -979,28 +914,30 @@ def counted_origins(structure: Structure, solution: model.Solution) -> dict[str,
             when = index.scopes[top].when
             assert when is not None, top
             for read in when.reads:
-                follow(read)
+                follow(read, found)
             return
         refused = [
             read for read in structure.reads(path) if isinstance(solution.read(read), model.Refused)
         ]
         for read in refused:
-            follow(read)
+            follow(read, found)
         if not refused and false_on_its_own(structure, solution, path, node_kind(path)):
             found[path] = node_kind(path)
 
-    def follow_facts(path: str) -> None:
+    def follow_facts(path: str, found: dict[str, str]) -> None:
         if not isinstance(facts.value(path), model.Refused) or path in index.facts:
             return
         refused = [
             read for read in structure.reads(path) if isinstance(facts.value(read), model.Refused)
         ]
         for read in refused:
-            follow_facts(read)
+            follow_facts(read, found)
         if not refused and false_on_its_own(structure, solution, path, "derived"):
             found[path] = "derived"
 
+    pairs: dict[Pair, str] = {}
     for piece in solution.validity("").false:
+        found: dict[str, str] = {}
         if piece.kind is model.PieceKind.CONSTRAINT:
             refused = [
                 read
@@ -1008,58 +945,35 @@ def counted_origins(structure: Structure, solution: model.Solution) -> dict[str,
                 if isinstance(solution.read(read), model.Refused)
             ]
             for read in refused:
-                follow(read)
+                follow(read, found)
             if not refused and false_on_its_own(structure, solution, piece.subject, "constraint"):
                 found[piece.subject] = "constraint"
         elif piece.kind is model.PieceKind.EMPTY_DOMAIN:
             if false_on_its_own(structure, solution, piece.subject, "empty-domain"):
                 found[piece.subject] = "empty-domain"
             for read in index.choices[piece.subject].domain.reads:
-                follow_facts(read)
+                follow_facts(read, found)
         else:
             when = index.scopes[piece.subject].when
             assert when is not None
             for read in when.reads:
-                follow(read)
-    return found
+                follow(read, found)
+        for origin, kind in found.items():
+            pairs[((piece.kind.value, piece.subject), origin)] = kind
+    return pairs
 
 
-def touched(
-    before: model.Configuration, after: model.Solution, edit: model.Change
-) -> frozenset[str]:
-    """What a change touches (reading 3): a choice it commits with a new value, a stored
-    choice it brings to be read as its value, a fact it sets to a new value. Clearing and
-    unsetting touch nothing."""
-    old = before.stored
-    found = {
-        path for path, value in edit.commit.items() if path not in old or not same(old[path], value)
-    }
-    earlier = before.solve()
-    found.update(
-        path
-        for path in after.configuration.stored
-        if isinstance(after.read(path), model.Known)
-        and not isinstance(earlier.read(path), model.Known)
-    )
-    found.update(
-        name
-        for name, value in edit.facts.items()
-        if name not in before.facts or not same(before.facts[name], value)
-    )
-    return frozenset(found)
-
-
-def refusing(
-    structure: Structure, before: model.Configuration, after: model.Solution, edit: model.Change
-) -> dict[str, str]:
-    """The origins that refuse ``edit`` from ``before`` to ``after`` (its would-be
-    configuration): the counted origins whose dependencies meet what it touches."""
-    reached = touched(before, after, edit)
+def added_pairs(
+    structure: Structure, before: model.Solution, after: model.Solution
+) -> dict[Pair, str]:
+    """The pairs counted in ``after`` and not in ``before`` (a piece not false before counts
+    as false through nothing), with each origin's kind; an empty domain's only while
+    reading 9's switch is on. Each one's origin refuses the change from one to the other."""
+    was = counted_pairs(structure, before)
     return {
-        origin: kind
-        for origin, kind in counted_origins(structure, after).items()
-        if (kind != "empty-domain" or EMPTY_DOMAIN_REFUSES)
-        and structure.dependencies(origin, kind) & reached
+        pair: kind
+        for pair, kind in counted_pairs(structure, after).items()
+        if pair not in was and (kind != "empty-domain" or EMPTY_DOMAIN_REFUSES)
     }
 
 
@@ -1114,8 +1028,10 @@ def check_change(
         if len(result.refusals) != len(wrong) or result.validity is not None:
             checked.problems.append("assignment: an assignment refusal reports alone (reading 12)")
         return checked
+    before = configuration.solve()
     after = model.Configuration(configuration.space, facts, stored).solve()
-    expected = refusing(structure, configuration, after, edit)
+    added = added_pairs(structure, before, after)
+    expected = {origin: kind for (_, origin), kind in added.items()}
     if isinstance(result, model.Accepted):
         checked.runs["3 accepted"] += 1
         published = result.configuration
@@ -1124,18 +1040,18 @@ def check_change(
                 "3 accepted: the change publishes otherwise than it assigns (nothing is cleared "
                 "or filled in behind the caller's back)"
             )
-        if expected:
+        if added:
             checked.problems.append(
-                "3 accepted: the change is accepted, but leaves false at their origin rules it "
-                f"reaches: {sorted(expected.items())}"
+                "3 accepted: the change is accepted, but adds (false piece, origin) pairs: "
+                f"{sorted(added)}"
             )
         return checked
     checked.runs["4 refusals"] += 1
     named = {item.origin: item for item in result.refusals if isinstance(item, model.RuleRefusal)}
     if {origin: item.kind for origin, item in named.items()} != expected:
         checked.problems.append(
-            f"4 refusals: named {sorted((o, i.kind) for o, i in named.items())}, false at their "
-            f"origin, feeding a false piece and reached: {sorted(expected.items())}"
+            f"4 refusals: named {sorted((o, i.kind) for o, i in named.items())}, the origins of "
+            f"the pairs the change adds: {sorted(expected.items())}"
         )
         return checked
     for origin, item in sorted(named.items()):
@@ -1171,9 +1087,9 @@ def _standing(
     standing are among the reads followed through bodies), whatever clearing it does."""
     problems: list[str] = []
     named = set(edit.commit) | set(edit.clear)
-    dependencies = structure.dependencies(origin, refusal.kind)
+    closure = structure.closure({origin})
     bodies = structure.bodies(origin) if refusal.kind != "empty-domain" else frozenset()
-    deciding = {path for path in dependencies if path in stored and path not in bodies}
+    deciding = {path for path in closure if path in stored and path not in bodies}
     deciding |= structure.deciders(structure.scope(origin))
     candidates = sorted(set(stored) - named - deciding)
     stray = set(refusal.standing) - set(candidates)
@@ -1204,32 +1120,23 @@ def _standing(
 
 
 def bind_problems(
-    structure: Structure, walked: model.Configuration, result: model.Accepted | model.Rejected
-) -> tuple[list[str], bool]:
-    """The bind of ``walked`` (``result``: its stored set committed as one change from an
-    empty configuration with the same facts) against invariant 1's condition; and whether
-    the condition expects it refused."""
-    empty = model.Configuration(walked.space, walked.facts)
-    edit = model.Change(commit=dict(walked.stored))
-    expected = refusing(structure, empty, walked.solve(), edit)
-    if isinstance(result, model.Accepted):
-        if expected:
-            return [f"1 bind: accepted, but refused by {sorted(expected.items())}"], True
-        asked = [q for q in questions(walked.index) if q[0] != "possible"]
-        moved = differences(
-            model_forms(walked.solve(), asked), model_forms(result.configuration.solve(), asked)
+    walked: model.Configuration, result: model.Accepted | model.Rejected
+) -> list[str]:
+    """Invariant 1's bind: ``result``, ``walked``'s stored set committed as one change from
+    an empty configuration with the same facts, is accepted, and answers as ``walked``."""
+    if isinstance(result, model.Rejected):
+        named = sorted(
+            (item.origin, item.kind)
+            if isinstance(item, model.RuleRefusal)
+            else (item.choice, "assignment")
+            for item in result.refusals
         )
-        return [
-            f"1 bind: accepted, answering otherwise: {[ask(q) for q in moved]}"
-        ] if moved else [], False
-    named = {
-        item.origin: item.kind for item in result.refusals if isinstance(item, model.RuleRefusal)
-    }
-    if named != expected or len(named) != len(result.refusals):
-        return [
-            f"1 bind: refused by {sorted(named.items())}, expected {sorted(expected.items())}"
-        ], bool(expected)
-    return [], True
+        return [f"1 bind: refused by {named}; what a walk publishes binds again unrefused (FN3)"]
+    asked = [q for q in questions(walked.index) if q[0] != "possible"]
+    moved = differences(
+        model_forms(walked.solve(), asked), model_forms(result.configuration.solve(), asked)
+    )
+    return [f"1 bind: accepted, answering otherwise: {[ask(q) for q in moved]}"] if moved else []
 
 
 # --- the engine comparison: counted while a milestone is pending ----------------------------------
@@ -1340,10 +1247,6 @@ class Tally:
     skipped: Counter[str] = field(default_factory=Counter)
     #: the model's invariant checks run, by name
     checks: Counter[str] = field(default_factory=Counter)
-    #: § 16.14's exception, by name: the moves down it tells apart
-    excused: Counter[str] = field(default_factory=Counter)
-    #: binds refused, as invariant 1's condition expects
-    binds_refused: int = 0
     #: the engine's own permanent checks run, by name
     engine_checks: Counter[str] = field(default_factory=Counter)
     #: configurations compared with the engine; the engine took the model's by a bind; or
@@ -1452,22 +1355,11 @@ class _Walk:
         )
         empty = model.Configuration(configuration.space, dict(configuration.facts))
         result = model.change(empty, model.Change(commit=dict(configuration.stored)))
-        problems, refused = bind_problems(self.structure, configuration, result)
-        self.invariant("1 bind", problems)
-        self.tally.binds_refused += refused
+        self.invariant("1 bind", bind_problems(configuration, result))
 
-    def additions(
-        self,
-        before: _State,
-        after: model.Solution,
-        forms: Mapping[Question, Form],
-        edit: model.Change,
-    ) -> None:
-        """Invariant 2, § 16.14's exception counted."""
-        found, told = order_problems(
-            before.forms, forms, edit.commit, self.excuse(after, before.forms, forms)
-        )
-        self.tally.excused[VIEW_SPACE_REFUSED] += len(told)
+    def additions(self, before: _State, forms: Mapping[Question, Form], edit: model.Change) -> None:
+        """Invariant 2."""
+        found = order_problems(before.forms, forms, edit.commit)
         self.invariant(
             "2 additions",
             [
@@ -1476,11 +1368,6 @@ class _Walk:
                 for q, move in sorted(found.items())
             ],
         )
-
-    def excuse(
-        self, after: model.Solution, before: Mapping[Question, Form], forms: Mapping[Question, Form]
-    ) -> Callable[[Question], bool]:
-        return lambda q: view_space_refused(self.structure, after, q, before[q], forms[q])
 
     # -- the engine
 
@@ -1536,7 +1423,6 @@ class _Walk:
     def engine_refinement(
         self,
         before: _State,
-        after: model.Solution,
         forms: Mapping[Question, Form],
         engine: Mapping[Question, Form],
         edit: model.Change,
@@ -1545,9 +1431,7 @@ class _Walk:
         down where the model's answer does not move is a disagreement like any other."""
         assert before.engine is not None
         self.tally.engine_checks["refinement"] += 1
-        found, _ = order_problems(
-            before.engine, engine, edit.commit, self.excuse(after, before.engine, engine)
-        )
+        found = order_problems(before.engine, engine, edit.commit)
         for question, move in sorted(found.items()):
             # told by the answers that disagree: after the step, or else before it
             pair = (forms[question], engine[question])
@@ -1727,7 +1611,7 @@ class _Walk:
         forms = model_forms(solution, self.asked)
         self.history_independence(result.configuration, forms)
         if addition:
-            self.additions(state, solution, forms, edit)
+            self.additions(state, forms, edit)
         point = successor
         if point is None:
             point = self.bind_engine(result.configuration)
@@ -1737,7 +1621,7 @@ class _Walk:
         if engine_forms_ is not None:
             self.compare(forms, engine_forms_)
             if addition and successor is not None and state.engine is not None:
-                self.engine_refinement(state, solution, forms, engine_forms_, edit)
+                self.engine_refinement(state, forms, engine_forms_, edit)
         return _State(result.configuration, solution, forms, point, engine_forms_)
 
 
@@ -1782,8 +1666,7 @@ def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
         "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     totals: dict[str, Counter[str]] = {
-        name: Counter()
-        for name in ("checks", "excused", "engine_checks", "by_question", "by_kind", "skipped")
+        name: Counter() for name in ("checks", "engine_checks", "by_question", "by_kind", "skipped")
     }
     for tally in tallies:
         for name, counter in totals.items():
@@ -1813,9 +1696,7 @@ def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
         f"{summed('steps')}, accepted {summed('accepted')}, the model's alone "
         f"{summed('model_only')}; {seconds:.1f} s, {seconds / max(len(tallies), 1):.2f} s per walk",
         f"descriptions skipped: {_counts(totals['skipped'])}",
-        f"invariant checks: {_counts(totals['checks'])}; binds refused as expected "
-        f"{summed('binds_refused')}",
-        f"excused (§ 16.14): {VIEW_SPACE_REFUSED} {totals['excused'][VIEW_SPACE_REFUSED]}",
+        f"invariant checks: {_counts(totals['checks'])}",
         f"engine's own checks: {_counts(totals['engine_checks'])}; configurations compared "
         f"{summed('compared')}, engine rebound to the model's {summed('rebound')}, out of step "
         f"{summed('out_of_step')}",
@@ -1836,9 +1717,10 @@ __all__ = [
     "CLASSIFIED",
     "FACT_VALUES",
     "UNCLASSIFIED",
-    "VIEW_SPACE_REFUSED",
     "Checked",
     "Generated",
+    "Pair",
+    "PieceId",
     "Question",
     "Structure",
     "Tally",
@@ -1846,16 +1728,15 @@ __all__ = [
     "below",
     "bind_problems",
     "check_change",
+    "added_pairs",
     "classify",
-    "counted_origins",
+    "counted_pairs",
     "differences",
     "generate",
     "order_problems",
     "pending",
     "questions",
-    "refusing",
     "seeds",
     "table",
-    "view_space_refused",
     "walk",
 ]

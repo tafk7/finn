@@ -109,8 +109,8 @@ def test_a_stored_value_new_facts_put_outside_its_domain_refuses_the_change() ->
 
 
 def test_new_facts_no_core_of_which_holds_leave_the_selector_open_and_are_accepted() -> None:
-    # 3 divides 99, which neither core takes: no rule the change reaches is false, since
-    # neither case is selected.
+    # 3 divides 99, which neither core takes: no piece is newly false, since neither case is
+    # selected.
     TYPED.start({"width": 9}, {PE: 3}).check_change(Change(facts={"width": 99}))
 
 
@@ -184,7 +184,8 @@ def test_a_value_outside_its_domain_a_cores_rule_reads_is_refused_by_its_type() 
 
 
 # The same cores with a rule of the root reading packed's ``pe``: the rule waits while ``pe``
-# waits on its selector, and selecting ``packed`` reaches it, ``pe`` standing in its way.
+# waits on its selector, and selecting ``packed`` with ``pe`` over 8 makes it newly false, ``pe``
+# standing in its way.
 
 ROOT_RULE = Case(
     "a root rule reading a choice under the cores",
@@ -510,7 +511,7 @@ def test_the_fact_a_waiting_choice_lacks_checks_its_type_when_it_comes() -> None
 
 
 # A stored choice of a selector's case that a rule of the case refuses: set under the open
-# selector, it waits, and the rule waits with it. Selecting its case reaches the rule.
+# selector, it waits, and the rule waits with it. Selecting its case makes the rule newly false.
 
 CASE_RULE = Case(
     "a case's rule and a waiting choice of the case",

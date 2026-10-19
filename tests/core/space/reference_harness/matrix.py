@@ -102,8 +102,8 @@ ROWS: tuple[Row, ...] = (
     Row(
         "select-facts-break",
         _CORE,
-        "selecting a case reaches its rules: one false over the facts refuses the switch, naming "
-        "it with nothing standing",
+        "selecting a case brings its rules in: one false over the facts is newly false and "
+        "refuses the switch, naming it with nothing standing",
         f"{_CASES}::test_selecting_a_case_whose_rule_the_facts_break_is_refused_naming_the_rule",
         "change-breaks-rule",
     ),
@@ -301,7 +301,7 @@ ROWS: tuple[Row, ...] = (
     Row(
         "required-facts",
         _CORE,
-        "new facts breaking a rule they reach are refused, naming the rule and the stored choice "
+        "new facts making a rule newly false are refused, naming the rule and the stored choice "
         "standing",
         f"{_RULES}::test_new_facts_lacking_a_capability_a_stored_case_needs_are_refused",
         "change-breaks-rule",
@@ -351,7 +351,7 @@ ROWS: tuple[Row, ...] = (
         _CORE,
         "a switch is refused by a rule of the new case false over the facts, naming it, not for "
         "the old case's choices it leaves out of play",
-        f"{_RULES}::test_a_rule_in_a_case_that_never_names_its_selector_is_reached_by_switching",
+        f"{_RULES}::test_a_rule_in_a_case_that_never_names_its_selector_refuses_a_switch_to_it",
         "inactive-refused",
     ),
     Row(
