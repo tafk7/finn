@@ -48,16 +48,13 @@ from .forms import (
 #: engine carries those findings, not one of its own).
 CODES: Mapping[reference.ReasonKind, str] = {
     reference.ReasonKind.OUTSIDE_DOMAIN: "domain-membership",
-    # Provisional: today's engine names an empty list "decision-no-viable-case" (forcing's
-    # word); the engine core adopts this name, or both rename.
     reference.ReasonKind.EMPTY_DOMAIN: "domain-empty",
     # § 16.17: a present choice's membership input that does not apply
     reference.ReasonKind.INPUT_ABSENT: "domain-input-absent",
 }
 
-#: Provisional, as ``domain-empty``: the code of a guard's validity piece, a guard refused
-#: through an input (owned by the guarded scope), beside the codes of that input. Today's
-#: engine carries the input's findings alone.
+#: the code of a guard's validity piece, a guard refused through an input (owned by the
+#: guarded scope), beside the codes of that input
 GUARD_CODE = "guard-refused"
 
 #: the reason kinds that carry their own code, the code of the engine's rejection

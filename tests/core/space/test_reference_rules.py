@@ -8,7 +8,7 @@ A linking rule and a requirement (cases 5 and 6 of the reference cases; cases 1 
 model's rewrite: a change is assignment, refused where it makes a rule newly false, naming
 the rule at its origin and the stored choices standing in its way; a selector switched
 away puts its case's choices dormant. Each rule is a constraint in the model; the engine
-spells it as it is authored at this commit (``Spelling`` beside each case).
+spells it as it is authored (``Spelling`` beside each case).
 """
 
 from __future__ import annotations
@@ -36,8 +36,6 @@ from core.space.reference_harness import (
     Spelling,
     check_definition,
 )
-
-# Each test runs with the readers index used for every cache, then for none: the same answers.
 
 
 def divisors(extent: int) -> tuple[int, ...]:

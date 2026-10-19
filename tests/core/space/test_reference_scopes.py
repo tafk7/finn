@@ -31,9 +31,6 @@ from core.space.reference_harness import (
     check_definition,
 )
 
-# Each test runs with the readers index used for every cache, then for none: the same answers.
-
-
 # -- 9. views and validity -------------------------------------------------------------------------
 #
 # ``title`` presents the fact ``name``, ``doubled`` the choice ``x``. The Space refuses a

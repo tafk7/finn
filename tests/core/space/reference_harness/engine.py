@@ -4,8 +4,10 @@
 """The engine side of the harness: a model description built as an engine Space, and the
 engine asked the model's questions, each answer put in the comparable form (``forms``).
 
-Everything that depends on how the engine is **authored** or **asked** at this commit is in
-this one module, so the engine core's change of API is a port of this file alone:
+This is the adapter to the engine core. Everything that depends on how the engine is
+**authored** or **asked** is in this one module, so a change of the engine's API is a port of
+this file alone. The engine answers each question itself, in the model's terms: no legacy
+form, and no answer the adapter computes in the engine's place.
 
 - **Spelling.** A rule of the description is a constraint in the model, and in the engine
   every rule is a ``@constraint`` of the Space that owns it, which its Space's validity
@@ -137,9 +139,9 @@ Rule = Admission | Plain | Requirement | Obligation | ByName
 
 @dataclass(frozen=True)
 class Spelling:
-    """How a case's rules are written today (by rule path; ``Admission`` when absent) and
-    the value types the description does not state (by path; a listed domain's are read
-    from its values, everything else is ``int``)."""
+    """How a case's rules are written in the engine (by rule path; ``Admission`` when
+    absent) and the value types the description does not state (by path; a listed domain's
+    are read from its values, everything else is ``int``)."""
 
     rules: Mapping[str, Rule] = field(default_factory=dict)
     types: Mapping[str, type] = field(default_factory=dict)

@@ -220,9 +220,9 @@ def test_a_refused_input_carries_the_codes_of_its_origin() -> None:
     }
 
 
-def test_the_provisional_codes_mark_an_empty_list_and_a_refused_guard() -> None:
-    # ``domain-empty`` and ``guard-refused``: the engine core adopts them, or both rename.
-    # ``on-n`` is false through the guard: it carries the guard's origin, ``gate``.
+def test_the_codes_of_an_empty_list_and_a_refused_guard() -> None:
+    # ``domain-empty`` and ``guard-refused``, the engine core's codes too. ``on-n`` is false
+    # through the guard: it carries the guard's origin, ``gate``.
     solution = reference.Configuration(gated(), {"w": 3, "v": 4}).solve()
     assert validity_form(solution) == ValidityForm(
         "refused",

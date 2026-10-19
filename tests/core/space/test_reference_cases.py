@@ -31,8 +31,6 @@ from core.space.reference import (
 )
 from core.space.reference_harness import Case, Pair, Spelling
 
-# Each test runs with the readers index used for every cache, then for none: the same answers.
-
 
 def divisors(extent: int) -> tuple[int, ...]:
     return tuple(value for value in range(1, extent + 1) if extent % value == 0)

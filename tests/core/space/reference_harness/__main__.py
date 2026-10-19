@@ -4,9 +4,10 @@
 """From ``tests``: ``python -m core.space.reference_harness`` prints the acceptance matrix as a
 markdown table; ``python -m core.space.reference_harness walks --seeds 0-99 --steps 40`` runs
 the seeded walks and prints their
-summary, then each failed walk whole. While a milestone with rows is pending, the engine's
-disagreements are counted; ``--without "engine core"`` takes that milestone's rows as removed,
-so every disagreement fails its walk (the engine core's engine walked as if it had removed
+summary, then each failed walk whole. With no milestone pending (none is: the engine core's
+is accepted), every disagreement with the engine fails its walk. While a later milestone
+with rows is pending, its disagreements are counted; ``--without MILESTONE`` takes its rows
+as removed, so every disagreement fails its walk (its engine walked as if it had removed
 them). It exits 1 when a walk failed. The walks are imported by their command alone, so the
 matrix prints whatever state the walks are in."""
 
@@ -25,7 +26,7 @@ def main(argv: list[str]) -> int:
     walks.add_argument(
         "--without",
         default="",
-        help='milestones whose rows are taken as removed, comma-separated ("engine core")',
+        help="pending milestones whose rows are taken as removed, comma-separated",
     )
     arguments = parser.parse_args(argv)
     if arguments.command != "walks":

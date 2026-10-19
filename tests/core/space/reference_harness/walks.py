@@ -43,13 +43,14 @@ origins it is false through) and what stands in an origin's way (:class:`Structu
 reading 4), so the check is not the model checking itself: it reads the model's evaluation
 of each configuration (its ``Solution``) and never its change code nor its pairs.
 
-**The engine** (today's, on this branch) answers the same questions at every configuration
+**The engine** (the engine core's) answers the same questions at every configuration
 the model reaches, and the same change at every step. Its own **permanent checks** are
 strict always: the walked engine configuration answers every question, and every change,
 as one built from nothing (``support.space_walk.fresh``). A disagreement with the model is
 **counted, not failed, while a milestone with rows is pending** (:func:`pending`): tallied
-by question. With every milestone's rows taken as removed (``--without "engine core"``, or
-once the matrix has none) every disagreement fails the walk. An engine error always fails.
+by question. The matrix has none (the engine core's milestone is accepted), so the walks
+are strict: every disagreement fails the walk, as it does with a pending milestone's rows
+taken as removed (``--without``). An engine error always fails.
 Refinement on the engine side (its answers over an addition, in the same order) is a
 disagreement like any other where the model holds. Where the engine refuses a change the
 model accepts, the engine side takes the model's configuration by a bind from nothing; if
