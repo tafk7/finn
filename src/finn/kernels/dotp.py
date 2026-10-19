@@ -33,7 +33,8 @@ dense form of ``K = KH * KW * C``, the window being the activation channel's.
 PE's and SIMD's domains read facts only: N (``columns``) and the widest K any datapath
 of the operation reads (``widest_reduction``), which the parent states from its own
 facts, and a window's channels. SIMD's fit to the K of the datapath it takes is a rule
-(``simd_fits``).
+(``simd_fits``), and so is the statement's fit to the tensors (``extents_stated``: N is
+the weights' last axis, and the datapath's K divides the widest K).
 
 The results' range, ``result_range``, is its parent's statement (MatMul's); each core
 derives its accumulator (``ACCU_WIDTH``) and ``y_tensor``'s encoding from it. The range
@@ -261,6 +262,22 @@ class DotpAxiKernel(LeafKernel):
             return reject(
                 "dotp-simd",
                 f"SIMD {self.simd} does not divide the datapath's extent {self.simd_extent}",
+            )
+        return True
+
+    @constraint
+    def extents_stated(self) -> bool | Rejected:
+        # The extents the folding factors' domains read are the parent's statement: N is
+        # the weights' last axis, and the datapath's K (a window's taps times its
+        # channels) divides the widest K (a K stated too small would drop SIMD values
+        # that fit the datapath).
+        extents = self.extents
+        reduction = prod(extents[index] for index in self.reduced)
+        if self.columns != extents[n] or self.widest_reduction % reduction:
+            return reject(
+                "dotp-extents",
+                f"the stated extents (N {self.columns}, widest K {self.widest_reduction}) "
+                f"disagree with the tensors (N {extents[n]}, K {reduction})",
             )
         return True
 

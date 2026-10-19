@@ -24,10 +24,11 @@ from finn.core.space import (
     DefinitionError,
     Rejected,
     Unresolved,
+    design_space,
     inspection,
 )
 from finn.dataflow.gemm import Form
-from finn.dataflow.tensor import ScalarEncoding
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Clock, Data
 from finn.kernels.artifacts.abi import Derived as DerivedClock
@@ -341,6 +342,35 @@ def test_the_core_refuses_before_its_folding_factors_are_chosen():
     assert isinstance(open_factors.inspect(type(open_factors).core_supported).result, Available)
     assert isinstance(open_factors.inspect(DotpAxiKernel.module).accepted_result, Unresolved)
     assert open_factors.x.element.bits == 3
+
+
+@pytest.mark.parametrize(
+    ("columns", "widest", "refused"),
+    ((2, 4, False), (2, 8, False), (3, 4, True), (2, 2, True), (2, 6, True)),
+)
+def test_a_core_s_stated_extents_are_checked_against_its_tensors(columns, widest, refused):
+    """N, stated by the parent (``columns``), is the weights' last axis, and the
+    datapath's K divides the widest K stated (``widest_reduction``): a K stated too
+    small, or one the datapath's does not divide, would list SIMD values that do not fit
+    it, or drop ones that do. Weights (4, 2): N 2, K 4."""
+    x = Tensor((1, 4), ScalarEncoding(DataType["INT3"]))
+    w = Tensor((4, 2), ScalarEncoding(DataType["INT3"]))
+    point = design_space(
+        PackedDotpKernel(
+            result_range=(-128, 127),
+            x_tensor=x,
+            w_tensor=w,
+            columns=columns,
+            widest_reduction=widest,
+            platform=FULL_DSP58,
+        )
+    )
+    found = point.inspect(PackedDotpKernel.extents_stated).result
+    if refused:
+        assert codes(found) == {"dotp-extents"}
+        assert inspection.validity(point).status == "refused"
+    else:
+        assert found == Available(True)
 
 
 def test_the_platform_is_a_required_fact():
