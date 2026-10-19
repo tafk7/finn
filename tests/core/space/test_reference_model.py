@@ -11,6 +11,7 @@ these tests are what the oracle is held to. "§" cites the semantics note
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -296,7 +297,10 @@ def cores() -> Space:
     return Space(("has_dsp58",), Scope("", selectors=(Selector("compute", (packed, dsp58)),)))
 
 
-def test_a_rule_in_a_case_that_never_names_its_selector_is_reached_by_switching() -> None:
+def test_a_rule_in_a_case_that_never_names_its_selector_refuses_a_switch_to_it() -> None:
+    """``supported`` is absent before the switch, and false at its own origin after it:
+    a new pair, nothing standing (it reads the facts alone)."""
+
     base = Configuration(
         cores(), {"has_dsp58": False}, {"compute": "packed", "compute.packed.pe": 2}
     )
@@ -536,24 +540,34 @@ def facts_refused() -> Space:
     )
 
 
-def test_reading_2_only_an_origin_feeding_a_false_piece_and_reached_refuses() -> None:
-    """``c`` reads ``d`` (refusing on the facts alone) and the open ``x``: setting ``x``
-    does not reach ``d``, so it is accepted. ``e`` refuses on ``x = 2``, and nothing
-    rules on it: it reads refused where asked, and refuses no change."""
+def test_reading_2_setting_x_beside_a_rule_false_through_facts_only_d_is_accepted() -> None:
+    """§ 16.15, what stays: ``c`` reads ``d`` (refusing on the facts alone) and the open
+    ``x``, and is false through ``d`` before and after setting ``x``: no new pair, so the
+    change is accepted and the configuration still reads refused."""
 
     broken = Configuration(facts_refused(), {"w": 3})
     assert broken.solve().validity().verdict is F
     kept = accepted(change(broken, Change(commit={"x": 1})))
     assert kept.validity.verdict is F
+    assert kept.validity.false[0].reasons == (
+        Reason(ReasonKind.INPUT_REFUSED, "c", "", "small", ("d",)),
+    )
+    # a facts change making d refuse while c stood true adds the pair (c, d): refused at d
+    sound = accepted(change(Configuration(facts_refused(), {"w": 4}), Change(commit={"x": 1})))
+    assert rejected(change(sound.configuration, Change(facts={"w": 5}))).refusals == (
+        RuleRefusal("d", "derived", (Reason(ReasonKind.DERIVED_BODY, "d", "", "bad"),), ()),
+    )
+
+
+def test_reading_2_a_refusing_derived_value_nothing_rules_on_refuses_no_change() -> None:
+    """§ 16.15, what stays: ``e`` refuses on ``x = 2`` and nothing rules on it; it reads
+    refused where asked, is in no pair, and refuses no change."""
+
     sound = Configuration(facts_refused(), {"w": 4})
     two = accepted(change(sound, Change(commit={"x": 2})))
     assert two.validity.verdict is T
     assert two.configuration.solve().read("e") == Refused(
         (Reason(ReasonKind.DERIVED_BODY, "e", "", "two"),)
-    )
-    # a facts change reaching d is refused at d, nothing standing
-    assert rejected(change(two.configuration, Change(facts={"w": 5}))).refusals == (
-        RuleRefusal("d", "derived", (Reason(ReasonKind.DERIVED_BODY, "d", "", "bad"),), ()),
     )
 
 
@@ -566,7 +580,10 @@ def guarded_by(read: str) -> Scope:
     )
 
 
-def test_reading_3_a_when_read_reaches_the_rules_it_guards() -> None:
+def test_reading_3_a_facts_change_bringing_a_guarded_rule_into_play_false_is_refused() -> None:
+    """``g.small`` does not apply while ``wide`` is false; setting it makes ``g`` present
+    and ``g.small`` false at its own origin: a new pair, ``g.n`` standing."""
+
     space = Space(("wide",), Scope("", children=(guarded_by("wide"),)))
     base = Configuration(space, {"wide": False}, {"g.n": 3})
     assert base.solve().state("g.n") == Dormant(3)
@@ -667,9 +684,10 @@ def test_reading_6_a_value_waiting_on_a_missing_fact_is_checked_when_it_comes() 
     assert unset.configuration.solve().state("lanes") == Waiting(2, ("n",))
 
 
-def test_reading_3_a_value_the_facts_change_lets_be_read_reaches_its_rules() -> None:
-    """``lanes = 4`` waits on ``n``; the facts change supplying ``n`` makes it read as
-    its value, which reaches ``cap``: refused, with ``lanes`` standing."""
+def test_reading_3_a_value_the_facts_change_lets_be_read_refuses_by_its_rule() -> None:
+    """``lanes = 4`` waits on ``n``, ``cap`` unknown; the facts change supplying ``n``
+    makes it read as its value, and ``cap`` false at its own origin: a new pair, refused
+    with ``lanes`` standing."""
 
     waiting = Configuration(capped(), {}, {"lanes": 4})
     assert waiting.solve().piece("cap").verdict is U
@@ -767,7 +785,7 @@ def test_reading_7_the_constructor_checks_types_and_a_broken_rule_is_legal() -> 
     assert Configuration(capped(), {}, {"lanes": 5}).solve().state("lanes") == Waiting(5, ("n",))
     broken = Configuration(linked(), {}, {"a": 1, "b": 3})
     assert false_kinds(broken.solve()) == {(PieceKind.CONSTRAINT, "linked")}
-    # a change that does not reach the rule is accepted, the configuration still refused
+    # a change adding no pair is accepted, the configuration still refused
     assert accepted(change(broken, Change(commit={"z": 1}))).validity.verdict is F
     # the same stored set as a change from nothing is refused (the engine's bind)
     assert rejected(change(Configuration(linked()), Change(commit={"a": 1, "b": 3}))).refusals == (
@@ -841,8 +859,9 @@ def test_reading_8_a_refused_guard_is_one_piece_and_its_scope_is_not_in_play() -
 
 def test_reading_8_a_refused_guard_under_an_open_selector_waits_on_it() -> None:
     """Refused takes effect once all above the guard is present: until ``mode`` is set
-    the scope and its guard's piece are unknown. Setting ``mode`` does not reach
-    ``gate``, the origin, so it is accepted and the configuration reads refused."""
+    the scope and its guard's piece are unknown. Setting ``mode`` makes the guard's piece
+    false through ``gate``, over the facts alone: a new pair, so the switch is refused at
+    ``gate`` with nothing standing (§ 16.15; § 16.13 accepted it)."""
 
     g = Scope(
         "g", when=When(("gate",), lambda r: r["gate"] > 2), choices=(Choice("n", listed(1, 2)),)
@@ -862,8 +881,9 @@ def test_reading_8_a_refused_guard_under_an_open_selector_waits_on_it() -> None:
     assert solution.validity().unknown[-1] == Piece(
         PieceKind.GUARD, "mode.a.g", "mode.a.g", U, waits=("mode",)
     )
-    result = accepted(change(base, Change(commit={"mode": "a"})))
-    assert (result.dormant, result.in_play, result.opened) == (("mode.a.g.n",), (), ())
+    result = rejected(change(base, Change(commit={"mode": "a"})))
+    assert result.refusals == (RuleRefusal("gate", "derived", (GATE,), ()),)
+    assert result.validity is not None
     assert result.validity.false == (
         Piece(
             PieceKind.GUARD,
@@ -876,6 +896,10 @@ def test_reading_8_a_refused_guard_under_an_open_selector_waits_on_it() -> None:
             ),
         ),
     )
+    # the other case is accepted; and under even facts, the switch to ``a`` is too
+    assert accepted(change(base, Change(commit={"mode": "b"}))).dormant == ("mode.a.g.n",)
+    even = Configuration(space, {"w": 4}, {"mode.a.g.n": 1})
+    assert accepted(change(even, Change(commit={"mode": "a"}))).in_play == ("mode.a.g.n",)
 
 
 def counted() -> Space:
@@ -893,6 +917,20 @@ def test_reading_9_a_facts_change_emptying_a_domain_is_refused_not_yet_ruled_on(
     assert result.refusals == (
         RuleRefusal("x", "empty-domain", (Reason(ReasonKind.EMPTY_DOMAIN, "x", ""),), ()),
     )
+    # a domain already empty adds no pair: new facts keeping it empty are accepted
+    empty = Configuration(counted(), {"n": 0})
+    assert accepted(change(empty, Change(facts={"n": -1}))).validity.verdict is F
+
+
+def test_reading_9_a_switch_to_the_case_of_a_domain_the_facts_empty_is_refused() -> None:
+    """§ 16.15, what stays: under the open ``mode`` the empty list is an unknown piece;
+    selecting ``on`` makes it false at its own origin, a new pair, nothing standing."""
+
+    base = Configuration(held(), {"n": 0})
+    result = rejected(change(base, Change(commit={"mode": "on"})))
+    reason = Reason(ReasonKind.EMPTY_DOMAIN, "mode.on.x", "mode.on")
+    assert result.refusals == (RuleRefusal("mode.on.x", "empty-domain", (reason,), ()),)
+    assert accepted(change(base, Change(commit={"mode": "off"}))).validity.verdict is T
 
 
 def test_an_empty_list_is_a_false_piece_and_a_waiting_list_an_unknown_one() -> None:
@@ -910,14 +948,15 @@ def test_an_empty_list_is_a_false_piece_and_a_waiting_list_an_unknown_one() -> N
     assert solve(counted(), {"n": 2}).possible("x") == ((0, Possible()), (1, Possible()))
 
 
+def held() -> Space:
+    case = Scope("on", choices=(Choice("x", computed(lambda r: tuple(range(r["n"])), ("n",))),))
+    return Space(("n",), Scope("", selectors=(Selector("mode", (case, Scope("off"))),)))
+
+
 def test_reading_13_a_listed_choice_under_an_open_selector_is_no_piece() -> None:
     """§ 16.12: a list with a value adds no piece, whatever its presence; so an open
     selector whose case holds a listed choice and no rules leaves the configuration
     valid. Emptied, the same list is an unknown piece under the waiting selector."""
-
-    def held() -> Space:
-        case = Scope("on", choices=(Choice("x", computed(lambda r: tuple(range(r["n"])), ("n",))),))
-        return Space(("n",), Scope("", selectors=(Selector("mode", (case, Scope("off"))),)))
 
     open_selector = solve(held(), {"n": 2})
     assert open_selector.state("mode") == Open()
@@ -958,6 +997,186 @@ def test_reading_10_the_ranking_is_its_own_answer_and_possible_keeps_list_order(
     assert large.ordered("size") == Known(("small", "large"))
     assert large.ordered("depth") is None
     assert large.possible("depth") is None
+
+
+# --- § 16.15: a change is refused by a new (false piece, origin) pair ---------------------
+
+
+def odd_refuses(read: str) -> Callable[[Reads], Any]:
+    return lambda r: Refuse("odd") if r[read] % 2 else r[read]
+
+
+def case_rules_over_facts(root_rule: bool = False) -> Space:
+    """``d`` at the root and ``e`` in case ``inner`` refuse an odd fact ``w``; case
+    ``outer``'s rule reads ``d``, case ``inner``'s reads ``e``; ``root_rule``: the root's
+    ``uses`` reads ``d`` too."""
+
+    outer = Scope("outer", constraints=(Constraint("fits", ("d",), lambda r: r["d"] > 0, "none"),))
+    inner = Scope(
+        "inner",
+        derived=(Derived("e", ("w",), odd_refuses("w")),),
+        constraints=(
+            Constraint("fits", ("mode.inner.e",), lambda r: r["mode.inner.e"] > 0, "none"),
+        ),
+    )
+    return Space(
+        ("w",),
+        Scope(
+            "",
+            derived=(Derived("d", ("w",), odd_refuses("w")),),
+            selectors=(Selector("mode", (outer, inner, Scope("off"))),),
+            constraints=(
+                (Constraint("uses", ("d",), lambda r: r["d"] > 0, "unused"),) if root_rule else ()
+            ),
+        ),
+    )
+
+
+def test_a_switch_to_a_case_whose_rule_the_facts_alone_break_is_refused_inside_or_outside() -> None:
+    """§ 16.15, what changes: with ``w`` odd and ``off`` selected nothing rules on ``d``
+    or ``e`` (valid). Each other case's rule is absent before the switch and false through
+    a derived value over the facts alone after it: a new pair, refused at that value with
+    nothing standing, the value outside the case (``d``) or inside it (``e``) alike."""
+
+    base = Configuration(case_rules_over_facts(), {"w": 3}, {"mode": "off"})
+    assert base.solve().validity().verdict is T
+    outer = RuleRefusal("d", "derived", (Reason(ReasonKind.DERIVED_BODY, "d", "", "odd"),), ())
+    assert rejected(change(base, Change(commit={"mode": "outer"}))).refusals == (outer,)
+    inner = Reason(ReasonKind.DERIVED_BODY, "mode.inner.e", "mode.inner", "odd")
+    assert rejected(change(base, Change(commit={"mode": "inner"}))).refusals == (
+        RuleRefusal("mode.inner.e", "derived", (inner,), ()),
+    )
+    # from the open selector alike: each case's rule is unknown before, not false
+    unset = Configuration(case_rules_over_facts(), {"w": 3})
+    assert rejected(change(unset, Change(commit={"mode": "outer"}))).refusals == (outer,)
+    even = Configuration(case_rules_over_facts(), {"w": 4}, {"mode": "off"})
+    assert accepted(change(even, Change(commit={"mode": "outer"}))).validity.verdict is T
+
+
+def test_an_origin_counted_on_one_piece_still_refuses_where_it_makes_another_false() -> None:
+    """Pairs are told by piece and origin: with ``uses`` already false through ``d``, the
+    switch to ``outer`` adds the pair (``mode.outer.fits``, ``d``), and is refused at ``d``."""
+
+    base = Configuration(case_rules_over_facts(root_rule=True), {"w": 3}, {"mode": "off"})
+    assert false_kinds(base.solve()) == {(PieceKind.CONSTRAINT, "uses")}
+    outer = RuleRefusal("d", "derived", (Reason(ReasonKind.DERIVED_BODY, "d", "", "odd"),), ())
+    assert rejected(change(base, Change(commit={"mode": "outer"}))).refusals == (outer,)
+
+
+def case_rule_over_a_stored_choice() -> Space:
+    """``dc`` refuses ``c = 3``; case ``on``'s rule reads it."""
+
+    on = Scope("on", constraints=(Constraint("fits", ("dc",), lambda r: r["dc"] > 0, "none"),))
+    return Space(
+        (),
+        Scope(
+            "",
+            choices=(Choice("c", listed(1, 2, 3)),),
+            derived=(Derived("dc", ("c",), lambda r: Refuse("three") if r["c"] == 3 else r["c"]),),
+            selectors=(Selector("mode", (on, Scope("off"))),),
+        ),
+    )
+
+
+def test_a_switch_to_a_case_whose_rule_is_false_through_a_stored_choice_names_it_standing() -> None:
+    """§ 16.15, what changes: ``c = 3`` under ``off`` is accepted (``dc`` refuses, and
+    nothing rules on it); switching to ``on`` makes ``on.fits`` false through ``dc``, a
+    new pair: refused at ``dc``, with ``c`` standing."""
+
+    off = accepted(
+        change(Configuration(case_rule_over_a_stored_choice()), Change(commit={"mode": "off"}))
+    )
+    three = accepted(change(off.configuration, Change(commit={"c": 3})))
+    assert three.validity.verdict is T
+    three_reason = Reason(ReasonKind.DERIVED_BODY, "dc", "", "three")
+    assert rejected(change(three.configuration, Change(commit={"mode": "on"}))).refusals == (
+        RuleRefusal("dc", "derived", (three_reason,), ("c",)),
+    )
+    # the caller sets c in the same batch, or clears it first
+    assert accepted(change(three.configuration, Change(commit={"mode": "on", "c": 2})))
+    cleared = accepted(change(three.configuration, Change(clear=("c",))))
+    assert (
+        accepted(change(cleared.configuration, Change(commit={"mode": "on"}))).validity.verdict is U
+    )
+    # the walked configuration binds again from nothing (FN3)
+    bind = change(
+        Configuration(case_rule_over_a_stored_choice()), Change(commit={"mode": "off", "c": 3})
+    )
+    assert accepted(bind).configuration.stored == three.configuration.stored
+
+
+def short() -> Space:
+    """``d`` is ``x + z``, refusing an odd sum; ``r`` asks ``d`` to be at least ``y``."""
+
+    return Space(
+        (),
+        Scope(
+            "",
+            choices=tuple(Choice(name, listed(1, 2, 3, 4)) for name in ("x", "y", "z")),
+            derived=(
+                Derived(
+                    "d",
+                    ("x", "z"),
+                    lambda r: Refuse("odd") if (r["x"] + r["z"]) % 2 else r["x"] + r["z"],
+                ),
+            ),
+            constraints=(Constraint("r", ("d", "y"), lambda r: r["d"] >= r["y"], "short"),),
+        ),
+    )
+
+
+def test_a_broken_configuration_accepts_its_pair_kept_and_refuses_a_new_one() -> None:
+    """Built directly with ``r`` false at its own origin (``2 >= 4``): ``y = 3`` keeps it
+    false through ``r`` (no new pair, accepted, still refused); ``x = 2`` makes it false
+    through ``d`` instead (``3`` is odd), a new pair: refused at ``d``, ``z`` standing;
+    ``y = 1`` makes it true."""
+
+    broken = Configuration(short(), {}, {"x": 1, "y": 4, "z": 1})
+    assert false_kinds(broken.solve()) == {(PieceKind.CONSTRAINT, "r")}
+    kept = accepted(change(broken, Change(commit={"y": 3})))
+    assert kept.validity.false[0].reasons == (constraint_reason("r", "short"),)
+    odd = Reason(ReasonKind.DERIVED_BODY, "d", "", "odd")
+    assert rejected(change(broken, Change(commit={"x": 2}))).refusals == (
+        RuleRefusal("d", "derived", (odd,), ("z",)),
+    )
+    assert accepted(change(broken, Change(commit={"y": 1}))).validity.verdict is T
+
+
+def viewed_child() -> Space:
+    """The child ``c`` caps ``x``; its view ``v`` answers ``y``; the root's ``high``
+    asks ``v`` to be at least 2."""
+
+    child = Scope(
+        "c",
+        choices=(Choice("x", listed(1, 2, 3)), Choice("y", listed(1, 2, 3))),
+        constraints=(Constraint("small", ("c.x",), lambda r: r["c.x"] <= 1, "big"),),
+        views=(View("v", ("c.y",), lambda r: r["c.y"]),),
+    )
+    return Space(
+        (),
+        Scope(
+            "",
+            children=(child,),
+            constraints=(Constraint("high", ("c.v",), lambda r: r["c.v"] >= 2, "low"),),
+        ),
+    )
+
+
+def test_clearing_is_refused_where_a_view_stops_refusing_with_its_space() -> None:
+    """§ 16.15 read literally, against § 5.6's "clearing never refuses" (open): with
+    ``c`` refused, ``v`` refuses with it and ``high`` is false through ``v`` with no
+    origin of its own. Clearing ``x`` leaves ``c`` open, so ``v`` answers 1 and ``high``
+    is false at its own origin: a new pair, refused, ``c.y`` standing."""
+
+    broken = Configuration(viewed_child(), {}, {"c.x": 3, "c.y": 1})
+    assert false_kinds(broken.solve()) == {
+        (PieceKind.CONSTRAINT, "high"),
+        (PieceKind.CONSTRAINT, "c.small"),
+    }
+    assert rejected(change(broken, Change(clear=("c.x",)))).refusals == (
+        rule("high", "low", standing=("c.y",)),
+    )
+    assert accepted(change(broken, Change(clear=("c.x",), commit={"c.y": 2})))
 
 
 # --- assignment ---------------------------------------------------------------------------

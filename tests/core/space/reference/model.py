@@ -60,18 +60,18 @@ and the original kept.
    whose membership reads a refused input, refuses the change
    (:class:`~.answers.AssignmentRefusal`). A value whose membership waits on a missing
    fact is accepted, and waits.
-2. *Origins.* In the successor: a constraint false on its own values; a derived value
+2. *Counted pairs.* An origin is a constraint false on its own values; a derived value
    or a view refusing on its own values; a present choice whose listed domain lists no
-   value. An origin counts when it feeds a false piece of the root's validity: it is
-   that piece, or the piece is false through refused inputs leading back to it.
-3. *Reach.* A counted origin is reached when its dependencies hold a choice the change
-   commits with a new value, a stored choice the change brings to be read as its value,
-   or a fact the change sets to a new value. Clearing choices and unsetting facts
-   reach nothing.
-4. *Refusal.* Each counted, reached origin refuses the change
-   (:class:`~.answers.RuleRefusal`), naming the stored choices standing in its way.
-   A rule false only through a refused input is never itself a refusal.
-5. *Accepted*, the change reports the stored choices it puts dormant or brings into
+   value. A configuration's counted pairs are each false piece of the root's validity
+   with each origin it is false through: the piece itself, or the origins its refused
+   inputs lead back to.
+3. *Refusal.* The change is refused when the successor holds a counted pair the
+   predecessor does not: a piece false through an origin it was not false through
+   before (a piece absent, unknown or true before counts as not false before). Each
+   origin of such a pair refuses it once (:class:`~.answers.RuleRefusal`), naming the
+   stored choices standing in its way. A rule false only through a refused input is
+   never itself a refusal. So no accepted change adds a pair.
+4. *Accepted*, the change reports the stored choices it puts dormant or brings into
    play and the open choices it brings into presence. A change that changes nothing
    returns the same configuration.
 
@@ -88,21 +88,32 @@ corpus; § 16 holds the readings its author gave for this model.
 1. *A view's body refusing on its own values is an origin* (§ 16.1), as a derived
    value's is. A view refused because its Space is refused is refused through, never an
    origin: its Space's false pieces are counted on their own.
-2. *Only an origin feeding a false piece refuses* (§ 16.2). The origins are found from
-   the false pieces of the root's validity, following refused inputs back through
-   derived values, views, and choices and values refused through a guard (to the
-   guard's refused reads). A refusing derived value or view nothing rules on reads
-   refused where it is asked and refuses no change.
-3. *What reaches an origin* (§ 16.3): its **dependencies**, its declared reads
-   followed through derived values' and views' bodies (never a view's Space's
-   validity), with the selector and the ``when`` reads of every scope above each node
-   met, the origin's own scope included, followed the same way. So a rule in a case is
-   reached by switching to that case, and a rule reading a child's view by switching to
-   the case holding that view. A listed domain's dependencies are its membership's
-   reads and its choice's scopes' selectors and ``when`` reads. "Brought into play" is
-   read as "read as its value after the change and not before": a stored choice whose
-   scope becomes present, or whose membership waited on a fact the change supplies
-   (otherwise that facts change could leave a reached rule false).
+2. *Only an origin feeding a false piece counts* (§ 16.2, kept by § 16.15). A piece's
+   origins are found from it, following refused inputs back through derived values,
+   views, and choices and values refused through a guard (to the guard's refused reads);
+   a listed domain's list refused through its membership's input, back over the facts.
+   A refusing derived value or view nothing rules on reads refused where it is asked,
+   is in no pair, and refuses no change. A piece false only through a view refused with
+   its Space has no origin of its own: its Space's false pieces are counted on their
+   own (reading 1).
+3. *A change is refused by a new pair* (§ 16.15, which replaces § 16.2-16.3's reach and
+   supersedes § 16.13's first consequence and § 16.14). Pieces are told apart by kind,
+   owner and subject; a pair is new when the predecessor lacks it, whatever moved.
+   Consequences: setting ``x`` beside a rule already false through ``d``, which refuses
+   on the facts alone, adds no pair and is accepted; switching to a case whose rule (or
+   guard) is false through the facts alone is refused with nothing standing, the
+   refusing derived value inside the case or outside it alike; a switch to a case whose
+   rule is false through a derived value over a stored ``c`` is refused with ``c``
+   standing; a configuration built with a broken rule accepts a change keeping that
+   rule false through the same origin, and refuses one making it false through another.
+   Every accepted change leaves the set of pairs no larger, so the bind of a
+   configuration reached by accepted changes from nothing is accepted (FN3), and no
+   accepted addition leaves a Space newly refused (§ 16.14's exception cannot arise).
+   Read literally, clearing (or unsetting a fact) can refuse in one shape: a piece
+   false only through a view refused with its Space, whose Space the clearing leaves
+   no longer refused, so that the view answers and the piece is false at an origin of
+   its own. § 5.6 says clearing never refuses; the model follows § 16.15's words, and
+   the difference is an open question for the note.
 4. *What stands in the way* (§ 16.4): the stored choices among the origin's declared
    reads followed through derived values' and views' bodies (not its presence's
    reads), less every choice the change names (committed or cleared) and every choice
@@ -127,11 +138,13 @@ corpus; § 16 holds the readings its author gave for this model.
    guarded scope, at the highest such guard (scopes under it add nothing). A refused
    ``when`` below a selector or a parent that is still unknown leaves the scope unknown
    and its piece unknown: refused takes effect once all above it is present.
-9. *A facts change emptying a present choice's listed domain is refused* (§ 16.9),
-   naming the ``EMPTY_DOMAIN`` origin with nothing standing; so is any change reaching
-   such a domain (a switch to the case holding it). **Not yet ruled on by the human.**
-   The single switch is :data:`EMPTY_DOMAIN_REFUSES`; off, an empty domain never
-   refuses a change and the configuration reads refused.
+9. *A change newly emptying a present choice's listed domain is refused* (§ 16.9, in
+   § 16.15's terms): a facts change emptying it, or a switch to the case holding it,
+   adds the pair of its ``EMPTY_DOMAIN`` piece and itself, and is refused naming it
+   with nothing standing. A domain already empty before the change adds no pair.
+   **Not yet ruled on by the human.** The single switch is
+   :data:`EMPTY_DOMAIN_REFUSES`; off, an empty domain never refuses a change and the
+   configuration reads refused.
 10. *A domain's order* (§ 16.10) ranks the membership list over ``order_reads``, which
     may read choices: :meth:`Solution.ordered` is the ranking, known, or waiting while a
     read waits. Possible values are answered in membership's list order.
@@ -193,8 +206,8 @@ from .answers import (
 )
 from .description import Index, Refuse, Space
 
-#: Reading 9 (§ 16.9), not yet ruled on by the human: a change reaching a present
-#: choice's empty listed domain is refused. The one place the reading is decided.
+#: Reading 9 (§ 16.9), not yet ruled on by the human: a change newly emptying a present
+#: choice's listed domain is refused. The one place the reading is decided.
 EMPTY_DOMAIN_REFUSES = True
 
 
@@ -663,29 +676,32 @@ class _Evaluation:
 
     # -- origins
 
-    def origins(self) -> _Origins:
-        """Every origin feeding a false piece of the root's validity (reading 2)."""
+    def pairs(self) -> dict[tuple[str, str, str], _Origins]:
+        """The counted pairs (reading 2): each false piece of the root's validity, by its
+        :func:`~.answers.piece_key`, with the origins it is false through."""
 
-        found: _Origins = {}
+        found: dict[tuple[str, str, str], _Origins] = {}
         for piece in self.validity("").false:
+            origins: _Origins = {}
             if piece.kind is PieceKind.CONSTRAINT:
                 own = tuple(r for r in piece.reasons if r.kind is ReasonKind.CONSTRAINT)
                 if own:
-                    found[piece.subject] = ("constraint", own)
+                    origins[piece.subject] = ("constraint", own)
                 else:
                     for read in self.inputs(self.index.reads_of(piece.subject)).refused:
-                        self._read_origins(read, found)
+                        self._read_origins(read, origins)
             elif piece.kind is PieceKind.EMPTY_DOMAIN:
                 listing = self.facts.listing(piece.subject)
                 if isinstance(listing, Known):
-                    found[piece.subject] = ("empty-domain", piece.reasons)
+                    origins[piece.subject] = ("empty-domain", piece.reasons)
                 else:
                     reads = self.index.choices[piece.subject].domain.reads
                     for read in self.facts.inputs(reads).refused:
-                        self.facts.origins(read, found)
+                        self.facts.origins(read, origins)
             else:
                 for read in self.parts(piece.subject)[2].guards:
-                    self._read_origins(read, found)
+                    self._read_origins(read, origins)
+            found[piece_key(piece)] = origins
         return found
 
     def _read_origins(self, path: str, found: _Origins) -> None:
@@ -787,14 +803,6 @@ def _assignment(checker: FactsOnly, path: str, value: Any) -> tuple[Reason, ...]
     return ()
 
 
-def _origin_dependencies(index: Index, origin: str, kind: str) -> frozenset[str]:
-    """What reaches an origin (reading 3)."""
-
-    if kind == "empty-domain":
-        return index.through_bodies(index.reads_of(origin)) | index.dependencies((origin,))
-    return index.dependencies((origin,))
-
-
 def _standing(
     index: Index, origin: str, kind: str, stored: Mapping[str, Any], named: set[str]
 ) -> tuple[str, ...]:
@@ -845,36 +853,22 @@ def change(configuration: Configuration, edit: Change) -> Accepted | Rejected:
     before = Solution(configuration)
     after = Solution(successor)
 
-    # 3. what the change touches: new values, values read anew, new facts
-    old = configuration.stored
-    touched = {
-        path for path, value in edit.commit.items() if path not in old or not same(old[path], value)
-    }
-    touched.update(
-        path
-        for path in stored
-        if isinstance(after.state(path), Set) and not isinstance(before.state(path), Set)
-    )
-    touched.update(
-        name
-        for name, value in edit.facts.items()
-        if name not in configuration.facts or not same(configuration.facts[name], value)
-    )
-
-    # 2 and 4. each counted origin the change reaches refuses it
+    # 2 and 3. each origin of a counted pair the predecessor lacks refuses the change, once
+    counted = before.evaluation.pairs()
     named = set(edit.commit) | set(edit.clear)
-    refusals: list[ChangeRefusal] = []
-    for origin, (kind, reasons) in sorted(after.evaluation.origins().items()):
-        if kind == "empty-domain" and not EMPTY_DOMAIN_REFUSES:
-            continue
-        if not _origin_dependencies(index, origin, kind) & touched:
-            continue
-        standing = _standing(index, origin, kind, stored, named)
-        refusals.append(RuleRefusal(origin, kind, reasons, standing))
+    refusals: dict[str, ChangeRefusal] = {}
+    for piece, origins in sorted(after.evaluation.pairs().items()):
+        for origin, (kind, reasons) in sorted(origins.items()):
+            if origin in counted.get(piece, {}) or origin in refusals:
+                continue
+            if kind == "empty-domain" and not EMPTY_DOMAIN_REFUSES:
+                continue
+            standing = _standing(index, origin, kind, stored, named)
+            refusals[origin] = RuleRefusal(origin, kind, reasons, standing)
     if refusals:
-        return Rejected(tuple(sorted(refusals, key=refusal_key)), after.validity())
+        return Rejected(tuple(sorted(refusals.values(), key=refusal_key)), after.validity())
 
-    # 5. what moved
+    # 4. what moved
     dormant: list[str] = []
     in_play: list[str] = []
     opened: list[str] = []

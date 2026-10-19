@@ -460,7 +460,7 @@ class Index:
             return self.views[path][0].reads
         return self.choices[path].domain.reads
 
-    # -- read closures, what a change reaches and what stands in its way
+    # -- read closures: what stands in an origin's way, and what decides a scope's existence
 
     def _followed(self, path: str) -> bool:
         """Whether a closure follows ``path``'s reads: a constraint's (a seed), a

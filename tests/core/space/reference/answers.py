@@ -226,8 +226,8 @@ class AssignmentRefusal:
 
 @dataclass(frozen=True)
 class RuleRefusal:
-    """A rule the change reaches, false at its origin. ``origin`` is the node where the
-    failure starts; ``kind`` is ``"constraint"``, ``"derived"``, ``"view"`` or
+    """An origin the change makes a piece newly false through (§ 16.15). ``origin`` is
+    the node where the failure starts; ``kind`` is ``"constraint"``, ``"derived"``, ``"view"`` or
     ``"empty-domain"`` (``origin`` then the choice whose listed domain lists no
     value); ``reasons`` its own reason; ``standing`` the stored choices standing in the
     way, which the caller sets in the same change or clears first."""
