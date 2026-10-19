@@ -943,7 +943,9 @@ def _choice_piece(
     world: World, piece: Node, trace: _Trace, reads: ReadSet, guards: set[NodeId]
 ) -> tuple[QueryResult[bool] | None, ReadSet]:
     """A choice's validity piece, read from its guard and its listed values (never from
-    its stored value), or ``None`` where it is no piece."""
+    its stored value), or ``None`` where it is no piece. A domain that lists nothing
+    (membership only) is never a piece: its inputs are not read, so neither their wait
+    nor their refusal makes it one."""
     waiting: Unresolved | None = None
     if piece.guard is not None:
         guard, reads = world.read(trace, piece.guard, reads)
@@ -957,7 +959,7 @@ def _choice_piece(
             waiting = answer
         elif _guard_result(piece, answer) is not None:
             return None, reads  # absent
-    if piece.domain is None:
+    if piece.domain is None or piece.domain.candidates is None:
         return None, reads
     if waiting is not None:
         # Presence unknown: its list as if it existed; empty (or not known) it is an
@@ -969,13 +971,13 @@ def _choice_piece(
         trace.extend((source, place._get(source).result) for source in bits.nodes(found))
         reads |= found
         if isinstance(listed, Available):
-            return (None if listed.value is not False else waiting), reads
+            return (None if listed.value else waiting), reads
         if isinstance(listed, Unresolved):  # it waits on a missing fact too
             return Unresolved(merged_findings((waiting, listed))), reads
         return waiting, reads
     listed, reads = _lists_a_value(world, piece, trace, reads)
     if isinstance(listed, Available):
-        return (_empty_domain(piece) if listed.value is False else None), reads
+        return (None if listed.value else _empty_domain(piece)), reads
     return cast(QueryResult[bool], listed), reads
 
 
@@ -1788,18 +1790,15 @@ def _first_member(
 def _lists_a_value(
     world: World, node: Node, trace: _Trace, reads: ReadSet
 ) -> tuple[QueryResult[object], ReadSet]:
-    """Whether a choice's domain lists a value here: ``Available(True)`` or
-    ``Available(False)`` (``Available(None)``: membership only, nothing is listed), or the
-    non-value its inputs answer. Membership is asked up to the first value it holds (the
-    full list, where it was already made, answers at once); memoized on the domain
-    inputs' answers."""
+    """Whether a choice's listed domain lists a value here: ``Available(True)`` or
+    ``Available(False)``, or the non-value its inputs answer. Membership is asked up to
+    the first value it holds (the full list, where it was already made, answers at once);
+    memoized on the domain inputs' answers."""
     domain = node.domain
-    assert domain is not None
+    assert domain is not None and domain.candidates is not None
     answers, blocked, reads = _domain_inputs(world, node, trace, reads)
     if blocked is not None:
         return blocked, reads
-    if domain.candidates is None:
-        return Available(None), reads
     called_on = _inputs(membership_arguments(node), answers)
     if _recall(world, (node.index, "listing"), called_on) is not None:
         found = _memoized(world, node, "listing", called_on, lambda: _list(world, node, answers))
