@@ -421,6 +421,9 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "tests.member_cache", ("support.member_cache",), ("kernels",), ("pytest",), "tests/kernels"
     ),
+    # The engine's purity check off for a test that counts the calls its memo saves
+    # (_world.check_purity), which every tree's conftests import.
+    Layer("tests.purity", ("support.purity",), ("space",), ("pytest",), "tests/core/space"),
     # The tests of the lower layers use only those layers and this table
     # (_typeshed: stubs named under TYPE_CHECKING).
     Layer(
@@ -445,6 +448,7 @@ LAYERS: tuple[Layer, ...] = (
             "tests.refusals",
             "tests.value_classes",
             "tests.space_reference",
+            "tests.purity",
         ),
         ("pytest", "_typeshed"),
         "tests/core/space",
@@ -489,6 +493,7 @@ LAYERS: tuple[Layer, ...] = (
             "tests.dataflow",
             "tests.oracle",
             "tests.member_cache",
+            "tests.purity",
         ),
         ("pytest", "numpy", "pyslang", "qonnx.core.datatype", "qonnx.core.ranges"),
         "tests/kernels",

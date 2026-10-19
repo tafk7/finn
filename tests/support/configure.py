@@ -28,18 +28,12 @@ attribute, as a graph FINN did not write holds it (or, with ``None``, removes it
 network, no seam, no checking. It stands for the read side's tests and for a cleared
 state, which ``configured`` cannot state.
 
-``with_defaults(network)``: a network with every open choice in play that is not
-required set as conversion and the cut set them, a kernel's by conversion's policies, a
-channel's by the interim channel rule (``finn.kernels.explore.Defaults``), a FIFO's depth
-left open: the set-up of a test that explores a network that never went through a graph.
-
 A test helper, imported as ``support.configure``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TypeVar
 
 from onnx import helper
 from qonnx.core.modelwrapper import ModelWrapper
@@ -50,8 +44,8 @@ from finn.core.reporting.findings import Refusal
 from finn.custom_op.kernels.network import persist, persist_kernel
 from finn.custom_op.kernels.shell import in_shell
 from finn.kernels.configure import chosen
-from finn.kernels.explore import Accepted, Defaults, Refused, Seam
-from finn.kernels.network import Network, interim_channel_defaults
+from finn.kernels.explore import Accepted, Refused, Seam
+from finn.kernels.network import interim_channel_defaults
 
 
 def configured(model: ModelWrapper, choices: Mapping[str, Mapping[str, object]]) -> ModelWrapper:
@@ -93,19 +87,6 @@ def configured(model: ModelWrapper, choices: Mapping[str, Mapping[str, object]])
     return model
 
 
-N = TypeVar("N", bound=Network)
-
-
-def with_defaults(network: N) -> N:
-    """``network`` with every open choice in play that is not required set as conversion
-    and the cut set them (``Defaults``, through a seam of its own holding every stored
-    choice, so that only the open ones are set): a kernel's by conversion's policies, a
-    channel's by the interim channel rule; a FIFO's depth left open."""
-    seam = Seam()
-    seam.held.update(network.chosen())
-    return Defaults().explore(seam, network)
-
-
 def write_raw(model: ModelWrapper, node_name: str, key: str, value: int | str | None) -> None:
     """``key`` on the node ``node_name`` as a raw ONNX attribute holding ``value`` (one
     already there is replaced), or no attribute for ``None``. Nothing is checked: the
@@ -118,4 +99,4 @@ def write_raw(model: ModelWrapper, node_name: str, key: str, value: int | str | 
     node.attribute.extend(kept)
 
 
-__all__ = ["configured", "with_defaults", "write_raw"]
+__all__ = ["configured", "write_raw"]

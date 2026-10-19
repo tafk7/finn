@@ -63,7 +63,7 @@ from finn.kernels.base import CYCLES
 from finn.kernels.configure import chosen, commit, describe
 from finn.kernels.defaults import defaulted, ranked
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.explore import Choice
+from finn.kernels.explore import Choice, Defaults, Seam
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel, datatype_range
@@ -622,6 +622,17 @@ def with_adapter_memories(subject: P, ram_style: str | None = None) -> P:
             first = {key: _first_valid(subject, key) for key in styles}
         return _committed(subject, first)
     return _committed(subject, dict.fromkeys(styles, ram_style))
+
+
+def with_defaults(network: N) -> N:
+    """``network`` with every open choice in play that is not required set as conversion
+    and the cut set them (``Defaults``, through a seam of its own holding every stored
+    choice, so that only the open ones are set): a kernel's by conversion's policies, a
+    channel's by the interim channel rule; a FIFO's depth left open. The set-up of a test
+    that explores a network that never went through a graph."""
+    seam = Seam()
+    seam.held.update(network.chosen())
+    return Defaults().explore(seam, network)
 
 
 def with_channel_defaults(network: N) -> N:

@@ -19,8 +19,7 @@ from typing import Any
 
 import pytest
 from support import chain
-from support.configure import with_defaults
-from support.helpers import FULL_DSP48E2, keyed
+from support.helpers import FULL_DSP48E2, keyed, with_defaults
 from support.refusals import refused
 from support.xsim import requires_xsim
 

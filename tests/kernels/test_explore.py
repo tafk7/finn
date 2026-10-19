@@ -6,7 +6,7 @@ restore), and the strategies that search it.
 
 On the Chain (``support.chain``: MatMul ``first``, Thresholding ``activate`` at a
 fixed PE, MatMul ``second``; three rows of four), its platform at 5 ns: as conversion and
-the cut leave it (``support.configure.with_defaults``: each kernel's choices by its
+the cut leave it (``support.helpers.with_defaults``: each kernel's choices by its
 policies, each channel's by the interim channel rule), or with nothing chosen
 (``chain.network()``) where a test reads what is open. No ONNX: the seam reads a network
 and its members, each key a member and the key in its space; owners are the KernelOps'
@@ -23,8 +23,15 @@ from typing import Any, cast
 import pytest
 from qonnx.core.datatype import DataType
 from support import chain
-from support.configure import with_defaults
-from support.helpers import FULL_DSP48E2, FULL_DSP58, Lanes, choose, keyed, matmul_point
+from support.helpers import (
+    FULL_DSP48E2,
+    FULL_DSP58,
+    Lanes,
+    choose,
+    keyed,
+    matmul_point,
+    with_defaults,
+)
 from support.refusals import refused
 
 import finn.kernels.explore as explore_module
