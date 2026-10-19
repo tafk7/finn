@@ -24,7 +24,6 @@ from collections.abc import Callable
 
 import pytest
 
-from core.space.reference_harness import walks
 from core.space import reference
 from core.space.reference import (
     Accepted,
@@ -46,6 +45,7 @@ from core.space.reference import (
     change,
     listed,
 )
+from core.space.reference_harness import walks
 from core.space.reference_harness.forms import (
     AnswerForm,
     ChangeForm,
@@ -66,8 +66,8 @@ from core.space.reference_harness.walks import (
     classify,
     counted_pairs,
     differences,
-    masking_problems,
     generate,
+    masking_problems,
     model_forms,
     order_problems,
     pending,
