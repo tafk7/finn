@@ -26,7 +26,9 @@ facts read, an enclosing selector before the choices of its cases, ties in decla
 order. Only those in play are defaulted: a choice under a case not selected, or whose
 presence waits on a choice still open, is left as it is. A value is valid when setting it
 alone is accepted (``inspection.viable``): a rule that waits on a choice still open does
-not refuse it.
+not refuse it. First valid is the first in the domain's order (``ranked``: the listed
+values ranked by the domain's order where it states one, as ``candidates`` lists them),
+not in its list's.
 """
 
 from __future__ import annotations
@@ -36,7 +38,16 @@ from dataclasses import dataclass
 from typing import Literal, TypeAlias, TypeVar
 
 from finn.core.reporting.findings import Finding, FindingKind
-from finn.core.space import BrokenRule, DefinitionError, Rejected, Space, inspection
+from finn.core.space import (
+    Available,
+    BrokenRule,
+    DefinitionError,
+    Inapplicable,
+    Rejected,
+    Space,
+    Unresolved,
+    inspection,
+)
 
 S = TypeVar("S", bound=Space)
 
@@ -174,15 +185,41 @@ def _fixed(point: S, reference: object, key: str, value: object) -> S | Finding:
     return unset(key, "fixed", f"{value!r} is refused: {why}", outside + _causes(report.broken))
 
 
+def ranked(
+    point: Space, reference: object, values: tuple[inspection.Possible | inspection.Refused, ...]
+) -> tuple[inspection.Possible | inspection.Refused, ...] | Unresolved | Rejected:
+    """A choice's listed ``values`` (``inspection.viable``'s, in its list's order) in its
+    domain's order: as its ``candidates`` rank them where the domain states an order; or
+    why that order is not known (a value it reads is open, or refused)."""
+    order = point.field(reference).candidates()
+    if order is None or isinstance(order, Inapplicable):
+        return values  # known by membership only, or not in play: no order to follow
+    if not isinstance(order, Available):
+        return order
+    rest = list(values)
+    found: list[inspection.Possible | inspection.Refused] = []
+    for value in order.value:
+        match = next((item for item in rest if item.value == value), None)
+        if match is not None:
+            found.append(match)
+            rest.remove(match)
+    return (*found, *rest)
+
+
 def _first_valid(point: S, reference: object, key: str) -> S | Finding:
-    """``point`` with ``key`` set to the first of its listed values that setting alone is
-    accepted (``inspection.viable``), or why none is: each value's rules."""
+    """``point`` with ``key`` set to the first of its listed values, in its domain's order
+    (``ranked``), that setting alone is accepted (``inspection.viable``), or why none is:
+    each value's rules."""
     (viable,) = inspection.viable(point, [reference])
     if viable.values is None:
         waits = ", ".join(viable.waits) or "an input of its domain"
         return unset(key, FIRST_VALID, f"its values wait on {waits}", ())
-    if viable.cases:
-        return point.with_choices({reference: viable.cases[0]})
+    items = ranked(point, reference, viable.values)
+    if not isinstance(items, tuple):
+        return unset(key, FIRST_VALID, "its order is not known", items.findings)
+    first = next((item for item in items if isinstance(item, inspection.Possible)), None)
+    if first is not None:
+        return point.with_choices({reference: first.value})
     refused = [item for item in viable.values if isinstance(item, inspection.Refused)]
     why = "; ".join(f"{item.value!r} breaks {_rules(item.broken)}" for item in refused)
     causes = _causes(rule for item in refused for rule in item.broken)
@@ -231,4 +268,13 @@ def defaulted(point: S, *, kept: Collection[str] = ()) -> S | tuple[Finding, ...
     return point
 
 
-__all__ = ["FIRST_VALID", "Fixed", "Policy", "defaulted", "policies", "stated_defaults", "unset"]
+__all__ = [
+    "FIRST_VALID",
+    "Fixed",
+    "Policy",
+    "defaulted",
+    "policies",
+    "ranked",
+    "stated_defaults",
+    "unset",
+]

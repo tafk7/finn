@@ -30,6 +30,7 @@ from finn.core.space import (
 from finn.kernels.base import ComposedKernel, Kernel, LeafKernel
 from finn.kernels.defaults import FIRST_VALID, Fixed, defaulted, policies
 from finn.kernels.dotp import PackedDotpKernel
+from finn.kernels.utilization import BLOCK_FIRST_BITS, memory_styles
 
 
 class Narrow(Space):
@@ -78,6 +79,24 @@ def test_each_choice_in_play_takes_its_first_valid_value_in_the_flow_order() -> 
         "style": inspection.Set("small"),
     }
     assert states(defaulted(design_space(Toy(width=8))))["style"] == inspection.Set("large")
+
+
+class Memory(Space):
+    bits: int = Param()
+    ram_style: str = Decision(domain=memory_styles(bits))
+
+
+def test_first_valid_is_the_first_in_the_domain_s_order_not_its_list_s() -> None:
+    """A memory's style lists its values in one order (``inspection.viable``: LUTRAM
+    first) and ranks them by the bits it holds (``memory_styles``): first valid is the
+    first possible value in the ranking, block RAM from ``BLOCK_FIRST_BITS``, LUTRAM
+    below."""
+    large = design_space(Memory(bits=BLOCK_FIRST_BITS))
+    (listed,) = inspection.viable(large, [Memory.ram_style])
+    assert listed.cases[:2] == ("distributed", "block")
+    assert states(defaulted(large))["ram_style"] == inspection.Set("block")
+    small = defaulted(design_space(Memory(bits=BLOCK_FIRST_BITS - 1)))
+    assert states(small)["ram_style"] == inspection.Set("distributed")
 
 
 def test_a_choice_already_set_is_kept() -> None:
