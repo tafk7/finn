@@ -423,7 +423,8 @@ LAYERS: tuple[Layer, ...] = (
     ),
     # The shell's bus counts (finn.platform.shells.bus_counts) checked against the top's
     # pins on every netlist a test reads, the fixture the kernel and the kernel-op tests'
-    # conftests import: the one place the kernel tests reach the platform registry.
+    # conftests import: the one place the kernel tests reach the platform registry. The
+    # counts' oracle, until lane 4 (budgets as constraints) retires it.
     Layer(
         "tests.top_pins",
         ("support.top_pins",),
