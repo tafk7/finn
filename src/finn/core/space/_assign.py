@@ -57,7 +57,7 @@ A change is **assignment**. In order:
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeVar, cast
 
@@ -237,16 +237,22 @@ def _moved_from(before: World, after: World, facts: set[NodeId]) -> Moved:
     return _moved(before, after, sources)
 
 
-def _broken(before: Pairs, world: World, named: frozenset[NodeId]) -> tuple[BrokenRule, ...]:
+def _broken(
+    before: Callable[[], Pairs], world: World, named: frozenset[NodeId]
+) -> tuple[BrokenRule, ...]:
     """The rules newly false in ``world``: each origin through which it holds a false
-    piece that ``before`` does not hold through it, with the stored choices standing in
-    its way (``named``: the choices excluded for being named by the change)."""
+    piece not held through that origin in the pairs ``before`` returns, with the stored
+    choices standing in its way (``named``: the choices excluded for being named by the
+    change). ``before`` is called only where ``world`` holds a false piece: the design
+    space compared with may be open everywhere, and reading its validity whole there
+    resolves every scope of unknown presence."""
     after = pairs(world)
     if not after:
         return ()
+    held_before = before()
     found: dict[NodeId, Origin] = {}
     for piece, origins in after.items():
-        held = before.get(piece, {})
+        held = held_before.get(piece, {})
         for index, origin in origins.items():
             if index not in held:
                 found.setdefault(index, origin)
@@ -365,7 +371,9 @@ def assign(
             not item.remove and before.get(index, _MISSING) is not stored[index]
             for index, item in normalized.items()
         )
-        broken = _broken(_held(current, instance), world, frozenset(normalized)) if sets else ()
+        broken = (
+            _broken(lambda: _held(current, instance), world, frozenset(normalized)) if sets else ()
+        )
         if broken:
             checked.extend(
                 ChangeOutcome(
@@ -374,7 +382,7 @@ def assign(
                 for item in requests
             )
             return Assigned(None, tuple(checked), broken)
-        made_false = _broken(_pairs(current), world, frozenset()) if changed_facts else ()
+        made_false = _broken(lambda: _pairs(current), world, frozenset()) if changed_facts else ()
         moved = _moved_from(current.world, world, changed_facts)
         _publish(world, trial=trial)
         published = [
@@ -430,7 +438,7 @@ def bound(current: State, requests: Sequence[Change[object]]) -> Assigned:
         kept = _same(world.stored, held)  # the receiver's own choices: the receiver
         if kept:
             world = current.world
-        made_false = _broken(_held(current, empty), world, frozenset())
+        made_false = _broken(lambda: _held(current, empty), world, frozenset())
         # Each saved choice from nothing stored: set (``"changed"``) where kept, else
         # ``"dropped"``, whatever ``current`` holds.
         outcomes = tuple(
