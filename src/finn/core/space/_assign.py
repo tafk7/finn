@@ -4,14 +4,14 @@
 
 A change is **assignment**. In order:
 
-1. **Identities.** Every item names a choice of this configuration, once (a ``Change``,
+1. **Identities.** Every item names a choice of this design space, once (a ``Change``,
    a ``{reference: value}`` mapping, or a keyword of the scope's own choices); facts
    name root formals, once. A malformed or foreign
    item is a ``RequestError``, before anything is evaluated.
 2. **Recognition**, then **snapshot**: every supplied value is recognized by its
    semantics, all before any is frozen (``_state.prepare``).
-3. **Same values.** Where every fact and stored value equals the configuration's, the
-   configuration is kept, each item ``"unchanged"``.
+3. **Same values.** Where every fact and stored value equals the receiver's, the
+   receiver is kept, each item ``"unchanged"``.
 4. **New facts instantiate a new design space** (``_instantiate``). Where a fact changes,
    every stored choice, dormant ones included, is checked again against its domain under
    the new facts (5). A value outside it, or whose domain's input refuses or does not
@@ -21,7 +21,7 @@ A change is **assignment**. In order:
    waiting on a missing fact is kept, waiting. Checks read facts only, so what is
    dropped does not depend on order. Nothing of the rules refuses this step: a constraint
    the new facts make false reads refused. ``bind`` is the same instantiation, of saved
-   choices on a configuration's facts.
+   choices on a design space's facts.
 5. **Type checks.** Each value set is checked against its domain, which reads facts
    only (``_world.type_check``): outside it, or an input of the domain refusing or not
    applying, refuses the change; a missing fact leaves the choice stored, waiting on it.
@@ -29,22 +29,28 @@ A change is **assignment**. In order:
    deciding whether it exists taken as holding), so a choice is checked wherever it
    sits, dormant or waiting on its presence alike, and its check holds until the facts
    change.
-6. **The configuration it would publish**: the design space of 4 (the receiver's, where
-   no fact changes), its stored choices less those cleared, with those set; its world
-   made from that design space's.
+6. **The design space it would publish**: that of 4 (the receiver's, where no fact
+   changes), its stored choices less those cleared, with those set; its world made from
+   that of 4.
 7. **Rules.** A change that sets a new choice (a value it does not hold in the design
-   space of 4) is refused where the configuration it would publish holds a false piece of
-   validity through an origin it was not false through in that design space
-   (``_origins``): a piece newly present counts as not false before. Each such origin is
-   a ``BrokenRule``, with the stored choices standing in its way. So no accepted change of
-   choices adds a false piece and its origin, and a change of choices is never refused for
-   what the facts broke. A change of clears alone is never refused: clearing opens a
-   choice, and an open choice turns what reads it unknown, never false. A change with a
-   value refused by its type check reports those alone. An accepted change of facts
-   reports, in the same form, the rules the new facts make false: each origin through
-   which the published configuration holds a false piece the receiver did not hold
-   through it, with every stored choice standing in its way.
-8. **Publication:** with nothing refused, the configuration is published whole; else
+   space of 4) is refused where the design space it would publish holds a false piece of
+   validity through an origin it was not false through in that of 4 (``_origins``): a
+   piece newly present counts as not false before. Each such origin is a ``BrokenRule``,
+   with the stored choices standing in its way. So no accepted change of choices adds a
+   false piece and its origin, and a change of choices is never refused for what the
+   facts broke. A change of clears alone is never refused, because clearing stays the
+   remedy a refusal names ("clear it first"). A clear only removes information, but it
+   may reveal a rule: where a Space is refused by its own rule, a rule reading one of its
+   views is false through it, with no origin of its own; clearing the choice behind that
+   refusal reopens the Space, and the rule may turn false at its own origin. What the
+   clear reveals was hidden behind the refusal, not caused by it, and the published
+   design space reads refused, naming it. A change with a value refused by its type
+   check reports those alone. An accepted change of facts reports, in the same form, the rules
+   newly false in the published design space: by its new facts, or revealed by a clear
+   beside them. Each is an origin through which the published design space holds a false
+   piece the receiver did not hold through it, with every stored choice standing in its
+   way.
+8. **Publication:** with nothing refused, the design space is published whole; else
    nothing is, and each item's outcome, and each rule broken, says why. Nothing is
    filled in.
 """
@@ -86,11 +92,12 @@ class Moved:
 
 @dataclass(frozen=True, slots=True)
 class Assigned:
-    """What a change came to: the configuration it publishes (the receiver's state
+    """What a change came to: the design space it publishes (the receiver's state
     where it changes nothing; ``None`` where it is refused); each item's outcome, in
     order: the facts given, the choices named, then the stored choices new facts dropped
-    (in the flow order); the rules it is refused by, or, accepted, the rules its new facts
-    (or a bind's saved choices) make false; and what it moved."""
+    (in the flow order); the rules it is refused by, or, accepted, the rules newly false
+    in the published design space: by its new facts, or revealed by a clear beside them
+    (a bind's: those its saved choices break); and what it moved."""
 
     state: State | None
     outcomes: tuple[ChangeOutcome, ...]
@@ -288,7 +295,7 @@ def assign(
     """The change of ``facts`` (by root formal) and ``requests`` (in the caller's order)
     from ``current``, under the model's lock: new facts instantiate a new design space
     (``_instantiate``), and the requests are a change of choices on it. A ``trial``
-    publishes nothing: the configuration it would publish is answered, its world left as
+    publishes nothing: the design space it would publish is answered, its world left as
     made."""
     linked = current.linked
     nodes = linked.nodes
@@ -502,9 +509,9 @@ def _fact_nodes(point: Space, facts: Mapping[Any, object]) -> dict[NodeId, objec
 
 
 def _report(point: S, assigned: Assigned) -> ConfigurationResult[S]:
-    """A change's report: the configuration it publishes (the receiver where it changes
-    nothing or is refused), each item's outcome, and the rules it is refused by or, where
-    accepted, its new facts make false."""
+    """A change's report: the design space it publishes (the receiver where it changes
+    nothing or is refused), each item's outcome, the rules it is refused by or, where
+    accepted, those newly false in the published design space, and what it moved."""
     if assigned.state is None:
         return ConfigurationResult(point, False, assigned.outcomes, assigned.broken)
     if assigned.state is state(point):
@@ -540,10 +547,11 @@ def try_with_facts(
     name, dormant ones included, is checked again against its domain under the new facts,
     and one outside it, or whose domain's input refuses or does not apply, is dropped
     (``"dropped"``, not requested); one waiting on a missing fact keeps waiting. A
-    constraint the new facts make false reads refused, and the report's ``broken`` names
-    it with the stored choices standing in its way. ``changes`` are a change of choices on
-    the new design space, refused by the rules of ``try_with_choices`` judged against it;
-    a refused batch publishes nothing."""
+    constraint the new facts make false reads refused. The report's ``broken`` names each
+    rule newly false in the published design space, by the new facts or revealed by a
+    clear beside them, with the stored choices standing in its way. ``changes`` are a
+    change of choices on the new design space, refused by the rules of
+    ``try_with_choices`` judged against it; a refused batch publishes nothing."""
     driver_only("configuration replacement")
     given = _fact_nodes(point, facts)
     return _report(point, assign(state(point), given, _requests(point, changes)))
@@ -577,8 +585,10 @@ def bind(point: S, /, *choices: ChangeRequest | Mapping[Any, object]) -> Configu
     (``"dropped"``); one waiting on a missing fact is kept, waiting. Never refused for
     constraints: the report's ``broken`` names every rule the saved choices break under
     these facts (false through an origin the facts with nothing stored are not), each with
-    the stored choices standing in its way, and the configuration reads refused. A change
-    of facts (``try_with_facts``) is this instantiation under the new facts."""
+    the stored choices standing in its way, and the design space reads refused. A change
+    of facts (``try_with_facts``) is this instantiation under the new facts. The point's
+    own stored choices are replaced and not reported, so bind from a design space with
+    nothing stored, as FINN will."""
     driver_only("configuration binding")
     return _report(point, bound(state(point), _requests(point, choices)))
 

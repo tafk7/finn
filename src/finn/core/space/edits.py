@@ -63,8 +63,9 @@ class ChangeOutcome:
 class BrokenRule:
     """A rule a change breaks: a piece of validity it makes false through an origin it
     was not false through before. A refused change is refused by it; an accepted change
-    of facts (or a bind) reports it as a rule the new facts (or the saved choices) make
-    false, which the published configuration reads refused.
+    of facts reports it as a rule newly false in the published design space: by the new
+    facts, or revealed by a clear beside them (a bind: by the saved choices). The
+    published design space reads refused.
 
     ``rule``: the origin's key, where the failure starts: a constraint false on its own
     values, a derived value or a view refusing on its own values, a choice whose listed
@@ -75,7 +76,7 @@ class BrokenRule:
     origin reads, less those deciding whether it exists. On a refused change, less those
     the change names: the caller sets them in the same change or clears them first (none
     where the values named and the facts alone break it). On an accepted one, every such
-    stored choice of the published configuration, which a later change may clear (none
+    stored choice of the published design space, which a later change may clear (none
     where the facts alone break it)."""
 
     rule: str
@@ -85,16 +86,17 @@ class BrokenRule:
 
 @dataclass(frozen=True, slots=True)
 class ConfigurationResult(Generic[S]):
-    """A change's report: the configuration it publishes (the receiver where it changes
+    """A change's report: the design space it publishes (the receiver where it changes
     nothing, or is refused), whether it was accepted, and each item's outcome (the facts
     given, the choices named, then the stored choices new facts dropped, in the flow order).
     ``broken``: on a refused change, the rules it is refused by; on an accepted one, the
-    rules the new facts make false (a change of facts) or the saved choices break (a
-    bind), which the published configuration reads refused; empty on an accepted change
-    of choices. An accepted change names, by key, the stored choices it puts out of play
-    (``dormant``: present or waiting before, absent after), those it brings into play
-    (``in_play``: not present before, present after) and the open choices it brings into
-    presence (``opened``)."""
+    rules newly false in the published design space: by its new facts, or revealed by a
+    clear beside them (a change of facts), or broken by the saved choices (a bind); the
+    published design space reads refused. Empty on an accepted change of choices. An
+    accepted change names, by key, the stored choices it puts out of play (``dormant``:
+    present or waiting before, absent after), those it brings into play (``in_play``: not
+    present before, present after) and the open choices it brings into presence
+    (``opened``)."""
 
     instance: S
     accepted: bool
