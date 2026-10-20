@@ -96,7 +96,7 @@ class ConfigurationResult(Generic[S]):
     accepted change names, by key, the stored choices it puts out of play (``dormant``:
     present or waiting before, absent after), those it brings into play (``in_play``: not
     present before, present after) and the open choices it brings into presence
-    (``opened``)."""
+    (``opened``). Before is the receiver; for a bind, its facts with nothing stored."""
 
     instance: S
     accepted: bool

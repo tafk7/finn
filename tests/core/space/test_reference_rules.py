@@ -612,6 +612,54 @@ def test_a_bind_keeps_saved_choices_that_break_a_rule_and_drops_one_outside_its_
     bound.check_state("x")
 
 
+# A bind reads against its facts with nothing stored, whatever the design space it is asked
+# of stores. ``x`` lists 1 to ``f``; ``k`` asks ``c`` to be at most ``f``; ``mode`` selects
+# ``a`` (``p``, ``r``) or ``b`` (``q``).
+
+SELECTED = Case(
+    "a bind that moves, drops and breaks",
+    Space(
+        ("f",),
+        Scope(
+            "",
+            choices=(
+                Choice("c", listed(1, 2, 3, 4)),
+                Choice("x", computed(lambda r: tuple(range(1, r["f"] + 1)), ("f",))),
+            ),
+            constraints=(Constraint("k", ("c", "f"), lambda r: r["c"] <= r["f"], "c-over"),),
+            selectors=(
+                Selector(
+                    "mode",
+                    (
+                        Scope("a", choices=(Choice("p", listed(1, 2)), Choice("r", listed(1, 2)))),
+                        Scope("b", choices=(Choice("q", listed(5, 6)),)),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+SAVED = {"c": 3, "x": 4, "mode": "a", "mode.a.p": 1, "mode.b.q": 5}
+
+
+def test_a_bind_from_a_design_space_with_stored_choices_reads_against_nothing_stored() -> None:
+    # Under ``f = 2``, from nothing stored: ``x = 4`` dropped, ``k`` broken with ``c``
+    # standing, ``mode.a.p`` brought into play, ``mode.b.q`` put dormant, ``mode.a.r``
+    # opened. From a design space storing ``mode = a``, ``mode.a.p = 2``, ``mode.a.r = 1``
+    # and ``c = 1`` (where ``p`` and ``r`` are present, ``q`` absent), the same: the
+    # receiver's choices don't matter.
+    nothing, _ = SELECTED.start({"f": 2}).engine.bind(SAVED)
+    assert nothing.dormant == {"mode.b.q"} and nothing.in_play == {"mode.a.p"}
+    assert nothing.opened == {"mode.a.r"} and {d.subject for d in nothing.dropped} == {"x"}
+    assert {(rule.subject, rule.standing) for rule in nothing.broken} == {("k", frozenset({"c"}))}
+    held = SELECTED.start({"f": 2}, {"mode": "a", "mode.a.p": 2, "mode.a.r": 1, "c": 1})
+    form, _ = held.engine.bind(SAVED)
+    assert form == nothing
+    bound = held.check_bind(SAVED)
+    bound.check_validity()
+    bound.check_state("mode.b.q")
+
+
 # New facts emptying a present choice's listed domain (reading 9, settled by § 16.24):
 # accepted, the empty-domain piece false and reported, a value stored there dropped first.
 

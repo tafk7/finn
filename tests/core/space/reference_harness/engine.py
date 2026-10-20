@@ -32,9 +32,10 @@ form, and no answer the adapter computes in the engine's place.
     failed check's, as an assignment refusal's), and its ``BrokenRule``s as the rules the
     published design space holds newly false (as a refusal's rules: origin, codes,
     standing). Drops and rules compare as sets;
-  - a bind (``finn.core.space.bind``) of saved choices under a configuration's facts, in
-    the same form as an accepted change: what it drops (its old value the saved one) and
-    the rules the kept choices break;
+  - a bind (``finn.core.space.bind``) of saved choices under a design space's facts, in
+    the same form as an accepted change, read against the facts with nothing stored
+    whatever the receiver stores: what it drops (its old value the saved one), the rules
+    the kept choices break, and what it moves;
   - possible values are ``inspection.viable``'s: ``Possible`` with what it moves,
     ``Refused`` with its broken rules; ``None`` where the engine lists nothing;
   - validity is ``inspection.validity`` (``"valid"``, ``"refused"``, ``"open"``);
@@ -771,10 +772,10 @@ class Point:
         return self._form(report, self.stored())
 
     def bind(self, stored: Mapping[str, object]) -> tuple[ChangeForm, Point]:
-        """``stored`` bound under this configuration's facts (``finn.core.space.bind``): the
+        """``stored`` bound under this design space's facts (``finn.core.space.bind``): the
         design space of the facts with exactly those choices, never refused. Its report, and
-        the configuration it publishes. Asked of a configuration with nothing stored, its
-        report reads against that configuration, as the model's ``bind`` does."""
+        the design space it publishes. Its report reads against the facts with nothing
+        stored, whatever this design space stores, as the model's ``bind`` does."""
         decisions = self._decisions()
         saved = {decisions[path]: value for path, value in stored.items()}
         report = space_bind(self.point, saved)

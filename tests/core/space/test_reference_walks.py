@@ -94,8 +94,10 @@ def test_a_seeded_walk_keeps_the_four_invariants_and_the_engines_own_checks(
     assert checks["assignment"] + checks["facts"] - checks["facts batch"] == STEPS
     # every configuration the model reaches: the start and each accepted step
     assert checks["1 history"] == checks["1 bind"] == tally.accepted + 1
-    # the engine compared at each, and its bind of each one's own choices against the model's
+    # the engine compared at each, and its bind of each one's own choices against the model's,
+    # from nothing stored and from the walked design space
     assert tally.engine_checks["cold"] == tally.engine_checks["bind"] == tally.compared
+    assert tally.engine_checks["bind held"] == tally.compared
     assert tally.engine_errors == 0
 
 

@@ -756,3 +756,14 @@ def test_a_facts_change_is_the_bind_of_its_stored_choices_under_the_new_facts() 
     same_design_space(by_facts.instance, by_bind.instance)
     assert set(dropped(by_facts)) == set(dropped(by_bind)) == {"lanes"}
     assert broken(by_facts) == broken(by_bind) == [("fits", ("c",))]
+
+
+def test_a_bind_moves_from_its_facts_with_nothing_stored_whatever_the_receiver_stores() -> None:
+    # ``lanes`` is saved under ``enabled = False``: put dormant, from nothing stored (where
+    # ``enabled`` is open) and from a receiver where ``enabled`` is already false alike.
+    saved = {Gated.enabled: False, Gated.lanes: 4}
+    nothing = bind(design_space(Gated(extent=12)), saved)
+    held = bind(design_space(Gated(extent=12)).with_choices(enabled=False), saved)
+    assert nothing.dormant == held.dormant == ("lanes",)
+    assert nothing.in_play == held.in_play == () and nothing.opened == held.opened == ()
+    same_design_space(nothing.instance, held.instance)

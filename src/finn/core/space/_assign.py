@@ -405,8 +405,10 @@ def bound(current: State, requests: Sequence[Change[object]]) -> Assigned:
     """``current``'s facts with exactly the saved choices ``requests`` set, under the
     model's lock: the design space of those facts instantiated with them (``_instantiate``),
     each value outside its domain dropped. Never refused; a clear is a ``RequestError``.
-    Its rules are those false through an origin that the facts with nothing stored are not
-    false through."""
+    It reads against the facts with nothing stored, whatever ``current`` stores: its rules
+    are those false through an origin that design space is not false through, and what
+    it moves is from that design space. Where the bound set is ``current``'s own (the same
+    objects), ``current`` is the design space it publishes."""
     linked = current.linked
     nodes = linked.nodes
     normalized = normalize(current, requests)
@@ -436,9 +438,9 @@ def bound(current: State, requests: Sequence[Change[object]]) -> Assigned:
                     "unchanged" if held.get(index, _MISSING) is world.stored[index] else "changed"
                 )
             outcomes.append(ChangeOutcome(nodes[index].owner, result, status))
+        moved = _moved_from(empty, world, set())
         if kept:
-            return Assigned(current, tuple(outcomes), made_false)
-        moved = _moved_from(current.world, world, set())
+            return Assigned(current, tuple(outcomes), made_false, moved)
         _publish(world, trial=False)
         return Assigned(State(current.model, world), tuple(outcomes), made_false, moved)
 
@@ -515,11 +517,10 @@ def _report(point: S, assigned: Assigned) -> ConfigurationResult[S]:
     accepted, those newly false in the published design space, and what it moved."""
     if assigned.state is None:
         return ConfigurationResult(point, False, assigned.outcomes, assigned.broken)
-    if assigned.state is state(point):
-        return ConfigurationResult(point, True, assigned.outcomes, assigned.broken)
     moved = assigned.moved
+    published = assigned.state
     return ConfigurationResult(
-        cast(S, attach(assigned.state, point._scope)),
+        point if published is state(point) else cast(S, attach(published, point._scope)),
         True,
         assigned.outcomes,
         assigned.broken,
@@ -586,7 +587,9 @@ def bind(point: S, /, *choices: ChangeRequest | Mapping[Any, object]) -> Configu
     (``"dropped"``); one waiting on a missing fact is kept, waiting. Never refused for
     constraints: the report's ``broken`` names every rule the saved choices break under
     these facts (false through an origin the facts with nothing stored are not), each with
-    the stored choices standing in its way, and the design space reads refused. A change
+    the stored choices standing in its way, and the design space reads refused. Its
+    ``dormant``, ``in_play`` and ``opened`` read against the same baseline, so what it
+    drops, breaks and moves is the same from any design space with these facts. A change
     of facts (``try_with_facts``) is this instantiation under the new facts. The point's
     own stored choices are replaced and not reported, so bind from a design space with
     nothing stored, as FINN will."""

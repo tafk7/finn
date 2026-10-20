@@ -60,7 +60,8 @@ not the model checking itself: it reads the model's evaluation of each configura
 **The engine** (the engine core's) answers the same questions at every configuration
 the model reaches, the same change at every step (a facts step's tallied as ``"facts
 change"``, apart from a change of choices), and invariant 1's bind of each configuration's
-own choices (``finn.core.space.bind`` against the model's ``bind``, its report compared).
+own choices (``finn.core.space.bind`` against the model's ``bind``, its report compared),
+from nothing stored and from the walked design space (``"bind held"``).
 Its own **permanent checks** are strict always: the walked engine configuration answers
 every question, and every change, as one built from nothing (``support.space_walk.fresh``),
 and its bind publishes the walked configuration's stored choices. No milestone with rows is
@@ -1607,23 +1608,31 @@ class _Walk:
 
     def engine_bind(self, configuration: model.Configuration, point: Point) -> None:
         """Invariant 1's bind on the engine side: the engine's bind of the walked design
-        space's own choices against the model's (its report), publishing the walked
-        engine configuration's stored choices."""
+        space's own choices against the model's (its report), from nothing stored and from
+        the walked engine design space itself (``"bind held"``: the receiver's choices do
+        not matter), each publishing the walked engine design space's stored choices."""
         expected, _ = bind_form(
             configuration.space, dict(configuration.facts), dict(configuration.stored)
         )
-        form, bound = self.bind_engine(configuration)
-        self.tally.engine_checks["bind"] += 1
-        label = f"the bind of {dict(configuration.stored)}"
-        if not agrees(expected, form):
-            self.disagree("bind", label, expected, form)
         walked = self.on_engine(point.stored)
-        if not _same_facts(self.on_engine(bound.stored), walked):
-            self.fail(
-                "engine",
-                f"{label}: the engine's bind publishes {self.on_engine(bound.stored)}, the "
-                f"walked engine configuration stores {walked}",
-            )
+        stored = dict(configuration.stored)
+        for question, label, (form, bound) in (
+            ("bind", f"the bind of {stored}", self.bind_engine(configuration)),
+            (
+                "bind held",
+                f"the bind of {stored} from the walked design space",
+                self.on_engine(lambda: point.bind(stored)),
+            ),
+        ):
+            self.tally.engine_checks[question] += 1
+            if not agrees(expected, form):
+                self.disagree(question, label, expected, form)
+            if not _same_facts(self.on_engine(bound.stored), walked):
+                self.fail(
+                    "engine",
+                    f"{label}: the engine's bind publishes {self.on_engine(bound.stored)}, "
+                    f"the walked engine design space stores {walked}",
+                )
 
     def engine_refinement(
         self,

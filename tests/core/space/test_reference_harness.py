@@ -41,7 +41,6 @@ from core.space.reference_harness import (
     RefusalForm,
     Row,
     RuleForm,
-    SetupError,
     StateForm,
     ValidityForm,
     markdown,
@@ -270,17 +269,19 @@ def test_the_engines_accepted_change_of_facts_carries_the_old_value_of_what_it_d
     assert engine.broken == {K_OVER}
 
 
-def test_a_bind_compares_from_a_configuration_with_nothing_stored() -> None:
-    # Both sides read a bind against the configuration it is asked of, the model's against
-    # its facts with nothing stored, so the harness asks it of nothing else. The bind of a
-    # value outside its domain drops it, its old value the saved one.
+def test_a_bind_compares_from_any_design_space_with_its_facts() -> None:
+    # Both sides read a bind against its facts with nothing stored, whatever the receiver
+    # stores, so the harness asks it of any design space. The bind of a value outside its
+    # domain drops it, its old value the saved one.
     bound = RANGED.start({"n": 1}).check_bind({"x": 2, "y": 2})
     assert bound.model.stored == {"y": 2} and bound.engine.stored() == {"y": 2}
     form, _ = RANGED.start({"n": 1}).engine.bind({"x": 2, "y": 2})
     assert form.dropped == {DroppedForm("x", 2, frozenset({("domain-membership", "x")}))}
     assert form.broken == {K_OVER}
-    with pytest.raises(SetupError, match="nothing stored"):
-        RANGED.start({"n": 3}, {"y": 1}).check_bind({"y": 2})
+    # From a design space storing choices of its own, the same report.
+    held, _ = RANGED.start({"n": 1}, {"x": 0, "y": 1}).engine.bind({"x": 2, "y": 2})
+    assert held == form
+    RANGED.start({"n": 1}, {"x": 0, "y": 1}).check_bind({"x": 2, "y": 2})
 
 
 def test_the_codes_of_an_empty_list_and_a_refused_guard() -> None:

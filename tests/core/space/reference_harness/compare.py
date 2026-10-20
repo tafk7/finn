@@ -387,12 +387,11 @@ class Pair:
         return None
 
     def check_bind(self, stored: Mapping[str, object]) -> Pair:
-        """``stored`` bound under this configuration's facts (the model's ``bind``, the
-        engine's ``finn.core.space.bind``), compared; its successor. Ask it of a
-        configuration with nothing stored: both sides read the bind against that."""
+        """``stored`` bound under this design space's facts (the model's ``bind``, the
+        engine's ``finn.core.space.bind``), compared; its successor. Asked of any design
+        space with these facts: both sides read the bind against the facts with nothing
+        stored, whatever the receiver stores."""
         __tracebackhide__ = True
-        if self.model.stored:
-            raise SetupError(f"{self.case.name}: bind from a configuration with nothing stored")
         expected, configuration = bind_form(self.model.space, self.model.facts, stored)
         form, point = self.engine.bind(stored)
         _check(self.case.name, f"the bind of {dict(stored)}", expected, form)
