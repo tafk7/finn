@@ -4,7 +4,9 @@
 """A partition's network in its shell (``InShell``, bound by ``in_shell``): the network of
 its KernelOps (``finn.custom_op.kernels.network``) with the ends the row of the model's
 target's shell offers (``finn.platform.shells.shell_row``) on its boundary channels, and
-the shell as functions over it, over its module and its channels' end contracts.
+the shell as functions over it, over its netlist (``Partition.netlist``: the module's
+buses counted without building the module, ``finn.platform.shells.bus_counts``) and its
+channels' end contracts.
 
 - **budgets** (``budget_refusal``, by the row's ``finn.platform.shells.budgets``):
   the AXI-Lite buses the module presents and its ends present (each end's contract,
@@ -12,7 +14,7 @@ the shell as functions over it, over its module and its channels' end contracts.
   initiates within its ``memory_ports``, each refused as ``interface-budget-exceeded``;
   a module that takes an aligned doubled clock needs a row that supplies one
   (``clk2x``), refused as ``clock-unavailable``. The ``ip`` row bounds neither count.
-  Of the configured module, so a network is within them once it is decided;
+  Of the configured netlist, so a network is within them once it is decided;
 - **resources** (``shell_resources``; ``InShell.own_resources``, which the seam reads):
   the sum of its members' own statements (``Partition.own_resources``), each end's (its
   contract's) and its row's static region's, at the memory ports and AXI-Lite buses it
@@ -136,12 +138,13 @@ def _bound(
 
 
 def _buses(network: Partition) -> QueryResult[tuple[int, int, bool]]:
-    """``bus_counts`` of its module; or what its module waits on, or why it is
+    """``bus_counts`` of its netlist and boundary buses (``Partition.netlist``), its top's
+    pins counted without building it; or what its netlist waits on, or why it is
     refused."""
-    module = network.module_of()
-    if not isinstance(module, Available):
-        return _together([module])
-    return Available(bus_counts(module.value.abi))
+    found = network.netlist()
+    if not isinstance(found, Available):
+        return _together([found])
+    return Available(bus_counts(*found.value))
 
 
 def _end_contracts(network: InShell) -> QueryResult[tuple[tuple[str, EndContract], ...]]:
@@ -160,7 +163,7 @@ def _end_contracts(network: InShell) -> QueryResult[tuple[tuple[str, EndContract
 
 
 def budget_refusal(network: InShell) -> tuple[Finding, ...]:
-    """Why the shell refuses ``network`` (its ``budgets``, of its module's ``bus_counts``
+    """Why the shell refuses ``network`` (its ``budgets``, of its netlist's ``bus_counts``
     and its ends' AXI-Lite buses): its findings, none where it is within them or not
     decided far enough to say."""
     buses = _buses(network)

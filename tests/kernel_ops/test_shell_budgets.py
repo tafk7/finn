@@ -11,9 +11,10 @@ the clock. Each refusal is named: ``interface-budget-exceeded``, ``clock-unavail
 
 No KernelOp names a control port, so a partition of KernelOps presents no AXI-Lite bus:
 the buses are counted here on a network built from the kernels directly, AXI-Lite
-thresholdings each given its port, its module's counts (``bus_counts``) checked by the
-same ``budgets`` and rows a partition's network reads. No kernel initiates a memory port
-(no bus protocol states one), so that count is always zero.
+thresholdings each given its port, its netlist's counts (``bus_counts``, the pins its
+module would have) checked by the same ``budgets`` and rows a partition's network reads.
+No kernel initiates a memory port (no bus protocol states one), so that count is always
+zero.
 """
 
 from __future__ import annotations
@@ -28,11 +29,13 @@ from support.helpers import built, choose, with_adapter_memories, with_direct_tr
 from support.models import MATMUL, configure_partition, kernel_model
 from support.refusals import refused
 from support.tfc import ULTRA96
+from support.top_pins import bus_counts_of_abi
 
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.reporting.findings import Finding
+from finn.core.space import Available
 from finn.custom_op.kernels.shell import configured_network, in_shell
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.network import Interface, Network, wire
@@ -98,9 +101,11 @@ def ends_of(point: Network) -> tuple[Any, ...]:
 
 
 def over_budget(point: Network, row: ShellRow) -> tuple[Finding, ...]:
-    """``row``'s budgets of ``point``'s module and of its ends' AXI-Lite buses."""
+    """``row``'s budgets of ``point``'s netlist and of its ends' AXI-Lite buses."""
     ends = sum(end.control_buses for end in ends_of(point))
-    return budgets(row, bus_counts(built(point, "shell").abi), ends)
+    netlist = point.netlist()
+    assert isinstance(netlist, Available), netlist
+    return budgets(row, bus_counts(*netlist.value), ends)
 
 
 def test_eight_axi_lite_thresholdings_and_two_ends_exceed_the_zynq_shells_nine() -> None:
@@ -172,6 +177,9 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     point, _ = configured_network(model, "chain")
     assert point.row is IP_ROW and IP_ROW.clk2x
     assert point.module.abi.clock_alignments
+    netlist = point.network.netlist()
+    assert isinstance(netlist, Available)
+    assert bus_counts(*netlist.value) == bus_counts_of_abi(point.module.abi) == (0, 0, True)
     write_target(model, ULTRA96)
     model = model.transform(MakeCutChoices())  # the ends the pynq row offers
     assert not in_shell(model, model.graph.node, name="chain").row.clk2x
@@ -183,6 +191,17 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
         "shell does not supply",
     ):
         configured_network(model, "chain")
+
+
+def test_the_counts_are_the_modules_pins() -> None:
+    """The shell counts the netlist (``bus_counts``) as the module's pins count
+    (``bus_counts_of_abi``): each thresholding's AXI-Lite bus, no memory port, no doubled
+    clock."""
+    point = thresholdings(3, IP_ROW)
+    netlist = point.netlist()
+    assert isinstance(netlist, Available)
+    module = built(point, "shell")
+    assert bus_counts(*netlist.value) == bus_counts_of_abi(module.abi) == (3, 0, False)
 
 
 def test_the_shells_netlist_presents_each_bus_with_its_writes() -> None:
