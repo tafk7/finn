@@ -376,14 +376,13 @@ class Space(metaclass=SpaceMeta):
     def with_facts(
         self, facts: Mapping[Any, object], /, *changes: ChangeRequest | Mapping[Any, object]
     ) -> Self:
-        """The same model with other values for root formals (``{House.budget: 120}``),
-        keeping every evaluation that read none of them. Refused by the same rules as a
-        change of choices: every stored choice is checked again against its domain over
-        the new facts, dormant ones included, and a rule the new facts make newly false
-        refuses them (a present choice's domain they leave without a value included),
-        naming the stored choices standing in its way. ``changes`` are choices, as for
-        ``with_choices``: the caller clears or sets what stands in the way in the same
-        change."""
+        """A new design space from other values for root formals (``{House.budget:
+        120}``), keeping every evaluation that read none of them and the choices that still
+        fall within their domains, then ``changes``, a change of choices on it. A change of
+        facts is never refused: a stored choice outside its new domain is dropped, and a
+        constraint the new facts make false reads refused (``try_with_facts`` reports
+        both). Raises ``ConfigurationError`` only where the batch's choices are refused,
+        by the rules of ``with_choices`` judged against the new design space."""
         from ._assign import with_facts
 
         return with_facts(self, facts, *changes)

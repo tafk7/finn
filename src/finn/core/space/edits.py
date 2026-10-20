@@ -42,24 +42,29 @@ class ChangeOutcome:
     the choice existed (wherever it sits: present, dormant or waiting on its presence):
     true where it holds the value; refused outside it, or through an input of the
     domain refusing or not applying; unresolved while a fact the domain reads is
-    missing (the choice is stored and waits on it). For a fact, or a clear,
-    ``Available(True)``.
+    missing (the choice is stored and waits on it). For a choice dropped, the check it
+    failed. For a fact, or a clear, ``Available(True)``.
 
-    ``status``: ``"changed"``, ``"unchanged"`` or ``"removed"`` in a published change;
-    in a refused one, ``"refused"`` for what refuses it and ``"checked"`` for the rest.
-    ``requested`` is false for a stored choice the change did not name that a facts
-    change checked again."""
+    ``status``: ``"changed"``, ``"unchanged"`` or ``"removed"`` in a published change,
+    and ``"dropped"`` for a stored value that new facts leave outside its domain (or
+    whose domain's input refuses or does not apply there): left out of the published
+    design space, its old value still the receiver's. In a refused change, ``"refused"``
+    for what refuses it and ``"checked"`` for the rest. ``requested`` is false for a
+    stored choice the change did not name (a value new facts dropped); a saved choice a
+    bind drops is requested."""
 
     owner: str
     result: QueryResult[bool]
-    status: Literal["unchanged", "changed", "removed", "checked", "refused"]
+    status: Literal["unchanged", "changed", "removed", "dropped", "checked", "refused"]
     requested: bool = True
 
 
 @dataclass(frozen=True, slots=True)
 class BrokenRule:
-    """A rule a change would break: a piece of validity it would make false through an
-    origin it was not false through before.
+    """A rule a change breaks: a piece of validity it makes false through an origin it
+    was not false through before. A refused change is refused by it; an accepted change
+    of facts (or a bind) reports it as a rule the new facts (or the saved choices) make
+    false, which the published configuration reads refused.
 
     ``rule``: the origin's key, where the failure starts: a constraint false on its own
     values, a derived value or a view refusing on its own values, a choice whose listed
@@ -67,8 +72,11 @@ class BrokenRule:
     apply), a formal two sources supply; never a guard (a guard refuses only through an
     input, and the refusal names the origin behind it). ``result``: the origin's own
     refusal. ``standing``: the stored choices standing in its way, by key: those the
-    origin reads that the change does not name, which the caller sets in the same change
-    or clears first (none where the values named and the facts alone break it)."""
+    origin reads, less those deciding whether it exists. On a refused change, less those
+    the change names: the caller sets them in the same change or clears them first (none
+    where the values named and the facts alone break it). On an accepted one, every such
+    stored choice of the published configuration, which a later change may clear (none
+    where the facts alone break it)."""
 
     rule: str
     result: Rejected
@@ -78,11 +86,15 @@ class BrokenRule:
 @dataclass(frozen=True, slots=True)
 class ConfigurationResult(Generic[S]):
     """A change's report: the configuration it publishes (the receiver where it changes
-    nothing, or is refused), whether it was accepted, and each item's outcome. A change
-    refused by the rules it would break names each in ``broken``. An accepted change
-    names, by key, the stored choices it puts out of play (``dormant``: present or
-    waiting before, absent after), those it brings into play (``in_play``: not present
-    before, present after) and the open choices it brings into presence (``opened``)."""
+    nothing, or is refused), whether it was accepted, and each item's outcome (the facts
+    given, the choices named, then the stored choices new facts dropped, in the flow order).
+    ``broken``: on a refused change, the rules it is refused by; on an accepted one, the
+    rules the new facts make false (a change of facts) or the saved choices break (a
+    bind), which the published configuration reads refused; empty on an accepted change
+    of choices. An accepted change names, by key, the stored choices it puts out of play
+    (``dormant``: present or waiting before, absent after), those it brings into play
+    (``in_play``: not present before, present after) and the open choices it brings into
+    presence (``opened``)."""
 
     instance: S
     accepted: bool
