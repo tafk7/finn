@@ -14,16 +14,17 @@ not. At every step (each change tried, accepted or refused):
 
 1. *History-independence.* The walked configuration answers every question (each choice's
    state, each value's answer, each rule, validity, each listed choice's possible values
-   and ranking) as ``Configuration(space, facts, stored)`` built from nothing; and
-   ``bind(space, facts, stored)`` publishes it, dropping nothing. And the change from
-   nothing, ``change(Configuration(space, facts), Change(commit=stored))``, is accepted
-   with the same answers, for every configuration the walk reaches by accepted changes
-   of choices that set (FN3: what a step publishes binds again unrefused). Why (§ 16.15):
-   such a change leaves the set of counted pairs (3) no larger, so the configuration's
-   false pieces are those its facts made false, which the configuration the change starts
-   from (its facts, nothing stored) counts too. Its scope: it may be refused by the
-   origins a clear-only step revealed from behind a view's Space (§ 16.16, 3) or a facts
-   step made newly false (§ 16.24), and nothing else; that is counted as expected.
+   and ranking) as ``Configuration(space, facts, stored)`` built from nothing; and the
+   bind of its own choices from nothing, ``bind(space, facts, stored)``, publishes it,
+   dropping nothing and reporting no rule broken, for every configuration the walk reaches
+   by accepted changes of choices that set (FN3: what a step publishes binds again with
+   nothing broken). Why (§ 16.15): such a change leaves the set of counted pairs (3) no
+   larger, so the configuration's false pieces are those its facts made false, which the
+   bind's baseline (its facts, nothing stored) counts too. Its scope: the bind may report
+   the origins a clear-only step revealed from behind a view's Space (§ 16.16, 3) or a
+   facts step made newly false (§ 16.24), and nothing else: a design space a step left
+   reading refused binds again, reads refused and reports them; that is counted as
+   expected.
 2. *Additions move answers only up the information order* (:func:`below`, the order
    defined in one place) over a step that only sets choices nothing was stored for, with no
    exception: no accepted addition leaves a Space newly refused (§ 16.15 removes § 16.14's).
@@ -57,18 +58,23 @@ not the model checking itself: it reads the model's evaluation of each configura
 ``Solution``) and never its change code nor its pairs.
 
 **The engine** (the engine core's) answers the same questions at every configuration
-the model reaches, and the same change at every step. Its own **permanent checks** are
-strict always: the walked engine configuration answers every question, and every change,
-as one built from nothing (``support.space_walk.fresh``). A disagreement with the model is
-**counted, not failed, while a milestone with rows is pending** (:func:`pending`): tallied
-by question. The facts-instance milestone is pending: the engine still refuses a change of
-facts the model takes as a new design space, and a facts step's change is tallied as
-``"facts change"``, apart from every other question's. With the milestone's rows taken as
-removed (``--without``), every disagreement fails the walk. An engine error always fails.
-Refinement on the engine side (its answers over an addition, in the same order) is a
-disagreement like any other where the model holds. Where the engine refuses a change the
-model accepts, the engine side takes the model's configuration by a change from nothing; if
-it refuses that too, it is out of step until a later configuration binds.
+the model reaches, the same change at every step (a facts step's tallied as ``"facts
+change"``, apart from a change of choices), and invariant 1's bind of each configuration's
+own choices (``finn.core.space.bind`` against the model's ``bind``, its report compared).
+Its own **permanent checks** are strict always: the walked engine configuration answers
+every question, and every change, as one built from nothing (``support.space_walk.fresh``),
+and its bind publishes the walked configuration's stored choices. No milestone with rows is
+pending (the facts-instance milestone is accepted), so every disagreement with the model
+fails the walk. While a later milestone with rows is pending (:func:`pending`), they are
+**counted, not failed**, tallied by question; with its rows taken as removed
+(``--without``), each fails the walk. An engine error always fails. Refinement on the engine
+side (its answers over an addition, in the same order) is a disagreement like any other
+where the model holds. Where the engine refuses a change the model accepts, the engine side
+takes the model's configuration by a bind, which is never refused.
+
+A fact unset is the model's alone: the engine cannot set an optional formal back to
+unsupplied, so such a step is checked against the model's invariants and never sent to the
+engine (``Point.change`` would raise ``NotTranslatable``).
 
 A failure prints the seed, the step, the description, the steps so far and the answers
 involved. ``python -m core.space.reference_harness walks`` (from ``tests``) prints a line
@@ -96,6 +102,7 @@ from .compare import (
     Disagreement,
     agrees,
     answer_form,
+    bind_form,
     change_form,
     possible_form,
     rule_form,
@@ -1357,46 +1364,32 @@ def _standing(
 
 def bind_problems(
     walked: model.Configuration,
-    result: model.Accepted | model.Rejected,
+    bound: model.Accepted,
     revealed: Collection[str] = frozenset(),
     broken: Collection[str] = frozenset(),
-) -> tuple[list[str], bool]:
-    """Invariant 1's bind: ``result``, ``walked``'s stored set committed as one change from
-    an empty configuration with the same facts, is accepted, and answers as ``walked``; or
-    refused by origins of ``revealed``, those clear-only steps of the walk revealed from
-    behind a view's Space (§ 16.16), or of ``broken``, those facts steps of the walk made
-    newly false (§ 16.24), and nothing else. And whether it was refused so."""
-    if isinstance(result, model.Rejected):
-        allowed = {*revealed, *broken}
-        if result.refusals and all(
-            isinstance(item, model.RuleRefusal) and item.origin in allowed
-            for item in result.refusals
-        ):
-            return [], True
-        named = sorted(
-            (item.origin, item.kind)
-            if isinstance(item, model.RuleRefusal)
-            else (item.choice, "assignment")
-            for item in result.refusals
-        )
+) -> tuple[list[str], frozenset[str]]:
+    """Invariant 1's bind: ``bound``, the bind of ``walked``'s stored choices under its facts
+    (``model.bind``, from nothing), publishes ``walked`` exactly and drops nothing; and it
+    reports no rule (FN3: what a walk publishes binds again with nothing broken) but those of
+    ``revealed``, which clear-only steps of the walk revealed from behind a view's Space
+    (§ 16.16), or of ``broken``, which facts steps of the walk made newly false (§ 16.24): a
+    design space a step left reading refused binds again, reads refused, and reports them.
+    The problems, and the origins it reports."""
+    problems: list[str] = []
+    if bound.dropped or not _same_published(bound.configuration, walked):
+        problems.append("1 bind: the bind of a design space's own choices drops or moves one")
+    reported = frozenset(item.origin for item in bound.broken)
+    stray = reported - {*revealed, *broken}
+    if stray:
+        named = sorted((item.origin, item.kind) for item in bound.broken if item.origin in stray)
         exempt = f"a clear revealed ({sorted(revealed)})" + (
             f" or new facts broke ({sorted(broken)})" if broken else ""
         )
-        return [
-            f"1 bind: refused by {named}; what a walk publishes binds again unrefused (FN3), "
-            f"but for rules {exempt}"
-        ], False
-    asked = [q for q in questions(walked.index) if q[0] != "possible"]
-    moved = differences(
-        model_forms(walked.solve(), asked), model_forms(result.configuration.solve(), asked)
-    )
-    problems = (
-        [f"1 bind: accepted, answering otherwise: {[ask(q) for q in moved]}"] if moved else []
-    )
-    bound = model.bind(walked.space, walked.facts, walked.stored)
-    if bound.dropped or not _same_published(bound.configuration, walked):
-        problems.append("1 bind: the bind of a design space's own choices drops or moves one")
-    return problems, False
+        problems.append(
+            f"1 bind: reports {named}; what a walk publishes binds again with nothing broken "
+            f"(FN3), but for rules {exempt}"
+        )
+    return problems, reported
 
 
 # --- the engine comparison: counted while a milestone is pending ----------------------------------
@@ -1435,17 +1428,18 @@ class Tally:
     checks: Counter[str] = field(default_factory=Counter)
     #: the engine's own permanent checks run, by name
     engine_checks: Counter[str] = field(default_factory=Counter)
-    #: configurations compared with the engine; the engine took the model's by a bind; or
-    #: could not, and was out of step
+    #: configurations compared with the engine; the engine took the model's by a bind
+    #: (``finn.core.space.bind``, never refused), where it refused what the model accepted
     compared: int = 0
     rebound: int = 0
-    out_of_step: int = 0
     #: disagreements with the engine (counted while a milestone is pending), by question
     by_question: Counter[str] = field(default_factory=Counter)
     engine_errors: int = 0
-    #: binds refused by rules clear-only steps revealed (§ 16.16) or facts steps broke
+    #: binds of a design space reading refused (invariant 1, through ``bind``), reporting a
+    #: rule a clear-only step revealed (§ 16.16), and reporting one a facts step broke
     #: (§ 16.24), as invariant 1 allows
-    binds_refused: int = 0
+    binds_revealed: int = 0
+    binds_broken: int = 0
     seconds: float = 0.0
     #: what failed: an invariant's name, "engine", "disagreement" or "error"
     failed: str | None = None
@@ -1464,13 +1458,13 @@ class _EngineError(Exception):
 @dataclass(frozen=True)
 class _State:
     """Where the walk is: the model's configuration and its answers, and the engine's point
-    (``None`` out of step) and its answers."""
+    and its answers."""
 
     configuration: model.Configuration
     solution: model.Solution
     forms: dict[Question, Form]
-    point: Point | None
-    engine: dict[Question, Form] | None
+    point: Point
+    engine: dict[Question, Form]
 
 
 class _Walk:
@@ -1543,11 +1537,13 @@ class _Walk:
             "1 history",
             [f"built from nothing, {ask(q)} differs: walked {forms[q]}" for q in moved],
         )
-        empty = model.Configuration(configuration.space, dict(configuration.facts))
-        result = model.change(empty, model.Change(commit=dict(configuration.stored)))
-        problems, refused = bind_problems(configuration, result, self.revealed, self.broken)
+        bound = model.bind(
+            configuration.space, dict(configuration.facts), dict(configuration.stored)
+        )
+        problems, reported = bind_problems(configuration, bound, self.revealed, self.broken)
         self.invariant("1 bind", problems)
-        self.tally.binds_refused += refused
+        self.tally.binds_revealed += bool(reported & self.revealed)
+        self.tally.binds_broken += bool(reported & self.broken)
 
     def additions(self, before: _State, forms: Mapping[Question, Form], edit: model.Change) -> None:
         """Invariant 2."""
@@ -1602,15 +1598,32 @@ class _Walk:
             )
         return form, successor
 
-    def bind_engine(self, configuration: model.Configuration) -> Point | None:
-        """The engine's configuration of ``configuration`` built from nothing, or ``None``."""
+    def bind_engine(self, configuration: model.Configuration) -> tuple[ChangeForm, Point]:
+        """``configuration``'s stored choices bound under its facts in the engine
+        (``finn.core.space.bind``, from nothing): its report and its configuration. Never
+        refused: a design space reading refused binds, and reports its rules."""
         start = self.on_engine(lambda: self.engine.open(dict(configuration.facts)))
-        if not configuration.stored:
-            return start
-        _, point = self.on_engine(
-            lambda: start.change(model.Change(commit=dict(configuration.stored)))
+        return self.on_engine(lambda: start.bind(dict(configuration.stored)))
+
+    def engine_bind(self, configuration: model.Configuration, point: Point) -> None:
+        """Invariant 1's bind on the engine side: the engine's bind of the walked design
+        space's own choices against the model's (its report), publishing the walked
+        engine configuration's stored choices."""
+        expected, _ = bind_form(
+            configuration.space, dict(configuration.facts), dict(configuration.stored)
         )
-        return point
+        form, bound = self.bind_engine(configuration)
+        self.tally.engine_checks["bind"] += 1
+        label = f"the bind of {dict(configuration.stored)}"
+        if not agrees(expected, form):
+            self.disagree("bind", label, expected, form)
+        walked = self.on_engine(point.stored)
+        if not _same_facts(self.on_engine(bound.stored), walked):
+            self.fail(
+                "engine",
+                f"{label}: the engine's bind publishes {self.on_engine(bound.stored)}, the "
+                f"walked engine configuration stores {walked}",
+            )
 
     def engine_refinement(
         self,
@@ -1621,7 +1634,6 @@ class _Walk:
     ) -> None:
         """The engine's answers over an addition it took itself, in the same order: a move
         down where the model's answer does not move is a disagreement like any other."""
-        assert before.engine is not None
         self.tally.engine_checks["refinement"] += 1
         found = order_problems(before.engine, engine, edit.commit)
         for question, move in sorted(found.items()):
@@ -1735,13 +1747,13 @@ class _Walk:
 
     # -- the walk
 
-    def state(self, configuration: model.Configuration, point: Point | None) -> _State:
+    def state(self, configuration: model.Configuration, point: Point) -> _State:
         solution = configuration.solve()
         forms = model_forms(solution, self.asked)
         self.history_independence(configuration, forms)
-        engine = self.engine_state(point) if point is not None else None
-        if engine is not None:
-            self.compare(forms, engine)
+        engine = self.engine_state(point)
+        self.compare(forms, engine)
+        self.engine_bind(configuration, point)
         return _State(configuration, solution, forms, point, engine)
 
     def run(self) -> Tally:
@@ -1788,28 +1800,18 @@ class _Walk:
                     checked.problems[0].split(":")[0], "invariant " + "\n".join(checked.problems)
                 )
             return state
-        engine: ChangeForm | None = None
-        successor: Point | None = None
-        if state.point is not None:
-            engine, successor = self.engine_change(state.point, edit)
+        engine, successor = self.engine_change(state.point, edit)
         self.history.append(
-            f"{_edit(edit)}: model {verdict}"
-            + (
-                f", engine {'accepted' if engine.accepted else 'refused'}"
-                if engine
-                else ", engine out of step"
-            )
+            f"{_edit(edit)}: model {verdict}, engine {'accepted' if engine.accepted else 'refused'}"
         )
         if checked.problems:
             self.fail(checked.problems[0].split(":")[0], "invariant " + "\n".join(checked.problems))
         facts_step = "facts" in checked.runs
-        if engine is not None:
-            expected = change_form(configuration, edit, result)
-            if not agrees(expected, engine):
-                # a facts step's: the facts-instance milestone's rows (the engine still refuses
-                # a change of facts the model takes as a new design space)
-                what = "facts change" if facts_step else "change"
-                self.disagree(what, f"the change {_edit(edit)}", expected, engine)
+        expected = change_form(configuration, edit, result)
+        if not agrees(expected, engine):
+            # tallied apart: a facts step's change (§ 16.24) and a change of choices
+            what = "facts change" if facts_step else "change"
+            self.disagree(what, f"the change {_edit(edit)}", expected, engine)
         if not isinstance(result, model.Accepted):
             return state
         tally.accepted += 1
@@ -1825,14 +1827,15 @@ class _Walk:
             self.additions(state, forms, edit)
         point = successor
         if point is None:
-            point = self.bind_engine(result.configuration)
-            tally.rebound += point is not None
-            tally.out_of_step += point is None
-        engine_forms_ = self.engine_state(point) if point is not None else None
-        if engine_forms_ is not None:
-            self.compare(forms, engine_forms_)
-            if addition and successor is not None and state.engine is not None:
-                self.engine_refinement(state, forms, engine_forms_, edit)
+            # the engine refused what the model accepted (a disagreement, counted while a
+            # milestone is pending): it takes the model's configuration by a bind
+            _, point = self.bind_engine(result.configuration)
+            tally.rebound += 1
+        engine_forms_ = self.engine_state(point)
+        self.compare(forms, engine_forms_)
+        self.engine_bind(result.configuration, point)
+        if addition and successor is not None:
+            self.engine_refinement(state, forms, engine_forms_, edit)
         return _State(result.configuration, solution, forms, point, engine_forms_)
 
 
@@ -1900,11 +1903,11 @@ def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
         f"{summed('steps')}, accepted {summed('accepted')}, the model's alone "
         f"{summed('model_only')}; {seconds:.1f} s, {seconds / max(len(tallies), 1):.2f} s per walk",
         f"descriptions skipped: {_counts(totals['skipped'])}",
-        f"invariant checks: {_counts(totals['checks'])}; binds refused by rules a clear "
-        f"revealed (§ 16.16) or new facts broke (§ 16.24) {summed('binds_refused')}",
+        f"invariant checks: {_counts(totals['checks'])}; binds reading refused, reporting rules "
+        f"a clear revealed (§ 16.16) {summed('binds_revealed')}, or new facts broke (§ 16.24) "
+        f"{summed('binds_broken')}",
         f"engine's own checks: {_counts(totals['engine_checks'])}; configurations compared "
-        f"{summed('compared')}, engine rebound to the model's {summed('rebound')}, out of step "
-        f"{summed('out_of_step')}",
+        f"{summed('compared')}, engine rebound to the model's by a bind {summed('rebound')}",
         f"engine disagreements ({mode}) by question: {_counts(totals['by_question'])}",
         f"engine errors: {summed('engine_errors')}",
     ]

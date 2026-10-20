@@ -35,7 +35,6 @@ from core.space.reference_harness import (
     Requirement,
     Spelling,
     check_definition,
-    expected,
 )
 
 
@@ -150,7 +149,6 @@ def test_setting_a_case_needing_a_missing_capability_is_refused_by_the_facts_alo
     REQUIRED.start({"has_big": False}).check_change(Change(commit={"style": "big"}))
 
 
-@expected("facts-rule-constraint")
 def test_new_facts_lacking_a_capability_a_stored_case_needs_are_reported() -> None:
     # Accepted, reading refused at the rule, which the report names with ``style`` standing
     # (§ 16.24).
@@ -538,12 +536,10 @@ def sized() -> Pair:
     return SIZED.start({"n": 8}, DORMANT_DEPTH).reach(Change(commit={"mode": "b"}))
 
 
-@expected("facts-drop-dormant")
 def test_a_facts_change_drops_a_dormant_value_outside_its_new_domain() -> None:
     sized().check_change(Change(facts={"n": 12}))
 
 
-@expected("facts-drop-present")
 def test_a_facts_change_drops_each_value_outside_its_new_domain() -> None:
     sized().check_change(Change(facts={"n": 6}))
 

@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The acceptance matrix: every disagreement between the engine and the reference model
-expected at this commit, by the milestone that removes it. Its rows are the facts-instance
-milestone's: the model takes a change of facts as a new design space, never refused (the
-semantics note's § 16.24), and the engine still refuses it.
+expected at this commit, by the milestone that removes it. It holds none: the engine agrees
+with the model on every question.
 
 Each row names the change that removes it, in one sentence, and its **witness**: the one
 test that shows it, marked with :func:`expected` (a strict expected failure raising
@@ -12,7 +11,9 @@ test that shows it, marked with :func:`expected` (a strict expected failure rais
 milestone is accepted when its rows' witnesses pass (each strict expected failure then
 fails) and it removes the rows. The engine core (the rewrite to the semantics the model
 states: assignment, refusal at the origin, dormant choices) was the first, accepted when
-it landed with the model: its rows' witnesses are plain tests.
+it landed with the model: its rows' witnesses are plain tests. The facts-instance milestone
+(a change of facts as a new design space, never refused: § 16.24) was the second, accepted
+when the engine dropped and reported as the model does.
 
 A later milestone joins ``MILESTONES`` with its rows; while it has rows the walks count
 their disagreements, and fail on each once none has.
@@ -34,7 +35,7 @@ import pytest
 from .compare import Disagreement
 
 #: in order: the line as it is, then each later milestone with rows to remove
-MILESTONES: tuple[str, ...] = ("base", "facts-instance")
+MILESTONES: tuple[str, ...] = ("base",)
 
 
 @dataclass(frozen=True)
@@ -51,76 +52,7 @@ class Row:
     note: str = ""
 
 
-#: what the engine answers today for each row: the change of facts refused
-_REFUSED = "today refused"
-
-ROWS: tuple[Row, ...] = (
-    Row(
-        "facts-drop-present",
-        "facts-instance",
-        "a change of facts drops each stored value its new facts put outside its domain, and "
-        "reports it with its old value, the choice open where present",
-        "test_reference_rules::test_a_facts_change_drops_each_value_outside_its_new_domain",
-        _REFUSED,
-    ),
-    Row(
-        "facts-drop-dormant",
-        "facts-instance",
-        "a change of facts drops a dormant value its new facts put outside its domain, and "
-        "reports it",
-        "test_reference_rules::test_a_facts_change_drops_a_dormant_value_outside_its_new_domain",
-        _REFUSED,
-    ),
-    Row(
-        "facts-drop-waiting",
-        "facts-instance",
-        "a change of facts drops a value waiting on its selector that its new facts put "
-        "outside its domain",
-        "test_reference_cases::test_a_stored_value_new_facts_put_outside_its_domain_is_dropped",
-        _REFUSED,
-    ),
-    Row(
-        "facts-drop-arriving",
-        "facts-instance",
-        "the change of facts supplying the fact a waiting value lacks drops the value where "
-        "it falls outside",
-        "test_reference_cases::test_the_fact_a_waiting_choice_lacks_checks_its_type_when_it_comes",
-        _REFUSED,
-    ),
-    Row(
-        "facts-drop-input-refused",
-        "facts-instance",
-        "a change of facts making a stored choice's membership input refuse drops the value, "
-        "the domain reading refused through the input",
-        "test_reference_cases::test_new_facts_that_refuse_a_stored_choices_membership_input_drop_it",
-        _REFUSED,
-    ),
-    Row(
-        "facts-drop-input-absent",
-        "facts-instance",
-        "a change of facts making a stored choice's membership input absent drops the value, "
-        "the domain reading refused (domain-input-absent) and reported",
-        "test_reference_cases::"
-        "test_new_facts_putting_a_stored_choices_membership_input_out_of_play_drop_it",
-        _REFUSED,
-    ),
-    Row(
-        "facts-rule-constraint",
-        "facts-instance",
-        "a change of facts making a constraint newly false is accepted, reading refused, and "
-        "reports the constraint with its standing choices",
-        "test_reference_rules::test_new_facts_lacking_a_capability_a_stored_case_needs_are_reported",
-        _REFUSED,
-    ),
-    Row(
-        "facts-rule-derived",
-        "facts-instance",
-        "a change of facts making a derived value refuse under a guard is accepted, reading "
-        "refused, and reports the derived value",
-        "test_reference_scopes::test_new_facts_refusing_a_guards_input_are_reported_at_the_input",
-        _REFUSED,
-    ),
-)
+ROWS: tuple[Row, ...] = ()
 
 BY_ID = {row.id: row for row in ROWS}
 

@@ -92,21 +92,8 @@ def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() ->
     assert not problems(CASE_MODULES)
 
 
-def test_the_engine_core_is_accepted_and_the_facts_instance_milestone_pending() -> None:
-    """The engine core's rows are removed; the facts-instance milestone's are the engine's
-    refused changes of facts, one row per clause of § 16.24 a hand case shows."""
-    assert MILESTONES == ("base", "facts-instance")
-    assert {row.milestone for row in ROWS} == {"facts-instance"}
-    assert sorted(row.id for row in ROWS) == [
-        "facts-drop-arriving",
-        "facts-drop-dormant",
-        "facts-drop-input-absent",
-        "facts-drop-input-refused",
-        "facts-drop-present",
-        "facts-drop-waiting",
-        "facts-rule-constraint",
-        "facts-rule-derived",
-    ]
+def test_the_engine_core_and_facts_instance_milestones_are_accepted_their_rows_removed() -> None:
+    assert MILESTONES == ("base",) and ROWS == ()
 
 
 # A later milestone with rows, put in the matrix where a test needs one.

@@ -29,7 +29,7 @@ from core.space.reference import (
     listed,
     membership,
 )
-from core.space.reference_harness import Case, Pair, Spelling, expected
+from core.space.reference_harness import Case, Pair, Spelling
 
 
 def divisors(extent: int) -> tuple[int, ...]:
@@ -96,7 +96,6 @@ def test_a_value_under_an_open_selector_waits_on_it() -> None:
     TYPED.start({"width": 12}, {PE: 3}).check_state(PE)
 
 
-@expected("facts-drop-waiting")
 def test_a_stored_value_new_facts_put_outside_its_domain_is_dropped() -> None:
     # 3 divides 9, not 71: every stored value is checked against the new facts, and one
     # outside is dropped and reported, never refusing the change (§ 16.24).
@@ -523,7 +522,6 @@ def test_a_choice_whose_domain_waits_on_a_fact_waits_on_it() -> None:
     ON_A_FACT.start({}, {"pe": 3}).check_state("pe")
 
 
-@expected("facts-drop-arriving")
 def test_the_fact_a_waiting_choice_lacks_checks_its_type_when_it_comes() -> None:
     # 3 does not divide 8: the value is dropped and reported (§ 16.24).
     ON_A_FACT.start({}, {"pe": 3}).check_change(Change(facts={"width": 8}))
@@ -640,7 +638,6 @@ def test_a_value_whose_membership_reads_a_refused_input_is_refused_at_commit() -
     REFUSED_INPUT.start({"w": 7}).check_change(Change(commit={"lanes": 1}))
 
 
-@expected("facts-drop-input-refused")
 def test_new_facts_that_refuse_a_stored_choices_membership_input_drop_it() -> None:
     REFUSED_INPUT.start({"w": 8}, {"lanes": 4}).check_change(Change(facts={"w": 7}))
 
@@ -718,7 +715,6 @@ def test_a_choice_whose_membership_input_is_in_play_is_set() -> None:
     GUARDED_INPUT.start({"on": True, "n": 4}, {"lanes": 2}).check_state("lanes")
 
 
-@expected("facts-drop-input-absent")
 def test_new_facts_putting_a_stored_choices_membership_input_out_of_play_drop_it() -> None:
     point = GUARDED_INPUT.start({"on": True, "n": 4}, {"lanes": 2})
     point.check_change(Change(facts={"on": False}))

@@ -10,6 +10,9 @@ asks compares one answer:
 - **kinds, values, codes, verdicts and refusals exactly**: a state, a verdict, each
   refusal's kind, subject, codes and standing choices, what a change moves, each possible
   value's outcome in its list's order;
+- **a change's lists as sets**: its refusals, the values new facts dropped and the rules
+  they broke. Drops are compared as sets: the model sorts them by path, the engine reports
+  them in its flow order;
 - **blockers as a subset**: the engine runs opaque method bodies that stop at their first
   unavailable read, so it may name fewer of what an answer waits on than the model, never
   one the model does not name.
@@ -246,6 +249,17 @@ def change_form(
     return ChangeForm(False, refusals=refusals)
 
 
+def bind_form(
+    space: reference.Space, facts: Mapping[str, object], stored: Mapping[str, object]
+) -> tuple[ChangeForm, reference.Configuration]:
+    """The model's ``bind`` of ``stored`` under ``facts``: its report as an accepted change
+    of the configuration with ``facts`` and nothing stored, and what it publishes."""
+    result = reference.bind(space, facts, stored)
+    return change_form(reference.Configuration(space, facts), reference.Change(), result), (
+        result.configuration
+    )
+
+
 def possible_form(solution: reference.Solution, path: str) -> PossibleForm:
     found = solution.possible(path)
     if found is None:
@@ -372,6 +386,18 @@ class Pair:
             return Pair(self.case, result.configuration, point)
         return None
 
+    def check_bind(self, stored: Mapping[str, object]) -> Pair:
+        """``stored`` bound under this configuration's facts (the model's ``bind``, the
+        engine's ``finn.core.space.bind``), compared; its successor. Ask it of a
+        configuration with nothing stored: both sides read the bind against that."""
+        __tracebackhide__ = True
+        if self.model.stored:
+            raise SetupError(f"{self.case.name}: bind from a configuration with nothing stored")
+        expected, configuration = bind_form(self.model.space, self.model.facts, stored)
+        form, point = self.engine.bind(stored)
+        _check(self.case.name, f"the bind of {dict(stored)}", expected, form)
+        return Pair(self.case, configuration, point)
+
     def reach(self, edit: reference.Change) -> Pair:
         """``edit`` compared, then its successor: how a question is asked beyond a change
         the engine may refuse, so its refusal shows as the disagreement it is. A change the
@@ -419,6 +445,7 @@ __all__ = [
     "SetupError",
     "agrees",
     "answer_form",
+    "bind_form",
     "change_form",
     "check_definition",
     "possible_form",

@@ -27,10 +27,14 @@ form, and no answer the adapter computes in the engine's place.
   - a change's report: refused, its type checks refused (``ChangeOutcome``, status
     ``"refused"``) as ``assignment`` refusals with their codes, and each ``BrokenRule`` as
     a ``rule`` refusal (its origin, its result's codes, its standing choices); accepted,
-    what it puts dormant, brings into play and opens, and its ``BrokenRule``s as the rules
-    the published design space holds newly false. The engine drops no stored value today
-    (a change of facts that would is refused), so an accepted change drops nothing here;
-    the engine's change of facts as a new design space (§ 16.24) extends this;
+    what it puts dormant, brings into play and opens, each stored value new facts dropped
+    (``ChangeOutcome`` status ``"dropped"``: its old value the receiver's, its codes the
+    failed check's, as an assignment refusal's), and its ``BrokenRule``s as the rules the
+    published design space holds newly false (as a refusal's rules: origin, codes,
+    standing). Drops and rules compare as sets;
+  - a bind (``finn.core.space.bind``) of saved choices under a configuration's facts, in
+    the same form as an accepted change: what it drops (its old value the saved one) and
+    the rules the kept choices break;
   - possible values are ``inspection.viable``'s: ``Possible`` with what it moves,
     ``Refused`` with its broken rules; ``None`` where the engine lists nothing;
   - validity is ``inspection.validity`` (``"valid"``, ``"refused"``, ``"open"``);
@@ -75,13 +79,15 @@ from finn.core.space import (
     selected,
     view,
 )
-from finn.core.space.edits import BrokenRule, ChangeOutcome, ChangeRequest
+from finn.core.space import bind as space_bind
+from finn.core.space.edits import BrokenRule, ChangeOutcome, ChangeRequest, ConfigurationResult
 
 from .forms import (
     AnswerForm,
     ChangeForm,
     Code,
     DefinitionForm,
+    DroppedForm,
     OutcomeForm,
     PossibleForm,
     RefusalForm,
@@ -751,7 +757,6 @@ class Point:
         """``edit`` applied: its comparable result, and the configuration it publishes."""
         if edit.unset:
             raise NotTranslatable("the engine cannot set a fact back to unknown")
-        engine = self.engine
         decisions = self._decisions()
         commits = {decisions[path]: value for path, value in edit.commit.items()}
         clears: list[ChangeRequest] = [
@@ -763,12 +768,38 @@ class Point:
             report = self.point.try_with_facts(facts, commits, *clears)
         else:
             report = self.point.try_with_choices(commits, *clears)
+        return self._form(report, self.stored())
+
+    def bind(self, stored: Mapping[str, object]) -> tuple[ChangeForm, Point]:
+        """``stored`` bound under this configuration's facts (``finn.core.space.bind``): the
+        design space of the facts with exactly those choices, never refused. Its report, and
+        the configuration it publishes. Asked of a configuration with nothing stored, its
+        report reads against that configuration, as the model's ``bind`` does."""
+        decisions = self._decisions()
+        saved = {decisions[path]: value for path, value in stored.items()}
+        report = space_bind(self.point, saved)
+        form, point = self._form(report, stored)
+        if point is None:
+            raise AssertionError(f"the engine refused a bind: {form}")
+        return form, point
+
+    def _form(
+        self, report: ConfigurationResult[Space], before: Mapping[str, object]
+    ) -> tuple[ChangeForm, Point | None]:
+        """A change's or a bind's ``report`` in the comparable form, and what it publishes.
+        A dropped value's old value is read from ``before``: the receiver's stored choices,
+        or a bind's saved ones."""
+        engine = self.engine
         if not report.accepted:
             refusals = _assignments(engine, report.outcomes) | _broken(engine, report.broken)
             return ChangeForm(False, refusals=refusals), None
         moved = (self._paths(report.dormant), self._paths(report.in_play))
         form = ChangeForm(
-            True, *moved, self._paths(report.opened), broken=_broken(engine, report.broken)
+            True,
+            *moved,
+            self._paths(report.opened),
+            dropped=_dropped(engine, report.outcomes, before),
+            broken=_broken(engine, report.broken),
         )
         return form, Point(engine, report.instance)
 
@@ -796,6 +827,26 @@ def _assignments(engine: Engine, outcomes: Iterable[ChangeOutcome]) -> frozenset
             engine.codes(result.findings) if isinstance(result, Rejected) else frozenset()
         )
         found.add(RefusalForm("assignment", engine.path(outcome.owner), codes))
+    return frozenset(found)
+
+
+def _dropped(
+    engine: Engine, outcomes: Iterable[ChangeOutcome], before: Mapping[str, object]
+) -> frozenset[DroppedForm]:
+    """An accepted report's dropped values: each outcome ``"dropped"``, its old value read
+    from ``before`` (the engine reports the check, not the value), its codes those of the
+    check it failed, as an assignment refusal's. A set: the engine reports them in flow
+    order, the model by path."""
+    found: set[DroppedForm] = set()
+    for outcome in outcomes:
+        if outcome.status != "dropped":
+            continue
+        path = engine.path(outcome.owner)
+        result = outcome.result
+        codes: frozenset[Code] = (
+            engine.codes(result.findings) if isinstance(result, Rejected) else frozenset()
+        )
+        found.add(DroppedForm(path, before[path], codes))
     return frozenset(found)
 
 
