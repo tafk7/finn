@@ -17,8 +17,11 @@ brought into play and opened. A step of choices that sets a new value and is acc
 holds no false piece through an origin its base did not hold it through. A step that
 changes a fact instantiates a new design space, never refused for it: the rules it
 reports broken are exactly the origins through which its successor holds a false piece
-its base did not. Every difference is reported with the step, the change and the first
-keys that differ; the tallies say what the walk exercised.
+its base did not. A facts step that also sets a choice is its facts, then its choices as
+a change of choices on their design space, which adds no pair: its successor holds no
+pair the same facts alone, changed on its base, do not. Every difference is reported
+with the step, the change and the first keys that differ; the tallies say what the walk
+exercised.
 
 A step sets a choice, stored or open, to one of its domain's listed values (in play,
 waiting on a selector still open, or dormant under a case not selected), or clears a
@@ -108,6 +111,7 @@ class Tallies:
     facts_refused: int = 0  # of those, the refused ones (by the choices beside them)
     dropped: int = 0  # accepted steps that dropped a stored value the new facts exclude
     made_false: int = 0  # accepted steps whose new facts made a rule false
+    batches: int = 0  # accepted facts steps that also set a choice, held to their facts' pairs
     broken: int = 0  # refused steps that broke a rule
     dormant: int = 0  # accepted steps that put a stored choice out of play
     in_play: int = 0  # accepted steps that brought one back into play
@@ -283,6 +287,23 @@ class _Walk:
         if new != reported:
             self.differ("rules made false by the facts", new ^ reported)
 
+    def compare_batch(self, base: Space, drawn: Draw, result: ConfigurationResult[Space]) -> None:
+        """An accepted facts step that also sets a choice against its facts alone, changed
+        on its base: its choices, a change of choices on the facts' design space, add no
+        pair to it."""
+        facts = self.apply(base, Draw({}, (), drawn.facts))
+        assert facts.accepted, "a change of facts alone is never refused"
+        if not self.sets(facts.instance, Draw(drawn.values)):
+            return
+        self.report.tallies.batches += 1
+        nodes = occurrence.state(base).linked.nodes
+        added = held(result.instance) - held(facts.instance)
+        if added:
+            self.differ(
+                "a pair its choices add to its facts' design space, accepted",
+                {nodes[origin].owner for _, origin in added},
+            )
+
     # -- the walk -----------------------------------------------------------------------
 
     def run(self, steps: int) -> Report:
@@ -322,6 +343,7 @@ class _Walk:
             tallies.made_false += bool(result.broken)
             if drawn.facts:
                 self.compare_made_false(base, result)
+                self.compare_batch(base, drawn, result)
             elif self.sets(base, drawn) and not held(result.instance) <= held(base):
                 self.differ("a false piece through a new origin, accepted", ())
             self.compare_successor(result.instance)
@@ -351,11 +373,11 @@ def walk(
 def check(report: Report, *, refused: bool = True, facts: bool = False) -> None:
     """Fail on any difference; and, so the walk cannot pass without exercising the engine,
     unless it accepted, cleared and paired, and (``refused``) refused a step. ``facts``:
-    also unless a step that changed a root formal was accepted, and (``refused``) one was
-    refused."""
+    also unless a step that changed a root formal was accepted, one that also set a choice
+    among them, and (``refused``) one was refused."""
     assert not report.differences, "\n".join(report.differences[:SHOWN])
     tallies = report.tallies
     assert tallies.accepted and (tallies.refused or not refused), tallies
     assert tallies.clears and tallies.pairs, tallies
-    assert not facts or tallies.facts_changed, tallies
+    assert not facts or (tallies.facts_changed and tallies.batches), tallies
     assert not (facts and refused) or tallies.facts_refused, tallies
