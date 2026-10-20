@@ -11,7 +11,9 @@ test that shows it, marked with :func:`expected` (a strict expected failure rais
 milestone is accepted when its rows' witnesses pass (each strict expected failure then
 fails) and it removes the rows. The engine core (the rewrite to the semantics the model
 states: assignment, refusal at the origin, dormant choices) was the first, accepted when
-it landed with the model: its rows' witnesses are plain tests.
+it landed with the model: its rows' witnesses are plain tests. The facts-instance milestone
+(a change of facts as a new design space, never refused: § 16.24) was the second, accepted
+when the engine dropped and reported as the model does.
 
 A later milestone joins ``MILESTONES`` with its rows; while it has rows the walks count
 their disagreements, and fail on each once none has.

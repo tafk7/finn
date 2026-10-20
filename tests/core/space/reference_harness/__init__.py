@@ -9,10 +9,10 @@ description as an engine Space and asks it the model's questions, each answered 
 engine's own reading in the model's terms (everything that depends on how the engine is
 authored or asked is there); :mod:`.compare` puts the model's answers in the same form
 (:mod:`.forms`) and compares them; :mod:`.matrix` records every disagreement a pending
-milestone still expects, by the milestone that removes it (none: the engine core's
-milestone is accepted, and the engine agrees with the model); :mod:`.walks` compares the two
-over seeded random walks (imported on its own, never by this package). The engine has one
-read path, so each test and each walk asks it once.
+milestone still expects, by the milestone that removes it (none: the engine core's and the
+facts-instance milestones are accepted, and the engine agrees with the model); :mod:`.walks`
+compares the two over seeded random walks (imported on its own, never by this package). The
+engine has one read path, so each test and each walk asks it once.
 
     CASE = Case("a toy", Space(("wide",), Scope("", choices=(Choice("x", listed(1, 2)),))))
     pair = CASE.start(facts={"wide": True})
@@ -33,6 +33,7 @@ from .forms import (
     AnswerForm,
     ChangeForm,
     DefinitionForm,
+    DroppedForm,
     OutcomeForm,
     PossibleForm,
     RefusalForm,
@@ -52,6 +53,7 @@ __all__ = [
     "ChangeForm",
     "DefinitionForm",
     "Disagreement",
+    "DroppedForm",
     "NotTranslatable",
     "Obligation",
     "OutcomeForm",

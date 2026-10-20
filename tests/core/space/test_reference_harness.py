@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,7 @@ from core.space.reference_harness import (
     ROWS,
     Case,
     Disagreement,
+    DroppedForm,
     NotTranslatable,
     OutcomeForm,
     PossibleForm,
@@ -90,7 +92,7 @@ def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() ->
     assert not problems(CASE_MODULES)
 
 
-def test_the_engine_core_is_accepted_its_rows_removed() -> None:
+def test_the_engine_core_and_facts_instance_milestones_are_accepted_their_rows_removed() -> None:
     assert MILESTONES == ("base",) and ROWS == ()
 
 
@@ -218,6 +220,89 @@ def test_a_refused_input_carries_the_codes_of_its_origin() -> None:
     assert change_form(configuration, edit, result).refusals == {
         RefusalForm("assignment", "lanes", frozenset({("odd-v", "half")}))
     }
+
+
+def test_an_accepted_change_of_facts_carries_its_dropped_values_and_new_rules_as_sets() -> None:
+    # ``v`` turns odd: ``lanes = 2`` is dropped, its type check through ``half``; the empty
+    # list's piece is now false through ``half``, reported at its origin; ``w`` turns odd:
+    # ``gate`` refuses, reported too. Both lists are sets: no side's order is compared.
+    configuration = reference.Configuration(gated(), {"w": 4, "v": 4}, {"lanes": 2})
+    edit = Change(facts={"w": 3, "v": 3})
+    form = change_form(configuration, edit, reference.change(configuration, edit))
+    assert form.accepted and form.refusals == frozenset()
+    assert form.dropped == {DroppedForm("lanes", 2, frozenset({("odd-v", "half")}))}
+    assert form.broken == {
+        RefusalForm("rule", "gate", frozenset({("odd", "gate")})),
+        RefusalForm("rule", "half", frozenset({("odd-v", "half")})),
+    }
+    assert not agrees(form, replace(form, dropped=frozenset()))
+
+
+def ranged() -> Space:
+    """``x`` below the fact ``n``; ``k`` asks ``y`` to be at most ``n``."""
+    return Space(
+        ("n",),
+        Scope(
+            "",
+            choices=(
+                Choice("x", computed(lambda r: tuple(range(r["n"])), ("n",))),
+                Choice("y", listed(1, 2)),
+            ),
+            constraints=(Constraint("k", ("y", "n"), lambda r: r["y"] <= r["n"], "y-over"),),
+        ),
+    )
+
+
+RANGED = Case("ranged", ranged())
+K_OVER = RefusalForm("rule", "k", frozenset({("y-over", "k")}), frozenset({"y"}))
+
+
+def test_the_engines_accepted_change_of_facts_carries_the_old_value_of_what_it_drops() -> None:
+    # ``n = 1``: ``x = 2`` is dropped (its old value the receiver's), ``k`` turns false with
+    # ``y`` standing; the engine's report in the model's form.
+    edit = Change(facts={"n": 1})
+    pair = RANGED.start({"n": 3}, {"x": 2, "y": 2})
+    engine, _ = pair.engine.change(edit)
+    expected = change_form(pair.model, edit, reference.change(pair.model, edit))
+    assert engine == expected
+    assert engine.dropped == {DroppedForm("x", 2, frozenset({("domain-membership", "x")}))}
+    assert engine.broken == {K_OVER}
+
+
+def test_a_bind_compares_from_any_design_space_with_its_facts() -> None:
+    # Both sides read a bind against its facts with nothing stored, whatever the receiver
+    # stores, so the harness asks it of any design space. The bind of a value outside its
+    # domain drops it, its old value the saved one.
+    bound = RANGED.start({"n": 1}).check_bind({"x": 2, "y": 2})
+    assert bound.model.stored == {"y": 2} and bound.engine.stored() == {"y": 2}
+    form, _ = RANGED.start({"n": 1}).engine.bind({"x": 2, "y": 2})
+    assert form.dropped == {DroppedForm("x", 2, frozenset({("domain-membership", "x")}))}
+    assert form.broken == {K_OVER}
+    # From a design space storing choices of its own, the same report.
+    held, _ = RANGED.start({"n": 1}, {"x": 0, "y": 1}).engine.bind({"x": 2, "y": 2})
+    assert held == form
+    RANGED.start({"n": 1}, {"x": 0, "y": 1}).check_bind({"x": 2, "y": 2})
+
+
+def test_a_binds_outcomes_read_from_nothing_stored_whatever_the_receiver_holds() -> None:
+    # The harness compares no outcome status (the model's bind has none), so the engine's
+    # are read here against what the model's bind keeps and drops: each saved choice kept
+    # is ``"changed"`` and each dropped ``"dropped"`` (requested), from a design space
+    # storing nothing, the kept choices themselves, or other values.
+    saved = {"x": 2, "y": 2}
+    result = reference.bind(ranged(), {"n": 1}, saved)
+    dropped = {item.choice for item in result.dropped}
+    expected = tuple(
+        (path, "changed" if path in result.configuration.stored else "dropped", True)
+        for path in saved
+    )
+    assert dropped == {"x"} and expected == (("x", "dropped", True), ("y", "changed", True))
+    nothing = RANGED.start({"n": 1}).engine
+    _, holding = nothing.bind(saved)
+    assert holding.stored() == dict(result.configuration.stored)
+    other = RANGED.start({"n": 1}, {"x": 0, "y": 1}).engine
+    for receiver in (nothing, holding, other):
+        assert receiver.bind_outcomes(saved) == expected
 
 
 def test_the_codes_of_an_empty_list_and_a_refused_guard() -> None:

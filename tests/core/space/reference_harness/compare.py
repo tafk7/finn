@@ -10,6 +10,9 @@ asks compares one answer:
 - **kinds, values, codes, verdicts and refusals exactly**: a state, a verdict, each
   refusal's kind, subject, codes and standing choices, what a change moves, each possible
   value's outcome in its list's order;
+- **a change's lists as sets**: its refusals, the values new facts dropped and the rules
+  they broke. Drops are compared as sets: the model sorts them by path, the engine reports
+  them in its flow order;
 - **blockers as a subset**: the engine runs opaque method bodies that stop at their first
   unavailable read, so it may name fewer of what an answer waits on than the model, never
   one the model does not name.
@@ -33,6 +36,7 @@ from .forms import (
     ChangeForm,
     Code,
     DefinitionForm,
+    DroppedForm,
     Form,
     OutcomeForm,
     PossibleForm,
@@ -93,6 +97,8 @@ def _show(value: object) -> str:
     if isinstance(value, RefusalForm):
         standing = f", standing {_show(value.standing)}" if value.standing else ""
         return f"{value.subject} ({value.kind}: {_show(value.codes)}{standing})"
+    if isinstance(value, DroppedForm):
+        return f"{value.subject} = {value.value!r} ({_show(value.codes)})"
     if isinstance(value, OutcomeForm):
         if value.kind == "impossible":
             return f"impossible {_show(value.refusals)}"
@@ -221,16 +227,37 @@ def change_form(
     edit: reference.Change,
     result: reference.Accepted | reference.Rejected,
 ) -> ChangeForm:
-    """``edit``'s ``result`` on ``configuration``."""
-    if isinstance(result, reference.Accepted):
-        return ChangeForm(
-            True, frozenset(result.dormant), frozenset(result.in_play), frozenset(result.opened)
-        )
+    """``edit``'s ``result`` on ``configuration``. A dropped value's type check and a rule's
+    reasons are read over the facts the change publishes, as membership reads them."""
     facts = {k: v for k, v in configuration.facts.items() if k not in edit.unset}
     facts.update(edit.facts)
     index = configuration.index
+    if isinstance(result, reference.Accepted):
+        read = reference.FactsOnly(index, facts).value
+        return ChangeForm(
+            True,
+            frozenset(result.dormant),
+            frozenset(result.in_play),
+            frozenset(result.opened),
+            dropped=frozenset(
+                DroppedForm(item.choice, item.value, _codes(item.reasons, read))
+                for item in result.dropped
+            ),
+            broken=frozenset(refusal_form(index, facts, item) for item in result.broken),
+        )
     refusals = frozenset(refusal_form(index, facts, item) for item in result.refusals)
     return ChangeForm(False, refusals=refusals)
+
+
+def bind_form(
+    space: reference.Space, facts: Mapping[str, object], stored: Mapping[str, object]
+) -> tuple[ChangeForm, reference.Configuration]:
+    """The model's ``bind`` of ``stored`` under ``facts``: its report as an accepted change
+    of the configuration with ``facts`` and nothing stored, and what it publishes."""
+    result = reference.bind(space, facts, stored)
+    return change_form(reference.Configuration(space, facts), reference.Change(), result), (
+        result.configuration
+    )
 
 
 def possible_form(solution: reference.Solution, path: str) -> PossibleForm:
@@ -359,6 +386,17 @@ class Pair:
             return Pair(self.case, result.configuration, point)
         return None
 
+    def check_bind(self, stored: Mapping[str, object]) -> Pair:
+        """``stored`` bound under this design space's facts (the model's ``bind``, the
+        engine's ``finn.core.space.bind``), compared; its successor. Asked of any design
+        space with these facts: both sides read the bind against the facts with nothing
+        stored, whatever the receiver stores."""
+        __tracebackhide__ = True
+        expected, configuration = bind_form(self.model.space, self.model.facts, stored)
+        form, point = self.engine.bind(stored)
+        _check(self.case.name, f"the bind of {dict(stored)}", expected, form)
+        return Pair(self.case, configuration, point)
+
     def reach(self, edit: reference.Change) -> Pair:
         """``edit`` compared, then its successor: how a question is asked beyond a change
         the engine may refuse, so its refusal shows as the disagreement it is. A change the
@@ -406,6 +444,7 @@ __all__ = [
     "SetupError",
     "agrees",
     "answer_form",
+    "bind_form",
     "change_form",
     "check_definition",
     "possible_form",

@@ -11,12 +11,17 @@ included), built directly in a world of its own. A configuration is its facts an
 choices, so the two must answer alike: every step compares the successor with its
 recomputation (the stored choices, every node's answer and the choices and facts each
 read, and the validity), and the step's report with the report of the same change on
-the recomputation of its base: accepted or refused, the values refused, the rules
-broken with the choices standing in each one's way, and the choices put dormant,
-brought into play and opened. A step that sets a new value and is accepted holds no
-false piece through an origin its base did not hold it through. Every difference is
-reported with the step, the change and the first keys that differ; the tallies say what
-the walk exercised.
+the recomputation of its base: accepted or refused, the values refused or dropped, the
+rules broken with the choices standing in each one's way, and the choices put dormant,
+brought into play and opened. A step of choices that sets a new value and is accepted
+holds no false piece through an origin its base did not hold it through. A step that
+changes a fact instantiates a new design space, never refused for it: the rules it
+reports broken are exactly the origins through which its successor holds a false piece
+its base did not. A facts step that also sets a choice is its facts, then its choices as
+a change of choices on their design space, which adds no pair: its successor holds no
+pair the same facts alone, changed on its base, do not. Every difference is reported
+with the step, the change and the first keys that differ; the tallies say what the walk
+exercised.
 
 A step sets a choice, stored or open, to one of its domain's listed values (in play,
 waiting on a selector still open, or dormant under a case not selected), or clears a
@@ -103,7 +108,10 @@ class Tallies:
     idle: int = 0  # steps with nothing to draw
     fact_steps: int = 0  # steps that changed a root formal
     facts_changed: int = 0  # of those, the accepted ones
-    facts_refused: int = 0  # of those, the refused ones
+    facts_refused: int = 0  # of those, the refused ones (by the choices beside them)
+    dropped: int = 0  # accepted steps that dropped a stored value the new facts exclude
+    made_false: int = 0  # accepted steps whose new facts made a rule false
+    batches: int = 0  # accepted facts steps that also set a choice, held to their facts' pairs
     broken: int = 0  # refused steps that broke a rule
     dormant: int = 0  # accepted steps that put a stored choice out of play
     in_play: int = 0  # accepted steps that brought one back into play
@@ -214,17 +222,18 @@ class _Walk:
         if got.accepted != want.accepted:
             self.differ(f"accepted {got.accepted}, recomputation {want.accepted}", ())
             return
-        refused = {o.owner: o.result for o in got.outcomes if o.status == "refused"}
-        expected = {o.owner: o.result for o in want.outcomes if o.status == "refused"}
-        if set(refused) != set(expected):
-            self.differ("refusing owners", set(refused) ^ set(expected))
-        wrong = [
-            owner
-            for owner in refused
-            if owner in expected and not same(refused[owner], expected[owner])
-        ]
-        if wrong:
-            self.differ("refusal results", wrong)
+        for status in ("refused", "dropped"):
+            found = {o.owner: o.result for o in got.outcomes if o.status == status}
+            expected = {o.owner: o.result for o in want.outcomes if o.status == status}
+            if set(found) != set(expected):
+                self.differ(f"{status} owners", set(found) ^ set(expected))
+            wrong = [
+                owner
+                for owner in found
+                if owner in expected and not same(found[owner], expected[owner])
+            ]
+            if wrong:
+                self.differ(f"{status} results", wrong)
         rules = {(rule.rule, rule.standing) for rule in got.broken}
         expected_rules = {(rule.rule, rule.standing) for rule in want.broken}
         if rules != expected_rules:
@@ -269,6 +278,32 @@ class _Walk:
         if not same(inspection.validity(successor), inspection.validity(recomputed)):
             self.differ("validity", ())
 
+    def compare_made_false(self, base: Space, result: ConfigurationResult[Space]) -> None:
+        """An accepted facts step's rules broken against the origins through which its
+        successor holds a false piece its base did not."""
+        nodes = occurrence.state(base).linked.nodes
+        new = {nodes[origin].owner for _, origin in held(result.instance) - held(base)}
+        reported = {rule.rule for rule in result.broken}
+        if new != reported:
+            self.differ("rules made false by the facts", new ^ reported)
+
+    def compare_batch(self, base: Space, drawn: Draw, result: ConfigurationResult[Space]) -> None:
+        """An accepted facts step that also sets a choice against its facts alone, changed
+        on its base: its choices, a change of choices on the facts' design space, add no
+        pair to it."""
+        facts = self.apply(base, Draw({}, (), drawn.facts))
+        assert facts.accepted, "a change of facts alone is never refused"
+        if not self.sets(facts.instance, Draw(drawn.values)):
+            return
+        self.report.tallies.batches += 1
+        nodes = occurrence.state(base).linked.nodes
+        added = held(result.instance) - held(facts.instance)
+        if added:
+            self.differ(
+                "a pair its choices add to its facts' design space, accepted",
+                {nodes[origin].owner for _, origin in added},
+            )
+
     # -- the walk -----------------------------------------------------------------------
 
     def run(self, steps: int) -> Report:
@@ -304,7 +339,12 @@ class _Walk:
             tallies.facts_changed += bool(drawn.facts)
             tallies.dormant += bool(result.dormant)
             tallies.in_play += bool(result.in_play)
-            if self.sets(base, drawn) and not held(result.instance) <= held(base):
+            tallies.dropped += any(o.status == "dropped" for o in result.outcomes)
+            tallies.made_false += bool(result.broken)
+            if drawn.facts:
+                self.compare_made_false(base, result)
+                self.compare_batch(base, drawn, result)
+            elif self.sets(base, drawn) and not held(result.instance) <= held(base):
                 self.differ("a false piece through a new origin, accepted", ())
             self.compare_successor(result.instance)
             self.point = result.instance
@@ -333,11 +373,11 @@ def walk(
 def check(report: Report, *, refused: bool = True, facts: bool = False) -> None:
     """Fail on any difference; and, so the walk cannot pass without exercising the engine,
     unless it accepted, cleared and paired, and (``refused``) refused a step. ``facts``:
-    also unless a step that changed a root formal was accepted, and (``refused``) one was
-    refused."""
+    also unless a step that changed a root formal was accepted, one that also set a choice
+    among them, and (``refused``) one was refused."""
     assert not report.differences, "\n".join(report.differences[:SHOWN])
     tallies = report.tallies
     assert tallies.accepted and (tallies.refused or not refused), tallies
     assert tallies.clears and tallies.pairs, tallies
-    assert not facts or tallies.facts_changed, tallies
+    assert not facts or (tallies.facts_changed and tallies.batches), tallies
     assert not (facts and refused) or tallies.facts_refused, tallies

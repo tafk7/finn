@@ -5,12 +5,13 @@
 compared with it (``core.space.reference_harness.walks``).
 
 Each seed draws a small description and a walk of changes over it. At every step the
-model's invariants hold strictly (history-independence and the bind accepted, additions
-moving answers only up the information order, no accepted change adding a (false piece,
-origin) pair, every refusal naming exactly its origins and their standing choices), and
-the engine's own checks hold (its walked configuration against one built from nothing).
-While a milestone with rows is pending the engine's disagreements with the model are
-counted; with them taken as removed, each fails its walk. Every invariant's checker is
+model's invariants hold strictly (history-independence and the bind publishing it with
+nothing broken, additions moving answers only up the information order, no accepted change
+adding a (false piece, origin) pair, every refusal naming exactly its origins and their
+standing choices), and the engine's own checks hold (its walked configuration against one
+built from nothing). No milestone with rows is pending, so each disagreement with the model
+fails its walk; while a later one is, they are counted, and with its rows taken as removed,
+each fails its walk. Every invariant's checker is
 also shown catching a deliberately wrong answer on a small description.
 
 The gate runs a fixed set of seeds; ``python -m core.space.reference_harness walks`` (from
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import random
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 
 import pytest
 
@@ -43,6 +45,7 @@ from core.space.reference import (
     View,
     When,
     change,
+    computed,
     listed,
 )
 from core.space.reference_harness import Row, walks
@@ -61,6 +64,7 @@ from core.space.reference_harness.walks import (
     below,
     bind_problems,
     check_change,
+    check_facts,
     counted_pairs,
     differences,
     generate,
@@ -83,19 +87,37 @@ def test_a_seeded_walk_keeps_the_four_invariants_and_the_engines_own_checks(
 ) -> None:
     tally = walk(seed, STEPS)
     assert tally.failure is None, tally.failure
-    assert tally.steps == STEPS and tally.checks["assignment"] == STEPS
+    # each step is a change of choices (its assignment checked) or a facts step; a batch's
+    # choices are checked as a change of choices too
+    checks = tally.checks
+    assert tally.steps == STEPS
+    assert checks["assignment"] + checks["facts"] - checks["facts batch"] == STEPS
     # every configuration the model reaches: the start and each accepted step
-    assert tally.checks["1 history"] == tally.checks["1 bind"] == tally.accepted + 1
-    assert tally.engine_checks["cold"] == tally.compared
+    assert checks["1 history"] == checks["1 bind"] == tally.accepted + 1
+    # the engine compared at each, and its bind of each one's own choices against the model's,
+    # from nothing stored and from the walked design space
+    assert tally.engine_checks["cold"] == tally.engine_checks["bind"] == tally.compared
+    assert tally.engine_checks["bind held"] == tally.compared
     assert tally.engine_errors == 0
 
 
 def test_the_gates_walks_exercise_every_invariant() -> None:
     tallies = [walk(seed, STEPS) for seed in range(6)]
     checks = sum((tally.checks for tally in tallies), start=type(tallies[0].checks)())
-    for name in ("2 additions", "3 accepted", "4 refusals", "4 standing"):
+    for name in (
+        "2 additions",
+        "3 accepted",
+        "4 refusals",
+        "4 standing",
+        "facts",
+        "facts dropped",
+        "facts report",
+        "facts batch",
+    ):
         assert checks[name], (name, checks)
     assert sum(tally.model_only for tally in tallies)  # a fact unset, on the model alone
+    # a design space a facts step left reading refused binds again, on both sides
+    assert sum(tally.binds_broken for tally in tallies)
 
 
 def test_a_walk_is_the_same_for_the_same_seed() -> None:
@@ -182,7 +204,8 @@ def test_the_summary_names_the_mode_and_the_checks(monkeypatch: pytest.MonkeyPat
     text = table(tallies)
     checks = ", ".join(f"{name} {count}" for name, count in sorted(tallies[0].checks.items()))
     assert (
-        f"invariant checks: {checks}; binds refused by rules a clear revealed (§ 16.16) 0" in text
+        f"invariant checks: {checks}; binds reading refused, reporting rules a clear revealed "
+        "(§ 16.16) 0, or new facts broke (§ 16.24) 0" in text
     )
     assert "engine disagreements (counted (pending: lane 9)) by question:" in text
     assert "excused" not in text
@@ -245,18 +268,22 @@ def guarded_by_a_stored_choice() -> Space:
 ODD = (Reason(ReasonKind.DERIVED_BODY, "d", "", "odd"),)
 
 
-def test_a_configuration_binds_again_with_the_same_answers() -> None:
+def test_a_configuration_binds_again_with_nothing_broken() -> None:
     walked = Configuration(linked(), {}, {"a": 2, "b": 1})
-    bind = change(Configuration(linked()), Change(commit={"a": 2, "b": 1}))
-    assert bind_problems(walked, bind) == ([], False)
-    refused = Rejected((RuleRefusal("linked", "constraint", (), ()),), None)
-    assert bind_problems(walked, refused) == (
+    bound = reference.bind(linked(), {}, {"a": 2, "b": 1})
+    assert bind_problems(walked, bound) == ([], frozenset())
+    broke = replace(bound, broken=(RuleRefusal("linked", "constraint", (), ()),))
+    assert bind_problems(walked, broke) == (
         [
-            "1 bind: refused by [('linked', 'constraint')]; what a walk publishes binds again "
-            "unrefused (FN3), but for rules a clear revealed ([])"
+            "1 bind: reports [('linked', 'constraint')]; what a walk publishes binds again "
+            "with nothing broken (FN3), but for rules a clear revealed ([])"
         ],
-        False,
+        frozenset({"linked"}),
     )
+    moved = reference.bind(linked(), {}, {"a": 3, "b": 1})
+    assert bind_problems(walked, moved)[0] == [
+        "1 bind: the bind of a design space's own choices drops or moves one"
+    ]
 
 
 def test_a_walk_never_reaches_a_configuration_whose_bind_is_refused() -> None:
@@ -274,11 +301,11 @@ def test_a_walk_never_reaches_a_configuration_whose_bind_is_refused() -> None:
     assert check_change(structure, first.configuration, edit, switch).problems == []
     built = Configuration(guarded_by_a_stored_choice(), {}, {"x": 1, "s": "a"})
     assert built.solve().validity().verdict is reference.Verdict.FALSE
-    bind = change(Configuration(guarded_by_a_stored_choice()), Change(commit={"x": 1, "s": "a"}))
-    problems, _ = bind_problems(built, bind)
+    bound = reference.bind(guarded_by_a_stored_choice(), {}, {"x": 1, "s": "a"})
+    problems, _ = bind_problems(built, bound)
     assert problems == [
-        "1 bind: refused by [('d', 'derived')]; what a walk publishes binds again unrefused "
-        "(FN3), but for rules a clear revealed ([])"
+        "1 bind: reports [('d', 'derived')]; what a walk publishes binds again with nothing "
+        "broken (FN3), but for rules a clear revealed ([])"
     ]
 
 
@@ -557,7 +584,7 @@ def viewed_child() -> Space:
     )
 
 
-def test_a_clear_revealing_a_masked_rule_is_accepted_and_its_bind_refusal_counted() -> None:
+def test_a_clear_revealing_a_masked_rule_is_accepted_and_its_bind_reports_the_rule() -> None:
     masked = Configuration(viewed_child(), {}, {"c.x": 3, "c.y": 1})
     edit = Change(clear=("c.x",))
     result = change(masked, edit)
@@ -569,12 +596,12 @@ def test_a_clear_revealing_a_masked_rule_is_accepted_and_its_bind_refusal_counte
     assert check_change(Structure(masked.index), masked, edit, fake).problems == [
         "3 clears: a change made only of clears and unsets is refused (§ 16.16)"
     ]
-    # its bind is refused by the revealed rule: expected after the clear, and only then
+    # its bind reports the revealed rule: expected after the clear, and only then
     revealed = result.configuration
-    bind = change(Configuration(viewed_child()), Change(commit=dict(revealed.stored)))
-    assert isinstance(bind, Rejected)
-    assert bind_problems(revealed, bind, {"high"}) == ([], True)
-    assert bind_problems(revealed, bind)[0]
+    bound = reference.bind(viewed_child(), {}, revealed.stored)
+    assert [item.origin for item in bound.broken] == ["high"]
+    assert bind_problems(revealed, bound, {"high"}) == ([], frozenset({"high"}))
+    assert bind_problems(revealed, bound)[0]
 
 
 def test_a_clear_only_step_adding_a_pair_any_other_way_fails(
@@ -596,3 +623,118 @@ def test_a_clear_only_step_adding_a_pair_any_other_way_fails(
     result = change(before, edit)
     problems = check_change(Structure(before.index), before, edit, result).problems
     assert len(problems) == 1 and problems[0].startswith("3 clears: the clear-only change adds")
+
+
+# -- facts steps (§ 16.24): never refused, checked against a bind of their result -----------------
+
+
+def bounded() -> Space:
+    """``c`` and ``x`` from 1 to 4, ``k`` asks ``c`` to be at most the fact ``f``; ``n``
+    divides ``f``."""
+    return Space(
+        ("f",),
+        Scope(
+            "",
+            choices=(
+                Choice("c", listed(1, 2, 3, 4)),
+                Choice("x", listed(1, 2, 3, 4)),
+                Choice(
+                    "n", computed(lambda r: tuple(d for d in (1, 2, 4) if r["f"] % d == 0), ("f",))
+                ),
+            ),
+            constraints=(Constraint("k", ("c", "f"), lambda r: r["c"] <= r["f"], "c-over"),),
+        ),
+    )
+
+
+BOUNDED = Configuration(bounded(), {"f": 4}, {"c": 3, "n": 4})
+FALLS = Change(facts={"f": 2})
+K_OVER = RuleRefusal("k", "constraint", (Reason(ReasonKind.CONSTRAINT, "k", "", "c-over"),), ("c",))
+
+
+def test_a_facts_step_publishes_the_bind_of_its_stored_choices_and_reports_its_new_rules() -> None:
+    # ``f = 2``: ``n = 4`` no longer divides it and is dropped; ``k`` turns false with ``c``
+    # standing. Every check holds, and each one runs.
+    result = change(BOUNDED, FALLS)
+    assert isinstance(result, Accepted)
+    assert [item.choice for item in result.dropped] == ["n"] and result.broken == (K_OVER,)
+    checked = check_facts(Structure(BOUNDED.index), BOUNDED, FALLS, result)
+    assert checked.problems == []
+    assert (checked.runs["facts"], checked.runs["facts dropped"], checked.runs["facts report"]) == (
+        1,
+        1,
+        1,
+    )
+    assert check_change(Structure(BOUNDED.index), BOUNDED, FALLS, result).runs == checked.runs
+
+
+def test_a_facts_step_refused_or_publishing_otherwise_than_its_bind_is_caught() -> None:
+    structure = Structure(BOUNDED.index)
+    refused = Rejected((K_OVER,), None)
+    assert check_facts(structure, BOUNDED, FALLS, refused).problems == [
+        "facts: a change of facts alone is refused (§ 16.24)"
+    ]
+    result = change(BOUNDED, FALLS)
+    assert isinstance(result, Accepted)
+    # ``n`` left out, but not reported dropped
+    unreported = replace(result, dropped=())
+    problems = check_facts(structure, BOUNDED, FALLS, unreported).problems
+    assert problems[:2] == [
+        "facts: the change of facts publishes otherwise than the bind of its stored choices under "
+        "the new facts",
+        "facts: dropped [], the values not of their type under the new facts: ['n']",
+    ]
+
+
+def test_a_facts_steps_report_missing_a_rule_or_a_standing_choice_is_caught() -> None:
+    structure = Structure(BOUNDED.index)
+    result = change(BOUNDED, FALLS)
+    assert isinstance(result, Accepted)
+    silent = replace(result, broken=())
+    assert check_facts(structure, BOUNDED, FALLS, silent).problems == [
+        "facts report: names [], the origins of the pairs new against the receiver: "
+        "[('k', 'constraint')]"
+    ]
+    alone = replace(result, broken=(replace(K_OVER, standing=()),))
+    assert check_facts(structure, BOUNDED, FALLS, alone).problems == [
+        "facts report: clearing c clears k, named standing []"
+    ]
+
+
+def test_a_batch_is_held_to_its_facts_then_its_choices() -> None:
+    # ``x = 2`` beside the facts adds no pair against them: accepted, ``k`` reported; the
+    # choices are a change of choices from the facts' design space (its assignment checked).
+    structure = Structure(BOUNDED.index)
+    edit = Change(facts={"f": 2}, commit={"x": 2})
+    result = change(BOUNDED, edit)
+    assert isinstance(result, Accepted) and result.broken == (K_OVER,)
+    checked = check_facts(structure, BOUNDED, edit, result)
+    assert checked.problems == []
+    assert (checked.runs["facts batch"], checked.runs["assignment"]) == (1, 1)
+    refused = Rejected((K_OVER,), None)
+    assert check_facts(structure, BOUNDED, edit, refused).problems == [
+        "facts batch: the batch and its facts then its choices answer otherwise"
+    ]
+    moved = replace(result, configuration=Configuration(bounded(), {"f": 2}, {"c": 3}))
+    assert check_facts(structure, BOUNDED, edit, moved).problems[0] == (
+        "facts batch: the batch publishes or drops otherwise than its facts then its choices"
+    )
+
+
+def test_a_design_space_new_facts_left_reading_refused_binds_and_reports_the_rule() -> None:
+    # After ``f = 2`` the walk holds ``k`` false through ``c``: the bind of its stored set
+    # keeps every value, drops none and reports ``k``, which invariant 1 allows once a facts
+    # step broke it, and names otherwise.
+    result = change(BOUNDED, FALLS)
+    assert isinstance(result, Accepted)
+    walked = result.configuration
+    bound = reference.bind(walked.space, walked.facts, walked.stored)
+    assert (bound.configuration.stored, bound.dropped, bound.broken) == ({"c": 3}, (), (K_OVER,))
+    assert bind_problems(walked, bound, broken={"k"}) == ([], frozenset({"k"}))
+    assert bind_problems(walked, bound)[0] == [
+        "1 bind: reports [('k', 'constraint')]; what a walk publishes binds again with nothing "
+        "broken (FN3), but for rules a clear revealed ([])"
+    ]
+    assert bind_problems(walked, bound, broken={"other"})[0][0].endswith(
+        "but for rules a clear revealed ([]) or new facts broke (['other'])"
+    )

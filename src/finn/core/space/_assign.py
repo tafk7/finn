@@ -1,38 +1,58 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""A change: choices set, replaced or cleared, and facts, as one batch.
+"""A change: choices set, replaced or cleared, and facts, as one batch; and a bind.
 
 A change is **assignment**. In order:
 
-1. **Identities.** Every item names a choice of this configuration, once (a ``Change``,
+1. **Identities.** Every item names a choice of this design space, once (a ``Change``,
    a ``{reference: value}`` mapping, or a keyword of the scope's own choices); facts
    name root formals, once. A malformed or foreign
    item is a ``RequestError``, before anything is evaluated.
 2. **Recognition**, then **snapshot**: every supplied value is recognized by its
    semantics, all before any is frozen (``_state.prepare``).
-3. **Same values.** Where every fact and stored value equals the configuration's, the
-   configuration is kept, each item ``"unchanged"``.
-4. **The configuration it would publish**: the stored choices, less those cleared, with
-   those set; the facts with those given; its world made from the receiver's.
+3. **Same values.** Where every fact and stored value equals the receiver's, the
+   receiver is kept, each item ``"unchanged"``.
+4. **New facts instantiate a new design space** (``_instantiate``). Where a fact changes,
+   every stored choice, dormant ones included, is checked again against its domain under
+   the new facts (5). A value outside it, or whose domain's input refuses or does not
+   apply, is dropped: left out of the stored choices before the new design space's
+   world is made, and reported ``"dropped"`` (in the flow order, after the items) unless
+   the change names the choice. A value
+   waiting on a missing fact is kept, waiting. Checks read facts only, so what is
+   dropped does not depend on order. Nothing of the rules refuses this step: a constraint
+   the new facts make false reads refused. ``bind`` is the same instantiation, of saved
+   choices on a design space's facts.
 5. **Type checks.** Each value set is checked against its domain, which reads facts
    only (``_world.type_check``): outside it, or an input of the domain refusing or not
    applying, refuses the change; a missing fact leaves the choice stored, waiting on it.
    Membership is read as if the choice existed (``World.membership``: every guard
    deciding whether it exists taken as holding), so a choice is checked wherever it
    sits, dormant or waiting on its presence alike, and its check holds until the facts
-   change. A facts change checks every stored value again, dormant ones included.
-6. **Rules.** A change that sets a new value (a choice set to a value it does not hold,
-   or a fact to a value it does not have) is refused where the configuration it would
-   publish holds a false piece of validity through an origin it was not false through
-   before (``_origins``): a piece newly present counts as not false before. Each such
-   origin is a ``BrokenRule``, with the stored choices standing in its way. So no
-   accepted change that sets adds a false piece and its origin: a configuration's false
-   pieces are those its facts made false. A change of clears alone is never refused:
-   clearing opens a choice, and an open choice turns what reads it unknown, never false.
-   A change with a value refused by its type check reports those alone.
-7. **Publication:** with nothing refused, the configuration is published whole; else
+   change.
+6. **The design space it would publish**: that of 4 (the receiver's, where no fact
+   changes), its stored choices less those cleared, with those set; its world made from
+   that of 4.
+7. **Rules.** A change that sets a new choice (a value it does not hold in the design
+   space of 4) is refused where the design space it would publish holds a false piece of
+   validity through an origin it was not false through in that of 4 (``_origins``): a
+   piece newly present counts as not false before. Each such origin is a ``BrokenRule``,
+   with the stored choices standing in its way. So no accepted change of choices adds a
+   false piece and its origin, and a change of choices is never refused for what the
+   facts broke. A change of clears alone is never refused, because clearing stays the
+   remedy a refusal names ("clear it first"). A clear only removes information, but it
+   may reveal a rule: where a Space is refused by its own rule, a rule reading one of its
+   views is false through it, with no origin of its own; clearing the choice behind that
+   refusal reopens the Space, and the rule may turn false at its own origin. What the
+   clear reveals was hidden behind the refusal, not caused by it, and the published
+   design space reads refused, naming it. A change with a value refused by its type
+   check reports those alone. An accepted change of facts reports, in the same form, the rules
+   newly false in the published design space: by its new facts, or revealed by a clear
+   beside them. Each is an origin through which the published design space holds a false
+   piece the receiver did not hold through it, with every stored choice standing in its
+   way.
+8. **Publication:** with nothing refused, the design space is published whole; else
    nothing is, and each item's outcome, and each rule broken, says why. Nothing is
-   cleared or filled in.
+   filled in.
 """
 
 from __future__ import annotations
@@ -72,10 +92,12 @@ class Moved:
 
 @dataclass(frozen=True, slots=True)
 class Assigned:
-    """What a change came to: the configuration it publishes (the receiver's state
+    """What a change came to: the design space it publishes (the receiver's state
     where it changes nothing; ``None`` where it is refused); each item's outcome, in
-    order: the facts given, the choices named, then the stored choices a facts change
-    checked again and found refusing; each rule it would break; and what it moved."""
+    order: the facts given, the choices named, then the stored choices new facts dropped
+    (in the flow order); the rules it is refused by, or, accepted, the rules newly false
+    in the published design space: by its new facts, or revealed by a clear beside them
+    (a bind's: those its saved choices break); and what it moved."""
 
     state: State | None
     outcomes: tuple[ChangeOutcome, ...]
@@ -142,8 +164,8 @@ def check(world: World, index: NodeId) -> QueryResult[bool]:
 
 
 def _refuses(result: QueryResult[bool]) -> bool:
-    """A type check that refuses the change: anything but true or unresolved (a missing
-    fact: the choice is stored and waits on it)."""
+    """A type check the value fails: anything but true or unresolved (a missing fact: the
+    choice is stored and waits on it)."""
     return not isinstance(result, Unresolved) and not (
         isinstance(result, Available) and result.value is True
     )
@@ -156,6 +178,24 @@ def _pairs(state: State) -> Pairs:
     if found is None:
         found = state.answers[("pairs", 0)] = pairs(state.world)
     return cast(Pairs, found)
+
+
+def _held(current: State, world: World) -> Pairs:
+    """The pairs of ``world``: ``current``'s own, kept on it, where ``world`` is its world."""
+    return _pairs(current) if world is current.world else pairs(world)
+
+
+def _value(node: Node, value: object, old: object) -> object:
+    """A choice's ``value`` as stored: the held object ``old`` where the two are equal by
+    the choice's semantics (so nothing reads it anew), else ``value``."""
+    if old is not _MISSING and _equal(node, value, old, "configuration equality", detach=True):
+        return old
+    return value
+
+
+def _same(left: Mapping[NodeId, object], right: Mapping[NodeId, object]) -> bool:
+    """Whether two stored sets hold the same objects for the same choices."""
+    return left.keys() == right.keys() and all(left[index] is right[index] for index in left)
 
 
 def _moved(before: World, after: World, sources: set[NodeId]) -> Moved:
@@ -185,15 +225,25 @@ def _moved(before: World, after: World, sources: set[NodeId]) -> Moved:
     )
 
 
-def _broken(current: State, world: World, named: frozenset[NodeId]) -> tuple[BrokenRule, ...]:
-    """The rules a change would break: each origin through which ``world`` (the
-    configuration it would publish) holds a false piece that ``current`` does not hold
-    through it, with the stored choices standing in its way (``named``: the choices the
-    change sets or clears)."""
+def _moved_from(before: World, after: World, facts: set[NodeId]) -> Moved:
+    """What a change moves from ``before`` to ``after``: its sources are the ``facts`` it
+    changed and every choice whose stored value it set, cleared or dropped."""
+    held, stored = before.stored, after.stored
+    sources = set(facts) | {
+        index
+        for index in held.keys() | stored.keys()
+        if held.get(index, _MISSING) is not stored.get(index, _MISSING)
+    }
+    return _moved(before, after, sources)
+
+
+def _broken(before: Pairs, world: World, named: frozenset[NodeId]) -> tuple[BrokenRule, ...]:
+    """The rules newly false in ``world``: each origin through which it holds a false
+    piece that ``before`` does not hold through it, with the stored choices standing in
+    its way (``named``: the choices excluded for being named by the change)."""
     after = pairs(world)
     if not after:
         return ()
-    before = _pairs(current)
     found: dict[NodeId, Origin] = {}
     for piece, origins in after.items():
         held = before.get(piece, {})
@@ -212,6 +262,30 @@ def _broken(current: State, world: World, named: frozenset[NodeId]) -> tuple[Bro
     )
 
 
+def _instantiate(
+    base: World, facts: Mapping[NodeId, object] | None, stored: Mapping[NodeId, object]
+) -> tuple[World, dict[NodeId, QueryResult[bool]]]:
+    """The design space of ``facts`` (``base``'s where ``None``) with the ``stored``
+    choices that fall within their domains, made from ``base``: every stored value checked
+    under those facts as if it existed (``check``, dormant ones included), and each it
+    fails left out. Returns its world and each stored value's check by choice, in the flow
+    order (``Evaluator.flow``). Checks read facts only, so what is left out does not depend
+    on order; a value waiting on a missing fact is kept, and no rule is read."""
+    made = base.successor(facts=facts, stored=stored)
+    position = {index: rank for rank, index in enumerate(base.evaluator.flow())}
+    checks = {index: check(made, index) for index in sorted(stored, key=position.__getitem__)}
+    kept = {index: value for index, value in stored.items() if not _refuses(checks[index])}
+    if len(kept) < len(stored):
+        made = base.successor(facts=facts, stored=kept)
+    return made, checks
+
+
+def _publish(world: World, *, trial: bool) -> None:
+    """A world as published: kept short (``World.flatten``) unless only tried."""
+    if world.depth > FLATTEN and not trial:
+        world.flatten()
+
+
 def assign(
     current: State,
     facts: Mapping[NodeId, object],
@@ -220,8 +294,10 @@ def assign(
     trial: bool = False,
 ) -> Assigned:
     """The change of ``facts`` (by root formal) and ``requests`` (in the caller's order)
-    from ``current``, under the model's lock. A ``trial`` publishes nothing: the
-    configuration it would publish is answered, its world left as made."""
+    from ``current``, under the model's lock: new facts instantiate a new design space
+    (``_instantiate``), and the requests are a change of choices on it. A ``trial``
+    publishes nothing: the design space it would publish is answered, its world left as
+    made."""
     linked = current.linked
     nodes = linked.nodes
     normalized = normalize(current, requests)
@@ -249,87 +325,58 @@ def assign(
             else:
                 given[index] = values[index]
                 changed_facts.add(index)
-        stored = dict(held)
+        # The design space the choices are changed on: the receiver's, or that of the new
+        # facts, with the stored values new facts leave outside their domains dropped.
+        instance = current.world
+        rechecked: dict[NodeId, QueryResult[bool]] = {}
+        if changed_facts:
+            instance, rechecked = _instantiate(instance, {**held_facts, **given}, held)
+        before = instance.stored
+        stored = dict(before)
         for index, item in normalized.items():
             if item.remove:
                 stored.pop(index, None)
-                continue
-            old = held.get(index, _MISSING)
-            if old is not _MISSING and _equal(
-                nodes[index], values[index], old, "configuration equality", detach=True
-            ):
-                stored[index] = old  # the same value: the held object
             else:
-                stored[index] = values[index]
+                stored[index] = _value(nodes[index], values[index], before.get(index, _MISSING))
         fact_outcomes = [
             ChangeOutcome(nodes[index].owner, Available(True), "unchanged") for index in facts
         ]
-        if (
-            not changed_facts
-            and stored.keys() == held.keys()
-            and all(stored[index] is held[index] for index in stored)
-        ):
+        if not changed_facts and _same(stored, held):
             unchanged = (
                 ChangeOutcome(nodes[item.node].owner, Available(True), "unchanged")
                 for item in requests
             )
             return Assigned(current, (*fact_outcomes, *unchanged))
-        world = current.world.successor(
-            facts={**held_facts, **given} if changed_facts else None, stored=stored
-        )
+        world = instance if _same(stored, before) else instance.successor(stored=stored)
         checks = {
             index: check(world, index) for index, item in normalized.items() if not item.remove
         }
-        sources = set(changed_facts) | {
-            index
-            for index in normalized
-            if held.get(index, _MISSING) is not stored.get(index, _MISSING)
-        }
-        # Membership reads facts only: a stored value is checked again by new facts alone,
-        # every one of them, dormant ones included.
-        retained: dict[NodeId, QueryResult[bool]] = {}
-        if changed_facts:
-            for index in sorted(stored, key=linked.ranks.__getitem__):
-                if index not in normalized:
-                    retained[index] = check(world, index)
-        refused = {
-            index for index, result in (*checks.items(), *retained.items()) if _refuses(result)
-        }
+        refused = {index for index, result in checks.items() if _refuses(result)}
+        checked = [ChangeOutcome(o.owner, o.result, "checked") for o in fact_outcomes]
         if refused:
-            outcomes = [
-                ChangeOutcome(outcome.owner, outcome.result, "checked") for outcome in fact_outcomes
-            ]
             for item in requests:
                 status: Literal["refused", "checked"] = (
                     "refused" if item.node in refused else "checked"
                 )
                 result = checks.get(item.node, Available(True))
-                outcomes.append(ChangeOutcome(nodes[item.node].owner, result, status))
-            outcomes.extend(
-                ChangeOutcome(nodes[index].owner, result, "refused", requested=False)
-                for index, result in retained.items()
-                if index in refused
-            )
-            return Assigned(None, tuple(outcomes))
-        sets = bool(changed_facts) or any(
-            not item.remove and held.get(index, _MISSING) is not stored[index]
+                checked.append(ChangeOutcome(nodes[item.node].owner, result, status))
+            return Assigned(None, tuple(checked))
+        sets = any(
+            not item.remove and before.get(index, _MISSING) is not stored[index]
             for index, item in normalized.items()
         )
-        broken = _broken(current, world, frozenset(normalized)) if sets else ()
+        broken = _broken(_held(current, instance), world, frozenset(normalized)) if sets else ()
         if broken:
-            refused_outcomes = (
-                *(ChangeOutcome(o.owner, o.result, "checked") for o in fact_outcomes),
-                *(
-                    ChangeOutcome(
-                        nodes[item.node].owner, checks.get(item.node, Available(True)), "checked"
-                    )
-                    for item in requests
-                ),
+            checked.extend(
+                ChangeOutcome(
+                    nodes[item.node].owner, checks.get(item.node, Available(True)), "checked"
+                )
+                for item in requests
             )
-            return Assigned(None, refused_outcomes, broken)
-        moved = _moved(current.world, world, sources)
-        if world.depth > FLATTEN and not trial:
-            world.flatten()
+            return Assigned(None, tuple(checked), broken)
+        made_false = _broken(_pairs(current), world, frozenset()) if changed_facts else ()
+        moved = _moved_from(current.world, world, changed_facts)
+        _publish(world, trial=trial)
         published = [
             ChangeOutcome(
                 outcome.owner, outcome.result, "changed" if index in changed_facts else "unchanged"
@@ -346,7 +393,59 @@ def assign(
             published.append(
                 ChangeOutcome(nodes[index].owner, checks.get(index, Available(True)), final)
             )
-        return Assigned(State(current.model, world), tuple(published), (), moved)
+        published.extend(
+            ChangeOutcome(nodes[index].owner, result, "dropped", requested=False)
+            for index, result in rechecked.items()
+            if index not in normalized and _refuses(result)
+        )
+        return Assigned(State(current.model, world), tuple(published), made_false, moved)
+
+
+def bound(current: State, requests: Sequence[Change[object]]) -> Assigned:
+    """``current``'s facts with exactly the saved choices ``requests`` set, under the
+    model's lock: the design space of those facts instantiated with them (``_instantiate``),
+    each value outside its domain dropped. Never refused; a clear is a ``RequestError``.
+    Its whole report reads against the facts with nothing stored, whatever ``current``
+    stores: each saved choice kept is ``"changed"`` and each dropped ``"dropped"``, its
+    rules are those false through an origin that design space is not false through, and
+    what it moves is from that design space. So the report is the same from any design
+    space with these facts. Where the bound set is ``current``'s own (the same objects),
+    ``current`` is the design space it publishes, with that same report."""
+    linked = current.linked
+    nodes = linked.nodes
+    normalized = normalize(current, requests)
+    if any(item.remove for item in normalized.values()):
+        raise RequestError("a bind sets saved choices; it clears none")
+    with current.evaluator.lock:
+        values = prepare(
+            linked, {index: (item.value, "choice") for index, item in normalized.items()}
+        )
+        held = current.world.stored
+        saved = {
+            index: _value(nodes[index], values[index], held.get(index, _MISSING))
+            for index in normalized
+        }
+        empty = current.world.successor(stored={}) if held else current.world
+        world, checks = _instantiate(empty, None, saved)
+        kept = _same(world.stored, held)  # the receiver's own choices: the receiver
+        if kept:
+            world = current.world
+        made_false = _broken(_held(current, empty), world, frozenset())
+        # Each saved choice from nothing stored: set (``"changed"``) where kept, else
+        # ``"dropped"``, whatever ``current`` holds.
+        outcomes = tuple(
+            ChangeOutcome(
+                nodes[item.node].owner,
+                checks[item.node],
+                "changed" if item.node in world.stored else "dropped",
+            )
+            for item in requests
+        )
+        moved = _moved_from(empty, world, set())
+        if kept:
+            return Assigned(current, outcomes, made_false, moved)
+        _publish(world, trial=False)
+        return Assigned(State(current.model, world), outcomes, made_false, moved)
 
 
 def tried(current: State, index: NodeId, value: object) -> Assigned:
@@ -416,18 +515,18 @@ def _fact_nodes(point: Space, facts: Mapping[Any, object]) -> dict[NodeId, objec
 
 
 def _report(point: S, assigned: Assigned) -> ConfigurationResult[S]:
-    """A change's report: the configuration it publishes (the receiver where it changes
-    nothing or is refused), and each item's outcome."""
+    """A change's report: the design space it publishes (the receiver where it changes
+    nothing or is refused), each item's outcome, the rules it is refused by or, where
+    accepted, those newly false in the published design space, and what it moved."""
     if assigned.state is None:
         return ConfigurationResult(point, False, assigned.outcomes, assigned.broken)
-    if assigned.state is state(point):
-        return ConfigurationResult(point, True, assigned.outcomes)
     moved = assigned.moved
+    published = assigned.state
     return ConfigurationResult(
-        cast(S, attach(assigned.state, point._scope)),
+        point if published is state(point) else cast(S, attach(published, point._scope)),
         True,
         assigned.outcomes,
-        (),
+        assigned.broken,
         moved.dormant,
         moved.in_play,
         moved.opened,
@@ -447,11 +546,17 @@ def try_with_choices(
 def try_with_facts(
     point: S, facts: Mapping[Any, object], /, *changes: ChangeRequest | Mapping[Any, object]
 ) -> ConfigurationResult[S]:
-    """Other values for root formals, and the choices ``changes`` make, as one batch, by
-    the rules of any change: every stored value is checked again against its domain over
-    the new facts (dormant ones included), and a rule the new facts make newly false (a
-    present choice's domain left without a value, or without an input, included) refuses
-    them."""
+    """A new design space from other values for root formals, keeping the choices that
+    still fall within their domains, then the choices ``changes`` make on it, as one
+    batch. A change of facts is never refused: every stored choice the batch does not
+    name, dormant ones included, is checked again against its domain under the new facts,
+    and one outside it, or whose domain's input refuses or does not apply, is dropped
+    (``"dropped"``, not requested); one waiting on a missing fact keeps waiting. A
+    constraint the new facts make false reads refused. The report's ``broken`` names each
+    rule newly false in the published design space, by the new facts or revealed by a
+    clear beside them, with the stored choices standing in its way. ``changes`` are a
+    change of choices on the new design space, refused by the rules of
+    ``try_with_choices`` judged against it; a refused batch publishes nothing."""
     driver_only("configuration replacement")
     given = _fact_nodes(point, facts)
     return _report(point, assign(state(point), given, _requests(point, changes)))
@@ -475,10 +580,33 @@ def with_facts(
     return report.instance
 
 
+def bind(point: S, /, *choices: ChangeRequest | Mapping[Any, object]) -> ConfigurationResult[S]:
+    """``point``'s facts with exactly the saved ``choices`` (``{reference: value}``
+    mappings or ``Change`` objects of ``point``; a clear is a ``RequestError``). Binding
+    facts to a Space's params instantiates a design space, and binding saved choices onto
+    those facts is the same instantiation, keeping the choices that fall within their
+    domains: each value is checked under ``point``'s facts as if its choice existed, and
+    one outside its domain, or whose domain's input refuses or does not apply, is dropped
+    (``"dropped"``); one waiting on a missing fact is kept, waiting. Each saved choice kept
+    is ``"changed"``, as set on the facts with nothing stored, whatever ``point`` holds.
+    Never refused for constraints: the report's ``broken`` names every rule the saved
+    choices break under these facts (false through an origin the facts with nothing stored
+    are not), each with the stored choices standing in its way, and the design space reads
+    refused. Its ``dormant``, ``in_play`` and ``opened`` read against the same baseline, so
+    the whole report (each outcome, the rules broken, what moved) is the same from any
+    design space with these facts. A change of facts (``try_with_facts``) is this
+    instantiation under the new facts. The point's own stored choices are replaced and not
+    reported, so bind from a design space with nothing stored, as FINN will."""
+    driver_only("configuration binding")
+    return _report(point, bound(state(point), _requests(point, choices)))
+
+
 __all__ = [
     "Assigned",
     "Moved",
     "assign",
+    "bind",
+    "bound",
     "change",
     "check",
     "clear",

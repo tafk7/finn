@@ -80,15 +80,30 @@ class RefusalForm:
 
 
 @dataclass(frozen=True)
+class DroppedForm:
+    """A stored value new facts left out: ``subject`` the choice, ``value`` its old value,
+    ``codes`` its type check's."""
+
+    subject: str
+    value: object
+    codes: frozenset[Code] = frozenset()
+
+
+@dataclass(frozen=True)
 class ChangeForm:
     """A change's result: accepted, with the stored choices it puts dormant or brings into
-    play and the open choices it brings into presence, or refused, with each refusal."""
+    play and the open choices it brings into presence, and under new facts the values it
+    dropped and the rules the published design space holds newly false (``broken``, as
+    ``rule`` refusals); or refused, with each refusal. Every list compares as a set, never
+    in either side's order."""
 
     accepted: bool
     dormant: frozenset[str] = frozenset()
     in_play: frozenset[str] = frozenset()
     opened: frozenset[str] = frozenset()
     refusals: frozenset[RefusalForm] = frozenset()
+    dropped: frozenset[DroppedForm] = frozenset()
+    broken: frozenset[RefusalForm] = frozenset()
 
 
 @dataclass(frozen=True)
