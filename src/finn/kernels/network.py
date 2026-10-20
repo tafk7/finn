@@ -474,6 +474,9 @@ def _rebuild(
             if outcome.status == "dropped"
         }
         broken = {rule.rule: rule.result.findings for rule in report.broken}
+        # A rule beside a dropped value refuses: the answer of the rebuild's former two-step
+        # retry (drop, then refused by the rule), kept so no network answer changes, not a
+        # rule of the engine's. The network layer's replacement removes it.
         standing = {
             rule.rule: tuple(key for key in rule.standing if key not in named)
             for rule in report.broken
