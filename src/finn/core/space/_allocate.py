@@ -12,13 +12,17 @@ node, whose pieces are given once every scope is placed: the scope's
 constraints, its Decisions (their own checks) and its placed scopes' validity.
 Afterwards scope identities and membership maps are fixed (``Table.scopes``);
 later phases replace node payloads only.
+
+In template mode (``_table``) only the own scope is walked: each Space it places is a
+stub holding the bindings this body writes for its formals (a literal or a default as a
+value, no node), and the own scope's guard is a node standing for wherever it is placed.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import replace
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from ._bindings import PlacementBinding, Slot, classify
 from ._configuration import Space
@@ -30,9 +34,13 @@ from ._nodes import (
 )
 from ._ordering import dependency_order
 from ._table import (
+    UNSUPPLIED_BINDING,
+    Binding,
+    BindingForm,
     ChoiceDraft,
     MemberTask,
     ScopeDraft,
+    Stub,
     Table,
     member_key,
 )
@@ -58,7 +66,10 @@ from .domains import Domain, finite
 from .errors import DefinitionError
 from .expressions import Expr
 from .ir import Argument, NodeKind
-from .semantics import BOOL, STRING
+from .semantics import BOOL, STRING, ValueSemantics
+
+if TYPE_CHECKING:
+    from ._template import Template
 
 _OWNER = "space.allocate"
 
@@ -77,9 +88,12 @@ _BINDING_KINDS: Mapping[str, NodeKind] = {
 }
 
 
-def allocate(space_type: type[Space]) -> Table:
-    """A new table with every occurrence of ``space_type``'s design space allocated."""
-    allocation = _Allocation(Table(space_type))
+def allocate(
+    space_type: type[Space], template_of: Callable[[type[Space]], Template] | None = None
+) -> Table:
+    """A new table with every occurrence of ``space_type``'s design space allocated; with
+    ``template_of`` (template mode), its own scope and a stub per Space it places."""
+    allocation = _Allocation(Table(space_type, template_of=template_of))
     allocation.check_recursion()
     allocation.allocate()
     return allocation.table
@@ -183,6 +197,10 @@ class _Allocation:
             record,
         )
         self.table.drafts.append(draft)
+        template_of = self.table.template_of
+        if template_of is not None and parent is not None:
+            # Template mode: the child's template, linked first; a stub of its own.
+            draft.stub = Stub(template_of(space_type), requires=self.table.applying)
         draft.slots = self.own_slots(draft)
         kinds = self.table.kinds[draft.effective.space_type]
         for member_name, declaration in draft.effective.members.items():
@@ -190,6 +208,8 @@ class _Allocation:
             # Structure (nodes and choices) is allocated below.
             if kind not in ("node", "choice"):
                 self.member(draft, member_name, declaration)
+        if draft.stub is not None:
+            return index
         for declaration, member_name in draft.effective.aliases.items():
             if member_name in draft.named_members:
                 draft.members[declaration] = draft.named_members[member_name]
@@ -217,6 +237,9 @@ class _Allocation:
                 )
             binding_kind, supplier = classify(slot)
             binding = PlacementBinding(supplier, binding_kind, slot.origin)
+        stub = draft.stub
+        if stub is not None and not isinstance(declaration, Param):
+            return  # a stub holds the child's formals as this body binds them, nothing else
         node_kind: NodeKind | None
         if isinstance(declaration, Param):
             if binding is not None:
@@ -238,6 +261,13 @@ class _Allocation:
                     f"{key}: unsupported declaration",
                     declaration=key,
                 )
+        if stub is not None and node_kind in ("const", "present"):
+            # A literal or a default is a value on the stub, and an unsupplied formal stays
+            # unsupplied: no node (the child's template has the formal's).
+            stub.bindings[member_name] = (
+                UNSUPPLIED_BINDING if binding is None else Binding("literal", binding.supplier)
+            )
+            return
         node = self.table.reserve(
             draft.index,
             key,
@@ -246,7 +276,11 @@ class _Allocation:
             guard=draft.guard,
             origin=declaration.origin,
         )
-        draft.named_members[member_name] = node
+        if stub is not None:
+            binding = cast(PlacementBinding, binding)
+            stub.bindings[member_name] = Binding(cast(BindingForm, binding.kind), node=node)
+        else:
+            draft.named_members[member_name] = node
         if binding is not None and binding.kind == "local-decision":
             self.local_decision(draft, node, binding)
         self.member_positions[node] = len(self.table.members)
@@ -361,9 +395,17 @@ class _Allocation:
             scope.choices[alias] = choice.index
             scope.members[alias] = selector
         choice.never = never
+        condition = scope.effective.guards.get(decision)
+        if self.table.template_of is not None and isinstance(condition, Supplied):
+            # Template mode: whether it applies is decided where the template is placed;
+            # its candidates are compiled, and what exists only where it applies is marked.
+            choice.never_formal = scope.effective.aliases.get(condition.formal)
+        outer = self.table.applying
+        if choice.never_formal is not None:
+            self.table.applying = choice.index
         for case, record in decision.candidates.items():
             case_key = member_key(key, case)
-            if never and record is not None:
+            if (never or choice.never_formal is not None) and record is not None:
                 choice.space_types[case] = record.space_type
             if record is None or never:
                 choice.cases.append((case, None))
@@ -399,8 +441,10 @@ class _Allocation:
                 source_scope=scope.index,
                 keys=(record,),
             )
+            self.table.drafts[child].candidate = (choice.index, case)
             choice.cases.append((case, child))
         self.shared_members(scope, choice)
+        self.table.applying = outer
 
     def never_holds(self, scope: ScopeDraft, condition: ValueRef[bool] | None) -> bool:
         """Whether a guard can never hold in ``scope``: the supply of a value input
@@ -416,19 +460,21 @@ class _Allocation:
         present exactly when it is selected. A name with incompatible types in
         different candidates is dropped when semantics are checked.
         """
-        found: dict[str, list[tuple[str, int]]] = {}
+        found: dict[str, list[tuple[str, int, ValueSemantics[object] | None]]] = {}
         for case, child in choice.cases:
             if child is None:
                 continue
-            for member, index in self.table.drafts[child].named_members.items():
-                if self.table.nodes[index].kind != "constraint":
-                    found.setdefault(member, []).append((case, index))
-        for member, alternatives in found.items():
-            if len(alternatives) < 2:
+            for member, semantics in self.candidate_members(child):
+                found.setdefault(member, []).append((case, child, semantics))
+        for member, entries in found.items():
+            if len(entries) < 2:
                 continue
-            known = [s for _, i in alternatives if (s := self.table.nodes[i].semantics) is not None]
+            known = [semantics for _, _, semantics in entries if semantics is not None]
             if any(not known[0].is_compatible_with(other) for other in known[1:]):
                 continue
+            alternatives = tuple(
+                (case, self.candidate_member(child, member)) for case, child, _ in entries
+            )
             node = self.table.reserve(
                 scope.index,
                 f"{choice.key}.$member.{member}",
@@ -437,17 +483,44 @@ class _Allocation:
                 source_owner=choice.key,
             )
             self.table.nodes[node] = replace(
-                self.table.nodes[node], selector=choice.selector, alternatives=tuple(alternatives)
+                self.table.nodes[node], selector=choice.selector, alternatives=alternatives
             )
             choice.members[member] = node
+            choice.selects[node] = member
+            choice.shared.add(node)
             self.table.shared[node] = (choice.index, member)
 
+    def candidate_members(self, child: int) -> Iterator[tuple[str, ValueSemantics[object] | None]]:
+        """A placed candidate's value members (not its constraints), in member order, each
+        with the type it is reserved with; in template mode, read from its class."""
+        draft = self.table.drafts[child]
+        if draft.stub is None:
+            for member, index in draft.named_members.items():
+                node = self.table.nodes[index]
+                if node.kind != "constraint":
+                    yield member, node.semantics
+            return
+        kinds = self.table.kinds[draft.effective.space_type]
+        for member, declaration in draft.effective.members.items():
+            if kinds[member] not in ("node", "choice") and not isinstance(declaration, Constraint):
+                yield member, draft.effective.semantics.get(declaration)
+
+    def candidate_member(self, child: int, member: str) -> int:
+        """A placed candidate's value member, as a node of this table."""
+        if self.table.drafts[child].stub is None:
+            return self.table.drafts[child].named_members[member]
+        return cast(int, self.table.stub_named(child, member))
+
     def allocate(self) -> None:
+        guard: int | None = None
+        if self.table.template_of is not None:
+            # Template mode: the guard the own scope is placed under, known where placed.
+            guard = self.table.placement_guard = self.table.reserve(0, "$guard", "guard", BOOL)
         self.new_scope(
             self.table.space_type,
             None,
             "",
-            None,
+            guard,
             record=None,
             source_scope=0,
         )
@@ -455,6 +528,8 @@ class _Allocation:
         while cursor < len(self.table.drafts):
             scope = self.table.drafts[cursor]
             cursor += 1
+            if scope.stub is not None:
+                continue  # a child's template places its own
             kinds = self.table.kinds[scope.effective.space_type]
             for name, declaration in scope.effective.members.items():
                 kind = kinds[name]
@@ -476,14 +551,24 @@ class _Allocation:
         then each scope it places (its validity), in placement order: a child node, or a
         candidate of a Decision over nodes."""
         nodes, drafts = self.table.nodes, self.table.drafts
+        # Template mode: a formal is a piece where it is bound to a fresh Decision, which
+        # is decided where the template is placed; a stub's piece is its child's validity.
+        candidates = {"constraint", "decision"}
+        if self.table.template_of is not None:
+            candidates.add("param")
         own: dict[int, list[int]] = {draft.index: [] for draft in drafts}
         for node in nodes:
-            if node.kind in ("constraint", "decision"):
+            if node.kind in candidates:
                 own[node.scope].append(node.index)
         for draft in drafts:
-            if draft.parent is not None:
+            if draft.stub is not None:
+                validity = self.table.imported(draft.index, draft.stub.template.validity)
+                own[cast(int, draft.parent)].append(validity)
+            elif draft.parent is not None:
                 own[draft.parent].append(cast(int, draft.validity))
         for draft in drafts:
+            if draft.stub is not None:
+                continue
             index = cast(int, draft.validity)
             nodes[index] = replace(nodes[index], constraints=tuple(own[draft.index]))
 
@@ -502,7 +587,12 @@ class _Allocation:
             draft = self.table.drafts[owner]
             name = cast(str, decision.name)
             key = member_key(draft.name, name)
-            if name in draft.named_members or name in draft.named_children:
+            taken = name in draft.named_members or name in draft.named_children
+            if draft.stub is not None:
+                # Owned at a child: its own members and named Decisions are its template's.
+                template = draft.stub.template
+                taken = taken or name in draft.effective.members or name in template.named_members
+            if taken:
                 raise DefinitionError.broken(
                     "shared-decision-name-taken",
                     _OWNER,
@@ -511,6 +601,7 @@ class _Allocation:
                     declaration=key,
                 )
             first = self.table.nodes[uses[0]]
+            self.table.applying = self.applying(uses, owner, key)
             node = self.table.reserve(
                 owner,
                 key,
@@ -519,6 +610,8 @@ class _Allocation:
                 guard=draft.guard,
                 origin=decision.origin,
             )
+            self.table.applying = None
+            self.table.named.append(node)
             task = self.table.members[self.member_positions[first.index]]
             self.member_positions[node] = len(self.table.members)
             self.table.members.append(replace(task, index=node, owner_scope=owner))
@@ -533,6 +626,31 @@ class _Allocation:
                 )
                 self.table.nodes[use] = replace(self.table.nodes[use], kind="alias")
                 self.table.editable_aliases.add(use)
+                stub = self.table.drafts[self.table.nodes[use].scope].stub
+                if stub is not None:
+                    member = self.table.members[position].name
+                    stub.bindings[member] = Binding("named", node=use)
+
+    def applying(self, uses: list[int], owner: int, key: str) -> int | None:
+        """Template mode: the Decision over nodes a named shared Decision exists only where
+        it applies, where its every use is in that choice's candidates. Where only some
+        are, the Decision is owned by the same scope wherever the choice applies or not;
+        a placement-dependent owner is refused."""
+        requires = {self.table.requires.get(use) for use in uses}
+        if len(requires) == 1:
+            return requires.pop()
+        always = [use for use in uses if self.table.requires.get(use) is None]
+        if always and owner == self.lowest_common_scope(
+            [self.table.nodes[use].scope for use in always]
+        ):
+            return None
+        raise DefinitionError.broken(
+            "template-owner-per-placement",
+            _OWNER,
+            f"{key}: the shared Decision is used in the candidates of a Decision over "
+            "nodes that may never apply, so the scope owning it depends on the placement",
+            declaration=key,
+        )
 
     def lowest_common_scope(self, scopes: list[int]) -> int:
         def ancestry(scope: int) -> list[int]:

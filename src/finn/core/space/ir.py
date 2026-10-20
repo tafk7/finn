@@ -40,6 +40,9 @@ NodeKind = Literal[
     "validity",
     "present",
     "members",
+    # A template's reference into a child Space: a node of the child class's template
+    # (``_template``); never a node of a linked model.
+    "import",
 ]
 
 
