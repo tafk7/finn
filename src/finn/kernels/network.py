@@ -62,7 +62,7 @@ member's netlist under its node (its name, unless the network is given another,
 ``nodes``: a graph's names with ``\\W`` as ``_``), in the order the network was declared
 (its instance order, which the text follows), with every boundary channel's AXIS bus
 (``finn.kernels.artifacts.top.compose``). A kernel with children merges its own netlist
-with the same function (``merged``).
+with the same function (``finn.kernels.base.merged``).
 """
 
 from __future__ import annotations
@@ -89,12 +89,12 @@ from finn.core.space import (
 )
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus
-from finn.kernels.artifacts.module import BusExport, Composed, Fragment, ProducerIdentity, merge
+from finn.kernels.artifacts.module import Composed, Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose
-from finn.kernels.base import BOUNDARY, NETLIST, PortEnd
+from finn.kernels.base import BOUNDARY, NETLIST, PortEnd, merged
 from finn.kernels.channels import Channel
 from finn.kernels.configure import chosen, refusal
-from finn.kernels.control import CONTROL, Control, Exported
+from finn.kernels.control import CONTROL, Control
 from finn.kernels.control import presented as presented_buses
 from finn.kernels.defaults import defaulted
 from finn.kernels.members import (
@@ -138,25 +138,6 @@ class NetworkError(ValueError):
     def __init__(self, message: str, findings: Iterable[Finding] = ()) -> None:
         super().__init__(message)
         self.findings = tuple(findings)
-
-
-# -- the module ---------------------------------------------------------------------------
-
-
-def merged(
-    netlists: Iterable[tuple[str, Fragment]], presented: Iterable[Exported] = ()
-) -> Fragment | Rejected:
-    """Each netlist under its node, in order, and the control buses presented (each a
-    ``BusExport`` with the writes its configuration takes)."""
-    exports = tuple(
-        BusExport(item.node, item.child, item.port, item.registers) for item in presented
-    )
-    try:
-        return merge(
-            *(netlist.under(node) for node, netlist in netlists), Fragment(exports=exports)
-        )
-    except ArtifactError as error:
-        return reject("kernel-netlist", str(error))
 
 
 # -- the wiring ---------------------------------------------------------------------------
@@ -1118,6 +1099,5 @@ __all__ = [
     "Wire",
     "dotted",
     "interim_channel_defaults",
-    "merged",
     "wire",
 ]

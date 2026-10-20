@@ -37,7 +37,7 @@ the kernel's extents or domains.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any, ClassVar, cast
 
@@ -57,6 +57,7 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, bind_extents
+from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus, Clocking, Direction, Pin, Signal
 from finn.kernels.artifacts.contributions import (
     Contribution,
@@ -68,13 +69,15 @@ from finn.kernels.artifacts.contributions import (
 from finn.kernels.artifacts.module import (
     Abi,
     BuildError,
+    BusExport,
     Composed,
     Fragment,
     Held,
     Leaf,
     Module,
+    merge,
 )
-from finn.kernels.control import CONTROL, presented
+from finn.kernels.control import CONTROL, Exported, presented
 from finn.kernels.defaults import Fixed, stated_defaults
 from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import RESOURCES_SEMANTICS, total
@@ -181,6 +184,23 @@ def _inputs(pin: Pin) -> tuple[str, ...]:
     if isinstance(pin, Signal):
         return (pin.name,) if pin.direction is Direction.IN else ()
     return tuple(name for name, direction in pin.member_directions() if direction is Direction.IN)
+
+
+def merged(
+    netlists: Iterable[tuple[str, Fragment]], presented: Iterable[Exported] = ()
+) -> Fragment | Rejected:
+    """Each netlist under its node, in order, and the control buses presented (each a
+    ``BusExport`` with the writes its configuration takes): a kernel with children's
+    netlist, and a network's."""
+    exports = tuple(
+        BusExport(item.node, item.child, item.port, item.registers) for item in presented
+    )
+    try:
+        return merge(
+            *(netlist.under(node) for node, netlist in netlists), Fragment(exports=exports)
+        )
+    except ArtifactError as error:
+        return reject("kernel-netlist", str(error))
 
 
 class Kernel(Space):
@@ -498,9 +518,7 @@ class ComposedKernel(Kernel, protocol=True):
     def composed_fragment(self) -> Fragment | Rejected:
         """A kernel with children's ``fragment``: each member's netlist under its node, and
         the control buses its members present with the writes their configuration takes
-        (``finn.kernels.network.merged``). A kernel that places none is refused."""
-        from finn.kernels.network import merged  # noqa: PLC0415 - the network imports the base
-
+        (``merged``). A kernel that places none is refused."""
         if not self.netlists:
             return reject(
                 "kernel-module",
@@ -597,4 +615,5 @@ __all__ = [
     "RESOURCES",
     "extent_of",
     "interface",
+    "merged",
 ]
