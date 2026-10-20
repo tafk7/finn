@@ -138,8 +138,7 @@ class Refusal:
     choice's key, the domain's findings) or each rule it would break (the rule's key: a
     constraint, a derived value, a view, a choice whose domain lists no value; its
     findings), and for each rule the stored choices standing in its way (``standing``), by
-    key. ``outside`` names the choices refused by their domain: those of the change, and
-    in a change of facts, the stored ones the new facts put outside it."""
+    key. ``outside`` names the choices refused by their domain: those of the change."""
 
     __slots__ = ("outside", "standing", "why")
 
@@ -193,10 +192,9 @@ def decision(subject: Space | type[Space], key: str) -> inspection.DecisionInfo[
 
 
 def refusal(report: ConfigurationResult[Any]) -> Refusal:
-    """Why the engine refused a change (``report``): each choice its domain refuses (a
-    value set, or in a change of facts a stored one checked again), by key, with the
-    domain's findings; else each rule it would break, by the rule's key, with its findings
-    and the stored choices standing in its way."""
+    """Why the engine refused a change (``report``): each value set that its domain
+    refuses, by key, with the domain's findings; else each rule it would break, by the
+    rule's key, with its findings and the stored choices standing in its way."""
     outside = {
         outcome.owner: outcome.result.findings
         for outcome in report.outcomes
@@ -229,15 +227,30 @@ def handles(point: Space, keys: Iterable[str]) -> dict[str, object] | Refusal:
 
 
 def commit(
+    point: Space, values: Mapping[str, object], clear: Collection[str] = ()
+) -> Space | Refusal:
+    """``point`` with ``values`` set and ``clear`` cleared, as one change of the engine's,
+    or why it is refused (``refusal``; and as ``changed``)."""
+    report = changed(point, values, clear)
+    if isinstance(report, Refusal):
+        return report
+    if report.accepted:
+        instance: Space = report.instance
+        return instance
+    return refusal(report)
+
+
+def changed(
     point: Space,
     values: Mapping[str, object],
     clear: Collection[str] = (),
     facts: Mapping[str, object] | None = None,
-) -> Space | Refusal:
-    """``point`` with ``values`` set and ``clear`` cleared (and its formals given ``facts``,
-    by name), as one change of the engine's, or why it is refused (``refusal``; a key
-    that names no choice, ``not-a-decision``; a request the engine refuses as malformed,
-    ``request-refused``)."""
+) -> ConfigurationResult[Any] | Refusal:
+    """The engine's report of ``point`` with ``values`` set and ``clear`` cleared (and its
+    formals given ``facts``, by name), as one change, accepted or refused: an accepted
+    change of facts names what the new facts drop and the rules they make false. Or why
+    the request is refused before the engine judges it (a key that names no choice,
+    ``not-a-decision``; a request the engine refuses as malformed, ``request-refused``)."""
     found = handles(point, (*values, *clear))
     if isinstance(found, Refusal):
         return found
@@ -257,10 +270,7 @@ def commit(
         return Refusal(
             {key: rejection("request-refused", key, str(error)) for key in (*values, *clear)}
         )
-    if report.accepted:
-        instance: Space = report.instance
-        return instance
-    return refusal(report)
+    return report
 
 
 def replayed(
