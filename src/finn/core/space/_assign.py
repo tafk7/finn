@@ -272,7 +272,8 @@ def _instantiate(
     order (``Evaluator.flow``). Checks read facts only, so what is left out does not depend
     on order; a value waiting on a missing fact is kept, and no rule is read."""
     made = base.successor(facts=facts, stored=stored)
-    checks = {index: check(made, index) for index in base.evaluator.flow() if index in stored}
+    position = {index: rank for rank, index in enumerate(base.evaluator.flow())}
+    checks = {index: check(made, index) for index in sorted(stored, key=position.__getitem__)}
     kept = {index: value for index, value in stored.items() if not _refuses(checks[index])}
     if len(kept) < len(stored):
         made = base.successor(facts=facts, stored=kept)
