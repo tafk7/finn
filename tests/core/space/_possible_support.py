@@ -61,5 +61,6 @@ def open_now(point: Space) -> list[str]:
 
 
 def broken(report: ConfigurationResult[Any]) -> dict[str, set[str]]:
-    """A refused change's broken rules, each with its standing choices (by key)."""
+    """A change's broken rules (refusing it, or made false by its new facts), each with
+    its standing choices (by key)."""
     return {rule.rule: set(rule.standing) for rule in report.broken}
