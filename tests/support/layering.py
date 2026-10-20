@@ -421,6 +421,16 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "tests.member_cache", ("support.member_cache",), ("kernels",), ("pytest",), "tests/kernels"
     ),
+    # The shell's bus counts (finn.platform.shells.bus_counts) checked against the top's
+    # pins on every netlist a test reads, the fixture the kernel and the kernel-op tests'
+    # conftests import: the one place the kernel tests reach the platform registry.
+    Layer(
+        "tests.top_pins",
+        ("support.top_pins",),
+        (*_KERNEL_STACK, "platform"),
+        ("pytest",),
+        "tests/kernels",
+    ),
     # The engine's purity check off for a test that counts the calls its memo saves
     # (_world.check_purity), which every tree's conftests import.
     Layer("tests.purity", ("support.purity",), ("space",), ("pytest",), "tests/core/space"),
@@ -493,6 +503,7 @@ LAYERS: tuple[Layer, ...] = (
             "tests.dataflow",
             "tests.oracle",
             "tests.member_cache",
+            "tests.top_pins",
             "tests.purity",
         ),
         ("pytest", "numpy", "pyslang", "qonnx.core.datatype", "qonnx.core.ranges"),
