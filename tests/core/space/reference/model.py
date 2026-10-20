@@ -953,7 +953,11 @@ def _newly_false(
     return found
 
 
-def _moved(before: Solution, after: Solution) -> tuple[tuple[str, ...], ...]:
+#: the stored choices put dormant, those brought into play, the open choices opened
+_Moved = tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]
+
+
+def _moved(before: Solution, after: Solution) -> _Moved:
     """The stored choices put dormant and brought into play, and the open choices brought
     into presence, from ``before`` to ``after`` (reading 5)."""
 
