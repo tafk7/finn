@@ -17,7 +17,6 @@ from typing import Any
 import pytest
 
 from core.space.reference import (
-    EMPTY_DOMAIN_REFUSES,
     Absent,
     Accepted,
     AssignmentRefusal,
@@ -29,6 +28,7 @@ from core.space.reference import (
     DefinitionError,
     Derived,
     Dormant,
+    Dropped,
     Impossible,
     Inapplicable,
     Known,
@@ -55,6 +55,7 @@ from core.space.reference import (
     View,
     Waiting,
     When,
+    bind,
     change,
     computed,
     kleene_and,
@@ -96,6 +97,12 @@ def rule(name: str, code: str, owner: str = "", standing: tuple[str, ...] = ()) 
 
 def outside(choice: str, owner: str = "") -> AssignmentRefusal:
     return AssignmentRefusal(choice, (Reason(ReasonKind.OUTSIDE_DOMAIN, choice, owner),))
+
+
+def dropped(choice: str, value: Any, owner: str = "") -> Dropped:
+    """A stored value new facts leave outside its domain (§ 16.24)."""
+
+    return Dropped(choice, value, (Reason(ReasonKind.OUTSIDE_DOMAIN, choice, owner),))
 
 
 def false_kinds(solution: Solution, scope: str = "") -> set[tuple[PieceKind, str]]:
@@ -430,20 +437,146 @@ def sized() -> Space:
     )
 
 
-def test_a_facts_change_is_refused_by_a_stored_value_outside_its_new_domain() -> None:
-    """Every stored value is re-checked, the dormant ``mode.a.depth`` included."""
+SIZED = {"lanes": 4, "mode": "b", "mode.a.depth": 8}
 
-    base = Configuration(sized(), {"n": 8}, {"lanes": 4, "mode": "b", "mode.a.depth": 8})
-    assert rejected(change(base, Change(facts={"n": 12}))) == Rejected(
-        (outside("mode.a.depth", "mode.a"),), None
+
+def test_a_facts_change_drops_a_value_newly_outside_its_domain_leaving_the_choice_open() -> None:
+    """§ 16.24: new facts are a new design space, never refused. At ``n = 6`` neither 4
+    nor 8 divides it: both are dropped and reported with their old values, ``lanes`` open
+    where it is present, ``mode.a.depth`` absent where it is dormant."""
+
+    base = Configuration(sized(), {"n": 8}, SIZED)
+    result = accepted(change(base, Change(facts={"n": 6})))
+    assert result.dropped == (dropped("lanes", 4), dropped("mode.a.depth", 8, "mode.a"))
+    assert result.configuration.stored == {"mode": "b"}
+    assert (result.dormant, result.in_play, result.opened, result.broken) == ((), (), (), ())
+    solution = result.configuration.solve()
+    assert solution.state("lanes") == Open()
+    assert solution.state("mode.a.depth") == Absent()
+    assert result.validity == Validity(T, (), ())
+    # inside their new domains, every value is kept
+    kept = accepted(change(base, Change(facts={"n": 16})))
+    assert (kept.configuration.stored, kept.dropped) == (SIZED, ())
+
+
+def test_a_facts_change_drops_a_dormant_value_outside_its_domain_and_reports_it() -> None:
+    """Every stored value is checked again, the dormant ``mode.a.depth`` included (§ 16.20):
+    8 does not divide 12, so it is dropped; ``lanes = 4`` divides it and is kept."""
+
+    base = Configuration(sized(), {"n": 8}, SIZED)
+    result = accepted(change(base, Change(facts={"n": 12})))
+    assert result.dropped == (dropped("mode.a.depth", 8, "mode.a"),)
+    assert result.configuration.stored == {"lanes": 4, "mode": "b"}
+    assert result.validity.verdict is T
+    # a choice the change names is not dropped: cleared, it is left out silently (§ 16.25)
+    cleared = accepted(change(base, Change(facts={"n": 12}, clear=("mode.a.depth",))))
+    assert (cleared.configuration.stored, cleared.dropped) == ({"lanes": 4, "mode": "b"}, ())
+
+
+def bounded() -> Space:
+    """``c`` and ``x`` from 1 to 4; ``k`` asks ``c`` to be at most the fact ``f``, ``l``
+    asks the same of ``x``."""
+
+    return Space(
+        ("f",),
+        Scope(
+            "",
+            choices=(Choice("c", listed(1, 2, 3, 4)), Choice("x", listed(1, 2, 3, 4))),
+            constraints=(
+                Constraint("k", ("c", "f"), lambda r: r["c"] <= r["f"], "c-over"),
+                Constraint("l", ("x", "f"), lambda r: r["x"] <= r["f"], "x-over"),
+            ),
+        ),
     )
-    assert rejected(change(base, Change(facts={"n": 6}))).refusals == (
-        outside("lanes"),
-        outside("mode.a.depth", "mode.a"),
+
+
+K_OVER = rule("k", "c-over", standing=("c",))
+
+
+def test_a_batch_equals_its_facts_then_its_choices() -> None:
+    """§ 16.25, the equivalence: ``k`` reads ``c``; ``f = 2`` makes ``k`` false with
+    ``c = 3``; the batch sets ``c = 4``, leaving ``k`` false through the same origin. Step 1
+    keeps the named ``c = 3`` (inside its domain), step 2 adds no pair against it: accepted.
+    The batch and the two calls in sequence publish the same design space, and the batch
+    reports ``k`` with ``c`` standing (read in the published design space, named or not)."""
+
+    receiver = Configuration(bounded(), {"f": 4}, {"c": 3})
+    batch = accepted(change(receiver, Change(facts={"f": 2}, commit={"c": 4})))
+    facts = accepted(change(receiver, Change(facts={"f": 2})))
+    choices = accepted(change(facts.configuration, Change(commit={"c": 4})))
+    assert batch.configuration == choices.configuration
+    assert batch.configuration.stored == {"c": 4}
+    assert batch.validity == choices.validity
+    assert batch.broken == facts.broken == (K_OVER,)
+    assert (batch.dropped, facts.dropped, choices.broken) == ((), (), ())
+
+
+def test_a_batch_whose_named_choice_breaks_a_rule_with_the_new_facts_is_refused() -> None:
+    """Step 2 is a change of choices on the new design space: ``x = 3`` makes ``l`` false
+    under ``f = 2``, a pair step 1 does not hold, so the whole batch is refused, ``x``
+    named (not standing), and nothing is published."""
+
+    receiver = Configuration(bounded(), {"f": 4}, {"c": 1})
+    result = rejected(change(receiver, Change(facts={"f": 2}, commit={"x": 3})))
+    assert result.refusals == (rule("l", "x-over"),)
+    # a value outside its domain refuses the batch by its type alone
+    assert rejected(change(receiver, Change(facts={"f": 2}, commit={"x": 5}))) == Rejected(
+        (outside("x"),), None
     )
-    assert accepted(change(base, Change(facts={"n": 16}))).validity.verdict is T
-    # the caller clears what stands in the way in the same change
-    assert accepted(change(base, Change(facts={"n": 12}, clear=("mode.a.depth",))))
+
+
+def test_a_batch_whose_facts_break_a_rule_its_choices_do_not_touch_is_accepted() -> None:
+    """``f = 2`` makes ``k`` false through the stored ``c = 3``; the batch's ``x = 1``
+    adds no pair against step 1: accepted, ``k`` reported with ``c`` standing. A pair step
+    1 adds and step 2 removes (``c = 1`` beside the facts) is not in the published design
+    space, so not reported."""
+
+    receiver = Configuration(bounded(), {"f": 4}, {"c": 3})
+    result = accepted(change(receiver, Change(facts={"f": 2}, commit={"x": 1})))
+    assert (result.broken, result.validity.verdict) == ((K_OVER,), F)
+    assert result.configuration.stored == {"c": 3, "x": 1}
+    fixed = accepted(change(receiver, Change(facts={"f": 2}, commit={"c": 1})))
+    assert (fixed.broken, fixed.validity.verdict) == ((), U)
+
+
+def test_a_rule_already_false_before_new_facts_is_never_reported() -> None:
+    """Built with ``k`` false (``c = 3`` over ``f = 2``): new facts keeping it false
+    through the same origin report nothing, whatever the batch commits beside them."""
+
+    receiver = Configuration(bounded(), {"f": 2}, {"c": 3})
+    assert accepted(change(receiver, Change(facts={"f": 1}))).broken == ()
+    beside = accepted(change(receiver, Change(facts={"f": 1}, commit={"c": 4})))
+    assert (beside.broken, beside.validity.verdict) == ((), F)
+
+
+def test_the_bind_keeps_saved_choices_that_break_a_rule_and_reports_it() -> None:
+    """SZ90 (2): the bind is never refused for rules. Its baseline is the facts with
+    nothing stored, so it lists every rule the saved choices break, with their standing
+    choices; the design space reads refused. A change of facts from the same stored set
+    publishes the same design space (§ 16.24)."""
+
+    space = bounded()
+    result = bind(space, {"f": 2}, {"c": 3, "x": 1})
+    assert result.configuration == Configuration(space, {"f": 2}, {"c": 3, "x": 1})
+    assert (result.broken, result.dropped, result.validity.verdict) == ((K_OVER,), (), F)
+    assert (result.dormant, result.in_play, result.opened) == ((), (), ())
+    moved = change(Configuration(space, {"f": 4}, {"c": 3, "x": 1}), Change(facts={"f": 2}))
+    assert accepted(moved).configuration == result.configuration
+    with pytest.raises(ConfigurationError):
+        bind(bounded(), {"f": 2}, {"nowhere": 1})
+
+
+def test_the_bind_drops_a_saved_value_outside_its_domain() -> None:
+    """``mode.b.q = 7`` is not of its type: dropped, reported. What moved is read against
+    the baseline: ``mode.a.p`` comes into play, the kept ``mode.b.q = 5`` would be dormant."""
+
+    result = bind(two_cores(), {}, {"mode": "a", "mode.a.p": 2, "mode.b.q": 7})
+    assert result.dropped == (dropped("mode.b.q", 7, "mode.b"),)
+    assert result.configuration.stored == {"mode": "a", "mode.a.p": 2}
+    assert (result.dormant, result.in_play, result.opened) == ((), ("mode.a.p",), ())
+    assert (result.broken, result.validity.verdict) == ((), T)
+    kept = bind(two_cores(), {}, {"mode": "a", "mode.a.p": 2, "mode.b.q": 5})
+    assert (kept.dormant, kept.in_play, kept.dropped) == (("mode.b.q",), ("mode.a.p",), ())
 
 
 def two_cores() -> Space:
@@ -552,11 +685,14 @@ def test_reading_2_setting_x_beside_a_rule_false_through_facts_only_d_is_accepte
     assert kept.validity.false[0].reasons == (
         Reason(ReasonKind.INPUT_REFUSED, "c", "", "small", ("d",)),
     )
-    # a facts change making d refuse while c stood true adds the pair (c, d): refused at d
+    # a facts change making d refuse while c stood true adds the pair (c, d): accepted, and
+    # reported at d (§ 16.24)
     sound = accepted(change(Configuration(facts_refused(), {"w": 4}), Change(commit={"x": 1})))
-    assert rejected(change(sound.configuration, Change(facts={"w": 5}))).refusals == (
+    odd = accepted(change(sound.configuration, Change(facts={"w": 5})))
+    assert odd.broken == (
         RuleRefusal("d", "derived", (Reason(ReasonKind.DERIVED_BODY, "d", "", "bad"),), ()),
     )
+    assert (odd.validity.verdict, odd.configuration.stored) == (F, {"x": 1})
 
 
 def test_reading_2_a_refusing_derived_value_nothing_rules_on_refuses_no_change() -> None:
@@ -580,18 +716,22 @@ def guarded_by(read: str) -> Scope:
     )
 
 
-def test_reading_3_a_facts_change_bringing_a_guarded_rule_into_play_false_is_refused() -> None:
+def test_a_facts_change_bringing_a_guarded_rule_into_play_false_is_accepted_and_reported() -> None:
     """``g.small`` does not apply while ``wide`` is false; setting it makes ``g`` present
-    and ``g.small`` false at its own origin: a new pair, ``g.n`` standing."""
+    and ``g.small`` false at its own origin: a new pair, reported with ``g.n`` standing,
+    never refused (§ 16.24)."""
 
     space = Space(("wide",), Scope("", children=(guarded_by("wide"),)))
     base = Configuration(space, {"wide": False}, {"g.n": 3})
     assert base.solve().state("g.n") == Dormant(3)
     assert base.solve().validity().verdict is T
-    result = rejected(change(base, Change(facts={"wide": True})))
-    assert result.refusals == (rule("g.small", "big", "g", ("g.n",)),)
+    result = accepted(change(base, Change(facts={"wide": True})))
+    assert result.broken == (rule("g.small", "big", "g", ("g.n",)),)
+    assert (result.dormant, result.in_play, result.opened) == ((), ("g.n",), ())
+    assert result.validity.verdict is F
     cleared = accepted(change(base, Change(facts={"wide": True}, clear=("g.n",))))
     assert (cleared.dormant, cleared.in_play, cleared.opened) == ((), (), ("g.n",))
+    assert (cleared.broken, cleared.validity.verdict) == ((), U)
 
 
 def deciding() -> Space:
@@ -714,9 +854,10 @@ def test_reading_6_a_value_waiting_on_a_missing_fact_is_checked_when_it_comes() 
     assert solution.state("lanes") == Waiting(2, ("n",))
     assert solution.read("lanes") == Unresolved(("n",))
     assert (waiting.validity.verdict, waiting.validity.waits) == (U, ("n",))
-    assert rejected(change(waiting.configuration, Change(facts={"n": 9}))) == Rejected(
-        (outside("lanes"),), None
-    )
+    # the fact arrives with 2 outside the divisors of 9: dropped, the choice open (§ 16.24)
+    outside_it = accepted(change(waiting.configuration, Change(facts={"n": 9})))
+    assert (outside_it.dropped, outside_it.broken) == ((dropped("lanes", 2),), ())
+    assert outside_it.configuration.solve().state("lanes") == Open()
     supplied = accepted(change(waiting.configuration, Change(facts={"n": 8})))
     assert supplied.configuration.solve().state("lanes") == Set(2)
     assert supplied.in_play == ()
@@ -725,16 +866,22 @@ def test_reading_6_a_value_waiting_on_a_missing_fact_is_checked_when_it_comes() 
     assert unset.configuration.solve().state("lanes") == Waiting(2, ("n",))
 
 
-def test_reading_3_a_value_the_facts_change_lets_be_read_refuses_by_its_rule() -> None:
+def test_a_constraint_new_facts_make_false_is_reported_with_its_standing_choice() -> None:
     """``lanes = 4`` waits on ``n``, ``cap`` unknown; the facts change supplying ``n``
-    makes it read as its value, and ``cap`` false at its own origin: a new pair, refused
-    with ``lanes`` standing."""
+    makes it read as its value, and ``cap`` false at its own origin: a new pair. The change
+    is accepted, the design space reads refused, and the report names ``cap`` with
+    ``lanes`` standing (§ 16.24); clearing ``lanes`` is then accepted (§ 16.16)."""
 
     waiting = Configuration(capped(), {}, {"lanes": 4})
     assert waiting.solve().piece("cap").verdict is U
-    assert rejected(change(waiting, Change(facts={"n": 8}))).refusals == (
-        rule("cap", "wide", standing=("lanes",)),
+    result = accepted(change(waiting, Change(facts={"n": 8})))
+    assert (result.broken, result.dropped) == ((rule("cap", "wide", standing=("lanes",)),), ())
+    assert result.configuration.stored == {"lanes": 4}
+    assert result.validity.false == (
+        Piece(PieceKind.CONSTRAINT, "", "cap", F, reasons=(constraint_reason("cap", "wide"),)),
     )
+    cleared = accepted(change(result.configuration, Change(clear=("lanes",))))
+    assert cleared.validity.verdict is U
 
 
 def guarded_input() -> Space:
@@ -756,8 +903,9 @@ ABSENT_SIZE = Reason(ReasonKind.INPUT_ABSENT, "lanes", "", related=("extra.size"
 
 def test_reading_6_a_membership_input_that_does_not_apply_refuses_the_assignment() -> None:
     """§ 16.17: with ``on`` false, ``extra.size`` does not exist for these facts: an
-    assignment to ``lanes`` is refused naming it, and so are new facts making it absent
-    while a value is stored."""
+    assignment to ``lanes`` is refused naming it. New facts making it absent while a value
+    is stored drop the value (§ 16.24), and the domain piece reads false through the
+    absent input, its own origin."""
 
     off = Configuration(guarded_input(), {"on": False, "n": 4})
     assert rejected(change(off, Change(commit={"lanes": 2}))) == Rejected(
@@ -767,8 +915,11 @@ def test_reading_6_a_membership_input_that_does_not_apply_refuses_the_assignment
         change(Configuration(guarded_input(), {"on": True, "n": 4}), Change(commit={"lanes": 2}))
     )
     assert on.configuration.solve().state("lanes") == Set(2)
-    assert rejected(change(on.configuration, Change(facts={"on": False}))) == Rejected(
-        (AssignmentRefusal("lanes", (ABSENT_SIZE,)),), None
+    off_again = accepted(change(on.configuration, Change(facts={"on": False})))
+    assert off_again.dropped == (Dropped("lanes", 2, (ABSENT_SIZE,)),)
+    assert off_again.broken == (RuleRefusal("lanes", "empty-domain", (ABSENT_SIZE,), ()),)
+    assert off_again.validity.false == (
+        Piece(PieceKind.EMPTY_DOMAIN, "", "lanes", F, reasons=(ABSENT_SIZE,)),
     )
     with pytest.raises(ConfigurationError):
         Configuration(guarded_input(), {"on": False, "n": 4}, {"lanes": 2})
@@ -777,7 +928,7 @@ def test_reading_6_a_membership_input_that_does_not_apply_refuses_the_assignment
 def test_reading_13_an_unset_choice_whose_input_does_not_apply_is_a_false_piece() -> None:
     """§ 16.17: the list of the unset, present ``lanes`` cannot be made, so its domain
     piece is false through the absent input, the domain its origin: new facts making the
-    input absent are refused at it (reading 9), nothing standing."""
+    input absent are accepted and report it (reading 9), nothing standing."""
 
     off = solve(guarded_input(), {"on": False, "n": 4})
     assert off.validity().false == (
@@ -785,7 +936,7 @@ def test_reading_13_an_unset_choice_whose_input_does_not_apply_is_a_false_piece(
     )
     assert off.possible("lanes") is None
     on = Configuration(guarded_input(), {"on": True, "n": 4})
-    assert rejected(change(on, Change(facts={"on": False}))).refusals == (
+    assert accepted(change(on, Change(facts={"on": False}))).broken == (
         RuleRefusal("lanes", "empty-domain", (ABSENT_SIZE,), ()),
     )
 
@@ -835,16 +986,17 @@ def test_reading_6_membership_under_a_false_when_over_a_choice_is_checked_as_if_
     assert result.configuration.solve().state("extra.p") == Dormant(2)
 
 
-def test_reading_6_a_facts_change_putting_a_dormant_value_outside_its_domain_is_refused() -> None:
-    """§ 16.20: a facts change re-checks every stored value as if its choice existed,
+def test_reading_6_a_facts_change_putting_a_dormant_value_outside_its_domain_drops_it() -> None:
+    """§ 16.20: a facts change checks every stored value again as if its choice existed,
     dormant ones included. ``extra.p = 2`` is dormant (``wide`` false): ``n = 9`` leaves 2
-    outside its divisors and is refused naming it; ``n = 8`` is accepted, 2 still dormant."""
+    outside its divisors, and it is dropped and reported (§ 16.24); ``n = 8`` keeps it,
+    still dormant."""
 
     stored = Configuration(guarded_by_a_choice(), {"n": 4}, {"wide": False, "extra.p": 2})
     assert stored.solve().state("extra.p") == Dormant(2)
-    assert rejected(change(stored, Change(facts={"n": 9}))) == Rejected(
-        (outside("extra.p", "extra"),), None
-    )
+    nine = accepted(change(stored, Change(facts={"n": 9})))
+    assert nine.dropped == (dropped("extra.p", 2, "extra"),)
+    assert nine.configuration.solve().state("extra.p") == Absent()
     kept = accepted(change(stored, Change(facts={"n": 8})))
     assert kept.configuration.solve().state("extra.p") == Dormant(2)
 
@@ -875,11 +1027,12 @@ def test_reading_6_a_refusing_membership_input_refuses_the_assignment() -> None:
     assert rejected(change(odd, Change(commit={"lanes": 1}))) == Rejected(
         (AssignmentRefusal("lanes", THROUGH_WIDTH),), None
     )
-    # a facts change making it refuse while a value is stored, alike
+    # a facts change making it refuse while a value is stored drops the value, the domain
+    # piece false through ``width``, reported at its origin (§ 16.24)
     stored = Configuration(lanes_over_width(), {"w": 8}, {"lanes": 4})
-    assert rejected(change(stored, Change(facts={"w": 7}))) == Rejected(
-        (AssignmentRefusal("lanes", THROUGH_WIDTH),), None
-    )
+    result = accepted(change(stored, Change(facts={"w": 7})))
+    assert result.dropped == (Dropped("lanes", 4, THROUGH_WIDTH),)
+    assert result.broken == (RuleRefusal("width", "derived", (THROUGH_WIDTH[0],), ()),)
 
 
 def test_reading_13_a_list_refused_through_its_input_is_a_false_piece_blamed_at_the_input() -> None:
@@ -889,7 +1042,7 @@ def test_reading_13_a_list_refused_through_its_input_is_a_false_piece_blamed_at_
     )
     assert odd.possible("lanes") is None
     even = Configuration(lanes_over_width(), {"w": 8})
-    assert rejected(change(even, Change(facts={"w": 7}))).refusals == (
+    assert accepted(change(even, Change(facts={"w": 7}))).broken == (
         RuleRefusal("width", "derived", (THROUGH_WIDTH[0],), ()),
     )
 
@@ -929,9 +1082,13 @@ def test_reading_7_the_constructor_checks_types_and_a_broken_rule_is_legal() -> 
     assert false_kinds(broken.solve()) == {(PieceKind.CONSTRAINT, "linked")}
     # a change adding no pair is accepted, the configuration still refused
     assert accepted(change(broken, Change(commit={"z": 1}))).validity.verdict is F
-    # the same stored set as a change from nothing is refused (the engine's bind)
+    # the same stored set as a change of choices from nothing is refused; the bind keeps it
+    # and reports the rule (§ 16.24)
     assert rejected(change(Configuration(linked()), Change(commit={"a": 1, "b": 3}))).refusals == (
         rule("linked", "b-above-a"),
+    )
+    assert bind(linked(), {}, {"a": 1, "b": 3}).broken == (
+        rule("linked", "b-above-a", standing=("a", "b")),
     )
 
 
@@ -991,12 +1148,12 @@ def test_reading_8_a_refused_guard_is_one_piece_and_its_scope_is_not_in_play() -
             reasons=(GATE, Reason(ReasonKind.INPUT_REFUSED, "g", "g", related=("gate",))),
         ),
     )
-    # the facts change refusing the guard is refused at the guard's input
+    # the facts change refusing the guard is accepted, reported at the guard's input
     present = Configuration(gated(), {"w": 4}, {"g.n": 1})
     assert present.solve().validity().verdict is T
-    assert rejected(change(present, Change(facts={"w": 3}))).refusals == (
-        RuleRefusal("gate", "derived", (GATE,), ()),
-    )
+    refused = accepted(change(present, Change(facts={"w": 3})))
+    assert refused.broken == (RuleRefusal("gate", "derived", (GATE,), ()),)
+    assert (refused.dormant, refused.configuration.stored) == (("g.n",), {"g.n": 1})
 
 
 def test_reading_8_a_refused_guard_under_an_open_selector_waits_on_it() -> None:
@@ -1050,15 +1207,21 @@ def counted() -> Space:
     )
 
 
-def test_reading_9_a_facts_change_emptying_a_domain_is_refused_not_yet_ruled_on() -> None:
-    """devi-2's reading, not yet ruled on by the human: the single switch is on."""
+EMPTY_X = RuleRefusal("x", "empty-domain", (Reason(ReasonKind.EMPTY_DOMAIN, "x", ""),), ())
 
-    assert EMPTY_DOMAIN_REFUSES is True
+
+def test_reading_9_a_facts_change_emptying_a_domain_is_accepted_reading_refused() -> None:
+    """§ 16.24 settles reading 9: new facts emptying a present choice's list are accepted;
+    the design space reads refused through its empty-domain piece, which the report lists,
+    nothing standing. A value stored there is dropped first."""
+
     base = Configuration(counted(), {"n": 2})
-    result = rejected(change(base, Change(facts={"n": 0})))
-    assert result.refusals == (
-        RuleRefusal("x", "empty-domain", (Reason(ReasonKind.EMPTY_DOMAIN, "x", ""),), ()),
-    )
+    result = accepted(change(base, Change(facts={"n": 0})))
+    assert (result.broken, result.dropped) == ((EMPTY_X,), ())
+    assert false_kinds(result.configuration.solve()) == {(PieceKind.EMPTY_DOMAIN, "x")}
+    stored = accepted(change(Configuration(counted(), {"n": 2}, {"x": 1}), Change(facts={"n": 0})))
+    assert (stored.dropped, stored.broken) == ((dropped("x", 1),), (EMPTY_X,))
+    assert stored.configuration.solve().state("x") == Open()
     # a domain already empty adds no pair: new facts keeping it empty are accepted
     empty = Configuration(counted(), {"n": 0})
     assert accepted(change(empty, Change(facts={"n": -1}))).validity.verdict is F
@@ -1363,10 +1526,10 @@ def viewed_child_over_a_fact() -> Space:
 
 
 def test_an_unset_revealing_a_rule_masked_by_its_views_space_is_accepted() -> None:
-    """§ 16.16 for facts: ``f = 3`` refuses ``c``, masking ``high``; ``y = 1`` is set
-    beside it (no new pair). Unsetting ``f`` reopens ``c`` and reveals ``high`` false at
-    its own origin: accepted, reading refused at ``high``. Setting ``f`` to 1 reveals it
-    too, and is refused, being a change that sets."""
+    """``f = 3`` refuses ``c``, masking ``high``; ``y = 1`` is set beside it (no new
+    pair). Unsetting ``f`` reopens ``c`` and reveals ``high`` false at its own origin;
+    setting ``f`` to 1 reveals it too. Both are changes of facts: accepted, reading refused
+    at ``high``, which the report lists with ``c.y`` standing (§ 16.24)."""
 
     masked = accepted(
         change(Configuration(viewed_child_over_a_fact(), {"f": 3}), Change(commit={"c.y": 1}))
@@ -1375,13 +1538,11 @@ def test_an_unset_revealing_a_rule_masked_by_its_views_space_is_accepted() -> No
         (PieceKind.CONSTRAINT, "high"),
         (PieceKind.CONSTRAINT, "c.small"),
     }
-    unset = accepted(change(masked.configuration, Change(unset=("f",))))
-    assert unset.validity.false == (
-        Piece(PieceKind.CONSTRAINT, "", "high", F, reasons=(constraint_reason("high", "low"),)),
-    )
-    assert rejected(change(masked.configuration, Change(facts={"f": 1}))).refusals == (
-        rule("high", "low", standing=("c.y",)),
-    )
+    high = Piece(PieceKind.CONSTRAINT, "", "high", F, reasons=(constraint_reason("high", "low"),))
+    for edit in (Change(unset=("f",)), Change(facts={"f": 1})):
+        revealed = accepted(change(masked.configuration, edit))
+        assert revealed.validity.false == (high,)
+        assert revealed.broken == (rule("high", "low", standing=("c.y",)),)
 
 
 # --- assignment ---------------------------------------------------------------------------

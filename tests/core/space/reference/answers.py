@@ -219,11 +219,24 @@ ChoiceState = Set | Waiting | Dormant | Open | Absent
 
 @dataclass(frozen=True)
 class AssignmentRefusal:
-    """A value that is not of its choice's type: outside its domain, or its domain's
-    membership reads a refused input. Named by the change, or stored and re-checked
-    against the facts the change sets."""
+    """A value the change names that is not of its choice's type: outside its domain, or
+    its domain's membership reads an input that refuses or does not apply. A stored value
+    the change does not name refuses nothing: under new facts it is dropped
+    (:class:`Dropped`, § 16.24)."""
 
     choice: str
+    reasons: tuple[Reason, ...]
+
+
+@dataclass(frozen=True)
+class Dropped:
+    """A stored value new facts leave out (§ 16.24): not of its choice's type under them,
+    outside its domain, or its domain's input refusing or not applying. ``value`` is the
+    old value, ``reasons`` the type check's, as an :class:`AssignmentRefusal` would carry
+    them. The choice is then open where it is present, and absent where it is not."""
+
+    choice: str
+    value: Any
     reasons: tuple[Reason, ...]
 
 
@@ -233,7 +246,11 @@ class RuleRefusal:
     the node where the failure starts; ``kind`` is ``"constraint"``, ``"derived"``, ``"view"`` or
     ``"empty-domain"`` (``origin`` then the choice whose listed domain lists no
     value); ``reasons`` its own reason; ``standing`` the stored choices standing in the
-    way, which the caller sets in the same change or clears first."""
+    way, which the caller sets in the same change or clears first.
+
+    An accepted change of facts reports the same records for the rules its facts make
+    newly false (``Accepted.broken``, § 16.24): information, not a refusal; its standing
+    choices are then read in the published design space, none left out for being named."""
 
     origin: str
     kind: str

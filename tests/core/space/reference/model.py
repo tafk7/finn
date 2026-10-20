@@ -53,29 +53,42 @@ piece of a scope whose presence is unknown is unknown, whatever it would answer.
 choice is otherwise a piece.
 
 **A change** (commit or replace choices, clear choices, set or unset facts, as one
-batch) is assignment: the successor is published whole, or refused with each refusal
-and the original kept.
+batch) publishes its successor whole, or is refused with each refusal and the original
+kept. A change of choices is assignment; a change of facts instantiates a new design
+space, and is never refused for its facts (§ 16.24).
 
-1. *Assignment.* Each committed value is checked against its domain; a change of facts
-   re-checks every stored value, dormant ones included. A value outside its domain, or
-   whose membership reads a refused input, refuses the change
-   (:class:`~.answers.AssignmentRefusal`). A value whose membership waits on a missing
-   fact is accepted, and waits.
+1. *Assignment.* Each committed value is checked against its domain. A value outside
+   its domain, or whose membership reads an input that refuses or does not apply,
+   refuses the change (:class:`~.answers.AssignmentRefusal`). A value whose membership
+   waits on a missing fact is accepted, and waits.
 2. *Counted pairs.* An origin is a constraint false on its own values; a derived value
    or a view refusing on its own values; a present choice whose listed domain lists no
    value. A configuration's counted pairs are each false piece of the root's validity
    with each origin it is false through: the piece itself, or the origins its refused
    inputs lead back to.
-3. *Refusal.* A change that sets a choice or a fact to a new value is refused when
-   the successor holds a counted pair the predecessor does not: a piece false through
-   an origin it was not false through before (a piece absent, unknown or true before
-   counts as not false before). Each origin of such a pair refuses it once
+3. *Refusal.* A change of choices that sets a choice to a new value is refused when the
+   successor holds a counted pair the predecessor does not: a piece false through an
+   origin it was not false through before (a piece absent, unknown or true before counts
+   as not false before). Each origin of such a pair refuses it once
    (:class:`~.answers.RuleRefusal`), naming the stored choices standing in its way. A
    rule false only through a refused input is never itself a refusal. So no accepted
-   change that sets adds a pair. A change that sets nothing new (its commits repeat
-   stored values, its facts their own values) and clears or unsets is never refused
-   (reading 3).
-4. *Accepted*, the change reports the stored choices it puts dormant or brings into
+   change of choices that sets adds a pair. A change of choices that sets nothing new
+   (its commits repeat stored values) and clears is never refused (reading 3).
+4. *New facts* (§ 16.24, § 16.25). A change of facts is the bind of the stored choices
+   under the new facts (:func:`bind`), then its choices as a change of choices on that
+   design space, published together or not at all. The bind type-checks every stored
+   value the change does not name, dormant ones included, as if its choice existed
+   (reading 6): outside its domain, or its domain's input refusing or not applying, the
+   value is dropped (:class:`~.answers.Dropped`); waiting on a missing fact, it is kept
+   and waits; inside, it is kept. Nothing of that refuses. A choice the change names is
+   kept where its old value is inside its new domain and left out silently where not;
+   its new value is then checked by 1, and the choices are judged by 3 against the
+   bind's pairs. The accepted report lists what was dropped and each rule the published
+   design space holds newly false against the receiver (``broken``), with its standing
+   choices read in the published design space, none left out for being named. A pair
+   the bind added and the choices removed is not in the published design space, so it
+   is not reported; nor is a pair already false before.
+5. *Accepted*, the change reports the stored choices it puts dormant or brings into
    play and the open choices it brings into presence. A change that changes nothing
    returns the same configuration.
 
@@ -110,18 +123,19 @@ corpus; § 16 holds the readings its author gave for this model.
    rule is false through a derived value over a stored ``c`` is refused with ``c``
    standing; a configuration built with a broken rule accepts a change keeping that
    rule false through the same origin, and refuses one making it false through another.
-   Every accepted change that sets leaves the set of pairs no larger, so the bind of a
-   configuration reached by such changes from nothing is accepted (FN3), and no
+   Every accepted change of choices that sets leaves the set of pairs no larger (a
+   change of facts may enlarge it, § 16.24), so a change from nothing committing the
+   stored set of a configuration reached by such changes is accepted (FN3), and no
    accepted addition leaves a Space newly refused (§ 16.14's exception cannot arise).
-   *Clears and unsets are never refused* (§ 16.16; § 5.6 stands): a change made only
-   of them is accepted whatever pairs it adds. "Sets" means a new value (§ 16.18):
-   committing the value already stored, or setting a fact to its own value, sets
+   *Clears are never refused* (§ 16.16; § 5.6 stands): a change of choices made only of
+   them is accepted whatever pairs it adds; an unset is a change of facts, never refused
+   either. "Sets" means a new value (§ 16.18): committing the value already stored sets
    nothing, so a change whose commits all repeat stored values is clear-only too (as a
    same-value update returns the receiver). It can add a pair in a single shape,
    **masking**: a piece false only through a view refused with its Space, whose Space
    the change reopens, so that the view answers and the piece is false at an origin of
-   its own. The configuration reads refused, naming it; its bind may be refused (a
-   named limit of FN3's invariant, until products leave the Space).
+   its own. The configuration reads refused, naming it; its change from nothing may be
+   refused (a named limit of FN3's invariant, until products leave the Space).
 4. *What stands in the way* (§ 16.4): the stored choices among the origin's declared
    reads followed through derived values' and views' bodies (not its presence's
    reads), less every choice the change names (committed or cleared) and every choice
@@ -138,10 +152,12 @@ corpus; § 16 holds the readings its author gave for this model.
    its cases' stored choices waiting. An unset choice not in play is
    :class:`~.answers.Absent`, a state the note's table lacks.
 6. *Membership that cannot be decided* (§ 16.6): a missing fact leaves a stored value
-   waiting (never read as a value) and the facts change supplying it checks its type; a
-   refusing input refuses the assignment, and a facts change making it refuse while a
-   value is stored. Membership is evaluated over the facts alone: a derived value it
-   reads is computed from its reads whatever its own scope's presence. *An input that
+   waiting (never read as a value), and the change of facts supplying it checks its
+   type, dropping the value where it falls outside (§ 16.24); a refusing input refuses
+   the assignment, and a change of facts making it refuse while a value is stored drops
+   the value, its domain piece false through the input. Membership is evaluated over
+   the facts alone: a derived value it reads is computed from its reads whatever its
+   own scope's presence. *An input that
    does not apply is refused* (§ 16.17, ``INPUT_ABSENT``, the choice's reason naming the
    input), not unresolved: only a change of facts could settle it. Its existence is
    decided over the facts alone: the choice's own existence guards (its scope's and
@@ -152,19 +168,20 @@ corpus; § 16 holds the readings its author gave for this model.
    false one makes the input absent, a waiting one leaves membership waiting, a refused
    one refuses it through that guard's input. An omitted fact stays a missing one.
 7. *The constructor* (§ 16.7) refuses a stored value outside its domain or whose
-   membership input refuses, dormant ones included; a stored set breaking a rule is a
-   legal configuration that reads refused. Only :func:`change` refuses it.
+   membership input refuses, dormant ones included: a configuration never holds one. A
+   change of facts and :func:`bind` drop such a value instead (§ 16.24). A stored set
+   breaking a rule is a legal configuration that reads refused: a change of choices
+   refuses it, a bind keeps it and reports the rule.
 8. *A guard refused through an input* (§ 16.8) is one ``GUARD`` piece, owned by the
    guarded scope, at the highest such guard (scopes under it add nothing). A refused
    ``when`` below a selector or a parent that is still unknown leaves the scope unknown
    and its piece unknown: refused takes effect once all above it is present.
-9. *A change newly emptying a present choice's listed domain is refused* (§ 16.9, in
-   § 16.15's terms): a facts change emptying it, or a switch to the case holding it,
-   adds the pair of its ``EMPTY_DOMAIN`` piece and itself, and is refused naming it
-   with nothing standing. A domain already empty before the change adds no pair.
-   **Not yet ruled on by the human.** The single switch is
-   :data:`EMPTY_DOMAIN_REFUSES`; off, an empty domain never refuses a change and the
-   configuration reads refused.
+9. *A change of facts emptying a present choice's listed domain is accepted* (§ 16.9,
+   settled the other way by § 16.24): the design space reads refused through the
+   choice's ``EMPTY_DOMAIN`` piece, whose pair with itself the report lists in
+   ``broken``, nothing standing. A selector switch bringing such a choice into play is
+   still refused, by 3, as a newly present false piece, nothing standing. A domain
+   already empty before the change adds no pair.
 10. *A domain's order* (§ 16.10) ranks the membership list over ``order_reads``, which
     may read choices: :meth:`Solution.ordered` is the ranking, known, or waiting while a
     read waits. Possible values are answered in membership's list order.
@@ -180,7 +197,7 @@ corpus; § 16 holds the readings its author gave for this model.
     false through the input when its membership reads a refused input (the list cannot
     be made; blamed at that input's origin). When an input does not apply (§ 16.17,
     reading 6) the list cannot be made either and the piece is false through it; the
-    origin is the domain itself, as for an empty list (reading 9 decides it alike). A
+    origin is the domain itself, as for an empty list (reading 9 holds for it alike). A
     list with a value adds no piece, whatever its presence: an open selector whose case
     holds a listed choice and no rules leaves the configuration valid. A membership-only
     domain has no piece.
@@ -206,6 +223,7 @@ from .answers import (
     ChangeRefusal,
     ChoiceState,
     Dormant,
+    Dropped,
     Impossible,
     Inapplicable,
     Known,
@@ -228,10 +246,6 @@ from .answers import (
     sorted_reasons,
 )
 from .description import Index, Refuse, Space
-
-#: Reading 9 (§ 16.9), not yet ruled on by the human: a change newly emptying a present
-#: choice's listed domain is refused. The one place the reading is decided.
-EMPTY_DOMAIN_REFUSES = True
 
 
 class ConfigurationError(ValueError):
@@ -865,13 +879,19 @@ class Change:
 @dataclass(frozen=True)
 class Accepted:
     """The published configuration; the stored choices put dormant and brought into
-    play, and the open choices brought into presence; its validity."""
+    play, and the open choices brought into presence; its validity. Under new facts
+    (a change of facts, or :func:`bind`): the stored values left out (``dropped``, by
+    choice) and the rules the published design space holds newly false (``broken``, by
+    :func:`~.answers.refusal_key`), each with its standing choices (§ 16.24). Both are
+    empty for a change of choices alone."""
 
     configuration: Configuration
     dormant: tuple[str, ...]
     in_play: tuple[str, ...]
     opened: tuple[str, ...]
     validity: Validity
+    dropped: tuple[Dropped, ...] = ()
+    broken: tuple[RuleRefusal, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -895,16 +915,12 @@ def _assignment(checker: FactsOnly, path: str, value: Any) -> tuple[Reason, ...]
 
 
 def _sets_new(configuration: Configuration, edit: Change) -> bool:
-    """Whether ``edit`` sets a choice or a fact to a new value (§ 16.18): a committed value
-    differing from the one stored, or a fact set to a value it does not have. A change that
-    does not is clear-only, never refused (§ 16.16)."""
+    """Whether the change of choices ``edit`` sets a choice to a new value (§ 16.18): a
+    committed value differing from the one stored. A change that does not is clear-only,
+    never refused (§ 16.16)."""
 
-    old, facts = configuration.stored, configuration.facts
-    return any(
-        path not in old or not same(old[path], value) for path, value in edit.commit.items()
-    ) or any(
-        name not in facts or not same(facts[name], value) for name, value in edit.facts.items()
-    )
+    old = configuration.stored
+    return any(path not in old or not same(old[path], value) for path, value in edit.commit.items())
 
 
 def _standing(
@@ -919,9 +935,149 @@ def _standing(
     return tuple(sorted(path for path in reads if path in stored and path not in named | deciders))
 
 
+def _newly_false(
+    before: Solution, after: Solution, named: set[str], sets: bool = True
+) -> dict[str, RuleRefusal]:
+    """Each origin of a counted pair ``after`` holds and ``before`` does not, once, with
+    its standing choices in ``after`` less ``named`` (reading 4); nothing unless ``sets``."""
+
+    index = after.index
+    counted = before.evaluation.pairs()
+    found: dict[str, RuleRefusal] = {}
+    for piece, origins in sorted(after.evaluation.pairs().items() if sets else ()):
+        for origin, (kind, reasons) in sorted(origins.items()):
+            if origin in counted.get(piece, {}) or origin in found:
+                continue
+            standing = _standing(index, origin, kind, after.configuration.stored, named)
+            found[origin] = RuleRefusal(origin, kind, reasons, standing)
+    return found
+
+
+def _moved(before: Solution, after: Solution) -> tuple[tuple[str, ...], ...]:
+    """The stored choices put dormant and brought into play, and the open choices brought
+    into presence, from ``before`` to ``after`` (reading 5)."""
+
+    dormant: list[str] = []
+    in_play: list[str] = []
+    opened: list[str] = []
+    index = after.index
+    for path in index.ordered_choices():
+        scope = index.choices[path].scope
+        was = before.presence(scope)
+        now = after.presence(scope)
+        if path in after.configuration.stored:
+            if was not in _OUT and now in _OUT:
+                dormant.append(path)
+            if was is not Presence.PRESENT and now is Presence.PRESENT:
+                in_play.append(path)
+        elif was is not Presence.PRESENT and now is Presence.PRESENT:
+            opened.append(path)
+    return tuple(dormant), tuple(in_play), tuple(opened)
+
+
+def _instantiate(
+    index: Index,
+    space: Space,
+    facts: Mapping[str, Any],
+    stored: Mapping[str, Any],
+    named: set[str],
+) -> tuple[Configuration, tuple[Dropped, ...]]:
+    """The design space of ``facts`` keeping each of ``stored`` that is of its type under
+    them (§ 16.24): a value outside its domain, or whose domain's input refuses or does not
+    apply, is left out, and reported unless ``named``; one waiting on a missing fact is
+    kept. Membership reads facts only, so what is left out does not depend on order."""
+
+    checker = FactsOnly(index, facts)
+    kept: dict[str, Any] = {}
+    dropped: list[Dropped] = []
+    for path in sorted(stored):
+        reasons = _assignment(checker, path, stored[path])
+        if not reasons:
+            kept[path] = stored[path]
+        elif path not in named:
+            dropped.append(Dropped(path, stored[path], reasons))
+    return Configuration(space, facts, kept), tuple(dropped)
+
+
+def _new_facts_report(
+    receiver: Configuration, published: Configuration, dropped: tuple[Dropped, ...]
+) -> Accepted:
+    """The accepted report of new facts: what moved from ``receiver``, what was dropped,
+    and each rule ``published`` holds newly false against ``receiver``, its standing
+    choices read in ``published`` with none left out for being named (§ 16.24)."""
+
+    before, after = Solution(receiver), Solution(published)
+    broken = _newly_false(before, after, set())
+    return Accepted(
+        published,
+        *_moved(before, after),
+        after.validity(),
+        dropped,
+        tuple(sorted(broken.values(), key=refusal_key)),
+    )
+
+
+def bind(space: Space, facts: Mapping[str, Any], stored: Mapping[str, Any]) -> Accepted:
+    """The design space of ``facts`` with exactly the ``stored`` choices (§ 16.24, SZ90):
+    each is checked against its domain under ``facts``, and dropped where it falls outside
+    (or its domain's input refuses or does not apply), kept where it is inside or waits on
+    a missing fact. Never refused for rules. Its baseline is the design space of ``facts``
+    with nothing stored: ``broken`` lists every rule the kept choices break with those
+    facts, and what moved is read against it."""
+
+    baseline = Configuration(space, facts)
+    for path in stored:
+        if path not in baseline.index.choices:
+            raise ConfigurationError(f"unknown choice {path}")
+    published, dropped = _instantiate(baseline.index, space, facts, stored, set())
+    return _new_facts_report(baseline, published, dropped)
+
+
+def _choices(configuration: Configuration, edit: Change) -> Accepted | Rejected:
+    """A change of choices alone (``edit`` changes no fact): assignment, then refusal by
+    a new pair."""
+
+    index = configuration.index
+    stored = dict(configuration.stored)
+    for path in edit.clear:
+        stored.pop(path, None)
+    stored.update(edit.commit)
+    if _same_mapping(stored, configuration.stored):
+        return Accepted(configuration, (), (), (), Solution(configuration).validity())
+
+    # 1. assignment: the named values
+    checker = FactsOnly(index, configuration.facts)
+    assignments = [
+        AssignmentRefusal(path, reasons)
+        for path in sorted(edit.commit)
+        if (reasons := _assignment(checker, path, stored[path]))
+    ]
+    if assignments:
+        return Rejected(tuple(assignments), None)
+
+    successor = Configuration(configuration.space, configuration.facts, stored)
+    before = Solution(configuration)
+    after = Solution(successor)
+
+    # 2 and 3. each origin of a counted pair the predecessor lacks refuses a change that
+    # sets a new value, once; clears alone are never refused (§ 16.16, § 16.18)
+    named = set(edit.commit) | set(edit.clear)
+    refusals = _newly_false(before, after, named, _sets_new(configuration, edit))
+    if refusals:
+        return Rejected(tuple(sorted(refusals.values(), key=refusal_key)), after.validity())
+
+    # 4. what moved
+    return Accepted(successor, *_moved(before, after), after.validity())
+
+
 def change(configuration: Configuration, edit: Change) -> Accepted | Rejected:
-    """Apply ``edit`` as assignment: accepted with the configuration it publishes and
-    what moved, or refused with each refusal."""
+    """Apply ``edit``: accepted with the configuration it publishes and what moved, or
+    refused with each refusal. A change of choices alone is assignment (:func:`_choices`).
+    A change of facts is two steps, published together or not at all (§ 16.24, § 16.25):
+    the receiver's stored choices bound under the new facts (:func:`bind`'s operation;
+    a choice the change names is kept where its old value is inside its new domain and
+    left out silently where not), then the choices as a change of choices on that design
+    space. The first never refuses; a refusal is the second's."""
 
     index = configuration.index
     for path in (*edit.commit, *edit.clear):
@@ -930,66 +1086,24 @@ def change(configuration: Configuration, edit: Change) -> Accepted | Rejected:
     for name in (*edit.facts, *edit.unset):
         if name not in index.facts:
             raise ConfigurationError(f"unknown fact {name}")
-    stored = dict(configuration.stored)
-    for path in edit.clear:
-        stored.pop(path, None)
-    stored.update(edit.commit)
     facts = dict(configuration.facts)
     for name in edit.unset:
         facts.pop(name, None)
     facts.update(edit.facts)
-    facts_changed = not _same_mapping(facts, configuration.facts)
-    if not facts_changed and _same_mapping(stored, configuration.stored):
-        return Accepted(configuration, (), (), (), Solution(configuration).validity())
+    choices = Change(commit=edit.commit, clear=edit.clear)
+    if _same_mapping(facts, configuration.facts):
+        return _choices(configuration, choices)
 
-    # 1. assignment: the named values, and every stored value under new facts
-    checker = FactsOnly(index, facts)
-    checked = sorted(stored) if facts_changed else sorted(edit.commit)
-    assignments = [
-        AssignmentRefusal(path, reasons)
-        for path in checked
-        if (reasons := _assignment(checker, path, stored[path]))
-    ]
-    if assignments:
-        return Rejected(tuple(assignments), None)
-
-    successor = Configuration(configuration.space, facts, stored)
-    before = Solution(configuration)
-    after = Solution(successor)
-
-    # 2 and 3. each origin of a counted pair the predecessor lacks refuses a change that
-    # sets a new value, once; clears and unsets alone are never refused (§ 16.16, § 16.18)
-    sets = _sets_new(configuration, edit)
-    counted = before.evaluation.pairs()
+    # step 1: the new design space; step 2: the choices on it, judged against its pairs
     named = set(edit.commit) | set(edit.clear)
-    refusals: dict[str, ChangeRefusal] = {}
-    for piece, origins in sorted(after.evaluation.pairs().items() if sets else ()):
-        for origin, (kind, reasons) in sorted(origins.items()):
-            if origin in counted.get(piece, {}) or origin in refusals:
-                continue
-            if kind == "empty-domain" and not EMPTY_DOMAIN_REFUSES:
-                continue
-            standing = _standing(index, origin, kind, stored, named)
-            refusals[origin] = RuleRefusal(origin, kind, reasons, standing)
-    if refusals:
-        return Rejected(tuple(sorted(refusals.values(), key=refusal_key)), after.validity())
-
-    # 4. what moved
-    dormant: list[str] = []
-    in_play: list[str] = []
-    opened: list[str] = []
-    for path in index.ordered_choices():
-        scope = index.choices[path].scope
-        was = before.presence(scope)
-        now = after.presence(scope)
-        if path in stored:
-            if was not in _OUT and now in _OUT:
-                dormant.append(path)
-            if was is not Presence.PRESENT and now is Presence.PRESENT:
-                in_play.append(path)
-        elif was is not Presence.PRESENT and now is Presence.PRESENT:
-            opened.append(path)
-    return Accepted(successor, tuple(dormant), tuple(in_play), tuple(opened), after.validity())
+    instantiated, dropped = _instantiate(
+        index, configuration.space, facts, configuration.stored, named
+    )
+    result = _choices(instantiated, choices)
+    if isinstance(result, Rejected):
+        return result
+    # a pair step 1 added and step 2 removed is not in the published design space
+    return _new_facts_report(configuration, result.configuration, dropped)
 
 
 # --- a configuration's answers -------------------------------------------------------
