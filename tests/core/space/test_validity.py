@@ -844,17 +844,19 @@ def test_a_value_whose_domain_input_is_refused_is_refused_naming_the_input() -> 
     assert refused_through_width(outcome.result)
 
 
-def test_new_facts_that_refuse_a_stored_choices_domain_input_are_refused() -> None:
+def test_new_facts_that_refuse_a_stored_choices_domain_input_drop_it() -> None:
     kept = commit(design_space(Lanes(w=8)), {"lanes": 4})
     report = kept.try_with_facts({Lanes.w: 7})
-    assert not report.accepted and report.instance is kept
-    (reached,) = [outcome for outcome in report.outcomes if not outcome.requested]
-    assert reached.owner == "lanes" and reached.status == "refused"
-    assert refused_through_width(reached.result)
-    # Cleared in the same change, the facts still refuse it: the open choice's list
-    # cannot be made, false through ``width`` on the facts alone.
+    assert report.accepted
+    (dropped,) = [outcome for outcome in report.outcomes if not outcome.requested]
+    assert dropped.owner == "lanes" and dropped.status == "dropped"
+    assert refused_through_width(dropped.result)
+    # The open choice's list cannot be made: false through ``width`` on the facts alone,
+    # reported, and the design space reads refused. Cleared in the same change, alike.
+    assert broken(report) == {"width": set()}
     cleared = kept.try_with_facts({Lanes.w: 7}, kept.field(Lanes.lanes).clear())
-    assert not cleared.accepted and broken(cleared) == {"width": set()}
+    assert cleared.accepted and broken(cleared) == {"width": set()}
+    assert inspection.validity(cleared.instance).status == "refused"
 
 
 def test_only_a_domain_that_answers_false_refuses_a_commit() -> None:

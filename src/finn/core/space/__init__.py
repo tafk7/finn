@@ -3,6 +3,7 @@
 """Typed design-space authoring, immutable specialization and public services."""
 
 from . import inspection
+from ._assign import bind
 from ._configuration import BoundDecision, BoundValue, Space
 from ._failure import NativeEvaluationError
 from .compiler import Model, design_space
@@ -53,6 +54,7 @@ __all__ = [
     # Space classes, node declarations and the compile step
     "Space",
     "design_space",
+    "bind",
     "Model",
     "composite",
     "Param",

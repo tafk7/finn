@@ -6,10 +6,11 @@ Each value set is type-checked against its domain, which reads facts only: outsi
 refuses the change; an input of the domain refusing, or not applying, refuses it,
 naming the input; a missing fact leaves the choice stored and waiting. A choice's
 membership is read as if it existed: under a case not selected or a false guard it is
-checked and kept dormant, under a selector still open it is checked and waits. A facts
-change checks every stored value again, dormant ones included. A
-change that passes its type checks and makes a rule newly false is refused, naming the
-rule and the stored choices standing in its way.
+checked and kept dormant, under a selector still open it is checked and waits. A change
+of choices that passes its type checks and makes a rule newly false is refused, naming
+the rule and the stored choices standing in its way. A facts change is never refused: it
+checks every stored value again, dormant ones included, and drops each now outside its
+domain.
 """
 
 from __future__ import annotations
@@ -213,17 +214,24 @@ def test_a_choice_under_a_when_over_a_fact_is_checked_where_its_inputs_exist_the
     assert isinstance(read(cast(State, kept.state), "window.lanes"), Inapplicable)
 
 
-def test_a_facts_change_checks_a_dormant_value_again_as_if_it_existed() -> None:
+def test_a_facts_change_checks_a_dormant_value_again_as_if_it_existed_and_drops_it() -> None:
     off = cast(State, change(start(Gated(extent=12)), {"enabled": False, "lanes": 4}).state)
-    refused = change(off, facts={"extent": 10})
-    assert [(o.owner, o.status, o.requested) for o in refused.outcomes] == [
-        ("extent", "checked", True),
-        ("lanes", "refused", False),
+    dropped = change(off, facts={"extent": 10})
+    assert dropped.accepted and dropped.broken == ()
+    assert [(o.owner, o.status, o.requested) for o in dropped.outcomes] == [
+        ("extent", "changed", True),
+        ("lanes", "dropped", False),
     ]
-    assert codes(refused.outcomes[1].result) == [("domain-membership", "lanes")]
+    assert codes(dropped.outcomes[1].result) == [("domain-membership", "lanes")]
+    assert key(off, "lanes") not in cast(State, dropped.state).stored
+    assert key(off, "lanes") in off.stored  # the receiver as it was
     assert change(off, {"lanes": 2}, facts={"extent": 10}).accepted
     narrow = cast(State, change(start(Fenced(wide=False, extent=12)), {"window.lanes": 4}).state)
-    assert not change(narrow, facts={"extent": 10}).accepted
+    under = change(narrow, facts={"extent": 10})
+    assert [(o.owner, o.status) for o in under.outcomes] == [
+        ("extent", "changed"),
+        ("window.lanes", "dropped"),
+    ]
 
 
 class Waits(Space):
@@ -238,12 +246,14 @@ def test_a_missing_fact_leaves_the_choice_waiting_until_the_facts_change_checks_
     assert codes(report.outcomes[0].result) == [("input-missing", "extent")]
     point = cast(State, report.state)
     assert codes(read(point, "lanes")) == [("input-missing", "extent")]
-    refused = change(point, facts={"extent": 12})
-    assert not refused.accepted
-    assert [(o.owner, o.status, o.requested) for o in refused.outcomes] == [
-        ("extent", "checked", True),
-        ("lanes", "refused", False),
+    # The fact arrives and 5 does not divide 12: the waiting value is dropped.
+    dropped = change(point, facts={"extent": 12})
+    assert dropped.accepted
+    assert [(o.owner, o.status, o.requested) for o in dropped.outcomes] == [
+        ("extent", "changed", True),
+        ("lanes", "dropped", False),
     ]
+    assert codes(read(cast(State, dropped.state), "lanes")) == [("decision-unassigned", "lanes")]
     supplied = change(point, facts={"extent": 10})
     assert supplied.accepted and read(cast(State, supplied.state), "lanes") == Available(5)
 
@@ -269,18 +279,20 @@ def test_an_input_of_the_domain_refusing_on_facts_refuses_the_assignment_naming_
     assert not report.accepted
     (outcome,) = report.outcomes
     assert outcome.status == "refused" and codes(outcome.result) == [("bad-width", "width")]
-    # A facts change that makes it refuse while a value is stored is refused alike, unless
-    # the change clears it.
+    # A facts change that makes it refuse while a value is stored drops the value: the
+    # open choice's list cannot be made, false through ``width``, on the facts alone.
     point = cast(State, change(start(Lanes(w=8)), {"lanes": 4}).state)
-    refused = change(point, facts={"w": 7})
-    assert not refused.accepted
-    assert [(o.owner, o.status, o.requested) for o in refused.outcomes] == [
-        ("w", "checked", True),
-        ("lanes", "refused", False),
+    dropped = change(point, facts={"w": 7})
+    assert dropped.accepted
+    assert [(o.owner, o.status, o.requested) for o in dropped.outcomes] == [
+        ("w", "changed", True),
+        ("lanes", "dropped", False),
     ]
-    # Clearing it opens the choice, whose list the facts cannot make: refused through
-    # ``width``, on the facts alone.
+    assert codes(dropped.outcomes[1].result) == [("bad-width", "width")]
+    assert [(rule.rule, rule.standing) for rule in dropped.broken] == [("width", ())]
+    # Cleared in the same change: the same design space, the value not reported.
     cleared = change(point, facts={"w": 7}, clear=("lanes",))
+    assert cleared.accepted and [o.status for o in cleared.outcomes] == ["changed", "removed"]
     assert [(rule.rule, rule.standing) for rule in cleared.broken] == [("width", ())]
 
 
