@@ -17,7 +17,7 @@ from typing import cast
 from finn.core.space import Decision, Param, Space, constraint, derived, view
 from finn.core.space._reads import ModelReads, existence_guards, infer, summary
 from finn.core.space.compiler import compile_model
-from finn.core.space.ir import LinkedModel
+from finn.core.space.ir import Linked
 
 
 class Leaf(Space):
@@ -88,17 +88,17 @@ class Outer(Space):
         return width
 
 
-def _model() -> tuple[LinkedModel, ModelReads]:
+def _model() -> tuple[Linked, ModelReads]:
     linked = compile_model(Outer).linked
     return linked, infer(linked)
 
 
-def _keys(linked: LinkedModel, nodes: frozenset[int] | None) -> set[str]:
+def _keys(linked: Linked, nodes: frozenset[int] | None) -> set[str]:
     assert nodes is not None
     return {linked.nodes[index].key for index in nodes}
 
 
-def _reads(linked: LinkedModel, reads: ModelReads, key: str) -> set[str]:
+def _reads(linked: Linked, reads: ModelReads, key: str) -> set[str]:
     return _keys(linked, reads.methods[linked.keys[key]])
 
 
@@ -132,6 +132,54 @@ def test_helpers_and_properties_are_read_in_the_scope_they_are_reached_through()
     linked, reads = _model()
     assert _reads(linked, reads, "by_helper") == {"leaf.lanes"}
     assert _reads(linked, reads, "by_property") == {"leaf.width"}
+
+
+class Mutual(Space):
+    """Two helpers that call each other, each reading another member."""
+
+    width: int = Param()
+    lanes: int = Decision(values=(1, 2))
+
+    def first(self, depth: int) -> int:
+        return self.width if depth == 0 else self.second(depth - 1)
+
+    def second(self, depth: int) -> int:
+        return self.lanes if depth == 0 else self.first(depth - 1)
+
+    @derived
+    def by_first(self) -> int:
+        return self.first(3)
+
+    @derived
+    def by_second(self) -> int:
+        return self.second(3)
+
+
+class PlacesMutual(Space):
+    inner = Mutual(width=4)
+
+    @derived
+    def through(self) -> int:
+        return self.inner.second(2)
+
+
+def test_helpers_calling_each_other_each_read_what_both_read() -> None:
+    """Inferred once per template and function, a helper cycle closes on what both read:
+    each method's reads are the union, wherever it is reached first."""
+    linked = compile_model(Mutual).linked
+    reads = infer(linked)
+    assert (
+        _reads(linked, reads, "by_first")
+        == _reads(linked, reads, "by_second")
+        == {
+            "width",
+            "lanes",
+        }
+    )
+    linked = compile_model(PlacesMutual).linked
+    reads = infer(linked)
+    assert _reads(linked, reads, "through") == {"inner.width", "inner.lanes"}
+    assert _reads(linked, reads, "inner.by_first") == {"inner.width", "inner.lanes"}
 
 
 def test_presence_reads_the_guards_on_the_way() -> None:

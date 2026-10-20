@@ -84,14 +84,12 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
     assert first.result == Available(12)
     assert calls == ["good"]
     # The unselected candidate is read only as absent: the root's validity, which the view
-    # reads, finds its validity inapplicable, and nothing of it runs.
+    # reads, reads the guard it is placed under, false, and so neither its validity nor
+    # anything of it is read.
     bad = {
         node.declaration.key: node.result for node in first.nodes if ".bad." in node.declaration.key
     }
-    assert bad == {
-        "implementation.bad.$selected": Available(False),
-        "implementation.bad.$validity": Inapplicable(),
-    }
+    assert bad == {"implementation.bad.$selected": Available(False)}
     assert any(node.selector and node.result == Available("good") for node in first.nodes)
     assert any(node.is_guard for node in first.nodes)
     assert any(

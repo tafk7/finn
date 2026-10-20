@@ -57,7 +57,6 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import Context, copy_context
 from dataclasses import dataclass, field
-from threading import RLock
 from typing import TYPE_CHECKING, TypeAlias, TypeVar, cast
 
 from finn.core.reporting.findings import Finding, FindingKind
@@ -83,11 +82,11 @@ from ._failure import (
 )
 from ._memo import BitTable, Counters, Kept, Key, Memo, ReadSet, Trace
 from ._nodes import NodeDecl, unwrap
-from ._reads import ModelReads, flow_order, infer, presence_readers
+from ._reads import ModelReads, infer
 from .declarations import Param, declared_path
 from .errors import EvaluationError, RequestError, ValueUnavailableError
 from .graph import Located
-from .ir import Argument, Choice, LinkedModel, Node, NodeId, NodeKind
+from .ir import Argument, Choice, Linked, Node, NodeId, NodeKind, Questions
 from .references import descend
 from .results import (
     Available,
@@ -116,7 +115,7 @@ if TYPE_CHECKING:
 Assessment: TypeAlias = ViewAssessment[object] | ConstraintAssessment
 T = TypeVar("T")
 
-_INAPPLICABLE = Inapplicable()
+INAPPLICABLE = Inapplicable()
 
 # How many evaluations deep a run goes on the Python stack before the depth guard
 # unwinds it. Each level through a method's read takes about a dozen Python frames.
@@ -182,9 +181,10 @@ class Called:
 
 class Evaluator:
     """What every world of one model shares: its structure and its methods' inferred
-    reads, the order its choices flow in, the bit table, the memo of authored functions,
-    the work counters, and the model's lock (worlds share their parents' entries and the
-    memo, so evaluation of one model is serialized)."""
+    reads (both answered node by node, as read), the order its choices flow in, the bit
+    table, the memo of authored functions, the work counters, and the model's lock (worlds
+    share their parents' entries and the memo, so evaluation of one model is serialized;
+    the structure resolves under it too)."""
 
     __slots__ = (
         "model",
@@ -196,33 +196,40 @@ class Evaluator:
         "counters",
         "lock",
         "run",
-        "_presence",
         "_flow",
     )
 
     def __init__(self, model: Model[Space]) -> None:
         self.model = model
-        self.linked: LinkedModel = model.linked
+        self.linked: Linked = model.linked
         self.nodes = self.linked.nodes
         self.reads: ModelReads = infer(self.linked)
         self.bits = BitTable()
         self.memo: Memo[Called] = Memo()
         self.counters = Counters()
-        self.lock = RLock()
+        self.lock = model.lock
         # The run in progress (under the lock), if any.
         self.run: _Run | None = None
-        self._presence: Mapping[NodeId, tuple[NodeId, ...]] | None = None
         self._flow: tuple[NodeId, ...] | None = None
 
+    def _whole(self) -> Questions:
+        whole = self.linked.whole
+        if whole is None:
+            raise RequestError(
+                "a table built by hand has no templates: it answers no question about its "
+                "whole design space (its flow order, its presence readers)"
+            )
+        return whole
+
     def flow(self) -> tuple[NodeId, ...]:
-        """The model's choices in the flow order (found once per model, on first use:
-        ``_reads.flow_order``). Each loop in it is noted, a finding stated without
+        """The model's choices in the flow order (found once per model, on first use, from
+        its templates: ``_whole``). Each loop in it is noted, a finding stated without
         refusing (``flow-loop``): its choices are taken in declaration order."""
         with self.lock:
             if self._flow is None:
-                found = flow_order(self.linked, self.reads)
+                found = self._whole().flow()
                 for loop in found.loops:
-                    keys = tuple(self.nodes[index].key for index in loop)
+                    keys = tuple(self.linked.header(index).key for index in loop)
                     note(
                         Finding(
                             FindingKind.LIMITATION,
@@ -238,11 +245,9 @@ class Evaluator:
 
     def presence_readers(self, source: NodeId) -> tuple[NodeId, ...]:
         """The choices whose presence may read the choice or fact ``source`` (found once
-        per model, on first use: ``_reads.presence_readers``)."""
+        per model, on first use, from its templates: ``_whole``)."""
         with self.lock:
-            if self._presence is None:
-                self._presence = presence_readers(self.linked, self.reads.methods)
-            return self._presence.get(source, ())
+            return self._whole().readers(source)
 
 
 class Deeper(BaseException):
@@ -600,7 +605,7 @@ class World:
             if node.kind == "constraint" and isinstance(inactive, Rejected):
                 # Under a guard refused through an input its scope is not in play: the
                 # constraint does not apply, and the guard's piece stands for it.
-                inactive = _INAPPLICABLE
+                inactive = INAPPLICABLE
             # A Space's validity under a guard that waits is still its pieces' AND: each
             # piece inside reads the same guard first and answers unknown.
             if inactive is not None and not (
@@ -750,7 +755,7 @@ def _guard_result(node: Node, answer: QueryResult[object]) -> NonValue | None:
         return answer
     if type(answer.value) is not bool:
         raise EvaluationError(node.owner, "applicability", "guard must return bool")
-    return None if answer.value else _INAPPLICABLE
+    return None if answer.value else INAPPLICABLE
 
 
 def _guard_assessment(node: Node, answer: NonValue) -> Assessment | None:
@@ -897,7 +902,7 @@ def _select(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
         raise EvaluationError(node.owner, "selection", "selector is not a declared case")
     target = node.selection_index.get(case)
     if target is None:
-        return Entry(_INAPPLICABLE, reads, tuple(trace))
+        return Entry(INAPPLICABLE, reads, tuple(trace))
     entry, reads = world.read(trace, target, reads)
     return Entry(entry.result, reads, tuple(trace))
 
@@ -955,11 +960,32 @@ def _validity(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
 
     A constraint, a choice or a placed Space whose guard is refused through a refused
     input is one guard piece (``guard-refused``, the input's refusal beside), once per
-    guard node."""
+    guard node.
+
+    A placed Space's piece is read from its guard first (the guard its placing scope
+    places it under, a node of this Space's scope or above): where the guard is false or
+    does not apply, the placed Space is absent and its validity answers inapplicable
+    whatever its pieces are, so the piece is that answer, read from the guard alone, and
+    the placed Space's validity is neither read nor resolved (an absent scope resolves no
+    node for it). Elsewhere the placed Space's validity is read as it answers, after its
+    guard. The trace holds what decides the piece either way: the guard, and the placed
+    Space's validity where it was read."""
+    linked = world.evaluator.linked
     nodes = world.evaluator.nodes
     answers: dict[str, QueryResult[bool]] = {}
     guards: set[NodeId] = set()
     for index in node.constraints:
+        header = linked.header(index)
+        placed: Entry | None = None
+        if header.kind == "validity" and header.guard is not None:
+            placed, reads = world.read(trace, header.guard, reads)
+            held = placed.result
+            if isinstance(held, Inapplicable):
+                answers[header.key] = held  # what the placed Space's validity answers
+                continue
+            if isinstance(held, Available) and held.value is False:
+                answers[header.key] = INAPPLICABLE
+                continue
         piece = nodes[index]
         if piece.kind == "decision":
             found, reads = _choice_piece(world, piece, trace, reads, guards)
@@ -969,7 +995,10 @@ def _validity(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
         entry, reads = world.read(trace, index, reads)
         answer = cast(QueryResult[bool], entry.result)
         if isinstance(answer, (Inapplicable, Rejected)) and piece.guard is not None:
-            guard, reads = world.read(trace, piece.guard, reads)
+            if placed is None:
+                guard, reads = world.read(trace, piece.guard, reads)
+            else:
+                guard = placed  # read above, first
             if isinstance(guard.result, Rejected):
                 if piece.guard in guards:
                     continue
@@ -1998,6 +2027,7 @@ _FRAMES: Mapping[NodeKind, Callable[[World, Node, _Trace, ReadSet], Entry]] = {
 __all__ = [
     "DEPTH",
     "FLATTEN",
+    "INAPPLICABLE",
     "Called",
     "Entry",
     "Evaluator",

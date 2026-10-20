@@ -3,59 +3,55 @@
 """Open one declaration's design space with and without collapsed forwarding.
 
 Collapse rewrites evaluation edges only, so both models have the same nodes,
-scopes and keys, and every node index answers the same question. ``answers``
-evaluates every node of a configuration; comparing the two lists proves that
-values and diagnostics are unchanged.
+scopes and keys, and every key answers the same question. The collapsed model is a
+model's structure, as compiled (``_structure``), its nodes collapsed as they are
+resolved; the plain one is the same structure's nodes as resolved before collapse, in one
+table (``_structure.materialize(..., collapsed=False)``). They number
+their nodes apart, so ``answers`` evaluates every node of a configuration by key;
+comparing the two proves that values and diagnostics are unchanged.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TypeVar, cast
-from unittest import mock
 
-from finn.core.space import EvaluationError, Model, Space, _linker
+from finn.core.space import EvaluationError, Model, Space
 from finn.core.space._state import copy_result
+from finn.core.space._structure import Structure, materialize, modes
+from finn.core.space._template import link_template
 from finn.core.space.compiler import root_parameters, root_record
-from finn.core.space.ir import LinkedModel, Node
+from finn.core.space.ir import Linked
 from finn.core.space.occurrence import bind, state
 
 S = TypeVar("S", bound=Space)
-
-
-@contextmanager
-def uncollapsed() -> Iterator[None]:
-    def identity(nodes: list[Node], order: tuple[int, ...]) -> tuple[int, ...]:
-        return tuple(range(len(nodes)))
-
-    with mock.patch.object(_linker, "collapse", identity):
-        yield
 
 
 def open_space(node: S, *, collapsed: bool) -> S:
     """A design space compiled afresh (no model cache), collapsed or not."""
     record = root_record(node)
     if collapsed:
-        linked = _linker.link_space(record.space_type)
+        permuted, eager = modes()
+        structure = Structure(link_template(record.space_type), permuted=permuted, eager=eager)
+        model = Model(record.space_type, cast(Linked, structure), structure.lock)
     else:
-        with uncollapsed():
-            linked = _linker.link_space(record.space_type)
-    model = Model(record.space_type, linked)
+        structure = Structure(link_template(record.space_type))
+        model = Model(record.space_type, materialize(structure, collapsed=False))
     return cast(S, bind(model, root_parameters(model, record)))
 
 
-def answers(point: Space) -> list[object]:
-    """Every node's public answer, or the evaluation failure it raises."""
+def answers(point: Space) -> dict[str, object]:
+    """Every node's public answer, or the evaluation failure it raises, by key."""
     current = state(point)
-    result: list[object] = []
-    for index in range(len(current.linked.nodes)):
+    result: dict[str, object] = {}
+    for node in current.linked.nodes:
+        index = node.index
         try:
             answer = current.world.result(index)
-            result.append(copy_result(current.linked, index, answer))
+            result[node.key] = copy_result(current.linked, index, answer)
         except EvaluationError as error:
-            result.append((type(error).__name__, str(error)))
+            result[node.key] = (type(error).__name__, str(error))
     return result
 
 
@@ -80,13 +76,14 @@ class Counts:
 def counts(point: Space, read: Callable[[Space], object]) -> Counts:
     """Static alias structure, and the work of one read on a fresh configuration: the
     nodes its world holds an entry for."""
-    linked: LinkedModel = state(point).linked
-    aliases = {node.index for node in linked.nodes if node.kind == "alias"}
-    edges = sum(1 for node in linked.nodes for target in node.dependencies if target in aliases)
+    linked: Linked = state(point).linked
+    nodes = tuple(node for node in linked.nodes)  # a structure's len bounds its ids
+    aliases = {node.index for node in nodes if node.kind == "alias"}
+    edges = sum(1 for node in nodes for target in node.dependencies if target in aliases)
     read(point)
     cache: Mapping[int, object] = state(point).world.cache
     return Counts(
-        len(linked.nodes),
+        len(nodes),
         len(aliases),
         edges,
         len(cache),

@@ -57,7 +57,7 @@ A change is **assignment**. In order:
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypeVar, cast
 
@@ -110,8 +110,13 @@ class Assigned:
 
 
 def normalize(current: State, changes: Sequence[Change[object]]) -> dict[NodeId, Change[object]]:
-    """Each change by its choice: every one of this configuration, naming an owned
-    Decision of its scope, once."""
+    """Each change by its choice: every one of this design space, naming an owned
+    Decision of its scope, once. Its scope and node are asked of the model
+    (``holds_scope``, ``holds_node``: an addressed scope, a node of one), never compared
+    with a length. A choice has one identity, the one its handles give: an id standing
+    for another node (an import, a formal's binding: ``_structure``) is no node, refused
+    here and never followed into the node it stands for, so the duplicate check and
+    every map keyed by a change's node (``stored``) see one id per choice."""
     linked = current.linked
     pending: dict[NodeId, Change[object]] = {}
     for item in changes:
@@ -119,9 +124,9 @@ def normalize(current: State, changes: Sequence[Change[object]]) -> dict[NodeId,
             raise RequestError("changes must come from a bound decision field")
         if item.base is not current:
             raise RequestError("all changes must target this exact base snapshot")
-        if type(item.scope) is not int or not 0 <= item.scope < len(linked.scopes):
+        if not linked.holds_scope(item.scope):
             raise RequestError("change scope does not belong to this model")
-        if type(item.node) is not int or not 0 <= item.node < len(linked.nodes):
+        if not linked.holds_node(item.node):
             raise RequestError("change node does not belong to this model")
         node = linked.nodes[item.node]
         if node.kind != "decision" or node.scope != item.scope:
@@ -200,8 +205,15 @@ def _same(left: Mapping[NodeId, object], right: Mapping[NodeId, object]) -> bool
 
 def _moved(before: World, after: World, sources: set[NodeId]) -> Moved:
     """What a change moves: for each choice whose presence may read a choice or fact the
-    change moved (``sources``), its presence before and after (``presence``: refused
-    guards count as absent)."""
+    change moved (``sources``), in the flow order, its presence after and, where that
+    decides a list, before (``presence``: refused guards count as absent). A stored
+    choice is ``dormant`` where it is absent after and was not absent before, ``in_play``
+    where it is present after and was not present before; an open choice is ``opened``
+    where it is present after and was not present before. So the presence before is read
+    only for a choice absent after and stored, or present after: a choice of unknown
+    presence after, or absent and open, is in no list whatever it was, and its presence
+    before (which may read the scopes of every case its guards wait on) is not read. The
+    lists are those of reading both everywhere. Keys are read from the nodes' headers."""
     evaluator = after.evaluator
     linked = evaluator.linked
     candidates = {choice for source in sources for choice in evaluator.presence_readers(source)}
@@ -209,19 +221,19 @@ def _moved(before: World, after: World, sources: set[NodeId]) -> Moved:
     in_play: list[NodeId] = []
     opened: list[NodeId] = []
     for index in sorted(candidates, key=linked.ranks.__getitem__):
-        was, now = presence(before, index)[0], presence(after, index)[0]
-        if index in after.stored:
-            if was != "absent" and now == "absent":
+        now = presence(after, index)[0]
+        if now == "unknown":
+            continue
+        stored = index in after.stored
+        if now == "absent":
+            if stored and presence(before, index)[0] != "absent":
                 dormant.append(index)
-            if was != "present" and now == "present":
-                in_play.append(index)
-        elif was != "present" and now == "present":
-            opened.append(index)
-    keys = linked.nodes
+        elif presence(before, index)[0] != "present":
+            (in_play if stored else opened).append(index)
     return Moved(
-        tuple(keys[index].key for index in dormant),
-        tuple(keys[index].key for index in in_play),
-        tuple(keys[index].key for index in opened),
+        tuple(linked.header(index).key for index in dormant),
+        tuple(linked.header(index).key for index in in_play),
+        tuple(linked.header(index).key for index in opened),
     )
 
 
@@ -237,16 +249,22 @@ def _moved_from(before: World, after: World, facts: set[NodeId]) -> Moved:
     return _moved(before, after, sources)
 
 
-def _broken(before: Pairs, world: World, named: frozenset[NodeId]) -> tuple[BrokenRule, ...]:
+def _broken(
+    before: Callable[[], Pairs], world: World, named: frozenset[NodeId]
+) -> tuple[BrokenRule, ...]:
     """The rules newly false in ``world``: each origin through which it holds a false
-    piece that ``before`` does not hold through it, with the stored choices standing in
-    its way (``named``: the choices excluded for being named by the change)."""
+    piece not held through that origin in the pairs ``before`` returns, with the stored
+    choices standing in its way (``named``: the choices excluded for being named by the
+    change). ``before`` is called only where ``world`` holds a false piece: the design
+    space compared with may be open everywhere, and reading its validity whole there
+    resolves every scope of unknown presence."""
     after = pairs(world)
     if not after:
         return ()
+    held_before = before()
     found: dict[NodeId, Origin] = {}
     for piece, origins in after.items():
-        held = before.get(piece, {})
+        held = held_before.get(piece, {})
         for index, origin in origins.items():
             if index not in held:
                 found.setdefault(index, origin)
@@ -365,7 +383,9 @@ def assign(
             not item.remove and before.get(index, _MISSING) is not stored[index]
             for index, item in normalized.items()
         )
-        broken = _broken(_held(current, instance), world, frozenset(normalized)) if sets else ()
+        broken = (
+            _broken(lambda: _held(current, instance), world, frozenset(normalized)) if sets else ()
+        )
         if broken:
             checked.extend(
                 ChangeOutcome(
@@ -374,7 +394,7 @@ def assign(
                 for item in requests
             )
             return Assigned(None, tuple(checked), broken)
-        made_false = _broken(_pairs(current), world, frozenset()) if changed_facts else ()
+        made_false = _broken(lambda: _pairs(current), world, frozenset()) if changed_facts else ()
         moved = _moved_from(current.world, world, changed_facts)
         _publish(world, trial=trial)
         published = [
@@ -430,7 +450,7 @@ def bound(current: State, requests: Sequence[Change[object]]) -> Assigned:
         kept = _same(world.stored, held)  # the receiver's own choices: the receiver
         if kept:
             world = current.world
-        made_false = _broken(_held(current, empty), world, frozenset())
+        made_false = _broken(lambda: _held(current, empty), world, frozenset())
         # Each saved choice from nothing stored: set (``"changed"``) where kept, else
         # ``"dropped"``, whatever ``current`` holds.
         outcomes = tuple(

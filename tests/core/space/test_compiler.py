@@ -12,6 +12,7 @@ from support.refusals import refused
 
 from finn.core.space import Space, default_semantics, design_space, inspection
 from finn.core.space._nodes import node_record
+from finn.core.space._structure import expand
 from finn.core.space.compiler import compile_model
 from finn.core.space.declarations import (
     Const,
@@ -54,10 +55,12 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
     nodes = model.linked.nodes
     cycles = nodes[model.resolve(0, Example.cycles)]
     assert {argument.name for argument in cycles.arguments} == {"extent", "lanes"}
-    position = {index: offset for offset, index in enumerate(model.linked.order)}
+    # The dependency order is the eager form's (a model's structure resolves on demand).
+    table = expand(Example)
+    position = {index: offset for offset, index in enumerate(table.order)}
     assert all(
         position[dependency] < position[node.index]
-        for node in nodes
+        for node in table.nodes
         for dependency in node.dependencies
     )
     assert model.linked.parameters == (model.resolve(0, Example.extent),)
@@ -232,11 +235,13 @@ def test_twenty_thousand_dependencies_compile_and_evaluate_iteratively() -> None
         )
     space_type = cast(type[Space], type("Deep", (Space,), members))
     model = compile_model(space_type)
-    # Every member, and the Space's validity node (no pieces: no constraint, no Decision).
-    assert len(model.linked.order) == 20_002
     last = model.resolve(0, members["value20000"])
     assert len(model.linked.nodes[last].dependencies) == 1
-    assert model.linked.order[-2:] == (last, model.linked.scopes[0].validity)
+    # Every member, and the Space's validity node (no pieces: no constraint, no Decision),
+    # in the eager form's dependency order (a model's structure resolves on demand).
+    table = expand(space_type)
+    assert len(table.order) == 20_002
+    assert table.order[-2:] == (table.keys["value20000"], table.scopes[0].validity)
     assert design_space(space_type()).query(cast(Derived[int], members["value20000"])) == Available(
         20_000
     )

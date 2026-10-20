@@ -1,0 +1,211 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+"""The questions about a whole design space, answered from templates (``_whole``): the
+flow order and its loops, the presence readers, ``inspection``'s decisions, choices,
+members and statistics, the scopes below a scope.
+
+Each equals the line's answer (``6d02612cc``: its algorithms over one table of every node,
+``core.space._whole_support``) on ``expand(C)``, by key, for every Space class the space
+tests and the engine's support modules define and for the classes below, which take the
+ways the corpus does not (a name the placing Space owns read by a method; a dynamic
+method's subtree holding formals, a fresh Decision and a named shared Decision; a validity
+piece reached by a guard); and answering it resolves no node. The kernels, the Chain's
+members and stage 7's chain are the kernel tree's (``kernel_ops/test_space_templates``).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import cast
+
+import pytest
+
+from core.space._templates_support import defined, links
+from core.space._whole_support import differences
+from finn.core.space import (
+    Decision,
+    Param,
+    Space,
+    derived,
+    design_space,
+    inspection,
+    view,
+)
+from finn.core.space._structure import Structure
+from finn.core.space._template import link_template
+from finn.core.space.compiler import Model
+from finn.core.space.errors import RequestError
+from finn.core.space.ir import Linked, LinkedModel, Node
+
+HERE = Path(__file__).resolve().parent
+
+# The methods whose reads, inferred per template, gained a read against the line's per
+# scope: two helpers calling each other (``test_reads``), each reading what both read (the
+# line kept what it found first while the cycle was open, in the order it met them).
+GAINED = {
+    "Mutual": {"by_second": ["width"]},
+    "PlacesMutual": {"inner.by_first": ["inner.lanes"]},
+}
+
+
+def _corpus() -> list[type[Space]]:
+    modules = [f"core.space.{path.stem}" for path in sorted(HERE.glob("*.py"))] + [
+        "support.space_cores",
+        "support.space_pipeline",
+        "support.space_walk",
+    ]
+    return [space_type for space_type in defined(modules) if links(space_type)]
+
+
+def test_the_space_tests_classes_answer_as_the_line() -> None:
+    classes = _corpus()
+    assert len(classes) > 150
+    failures: list[str] = []
+    gained: dict[str, dict[str, list[str]]] = {}
+    loops = 0
+    for space_type in classes:
+        compared = differences(space_type)
+        failures.extend(compared.differences)
+        loops += compared.loops
+        if compared.gained:
+            gained[space_type.__qualname__] = compared.gained
+    assert not failures, "\n".join(failures)
+    assert gained == GAINED
+    assert loops  # a loop is among them
+
+
+# -- the ways the corpus does not take ----------------------------------------------------------
+
+_SHARED: int = Decision(values=(1, 2, 4), name="shared")
+
+
+class Probe(Space):
+    """A method reading a name its placing Space owns in its scope (a named shared
+    Decision), and a choice whose presence reads it."""
+
+    first: int = Param()
+
+    @derived
+    def big(self) -> bool:
+        return 2 * cast(int, self.shared) > 2  # type: ignore[attr-defined]
+
+    lanes: int = Decision(values=(1, 2), when=big)
+
+
+class OwnsForProbe(Space):
+    pick: bool = Decision(values=(False, True))
+    probe = Probe(first=_SHARED)  # ``shared`` is the probe's alone: owned in its scope
+    after: int = Decision(values=(1, 2), when=probe.big)
+
+
+class Inner(Space):
+    depth: int = Param()
+    lanes: int = Decision(values=(1, 2))
+
+
+#: The name a dynamic method reads by: a module global, so its source does not fix it.
+LANES = "lanes"
+
+
+class Dynamic(Space):
+    """A dynamic method: it may read every node of its scope and below: a formal its
+    placing Space binds, a placed Space's formal bound to a fresh Decision, the named
+    shared Decision its placing Space owns in it."""
+
+    width: int = Param()
+    inner = Inner(depth=Decision(values=(3, 4)))
+
+    @derived
+    def wide(self) -> bool:
+        return cast(int, getattr(self.inner, LANES)) > 1
+
+    gated: int = Decision(values=(1, 2), when=wide)
+
+
+_OWNED: int = Decision(values=(5, 6), name="owned")
+
+
+class PlacesDynamic(Space):
+    pick: bool = Decision(values=(False, True))
+    dynamic = Dynamic(width=_OWNED)
+    later: int = Decision(values=(1, 2), when=dynamic.wide)
+
+
+class Room(Space):
+    depth: int = Param()
+
+
+class Pieces(Space):
+    """A guard reading a view, which reads its Space's validity: the walk from the guard
+    reaches a validity piece, a placed Space's formal bound to a fresh Decision."""
+
+    room = Room(depth=Decision(values=(1, 2)))
+
+    @view
+    def flag(self) -> bool:
+        return self.room.depth > 1
+
+    @derived
+    def shown(self) -> bool:
+        return self.flag
+
+    extra: int = Decision(values=(1, 2), when=shown)
+
+
+@pytest.mark.parametrize(
+    "space_type",
+    (OwnsForProbe, PlacesDynamic, Pieces),
+    ids=lambda space_type: space_type.__name__,
+)
+def test_a_way_the_corpus_does_not_take_answers_as_the_line(space_type: type[Space]) -> None:
+    compared = differences(space_type)
+    assert not compared.differences, "\n".join(compared.differences)
+    assert not compared.gained
+
+
+def test_a_method_reading_a_name_its_placing_space_owns_reads_that_choice() -> None:
+    keys = [item.key for item in inspection.decisions(OwnsForProbe)]
+    # Both read ``probe.shared`` through ``big``; ``after`` is declared first.
+    assert keys == ["pick", "probe.shared", "after", "probe.lanes"]
+
+
+def test_a_dynamic_method_reads_its_scopes_subtree_and_what_its_placing_space_owns() -> None:
+    keys = [item.key for item in inspection.decisions(PlacesDynamic)]
+    for read in ("dynamic.owned", "dynamic.inner.lanes", "dynamic.inner.depth"):
+        assert keys.index(read) < keys.index("dynamic.gated")
+        assert keys.index(read) < keys.index("later")
+
+
+# -- answered from templates: nothing resolved ---------------------------------------------------
+
+
+def test_the_flow_order_the_readers_and_the_lists_resolve_no_node() -> None:
+    structure = Structure(link_template(PlacesDynamic))
+    model = Model(PlacesDynamic, cast(Linked, structure), structure.lock)
+    inspection.decisions(model)
+    inspection.choices(model)
+    inspection.members(model)
+    inspection.statistics(model)
+    for source in (*structure.parameters, *structure.decisions):
+        model.evaluator.presence_readers(source)
+    counts = structure.counts()
+    assert counts["nodes resolved"] == 0
+    assert counts["scopes addressed"] == 3
+
+
+def test_ranks_are_places_in_the_flow_order() -> None:
+    point = design_space(PlacesDynamic())
+    structure = inspection.model(point).structure
+    assert structure is not None
+    flow = inspection.model(point).evaluator.flow()
+    assert [structure.ranks[index] for index in flow] == list(range(len(flow)))
+    assert list(structure.ranks) == list(flow)
+
+
+def test_a_table_built_by_hand_answers_no_whole_design_space_question() -> None:
+    table = LinkedModel((Node(0, 0, "x", "decision"),), (), (0,), (), (0,), {"x": 0})
+    model = Model(Space, table)
+    with pytest.raises(RequestError, match="no question about its whole design space"):
+        model.evaluator.flow()
+    with pytest.raises(RequestError, match="no question about its whole design space"):
+        model.evaluator.presence_readers(0)

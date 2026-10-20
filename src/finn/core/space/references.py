@@ -23,7 +23,7 @@ from .declarations import (
     ValueRef,
 )
 from .errors import RequestError
-from .ir import Choice, LinkedModel, Node, Scope
+from .ir import Choice, Linked, Node, Scope
 from .semantics import ValueSemantics
 
 T = TypeVar("T")
@@ -34,20 +34,19 @@ class ValueHandle(ValueRef[T], Generic[T]):
     """A value reference whose interpretation belongs to an exact compilation."""
 
     _record_origin = False
-    _linked: LinkedModel = field(repr=False)
+    _linked: Linked = field(repr=False)
     _node: int = field(repr=False)
     semantics: ValueSemantics[T] | None = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if type(self._node) is not int or not 0 <= self._node < len(self._linked.nodes):
+        # An identity that stands for another, or none here, is no node (``holds_node``):
+        # a handle holds a node's own id, so equality and hash are by it.
+        if not self._linked.holds_node(self._node):
             raise RequestError("handle does not identify a compiled node")
-        object.__setattr__(
-            self,
-            "semantics",
-            cast(ValueSemantics[T] | None, self._linked.nodes[self._node].semantics),
-        )
+        node = self._linked.header(self._node)  # read, not resolved
+        object.__setattr__(self, "semantics", cast(ValueSemantics[T] | None, node.semantics))
 
-    def _resolve(self, linked: LinkedModel) -> int:
+    def _resolve(self, linked: Linked) -> int:
         if self._linked is not linked:
             raise RequestError("handle belongs to a different compiled model")
         return self._node
@@ -63,7 +62,7 @@ class ValueHandle(ValueRef[T], Generic[T]):
         return hash((id(self._linked), self._node))
 
     def __repr__(self) -> str:
-        return f"{type(self).__name__}({self._linked.nodes[self._node].key!r})"
+        return f"{type(self).__name__}({self._linked.header(self._node).key!r})"
 
 
 @dataclass(frozen=True, eq=False, repr=False)
@@ -72,13 +71,13 @@ class DecisionHandle(ValueHandle[T], Generic[T]):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if self._linked.nodes[self._node].kind != "decision":
+        if self._linked.header(self._node).kind != "decision":
             raise RequestError("a decision handle requires an owning Decision")
 
 
-def decision_key(linked: LinkedModel, index: int) -> str:
+def decision_key(linked: Linked, index: int) -> str:
     """A decision's stable key is its dotted declaration path."""
-    return linked.nodes[index].key
+    return linked.header(index).key
 
 
 def descend(scopes: Sequence[Scope], scope: int, path: Sequence[Declaration]) -> int:

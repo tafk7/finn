@@ -3,28 +3,31 @@
 
 """Immutable linked representation shared by compilation and evaluation.
 
-The table stores each occurrence once. Node references (``NodeId``) describe
-potential edges; the evaluator records demanded edges separately for every cached
-result.
+A node (``Node``) is one occurrence of a member in a placed scope. A model's structure
+(``_structure``) resolves each when it is read; a table (``LinkedModel``) stores every one
+(``_structure.expand``'s, or one built by hand). The engine reads either through
+``Linked``. Node
+references (``NodeId``) describe potential edges; the evaluator records demanded edges
+separately for every cached result.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
 
 from .semantics import ValueSemantics
 
 if TYPE_CHECKING:
     from ._configuration import Space
+    from ._whole import Flow
     from .domains import Domain
 
-# A node's identity in its model: its position in ``LinkedModel.nodes``. Every
-# reference to a node, here and in the evaluator, is a ``NodeId``, so a later
-# identity (an instance, a template node) changes this name and the few places that
-# turn a node into a cache key or a bit.
+# A node's identity in its model: in a model's structure (``_structure``), its scope's
+# base plus its template node (a scope's block; numbered in the order scopes are
+# addressed, so nothing orders by it); in a table, its position there.
 NodeId: TypeAlias = int
 
 NodeKind = Literal[
@@ -40,6 +43,9 @@ NodeKind = Literal[
     "validity",
     "present",
     "members",
+    # A template's reference into a child Space: a node of the child class's template
+    # (``_template``); never a node of a linked model.
+    "import",
 ]
 
 
@@ -166,6 +172,9 @@ class LinkedModel:
     editable_aliases: frozenset[NodeId] = frozenset()
     # Each node's forwarding source: an alias chain collapsed to its source.
     forward: tuple[NodeId, ...] = ()
+    # Its answers to the questions about the whole design space, where it is a structure's
+    # (``_structure.materialize``), in its numbering; None for a table built by hand.
+    whole: Questions | None = field(default=None, compare=False, repr=False)
     # A selector's Choice (its index in ``choices``), by the selector node.
     selector_choices: Mapping[NodeId, int] = field(init=False, repr=False)
     ranks: tuple[int, ...] = field(init=False, repr=False)
@@ -183,3 +192,119 @@ class LinkedModel:
             "selector_choices",
             MappingProxyType({item.selector: item.index for item in self.choices}),
         )
+
+    def header(self, index: NodeId) -> Node:
+        """A node as a header reads it (``NodeHeader``): the node itself."""
+        return self.nodes[index]
+
+    def holds_scope(self, index: object) -> bool:
+        """Whether ``index`` is one of its scopes: a table holds every scope, numbered from
+        0."""
+        return type(index) is int and 0 <= index < len(self.scopes)
+
+    def holds_node(self, index: object) -> bool:
+        """Whether ``index`` is one of its nodes: a table holds every node, numbered from
+        0."""
+        return type(index) is int and 0 <= index < len(self.nodes)
+
+
+class Questions(Protocol):
+    """The answers to the questions about a whole design space (``_whole``)."""
+
+    def flow(self) -> Flow: ...
+
+    def readers(self, source: NodeId) -> tuple[NodeId, ...]: ...
+
+
+class NodeHeader(Protocol):
+    """What is read of a node without resolving its references (but its guard's
+    identity): a structure's ``Header``, or a table's ``Node``."""
+
+    @property
+    def index(self) -> NodeId: ...
+
+    @property
+    def scope(self) -> int: ...
+
+    @property
+    def key(self) -> str: ...
+
+    @property
+    def kind(self) -> NodeKind: ...
+
+    @property
+    def semantics(self) -> ValueSemantics[object] | None: ...
+
+    @property
+    def source_owner(self) -> str | None: ...
+
+    @property
+    def owner(self) -> str: ...
+
+    @property
+    def origin(self) -> str | None: ...
+
+    @property
+    def domain(self) -> Domain[object] | None: ...
+
+    @property
+    def required_choice(self) -> bool: ...
+
+    @property
+    def guard(self) -> NodeId | None: ...
+
+
+class _Ranked(Protocol):
+    def __getitem__(self, index: int, /) -> Any: ...
+
+
+class Linked(Protocol):
+    """What the engine reads of a linked model: a model's structure (``_structure``), its
+    nodes resolved on demand, or a table holding every node (``LinkedModel``: ``expand``'s,
+    or one built by hand). ``ranks`` orders decisions (a structure's: by the flow order);
+    ``header`` reads a node without resolving it; ``whole`` answers the questions about
+    the whole design space (None for a table built by hand). ``holds_scope`` and
+    ``holds_node`` say whether an identity is one of its scopes or nodes, the same way in
+    every mode (never by comparing it with a length: a structure's ``NodeId``s come in
+    blocks with holes). An identity standing for another node is not one of its nodes:
+    ``holds_node`` is the question for an identity, not for a read, and never follows it
+    (a table has none)."""
+
+    @property
+    def nodes(self) -> Sequence[Node]: ...
+
+    @property
+    def scopes(self) -> Sequence[Scope]: ...
+
+    @property
+    def choices(self) -> Sequence[Choice]: ...
+
+    @property
+    def keys(self) -> Mapping[str, NodeId]: ...
+
+    @property
+    def selector_choices(self) -> Mapping[NodeId, int]: ...
+
+    @property
+    def editable_aliases(self) -> Collection[NodeId]: ...
+
+    @property
+    def forward(self) -> Sequence[NodeId]: ...
+
+    @property
+    def parameters(self) -> tuple[NodeId, ...]: ...
+
+    @property
+    def decisions(self) -> tuple[NodeId, ...]: ...
+
+    @property
+    def ranks(self) -> _Ranked: ...
+
+    @property
+    def whole(self) -> Questions | None: ...
+
+    def header(self, index: NodeId, /) -> NodeHeader: ...
+
+    def holds_scope(self, index: object, /) -> bool: ...
+
+    def holds_node(self, index: object, /) -> bool: ...

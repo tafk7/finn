@@ -1,13 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Check a lowered table's value semantics across scopes, in dependency order.
+"""Check a template's lowered table's value semantics, in dependency order.
 
 An alias, a view, a presence and a selection take their sources' semantics
 when they declare none; then every output, alternative, guard, callback
 argument, export and integer operand must agree with what reads it. A shared
 ``decision.member`` whose candidates disagree on its type is dropped when
-nothing reads it.
+nothing reads it. An import has its target's checked semantics, and a child's exports
+are checked in its own template.
 """
 
 from __future__ import annotations
@@ -96,6 +97,7 @@ def _drop_shared(table: Table, index: int) -> bool:
     if any(index in node.dependencies for node in table.nodes):
         return False  # a declaration reads it: the disagreement is an error
     del table.choice_drafts[choice].members[member]
+    table.choice_drafts[choice].dropped.add(member)
     table.nodes[index] = replace(table.nodes[index], alternatives=(), semantics=STRING)
     return True
 
@@ -115,6 +117,8 @@ def _check_arguments(table: Table) -> None:
 
 def _check_exports(table: Table) -> None:
     for draft in table.drafts:
+        if draft.stub is not None:
+            continue  # a child's exports are checked in its template
         exported = [
             (export, draft.members[declaration])
             for export, declaration in draft.effective.exports.items()
