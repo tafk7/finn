@@ -125,7 +125,7 @@ corpus; § 16 holds the readings its author gave for this model.
    rule false through the same origin, and refuses one making it false through another.
    Every accepted change of choices that sets leaves the set of pairs no larger (a
    change of facts may enlarge it, § 16.24), so a change from nothing committing the
-   stored set of a configuration reached by such changes is accepted (FN3), and no
+   stored set of a design space reached by such changes is accepted (FN3), and no
    accepted addition leaves a Space newly refused (§ 16.14's exception cannot arise).
    *Clears are never refused* (§ 16.16; § 5.6 stands): a change of choices made only of
    them is accepted whatever pairs it adds; an unset is a change of facts, never refused
@@ -134,7 +134,7 @@ corpus; § 16 holds the readings its author gave for this model.
    same-value update returns the receiver). It can add a pair in a single shape,
    **masking**: a piece false only through a view refused with its Space, whose Space
    the change reopens, so that the view answers and the piece is false at an origin of
-   its own. The configuration reads refused, naming it; its change from nothing may be
+   its own. The design space reads refused, naming it; its change from nothing may be
    refused (a named limit of FN3's invariant, until products leave the Space).
 4. *What stands in the way* (§ 16.4): the stored choices among the origin's declared
    reads followed through derived values' and views' bodies (not its presence's
@@ -168,10 +168,10 @@ corpus; § 16 holds the readings its author gave for this model.
    false one makes the input absent, a waiting one leaves membership waiting, a refused
    one refuses it through that guard's input. An omitted fact stays a missing one.
 7. *The constructor* (§ 16.7) refuses a stored value outside its domain or whose
-   membership input refuses, dormant ones included: a configuration never holds one. A
-   change of facts and :func:`bind` drop such a value instead (§ 16.24). A stored set
-   breaking a rule is a legal configuration that reads refused: a change of choices
-   refuses it, a bind keeps it and reports the rule.
+   membership input refuses, dormant ones included: a :class:`Configuration` never holds
+   one. A change of facts and :func:`bind` drop such a value instead (§ 16.24). A stored
+   set breaking a rule is a legal :class:`Configuration`, reading refused: a change of
+   choices refuses it, a bind keeps it and reports the rule.
 8. *A guard refused through an input* (§ 16.8) is one ``GUARD`` piece, owned by the
    guarded scope, at the highest such guard (scopes under it add nothing). A refused
    ``when`` below a selector or a parent that is still unknown leaves the scope unknown
@@ -1075,7 +1075,7 @@ def _choices(configuration: Configuration, edit: Change) -> Accepted | Rejected:
 
 
 def change(configuration: Configuration, edit: Change) -> Accepted | Rejected:
-    """Apply ``edit``: accepted with the configuration it publishes and what moved, or
+    """Apply ``edit``: accepted with the design space it publishes and what moved, or
     refused with each refusal. A change of choices alone is assignment (:func:`_choices`).
     A change of facts is two steps, published together or not at all (§ 16.24, § 16.25):
     the receiver's stored choices bound under the new facts (:func:`bind`'s operation;

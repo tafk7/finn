@@ -1395,7 +1395,7 @@ def bind_problems(
     )
     bound = model.bind(walked.space, walked.facts, walked.stored)
     if bound.dropped or not _same_published(bound.configuration, walked):
-        problems.append("1 bind: the bind of a configuration's own choices drops or moves one")
+        problems.append("1 bind: the bind of a design space's own choices drops or moves one")
     return problems, False
 
 
