@@ -27,7 +27,10 @@ form, and no answer the adapter computes in the engine's place.
   - a change's report: refused, its type checks refused (``ChangeOutcome``, status
     ``"refused"``) as ``assignment`` refusals with their codes, and each ``BrokenRule`` as
     a ``rule`` refusal (its origin, its result's codes, its standing choices); accepted,
-    what it puts dormant, brings into play and opens;
+    what it puts dormant, brings into play and opens, and its ``BrokenRule``s as the rules
+    the published design space holds newly false. The engine drops no stored value today
+    (a change of facts that would is refused), so an accepted change drops nothing here;
+    the engine's change of facts as a new design space (§ 16.24) extends this;
   - possible values are ``inspection.viable``'s: ``Possible`` with what it moves,
     ``Refused`` with its broken rules; ``None`` where the engine lists nothing;
   - validity is ``inspection.validity`` (``"valid"``, ``"refused"``, ``"open"``);
@@ -764,7 +767,9 @@ class Point:
             refusals = _assignments(engine, report.outcomes) | _broken(engine, report.broken)
             return ChangeForm(False, refusals=refusals), None
         moved = (self._paths(report.dormant), self._paths(report.in_play))
-        form = ChangeForm(True, *moved, self._paths(report.opened))
+        form = ChangeForm(
+            True, *moved, self._paths(report.opened), broken=_broken(engine, report.broken)
+        )
         return form, Point(engine, report.instance)
 
 

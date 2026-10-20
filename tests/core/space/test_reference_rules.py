@@ -35,6 +35,7 @@ from core.space.reference_harness import (
     Requirement,
     Spelling,
     check_definition,
+    expected,
 )
 
 
@@ -149,7 +150,10 @@ def test_setting_a_case_needing_a_missing_capability_is_refused_by_the_facts_alo
     REQUIRED.start({"has_big": False}).check_change(Change(commit={"style": "big"}))
 
 
-def test_new_facts_lacking_a_capability_a_stored_case_needs_are_refused() -> None:
+@expected("facts-rule-constraint")
+def test_new_facts_lacking_a_capability_a_stored_case_needs_are_reported() -> None:
+    # Accepted, reading refused at the rule, which the report names with ``style`` standing
+    # (§ 16.24).
     REQUIRED.start({"has_big": True}, {"style": "big"}).check_change(
         Change(facts={"has_big": False})
     )
@@ -498,7 +502,8 @@ def test_a_switch_back_with_the_restored_choice_moved_too_is_accepted() -> None:
     moved().check_change(Change(commit={"compute": "packed", PE2: 2}))
 
 
-# A facts change refused by a stored value outside its new domain, a dormant one included.
+# A facts change dropping each stored value outside its new domain, a dormant one included
+# (§ 16.24): new facts are a new design space, never refused.
 
 SIZED = Case(
     "a facts change and the stored values' types",
@@ -533,15 +538,18 @@ def sized() -> Pair:
     return SIZED.start({"n": 8}, DORMANT_DEPTH).reach(Change(commit={"mode": "b"}))
 
 
-def test_a_facts_change_is_refused_by_a_dormant_value_outside_its_new_domain() -> None:
+@expected("facts-drop-dormant")
+def test_a_facts_change_drops_a_dormant_value_outside_its_new_domain() -> None:
     sized().check_change(Change(facts={"n": 12}))
 
 
-def test_a_facts_change_is_refused_by_each_value_outside_its_new_domain() -> None:
+@expected("facts-drop-present")
+def test_a_facts_change_drops_each_value_outside_its_new_domain() -> None:
     sized().check_change(Change(facts={"n": 6}))
 
 
-def test_a_facts_change_clearing_what_stands_in_its_way_is_accepted() -> None:
+def test_a_facts_change_clearing_a_value_outside_its_new_domain_is_accepted() -> None:
+    # The cleared ``mode.a.depth`` is named: left out without being reported (§ 16.25).
     sized().check_change(Change(facts={"n": 12}, clear=("mode.a.depth",)))
 
 

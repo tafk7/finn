@@ -4,8 +4,9 @@
 """From ``tests``: ``python -m core.space.reference_harness`` prints the acceptance matrix as a
 markdown table; ``python -m core.space.reference_harness walks --seeds 0-99 --steps 40`` runs
 the seeded walks and prints their
-summary, then each failed walk whole. With no milestone pending (none is: the engine core's
-is accepted), every disagreement with the engine fails its walk. While a later milestone
+summary, then each failed walk whole. With no milestone pending (the engine core's is
+accepted; the facts-instance milestone is pending), every disagreement with the engine fails
+its walk. While a later milestone
 with rows is pending, its disagreements are counted; ``--without MILESTONE`` takes its rows
 as removed, so every disagreement fails its walk (its engine walked as if it had removed
 them). It exits 1 when a walk failed. The walks are imported by their command alone, so the

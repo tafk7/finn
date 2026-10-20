@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,7 @@ from core.space.reference_harness import (
     ROWS,
     Case,
     Disagreement,
+    DroppedForm,
     NotTranslatable,
     OutcomeForm,
     PossibleForm,
@@ -90,8 +92,21 @@ def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() ->
     assert not problems(CASE_MODULES)
 
 
-def test_the_engine_core_is_accepted_its_rows_removed() -> None:
-    assert MILESTONES == ("base",) and ROWS == ()
+def test_the_engine_core_is_accepted_and_the_facts_instance_milestone_pending() -> None:
+    """The engine core's rows are removed; the facts-instance milestone's are the engine's
+    refused changes of facts, one row per clause of § 16.24 a hand case shows."""
+    assert MILESTONES == ("base", "facts-instance")
+    assert {row.milestone for row in ROWS} == {"facts-instance"}
+    assert sorted(row.id for row in ROWS) == [
+        "facts-drop-arriving",
+        "facts-drop-dormant",
+        "facts-drop-input-absent",
+        "facts-drop-input-refused",
+        "facts-drop-present",
+        "facts-drop-waiting",
+        "facts-rule-constraint",
+        "facts-rule-derived",
+    ]
 
 
 # A later milestone with rows, put in the matrix where a test needs one.
@@ -218,6 +233,22 @@ def test_a_refused_input_carries_the_codes_of_its_origin() -> None:
     assert change_form(configuration, edit, result).refusals == {
         RefusalForm("assignment", "lanes", frozenset({("odd-v", "half")}))
     }
+
+
+def test_an_accepted_change_of_facts_carries_its_dropped_values_and_new_rules_as_sets() -> None:
+    # ``v`` turns odd: ``lanes = 2`` is dropped, its type check through ``half``; the empty
+    # list's piece is now false through ``half``, reported at its origin; ``w`` turns odd:
+    # ``gate`` refuses, reported too. Both lists are sets: no side's order is compared.
+    configuration = reference.Configuration(gated(), {"w": 4, "v": 4}, {"lanes": 2})
+    edit = Change(facts={"w": 3, "v": 3})
+    form = change_form(configuration, edit, reference.change(configuration, edit))
+    assert form.accepted and form.refusals == frozenset()
+    assert form.dropped == {DroppedForm("lanes", 2, frozenset({("odd-v", "half")}))}
+    assert form.broken == {
+        RefusalForm("rule", "gate", frozenset({("odd", "gate")})),
+        RefusalForm("rule", "half", frozenset({("odd-v", "half")})),
+    }
+    assert not agrees(form, replace(form, dropped=frozenset()))
 
 
 def test_the_codes_of_an_empty_list_and_a_refused_guard() -> None:

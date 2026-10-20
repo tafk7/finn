@@ -33,6 +33,7 @@ from .forms import (
     ChangeForm,
     Code,
     DefinitionForm,
+    DroppedForm,
     Form,
     OutcomeForm,
     PossibleForm,
@@ -93,6 +94,8 @@ def _show(value: object) -> str:
     if isinstance(value, RefusalForm):
         standing = f", standing {_show(value.standing)}" if value.standing else ""
         return f"{value.subject} ({value.kind}: {_show(value.codes)}{standing})"
+    if isinstance(value, DroppedForm):
+        return f"{value.subject} = {value.value!r} ({_show(value.codes)})"
     if isinstance(value, OutcomeForm):
         if value.kind == "impossible":
             return f"impossible {_show(value.refusals)}"
@@ -221,14 +224,24 @@ def change_form(
     edit: reference.Change,
     result: reference.Accepted | reference.Rejected,
 ) -> ChangeForm:
-    """``edit``'s ``result`` on ``configuration``."""
-    if isinstance(result, reference.Accepted):
-        return ChangeForm(
-            True, frozenset(result.dormant), frozenset(result.in_play), frozenset(result.opened)
-        )
+    """``edit``'s ``result`` on ``configuration``. A dropped value's type check and a rule's
+    reasons are read over the facts the change publishes, as membership reads them."""
     facts = {k: v for k, v in configuration.facts.items() if k not in edit.unset}
     facts.update(edit.facts)
     index = configuration.index
+    if isinstance(result, reference.Accepted):
+        read = reference.FactsOnly(index, facts).value
+        return ChangeForm(
+            True,
+            frozenset(result.dormant),
+            frozenset(result.in_play),
+            frozenset(result.opened),
+            dropped=frozenset(
+                DroppedForm(item.choice, item.value, _codes(item.reasons, read))
+                for item in result.dropped
+            ),
+            broken=frozenset(refusal_form(index, facts, item) for item in result.broken),
+        )
     refusals = frozenset(refusal_form(index, facts, item) for item in result.refusals)
     return ChangeForm(False, refusals=refusals)
 

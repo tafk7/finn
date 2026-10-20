@@ -29,6 +29,7 @@ from core.space.reference_harness import (
     Case,
     Spelling,
     check_definition,
+    expected,
 )
 
 # -- 9. views and validity -------------------------------------------------------------------------
@@ -490,7 +491,8 @@ GATED = Case(
 )
 
 
-def test_new_facts_refusing_a_guards_input_are_refused_at_the_input() -> None:
+@expected("facts-rule-derived")
+def test_new_facts_refusing_a_guards_input_are_reported_at_the_input() -> None:
     GATED.start({"w": 4}, {"g.n": 1}).check_change(Change(facts={"w": 3}))
 
 
