@@ -1,16 +1,16 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The ends a shell offers on its boundary channels: where a partition's stream meets memory.
+"""The movers a shell offers on its boundary channels: where a partition's stream meets memory.
 
 A boundary channel of a partition's network has a side without an end, its **free
-side**: the AXIS port the network presents (``Channel.free_side``). A shell with ends
-offers each such channel the ends it can place there (``EndOffer``), and the channel's
-``end`` Decision chooses one, by kind (``ENDS``), as it places its ``source``; the
-interim channel rule sets it where the network builds the channel (the first valid end,
-the one offered), and it is persisted. An end binds no RTL in the partition's
-module: its pins stay its own, and the shell integrates the end beside the IP from its
-facts (``EndContract``).
+side**: the AXIS port the network presents (``Channel.free_side``). A shell with movers
+offers each such channel the movers it can place there (``MoverOffer``), and the channel's
+``mover`` Decision chooses one, by kind (``MOVERS``), as it places its ``source``; the
+interim channel rule sets it where the network builds the channel (the first valid mover,
+the one offered), and it is persisted. A mover binds no RTL in the partition's
+module: its pins stay its own, and the shell integrates the mover beside the IP from its
+facts (``MoverContract``).
 
 **``IODMA_hls``** (kind ``iodma_hls``), the Zynq shell's memory mover, modelled at its
 stream side, the free side's contract:
@@ -20,9 +20,9 @@ stream side, the free side's contract:
   fills and reads that buffer as the tensor's row-major array, one pass of it a
   frame. A free side that presents its pass more than once a frame (``passes``: a
   streamed weight read once per row of its activations) is refused
-  (``end-repetition``) until the host's or the end's repetition is designed: the
+  (``mover-repetition``) until the host's or the mover's repetition is designed: the
   driver would move one pass where the stream takes several. A free side whose pass
-  is not row-major (``Traversal.row_major``) is refused (``end-order``): the driver
+  is not row-major (``Traversal.row_major``) is refused (``mover-order``): the driver
   would feed it the wrong elements with no error;
 
 - its memory port is ``gcd(frame bits, cap)``, a frame's bits the stream's padded
@@ -36,29 +36,29 @@ stream side, the free side's contract:
   before the stream runs dry, or once its last word left);
 - it presents one AXI-Lite bus to the shell's processor (its ``s_axi_control``),
   which the shell's budget check counts against its budget beside the
-  partition's (``END``, ``EndContract.control_buses``);
+  partition's (``MOVER``, ``MoverContract.control_buses``);
 - the memory latency ``L`` is **excluded**: the shell does not know it, and each call
   adds it (``MEMORY_LATENCY``, what the exploration report states). A frame a call is
   the bound that holds for any batch, since the batch is the driver's runtime argument;
-- its beat times over a frame (``EndContract.times``), one a cycle, or once the memory
+- its beat times over a frame (``MoverContract.times``), one a cycle, or once the memory
   word that completes the beat arrived where the memory is the narrower; FIFO sizing
   reads them, and its cycles as its span, as a kernel's port's pace
   (``finn.kernels.fifo_sizing.ends``);
 - it initiates one AXI memory port into the shell's memory interconnect
-  (``EndContract.memory_ports``), which the shell's static region scales by;
+  (``MoverContract.memory_ports``), which the shell's static region scales by;
 - its resources (``iodma_hls_resources``), by its widths: its memory port
   (``intfWidth``), its stream (``streamWidth``, the free side's ``tdata``) and the
   converters between them (``converter_kind``: none where the two are equal, one
   where either divides the other, two through their least common multiple
   otherwise). They are the shell's, not the channel's (``Channel.resource_use``):
-  out of context (``SHELL_CHARACTERISED``), which overstates the placed end.
+  out of context (``SHELL_CHARACTERISED``), which overstates the placed mover.
 
-A boundary channel exports its end's contract under ``END`` (none without an end),
+A boundary channel exports its mover's contract under ``MOVER`` (none without a mover),
 which the shell sums with its static region (``finn.custom_op.kernels.shell``).
-The end exports its cycles a frame under ``CYCLES``, the channel's member that it is:
-the channel's are at least its end's.
-These ends are not ``finn.dataflow.ends``'s, which are the two beat sequences a channel's
-producer and consumer present (``End``, ``Ends``).
+The mover exports its cycles a frame under ``CYCLES``, the channel's member that it is:
+the channel's are at least its mover's.
+A mover is not a channel's end (``finn.dataflow.ends``: the two beat sequences a channel's
+producer and consumer present, ``End``, ``Ends``).
 """
 
 from __future__ import annotations
@@ -86,18 +86,18 @@ from finn.kernels.utilization import Fit
 from finn.platform.capabilities import Resources
 
 IODMA_HLS = "iodma_hls"
-"""The kind of the ``IODMA_hls`` end."""
+"""The kind of the ``IODMA_hls`` mover."""
 
 MEMORY_LATENCY = "memory latency: unmeasured; each call adds L"
-"""What an end's cycles leave out, as the exploration report states it."""
+"""What a mover's cycles leave out, as the exploration report states it."""
 
-END = ViewKey("end", default_semantics(tuple))
-"""A boundary channel's end, as its contract (``EndContract``): one, or none without an
-end. The shell's budget check counts their AXI-Lite buses, and it sums their
+MOVER = ViewKey("mover", default_semantics(tuple))
+"""A boundary channel's mover, as its contract (``MoverContract``): one, or none without an
+mover. The shell's budget check counts their AXI-Lite buses, and it sums their
 resources and counts their memory ports."""
 
 NO_CONVERTER, DIVISIBLE, LCM = "none", "divisible", "lcm"
-"""The converters between an end's memory port and its stream (``converter_kind``)."""
+"""The converters between a mover's memory port and its stream (``converter_kind``)."""
 
 
 def converter_kind(memory_width: int, stream_width: int) -> str:
@@ -118,7 +118,7 @@ def converter_kind(memory_width: int, stream_width: int) -> str:
 # divisible stream); within 3.1 %, characterised on 80-bit streams only.
 IODMA_LEAST_PORT = 64
 """The narrowest memory port characterised; a narrower one is stated at it (a 16-bit
-output end measured above the 64-bit one)."""
+output mover measured above the 64-bit one)."""
 IODMA_IN_LUT = Fit(985.5, (0.854, 1.644))
 IODMA_IN_FF = Fit(1376.4, (4.191, 2.860))
 IODMA_IN_LCM_LUT = Fit(1247.9, (0.270, 1.351))
@@ -128,8 +128,8 @@ IODMA_OUT_FF = Fit(1606.8, (4.047, 3.179))
 IODMA_OUT_LCM_LUT = Fit(1433.3, (0.296, 1.481))
 IODMA_OUT_LCM_FF = Fit(1879.5, (1.010, 5.048))
 IODMA_IN_BUFFER_BITS = 36
-"""The input end's read buffer: a RAMB18 for each 36 bits of its memory port (1, 2, 4
-and 7.5 RAMB36 at 64, 128, 256 and 512 bits, at every stream width); the output end
+"""The input mover's read buffer: a RAMB18 for each 36 bits of its memory port (1, 2, 4
+and 7.5 RAMB36 at 64, 128, 256 and 512 bits, at every stream width); the output mover
 has none."""
 
 
@@ -159,9 +159,9 @@ def iodma_hls_resources(*, direction: str, intf_width: int, stream_width: int) -
 
 
 @dataclass(frozen=True, kw_only=True)
-class EndOffer:
-    """What a shell offers a boundary channel's free side: an end's ``kind`` (a key of
-    ``ENDS``), its memory port's widest (``width_cap``, bits), the frames each call
+class MoverOffer:
+    """What a shell offers a boundary channel's free side: a mover's ``kind`` (a key of
+    ``MOVERS``), its memory port's widest (``width_cap``, bits), the frames each call
     moves (``frames_per_call``), and the cycles each call adds beside the memory
     latency, with a width converter (``call_converted``) and without
     (``call_direct``)."""
@@ -181,10 +181,10 @@ class EndOffer:
             raise ValueError("a call adds no fewer than zero cycles")
 
 
-def iodma_hls(width_cap: int, *, frames_per_call: int = 1) -> EndOffer:
-    """The ``IODMA_hls`` end, its memory port at most ``width_cap`` bits, with its call
+def iodma_hls(width_cap: int, *, frames_per_call: int = 1) -> MoverOffer:
+    """The ``IODMA_hls`` mover, its memory port at most ``width_cap`` bits, with its call
     constants as measured: 4 cycles a call with a width converter, 13 without."""
-    return EndOffer(
+    return MoverOffer(
         kind=IODMA_HLS,
         width_cap=width_cap,
         frames_per_call=frames_per_call,
@@ -194,8 +194,8 @@ def iodma_hls(width_cap: int, *, frames_per_call: int = 1) -> EndOffer:
 
 
 @dataclass(frozen=True, kw_only=True)
-class EndContract:
-    """An end's facts, as the shell integrates it and an exploration costs it:
+class MoverContract:
+    """A mover's facts, as the shell integrates it and an exploration costs it:
 
     - ``kind``; ``direction``: ``in`` (memory to the module's input) or ``out``;
     - the stream side, the free side's contract: ``port`` (its AXIS port), ``tdata``
@@ -246,17 +246,17 @@ class EndContract:
         return tuple(max(beat, ceil((beat + 1) * words / beats) - 1) for beat in range(beats))
 
 
-class IodmaEnd(Space):
-    """The ``IODMA_hls`` end on a free side (``side``), where ``offers`` offer it."""
+class IodmaMover(Space):
+    """The ``IODMA_hls`` mover on a free side (``side``), where ``offers`` offer it."""
 
-    offers: tuple[EndOffer, ...] = Param()
+    offers: tuple[MoverOffer, ...] = Param()
     side: StreamContract = Param()
 
     @constraint
     def offered(self) -> bool | Rejected:
         """The shell offers this kind."""
         if not any(offer.kind == IODMA_HLS for offer in self.offers):
-            return reject("end-not-offered", f"the shell offers no {IODMA_HLS} end here")
+            return reject("mover-not-offered", f"the shell offers no {IODMA_HLS} mover here")
         return True
 
     @constraint
@@ -266,10 +266,10 @@ class IodmaEnd(Space):
         repeated = passes(form)
         if repeated > 1:
             return reject(
-                "end-repetition",
-                f"{self.side.transport.name}: an {IODMA_HLS} end moves one pass of a "
+                "mover-repetition",
+                f"{self.side.transport.name}: an {IODMA_HLS} mover moves one pass of a "
                 f"{list(form.shape)} buffer a frame, and this free side presents it "
-                f"{repeated} times a frame (repetition by the host or the end is not "
+                f"{repeated} times a frame (repetition by the host or the mover is not "
                 "designed yet)",
             )
         return True
@@ -281,15 +281,15 @@ class IodmaEnd(Space):
         one = period(self.side.form)
         if not one.row_major:
             return reject(
-                "end-order",
-                f"{self.side.transport.name}: an {IODMA_HLS} end moves a row-major buffer, "
+                "mover-order",
+                f"{self.side.transport.name}: an {IODMA_HLS} mover moves a row-major buffer, "
                 f"and this free side presents {one.beats} beats of {one.lanes} lanes of "
                 f"{list(one.shape)} in another order",
             )
         return True
 
     @derived
-    def contract(self) -> EndContract:
+    def contract(self) -> MoverContract:
         """Its facts on ``side``, sized by its offer (see the module docstring)."""
         (offer,) = (offer for offer in self.offers if offer.kind == IODMA_HLS)
         side = self.side
@@ -298,7 +298,7 @@ class IodmaEnd(Space):
         converter = memory != tdata
         # Seen from inside the module, its input is the AXIS target.
         direction = "in" if side.transport.endpoint is Endpoint.TARGET else "out"
-        return EndContract(
+        return MoverContract(
             kind=IODMA_HLS,
             direction=direction,
             port=side.transport.name,
@@ -320,8 +320,8 @@ class IodmaEnd(Space):
 
     @derived
     def frame_cycles(self) -> int:
-        """Its cycles a frame (``EndContract.cycles``)."""
-        contract: EndContract = self.contract
+        """Its cycles a frame (``MoverContract.cycles``)."""
+        contract: MoverContract = self.contract
         return contract.cycles
 
     # Cost, not validity: read apart from its constraints.
@@ -330,21 +330,21 @@ class IodmaEnd(Space):
     exports = {CYCLES: cycles}
 
 
-ENDS: dict[str, type[Space] | Space] = {IODMA_HLS: IodmaEnd}
-"""The ends a shell can offer a free side, by kind."""
+MOVERS: dict[str, type[Space] | Space] = {IODMA_HLS: IodmaMover}
+"""The movers a shell can offer a free side, by kind."""
 
 
 __all__ = [
     "DIVISIBLE",
-    "END",
-    "ENDS",
+    "MOVER",
+    "MOVERS",
     "IODMA_HLS",
     "LCM",
     "MEMORY_LATENCY",
     "NO_CONVERTER",
-    "EndContract",
-    "EndOffer",
-    "IodmaEnd",
+    "IodmaMover",
+    "MoverContract",
+    "MoverOffer",
     "converter_kind",
     "iodma_hls",
     "iodma_hls_resources",

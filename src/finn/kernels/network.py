@@ -1092,7 +1092,7 @@ class Network:
     def own_resources(self) -> QueryResult[Resources] | None:
         """Its own statement of what it uses, members included, or None: a plain network
         makes none; a partition's states its members', and in its shell, its total with its
-        ends and static region."""
+        movers and static region."""
         return None
 
     def __repr__(self) -> str:

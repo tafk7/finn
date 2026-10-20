@@ -458,7 +458,7 @@ def step_build_bitfile(
     delivered clock is noted as a warning, against the throughput step_target_throughput
     folded to, where the partition's body records one.
 
-    ``hw_debug``: insert integrated logic analyzers on the ends' streams."""
+    ``hw_debug``: insert integrated logic analyzers on the movers' streams."""
     _refuse_shell(cfg, "step_build_bitfile")
     _refuse_drift(model, cfg, "bitfile")
     _, body, _ = partition_body(model)

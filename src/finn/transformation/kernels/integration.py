@@ -2,26 +2,26 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The integration export: what a shell's integration builds around the build's
-partition, read from its network's ends.
+partition, read from its network's movers.
 
 ``integration(model)`` takes the build's parent graph (its one partition node,
 ``finn.core.graph.partition.partition_body``), refuses a body whose design its check did
 not verify as it is now (``refuse_unverified``), configures the partition's network as
-hardware generation does (``configured_network``) and reads the ends its boundary channels
+hardware generation does (``configured_network``) and reads the movers its boundary channels
 place
-(``Channel.end_contract``) and its shell's row. For the Zynq block design
+(``Channel.mover_contract``) and its shell's row. For the Zynq block design
 (``vivado-block-design``, the ``pynq`` shell) it states:
 
 - the partition's IP: its instance, named as its node, and its VLNV;
-- each end as an ``IODMA_hls`` (``IodmaConfiguration``), its node attributes from the
-  end's facts: vectors ``(1, beats)``, the stream's bytes a beat, memory and stream
+- each mover as an ``IODMA_hls`` (``IodmaConfiguration``), its node attributes from the
+  mover's facts: vectors ``(1, beats)``, the stream's bytes a beat, memory and stream
   widths, as ``InsertIODMA`` sized them. ``IODMA_hls`` moves bytes: its ``dataType``
   stays the ``UINT8`` container and its generated code is the one it always was; the
-  stream's element is the end's (``EndContract.element``);
-- the connections, each from its source pin to its sink pin: each end to its
-  partition port over AXI-Stream, each end's memory port to the memory interconnect's
-  next slave port over AXI-MM, each AXI-Lite bus (in the order: input ends, the
-  partition's, output ends) from the control interconnect's next master port, and every
+  stream's element is the mover's (``MoverContract.element``);
+- the connections, each from its source pin to its sink pin: each mover to its
+  partition port over AXI-Stream, each mover's memory port to the memory interconnect's
+  next slave port over AXI-MM, each AXI-Lite bus (in the order: input movers, the
+  partition's, output movers) from the control interconnect's next master port, and every
   instance's clock and reset from the shell's;
 - the clock: the period asked (the target's), which the shell's processor is asked for;
 - the addresses: each AXI-Lite bus from the row's ``control_base``, in that order,
@@ -29,13 +29,13 @@ place
   control map, three scalar registers, fits the least; a partition's bus takes
   ``2**awaddr`` bytes, as its IP's register map states).
 
-It wires one AXI-Lite bus and one memory port an end: an end whose contract states
+It wires one AXI-Lite bus and one memory port a mover: a mover whose contract states
 other counts is refused, by name (``wire_one_bus_each``), as is a partition bus with
 no ``awaddr`` (no aperture).
 
-The names are the block design's: ends ``idma<i>`` and ``odma<j>`` by direction in port
+The names are the block design's: movers ``idma<i>`` and ``odma<j>`` by direction in port
 order, the static region's instances ``<ip>_0`` (``finn.platform.shells.StaticRegion``), and an
-end's pins those of its ``IODMA_hls`` IP as the pynq shell's runner packages it
+mover's pins those of its ``IODMA_hls`` IP as the pynq shell's runner packages it
 (``IODMA_PINS``).
 
 It is a function of the configured network: the export is the integration's (a block
@@ -56,14 +56,14 @@ from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.custom_op.kernels.shell import configured_network, refuse_unverified
 from finn.kernels.artifacts.abi import Bus, StandardProtocol
 from finn.kernels.artifacts.ipxact import vlnv
-from finn.kernels.ends import IODMA_HLS, EndContract
+from finn.kernels.movers import IODMA_HLS, MoverContract
 from finn.platform.shells import VIVADO_BLOCK_DESIGN
 
 if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
-END_INSTANCES = {"in": "idma", "out": "odma"}
-"""An end's instance name in the block design by its direction, numbered in port order."""
+MOVER_INSTANCES = {"in": "idma", "out": "odma"}
+"""A mover's instance name in the block design by its direction, numbered in port order."""
 
 IODMA_PINS = {
     "stream_in": "s_axis_0",
@@ -71,7 +71,7 @@ IODMA_PINS = {
     "memory": "m_axi_gmem0",
     "control": "s_axi_control_0",
 }
-"""The pins of an ``IODMA_hls`` end's IP, its one node packaged as a stitched IP (the pynq
+"""The pins of an ``IODMA_hls`` mover's IP, its one node packaged as a stitched IP (the pynq
 shell's runner, ``finn.shells.pynq.runner``)."""
 
 CLOCK, RESET = "ap_clk", "ap_rst_n"
@@ -80,7 +80,7 @@ CLOCK, RESET = "ap_clk", "ap_rst_n"
 
 @dataclass(frozen=True, kw_only=True)
 class IodmaConfiguration:
-    """An ``IODMA_hls`` node for an end: its ``direction``; ``vectors``, the frame's beats
+    """An ``IODMA_hls`` node for a mover: its ``direction``; ``vectors``, the frame's beats
     as ``numInputVectors``; ``channels``, the stream's bytes a beat (``NumChannels``)
     in the byte ``container`` (``dataType``); and its ``memory_width``
     (``intfWidth``) and ``stream_width`` (``streamWidth``), bits."""
@@ -106,8 +106,8 @@ class IodmaConfiguration:
 
 
 @dataclass(frozen=True, kw_only=True)
-class IntegratedEnd:
-    """An end in the integration: its ``instance``, the boundary ``tensor`` and partition
+class IntegratedMover:
+    """A mover in the integration: its ``instance``, the boundary ``tensor`` and partition
     ``port`` it meets, the tensor's ``shape`` (one inference, as the graph states it),
     its facts (``contract``) and its ``IODMA_hls`` node (``iodma``)."""
 
@@ -115,7 +115,7 @@ class IntegratedEnd:
     tensor: str
     port: str
     shape: tuple[int, ...]
-    contract: EndContract
+    contract: MoverContract
     iodma: IodmaConfiguration
 
 
@@ -151,13 +151,13 @@ class Integration:
     period_ns: float
     partition: str
     vlnv: str
-    ends: tuple[IntegratedEnd, ...]
+    movers: tuple[IntegratedMover, ...]
     connections: tuple[Connection, ...]
     addresses: tuple[Address, ...]
 
-    def end(self, instance: str) -> IntegratedEnd:
-        """The end named ``instance``."""
-        (found,) = (end for end in self.ends if end.instance == instance)
+    def mover(self, instance: str) -> IntegratedMover:
+        """The mover named ``instance``."""
+        (found,) = (mover for mover in self.movers if mover.instance == instance)
         return found
 
     def report(self) -> dict[str, Any]:
@@ -170,17 +170,17 @@ class Integration:
             "host_runtime": self.host_runtime,
             "period_ns": self.period_ns,
             "partition": {"instance": self.partition, "vlnv": self.vlnv},
-            "ends": [
+            "movers": [
                 {
-                    "instance": end.instance,
-                    "tensor": end.tensor,
-                    "port": end.port,
-                    "shape": list(end.shape),
-                    "kind": end.contract.kind,
-                    "element": end.contract.element.dtype.name,
-                    "iodma": end.iodma.attributes,
+                    "instance": mover.instance,
+                    "tensor": mover.tensor,
+                    "port": mover.port,
+                    "shape": list(mover.shape),
+                    "kind": mover.contract.kind,
+                    "element": mover.contract.element.dtype.name,
+                    "iodma": mover.iodma.attributes,
                 }
-                for end in self.ends
+                for mover in self.movers
             ],
             "connections": [
                 {"kind": item.kind, "source": item.source, "sink": item.sink}
@@ -202,13 +202,13 @@ class IntegrationError(Refusal):
         super().__init__((Finding(FindingKind.REJECTION, code, owner, message),))
 
 
-def iodma_configuration(contract: EndContract) -> IodmaConfiguration:
-    """An ``IODMA_hls`` end's node, from its facts, in its byte container."""
+def iodma_configuration(contract: MoverContract) -> IodmaConfiguration:
+    """An ``IODMA_hls`` mover's node, from its facts, in its byte container."""
     if contract.kind != IODMA_HLS:
         raise IntegrationError(
-            "end-kind-unsupported",
+            "mover-kind-unsupported",
             "iodma_configuration",
-            f"an end of kind {contract.kind!r} is not an {IODMA_HLS} end",
+            f"a mover of kind {contract.kind!r} is not an {IODMA_HLS} mover",
         )
     return IodmaConfiguration(
         direction=contract.direction,
@@ -220,17 +220,17 @@ def iodma_configuration(contract: EndContract) -> IodmaConfiguration:
     )
 
 
-def wire_one_bus_each(contract: EndContract, where: str) -> None:
-    """Refuse an end (at ``where``, for the message) the block design cannot wire: it
-    connects one AXI-Lite bus and one memory port an end, while the shell's budgets
-    and costing read the counts the end's contract states."""
+def wire_one_bus_each(contract: MoverContract, where: str) -> None:
+    """Refuse a mover (at ``where``, for the message) the block design cannot wire: it
+    connects one AXI-Lite bus and one memory port a mover, while the shell's budgets
+    and costing read the counts the mover's contract states."""
     if (contract.control_buses, contract.memory_ports) != (1, 1):
         raise IntegrationError(
-            "end-buses-unwired",
+            "mover-buses-unwired",
             VIVADO_BLOCK_DESIGN,
-            f"{where}: its {contract.kind} end states {contract.control_buses} AXI-Lite "
+            f"{where}: its {contract.kind} mover states {contract.control_buses} AXI-Lite "
             f"buses and {contract.memory_ports} memory ports; the {VIVADO_BLOCK_DESIGN!r} "
-            "integration wires one of each an end",
+            "integration wires one of each a mover",
         )
 
 
@@ -265,15 +265,15 @@ def integration(model: ModelWrapper) -> Integration:
     region = row.static_region
     memory, control = f"{region.memory_interconnect}_0", f"{region.control_interconnect}_0"
     counts = {"in": 0, "out": 0}
-    ends = []
+    movers = []
     for tensor, port in boundary:
         channel = point.channel(tensor)
-        if not channel.ended:
+        if not channel.offered:
             raise IntegrationError(
-                "end-absent",
+                "mover-absent",
                 VIVADO_BLOCK_DESIGN,
-                f"{tensor} ({port}): the {row.shell!r} shell places no end on it; its "
-                "integration connects every boundary port to an end",
+                f"{tensor} ({port}): the {row.shell!r} shell places no mover on it; its "
+                "integration connects every boundary port to a mover",
             )
         shape = known_shape(body, tensor)
         if shape is None:
@@ -282,13 +282,13 @@ def integration(model: ModelWrapper) -> Integration:
                 VIVADO_BLOCK_DESIGN,
                 f"{tensor} ({port}): the partition states no shape for it",
             )
-        contract: EndContract = channel.end_contract
+        contract: MoverContract = channel.mover_contract
         wire_one_bus_each(contract, f"{tensor} ({port})")
-        prefix = END_INSTANCES[contract.direction]
+        prefix = MOVER_INSTANCES[contract.direction]
         instance = f"{prefix}{counts[contract.direction]}"
         counts[contract.direction] += 1
-        ends.append(
-            IntegratedEnd(
+        movers.append(
+            IntegratedMover(
                 instance=instance,
                 tensor=tensor,
                 port=port,
@@ -297,39 +297,39 @@ def integration(model: ModelWrapper) -> Integration:
                 iodma=iodma_configuration(contract),
             )
         )
-    inputs = [end for end in ends if end.contract.direction == "in"]
-    outputs = [end for end in ends if end.contract.direction == "out"]
+    inputs = [mover for mover in movers if mover.contract.direction == "in"]
+    outputs = [mover for mover in movers if mover.contract.direction == "out"]
     partition = node.name
     buses = [
         pin
         for pin in point.module.abi.pins
         if isinstance(pin, Bus) and pin.protocol is StandardProtocol.AXILITE
     ]
-    # The block design's order: the input ends, the partition, the output ends.
+    # The block design's order: the input movers, the partition, the output movers.
     control_buses: list[tuple[str, int]] = [
-        (f"{end.instance}/{IODMA_PINS['control']}", region.control_aperture) for end in inputs
+        (f"{mover.instance}/{IODMA_PINS['control']}", region.control_aperture) for mover in inputs
     ]
     control_buses += [
         (f"{partition}/{bus.name}", _aperture(bus, region.control_aperture)) for bus in buses
     ]
     control_buses += [
-        (f"{end.instance}/{IODMA_PINS['control']}", region.control_aperture) for end in outputs
+        (f"{mover.instance}/{IODMA_PINS['control']}", region.control_aperture) for mover in outputs
     ]
     connections: list[Connection] = []
-    for end in ends:
-        if end.contract.direction == "in":
+    for mover in movers:
+        if mover.contract.direction == "in":
             stream = Connection(
-                "axis", f"{end.instance}/{IODMA_PINS['stream_out']}", f"{partition}/{end.port}"
+                "axis", f"{mover.instance}/{IODMA_PINS['stream_out']}", f"{partition}/{mover.port}"
             )
         else:
             stream = Connection(
-                "axis", f"{partition}/{end.port}", f"{end.instance}/{IODMA_PINS['stream_in']}"
+                "axis", f"{partition}/{mover.port}", f"{mover.instance}/{IODMA_PINS['stream_in']}"
             )
         connections.append(stream)
-    for index, end in enumerate([*inputs, *outputs]):
+    for index, mover in enumerate([*inputs, *outputs]):
         connections.append(
             Connection(
-                "aximm", f"{end.instance}/{IODMA_PINS['memory']}", f"{memory}/S{index:02d}_AXI"
+                "aximm", f"{mover.instance}/{IODMA_PINS['memory']}", f"{memory}/S{index:02d}_AXI"
             )
         )
     addresses = []
@@ -339,7 +339,11 @@ def integration(model: ModelWrapper) -> Integration:
         offset = -(-base // aperture) * aperture
         addresses.append(Address(interface, offset, aperture))
         base = offset + aperture
-    for instance in [*(end.instance for end in inputs), partition, *(e.instance for e in outputs)]:
+    for instance in [
+        *(mover.instance for mover in inputs),
+        partition,
+        *(e.instance for e in outputs),
+    ]:
         connections.append(Connection("clock", f"{memory}/aclk", f"{instance}/{CLOCK}"))
         connections.append(Connection("reset", f"{memory}/aresetn", f"{instance}/{RESET}"))
     target = read_target(body)
@@ -352,19 +356,19 @@ def integration(model: ModelWrapper) -> Integration:
         period_ns=target.platform.period_ns,
         partition=partition,
         vlnv=vlnv(partition),
-        ends=tuple(ends),
+        movers=tuple(movers),
         connections=tuple(connections),
         addresses=tuple(addresses),
     )
 
 
 __all__ = [
-    "END_INSTANCES",
+    "MOVER_INSTANCES",
     "IODMA_PINS",
     "VIVADO_BLOCK_DESIGN",
     "Address",
     "Connection",
-    "IntegratedEnd",
+    "IntegratedMover",
     "Integration",
     "IntegrationError",
     "IodmaConfiguration",

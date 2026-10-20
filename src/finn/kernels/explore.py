@@ -885,7 +885,7 @@ class Seam:
 
     def resources(self, network: Composition) -> Stated | tuple[Finding, ...]:
         """What the network uses of the device as far as it is stated (``Stated``): its
-        own statement where it makes one (a shell's: its partition's, its ends' and its
+        own statement where it makes one (a shell's: its partition's, its movers' and its
         static region's sum), else its members' sum, exact; or, where members state none,
         the sum of those that do, a lower bound, naming the others (``Stated.unstated``);
         or why it states nothing, its findings: the open choices it waits on."""
@@ -1803,13 +1803,13 @@ class MaxThroughput:
     budget's network is costed with its reopened choices given back (``Seam.restore``:
     what the fold does not decide at its prior value, or where that is refused by its
     policy), by the network's resources as far as they are stated (``Seam.resources``: a
-    shell's adds its ends' and its static region's). Of every network tried, it keeps the
+    shell's adds its movers' and its static region's). Of every network tried, it keeps the
     one that fits with the fewest cycles, ties to the least resources (the highest
     use-to-budget ratio first, then the next; then the first tried), and returns it,
     restored as it was costed. Fewer cycles, more
     resources is the assumption, as ``TargetCycles``' is; where a budget's network
     departs from it (a larger budget reaching fewer cycles or using more, or a budget
-    relaxed above itself: an end's converter), the report states it, and the
+    relaxed above itself: a mover's converter), the report states it, and the
     search goes on as bisection: a better network it reached on the way is still kept.
 
     A member that states no resources (a compressor reducer, a memory in ``auto``, a
@@ -2043,7 +2043,7 @@ class MaxThroughput:
     def _departures(self) -> list[str]:
         """Where the budgets tried depart from the search's assumption (fewer cycles,
         more resources): a budget relaxed above itself past the fastest bottleneck, or
-        relaxed and still not met (the refold changes an end's converter); and a
+        relaxed and still not met (the refold changes a mover's converter); and a
         larger budget that reached fewer cycles or used more of a budgeted resource."""
         found = [
             f"budget {tried.cycles} relaxed to {tried.relaxed_to}, reaching {tried.reached.cycles}"
@@ -2136,7 +2136,7 @@ class SizeFifos:
     held value (kept, not committed), else its earlier value, else the interim channel
     rule's, ``auto`` (FinnLib's own selection by depth and width) (``_style``). A channel
     the model does not read (a
-    boundary without an end, a memory source) is direct, with why. Where the seam refuses
+    boundary without a mover, a memory source) is direct, with why. Where the seam refuses
     a channel's FIFO, that channel falls back to direct, its refusal reported, and the
     batch is attempted again.
 

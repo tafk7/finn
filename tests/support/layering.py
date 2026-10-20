@@ -355,7 +355,7 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernel_ops",
     ),
     # The shells' builds: what builds the partition into a shell (the pynq shell's block
-    # design, its ends' IODMAs, its driver), from the integration export. Below the
+    # design, its movers' IODMAs, its driver), from the integration export. Below the
     # flow: the builder runs them. The board's driver files (finn.shells.pynq.data)
     # import pynq, each other and, to validate, dataset_loading.
     Layer(

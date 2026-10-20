@@ -243,11 +243,11 @@ def test_a_body_s_inherited_target_is_in_its_network_s_key() -> None:
 
 
 def test_a_body_bound_plain_and_in_shells_keeps_a_network_each() -> None:
-    """One body bound in one cache, in the verifying mode, three ways: plain (no ends
-    offered), in Ultra96's shell (its row offers an end) and in a row of the same ends
+    """One body bound in one cache, in the verifying mode, three ways: plain (no movers
+    offered), in Ultra96's shell (its row offers a mover) and in a row of the same movers
     with no static region of its own. Each is its own entry, as it is bound without the
     cache, and binding each again is its own entry's hit, verified. Retargeted by hand,
-    its new ends are set as the cut sets them (``MakeCutChoices``)."""
+    its new movers are set as the cut sets them (``MakeCutChoices``)."""
     model = kernel_model()
     configure_partition(model)
     write_target(model, ULTRA96)
@@ -255,7 +255,7 @@ def test_a_body_bound_plain_and_in_shells_keeps_a_network_each() -> None:
     nodes = list(model.graph.node)
     row = shell_row("pynq", "Ultra96")
     bare = replace(row, static_region=None)
-    assert row.ends and row.static_region is not None
+    assert row.movers and row.static_region is not None
 
     def bound() -> tuple[Partition, InShell, InShell]:
         plain = network(model, nodes, name="chain")
@@ -277,8 +277,8 @@ def test_a_body_bound_plain_and_in_shells_keeps_a_network_each() -> None:
     assert after["network hits verified"] == before["network hits verified"] + 3
     assert after["mismatches"] == before["mismatches"]
     plain, shelled, stripped = first
-    assert type(plain) is Partition and plain.ends == ()
-    assert shelled.row == row and stripped.row == bare and shelled.ends == stripped.ends
+    assert type(plain) is Partition and plain.movers == ()
+    assert shelled.row == row and stripped.row == bare and shelled.movers == stripped.movers
     resources = [each.own_resources() for each in first]
     assert len(set(map(repr, resources))) == 3
     assert resources == [each.own_resources() for each in fresh]

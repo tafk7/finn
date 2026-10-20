@@ -473,10 +473,10 @@ def test_the_shell_s_cycles_and_resources_are_its_members() -> None:
     assert cycles == Available(12)
     used = bound.own_resources()
     assert isinstance(used, Available)
-    # The ip shell has no ends or static region: its resources are its members' sum.
+    # The ip shell has no movers or static region: its resources are its members' sum.
     split = shell.shell_resources(bound)
     assert isinstance(split, shell.ShellResources)
-    assert split.ends == () and split.static_region == ()
+    assert split.movers == () and split.static_region == ()
     assert split.total == used.value
 
 

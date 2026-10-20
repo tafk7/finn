@@ -85,7 +85,7 @@ TFC_BUILT = tfc_built()
 #: What conversion, the cut and the fold store on TFC beside ``TFC_BUILT``, 27 values
 #: forcing left unstored: each MatMul's core (conversion's first valid), each
 #: Thresholding's AXI-Lite and UltraRAM stages (conversion's), each weight's source and
-#: each activation's adapter (the interim channel rule's one possible), the end of each
+#: each activation's adapter (the interim channel rule's one possible), the mover of each
 #: boundary channel the pynq row offers one, and the output adapter the fold at 1e6 frames
 #: a second brings into play on each activation and on the first MatMul's output (the
 #: interim channel rule's).
@@ -98,8 +98,8 @@ STORED: dict[str, dict[str, object]] = {
         for index in range(4)
     },
     "MatMul_0_out0": {"output_adapter": "vpc"},
-    "Reshape_0_out0": {"end": "iodma_hls"},
-    "MatMul_3_out0": {"end": "iodma_hls"},
+    "Reshape_0_out0": {"mover": "iodma_hls"},
+    "MatMul_3_out0": {"mover": "iodma_hls"},
 }
 
 #: Every value TFC_W2A2 is built with and stores at 1,000,000 frames a second, 84 by

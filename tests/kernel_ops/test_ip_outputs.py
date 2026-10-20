@@ -125,7 +125,7 @@ def test_the_description_beside_the_ip_reads_back_against_the_modules_pins(
 
 def test_the_description_states_each_streams_passes_a_frame(tmp_path: Path) -> None:
     """On ``ip``, whose integrator moves the streams, the Chain's streamed w2 crosses the
-    boundary once per row of x, three times a frame, which no end refuses there: the
+    boundary once per row of x, three times a frame, which no mover refuses there: the
     description states each stream's passes (``order``), so that its integrator supplies
     w2 three times (SZ11 (f))."""
     configure_partition(model := kernel_model(second_weights=False))
@@ -373,7 +373,7 @@ def test_verification_records_the_design_it_verified_and_a_save_keeps_it(
     assert again.get(OUTPUT_VERIFIED) == design_digest(again) == before
 
 
-#: Ultra96 in the Zynq shell, whose integration reads the partition's ends.
+#: Ultra96 in the Zynq shell, whose integration reads the partition's movers.
 ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
 
 

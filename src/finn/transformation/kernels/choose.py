@@ -71,12 +71,12 @@ verifies the partition (``fifo-stale``), unless a strategy dropped it to be size
 
 The resources are the shell's (``shell_resources``), each member its own
 statement (``finn.kernels.base.RESOURCES``): its partition (the partition's kernels
-and its channels, boundary channels included), each end and its static region, and
+and its channels, boundary channels included), each mover and its static region, and
 their sum, ``used``; where members state none (a memory in ``auto``, which
 Vivado places), ``used`` is the sum of those that
 do, a lower bound (``lower_bound``), each other named with why (``unstated``, its
 findings), and the
-ends and the static region are not counted. The ends' and the static region's are out
+movers and the static region are not counted. The movers' and the static region's are out
 of context, which the report says with how far that overstates the placed shell; the
 ``ip`` shell has neither, so its sum is its partition's. The platform's are its part's totals
 (``Platform.resources``), nothing subtracted: what the platform has, not a budget,
@@ -91,8 +91,8 @@ naming the binding resource, whichever strategy chose it: the report ranks and s
 it, and refuses nothing.
 
 The shell is the model's target's (``finn.custom_op.kernels.shell``): its row offers the
-boundary channels its ends (none: the ``ip`` shell). Where a channel has an end, the
-report has its row (``ends``: its facts and its cycles a frame, a frame a call and 16) and
+boundary channels its movers (none: the ``ip`` shell). Where a channel has a mover, the
+report has its row (``movers``: its facts and its cycles a frame, a frame a call and 16) and
 says what the cycles leave out (``memory_latency``: unmeasured, each call adds it).
 """
 
@@ -122,7 +122,6 @@ from finn.custom_op.kernels.shell import (
     shell_resources,
 )
 from finn.kernels.base import RESOURCES
-from finn.kernels.ends import MEMORY_LATENCY, EndContract
 from finn.kernels.explore import (
     FIFOS_BY_MODEL,
     FIFOS_NOT_CHECKED,
@@ -136,6 +135,7 @@ from finn.kernels.explore import (
     TargetThroughput,
 )
 from finn.kernels.fifo import FifoKernel
+from finn.kernels.movers import MEMORY_LATENCY, MoverContract
 from finn.kernels.network import Key, dotted
 from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
 from finn.platform.capabilities import Platform
@@ -166,14 +166,14 @@ class Explored:
 
 RESOURCES_COUNTED = (
     "the shell: its partition (the partition's kernels and channels, boundary channels "
-    "included), each end and its static region, each its own statement"
+    "included), each mover and its static region, each its own statement"
 )
 """What the report's resources count, as it states it."""
 
 RESOURCES_LOWER_BOUND = (
     "a lower bound: the members that state their own resources (the partition's kernels "
     "and channels, boundary channels included); the members named under unstated state "
-    "none, and the ends and the static region are not counted while they do not"
+    "none, and the movers and the static region are not counted while they do not"
 )
 """What the report's resources count where members state none, as it states it."""
 
@@ -193,7 +193,7 @@ def resources_exact(platform: Platform | None) -> str:
         f"storage are the RTL's, in {table}; a FIFO's shallow hi space, which Vivado "
         "places, is a model; its other LUTs and FFs are models (about 10 %); a memory "
         "in auto, other than a FIFO's, is placed by Vivado, not stated (unstated); the "
-        "ends and the static region are models, "
+        "movers and the static region are models, "
         + SHELL_CHARACTERISED
         + ", which overstate the placed shell (by about 28 % of its LUTs, TFC on Ultra96)"
     )
@@ -244,7 +244,7 @@ def _resources_report(
         if stated is None
         else {
             "partition": asdict(stated.partition),
-            "ends": {name: asdict(each) for name, each in stated.ends},
+            "movers": {name: asdict(each) for name, each in stated.movers},
             "static_region": {name: asdict(each) for name, each in stated.static_region},
         },
         "lower_bound": lower_bound,
@@ -380,11 +380,11 @@ def _placed(seam: Seam, network: Partition) -> dict[Key, object]:
     return found
 
 
-def _end_rows(network: Partition, ends: Sequence[str]) -> dict[str, dict[str, object]]:
-    """Each end's facts and cycles a frame, by its boundary channel."""
+def _mover_rows(network: Partition, movers: Sequence[str]) -> dict[str, dict[str, object]]:
+    """Each mover's facts and cycles a frame, by its boundary channel."""
     rows: dict[str, dict[str, object]] = {}
-    for name in ends:
-        contract: EndContract = network.member(name).end_contract
+    for name in movers:
+        contract: MoverContract = network.member(name).mover_contract
         rows[name] = {
             "kind": contract.kind,
             "direction": contract.direction,
@@ -561,9 +561,9 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         part_report(read_target(model).part),
         network.row.caveat,
     )
-    ends: dict[str, object] = {}
-    if network.ends and not cost.waiting and not cost.refused:
-        ends = {"ends": _end_rows(network, network.ends), "memory_latency": MEMORY_LATENCY}
+    movers: dict[str, object] = {}
+    if network.movers and not cost.waiting and not cost.refused:
+        movers = {"movers": _mover_rows(network, network.movers), "memory_latency": MEMORY_LATENCY}
     final = seam.chosen(network)
     placed = [dotted(key) for key in _placed(seam, network)]
     # The strategy's last check of the FIFOs, where it made one (Seam.check_fifos).
@@ -582,7 +582,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         },
         **({} if check is None else {"fifo_check": check.report()}),
         **_cost_report(network, cost, resources),
-        **ends,
+        **movers,
         "seconds": round(time.perf_counter() - started, 3),
     }
     found = tuple(getattr(strategy, "findings", ()))
@@ -621,7 +621,7 @@ def exploration_summary(explored: Explored, label: str) -> list[str]:
 
 
 def shell_bottleneck(model: ModelWrapper) -> Bottleneck | None:
-    """The slowest members of a partition model of KernelOps' network, ends included,
+    """The slowest members of a partition model of KernelOps' network, movers included,
     and their cycles a frame, its saved choices replayed (None where a member's cycles
     wait on a choice left open)."""
     bound = in_shell(model, model.graph.node)

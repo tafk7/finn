@@ -37,9 +37,9 @@ depth (``0``: direct) and why. The least depth counts the words the FIFO must
 hold; the DEPTH proposed is the least whose native storage holds them
 (``least_depth_holding``: FinnLib's FIFO is a shift register of five words up to
 33, so a DEPTH of two holds up to five). A boundary's free side is paced by the
-end the shell places there (``Channel.end``, ``finn.kernels.ends``): its beat
-times over a frame, and its cycles a frame as its span. A boundary without an
-end (the ``ip`` shell: its integrator's pacing), a memory source (paced by its
+mover the shell places there (``Channel.mover``, ``finn.kernels.movers``): its beat
+times over a frame, and its cycles a frame as its span. A boundary without a
+mover (the ``ip`` shell: its integrator's pacing), a memory source (paced by its
 consumer) and an end no schedule paces are not modelled: direct, with that
 reason. So is an adapter
 chain other than one ``vpc`` before the transport and one ``input_gen`` after it.
@@ -64,9 +64,9 @@ from math import ceil
 
 from finn.kernels.adapters import Convert
 from finn.kernels.channels import Channel
-from finn.kernels.ends import EndContract
 from finn.kernels.fifo import least_depth_holding
 from finn.kernels.input_generator import Generate, NestBuffer, nest_buffer
+from finn.kernels.movers import MoverContract
 from finn.kernels.transport import StreamContract
 
 
@@ -298,10 +298,10 @@ def _pattern(contract: StreamContract, side: str) -> Pattern:
 
 
 def _free(channel: Channel) -> Pattern:
-    """A boundary's free side, paced by its end: its beat times and its cycles a frame."""
-    if not channel.ended:
+    """A boundary's free side, paced by its mover: its beat times and its cycles a frame."""
+    if not channel.offered:
         raise NotModelled("a boundary: not modelled")
-    contract: EndContract = channel.end_contract
+    contract: MoverContract = channel.mover_contract
     return Pattern(contract.times, contract.cycles)
 
 

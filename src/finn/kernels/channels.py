@@ -27,8 +27,8 @@ A channel with an end on one side only is a boundary: its ``port`` names the mod
 AXIS port (``in0_V``), refused where absent (``channel-boundary``). The boundary presents
 what its inner end presents, by one rule: an input without the replay or window its
 receiver realizes (``unreplayed``), an output as produced, neither with markers. Where a
-shell offers ends (``end_offer``, ``finn.kernels.ends``), the ``end`` Decision places one
-on that free side; it binds no RTL in the module and exports its contract (``END``) for
+shell offers movers (``mover_offer``, ``finn.kernels.movers``), the ``mover`` Decision places one
+on that free side; it binds no RTL in the module and exports its contract (``MOVER``) for
 the shell's budget check and resources.
 
 A channel whose tensor has a known value (``contents``) has a ``source`` (``SOURCES``: a
@@ -37,7 +37,7 @@ consumer reads it; with several sets, the source's set port is the channel's int
 (``set_end``), which the index tensor's channel consumes.
 
 As a kernel with children, its members are its source, its adapters' stages, its FIFO
-(``ChannelFifo``) and its end, in the order the stream runs through them. It exports
+(``ChannelFifo``) and its mover, in the order the stream runs through them. It exports
 their netlists with its hops (``NETLIST``), its boundary's AXIS bus (``BOUNDARY``), and
 their cycles, buffering and resources. It is no module of its own.
 """
@@ -80,9 +80,9 @@ from finn.kernels.base import (
     ComposedKernel,
     PortEnd,
 )
-from finn.kernels.ends import END, ENDS, EndContract, EndOffer, IodmaEnd
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.movers import MOVER, MOVERS, IodmaMover, MoverContract, MoverOffer
 from finn.kernels.transport import (
     AxisBeat,
     Mismatch,
@@ -228,7 +228,7 @@ class Channel(ComposedKernel):
 
     ``producer`` and ``consumer`` are the ends of the ports on it, facts its network
     gives (``Interface``). A side without an end is the boundary, presented as the AXIS
-    port ``port``, where the ``end`` the shell offers (``end_offer``) sits. A channel
+    port ``port``, where the ``mover`` the shell offers (``mover_offer``) sits. A channel
     with a known value has its ``source`` as its producer; with several sets, the
     source reads the set indices (``index_tensor``) from the channel whose consumer is
     ``set_end``, the one interface it presents. ``platform`` is the target's: its
@@ -250,13 +250,13 @@ class Channel(ComposedKernel):
     sets: int = Param(default=1)
     index_tensor: Tensor = Param(required=False)
     platform: Platform = Param()
-    end_offer: tuple[EndOffer, ...] = Param(required=False)
+    mover_offer: tuple[MoverOffer, ...] = Param(required=False)
     # Whether the channel carries a known value, which its source drives: where nothing
     # supplies ``contents``, the source never applies and its candidates are not compiled.
     valued = supplied(contents)
-    # Whether a shell offers ends on its free side: where nothing supplies the offers,
-    # the end never applies and its candidates are not compiled.
-    ended = supplied(end_offer)
+    # Whether a shell offers movers on its free side: where nothing supplies the offers,
+    # the mover never applies and its candidates are not compiled.
+    offered = supplied(mover_offer)
 
     @derived
     def attached(self) -> tuple[PortEnd, ...]:
@@ -373,7 +373,7 @@ class Channel(ComposedKernel):
 
     @derived
     def free_side(self) -> StreamContract | Rejected:
-        """The side without a port's end, as the module presents it: where a shell's end
+        """The side without a port's end, as the module presents it: where a shell's mover
         sits."""
         found = self.endpoints
         if found.source_owner is None:
@@ -381,18 +381,18 @@ class Channel(ComposedKernel):
         if found.sink_owner is None:
             return found.sink
         return reject(
-            "channel-end", "an end sits on a boundary's free side, and both sides have a port"
+            "channel-mover", "a mover sits on a boundary's free side, and both sides have a port"
         )
 
-    end: IodmaEnd = Decision(ENDS, when=ended, offers=end_offer, side=free_side)
-    end_contract = View(end.contract)
+    mover: IodmaMover = Decision(MOVERS, when=offered, offers=mover_offer, side=free_side)
+    mover_contract = View(mover.contract)
 
     @derived
-    def placed_end(self) -> tuple[EndContract, ...]:
-        """Its end's contract, or none without an end."""
-        if not self.ended:
+    def placed_mover(self) -> tuple[MoverContract, ...]:
+        """Its mover's contract, or none without a mover."""
+        if not self.offered:
             return ()
-        contract: EndContract = self.end_contract
+        contract: MoverContract = self.mover_contract
         return (contract,)
 
     @derived
@@ -584,7 +584,7 @@ class Channel(ComposedKernel):
     @derived
     def frame_cycles(self) -> int:
         """The clock cycles a frame takes through its own members: the slowest's (its
-        source's, its adapters' stages', its end's), one beat a cycle at best; a FIFO
+        source's, its adapters' stages', its mover's), one beat a cycle at best; a FIFO
         states none, and a channel of wires takes none of its own."""
         return max((item.value for item in self.member_cycles), default=0)
 
@@ -595,7 +595,7 @@ class Channel(ComposedKernel):
         sides = ((ends.source_owner, ends.source), (ends.sink_owner, ends.sink))
         return tuple(contract.transport.axis_bus() for owner, contract in sides if owner is None)
 
-    end_export = View(placed_end)
+    mover_export = View(placed_mover)
 
     exports = {
         NETLIST: ComposedKernel.netlist,
@@ -603,7 +603,7 @@ class Channel(ComposedKernel):
         CYCLES: ComposedKernel.cycles,
         BUFFERING: ComposedKernel.buffering,
         RESOURCES: ComposedKernel.resources,
-        END: end_export,
+        MOVER: mover_export,
     }
 
 

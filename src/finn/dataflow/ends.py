@@ -11,8 +11,8 @@ traverses the tensor's shape, the source's values fit the tensor's element,
 and the tensor's fit the sink's. What joins the two sequences is
 ``finn.dataflow.plan``. How the ends are found (the kernels' ports, the network's
 boundary) is the channel's, not this layer's. These ends are not
-``finn.kernels.ends``'s, which are where a partition's boundary stream meets
-memory (``Channel.end``).
+the movers of ``finn.kernels.movers``, where a partition's boundary stream meets
+memory (``Channel.mover``).
 """
 
 from __future__ import annotations

@@ -3,7 +3,7 @@
 
 """The most throughput within resources (``MaxThroughput``) through the exploration, and
 the warning over the part: on the ``ip`` shell (the part, its total its partition's) and
-in the Zynq shell (``pynq``: its two ends and its static region join the partition's).
+in the Zynq shell (``pynq``: its two movers and its static region join the partition's).
 
 The budget is a fraction of the part's totals (xczu3eg: 70 560 LUT, 141 120 FF, 432
 RAMB18, 360 DSP), against the shell's total, the report's ``resources.used``. On
@@ -14,8 +14,8 @@ The search on the Chain without the KernelOps is ``tests/kernels/test_explore.py
 
 Folded by ``TargetCycles`` and restored, the Chain on ip reaches 3 cycles a frame at
 669 LUT (its fastest), 12 at 359, 24 at 321 and 48 (its least parallelism) at 298. In
-the Zynq shell its ends hold it at 16 cycles at the fastest, and its shell's total is
-about 9 500 LUT more: the ends' and the static region's.
+the Zynq shell its movers hold it at 16 cycles at the fastest, and its shell's total is
+about 9 500 LUT more: the movers' and the static region's.
 
 TFC's least parallelism (no budget) reaches 50 176 cycles a frame at 1 131 LUT on ip,
 10 875 in the Zynq shell; at 3 136 cycles it uses 1 196 and 10 940. Each end-to-end
@@ -162,8 +162,8 @@ def test_tfc_on_ip_searches_to_the_least_budget_that_fits(tfc: ModelWrapper) -> 
 
 
 def test_in_the_zynq_shell_the_search_costs_the_shell_s_total() -> None:
-    """The whole part on pynq: the fastest fold, relaxed to the ends' 16 cycles, fits at
-    once, so it is the one fold. What it costs is the shell's total, its ends and its
+    """The whole part on pynq: the fastest fold, relaxed to the movers' 16 cycles, fits at
+    once, so it is the one fold. What it costs is the shell's total, its movers and its
     static region beside its partition."""
     report = explored(kernel_model(), ULTRA96, [Defaults(), *within(1.0)])
     searched = report["strategies"][1]
@@ -172,7 +172,7 @@ def test_in_the_zynq_shell_the_search_costs_the_shell_s_total() -> None:
     ]
     assert report["bottleneck"] == {"members": ["x", "y"], "cycles": 16}
     shell = report["resources"]["shell"]
-    parts = [shell["partition"], *shell["ends"].values(), *shell["static_region"].values()]
+    parts = [shell["partition"], *shell["movers"].values(), *shell["static_region"].values()]
     summed = total(Resources(**part) for part in parts)
     assert (
         searched["used"]
@@ -189,7 +189,7 @@ def test_where_nothing_fits_the_search_states_it_and_keeps_the_least_parallelism
     ``resource-budget`` limitation, in its report and the result), naming the binding
     resource, and keeps the least parallelism; the point is explored and
     saved all the same (RC5). Here the least parallelism uses more LUTs than the fastest
-    fold (a wider end), a departure the report states. FIFOs join after the search:
+    fold (a wider mover), a departure the report states. FIFOs join after the search:
     sizing places one on the output, so the report's total is above the search's."""
     model = kernel_model()
     write_target(model, ULTRA96)
@@ -223,12 +223,12 @@ def test_where_nothing_fits_the_search_states_it_and_keeps_the_least_parallelism
 @pytest.mark.slow
 def test_tfc_in_the_zynq_shell_searches_to_the_least_budget_that_fits(tfc: ModelWrapper) -> None:
     """15.57 % of the part's LUTs (10 986), between the least parallelism's shell total,
-    10 913, and the 11 077 of 2 048 cycles: 3 136 cycles at 10 978, the ends and the
+    10 913, and the 11 077 of 2 048 cycles: 3 136 cycles at 10 978, the movers and the
     static region beside the partition."""
     searched, report = searched_tfc(tfc, "pynq", 0.1557, 10986, 3136)
     resources = report["resources"]
     assert resources["used"]["lut"] == 10978 > resources["shell"]["partition"]["lut"] + 9000
-    # The input end bounds the shell: the fastest fold, relaxed to 53, reaches 62 at
+    # The input mover bounds the shell: the fastest fold, relaxed to 53, reaches 62 at
     # the end (SZ6), a departure stated and not corrected.
     tried = searched["tried"]
     assert (tried[0]["relaxed_to"], tried[0]["bottleneck"]) == (53, 62)

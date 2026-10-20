@@ -7,11 +7,11 @@ Zynq block design, from the partition's integration export
 
 The runner (``build_pynq``):
 
-- generates each end's ``IODMA_hls`` IP in a scratch model of its one node, configured
-  as the export states it (``IntegratedEnd.iodma``), through code generation and Vitis
+- generates each mover's ``IODMA_hls`` IP in a scratch model of its one node, configured
+  as the export states it (``IntegratedMover.iodma``), through code generation and Vitis
   HLS (``ipgen.prepare_ip``, ``ipgen.hls_synth_ip``, through the HLS cache), and
   packages it as the block design instantiates it (``ipgen.create_stitched_ip``, named
-  as the end's instance: ``xilinx_finn:finn:<instance>:1.0`` with the pins
+  as the mover's instance: ``xilinx_finn:finn:<instance>:1.0`` with the pins
   ``IODMA_PINS`` names);
 - packages the partition (``PackagePartition``: its body states its IP in
   ``finn.outputs``), unless its body already states an IP whose key is the one the body
@@ -84,13 +84,13 @@ from finn.shells.pynq.ipgen import (
 from finn.toolchain.launcher import StrPath, Toolchain, ToolFailed, host_toolchain
 from finn.toolchain.vivado import PL_CLOCKS, delivered_clock, tcl_quote, vivado_jobs
 from finn.transformation.kernels.choose import shell_bottleneck
-from finn.transformation.kernels.integration import IntegratedEnd, Integration, integration
+from finn.transformation.kernels.integration import IntegratedMover, Integration, integration
 from finn.transformation.kernels.package import PackagePartition, ip_key
 from finn.util.basic import make_build_dir
 
 _LOG = logging.getLogger(__name__)
 
-#: The domain of the IODMA_hls node an end's IP is generated from.
+#: The domain of the IODMA_hls node a mover's IP is generated from.
 IODMA_DOMAIN = iodma.__name__
 
 #: The project the template creates (``create_project finn_zynq_link``).
@@ -110,7 +110,7 @@ STATIC_INSTANCES = {
 @dataclass(frozen=True)
 class PynqOptions:
     """The ``pynq`` shell's build options (step_build_bitfile's ``hw_debug`` setting on a
-    ``pynq`` target). ``hw_debug``: integrated logic analyzers on the ends' streams and
+    ``pynq`` target). ``hw_debug``: integrated logic analyzers on the movers' streams and
     on the memory interconnect's port to the processor."""
 
     hw_debug: bool = False
@@ -146,56 +146,56 @@ class PynqBuilt:
 
 
 def _instances(export: Integration) -> list[str]:
-    """The block design's instances in its order: the input ends, the partition, the
-    output ends."""
-    inputs = [end.instance for end in export.ends if end.contract.direction == "in"]
-    outputs = [end.instance for end in export.ends if end.contract.direction == "out"]
+    """The block design's instances in its order: the input movers, the partition, the
+    output movers."""
+    inputs = [mover.instance for mover in export.movers if mover.contract.direction == "in"]
+    outputs = [mover.instance for mover in export.movers if mover.contract.direction == "out"]
     return [*inputs, export.partition, *outputs]
 
 
-def iodma_model(end: IntegratedEnd) -> ModelWrapper:
+def iodma_model(mover: IntegratedMover) -> ModelWrapper:
     """A scratch model of one ``IODMA_hls`` node, ``<instance>_IODMA_hls_0``, configured as
-    the export states ``end``: from its memory side (``<instance>_memory``) to its
+    the export states ``mover``: from its memory side (``<instance>_memory``) to its
     boundary tensor, or back, each of the tensor's shape and the channel's element."""
-    shape = list(end.shape)
-    memory = helper.make_tensor_value_info(f"{end.instance}_memory", TensorProto.FLOAT, shape)
-    stream = helper.make_tensor_value_info(end.tensor, TensorProto.FLOAT, shape)
-    source, sink = (memory, stream) if end.contract.direction == "in" else (stream, memory)
+    shape = list(mover.shape)
+    memory = helper.make_tensor_value_info(f"{mover.instance}_memory", TensorProto.FLOAT, shape)
+    stream = helper.make_tensor_value_info(mover.tensor, TensorProto.FLOAT, shape)
+    source, sink = (memory, stream) if mover.contract.direction == "in" else (stream, memory)
     node = helper.make_node(
         "IODMA_hls",
         [source.name],
         [sink.name],
-        name=f"{end.instance}_IODMA_hls_0",
+        name=f"{mover.instance}_IODMA_hls_0",
         domain=IODMA_DOMAIN,
-        **end.iodma.attributes,
+        **mover.iodma.attributes,
     )
     model = ModelWrapper(
         qonnx_make_model(
-            helper.make_graph([node], end.instance, [source], [sink]),
+            helper.make_graph([node], mover.instance, [source], [sink]),
             opset_imports=[helper.make_opsetid("", 13), helper.make_opsetid(IODMA_DOMAIN, 1)],
         )
     )
-    element = end.contract.element
+    element = mover.contract.element
     for each in (source, sink):
         model.set_tensor_datatype(each.name, element.dtype, element.value_range)
     return model
 
 
-def generate_end_ip(
-    end: IntegratedEnd, part: str, period_ns: float, directory: Path, toolchain: Toolchain
+def generate_mover_ip(
+    mover: IntegratedMover, part: str, period_ns: float, directory: Path, toolchain: Toolchain
 ) -> InstanceIP:
-    """``end``'s IP: its scratch model (``iodma_model``, saved in ``directory``) through
-    code generation and Vitis HLS (cached), packaged as ``end.instance`` (``ipgen``),
+    """``mover``'s IP: its scratch model (``iodma_model``, saved in ``directory``) through
+    code generation and Vitis HLS (cached), packaged as ``mover.instance`` (``ipgen``),
     every tool run through ``toolchain``."""
-    model = iodma_model(end)
+    model = iodma_model(mover)
     model = prepare_ip(model, period_ns)
     model = hls_synth_ip(model, part, toolchain=toolchain)
-    model = create_stitched_ip(model, part, period_ns, end.instance, toolchain=toolchain)
+    model = create_stitched_ip(model, part, period_ns, mover.instance, toolchain=toolchain)
     directory.mkdir(parents=True, exist_ok=True)
-    model.save(str(directory / f"{end.instance}.onnx"))
+    model.save(str(directory / f"{mover.instance}.onnx"))
     vlnv = model.get_metadata_prop("vivado_stitch_vlnv")
     if vlnv is None:
-        raise RuntimeError(f"{end.instance}: its packaged IP states no VLNV")
+        raise RuntimeError(f"{mover.instance}: its packaged IP states no VLNV")
     return InstanceIP(vlnv=vlnv, repositories=tuple(ip_repositories(model)))
 
 
@@ -208,7 +208,7 @@ def _interface(own: str, peer: str) -> str:
 
 
 def debug_lines(export: Integration) -> list[str]:
-    """Integrated logic analyzers on every stream between an end and the partition (each
+    """Integrated logic analyzers on every stream between a mover and the partition (each
     net named by its master pin) and on the memory interconnect's port to the
     processor, as the template's debug block sets them on the HWCustomOp flow's."""
     streams = [
@@ -357,7 +357,7 @@ def build_pynq(
     options: PynqOptions = PynqOptions(),
 ) -> PynqBuilt:
     """Build the parent graph ``model`` in the Zynq block design of its
-    integration export ``export`` (see the module docstring): the ends' IPs (their
+    integration export ``export`` (see the module docstring): the movers' IPs (their
     scratch models saved in ``directory``) and the partition's (its body saved with
     its IP stated, or the IP the body states already when its key is the one the body
     has now), the project (a new build directory), Vivado run on it, and
@@ -390,9 +390,9 @@ def build_pynq(
                 raise RuntimeError(f"{node.name}: its body states no packaged IP")
             ips[instance] = InstanceIP(vlnv, (ip,))
         else:
-            end = export.end(instance)
-            ips[instance] = generate_end_ip(
-                end, export.part, export.period_ns, Path(directory), toolchain
+            mover = export.mover(instance)
+            ips[instance] = generate_mover_ip(
+                mover, export.part, export.period_ns, Path(directory), toolchain
             )
     project: str = make_build_dir(prefix="vivado_zynq_proj_")  # type: ignore[no-untyped-call]
     script = project + "/ip_config.tcl"
@@ -530,12 +530,12 @@ class BuildPynqBitfile(Transformation):
     hardware handoff (bitfile/), the routed timing report (report/post_route_timing.rpt),
     the template's impl_1 hierarchical utilization (report/placed_utilization.xml), each
     IP's out-of-context synthesis utilization (report/out_of_context/), and the
-    delivered clock beside the one asked, with the partition network's bottleneck, ends
+    delivered clock beside the one asked, with the partition network's bottleneck, movers
     included, and the throughput asked (``objective_fps``, step_target_throughput's)
     (report/delivered_clock.json), with its limitations (``delivered_clock_findings``,
     the report's ``findings``). The shell, board, part and clock are the target the
-    partition's body states (``pynq_row``); the ends' scratch models are kept in
-    ``ends/`` beside the body's file.
+    partition's body states (``pynq_row``); the movers' scratch models are kept in
+    ``movers/`` beside the body's file.
 
     The parent graph states the bitfile and its hardware handoff (``finn.outputs``; the
     reports beside them: ``bitfile_directory``), the digest of the partition's design
@@ -581,7 +581,7 @@ class BuildPynqBitfile(Transformation):
         built = build_pynq(
             model,
             export,
-            Path(body_file).parent / "ends",
+            Path(body_file).parent / "movers",
             toolchain=toolchain,
             jobs=toolchain.selection.vivado_jobs,
             options=self.options,
@@ -665,7 +665,7 @@ __all__ = [
     "collect",
     "debug_lines",
     "delivered_clock_findings",
-    "generate_end_ip",
+    "generate_mover_ip",
     "iodma_model",
     "project_script",
     "pynq_row",

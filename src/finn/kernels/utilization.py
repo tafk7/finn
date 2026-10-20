@@ -53,7 +53,7 @@ CHARACTERISED = "xczu3eg-sbva484-1-i, Vivado 2025.2, out of context at 5 ns"
 """Where every leaf kernel's ``Fit`` was characterised: the part, the tool and the clock."""
 
 SHELL_CHARACTERISED = "out of context, Vivado 2025.2, xczu3eg/xczu7ev"
-"""Where the shell's statements (its ends' and its static region's) were characterised:
+"""Where the shell's statements (its movers' and its static region's) were characterised:
 each IP synthesized on its own, which overstates what the placed shell uses."""
 
 

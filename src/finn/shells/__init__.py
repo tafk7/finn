@@ -5,7 +5,7 @@
 shell row of the platform registry that integrates the partition
 (``finn.platform.shells``; the ``ip`` shell has none: its user integrates the IP).
 
-- ``pynq``: the Zynq block design (``pynq.runner``), its ends' IODMAs (``pynq.iodma``,
+- ``pynq``: the Zynq block design (``pynq.runner``), its movers' IODMAs (``pynq.iodma``,
   ``pynq.ipgen``), its PYNQ driver (``pynq.driver``) and its deployment package
   (``pynq.deploy``).
 

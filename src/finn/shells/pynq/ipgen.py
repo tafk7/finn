@@ -2,7 +2,7 @@
 # Copyright (C) 2023-2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""An end's IODMA as the IP the pynq shell's block design instantiates: its scratch model
+"""A mover's IODMA as the IP the pynq shell's block design instantiates: its scratch model
 of one ``IODMA_hls`` node (``finn.shells.pynq.iodma``) through code generation
 (``prepare_ip``), Vitis HLS through the HLS cache (``hls_synth_ip``) and a block design
 of its own, packaged (``create_stitched_ip``, on the Tcl ``stitched_ip_tcl`` writes),
@@ -49,7 +49,7 @@ def _iodma(model: ModelWrapper) -> IODMA_hls:
     (node,) = model.graph.node
     op = getCustomOp(node)
     if not isinstance(op, IODMA_hls):
-        raise TypeError(f"{node.name}: an end's scratch model holds one IODMA_hls, not {op!r}")
+        raise TypeError(f"{node.name}: a mover's scratch model holds one IODMA_hls, not {op!r}")
     return op
 
 
