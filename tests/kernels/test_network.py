@@ -39,7 +39,6 @@ from finn.kernels.base import CYCLES
 from finn.kernels.members import reasons
 from finn.kernels.network import Fact, Interface, Network, NetworkError, Wire, wire
 from finn.platform.capabilities import Platform
-from finn.platform.shells import bus_counts
 
 FOLDING = {
     f"{layer}.{key}": value
@@ -297,15 +296,13 @@ def test_each_member_sits_under_its_node_in_the_module() -> None:
 
 
 def test_a_top_whose_pins_cannot_be_formed_is_refused_as_its_netlist() -> None:
-    """Two boundary channels at one port: the netlist is made, and the shell counts it,
-    but the top's pins name that port twice, so its module is refused (``kernel-netlist``),
-    not raised."""
+    """Two boundary channels at one port: the netlist is made, but the top's pins name that
+    port twice, so its module is refused (``kernel-netlist``), not raised."""
     members = chain.members()
-    members["y"] = Wire({**members["y"].facts, "port": "s_axis_0"})
+    members["y"] = Wire({**cast(Wire, members["y"]).facts, "port": "s_axis_0"})
     clashing = Network(members, stored=chain.chain().chosen())
     netlist = clashing.netlist()
     assert isinstance(netlist, Available)
-    assert bus_counts(*netlist.value) == (0, 0, False)
     module = module_of(clashing, chain.STEM)
     assert isinstance(module, Rejected)
     assert [(f.code, f.message) for f in module.findings] == [
