@@ -21,24 +21,27 @@ shell of the model's target (``in_shell``).
   wiring.stored)``), its ends (``Interface(node, wiring.end)``, from the op's
   ``wiring``), and the target's platform. Only the selection's ONNX inputs and outputs
   are boundaries, named by the shell's convention ``s_axis_<i>`` and ``m_axis_<j>``, each
-  offered the ends given (``ends``; ``Channel.end``: one offered is forced, so nothing is
-  persisted). A channel has one consumer, so a tensor read more
-  than once is refused by name before anything is bound (``tensor-fan-out``): read by
-  two of the nodes (an edge, or a parameter both own), or read by one and at an output
-  boundary too (a graph output, or read outside the nodes). Fan-out waits for a channel
-  that forks;
+  offered the ends given (``ends``; ``Channel.end``, which the cut sets, first valid, by
+  the interim channel rule, and persists as any choice). A channel has one consumer, so a
+  tensor read more than once is refused by name before anything is bound
+  (``tensor-fan-out``): read by two of the nodes (an edge, or a parameter both own), or
+  read by one and at an output boundary too (a graph output, or read outside the nodes).
+  Fan-out waits for a channel that forks;
 - **its order**: members are declared input boundary channels, the other channels, the
   kernels, output boundary channels (``Reshape_0_out0``, ..., ``MatMul_0``, ...), the
   module's instance order; each member's node in the module is its name with ``\\W`` as
   ``_``. A node and a tensor, or two nodes, of one name are refused: a member is named
   once, as the choices log ``kernel_choices.json`` names it;
-- **its stored choices**, replayed as each member is bound (``Network``'s ``stored``):
-  every node's attributes and every channel's ``finn.channel`` on its tensor (in a
-  partition's body only, ``refuse_outside_body``). A stored choice the current facts
-  refuse is dropped as stale, with why (``Partition.stale``); a channel whose ends wait
-  holds its choices until it is bound. With every KernelOp of the model selected, choices
-  a tensor states that is no channel of it are stale too. Nothing is written: ``persist``,
-  the one writer of choices, writes a network's choices back, each owner's whole;
+- **its stored choices**, set as each member is bound, as one change (``Network``'s
+  ``stored``): every node's attributes and every channel's ``finn.channel`` on its tensor
+  (in a partition's body only, ``refuse_outside_body``). A stored value outside its domain
+  over the current facts is dropped as stale, with why (``Partition.stale``); a stored set
+  that breaks a rule refuses the bind, naming it (``network-invalid``, the rule's findings
+  its causes); a channel whose
+  ends wait holds its choices until it is bound. Nothing is filled in. With every KernelOp
+  of the model selected, choices a tensor states that is no channel of it are stale too.
+  Nothing is written: ``persist``, the one writer of choices, writes a network's choices
+  back, each owner's whole;
 - **its outputs**: each node's output is its kernel's product. Where the graph's
   annotation of an output (its shape's element count and last axis, its datatype and
   its range) differs from what its producer states, the graph is stale, refused by name
@@ -60,14 +63,14 @@ In the verifying mode a hit is bound again with no cache open and compared.
 
 A partition's resources (``Partition.own_resources``) are its members'. The shell's
 budgets and resources over a network (its members', its ends' and its static region's),
-and the body's choices given their baselines (``baseline_choices``) on the network in its
-shell, are ``finn.custom_op.kernels.shell``'s.
+and the cut's choices (``make_cut_choices``: the channels' by the interim channel rule) on
+the network in its shell, are ``finn.custom_op.kernels.shell``'s.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Collection, Hashable, Iterable, Mapping
+from collections.abc import Callable, Hashable, Iterable, Mapping
 from dataclasses import replace
 from functools import partial
 from typing import TYPE_CHECKING, Any, TypeVar, cast
@@ -87,7 +90,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import edge_tensor, initializer, reading
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest
 from finn.core.reporting.findings import Finding, FindingKind
-from finn.core.space import Available, QueryResult, Rejected, Space, Unresolved
+from finn.core.space import Available, QueryResult, Rejected, Space, Unresolved, inspection
 from finn.custom_op.kernels.base import KernelOp, kernel_op, typed
 from finn.kernels.artifacts.module import Composed, ProducerIdentity
 from finn.kernels.base import RESOURCES
@@ -123,14 +126,14 @@ def _primitive(value: object) -> bool:
 
 
 def _described(bound: Network, stored: Mapping[Key, object]) -> dict[str, tuple[Finding, ...]]:
-    """What replay dropped of ``bound``'s stored choices, by dotted key, each with the
-    kernel's findings kept: the value stored, and for a value outside its domain the cases
-    the decision could take now (its viable ones, read where the dropped choice is open
-    again), which its message names."""
+    """What the bind dropped of ``bound``'s stored choices (each a value outside its
+    domain), by dotted key, each with the kernel's findings kept: the value stored, and the
+    values the choice could take now (its possible ones, ``Network.viable``, read where the
+    dropped choice is open), which its message names."""
     dropped = bound.dropped
     if not dropped:
         return {}
-    cases = {key: item.cases for key, item in bound.viable({name for name, _ in dropped})}
+    cases = {key: item.cases for key, item in bound.viable(dropped)}
 
     def described(key: Key, finding: Finding) -> Finding:
         details = dict(finding.details)
@@ -152,8 +155,8 @@ def _described(bound: Network, stored: Mapping[Key, object]) -> dict[str, tuple[
 def stale_text(key: str, found: Iterable[Finding]) -> str:
     """A stale choice as a line, its key (dotted, ``first.compute.packed.pe``) named once:
     ``first.compute.packed.pe = 3: not one of 1, 2, 4 (domain-membership)``, the value
-    where the findings hold it, each finding's message and its code (an inapplicable one
-    is its code only)."""
+    where the findings hold it, each finding's message and its code (a message that is its
+    code, its code only)."""
     findings = tuple(found)
     values = [dict(each.details)["value"] for each in findings if "value" in dict(each.details)]
     named = f"{key} = {values[0]}" if values else key
@@ -170,10 +173,10 @@ class Partition(Network):
     """A network bound from a graph's nodes (see the module docstring): its ``name`` (its
     module's), its ``boundary`` (each boundary tensor and its port, inputs then outputs),
     the boundary channels offered ends (``ends``), the stored choices dropped as stale
-    where it was bound, by key, with the kernel's findings (``stale``: each keeps its code,
-    its owner and its details, which add the value stored, ``value``, and for a value
-    outside its domain the cases the decision could take, ``candidates``; ``stale_text``
-    makes a line of them), and whether it holds every KernelOp of its model (``whole``).
+    where it was bound, by key, with the kernel's findings (``stale``: each a value outside
+    its domain, keeping its code, its owner and its details, which add the value stored,
+    ``value``, and the values the choice could take, ``candidates``; ``stale_text`` makes a
+    line of them), and whether it holds every KernelOp of its model (``whole``).
     Immutable, as a network: a change returns another, which keeps these."""
 
     __slots__ = ("_memo", "boundary", "ends", "name", "stale", "whole")
@@ -516,7 +519,7 @@ def _key(
 def _observed(bound: Partition) -> object:
     """What is read of a network bound, to compare in the verifying mode: its class, its
     ends and shell (a shell's row, its resources), its members, their order, wiring and
-    nodes, each member's point as the member cache compares one, what replay dropped and
+    nodes, each member's point as the member cache compares one, what the bind dropped and
     why each unbound channel waits."""
     points = {
         each: observed(Configured(bound.member(each)))
@@ -618,8 +621,19 @@ def _bound(
             whole=whole,
         )
     except NetworkError as error:
-        raise KernelOpError.refused(
-            "network-invalid", "Partition", f"{name}: {error}", node=name
+        message = f"{name}: {error}"
+        raise KernelOpError(
+            message,
+            findings=(
+                Finding(
+                    FindingKind.REJECTION,
+                    "network-invalid",
+                    "Partition",
+                    message,
+                    (("node", name),),
+                    error.findings,
+                ),
+            ),
         ) from error
     _stale(model, bound, nodes, ops)
     return bound
@@ -660,27 +674,24 @@ def _write_channel(model: ModelWrapper, tensor: str, choices: Mapping[str, objec
         model.set(CHANNEL_KEYS[key], value, tensor=tensor)
 
 
-def persist(
-    model: ModelWrapper, network: Network, owners: Collection[str] | None = None
-) -> dict[str, dict[str, object]]:
+def persist(model: ModelWrapper, network: Network) -> dict[str, dict[str, object]]:
     """Write ``network``'s choices, a network of ``model``'s nodes (``network``), back
-    where they are stated, each owner's whole: every Decision it commits, and every choice
-    it keeps unchecked (a commitment whose check cannot conclude yet; a forced one is never
-    committed), and the choices an unbound channel holds, on its owner, a
+    where they are stated, each owner's whole: every choice it stores, whatever its state
+    (set, waiting or dormant), and the choices an unbound channel holds, on its owner, a
     kernel's node or a channel's tensor; a choice an owner holds that the network does
-    not (one replay dropped as stale) cleared, and, where it is a partition holding every
+    not (one the bind dropped as stale) cleared, and, where it is a partition holding every
     KernelOp of the model, so are the channel choices of a tensor that is no channel of it.
-    Of ``owners`` only, where named (conversion writes its node's own, and no tensor's).
 
-    The one writer of choices: a route to one is ``Hold`` in a step after the cut, this
-    function for the compiler, and ``support.configure.configured`` for a test. Channel
+    The one writer of a network's choices: a route to one is ``Hold`` in a step after the
+    cut, this function for the compiler (``persist_kernel`` beside it for conversion, one
+    node's kernel alone), and ``support.configure.configured`` for a test. Channel
     choices are a partition's body's only: written on a graph that is not (host nodes
     beside the KernelOps) they are refused, by name, before anything is written
     (``channel-choices-outside-body``). Every value is checked and encoded before any is
-    written, so a write cannot fail halfway; none is replayed on a fresh point, since the
-    network has bound each (its committed Decisions are checked as it commits them).
+    written, so a write cannot fail halfway; none is set again on a fresh point, since the
+    network has bound each (its choices are checked as they are set).
     Returns what each owner now holds, by graph name."""
-    names = [name for name in network.members if owners is None or name in owners]
+    names = list(network.members)
     held_by: dict[str, dict[str, object]] = {name: {} for name in names}
     for (owner, key), value in network.chosen(names).items():
         held_by[owner][key] = value
@@ -698,13 +709,29 @@ def persist(
         elif values or name in stated:
             _encoded(name, values)
             writes.append(_channel_write(model, name, values))
-    whole = owners is None and isinstance(network, Partition) and network.whole
+    whole = isinstance(network, Partition) and network.whole
     stray = [tensor for tensor in stated if whole and tensor not in held_by]
     for write in writes:
         write()
     for tensor in stray:
         model.clear(CHANNEL, tensor=tensor)
     return held_by
+
+
+def persist_kernel(model: ModelWrapper, node: NodeProto, point: Space) -> dict[str, object]:
+    """Write ``point``, the KernelOp ``node``'s kernel alone, on the node, its whole: every
+    choice it stores, by key, whatever its state (``inspection.states``: set, waiting or
+    dormant). Conversion's write (``finn.transformation.kernels.convert``): one node, no
+    network, nothing on a tensor. As ``persist``, every value is checked and encoded before
+    any is written. Returns what the node now holds."""
+    held = {
+        key: state.value
+        for key, state in inspection.states(point)
+        if isinstance(state, (inspection.Set, inspection.Waiting, inspection.Dormant))
+    }
+    op = kernel_op(model, node)
+    op._write(op._saved(held))
+    return held
 
 
 def _kernel_write(op: KernelOp, merged: Mapping[str, int | str]) -> Callable[[], None]:
@@ -724,5 +751,6 @@ __all__ = [
     "member",
     "network",
     "persist",
+    "persist_kernel",
     "stale_text",
 ]

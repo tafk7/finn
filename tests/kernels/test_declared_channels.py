@@ -193,8 +193,10 @@ def test_two_producers_on_one_channel_are_refused_by_the_channel():
     )
     refused = clash.member("shared").query(Channel.netlist)
     assert isinstance(refused, Rejected)
-    assert {f.code for f in refused.findings} == {"channel-users"}
-    assert "a.output, b.output" in refused.findings[0].message
+    # The origin, and beside it each guard that reads it (guard-refused).
+    assert {f.code for f in refused.findings} == {"channel-users", "guard-refused"}
+    (users,) = [f for f in refused.findings if f.code == "channel-users"]
+    assert "a.output, b.output" in users.message
 
 
 def test_a_boundary_channel_needs_its_port_name():
@@ -208,7 +210,10 @@ def test_a_boundary_channel_needs_its_port_name():
     )
     refused = unnamed.member("out").query(Channel.netlist)
     assert isinstance(refused, Rejected)
-    assert {(f.code, f.owner) for f in refused.findings} == {("channel-boundary", "endpoints")}
+    # The origin, and beside it each guard that reads it (guard-refused, by its scope).
+    assert {f.code for f in refused.findings} == {"channel-boundary", "guard-refused"}
+    origins = {(f.code, f.owner) for f in refused.findings if f.code != "guard-refused"}
+    assert origins == {("channel-boundary", "endpoints")}
 
 
 # -- the anchoring rule: a channel's facts read the members before it --------------------

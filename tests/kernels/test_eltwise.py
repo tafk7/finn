@@ -6,6 +6,8 @@ its test-side reference, and what its numeric sweep covers of its design space."
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 from support.helpers import eltwise, module_of
@@ -13,6 +15,7 @@ from support.kernel_specs.eltwise import computed
 
 from finn.core.space import (
     Available,
+    Decision,
     Param,
     Rejected,
     Space,
@@ -24,6 +27,7 @@ from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.configure import refusal
 from finn.kernels.eltwise import EltwiseKernel
 from finn.platform.capabilities import DspBlock, Platform
 from kernels.sweeps import eltwise_numeric
@@ -74,26 +78,63 @@ def test_eltwise_rounds_its_scale_to_binary32_and_lists_its_sources_in_order() -
 def test_eltwise_refuses_a_nonfinite_or_unrepresentable_native_scale(
     scale: float,
 ) -> None:
-    point = eltwise(scale=scale)
+    """The scale is refused on its own value, and the kernel through it, at the origin,
+    its PE still open (the kernel's rule reads facts alone). Setting PE breaks no rule
+    that was not broken before, so it is accepted, and the kernel stays refused."""
+    point = eltwise(scale=scale, pe=None)
     assert isinstance(point.query(EltwiseKernel.native_scale), Rejected)
-    assert isinstance(point.inspect(EltwiseKernel.module).accepted_result, Rejected)
+    assert isinstance(dict(inspection.states(point))["pe"], inspection.Open)
+    assert refused_by(point) == {("native_scale", "eltwise-scale")}
+    report = point.try_with_choices(pe=2)
+    assert report.accepted
+    assert refused_by(report.instance) == {("native_scale", "eltwise-scale")}
 
 
-def test_eltwise_refuses_unsupported_profiles() -> None:
+def refused_by(point: EltwiseKernel) -> set[tuple[str, str]]:
+    """The owner and code of each finding that refuses ``point``'s configuration (its
+    validity's false pieces)."""
+    return {(finding.owner, finding.code) for finding in refusal(inspection.validity(point))}
+
+
+@pytest.mark.parametrize(
+    ("profile", "code"),
+    (
+        ({"operation": "DIV"}, "eltwise-operation"),
+        ({"lhs": "INT4"}, "eltwise-integer-pair"),
+        ({"lhs": "BIPOLAR"}, "eltwise-integer-pair"),
+        ({"scale": 0.5}, "eltwise-scale"),
+        ({"operation": "MUL", "lhs": "FLOAT32", "scale": 0.5}, "eltwise-scale"),
+        ({"lhs": "FLOAT32", "target": DspBlock.DSP48E2}, "eltwise-target"),
+    ),
+)
+def test_eltwise_refuses_unsupported_profiles(profile: dict[str, Any], code: str) -> None:
+    """A profile the RTL does not implement is refused on its facts, its PE still open:
+    the kernel's rule reads facts alone, so the kernel reads refused from the start,
+    naming it. Setting PE breaks no rule that was not broken before, so it is accepted,
+    and the kernel stays refused by the same rule; a PE outside its domain is refused by
+    the domain."""
     with pytest.raises(ValueError, match="domain-membership"):
         eltwise(pe=0)
-    refused = (
-        eltwise(operation="DIV"),
-        eltwise(lhs="INT4"),
-        eltwise(lhs="BIPOLAR"),
-        eltwise(scale=0.5),
-        eltwise(operation="MUL", lhs="FLOAT32", scale=0.5),
-        eltwise(lhs="FLOAT32", target=DspBlock.DSP48E2),
-    )
-    assert all(
-        isinstance(point.inspect(EltwiseKernel.module).accepted_result, Rejected)
-        for point in refused
-    )
+    point = eltwise(pe=None, **profile)
+    assert isinstance(dict(inspection.states(point))["pe"], inspection.Open)
+    assert inspection.validity(point).status == "refused"
+    # BIPOLAR is no ordinary integer either: operands_supported refuses it beside.
+    assert ("implementation_supported", code) in refused_by(point)
+    report = point.try_with_choices(pe=2)
+    assert report.accepted
+    assert refused_by(report.instance) == refused_by(point)
+
+
+def test_eltwise_pe_is_a_divisor_of_the_channels_its_parameter_holds() -> None:
+    """PE's domain lists the channels' divisors, and admits none past the RTL's PE
+    parameter, a 32-bit integer: a type, not a rule."""
+    point = eltwise(pe=None)
+    (pe,) = inspection.viable(point, [EltwiseKernel.pe])
+    assert pe.values is not None and [item.value for item in pe.values] == [1, 2, 3, 6]
+    declared = EltwiseKernel.__dict__["pe"]
+    assert isinstance(declared, Decision)
+    assert declared.domain.accepts(candidate=2**31, extent=2**32) is True
+    assert declared.domain.accepts(candidate=2**32, extent=2**33) is False
 
 
 def test_eltwise_result_is_known_while_an_optional_parent_platform_is_unset() -> None:
@@ -111,7 +152,7 @@ def test_eltwise_result_is_known_while_an_optional_parent_platform_is_unset() ->
     point = design_space(OptionalPlatform()).with_choices({OptionalPlatform.arithmetic.pe: 2})
     assert point.arithmetic.result_dtype.name == "INT4"
     # Its validity waits on the platform; its module, a product, answers meanwhile.
-    assert inspection.validity(point.arithmetic).status == "undecided"
+    assert inspection.validity(point.arithmetic).status == "open"
     assessment = point.arithmetic.inspect(EltwiseKernel.module)
     assert isinstance(assessment.output_result, Available)
     assert isinstance(assessment.validity, Unresolved)

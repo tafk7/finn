@@ -8,7 +8,8 @@ PE channels a beat, channels innermost. The channel between them derives its
 plan from the two presentations, split at its transport, and exactly one
 adapter candidate a side carries it out: nothing for the same order, a ``vpc``
 before the transport for other lanes, an ``input_gen`` after it for another
-beat order, and both. A FIFO sits between the two sides. A channel that admits no adapter
+beat order, and both: each side's set first valid as the network builds the channel (the
+interim channel rule). A FIFO sits between the two sides. A channel that admits no adapter
 refuses a non-empty plan. FinnLib's ``inner_shuffle`` is not a candidate; a
 kernel with children places it explicitly (``TransposeKernel``, ``test_transpose.py``).
 """
@@ -30,6 +31,7 @@ from support.helpers import (
     FULL_DSP48E2,
     built,
     choose,
+    keyed,
     labels,
 )
 
@@ -39,8 +41,12 @@ from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, Traversal, vector_major
 from finn.kernels.adapters import Convert, realize
 from finn.kernels.channels import Channel, ChannelFifo
-from finn.kernels.configure import commit
+from finn.kernels.configure import chosen
 from finn.kernels.vpc import VpcKernel
+
+
+def handle(point, key):
+    return next(item.reference for item in inspection.decisions(point) if item.key == key)
 
 
 def stage_parameters(point):
@@ -133,16 +139,25 @@ def test_exactly_one_candidate_a_side_carries_out_each_plan():
             {"x.output_adapter": "vpc", "x.adapter": "input_gen"},
         ),
     ):
-        x = adapted(source, pe, commit_all=False).member("x")
-        # The one chain a side that carries out its plan is forced.
-        forced = {f"x.{item.key}": item for item in inspection.forced(x)}
-        assert {key: forced[key].value for key in forced if key.endswith("adapter")} == sides
-    # Every other candidate refuses its side's plan.
-    assert all("adapter-plan" in why for why in forced["x.adapter"].refused.values())
-    chosen = commit(x, {"adapter": "input_gen_vpc"})
-    refused = inspection.validity(chosen.adapter).result
-    assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"adapter-plan"}
+        x = adapted(source, pe).member("x")
+        # The one chain a side that carries out its plan is its first valid value, set as
+        # the network builds the channel (the interim channel rule).
+        adapters = {key: value for key, value in chosen(x).items() if key.endswith("adapter")}
+        assert {f"x.{key}": value for key, value in adapters.items()} == sides
+    # Every other candidate refuses its side's plan: possible values, one.
+    (adapter,) = inspection.viable(x, [handle(x, "adapter")])
+    assert adapter.cases == ("input_gen",)
+    assert all(
+        "adapter-plan" in {finding.code for rule in item.broken for finding in rule.result.findings}
+        for item in adapter.values or ()
+        if isinstance(item, inspection.Refused)
+    )
+    # Setting another is refused by the rule it breaks.
+    report = x.try_with_choices({handle(x, "adapter"): "input_gen_vpc"})
+    assert not report.accepted
+    assert {finding.code for rule in report.broken for finding in rule.result.findings} == {
+        "adapter-plan"
+    }
 
 
 def test_a_stream_admitting_no_adapter_refuses_its_plan():
@@ -151,8 +166,10 @@ def test_a_stream_admitting_no_adapter_refuses_its_plan():
     assert isinstance(refused, Rejected)
     plan = [finding for finding in refused.findings if finding.code == "channel-plan"]
     assert plan and "width_conversion" in plan[0].message
-    # Its adapter Decision does not apply.
+    # Its adapter Decision does not apply, and the network leaves a channel refused on its
+    # own facts as it is: its transport stays open.
     assert not point.member("x").adapting
+    assert ("x", "transport") in point.undecided()
 
 
 def test_a_fifo_sits_between_the_two_sides():
@@ -207,18 +224,22 @@ FIFO = {"x.transport": "fifo", "x.transport.fifo.buffer.depth": 32}
 WAITING = {"decision-unassigned"}
 
 
-def no_ultraram_fifo():
-    """``transposed``'s input channel ``a`` on a platform without UltraRAM, its FIFO in
-    UltraRAM."""
+def test_a_fifo_in_a_memory_the_platform_lacks_is_refused_by_its_rule():
+    """``transposed``'s input channel ``a`` on a platform without UltraRAM: its FIFO in
+    UltraRAM is refused, by the FIFO's rule, named."""
     point = transposed(6, 4, 2, platform=replace(FULL_DSP48E2, uram=False))
-    return choose(
-        point,
-        {
-            "a.transport": "fifo",
-            "a.transport.fifo.buffer.depth": 32,
-            "a.transport.fifo.buffer.ram_style": "ultra",
-        },
-    ).member("a")
+    trial = point.trial(
+        keyed(
+            {
+                "a.transport": "fifo",
+                "a.transport.fifo.buffer.depth": 32,
+                "a.transport.fifo.buffer.ram_style": "ultra",
+            }
+        )
+    )
+    assert {key: {finding.code for finding in why} for key, why in trial.refused.items()} == {
+        ("a", "transport.fifo.buffer.uram_present"): {"uram-absent"}
+    }
 
 
 @pytest.mark.parametrize(
@@ -241,28 +262,17 @@ def no_ultraram_fifo():
             [("realizable", {"channel-plan"})],
             None,
         ),
-        # Its FIFO's rule. ``compatible`` checks the stages its children present, products
-        # refused with them: it repeats the root.
-        (
-            no_ultraram_fifo,
-            "refused",
-            [
-                ("compatible", {"uram-absent"}),
-                ("transport.fifo.buffer.uram_present", {"uram-absent"}),
-            ],
-            ("refused", [("transport.fifo.buffer.uram_present", {"uram-absent"})]),
-        ),
         # The FIFO's memory open: its stage, a module, waits on it.
         (
             lambda: choose(adapted(columns_first(ROWS, CHANNELS, 4), 2), FIFO).member("x"),
-            "undecided",
+            "open",
             [
                 ("compatible", WAITING),
                 ("transport.fifo.buffer.capacity_supported", WAITING),
                 ("transport.fifo.buffer.uram_present", WAITING),
             ],
             (
-                "undecided",
+                "open",
                 [
                     ("transport.fifo.buffer.capacity_supported", WAITING),
                     ("transport.fifo.buffer.uram_present", WAITING),
@@ -277,7 +287,7 @@ def test_a_channel_s_rules_and_its_fifo_read_the_values_its_views_present(
     """``compatible`` and ``hops`` read the stages as a value (``staged``: its children's
     ``stages``), not the channel's ``stages`` view, and the FIFO candidate reads what
     arrives through its formal, after the output adapter's stages: valid, refused and
-    undecided each answer, with no dependency cycle."""
+    open each answer, with no dependency cycle."""
     point = channel()
     assert validity_of(point) == (status, pieces)
     if candidate is not None:
@@ -288,9 +298,10 @@ def test_a_channel_s_rules_and_its_fifo_read_the_values_its_views_present(
 
 
 def test_a_channel_s_cost_waits_on_no_memory_style():
-    # The adapter's input_gen memory is left open: cost does not read it.
-    point = adapted(columns_first(ROWS, CHANNELS, 4), 4, commit_all=False)
-    assert ("x", "adapter.input_gen.input_gen.ram_style") in {key for key, _ in point.viable()}
+    # The adapter's input_gen memory cleared, open: cost does not read it.
+    memory = ("x", "adapter.input_gen.input_gen.ram_style")
+    point = adapted(columns_first(ROWS, CHANNELS, 4), 4).trial({}, (memory,)).network
+    assert memory in point.undecided()
     # Nine beats a frame through the input_gen, which holds its buffer of 4 x 4-bit
     # words: BUF_SIZE 16 for the transpose nest {3, 3} {1, 3} (MAX_OCCUPANCY 13), not
     # its frame of nine.

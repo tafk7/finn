@@ -77,7 +77,7 @@ def test_the_view_reducer_reports_a_reason_from_output_and_validity_once() -> No
     waiting: ViewAssessment[int] = assess_view(
         Unresolved((kitchen,)), owner="total", validity=Unresolved((dining, kitchen))
     )
-    # An undecided Space leaves the view answering its output; readiness merges both.
+    # An open Space leaves the view answering its output; readiness merges both.
     assert waiting.accepted_result == Unresolved((kitchen,))
     assert waiting.readiness.result == Unresolved((dining, kitchen))
     assert waiting.readiness.results["$validity"] == Unresolved((dining, kitchen))

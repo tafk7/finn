@@ -17,6 +17,7 @@ from support.helpers import (
     choose,
     cycles_of,
     fifo_node,
+    keyed,
     with_direct_transports,
 )
 from support.tiled_mvu import MH, MW, NF, PE_T, SF, SIMD_T, R, T
@@ -256,6 +257,11 @@ PARAMETERS = (1, -2, 7, -8)
 
 def eltwise_with_constant(form=None):
     """Eltwise ADD whose rhs is a memory's cyclic channel vector, joined directly."""
+    return with_direct_transports(constant_network(form))
+
+
+def constant_network(form=None):
+    """``eltwise_with_constant``'s network, its transports open."""
     form = vector_major((CHANNELS,), PE) if form is None else form
     int4, int5 = DataType["INT4"], DataType["INT5"]
 
@@ -299,10 +305,9 @@ def eltwise_with_constant(form=None):
             ),
         }
     )
-    chosen = choose(
+    return choose(
         network, {"add.pe": PE, "rhs.ram_style": "distributed", "rhs.pumped_memory": False}
     )
-    return with_direct_transports(chosen)
 
 
 def test_the_delivery_kernel_serves_a_second_consumer_through_the_same_contract():
@@ -311,12 +316,19 @@ def test_the_delivery_kernel_serves_a_second_consumer_through_the_same_contract(
     # Lane for lane: the memory's channels are the ones eltwise reads.
     assert (into.source.instance, into.sink.instance) == ("rhs", "add")
     assert (into.lanes, into.lane_bits) == ((0, 1), 4)
-    # A delivery whose lanes carry other positions (0,2),(1,3) needs a lane regroup.
-    strided = Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),))
-    refused = eltwise_with_constant(strided).member("c").query(Channel.netlist)
+    # A delivery whose lanes carry other positions (0,2),(1,3) needs a lane regroup: the
+    # channel is refused with its transport open, and joining it directly is refused by
+    # the rule it breaks, for the same reason.
+    strided = constant_network(Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),)))
+    refused = strided.member("c").query(Channel.netlist)
     assert isinstance(refused, Rejected)
     (plan,) = [finding for finding in refused.findings if finding.code == "channel-plan"]
     assert "another lane axis" in plan.message
+    trial = strided.trial(keyed({"c.transport": "direct"}))
+    assert not trial.accepted
+    ((rule, (form,)),) = trial.refused.items()
+    assert (rule, form.code) == (("c", "compatible"), "channel-form")
+    assert "another lane axis" in form.message
 
 
 def test_a_pure_lane_permutation_is_realized_as_free_wiring():

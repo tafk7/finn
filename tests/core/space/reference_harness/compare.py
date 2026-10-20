@@ -7,14 +7,12 @@ A case (``Case``) is a description, built in both the model and the engine; a ``
 one configuration of it on both sides, reached by the same changes. Each question a test
 asks compares one answer:
 
-- **kinds, values, codes and verdicts exactly**: a refused set, a forced value, a
-  verdict, each refusal's codes;
+- **kinds, values, codes, verdicts and refusals exactly**: a state, a verdict, each
+  refusal's kind, subject, codes and standing choices, what a change moves, each possible
+  value's outcome in its list's order;
 - **blockers as a subset**: the engine runs opaque method bodies that stop at their first
   unavailable read, so it may name fewer of what an answer waits on than the model, never
-  one the model does not name;
-- **an open choice's possible cases** only where both can list them: the engine lists no
-  case of a choice whose presence waits (``inspection.viable``), so where the model's
-  answer waits, the cases are not compared.
+  one the model does not name.
 
 A disagreement raises :class:`Disagreement`, an ``AssertionError`` naming the case, the
 question and both answers. A test may state the answer a ruling on the semantics gives in
@@ -23,22 +21,22 @@ place of the model's (``ruled=``) where the model has not yet been brought to it
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, fields, replace
-from typing import Any
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, fields
 
 from core.space import reference
 from core.space.reference.model import same
-from finn.core.space import DefinitionError, EvaluationError
 
-from .engine import Engine, Point, Spelling, build
+from .engine import Engine, Point, Spelling, build, definition
 from .forms import (
     AnswerForm,
     ChangeForm,
     Code,
     DefinitionForm,
     Form,
-    Refusal,
+    OutcomeForm,
+    PossibleForm,
+    RefusalForm,
     RuleForm,
     StateForm,
     ValidityForm,
@@ -50,11 +48,14 @@ from .forms import (
 #: engine carries those findings, not one of its own).
 CODES: Mapping[reference.ReasonKind, str] = {
     reference.ReasonKind.OUTSIDE_DOMAIN: "domain-membership",
-    reference.ReasonKind.NO_POSSIBLE_VALUE: "decision-no-viable-case",
-    reference.ReasonKind.INACTIVE: "inactive",
-    reference.ReasonKind.CONFLICT: "decision-conflict",
+    reference.ReasonKind.EMPTY_DOMAIN: "domain-empty",
+    # § 16.17: a present choice's membership input that does not apply
+    reference.ReasonKind.INPUT_ABSENT: "domain-input-absent",
 }
 
+#: the code of a guard's validity piece, a guard refused through an input (owned by the
+#: guarded scope), beside the codes of that input
+GUARD_CODE = "guard-refused"
 
 #: the reason kinds that carry their own code, the code of the engine's rejection
 _OWN_CODE = (
@@ -89,74 +90,78 @@ class SetupError(Exception):
 def _show(value: object) -> str:
     if isinstance(value, frozenset):
         return "{" + ", ".join(sorted(map(_show, value))) + "}"
-    if isinstance(value, Refusal):
-        return f"{value.choice} ({value.kind}: {_show(value.codes)})"
+    if isinstance(value, RefusalForm):
+        standing = f", standing {_show(value.standing)}" if value.standing else ""
+        return f"{value.subject} ({value.kind}: {_show(value.codes)}{standing})"
+    if isinstance(value, OutcomeForm):
+        if value.kind == "impossible":
+            return f"impossible {_show(value.refusals)}"
+        moved = [
+            f"{name} {_show(getattr(value, name))}"
+            for name in ("dormant", "in_play", "opened")
+            if getattr(value, name)
+        ]
+        return " ".join(("possible", *moved))
+    if isinstance(value, tuple):
+        return "(" + ", ".join(map(_show, value)) + ")"
     return repr(value)
 
 
 def _same(left: object, right: object) -> bool:
     if isinstance(left, tuple) and isinstance(right, tuple):
         return len(left) == len(right) and all(map(_same, left, right))
-    if isinstance(left, (frozenset, Refusal)) or left is None:
+    if isinstance(left, (frozenset, RefusalForm, OutcomeForm)) or left is None:
         return bool(left == right)
     return same(left, right)
 
 
 # --- the model's answers in the comparable form ------------------------------------------------
 
+#: what a refused input reads as, to expand its reasons
+_Read = Callable[[str], reference.Answer]
 
-def _codes(solution: reference.Solution, reasons: Iterable[reference.Reason]) -> frozenset[Code]:
+
+def _codes(
+    reasons: Iterable[reference.Reason],
+    read: _Read,
+    space: Callable[[str], frozenset[Code]] | None = None,
+) -> frozenset[Code]:
+    """``reasons`` as codes: own codes and mapped kinds as they are, a refused input by the
+    reasons that refuse it (``read``), a refused Space by its false pieces (``space``)."""
     found: set[Code] = set()
     for reason in reasons:
         if reason.kind in _OWN_CODE:
             found.add((reason.code, reason.subject))
         elif reason.kind is reference.ReasonKind.INPUT_REFUSED:
             for path in reason.related:
-                found |= _refusal(solution, path)
+                answer = read(path)
+                if isinstance(answer, reference.Refused):
+                    found |= _codes(answer.reasons, read, space)
         elif reason.kind is reference.ReasonKind.SPACE_REFUSED:
-            found |= validity_form(solution, reason.owner).false
+            assert space is not None, reason
+            found |= space(reason.owner)
         else:
             found.add((CODES[reason.kind], reason.subject))
     return frozenset(found)
 
 
-def _refusal(solution: reference.Solution, path: str) -> frozenset[Code]:
-    """Why a refused input is refused."""
-    if path in solution.index.choices:
-        state = solution.state(path)
-        if isinstance(
-            state, (reference.RefusedChoice, reference.GuardRefused, reference.InputRefused)
-        ):
-            return _codes(solution, state.reasons)
-        return frozenset()
-    answer = solution.read(path)
-    return (
-        _codes(solution, answer.reasons) if isinstance(answer, reference.Refused) else frozenset()
-    )
+def _solution_codes(
+    solution: reference.Solution, reasons: Iterable[reference.Reason]
+) -> frozenset[Code]:
+    return _codes(reasons, solution.read, lambda owner: validity_form(solution, owner).false)
 
 
 def state_form(solution: reference.Solution, path: str) -> StateForm:
     state = solution.state(path)
-    if isinstance(state, reference.Readable):
-        return StateForm("readable", state.value)
-    if isinstance(state, reference.GuardRefused):
-        # admitted (its own check holds), but published it reads refused through its
-        # guard: the engine's refused state, through the selector's no-possible-case
-        return StateForm("refused", codes=_codes(solution, state.reasons))
-    if isinstance(state, reference.InputRefused):
-        # kept, never read as a value; published it reads refused through the domain's
-        # refused input: the engine's refused state, with the input's findings
-        return StateForm("refused", codes=_codes(solution, state.reasons))
-    if isinstance(state, reference.Unchecked):
-        return StateForm("unchecked", state.value, blockers=frozenset(state.waits))
-    if isinstance(state, reference.Forced):
-        return StateForm("forced", state.value)
+    if isinstance(state, reference.Set):
+        return StateForm("set", state.value)
+    if isinstance(state, reference.Waiting):
+        return StateForm("waiting", state.value, frozenset(state.waits))
+    if isinstance(state, reference.Dormant):
+        return StateForm("dormant", state.value)
     if isinstance(state, reference.Open):
-        possible = None if state.waits else state.possible
-        return StateForm("open", possible=possible, blockers=frozenset(state.waits) - {path})
-    if isinstance(state, reference.RefusedChoice):
-        return StateForm("refused", codes=_codes(solution, state.reasons))
-    return StateForm("inactive", state.value)
+        return StateForm("open", blockers=frozenset(state.waits))
+    return StateForm("absent")
 
 
 def answer_form(solution: reference.Solution, path: str) -> AnswerForm:
@@ -166,7 +171,7 @@ def answer_form(solution: reference.Solution, path: str) -> AnswerForm:
     if isinstance(answer, reference.Unresolved):
         return AnswerForm("unresolved", blockers=frozenset(answer.waits))
     if isinstance(answer, reference.Refused):
-        return AnswerForm("refused", codes=_codes(solution, answer.reasons))
+        return AnswerForm("refused", codes=_solution_codes(solution, answer.reasons))
     return AnswerForm("inapplicable")
 
 
@@ -177,45 +182,81 @@ def rule_form(solution: reference.Solution, path: str) -> RuleForm:
     if piece.verdict is reference.Verdict.TRUE:
         return RuleForm("true")
     if piece.verdict is reference.Verdict.FALSE:
-        return RuleForm("false", codes=_codes(solution, piece.reasons))
+        return RuleForm("false", codes=_solution_codes(solution, piece.reasons))
     return RuleForm("unknown", blockers=frozenset(piece.waits))
+
+
+def _piece_codes(solution: reference.Solution, piece: reference.Piece) -> frozenset[Code]:
+    codes = _solution_codes(solution, piece.reasons)
+    if piece.kind is reference.PieceKind.GUARD:
+        codes |= {(GUARD_CODE, piece.subject)}
+    return codes
 
 
 def validity_form(solution: reference.Solution, scope: str = "") -> ValidityForm:
     validity = solution.validity(scope)
-    false = frozenset().union(*(_codes(solution, piece.reasons) for piece in validity.false))
-    verdict = {
-        reference.Verdict.TRUE: "valid",
-        reference.Verdict.FALSE: "refused",
-        reference.Verdict.UNKNOWN: "undecided",
-    }[validity.verdict]
-    blockers = frozenset(validity.waits) if verdict == "undecided" else frozenset[str]()
-    return ValidityForm(verdict, false, blockers)  # type: ignore[arg-type]
+    false = frozenset().union(*(_piece_codes(solution, piece) for piece in validity.false))
+    if validity.verdict is reference.Verdict.TRUE:
+        return ValidityForm("valid", false)
+    if validity.verdict is reference.Verdict.FALSE:
+        return ValidityForm("refused", false)
+    return ValidityForm("open", false, frozenset(validity.waits))
+
+
+def refusal_form(
+    index: reference.Index, facts: Mapping[str, object], refusal: reference.ChangeRefusal
+) -> RefusalForm:
+    """One refusal of a change whose configuration has ``facts``. An assignment refusal's
+    refused inputs are read over the facts alone, as membership reads them; a rule
+    refusal's reasons are its origin's own."""
+    read = reference.FactsOnly(index, facts).value
+    if isinstance(refusal, reference.AssignmentRefusal):
+        return RefusalForm("assignment", refusal.choice, _codes(refusal.reasons, read))
+    codes = _codes(refusal.reasons, read)
+    return RefusalForm("rule", refusal.origin, codes, frozenset(refusal.standing))
 
 
 def change_form(
-    solution: reference.Solution, result: reference.Accepted | reference.Rejected
+    configuration: reference.Configuration,
+    edit: reference.Change,
+    result: reference.Accepted | reference.Rejected,
 ) -> ChangeForm:
-    """``solution`` is the configuration the change would publish."""
+    """``edit``'s ``result`` on ``configuration``."""
     if isinstance(result, reference.Accepted):
-        return ChangeForm(True, unchecked=frozenset(result.unchecked))
-    refusals = frozenset(
-        Refusal(
-            item.choice,
-            "named" if item.kind == "named" else "reached",
-            _codes(solution, item.reasons),
+        return ChangeForm(
+            True, frozenset(result.dormant), frozenset(result.in_play), frozenset(result.opened)
         )
-        for item in result.refusals
-    )
+    facts = {k: v for k, v in configuration.facts.items() if k not in edit.unset}
+    facts.update(edit.facts)
+    index = configuration.index
+    refusals = frozenset(refusal_form(index, facts, item) for item in result.refusals)
     return ChangeForm(False, refusals=refusals)
+
+
+def possible_form(solution: reference.Solution, path: str) -> PossibleForm:
+    found = solution.possible(path)
+    if found is None:
+        return PossibleForm(None)
+    configuration = solution.configuration
+    outcomes: list[tuple[object, OutcomeForm]] = []
+    for value, outcome in found:
+        if isinstance(outcome, reference.Possible):
+            moved = (frozenset(outcome.dormant), frozenset(outcome.in_play))
+            outcomes.append((value, OutcomeForm("possible", *moved, frozenset(outcome.opened))))
+        else:
+            refusals = frozenset(
+                refusal_form(configuration.index, configuration.facts, item)
+                for item in outcome.refusals
+            )
+            outcomes.append((value, OutcomeForm("impossible", refusals=refusals)))
+    return PossibleForm(tuple(outcomes))
 
 
 # --- the comparison ------------------------------------------------------------------------------
 
 
 def agrees(expected: Form, engine: Form) -> bool:
-    """Whether the engine's answer is the model's: exactly, but for blockers (a subset) and
-    the possible cases of a choice whose answer waits (not compared)."""
+    """Whether the engine's answer is the model's: exactly, but for blockers (a subset)."""
     if type(expected) is not type(engine):
         return False
     for item in fields(expected):
@@ -223,8 +264,6 @@ def agrees(expected: Form, engine: Form) -> bool:
         if item.name == "blockers":
             if not right <= left:
                 return False
-        elif item.name == "possible" and isinstance(expected, StateForm) and expected.blockers:
-            continue
         elif not _same(left, right):
             return False
     return True
@@ -240,10 +279,6 @@ class Case:
     """A description built in the model and in the engine (spelled as ``spelling`` says)."""
 
     def __init__(self, name: str, description: reference.Space, spelling: Spelling | None = None):
-        if description.trials_count_retained_checks:
-            # The matrix is built on the model's default trial reach; a case on the other
-            # reading would compare an answer no row accounts for.
-            raise ValueError(f"{name}: a case compares the model's default trial reach only")
         self.name = name
         self.description = description
         self.engine: Engine = build(description, spelling)
@@ -303,14 +338,13 @@ class Pair:
         expected = ruled or validity_form(self.solution())
         _check(self.case.name, "validity", expected, self.engine.validity())
 
-    def check_possible(self, path: str, *, ruled: tuple[Any, ...] | None = None) -> None:
-        """An open choice's possible cases (its forced value, or none when refused)."""
+    def check_possible(self, path: str, *, ruled: PossibleForm | None = None) -> None:
+        """A choice's possible values, each with what setting it alone answers."""
         __tracebackhide__ = True
-        solution = self.solution()
-        expected = state_form(solution, path)
-        if ruled is not None:
-            expected = replace(expected, possible=ruled)
-        _check(self.case.name, f"the possible cases of {path}", expected, self.engine.state(path))
+        expected = ruled or possible_form(self.solution(), path)
+        _check(
+            self.case.name, f"the possible values of {path}", expected, self.engine.possible(path)
+        )
 
     def check_change(
         self, edit: reference.Change, *, ruled: ChangeForm | None = None
@@ -318,16 +352,22 @@ class Pair:
         """``edit`` compared; the successor where both accept it."""
         __tracebackhide__ = True
         result = reference.change(self.model, edit)
-        if ruled is None:
-            successor = _published(self.model, edit)
-            expected = change_form(successor.solve(), result)
-        else:
-            expected = ruled
+        expected = ruled or change_form(self.model, edit, result)
         form, point = self.engine.change(edit)
         _check(self.case.name, f"the change {_edit(edit)}", expected, form)
         if isinstance(result, reference.Accepted) and point is not None:
             return Pair(self.case, result.configuration, point)
         return None
+
+    def reach(self, edit: reference.Change) -> Pair:
+        """``edit`` compared, then its successor: how a question is asked beyond a change
+        the engine may refuse, so its refusal shows as the disagreement it is. A change the
+        model refuses is a test written wrongly (``SetupError``)."""
+        __tracebackhide__ = True
+        successor = self.check_change(edit)
+        if successor is None:
+            raise SetupError(f"{self.case.name}: the model refuses {_edit(edit)}")
+        return successor
 
 
 def check_definition(
@@ -336,52 +376,17 @@ def check_definition(
     spelling: Spelling | None = None,
     facts: Mapping[str, object] | None = None,
 ) -> None:
-    """Whether ``description`` is a definition: the model's definition error (a cycle) or
-    none, against the engine's. The engine reports a cycle when building the Space, or
-    when asked (its validity, every rule and every view of the configuration with
-    ``facts``), as a dependency cycle; it answers otherwise."""
+    """Whether ``description`` is a definition: the model's definition error (a cycle, a
+    domain reading a choice) or none, against the engine's. The engine reports a cycle when
+    building the Space, or when asked (its validity, every rule and every view of the
+    configuration with ``facts``), as a dependency cycle; it answers otherwise."""
     __tracebackhide__ = True
     try:
         description.validate()
         expected = DefinitionForm(None)
     except reference.DefinitionError as error:
         expected = DefinitionForm(error.kind)
-    _check(name, "the definition", expected, _engine_definition(description, spelling, facts))
-
-
-def _engine_definition(
-    description: reference.Space,
-    spelling: Spelling | None,
-    facts: Mapping[str, object] | None,
-) -> DefinitionForm:
-    try:
-        engine = build(description, spelling, cycles=True)
-        point = engine.open(dict(facts or {}))
-        point.validity()
-        for path in sorted(engine.index.constraints):
-            point.rule(path)
-        for path in sorted(engine.index.views):
-            point.answer(path)
-    except DefinitionError as error:
-        if any(finding.code == "cyclic-dependency" for finding in error.findings):
-            return DefinitionForm("cycle")
-        raise
-    except EvaluationError as error:
-        if error.role == "dependency cycle":
-            return DefinitionForm("cycle")
-        raise
-    return DefinitionForm(None)
-
-
-def _published(
-    configuration: reference.Configuration, edit: reference.Change
-) -> reference.Configuration:
-    """The configuration ``edit`` would publish, refused or not (what its reasons read)."""
-    stored = {k: v for k, v in configuration.stored.items() if k not in edit.clear}
-    stored.update(edit.commit)
-    facts = {k: v for k, v in configuration.facts.items() if k not in edit.unset}
-    facts.update(edit.facts)
-    return reference.Configuration(configuration.space, facts, stored)
+    _check(name, "the definition", expected, definition(description, spelling, facts))
 
 
 def _edit(edit: reference.Change) -> str:
@@ -394,6 +399,7 @@ def _edit(edit: reference.Change) -> str:
 
 __all__ = [
     "CODES",
+    "GUARD_CODE",
     "Case",
     "Disagreement",
     "Pair",
@@ -402,6 +408,8 @@ __all__ = [
     "answer_form",
     "change_form",
     "check_definition",
+    "possible_form",
+    "refusal_form",
     "rule_form",
     "state_form",
     "validity_form",

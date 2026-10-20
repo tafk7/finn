@@ -54,7 +54,6 @@ from finn.kernels.artifacts.module import ProducerIdentity
 from finn.core.space import (
     Available, Decision, Param, Space, design_space, derived, divisors_of, view,
 )
-import greenlet  # the Space engine's declared native dependency
 
 class Tiles(Space):
     extent: int = Param()
@@ -103,6 +102,8 @@ placed_dotp = Network({
         result_range=ordinary_integer_bounds(DataType["INT8"]),
         x_tensor=X2,
         w_tensor=W2,
+        columns=2,
+        widest_reduction=2,
         platform=PLATFORM,
     ),
 })
@@ -289,8 +290,8 @@ def test_installed_wheel_materializes_independent_kernel_builds(tmp_path: Path) 
         metadata = BytesParser().parsebytes(archive.read(metadata_name))
         requirements = metadata.get_all("Requires-Dist", [])
         names = {value.split(";")[0].replace(" ", "") for value in requirements}
-        for dependency in ("greenlet", "pyslang"):
-            assert any(name.startswith(dependency) for name in names), dependency
+        assert any(name.startswith("pyslang") for name in names)
+        assert not any(name.startswith("greenlet") for name in names)
         assert not any(name.startswith("jinja2") for name in names)
         assert not any(name.startswith("typing") for name in names)
     installed = tmp_path / "installed"

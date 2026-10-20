@@ -31,7 +31,7 @@ def test_dataflow_loads_no_engine_or_kernels_at_runtime() -> None:
             "    name for name in sys.modules",
             "    if name.startswith(",
             "        ('finn.core.', 'finn.kernels', 'finn.custom_op',",
-            "         'onnx', 'greenlet')",
+            "         'onnx')",
             "    )",
             "    and not name.startswith('finn.core.reporting')",
             "    or (",

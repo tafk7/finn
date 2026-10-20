@@ -10,7 +10,8 @@ import pytest
 
 from finn.core.reporting.findings import Finding, FindingKind, ordered_findings
 from finn.core.space import Decision, Model, Param, Space, design_space, divisors_of
-from finn.core.space._runtime import Snapshot, decision_state, evaluate
+from finn.core.space._state import State, bind, decision_state
+from finn.core.space._world import Entry
 from finn.core.space.errors import ConfigurationError, EvaluationError, RequestError
 from finn.core.space.ir import Argument, LinkedModel, Node
 from finn.core.space.results import (
@@ -169,7 +170,7 @@ def test_view_reducer_obeys_readiness_output_and_refusal_precedence() -> None:
     assert waiting.readiness.results["lanes"] == blocker()
     inactive: ViewAssessment[int] = assess_view(Inapplicable(), owner="physical", validity=refused)
     assert inactive.accepted_result == refused
-    # An undecided Space leaves the view answering its output.
+    # An open Space leaves the view answering its output.
     absent: ViewAssessment[int] = assess_view(Inapplicable(), owner="physical", validity=blocker())
     assert isinstance(absent.accepted_result, Inapplicable)
     undecided = assess_view(raw, owner="physical", validity=blocker())
@@ -207,7 +208,8 @@ def test_errors_keep_boundary_and_programming_failures_distinct() -> None:
 
 
 def prepared(*nodes: Node) -> Model[Space]:
-    """Minimal prepared model for evaluator tests using hand-built explicit IR."""
+    """Minimal prepared model for evaluator tests using hand-built explicit IR (evaluated
+    on the core's worlds: ``open_state``, ``evaluate``)."""
     linked = LinkedModel(
         nodes,
         (),
@@ -218,6 +220,20 @@ def prepared(*nodes: Node) -> Model[Space]:
     )
 
     return Model(Space, linked)
+
+
+def open_state(model: Model[Space], facts: dict[int, object]) -> State:
+    """A configuration of ``model`` over ``facts`` (frozen as given), every choice open."""
+    return bind(model, facts)
+
+
+def evaluate(current: State, node: int) -> Entry:
+    return current.world.entry(node)
+
+
+def dependencies(entry: Entry) -> tuple[int, ...]:
+    """What an entry read, in order, each once."""
+    return tuple(dict.fromkeys(node for node, _ in entry.trace))
 
 
 INT = cast(ValueSemantics[object], default_semantics(int))
@@ -248,14 +264,14 @@ def test_iterative_evaluation_demands_only_a_deep_query_closure() -> None:
             )
         )
     nodes.append(Node(6001, 0, "unrelated", "derived", semantics=INT, function=unrelated))
-    snapshot = Snapshot(prepared(*nodes), {})
-    result = evaluate(snapshot, 6000)
+    current = open_state(prepared(*nodes), {})
+    result = evaluate(current, 6000)
     assert result.result == Available(6000)
-    assert result.dependencies == (5999,)
+    assert dependencies(result) == (5999,)
     assert len(calls) == 6000
-    assert evaluate(snapshot, 6000) is result
+    assert evaluate(current, 6000) is result
     assert len(calls) == 6000
-    assert 6001 not in snapshot.cache
+    assert 6001 not in current.world.cache
 
 
 def test_guard_suppresses_callbacks_and_both_decision_queries_agree() -> None:
@@ -268,15 +284,15 @@ def test_guard_suppresses_callbacks_and_both_decision_queries_agree() -> None:
         Node(2, 0, "body", "derived", semantics=INT, guard=0, function=inactive),
         Node(3, 0, "active", "decision", semantics=INT),
     )
-    snapshot = Snapshot(model, {})
-    assert isinstance(evaluate(snapshot, 1).result, Inapplicable)
-    assert isinstance(decision_state(snapshot, 1), Inapplicable)
-    assert isinstance(evaluate(snapshot, 2).result, Inapplicable)
-    assert evaluate(snapshot, 2).dependencies == (0,)
-    state = decision_state(snapshot, 3)
+    current = open_state(model, {})
+    assert isinstance(evaluate(current, 1).result, Inapplicable)
+    assert isinstance(decision_state(current, 1), Inapplicable)
+    assert isinstance(evaluate(current, 2).result, Inapplicable)
+    assert dependencies(evaluate(current, 2)) == (0,)
+    state = decision_state(current, 3)
     assert isinstance(state, Available)
     assert state.value.status == "unassigned"
-    assert isinstance(evaluate(snapshot, 3).result, Unresolved)
+    assert isinstance(evaluate(current, 3).result, Unresolved)
 
 
 def test_missing_optional_input_blocks_callbacks_and_differs_from_supplied_none() -> None:
@@ -312,8 +328,8 @@ def test_missing_optional_input_blocks_callbacks_and_differs_from_supplied_none(
             function=consume,
         ),
     )
-    absent = Snapshot(model, {})
-    supplied = Snapshot(model, {0: None})
+    absent = open_state(model, {})
+    supplied = open_state(model, {0: None})
     assert isinstance(evaluate(absent, 1).result, Unresolved)
     assert calls == []
     assert evaluate(supplied, 1).result == Available(True)
@@ -343,18 +359,17 @@ def test_callback_arguments_are_detached_from_snapshot_values() -> None:
             function=mutate,
         ),
     )
-    first = Snapshot(model, {0: [1]})
-    second = Snapshot(model, {0: [2, 3]})
+    first = open_state(model, {0: [1]})
+    second = open_state(model, {0: [2, 3]})
     assert evaluate(first, 1).result == Available(2)
     assert evaluate(first, 0).result == Available([1])
     assert evaluate(second, 1).result == Available(3)
-    successor = Snapshot(first.model, first.parameters)
-    assert successor.parameters is first.parameters
-    assert successor.cache == {}
-    assert first.cache
-    assert evaluate(successor, 1).result == Available(2)
+    again = open_state(first.model, dict(first.facts))
+    assert again.world.cache == {}
+    assert first.world.cache
+    assert evaluate(again, 1).result == Available(2)
     assert evaluate(first, 0).result == Available([1])
-    assert successor.cache is not first.cache
+    assert again.world.cache is not first.world.cache
 
 
 def test_selection_preserves_selected_refusal_and_skips_other_callback() -> None:
@@ -380,12 +395,12 @@ def test_selection_preserves_selected_refusal_and_skips_other_callback() -> None
             alternatives=(("chosen", 1), ("other", 2)),
         ),
     )
-    snapshot = Snapshot(model, {})
-    selected = evaluate(snapshot, 3)
-    assert selected.result == evaluate(snapshot, 1).result
+    current = open_state(model, {})
+    selected = evaluate(current, 3)
+    assert selected.result == evaluate(current, 1).result
     assert isinstance(selected.result, Rejected)
-    assert selected.dependencies == (0, 1)
-    assert 2 not in snapshot.cache
+    assert dependencies(selected) == (0, 1)
+    assert 2 not in current.world.cache
 
 
 def test_view_callback_and_accepted_dependency_share_the_cached_assessment() -> None:
@@ -395,9 +410,9 @@ def test_view_callback_and_accepted_dependency_share_the_cached_assessment() -> 
         Node(2, 0, "physical", "view", semantics=INT, output=0, constraints=(1,)),
         Node(3, 0, "parent", "alias", semantics=INT, output=2),
     )
-    snapshot = Snapshot(model, {})
-    parent = evaluate(snapshot, 3)
-    direct = evaluate(snapshot, 2)
+    current = open_state(model, {})
+    parent = evaluate(current, 3)
+    direct = evaluate(current, 2)
     assert isinstance(direct.assessment, ViewAssessment)
     assert parent.result is direct.result
     assert direct.assessment.accepted_result == direct.result
@@ -408,7 +423,7 @@ def test_view_callback_and_accepted_dependency_share_the_cached_assessment() -> 
 def test_bad_callback_output_raises_contextual_programming_error() -> None:
     model = prepared(Node(0, 0, "broken", "derived", semantics=INT, function=lambda: "wrong"))
     with pytest.raises(EvaluationError) as raised:
-        evaluate(Snapshot(model, {}), 0)
+        evaluate(open_state(model, {}), 0)
     assert raised.value.owner == "broken"
     assert raised.value.role == "derived"
     assert isinstance(raised.value.__cause__, TypeError)
@@ -431,9 +446,9 @@ def test_required_alias_preserves_canonical_missing_parameter_owner() -> None:
             function=consume,
         ),
     )
-    snapshot = Snapshot(model, {})
-    answer = evaluate(snapshot, 2).result
+    current = open_state(model, {})
+    answer = evaluate(current, 2).result
     assert isinstance(answer, Unresolved)
     assert all(finding.owner == "source" for finding in answer.findings)
-    assert evaluate(snapshot, 2).dependencies == (1,)
-    assert evaluate(snapshot, 1).dependencies == (0,)
+    assert dependencies(evaluate(current, 2)) == (1,)
+    assert dependencies(evaluate(current, 1)) == (0,)

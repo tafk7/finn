@@ -29,16 +29,15 @@
 
 # Each test runs with its random state seeded from its node id (support.rng_seed, in
 # tests/support).
+# purity_unchecked turns the Space engine's purity check off for a test that counts
+# the calls its memo saves (support.purity).
 import pytest
 
 import numpy as np
 import random
 from support.member_cache import _member_cache, pytest_sessionfinish  # noqa: F401
+from support.purity import purity_unchecked  # noqa: F401
 from support.rng_seed import seed_from_nodeid
-
-# Every Space snapshot's cache refuses what the engine's rule forbids, and a test may take
-# the index path (support.space_checks).
-from support.space_checks import index_path, pytest_terminal_summary  # noqa: F401
 
 try:
     import torch

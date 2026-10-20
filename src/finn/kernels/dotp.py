@@ -30,6 +30,12 @@ N)``, a densely realized depthwise operation. PE and SIMD fold ``n`` and ``k``, 
 pixels and window positions, ``(oh, ow, n, kh, kw, c)``; the core sees the beats of a
 dense form of ``K = KH * KW * C``, the window being the activation channel's.
 
+PE's and SIMD's domains read facts only: N (``columns``) and the widest K any datapath
+of the operation reads (``widest_reduction``), which the parent states from its own
+facts, and a window's channels. SIMD's fit to the K of the datapath it takes is a rule
+(``simd_fits``), and so is the statement's fit to the tensors (``extents_stated``: N is
+the weights' last axis, and the datapath's K divides the widest K).
+
 The results' range, ``result_range``, is its parent's statement (MatMul's); each core
 derives its accumulator (``ACCU_WIDTH``) and ``y_tensor``'s encoding from it. The range
 is not a proof that a frame fits it: the parent must bound each frame's accumulation to
@@ -170,6 +176,14 @@ class DotpAxiKernel(LeafKernel):
     # The tensors its input ports read: facts its parent gives.
     x_tensor: Tensor = Param(required=False)
     w_tensor: Tensor = Param(required=False)
+    # The extents PE and SIMD may divide, which its parent states from the operation's
+    # own facts. The form, the activations' view and the weights above are the
+    # datapath's, which may follow a choice of its parent's (MatMul's realization), so
+    # a folding factor's domain does not read them. N is the same in every datapath;
+    # the widest reduction is the widest datapath's K: K * N for a depthwise operation,
+    # which a dense realization reads, else K.
+    columns: int = Param()
+    widest_reduction: int = Param()
 
     @derived
     def windowed(self) -> bool:
@@ -226,11 +240,46 @@ class DotpAxiKernel(LeafKernel):
 
     @derived
     def simd_extent(self) -> int:
-        """The extent SIMD divides: K, or a window's channels."""
+        """The datapath's extent SIMD divides: K, or a window's channels."""
         return self.channels if self.windowed else self.reduction
 
-    pe: int = Decision(domain=divisors_of(outputs))
-    simd: int = Decision(domain=divisors_of(simd_extent))
+    @derived
+    def widest_simd_extent(self) -> int:
+        """The widest extent SIMD may divide, from facts alone: a window's channels (the
+        activations' last axis), else the widest reduction. ``simd_extent``, the
+        datapath's, divides it."""
+        found: int = self.x_tensor.shape[-1] if self.windowed else self.widest_reduction
+        return found
+
+    # Each folding factor's domain reads facts only; SIMD's fit to the datapath it
+    # takes is a rule (``simd_fits``).
+    pe: int = Decision(domain=divisors_of(columns))
+    simd: int = Decision(domain=divisors_of(widest_simd_extent))
+
+    @constraint
+    def simd_fits(self) -> bool | Rejected:
+        if self.simd_extent % self.simd:
+            return reject(
+                "dotp-simd",
+                f"SIMD {self.simd} does not divide the datapath's extent {self.simd_extent}",
+            )
+        return True
+
+    @constraint
+    def extents_stated(self) -> bool | Rejected:
+        # The extents the folding factors' domains read are the parent's statement: N is
+        # the weights' last axis, and the datapath's K (a window's taps times its
+        # channels) divides the widest K (a K stated too small would drop SIMD values
+        # that fit the datapath).
+        extents = self.extents
+        reduction = prod(extents[index] for index in self.reduced)
+        if self.columns != extents[n] or self.widest_reduction % reduction:
+            return reject(
+                "dotp-extents",
+                f"the stated extents (N {self.columns}, widest K {self.widest_reduction}) "
+                f"disagree with the tensors (N {extents[n]}, K {reduction})",
+            )
+        return True
 
     @derived
     def pumpable(self) -> bool:
@@ -464,7 +513,7 @@ _ADD_MULTI = (
 #: add_multi's two reductions of a lane's SIMD products (FinnLib dotp's ``REDUCER``): a
 #: binary adder tree with its pipeline registers between its levels, or a compressor tree
 #: of LUT counters with them at its output. Same latency and results. The adder tree is
-#: the baseline, listed first: it meets timing with the larger margin, and one synthesis
+#: listed first, so first valid takes it: it meets timing with the larger margin, and one synthesis
 #: of a packed dotp takes about 3 GB of memory with it against about 37 GB with the
 #: compressor. The compressor saves LUTs and registers at wide SIMD.
 REDUCERS = ("tree", "compressor")
@@ -501,8 +550,8 @@ class PackedDotpKernel(DotpAxiKernel):
     version = 1
     core = "dotp"
 
-    #: How add_multi reduces the SIMD products: a choice within this core, its baseline
-    #: first (``REDUCERS``: why the adder tree).
+    #: How add_multi reduces the SIMD products: a choice within this core, the adder tree
+    #: first (``REDUCERS``: why).
     reducer: str = Decision(values=REDUCERS)
 
     @derived

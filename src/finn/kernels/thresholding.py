@@ -32,7 +32,7 @@ resource monotone in depth from its two depth triggers. So the expressible assig
 deepest ``ultra_stages`` in UltraRAM, the ``block_stages`` above them in block
 RAM, and the rest ``ram_style``: ``distributed`` first, or ``auto`` last (Vivado's
 placement, with no stage in block RAM), which states no resources
-(``finn.kernels.utilization.auto_unstated``), so no baseline takes it. Each
+(``finn.kernels.utilization.auto_unstated``), so first valid never takes it. Each
 assignment has one spelling: with every stage in UltraRAM none is left, and
 ``ram_style`` does not apply. Counted in stages,
 not depths, the choices do not move with PE; ``parameters`` maps them to the

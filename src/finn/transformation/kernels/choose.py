@@ -11,14 +11,14 @@ the build's strategy steps run, opens it through the parent graph's node,
 cut's alone: a model holding any other node is refused. It binds the body's network in
 its shell (``finn.custom_op.kernels.shell.in_shell``: their kernels, the channels between
 them and the channels on its boundary, members named as the graph, ``MatMul_0``; the nodes'
-and the channels' saved choices replayed, a stale one dropped with why), which its ``Seam``
-(``finn.kernels.explore``) explores, each choice keyed by its owner, a node or a
+and the channels' saved choices set as it binds, a stale one dropped with why), which its
+``Seam`` (``finn.kernels.explore``) explores, each choice keyed by its owner, a node or a
 tensor, and the key there; holds the keys the body records (``HELD``; a held key the
-bound network does not state is refused, ``held-not-taken``, ``held-owner-unknown``), gives every
-choice the body leaves open its baseline (``Seam.baseline``: what ``BaselineChoices``
-does, a no-op on a body the cut created; on a body made by hand, or for a choice replay
-dropped as stale, the report names what it baselined), runs the strategy, which reopens
-the choices it decides, explores and settles, and then:
+bound network does not state is refused, ``held-not-taken``, ``held-owner-unknown``); runs
+the strategy, which reopens the choices it decides, searches, and gives back the prior
+values of those it left open (or, where one is refused, sets it by its policy, reported);
+and then (a choice the body leaves open stays open: conversion and the cut set the rest,
+and nothing fills a value in but a strategy):
 
 - checks nothing of the FIFOs of itself: a strategy may (``Seam.check_fifos``, or
   ``Seam.checked``, which drops each FIFO, not held, that no longer keeps its producer
@@ -35,17 +35,23 @@ the choices it decides, explores and settles, and then:
 - records the keys held, those the body recorded and those a ``Hold`` fixed, in the
   body as keys (``HELD``, ``{graph name: [key, ...]}``; the values are the ones the nodes
   and tensors state), so that every later exploration of the body holds them: a hold lasts
-  for the build, and re-baselining keeps it; and a
+  for the build, and going back to the defaults keeps it; and a
   target throughput's frames a second (``OBJECTIVE_FPS``), which a later exploration
   whose strategy changes any kernel's choice removes;
-- keeps what it found (``explored``): the network, its cost and the report: the choices
-  the body left open and the baseline took (``baselined``); the strategy with every
-  value it changed (``changed``: before and after, by owner), how many it reopened and
-  settling kept, the ones settling re-baselined, a ``Hold``'s held keys, attempts and time;
-  every value by its owner (a node or a tensor, by graph name, and the key there, as
-  the log ``report/kernel_choices.json`` names it), with who set it (``saved``: the body,
-  ``baseline``, or the strategy); the keys held; the choices left open (a required one named
-  so); each FIFO's memory style beside the storage FinnLib's selection gives it and what it uses
+- keeps what it found (``explored``): the network, its cost and the report: the strategy
+  with every value it changed (``changed``: before and after, by owner), how many it
+  reopened and gave back their prior values (``kept``), those it set by their policy
+  where the prior value is refused (``by_policy``), those it left open (``unset``), the
+  stored channel choices the interim channel rule derived again on its way
+  (``rederived``) and those it set as the new facts brought them into play
+  (``interim``), a ``Hold``'s held keys, attempts and time; every value by its owner (a
+  node or a tensor, by graph name, and the key there, as the log
+  ``report/kernel_choices.json`` names it), with who set it (``saved``: the body, the
+  strategy, the strategy by the choice's policy, ``<strategy>, its policy``, or the
+  interim channel rule, a channel's value its rebuild gave it on the strategy's way,
+  ``interim channel rule``); the keys
+  held; the choices left open (a required one named so); each FIFO's memory style beside
+  the storage FinnLib's selection gives it and what it uses
   (``fifo_storage``: its ``auto`` is FinnLib's, not Vivado's); whether FIFOs were
   sized; how they were judged (``fifos_judged``: ``model``, where the strategy sized them
   or checked them; ``not checked``; or what the strategy's report states); the dropped
@@ -141,11 +147,14 @@ if TYPE_CHECKING:
 #: No value: a key absent from a mapping of values.
 _ABSENT = object()
 
+#: Who set a channel's value the network's rebuild gave it, as a report names it.
+INTERIM = "interim channel rule"
+
 
 @dataclass(frozen=True)
 class Explored:
-    """An exploration's result: the body's network (every value, settled after the
-    strategy), its cost, the report (JSON values), and every limitation it found
+    """An exploration's result: the body's network (every value, as the strategy left
+    it), its cost, the report (JSON values), and every limitation it found
     (``findings``: the strategy's, its last check's of the transports where it checked,
     then the resources'), never a refusal."""
 
@@ -403,11 +412,11 @@ def _held_values(
 ) -> dict[Key, object]:
     """The values of the keys the body's mark holds (``held``, by owner), the ones
     ``network`` states (``saved``). A held key is the user's exact value, so one the network
-    does not take is refused, by name, never dropped and given its baseline: an owner that
-    is no member of the network (``held-owner-unknown``), or a key the bound network states
-    no value for, because replay refused the stored one or it is gone (``held-not-taken``;
-    replay's findings are its causes). A key kept unchecked is stated, by its stored value:
-    its hold waits with it."""
+    does not take is refused, by name, never dropped and set another way: an owner that is
+    no member of the network (``held-owner-unknown``), or a key the bound network states no
+    value for, because the bind dropped the stored one or it is gone (``held-not-taken``;
+    the bind's findings are its causes). A key stored out of play (dormant) or waiting is
+    stated, by its stored value."""
     members = set(network.members)
     kernels = set(network.kernels)
     values: dict[Key, object] = {}
@@ -431,7 +440,7 @@ def _held_values(
                     code,
                     "explore_kernel_choices",
                     f"{dotted((owner, key))}: held by the body, but {reason}; the held value "
-                    "was not taken, and no baseline takes its place",
+                    "was not taken, and nothing takes its place",
                     (("keys", (key,)), *subject),
                     causes=network.dropped.get((owner, key), ()),
                 )
@@ -446,10 +455,10 @@ def _held_values(
 
 
 def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None) -> Explored:
-    """The KernelOps of a partition's body, ``model``, explored by ``strategy`` (None: only
-    the body's open choices given their baselines) and every value persisted, on its
-    network in the shell of the model's target, the body's holds kept and recorded; see the
-    module docstring."""
+    """The KernelOps of a partition's body, ``model``, explored by ``strategy`` (None:
+    nothing changed, only checked and reported) and every value persisted, on its network
+    in the shell of the model's target, the body's holds kept and recorded; see the module
+    docstring."""
     if not model.graph.node:
         raise KernelOpError.refused(
             "kernel-ops-absent", "explore_kernel_choices", "no KernelOp to explore"
@@ -467,18 +476,12 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     bound = in_shell(model, nodes)
     seam = Seam(read_target(model).platform)
     network = bound
-    # What the body states: its committed choices and those kept unchecked (a commitment
-    # whose check waits, which a hold may sit on).
+    # What the body states: every stored choice, in play or not.
     saved = network.chosen()
     # The body's mark names the keys held; their values are the ones the network states.
     seam.held.update(_held_values(network, saved, held_keys(model)))
-    # A choice the body leaves open takes its baseline before the strategy runs; a hold
-    # the body records must hold there.
-    network = seam.baseline(network)
-    values = seam.chosen(network)
-    baselined = [key for key in values if key not in saved]
-    # Who set each value: the body (``saved``), the baseline, or the strategy.
-    set_by = {key: "saved" if key in saved else "baseline" for key in values}
+    # Who set each value: the body (``saved``), or the strategy.
+    set_by = dict.fromkeys(saved, "saved")
     entry: dict[str, object] | None = None
     changed: list[Key] = []
     if strategy is not None:
@@ -493,18 +496,29 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
             for key in dict.fromkeys([*before, *after])
             if before.get(key, _ABSENT) != after.get(key, _ABSENT)
         ]
+        by_policy = {key for run in seam.runs for key in run.by_policy}
+        by_rule = {key for run in seam.runs for key in (*run.rederived, *run.interim)}
         for key in changed:
-            if key in after:
-                set_by[key] = label
-            else:
+            if key not in after:
                 set_by.pop(key, None)
+            elif key in by_policy:
+                set_by[key] = f"{label}, its policy"
+            else:
+                set_by[key] = INTERIM if key in by_rule else label
         entry = {
             **report,
             "committed": sum(key in after for key in changed),
             "changed": {dotted(key): [before.get(key), after.get(key)] for key in changed},
             "reopened": len({key for run in seam.runs for key in run.reopened}),
             "kept": len({key for run in seam.runs for key in run.kept}),
-            "re-baselined": [dotted(key) for run in seam.runs for key in run.baselined],
+            "by_policy": [dotted(key) for run in seam.runs for key in run.by_policy],
+            "unset": {
+                dotted(key): why(found) for run in seam.runs for key, found in run.unset.items()
+            },
+            "rederived": {
+                dotted(key): why(found) for run in seam.runs for key, found in run.rederived.items()
+            },
+            "interim": [dotted(key) for run in seam.runs for key in run.interim],
             "attempts": seam.attempts - attempts,
             "seconds": round(time.perf_counter() - began, 3),
         }
@@ -536,8 +550,8 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         # The folding is no longer the one the target throughput explored.
         model.delete(OBJECTIVE_FPS)
     left = [
-        dotted(choice.key) + (" (required)" if choice.required else "")
-        for choice in seam.choices(network)
+        dotted(key) + (" (required)" if getattr(network.decision(key), "required", False) else "")
+        for key in network.undecided()
     ]
     cost = seam.cost(network)
     resources, over_part = _resources_report(
@@ -556,7 +570,6 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     check = seam.checks[-1] if seam.checks else None
     explored = {
         "strategy": entry,
-        "baselined": [dotted(key) for key in baselined],
         "choices": _by_owner({key: {"value": final[key], "by": set_by[key]} for key in final}),
         "held": _by_owner(seam.held),
         "open": left,

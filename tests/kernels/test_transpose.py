@@ -48,7 +48,8 @@ def test_its_simd_is_any_divisor_of_the_rows_and_its_pages_any_memory() -> None:
     it, and 4, which divides J and not I, is not a case. The pages' explicit styles come first,
     ordered by the bits they hold, then ``auto``."""
     base = unchosen(**transpose())
-    viable = {dotted(key): item.cases for key, item in base.viable()}
+    keys = [key for key in base.undecided() if key[0] == KERNEL]
+    viable = {dotted(key): item.cases for key, item in base.viable(keys)}
     assert viable == {
         f"{KERNEL}.simd": (1, 2, 3, 6),
         f"{KERNEL}.ram_style": ("distributed", "block", "ultra", "auto"),
@@ -126,17 +127,21 @@ def test_its_ultra_pages_need_ultraram_but_no_initial_contents() -> None:
     assert dict(kernel.module.parameters)["RAM_STYLE"] == '"ultra"'
 
 
-def test_ultra_pages_without_ultraram_are_accepted_and_the_configuration_is_refused() -> None:
-    """``ram_style`` is a type check, so ``ultra`` commits; the kernel's ``uram-absent``
-    constraint refuses the configuration, where the platform has no UltraRAM."""
-    for uram, status in ((True, "valid"), (False, "refused")):
+def test_ultra_pages_without_ultraram_are_refused_by_the_kernel_s_rule() -> None:
+    """``ultra`` is in the domain whatever the platform; where the platform has no
+    UltraRAM, the kernel's ``uram-absent`` rule refuses setting it, nothing standing (a
+    commit that breaks a rule is refused); with UltraRAM the configuration is valid."""
+    for uram in (True, False):
         platform = replace(FULL_DSP48E2, uram=uram)
         point = design_space(
             TransposeKernel(input_tensor=tensor(MATRICES, "INT4"), platform=platform)
         )
-        handle = point.field(TransposeKernel.ram_style).reference
-        assert point.try_with_choices({handle: "ultra"}).accepted
-        found = inspection.validity(point.with_choices(simd=2, ram_style="ultra"))
-        assert found.status == status
-        refusals = {f.code for piece in found.pieces for f in getattr(piece.result, "findings", ())}
-        assert refusals == (set() if uram else {"uram-absent"})
+        report = point.try_with_choices(simd=2, ram_style="ultra")
+        assert report.accepted == uram
+        if uram:
+            assert inspection.validity(report.instance).status == "valid"
+        else:
+            assert [
+                (rule.rule, rule.standing, {f.code for f in rule.result.findings})
+                for rule in report.broken
+            ] == [("uram_present", (), {"uram-absent"})]

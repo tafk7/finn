@@ -53,15 +53,15 @@ class ValueSemantics(Generic[T]):
         )
 
     def accepts(self, value: object) -> bool:
-        from . import _execution  # noqa: PLC0415 - semantics/execution boundary
+        from ._failure import transformation  # noqa: PLC0415 - semantics/evaluation
 
-        with _execution.transformation("value recognition"):
+        with transformation("value recognition"):
             return bool(self.recognizes(value))
 
     def freeze(self, value: object) -> T:
-        from . import _execution  # noqa: PLC0415 - semantics/execution boundary
+        from ._failure import transformation  # noqa: PLC0415 - semantics/evaluation
 
-        with _execution.transformation("value snapshot"):
+        with transformation("value snapshot"):
             if not self.accepts(value):
                 raise TypeError(unrecognized(self))
             frozen = self.snapshot(cast(T, value))
@@ -70,9 +70,9 @@ class ValueSemantics(Generic[T]):
             return frozen
 
     def values_equal(self, left: object, right: object) -> bool:
-        from . import _execution  # noqa: PLC0415 - semantics/execution boundary
+        from ._failure import transformation  # noqa: PLC0415 - semantics/evaluation
 
-        with _execution.transformation("value equality"):
+        with transformation("value equality"):
             if not self.accepts(left) or not self.accepts(right):
                 return False
             return bool(self.equal(cast(T, left), cast(T, right)))
@@ -174,7 +174,7 @@ def _owned(call: Callable[[], R], owner: str, role: str) -> R:
     """``call``'s result; a failure of the adapter it runs is ``owner``'s, in ``role``.
 
     An ``EvaluationError`` passes unchanged: the adapter read a configuration
-    (``_execution.transformation``), and that error already names who and where.
+    (``_failure.transformation``), and that error already names who and where.
     """
     try:
         return call()

@@ -6,22 +6,18 @@
 A stored value on the graph, after ``persist`` writes the network's choices back and the
 network is bound again from the graph (``network``):
 
-- **checked**: kept, readable, the same value (``test_graph_network``'s
+- **set**: kept, readable, the same value (``test_graph_network``'s
   ``test_an_explored_network_persists_and_replays_as_itself``, a node's and the channels');
-- **unchecked** (its own check cannot conclude): kept unchecked, the same stored value and
-  what it waits on (``test_package``'s
-  ``test_an_unchecked_choice_is_saved_and_replayed_as_unchecked``, ``test_channel_choices``'s
-  ``test_a_channel_choice_kept_unchecked_is_saved_and_replayed_as_unchecked``);
-- **inactive** (its selector settled on another case): one Space refuses it; the network
-  drops it as stale, with why, and saving clears it (here);
-- **refused by a changed fact** (its own check false): dropped as stale, with a finding
-  naming the value (and, for a value outside its domain, the values the Decision could take
-  now), and saving clears it (here);
-- **its own check true, a rule a changed fact makes false**: kept, committed, the
-  configuration refused naming the rule; saving writes it, and bound again it is kept as
-  it was (here);
-- **left unknown by a changed fact**: kept, not stale: a node's choice unchecked, a
-  channel whose ends wait holding its choices (here);
+- **out of play** (its selector on another case): kept, dormant, saved and bound again
+  dormant (here; ``test_channel_choices``'s
+  ``test_a_channel_choice_out_of_play_is_saved_and_replayed_out_of_play``);
+- **refused by a changed fact** (outside its domain): dropped as stale, with a finding
+  naming the value and the values the choice could take now, left open, and saving clears
+  it (here);
+- **a rule a changed fact makes false** over stored choices: the bind is refused, naming
+  the rule, until the choices are changed (here);
+- **its scope left unknown** (a core not stated): a channel whose ends wait holding its
+  choices (here);
 - **a key the network does not have**: a node's attribute no choice declares refuses the
   bind, by name (here); a channel's choices on a tensor that is no channel are dropped and
   cleared (``test_channel_choices``'s
@@ -54,12 +50,16 @@ FOLDING: dict[str, object] = {
     "compute.packed.compute_pumping": False,
     "compute.packed.reducer": "tree",
 }
-"""MatMul's folding; ``compute`` is forced on ``TARGET`` (DSP48E2), so it is not stored."""
-SAVED = {key: value for key, value in FOLDING.items() if key != "compute"}
-"""What the node stores of ``FOLDING`` on ``TARGET``."""
-WEIGHT_SOURCE: dict[str, object] = {"source.memstream.ram_style": "block", "transport": "direct"}
+"""MatMul's folding, its core with it."""
+WEIGHT_SOURCE: dict[str, object] = {
+    "source": "memstream",
+    "source.memstream.ram_style": "block",
+    "source.memstream.pumped_memory": False,
+    "transport": "direct",
+}
+"""The weights' channel's choices, as a set-up and the interim channel rule make them."""
 VERSAL = Target(part="a part with UltraRAM it initializes", platform=FULL_DSP58, shell="ip")
-"""A target with UltraRAM, whose MatMul ``compute`` is open (DSP58): nothing forces it."""
+"""A target with UltraRAM, on which a MatMul's ``compute`` has two possible values."""
 
 
 def bound(model: ModelWrapper) -> Partition:
@@ -99,179 +99,121 @@ def retarget(model: ModelWrapper, target: Target) -> ModelWrapper:
     return model.transform(InferKernelTensors())
 
 
-# -- inactive ----------------------------------------------------------------------------
+# -- out of play -------------------------------------------------------------------------
 
 
-def test_a_node_choice_its_selector_settled_away_from_is_dropped_and_cleared() -> None:
-    """``compute.int8_dsp58.pe`` on a DSP48E2 target, where ``compute`` is forced to
-    ``packed``: written raw, as a graph FINN did not write holds it. The node's Space alone
-    refuses it by name; the network drops it as stale (``inapplicable``, the value stored
-    beside), the rest replays, and saving clears it: bound again, nothing is stale and the
-    folding reads as before."""
+def test_a_node_choice_under_a_case_not_selected_is_kept_out_of_play_and_saved() -> None:
+    """``compute.int8_dsp58.pe`` on a DSP48E2 target, where ``compute`` is ``packed``:
+    written raw, as a graph FINN did not write holds it. It is a value of its domain under
+    a case not selected: the node's Space and the network keep it, out of play (dormant),
+    nothing stale; saving writes it, and bound again it is kept the same."""
     model = configured(matmul_model(), {"first": FOLDING})
     write_raw(model, "first", "compute.int8_dsp58.pe", 2)
-    with refused(
-        "choices-refused",
-        error=KernelOpError,
-        owner="MatMul",
-        node="first",
-        keys=("compute.int8_dsp58.pe",),
-    ):
-        kernel_op(model, node(model)).point()
+    point = kernel_op(model, node(model)).point()
+    assert dict(inspection.states(point))["compute.int8_dsp58.pe"] == inspection.Dormant(2)
     first = bound(model)
-    assert stale(first) == {
-        "first.compute.int8_dsp58.pe": [("inapplicable", "compute.int8_dsp58.pe", {"value": 2})]
-    }
-    assert first.unchecked() == ()
-    assert first.member("first").compute.pe == 2
-    assert persist(model, first)["first"] == SAVED
-    assert "compute.int8_dsp58.pe" not in {attribute.name for attribute in node(model).attribute}
+    assert not first.stale and first.member("first").compute.pe == 2
+    assert persist(model, first)["first"] == {**FOLDING, "compute.int8_dsp58.pe": 2}
     again = bound(model)
-    assert not again.stale and again.unchecked() == ()
-    assert again.chosen() == first.chosen()
+    assert not again.stale and again.chosen() == first.chosen()
 
 
-def test_a_channel_choice_its_adapter_settled_away_from_is_dropped_and_cleared() -> None:
-    """The levels edge's input adapter is forced to ``input_gen`` by its ends; a memory of
-    the ``input_gen_vpc`` chain, written on its tensor past the writer, is inactive. The
-    network drops it as stale (``inapplicable``, the value beside), and saving clears it
-    from the tensor, leaving the edge's own choices: bound again, nothing is stale."""
+def test_a_channel_choice_under_an_adapter_not_selected_is_kept_out_of_play_and_saved() -> None:
+    """The levels edge's input adapter is ``input_gen``; a memory of the
+    ``input_gen_vpc`` chain, written on its tensor past the writer, is out of play: the
+    network keeps it, dormant, nothing stale, and saving writes it beside the edge's own
+    choices: bound again, the same."""
     model = kernel_model()
-    model.set(CHANNEL_KEYS["adapter.input_gen_vpc.input_gen.ram_style"], "auto", tensor="levels")
-    first = bound(model)
     key = "adapter.input_gen_vpc.input_gen.ram_style"
-    assert stale(first) == {f"levels.{key}": [("inapplicable", key, {"value": "auto"})]}
-    assert first.unchecked() == ()
+    model.set(CHANNEL_KEYS[key], "auto", tensor="levels")
+    first = bound(model)
+    assert not first.stale
+    assert dict(first.states(["levels"]))[("levels", key)] == inspection.Dormant("auto")
     held = {name: value for (_, name), value in first.chosen(["levels"]).items()}
-    assert key not in held and persist(model, first)["levels"] == held
-    assert key not in channel_choices(model, "levels")
+    assert held[key] == "auto" and persist(model, first)["levels"] == held
+    assert channel_choices(model, "levels")[key] == "auto"
     again = bound(model)
-    assert not again.stale and again.unchecked() == ()
-    assert again.chosen() == first.chosen()
+    assert not again.stale and again.chosen() == first.chosen()
 
 
-# -- a fact changed: the choice's own check false ------------------------------------------
+# -- a fact changed: the choice outside its domain -------------------------------------------
 
 
 def test_a_node_choice_a_changed_fact_refuses_is_dropped_with_candidates_and_cleared() -> None:
     """The weights' columns change from 4 to 6 under a stored ``pe`` of 4, which no longer
-    divides them. Bound again, the network drops ``pe`` as stale: its own finding names the
-    value stored and the values ``pe`` could take now, its selector's (``compute``, left
-    with no viable case by it) beside. Saving clears it and keeps the rest; bound again,
-    nothing is stale, ``pe`` is open, the rest reads as stored."""
+    divides them. Bound again, the network drops ``pe`` as stale: its domain's finding names
+    the value stored and the values ``pe`` could take now. Saving clears it and keeps the
+    rest; bound again, nothing is stale, ``pe`` is open, the rest reads as stored."""
     model = configured(matmul_model(), {"first": {**FOLDING, "compute.packed.pe": 4}})
     widened = np.concatenate([WEIGHTS, WEIGHTS[:, :2]], axis=1).astype(np.float32)
     model.set_initializer("w", widened)
     model = model.transform(InferKernelTensors())
     first = bound(model)
-    ((key, findings),) = first.stale.items()
+    ((key, (own,)),) = first.stale.items()
     assert key == "first.compute.packed.pe"
-    assert {(found.code, found.owner) for found in findings} == {
-        ("domain-membership", "compute.packed.pe"),
-        ("decision-no-viable-case", "compute"),
-    }
-    (own,) = [found for found in findings if found.code == "domain-membership"]
+    assert (own.code, own.owner) == ("domain-membership", "compute.packed.pe")
     assert dict(own.details) == {"value": 4, "candidates": (1, 2, 3, 6)}
     assert own.message == "not one of 1, 2, 3, 6"
-    assert first.unchecked() == ()
-    kept = {name: value for name, value in SAVED.items() if name != "compute.packed.pe"}
+    kept = {name: value for name, value in FOLDING.items() if name != "compute.packed.pe"}
     assert persist(model, first)["first"] == kept
     assert "compute.packed.pe" not in kernel_choices_config(model)["first"]
     again = bound(model)
-    assert not again.stale and again.unchecked() == ()
+    assert not again.stale
     assert ("first", "compute.packed.pe") in again.undecided()
-    assert again.chosen() == {("first", name): value for name, value in kept.items()}
+    assert again.chosen(["first"]) == {("first", name): value for name, value in kept.items()}
 
 
-# -- a fact changed: its own check true, a rule false ----------------------------------------
+# -- a fact changed: a rule false over stored choices ----------------------------------------
 
 
-def test_a_channel_choice_a_rule_a_changed_fact_makes_false_is_kept_and_saved() -> None:
+def test_a_channel_choice_a_rule_a_changed_fact_makes_false_refuses_the_bind() -> None:
     """The weights' memory stored as ``ultra`` on a part with UltraRAM, the model then built
     for one without. Whether the part has UltraRAM is a rule of the memory's, not its
-    domain: the choice's own check holds, so the network keeps it, committed, under its
-    source's guard, which the rule leaves with no possible case (the configuration refused,
-    ``uram-absent`` among the reasons). Nothing is stale; saving writes the stored ``ultra``
-    beside the transport, and bound again the network holds the same."""
+    domain: binding the stored choices together breaks it, so the bind is refused, naming
+    each rule by its key once (``network-invalid``), the rules' findings its causes, about
+    the channel; nothing is dropped behind the user's back."""
     model = retarget(matmul_model(), VERSAL)
     configured(
         model, {"first": FOLDING, "w": {**WEIGHT_SOURCE, "source.memstream.ram_style": "ultra"}}
     )
+    assert channel_choices(model, "w")["source.memstream.ram_style"] == "ultra"
     model = retarget(model, TARGET)
-    first = bound(model)
-    key = "source.memstream.ram_style"
-    stored = {("w", key): "ultra", ("w", "transport"): "direct"}
-    assert not first.stale and first.unchecked() == ()
-    assert first.chosen(["w"]) == stored
-    validity = inspection.validity(first.member("w"))
-    assert validity.status == "refused"
-    assert {
-        (found.code, found.owner, "uram-absent" in found.message)
-        for piece in validity.pieces
-        for found in piece.result.findings
-    } == {("decision-no-viable-case", "source", True)}
-    assert persist(model, first)["w"] == {key: "ultra", "transport": "direct"}
-    assert channel_choices(model, "w") == {key: "ultra", "transport": "direct"}
-    again = bound(model)
-    assert not again.stale and again.unchecked() == ()
-    assert again.chosen(["w"]) == stored
-    assert inspection.validity(again.member("w")) == validity
+    with refused(
+        "network-invalid",
+        error=KernelOpError,
+        message="w: its stored choices are refused: .*uram",
+    ) as caught:
+        bound(model)
+    assert caught.finding.message.count("uram_present") == 1
+    assert {(f.code, f.owner, dict(f.details)["tensor"]) for f in caught.finding.causes} == {
+        ("uram-absent", "source.memstream.uram_present", "w"),
+        ("uram-init", "source.memstream.uram_init_taken", "w"),
+    }
+    assert channel_choices(model, "w")["source.memstream.ram_style"] == "ultra"
 
 
-# -- a fact changed: the choice's own check unknown ----------------------------------------
+# -- a scope left unknown ------------------------------------------------------------------------
 
 
-def folded_then_moved_to_dsp58() -> ModelWrapper:
-    """MatMul folded, and its input's and weights' channels chosen, on ``TARGET``
-    (DSP48E2, where ``compute`` is forced, so not stored), the model then built for
-    ``VERSAL``, where ``compute`` is open."""
+def test_a_channel_whose_ends_wait_on_a_core_not_stated_holds_its_choices() -> None:
+    """The MatMul's ``compute`` not stated (written away, as a graph FINN did not write
+    holds it), on DSP58, where it has two possible values: its ends are unknown, so the
+    weights' channel and the input's wait on it, unbound, each holding the choices stored
+    on its tensor; none is stale. Saving writes them back on their tensors; bound again,
+    the channels wait on ``compute`` holding the same choices."""
     model = configured(matmul_model(), {"first": FOLDING, "x": EDGE, "w": WEIGHT_SOURCE})
-    assert "compute" not in kernel_choices_config(model)["first"]
-    return retarget(model, VERSAL)
-
-
-def test_a_node_choice_a_changed_fact_leaves_unknown_is_kept_unchecked() -> None:
-    """On DSP58 ``compute`` is open, so the folding stored under ``packed`` waits on it: each
-    key is kept unchecked, its stored value and ``compute`` named, not stale, and
-    ``compute`` is the one open choice. Each is committed all the same (a kept commitment
-    reads as committed, whatever its read answers), so the network's choices list it.
-    Saving writes each by its stored value; bound again, the node holds them unchecked,
-    waiting on the same ``compute``."""
-    model = folded_then_moved_to_dsp58()
-    waiting = tuple(
-        (("first", key), inspection.Unchecked(key, value, ("compute",)))
-        for key, value in sorted(SAVED.items())
-    )
+    x, w = channel_choices(model, "x"), channel_choices(model, "w")
+    model = retarget(model, VERSAL)
+    write_raw(model, "first", "compute", None)
     first = bound(model)
     assert not first.stale
-    assert first.unchecked() == waiting
-    assert first.chosen(["first"]) == {("first", key): value for key, value in SAVED.items()}
+    assert (holding(first, "x"), holding(first, "w")) == (x, w)
     assert first.undecided() == (("first", "compute"),)
-    assert persist(model, first)["first"] == SAVED
-    again = bound(model)
-    assert not again.stale
-    assert again.unchecked() == waiting
-    assert inspection.unchecked(again.member("first")) == tuple(item for _, item in waiting)
-    assert again.chosen(["first"]) == first.chosen(["first"])
-
-
-def test_a_channel_whose_ends_a_changed_fact_leaves_unknown_holds_its_choices() -> None:
-    """On DSP58 the MatMul's ``compute`` is open, so its ends are unknown: the weights'
-    channel and the input's wait on it, unbound, each holding the choices stored on its
-    tensor; none is stale, and none is listed unchecked (an unbound channel's choices wait
-    with its read; only the node's folding is). Saving writes them back on their tensors;
-    bound again, the channels wait on ``compute`` holding the same choices."""
-    model = folded_then_moved_to_dsp58()
-    first = bound(model)
-    assert not first.stale
-    assert (holding(first, "x"), holding(first, "w")) == (EDGE, WEIGHT_SOURCE)
-    assert {owner for (owner, _), _ in first.unchecked()} == {"first"}
     written = persist(model, first)
-    assert (written["x"], written["w"]) == (EDGE, WEIGHT_SOURCE)
-    assert (channel_choices(model, "x"), channel_choices(model, "w")) == (EDGE, WEIGHT_SOURCE)
+    assert (written["x"], written["w"]) == (x, w)
     again = bound(model)
     assert not again.stale
-    assert (holding(again, "x"), holding(again, "w")) == (EDGE, WEIGHT_SOURCE)
+    assert (holding(again, "x"), holding(again, "w")) == (x, w)
     assert again.chosen(["x", "w"]) == first.chosen(["x", "w"])
 
 
@@ -296,5 +238,5 @@ def test_a_node_attribute_no_choice_declares_refuses_the_bind_by_name() -> None:
     write_raw(model, "first", "compute.packed.typo", None)
     again = bound(model)
     assert not again.stale and again.chosen(["first"]) == {
-        ("first", key): value for key, value in SAVED.items()
+        ("first", key): value for key, value in FOLDING.items()
     }

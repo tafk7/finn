@@ -11,9 +11,10 @@ each sample it
    tensor of that interface, an input's given to the kernel as
    ``<interface>_tensor`` and an output's the kernel's own (``<interface>_tensor``,
    its statement), and takes the end it presents, ``<interface>_end``. It commits
-   the sample's factors and the pinned ``choices``, then the channels' transports
-   and the memories of the adapter chains (each chain forced). The module is named
-   ``finn_<kernel>conformance``;
+   the sample's factors and the pinned ``choices``, then the kernel's other open
+   choices by their default policies and every channel's by the interim channel rule,
+   as the cut sets them (its transport, its adapter chain and the chain's memories).
+   The module is named ``finn_<kernel>conformance``;
 2. checks each of the kernel's leaves in the module (the kernel, or
    the children of a kernel with children) against its materialized sources
    under the declared parameter binding (``artifacts.rtl.extract``, then the
@@ -59,14 +60,15 @@ A port is found where it is placed: the end on each channel below the kernel, a
 member of a leaf kernel (``input``) or a child's (``compute.packed.x``).
 
 Factors: ``SAMPLED`` takes the smallest, an interior and the largest
-configuration of the kernel's scalar Decisions that ``choices`` leaves open,
-each folding factor's candidates read from ``point.field(<factor>).candidates()`` with the
-factors before it committed, and deduplicates them. Explicit configurations name the
-kernel's own members: a Decision is committed, a Param is given (a folding factor that
-is still a Param), and a derived member is checked: the kernel must derive that value
-(a channel stage's generics, from the sequences it is given). A Decision below a child
-is named by its key below the kernel (``compute.packed.pe``). The adapter sample reuses
-the middle configuration.
+configuration of the kernel's open choices that ``choices`` leaves open, each from
+its possible values (``Network.viable``: never a value a rule refuses) with the
+choices before it in the flow order set, and deduplicates them; a selector, or a
+choice with one possible value, takes its default policy and is no factor. Explicit
+configurations name the kernel's own members: a Decision is committed, a Param is
+given (a folding factor that is still a Param), and a derived member is checked: the
+kernel must derive that value (a channel stage's generics, from the sequences it is
+given). A Decision below a child is named by its key below the kernel
+(``compute.packed.pe``). The adapter sample reuses the middle configuration.
 
 An output given as a shape takes its element from the kernel: the element of the
 tensor it states at that interface (``<interface>_tensor``), read before any output
@@ -126,9 +128,10 @@ from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.artifacts.rtl import Declined, extract
 from finn.kernels.base import Kernel
 from finn.kernels.channels import Channel
-from finn.kernels.configure import describe
+from finn.kernels.configure import chosen, describe
+from finn.kernels.defaults import defaulted
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.network import Interface, Network, dotted, wire
+from finn.kernels.network import Interface, Key, Network, dotted, wire
 from finn.kernels.transport import StreamContract
 from finn.toolchain.launcher import host_toolchain
 from support.helpers import (
@@ -137,6 +140,7 @@ from support.helpers import (
     cycles_of,
     module_of,
     with_adapter_memories,
+    with_channel_defaults,
     with_direct_transports,
 )
 
@@ -253,47 +257,67 @@ def _label(config: Mapping[str, object]) -> str:
     return ", ".join(f"{key}={short(value)}" for key, value in config.items()) or "defaults"
 
 
-def _candidates(point: Any, key: str) -> tuple[object, ...]:
-    """The candidates of the kernel's Decision ``key`` (``kernel.<key>``) on a design."""
-    kernel, key = point.member(KERNEL), key[len(KERNEL) + 1 :]
-    reference = {info.key: info.reference for info in inspection.decisions(kernel)}[key]
-    found = kernel.field(reference).candidates()
-    assert isinstance(found, Available) and found.value, f"{key} has no candidates: {found}"
-    return tuple(found.value)
+def _possible(point: Any, key: Key) -> tuple[object, ...]:
+    """The possible values of the kernel's open choice ``key`` on a design, in its list's
+    order: those setting it alone accepts (``Network.viable``), never a value its domain
+    lists that a rule refuses."""
+    ((_, found),) = point.viable((key,))
+    assert found.cases, f"{dotted(key)} has no possible value: {found}"
+    return tuple(found.cases)
 
 
-def _keys(base: Any) -> tuple[set[str], list[str], list[str]]:
-    """A design's selectors, its open choices in rank order, and the kernel's undecided
-    choices, each by ``member.key``."""
-    selectors = {dotted(key) for key, info in base.decisions().items() if info.selector}
-    ranked = [dotted(key) for key, _ in base.viable()]
-    open_ = [dotted(key) for key in base.undecided() if key[0] == KERNEL]
-    return selectors, ranked, open_
+def _by_policy(point: Any, key: Key) -> Any:
+    """A design with the kernel's open choice ``key`` set by its default policy, as
+    conversion sets it (``finn.kernels.defaults.defaulted``), the kernel's other open
+    choices left open."""
+    kernel = point.member(KERNEL)
+    others = {below for below, _ in inspection.states(kernel)} - {key[1]}
+    done = defaulted(kernel, kept=others)
+    assert not isinstance(done, tuple), f"{dotted(key)}: " + "; ".join(map(str, done))
+    return _chosen(point, {dotted(key): chosen(done)[key[1]]})
+
+
+def _defaulted(point: Any) -> Any:
+    """A design with every open choice of its kernel in play that is not required set by
+    its default policy, as conversion sets it."""
+    kernel = point.member(KERNEL)
+    done = defaulted(kernel)
+    assert not isinstance(done, tuple), "; ".join(map(str, done))
+    before = chosen(kernel)
+    values = {f"{KERNEL}.{key}": value for key, value in chosen(done).items() if key not in before}
+    return _chosen(point, values)
 
 
 def _enumerated(base: Any, choices: Mapping[str, object]) -> list[tuple[str, dict[str, object]]]:
-    """Configurations of the kernel's open scalar Decisions, each committed in turn.
+    """Configurations of the kernel's open choices, each set in turn.
 
-    They are committed in rank order, a pinned choice in its turn too (a Decision whose
-    cases read another, as pumping reads SIMD, is committed after it); a pinned choice is
-    not part of a configuration.
+    The kernel's open choices in play are taken in its flow order (``Network.undecided``),
+    one at a time, so a choice another brings into play, or whose possible values another
+    narrows (pumping by SIMD), is taken after it. A pinned choice takes its value; a
+    selector, or a choice with one possible value, its default policy (nothing to sample);
+    any other the value ``choose`` picks of its possible values (``_possible``). Only
+    those picked are part of a configuration.
     """
-    selectors, ranked, open_ = _keys(base)
-    keys = sorted(
-        (key for key in open_ if key not in selectors),
-        key=lambda key: ranked.index(key) if key in ranked else len(ranked),
-    )
+    selectors = {key for key, info in base.decisions().items() if info.selector}
     local = len(KERNEL) + 1
 
     def pick(choose: Callable[[tuple[object, ...]], object]) -> dict[str, object]:
         point, config = base, {}
-        for key in keys:
-            pinned = key[local:] in choices
-            value = choices[key[local:]] if pinned else choose(_candidates(point, key))
-            point = _chosen(point, {key: value})
-            if not pinned:
-                config[key[local:]] = value
-        return config
+        while True:
+            open_ = [key for key in point.undecided() if key[0] == KERNEL]
+            if not open_:
+                return config
+            key = open_[0]
+            name = dotted(key)[local:]
+            if name in choices:
+                point = _chosen(point, {dotted(key): choices[name]})
+                continue
+            possible = _possible(point, key)
+            if key in selectors or len(possible) == 1:
+                point = _by_policy(point, key)
+                continue
+            config[name] = choose(possible)
+            point = _chosen(point, {dotted(key): config[name]})
 
     return [
         ("smallest", pick(lambda found: found[0])),
@@ -374,8 +398,8 @@ def kernel_space(design: Any) -> tuple[Any, str, str]:
 
 
 def configured(design: Any, choices: Mapping[str, object]) -> Any:
-    """A design with ``choices`` (``member.key``) committed, its channels' transports and
-    adapters' memories then given their baselines."""
+    """A design with ``choices`` (``member.key``) committed, its channels' transports then
+    direct and its adapters' memories at their first possible values."""
     return with_adapter_memories(with_direct_transports(_chosen(design, choices)))
 
 
@@ -521,13 +545,16 @@ def place(
     facts: Mapping[str, object] = EMPTY,
     values: Mapping[str, np.ndarray] | None = None,
 ) -> Any:
-    """The sample's design; the adapter sample's first input fed by a memory.
+    """The sample's design, every kernel choice it leaves open in play set by its default
+    policy (``_defaulted``), then every channel's by the interim channel rule, as the cut
+    sets them (``with_channel_defaults``: its adapter chain, the chain's memories); the
+    adapter sample's first input fed by a memory.
 
     The memory presents ``vector_major`` at the first lane count, of those
     dividing the innermost extent, that makes the channel convert widths.
     """
-    plain = with_adapter_memories(
-        _committed(space_type, sample.factors, inputs, outputs, choices, facts)
+    plain = with_channel_defaults(
+        _defaulted(_committed(space_type, sample.factors, inputs, outputs, choices, facts))
     )
     if not sample.adapter:
         return plain
@@ -543,8 +570,8 @@ def place(
         if other == lanes:
             continue
         fed = (name, vector_major(tensor.shape, other), contents)
-        point = with_adapter_memories(
-            _committed(space_type, sample.factors, inputs, outputs, choices, facts, fed)
+        point = with_channel_defaults(
+            _defaulted(_committed(space_type, sample.factors, inputs, outputs, choices, facts, fed))
         )
         stream = design_member(point, name)
         found = stream.query(Channel.plan)

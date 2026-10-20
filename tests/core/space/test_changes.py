@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from typing import cast
 
@@ -15,18 +16,18 @@ from finn.core.space import (
     Space,
     ValueSemantics,
     composite,
+    constraint,
     design_space,
     domain,
 )
 from finn.core.space.edits import ChangeRequest
 from finn.core.space.errors import (
-    ConfigurationError,
     DefinitionError,
     EvaluationError,
     RequestError,
 )
 from finn.core.space.inspection import candidate, choices, decision_handle
-from finn.core.space.results import Available, Inapplicable, Rejected, Unresolved
+from finn.core.space.results import Available, Inapplicable, Unresolved
 
 
 def test_malformed_batch_structure_and_types_precede_every_snapshot_callback() -> None:
@@ -179,6 +180,7 @@ def test_replacement_equality_is_contextual_and_cannot_mutate_stored_values() ->
     assert chosen.value == [1]
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -> None:
     limits: list[int] = []
     admitted: list[int] = []
@@ -217,7 +219,7 @@ def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -
     assert len(admitted) == len(members)
     assert all(outcome.status == "changed" for outcome in report.outcomes)
     assert report.instance.query(limit) == Available(100)
-    assert limits == [100]  # the successor keeps the trial's evaluation: it read no Decision
+    assert limits == [100]  # the successor keeps the change's evaluation: it read no choice
 
     limits.clear()
     admitted.clear()
@@ -226,49 +228,53 @@ def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -
     failed = base.try_with_choices(*edits)
     assert not failed.accepted
     assert failed.instance is base
-    assert limits == [100]
-    assert len(admitted) == len(members)
-    assert [outcome.status for outcome in failed.outcomes].count("admissible") == len(members) - 1
+    # The model's memo answers the limit, a function of the same fact, as before, and the
+    # membership of every value the first batch checked: equal values, by their semantics.
+    assert limits == []
+    assert admitted == [-1]
+    assert [outcome.status for outcome in failed.outcomes].count("checked") == len(members) - 1
     assert all(isinstance(base.query(member), Unresolved) for member in members)
 
 
-def test_dependent_batch_is_order_independent_without_precommitting_candidates() -> None:
-    calls: list[tuple[int, int]] = []
+def test_a_chain_of_related_choices_is_order_independent_as_its_constraints() -> None:
+    """Each step one more than the last: a relation of a choice to another, so a
+    constraint of the Space holding both (a domain reads facts only). Set in one batch,
+    in any order, the chain is accepted; one step off breaks the rule beside it."""
+    calls: list[int] = []
+    steps: tuple[int, ...] = tuple(range(1, 34))
+    members = [Decision(values=steps) for _ in range(32)]
+    rules: dict[str, object] = {}
 
-    def membership(*, candidate: int, previous: int) -> bool:
-        calls.append((candidate, previous))
-        return candidate == previous + 1
+    def follows(at: int) -> Callable[..., bool]:
+        def rule(*, step: int, previous: int) -> bool:
+            calls.append(at)
+            return step == previous + 1
 
-    members: list[int] = [Decision(values=(1,))]
-    for _ in range(31):
-        members.append(Decision(domain=domain(accepts=membership, previous=members[-1])))
+        return rule
+
+    for index in range(1, len(members)):
+        rules[f"follows_{index}"] = constraint(step=members[index], previous=members[index - 1])(
+            follows(index)
+        )
     space_type = composite(
         "DependentBatch",
-        {f"step_{i}": member for i, member in enumerate(members)},
+        {**{f"step_{i}": member for i, member in enumerate(members)}, **rules},
         annotations={f"step_{i}": int for i in range(len(members))},
     )
     base = design_space(space_type())
     edits = [base.field(member).change(index + 1) for index, member in enumerate(members)]
     report = base.try_with_choices(*reversed(edits))
     assert report.accepted
-    assert calls == [(index + 1, index) for index in range(1, len(members))]
+    assert sorted(calls) == list(range(1, len(members)))  # each rule once
     assert report.instance.query(members[-1]) == Available(len(members))
-    calls.clear()
     edits[0] = base.field(members[0]).change(2)
     failed = base.try_with_choices(*reversed(edits))
-    assert not failed.accepted
-    assert failed.instance is base
-    assert calls == []  # the refused first candidate never became a dependency value
-    primary = failed.outcomes[-1].result
-    assert isinstance(primary, Rejected)
-    assert primary.findings and all(finding.owner == "step_0" for finding in primary.findings)
-    # Dependents preserve the prerequisite cause; they have not run membership.
-    for item in failed.outcomes[:-1]:
-        assert isinstance(item.result, Rejected)
-        assert item.result.findings == primary.findings
+    assert not failed.accepted and failed.instance is base
+    assert all(outcome.status == "checked" for outcome in failed.outcomes)
+    assert [(rule.rule, rule.standing) for rule in failed.broken] == [("follows_1", ())]
 
 
-def test_selector_and_nested_edit_share_atomic_order_and_inactive_edits_refuse() -> None:
+def test_selector_and_nested_edit_share_atomic_order_and_inactive_edits_are_dormant() -> None:
     class Child(Space):
         value: int = Decision(values=(1, 2))
 
@@ -285,15 +291,22 @@ def test_selector_and_nested_edit_share_atomic_order_and_inactive_edits_refuse()
     assert selected is not None and selected.query(Child.value) == Available(2)
     inactive = candidate(report.instance, Root.implementation, "b")
     assert inactive is not None
-    failed = report.instance.try_with_choices(inactive.field(Child.value).change(1))
-    assert not failed.accepted
-    assert isinstance(failed.outcomes[0].result, Inapplicable)
-    assert failed.instance is report.instance
-    with pytest.raises(ConfigurationError):
-        report.instance.with_choices({selector: "b"})
+    # Set under the case not selected, the value is checked there and kept, dormant.
+    dormant = report.instance.try_with_choices(inactive.field(Child.value).change(1))
+    assert dormant.accepted
+    other = candidate(dormant.instance, Root.implementation, "b")
+    assert other is not None and isinstance(other.query(Child.value), Inapplicable)
+    # Switching to it puts a's value out of play and brings b's in.
+    switched = dormant.instance.with_choices({selector: "b"})
+    assert candidate(switched, Root.implementation, "b").query(Child.value) == Available(1)  # type: ignore[union-attr]
+    assert isinstance(
+        candidate(switched, Root.implementation, "a").query(Child.value),  # type: ignore[union-attr]
+        Inapplicable,
+    )
 
 
-def test_enumerated_candidates_still_pass_membership_before_commitment() -> None:
+@pytest.mark.usefixtures("purity_unchecked")
+def test_candidates_are_the_enumerated_values_membership_accepts() -> None:
     seen: list[int] = []
 
     def membership(*, candidate: int) -> bool:
@@ -304,13 +317,17 @@ def test_enumerated_candidates_still_pass_membership_before_commitment() -> None
         value: int = Decision(domain=domain(accepts=membership, candidates=lambda: (-1, 1)))
 
     base = design_space(Trial())
-    assert base.field(Trial.value).candidates() == Available((-1, 1))
-    assert seen == []
+    # Membership is asked of each enumerated value once, and kept.
+    assert base.field(Trial.value).candidates() == Available((1,))
+    assert seen == [-1, 1]
+    assert base.field(Trial.value).candidates() == Available((1,))
+    assert seen == [-1, 1]
+    # A value set is type-checked by membership, listed or not.
     report = base.try_with_choices(base.field(Trial.value).change(-1))
     assert not report.accepted
-    assert seen == [-1]
-    # Every listed value is checked by membership: -1 is no case, so 1 is forced.
-    assert base.query(Trial.value) == Available(1)
+    assert seen == [-1, 1, -1]
+    # Nothing is filled in, though one listed value alone passes membership.
+    assert isinstance(base.query(Trial.value), Unresolved)
 
 
 def test_programmer_failure_after_provisional_admission_never_publishes_a_successor() -> None:

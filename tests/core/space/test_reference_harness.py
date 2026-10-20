@@ -4,13 +4,11 @@
 """The harness comparing the engine with its reference model, held to its own rules: the
 model imports the standard library only, every row of the acceptance matrix has exactly
 one witness and every expected failure a row, and the comparison reads blockers as a
-subset and everything else exactly."""
+subset and everything else exactly. The walks' own checks are ``test_reference_walks``'s."""
 
 from __future__ import annotations
 
 import ast
-import dataclasses
-import random
 import sys
 from pathlib import Path
 
@@ -26,6 +24,7 @@ from core.space.reference import (
     Scope,
     Selector,
     Space,
+    When,
     computed,
     listed,
 )
@@ -35,14 +34,23 @@ from core.space.reference_harness import (
     Case,
     Disagreement,
     NotTranslatable,
+    OutcomeForm,
+    PossibleForm,
+    RefusalForm,
+    Row,
     RuleForm,
     StateForm,
     ValidityForm,
     markdown,
+    matrix,
 )
-from core.space.reference_harness.compare import agrees, rule_form
+from core.space.reference_harness.compare import (
+    agrees,
+    change_form,
+    rule_form,
+    validity_form,
+)
 from core.space.reference_harness.matrix import problems
-from core.space.reference_harness.walks import generate
 from finn.core.space import inspection
 
 
@@ -78,122 +86,159 @@ CASE_MODULES = tuple(
 
 
 def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() -> None:
-    assert ROWS and all(path.exists() for path in CASE_MODULES)
+    assert all(path.exists() for path in CASE_MODULES)
     assert not problems(CASE_MODULES)
 
 
+def test_the_engine_core_is_accepted_its_rows_removed() -> None:
+    assert MILESTONES == ("base",) and ROWS == ()
+
+
+# A later milestone with rows, put in the matrix where a test needs one.
+LATER = ("lane 9", "lane 10")
+WITNESS = "test_reference_cases::test_it"
+LATER_ROWS = (
+    Row("b-row", "lane 10", "the second change", "test_reference_cases::test_other"),
+    Row("a-row", "lane 9", "the change", WITNESS, "today refused"),
+)
+
+
+@pytest.fixture
+def later(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(matrix, "MILESTONES", ("base", *LATER))
+    monkeypatch.setattr(matrix, "ROWS", LATER_ROWS)
+    monkeypatch.setattr(matrix, "BY_ID", {row.id: row for row in LATER_ROWS})
+
+
+@pytest.mark.usefixtures("later")
 def test_the_matrix_check_finds_a_row_without_its_witness(tmp_path: Path) -> None:
     """A check that has never rejected anything is a check nobody has tested."""
-    witness = ROWS[0].witness.split("::")[1]
-    elsewhere = tmp_path / "test_reference_cases.py"
-    elsewhere.write_text(f"@pytest.mark.xfail(strict=True)\ndef {witness}() -> None: ...\n")
-    found = problems([elsewhere])
-    assert f"test_reference_cases::{witness}: an expected failure with no row" in found
-    assert any(item.startswith(f"{ROWS[0].id}: witnessed by []") for item in found)
+    module = tmp_path / "test_reference_cases.py"
+    module.write_text(
+        '@expected("a-row")\ndef test_it() -> None: ...\n\n'
+        "@pytest.mark.xfail(strict=True)\ndef test_other() -> None: ...\n\n"
+        '@expected("c-row")\ndef test_third() -> None: ...\n'
+    )
+    assert problems([module]) == [
+        "test_reference_cases::test_other: an expected failure with no row",
+        "c-row: witnessed by ['test_reference_cases::test_third'], but no such row",
+        "b-row: witnessed by [], names test_reference_cases::test_other",
+    ]
 
 
-def test_the_matrix_is_built_on_the_models_default_trial_reach() -> None:
-    # Off: a value case's trial does not count other stored choices' own checks, so a forced
-    # value may make a retained choice's own check false, and the change is refused. Every
-    # case and every walk compares the model's default; flipping it moves answers, and the
-    # rows with them.
-    defaults = {item.name: item.default for item in dataclasses.fields(Space)}
-    assert defaults["trials_count_retained_checks"] is False
-    assert not generate(random.Random(0))[0].description.trials_count_retained_checks
-    other = dataclasses.replace(Space((), Scope("")), trials_count_retained_checks=True)
-    with pytest.raises(ValueError, match="default trial reach"):
-        Case("the other reading", other)
+@pytest.mark.usefixtures("later")
+def test_a_witness_is_a_strict_expected_failure_raising_a_disagreement() -> None:
+    @matrix.expected("a-row")
+    def test_it() -> None: ...
+
+    (mark,) = test_it.pytestmark  # type: ignore[attr-defined]
+    assert mark.name == "xfail" and mark.kwargs == {
+        "strict": True,
+        "raises": Disagreement,
+        "reason": "lane 9: the change (today refused)",
+    }
 
 
+@pytest.mark.usefixtures("later")
 def test_the_matrix_prints_as_a_markdown_table_in_milestone_order() -> None:
     table = markdown().splitlines()
-    assert table[0].startswith("| Row | Milestone |") and len(table) == len(ROWS) + 2
-    milestones = [line.split(" | ")[1] for line in table[2:]]
-    assert milestones == sorted(milestones, key=MILESTONES.index)
-    assert all(f"| {row.id} |" in markdown() for row in ROWS)
+    assert table[0] == "| Row | Milestone | The change that removes it | Witness |"
+    assert table[2:] == [
+        f"| a-row | lane 9 | the change (today refused) | `{WITNESS}` |",
+        "| b-row | lane 10 | the second change | `test_reference_cases::test_other` |",
+    ]
 
 
 # -- the comparison --------------------------------------------------------------------------------
 
 
 def test_the_engine_may_name_fewer_blockers_than_the_model_never_others() -> None:
-    model = ValidityForm("undecided", blockers=frozenset({"x", "y"}))
-    assert agrees(model, ValidityForm("undecided", blockers=frozenset({"x"})))
-    assert not agrees(model, ValidityForm("undecided", blockers=frozenset({"z"})))
+    model = ValidityForm("open", blockers=frozenset({"x", "y"}))
+    assert agrees(model, ValidityForm("open", blockers=frozenset({"x"})))
+    assert not agrees(model, ValidityForm("open", blockers=frozenset({"z"})))
     assert not agrees(model, ValidityForm("valid"))
 
 
-def test_the_possible_cases_of_a_choice_whose_answer_waits_are_not_compared() -> None:
-    waiting = StateForm("open", possible=(1, 2), blockers=frozenset({"want"}))
-    assert agrees(waiting, StateForm("open", blockers=frozenset({"want"})))
-    assert not agrees(StateForm("open", possible=(1, 2)), StateForm("open", possible=(1,)))
+def test_possible_values_compare_exactly_in_their_lists_order() -> None:
+    one, two = (1, OutcomeForm("possible")), (2, OutcomeForm("possible"))
+    assert agrees(PossibleForm((one, two)), PossibleForm((one, two)))
+    assert not agrees(PossibleForm((one, two)), PossibleForm((two, one)))
+    assert not agrees(PossibleForm((one,)), PossibleForm(None))
+    moved = (1, OutcomeForm("possible", dormant=frozenset({"p"})))
+    assert not agrees(PossibleForm((moved,)), PossibleForm((one,)))
 
 
 def test_values_compare_by_type_as_well() -> None:
-    assert not agrees(StateForm("forced", True), StateForm("forced", 1))
-
-
-def test_a_rule_reading_a_refused_choice_carries_the_reasons_that_refuse_it() -> None:
-    # Whatever refuses the choice it reads: its own check (a value outside its domain), its
-    # guard (admitted under a selector with no possible case) or its domain's input (refused
-    # on facts), the rule is false with those reasons' codes, never with none.
-    cores = Selector(
-        "compute",
-        (
-            Scope(
-                "packed",
-                choices=(Choice("pe", listed(1, 2, 3)),),
-                constraints=(Constraint("fits", ("width",), lambda r: r["width"] <= 8, "wide"),),
-            ),
-            Scope(
-                "stub",
-                constraints=(Constraint("even", ("width",), lambda r: r["width"] % 2 == 0, "odd"),),
-            ),
-        ),
+    assert not agrees(StateForm("set", True), StateForm("set", 1))
+    assert not agrees(
+        PossibleForm(((True, OutcomeForm("possible")),)),
+        PossibleForm(((1, OutcomeForm("possible")),)),
     )
-    space = Space(
-        ("width", "w"),
+
+
+def gated() -> Space:
+    """``g`` is present while the derived ``gate`` exceeds 2; ``gate`` refuses an odd ``w``.
+    ``lanes``'s domain reads ``half``, which refuses an odd ``v``; ``z`` lists nothing."""
+    return Space(
+        ("w", "v"),
         Scope(
             "",
             choices=(
-                Choice("x", listed(1, 2)),
                 Choice(
                     "lanes",
                     computed(lambda r: tuple(d for d in (1, 2) if r["half"] % d == 0), ("half",)),
                 ),
+                Choice("z", listed()),
             ),
-            selectors=(cores,),
-            derived=(Derived("half", ("w",), lambda r: Refuse("odd-w") if r["w"] % 2 else r["w"]),),
-            constraints=(
-                Constraint("on-x", ("x",), lambda r: r["x"] > 0, "x"),
-                Constraint(
-                    "on-pe", ("compute.packed.pe",), lambda r: r["compute.packed.pe"] > 0, "pe"
+            derived=(
+                Derived("gate", ("w",), lambda r: Refuse("odd") if r["w"] % 2 else r["w"]),
+                Derived("half", ("v",), lambda r: Refuse("odd-v") if r["v"] % 2 else r["v"]),
+            ),
+            children=(
+                Scope(
+                    "g",
+                    when=When(("gate",), lambda r: r["gate"] > 2),
+                    choices=(Choice("n", listed(1, 2)),),
                 ),
-                Constraint("on-lanes", ("lanes",), lambda r: r["lanes"] > 0, "lanes"),
             ),
+            constraints=(Constraint("on-n", ("g.n",), lambda r: r["g.n"] > 0, "n"),),
         ),
     )
-    stored = {"x": 3, "compute.packed.pe": 3, "lanes": 1}
-    solution = reference.Configuration(space, {"width": 9, "w": 7}, stored).solve()
-    assert isinstance(solution.state("x"), reference.RefusedChoice)
-    assert isinstance(solution.state("compute.packed.pe"), reference.GuardRefused)
-    assert isinstance(solution.state("lanes"), reference.InputRefused)
-    assert rule_form(solution, "on-x") == RuleForm("false", frozenset({("domain-membership", "x")}))
-    assert rule_form(solution, "on-pe") == RuleForm(
-        "false", frozenset({("decision-no-viable-case", "compute")})
+
+
+def test_a_refused_input_carries_the_codes_of_its_origin() -> None:
+    # Whatever refuses what a node reads (a guard over a refusing input, a membership input
+    # refusing), the node carries the codes of the origin, never none.
+    configuration = reference.Configuration(gated(), {"w": 3, "v": 3}, {"g.n": 2})
+    solution = configuration.solve()
+    assert isinstance(solution.state("g.n"), reference.Dormant)
+    assert rule_form(solution, "on-n") == RuleForm("false", frozenset({("odd", "gate")}))
+    edit = Change(commit={"lanes": 1})
+    result = reference.change(configuration, edit)
+    assert change_form(configuration, edit, result).refusals == {
+        RefusalForm("assignment", "lanes", frozenset({("odd-v", "half")}))
+    }
+
+
+def test_the_codes_of_an_empty_list_and_a_refused_guard() -> None:
+    # ``domain-empty`` and ``guard-refused``, the engine core's codes too. ``on-n`` is false
+    # through the guard: it carries the guard's origin, ``gate``.
+    solution = reference.Configuration(gated(), {"w": 3, "v": 4}).solve()
+    assert validity_form(solution) == ValidityForm(
+        "refused",
+        frozenset({("domain-empty", "z"), ("guard-refused", "g"), ("odd", "gate")}),
     )
-    assert rule_form(solution, "on-lanes") == RuleForm("false", frozenset({("odd-w", "half")}))
 
 
 def test_a_disagreement_names_the_case_the_question_and_both_answers() -> None:
     with pytest.raises(Disagreement) as caught:
-        LISTED.start().check_state("x", ruled=StateForm("forced", 2))
+        LISTED.start().check_state("x", ruled=StateForm("set", 2))
     assert isinstance(caught.value, AssertionError)
     text = str(caught.value)
     assert text.splitlines()[0] == "listed: the state of x"
-    assert "! kind: model 'forced' | engine 'open'" in text
+    assert "! kind: model 'set' | engine 'open'" in text
     assert "! value: model 2 | engine None" in text
-    assert "  codes: model {} | engine {}" in text
+    assert "  blockers: model {} | engine {}" in text
 
 
 # -- the translator --------------------------------------------------------------------------------
@@ -225,14 +270,12 @@ NESTED = Case(
 )
 
 
-@pytest.mark.usefixtures("index_path")
 def test_every_choice_keeps_its_path_as_its_key() -> None:
     point = NESTED.start({"width": 4}).engine.point
     keys = {item.key for item in inspection.decisions(point)}
     assert keys == {"unit.compute", "unit.compute.packed.pe", "unit.compute.stub.rows"}
 
 
-@pytest.mark.usefixtures("index_path")
 def test_a_selector_is_read_as_its_selected_case() -> None:
     NESTED.start({"width": 4}, {"unit.compute": "stub"}).check_answer("unit.compute")
 

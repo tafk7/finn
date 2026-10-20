@@ -1,7 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Typed occurrence operations over one compiled model and immutable snapshot."""
+"""The read boundary: typed operations on a configuration, or on a method's receiver.
+
+A Space object that reads values is one of two things. A **configuration**
+(``design_space``, a change) reads through its state (``_state.State``): each read is
+a driver demand, evaluated in the configuration's world under the model's lock. A
+**receiver**, the ``self`` a ``self`` method runs with, reads through the method's
+reader (``_world.MethodReader``): each read is evaluated in the world the method runs
+in, recorded, and checked against what the method's source may read. A configuration
+read during an authored call is that call's failure (a method reads through its
+receiver), and so is a driver-only operation.
+"""
 
 # Lazy imports break the declaration/configuration/evaluation cycle.
 # ruff: noqa: PLC0415
@@ -10,10 +20,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TypeVar, cast, overload
 
-from . import _execution, _runtime
-from ._collapse import guard_implies
+from . import _state
 from ._configuration import BoundDecision, BoundValue, Space
-from ._runtime import Snapshot
+from ._failure import check_transformation, current, driver_only, fault
+from ._state import State
+from ._world import MethodReader
 from .compiler import Model
 from .declarations import (
     Constraint,
@@ -24,7 +35,7 @@ from .declarations import (
     declared_path,
 )
 from .errors import EvaluationError, RequestError
-from .ir import Choice, LinkedModel
+from .ir import Choice, LinkedModel, NodeId
 from .results import (
     Available,
     ConstraintAssessment,
@@ -33,27 +44,55 @@ from .results import (
     QueryResult,
     Unresolved,
     ViewAssessment,
-    require_value,
 )
-from .semantics import recognize, snapshot, unrecognized
+from .semantics import snapshot
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
 
 
-def state(point: Space) -> Snapshot:
-    current = vars(point).get("_state")
-    if not isinstance(current, Snapshot):
+def _reader(point: Space) -> MethodReader | None:
+    """The method reader ``point`` reads through, where it is a method's receiver."""
+    found = vars(point).get("_state")
+    return found if isinstance(found, MethodReader) else None
+
+
+def state(point: Space) -> State:
+    """A configuration's state."""
+    found = vars(point).get("_state")
+    if not isinstance(found, State):
         if declared_path(point) is not None:
             raise RequestError(
                 f"{point!r} is a node declaration, not a configuration; open its root's "
                 "design space with design_space()"
             )
         raise RequestError("a configuration is created by design_space()")
-    return current
+    return found
 
 
-def attach(current: Snapshot, scope: int) -> Space:
+def _driver(point: Space) -> State:
+    """A configuration's state, for a read: refused in a value transformation, and inside
+    an authored call (it reads through its receiver), sticky there."""
+    found = state(point)
+    check_transformation()
+    active = current()
+    if active is not None:
+        error = EvaluationError(active.owner, "field read", "cross-configuration access")
+        fault(active, error)
+        raise error
+    return found
+
+
+def model_of(point: Space) -> Model[Space]:
+    """The compiled model a configuration or a receiver reads."""
+    reader = _reader(point)
+    if reader is not None:
+        return reader.world.evaluator.model
+    return state(point).model
+
+
+def attach(current: State, scope: int) -> Space:
+    """The configuration of ``scope`` in ``current``."""
     space_type = current.linked.scopes[scope].space_type
     instance = object.__new__(space_type)
     object.__setattr__(instance, "_state", current)
@@ -63,26 +102,16 @@ def attach(current: Snapshot, scope: int) -> Space:
 
 def prepare_values(
     linked: LinkedModel,
-    pending: Mapping[int, object],
+    pending: Mapping[NodeId, object],
     role: str,
-) -> dict[int, object]:
-    """Recognize the entire request before any snapshot adapter is invoked."""
-    for index, value in pending.items():
-        node = linked.nodes[index]
-        assert node.semantics is not None
-        if not recognize(node.semantics, value, owner=node.owner, role=f"{role} recognition"):
-            raise RequestError(f"{node.key}: {unrecognized(node.semantics)}")
-    prepared: dict[int, object] = {}
-    for index, value in pending.items():
-        node = linked.nodes[index]
-        assert node.semantics is not None
-        prepared[index] = snapshot(node.semantics, value, owner=node.owner, role=f"{role} snapshot")
-    return prepared
+) -> dict[NodeId, object]:
+    """Recognize every value before any is snapshot, then snapshot each."""
+    return _state.prepare(linked, {index: (value, role) for index, value in pending.items()})
 
 
-def bind(model: Model[S], parameters: Mapping[int, object]) -> S:
+def bind(model: Model[S], parameters: Mapping[NodeId, object]) -> S:
     """Validate all root inputs and freeze them before any evaluation."""
-    _execution.driver_only("configuration binding")
+    driver_only("configuration binding")
     for index in parameters:
         if index not in model.linked.parameters:
             raise RequestError(f"{model.linked.nodes[index].key} is not an exposed parameter")
@@ -94,13 +123,11 @@ def bind(model: Model[S], parameters: Mapping[int, object]) -> S:
     if missing:
         raise RequestError(f"missing required parameters: {', '.join(missing)}")
     frozen = prepare_values(model.linked, parameters, "parameter")
-    snapshot = _runtime.Snapshot(cast(Model[Space], model), frozen)
-    return cast(S, attach(snapshot, 0))
+    return cast(S, attach(_state.bind(cast(Model[Space], model), frozen), 0))
 
 
-def _node_scope(point: Space, reference: object) -> int | None:
+def _node_scope(linked: LinkedModel, point: Space, reference: object) -> int | None:
     """For a node reference, the node's scope; None for anything else."""
-    from ._configuration import Space
     from ._nodes import NodeDecl
     from .references import descend
 
@@ -112,8 +139,7 @@ def _node_scope(point: Space, reference: object) -> int | None:
     *outer, last = path
     if not isinstance(last, NodeDecl):
         return None
-    current = state(point)
-    scopes = current.linked.scopes
+    scopes = linked.scopes
     holder = descend(scopes, point._scope, outer)
     scope = scopes[holder]
     if last is scope.record:
@@ -124,113 +150,53 @@ def _node_scope(point: Space, reference: object) -> int | None:
     return target
 
 
-def _presence(point: Space, target: int) -> int | None:
-    """The node answering a node's presence: its guard."""
-    return state(point).linked.scopes[target].guard
-
-
 def query(point: Space, reference: object) -> QueryResult[object]:
-    _execution.driver_only("query inspection")
+    driver_only("query inspection")
     current = state(point)
-    target = _node_scope(point, reference)
+    linked = current.linked
+    target = _node_scope(linked, point, reference)
     if target is not None:
-        presence = _presence(point, target)
+        presence = linked.scopes[target].guard
         if presence is not None:
-            answer = _runtime.evaluate(current, presence).result
+            answer = current.world.result(presence)
             if not isinstance(answer, Available) or answer.value is not True:
                 return answer if not isinstance(answer, Available) else Inapplicable()
         return Available(attach(current, target))
     index = current.model.resolve(point._scope, reference)
-    result = _runtime.evaluate(current, index).result
-    return _runtime.copy_result(current, index, result)
+    return _state.answer(current, index)
 
 
 def present(point: Space, node: object) -> bool:
     """Whether a node, or a value input, is present, read like a value (undecided presence
     raises)."""
-    target = _node_scope(point, node)
+    reader = _reader(point)
+    if reader is not None:  # a method reads through the world it runs in
+        return reader.present(point, node)
+    current = _driver(point)
+    target = _node_scope(current.linked, point, node)
     if target is None:
         if isinstance(node, Param):
-            return _supplied(point, node)
+            return _supplied(current, point, node)
         raise RequestError("present() takes a node (a child or a candidate) or a value input")
-    presence = _presence(point, target)
+    presence = current.linked.scopes[target].guard
     if presence is None:
         return True
-    answer = _read_result(point, presence)
+    answer = current.world.result(presence)
     if isinstance(answer, Available):
         return answer.value is True
     if isinstance(answer, Inapplicable) or (isinstance(answer, Unresolved) and _unsupplied(answer)):
         return False
-    return bool(_read_index(point, presence))  # undecided: raises like any value read
+    return bool(_state.value(current, presence))  # undecided: raises like any value read
 
 
-def _supplied(point: Space, formal: Param[object]) -> bool:
-    """Whether a value input is supplied: a source applies. The value is never evaluated.
-
-    Presence is known before the value is: the walk follows the edges a read
-    of the value would follow, reading only facts (guards, the choices that
-    select a candidate's member, whether an input was given at start) and
-    never a computation (a derived value, a view's callback). Omitted at
-    start, or a formal no present source supplies, it is not supplied. A
-    source that applies is supplied whatever its value then answers: a
-    refusal surfaces where the value is read, with its findings. Undecided
-    presence raises like any value read.
-    """
-    applies = _source_applies(point, state(point).model.resolve(point._scope, formal))
+def _supplied(current: State, point: Space, formal: Param[object]) -> bool:
+    """Whether a value input is supplied: a source applies (``_state.source_applies``).
+    The value is never evaluated. Undecided presence raises like any value read."""
+    applies = _state.source_applies(current, current.model.resolve(point._scope, formal))
     if isinstance(applies, bool):
         return applies
-    _read_index(point, applies)  # undecided: raises like any value read
+    _state.value(current, applies)  # undecided: raises like any value read
     raise AssertionError("an undecided presence read halts")
-
-
-def _source_applies(point: Space, index: int) -> bool | int:
-    """Whether a source applies at ``index``, or the presence node still undecided."""
-    node = state(point).linked.nodes[index]
-    if node.guard is not None:
-        holds = _holds(point, node.guard)
-        if holds is not True:
-            return holds
-    if node.kind == "param":
-        return isinstance(_read_result(point, index), Available)  # given at start
-    if node.kind in ("alias", "guard", "view"):
-        return _source_applies(point, cast(int, node.output))
-    if node.kind == "select":
-        selector = cast(int, node.selector)
-        case = _read_result(point, selector)
-        if not isinstance(case, Available):
-            return False if isinstance(case, Inapplicable) else selector
-        target = cast(Mapping[str, int], node.selection_index).get(cast(str, case.value))
-        return False if target is None else _source_applies(point, target)
-    if node.kind == "present":
-        answers = [_source_applies(point, target) for _, target in node.alternatives]
-        if any(answer is True for answer in answers):  # an index may equal 1
-            return True
-        return next((answer for answer in answers if answer is not False), False)
-    return True  # a const, a decision, a computation: the source itself
-
-
-def _holds(point: Space, guard: int) -> bool | int:
-    """Whether a guard holds (inapplicable: it does not), or its index while undecided."""
-    answer = _read_result(point, guard)
-    if isinstance(answer, Available):
-        return answer.value is True
-    return False if isinstance(answer, Inapplicable) else guard
-
-
-def _read_result(point: Space, index: int) -> QueryResult[object]:
-    """A node's answer without halting the reading method on a non-value."""
-    snapshot = state(point)
-    _execution.check_snapshot(snapshot)
-    active = _execution.current()
-    if active is None:
-        return _runtime.evaluate(snapshot, index).result
-    active.dependencies[index] = None
-    outcome: object = (
-        snapshot.cache[index] if index in snapshot.cache else active.native_parent.switch(index)
-    )
-    if not isinstance(outcome, _runtime.Evaluation):
-        _execution.accept_read(active, index, outcome)  # a transported failure: raises
-    return cast(_runtime.Evaluation, outcome).result
 
 
 def _unsupplied(answer: Unresolved) -> bool:
@@ -239,49 +205,13 @@ def _unsupplied(answer: Unresolved) -> bool:
 
 
 def read_value(point: Space, reference: ValueRef[T] | View[T]) -> T:
-    active = _execution.current()
-    try:
-        return _read_value(point, reference)
-    except BaseException as cause:
-        if active is not None:
-            _execution._remember_exception(active, cause)
-        raise
-
-
-def _read_index(point: Space, index: int) -> object:
-    snapshot = state(point)
-    _execution.check_snapshot(snapshot)
-    snapshot.work.getter_attempts += 1
-    active = _execution.current()
-    if active is None:
-        entry = _runtime.evaluate(snapshot, index)
-    else:
-        active.dependencies[index] = None
-        if index in snapshot.cache:
-            outcome: object = snapshot.cache[index]
-        else:
-            outcome = active.native_parent.switch(index)
-        entry = _execution.accept_read(active, index, outcome)
-    answer = _runtime.copy_result(snapshot, index, entry.result)
-    return require_value(answer, context=snapshot.model.linked.nodes[index].owner)
-
-
-def _read_value(point: Space, reference: ValueRef[T] | View[T]) -> T:
-    snapshot = state(point)
-    _execution.check_snapshot(snapshot)
-    index = snapshot.model.resolve(point._scope, reference)
-    active = _execution.current()
-    if active is not None:
-        # A method's read of a forwarding alias goes straight to its source
-        # when the alias applies whenever the reading node does.
-        linked = snapshot.linked
-        source = linked.forward[index]
-        if source != index and guard_implies(
-            linked.nodes, linked.nodes[index].guard, linked.nodes[active.index].guard
-        ):
-            active.via[index] = source
-            index = source
-    return cast(T, _read_index(point, index))
+    """A member read as a value: the configuration's, or, on a receiver, the method's
+    read (recorded and checked)."""
+    reader = _reader(point)
+    if reader is not None:  # a method reads through the world it runs in
+        return cast(T, reader.read_value(point, reference))
+    current = _driver(point)
+    return cast(T, _state.value(current, current.model.resolve(point._scope, reference)))
 
 
 @overload
@@ -296,7 +226,7 @@ def inspect(
     point: Space,
     reference: View[T] | Constraint,
 ) -> ViewAssessment[T] | ConstraintAssessment:
-    _execution.driver_only("assessment inspection")
+    driver_only("assessment inspection")
     current = state(point)
     index = current.model.resolve(point._scope, reference)
     node = current.linked.nodes[index]
@@ -305,32 +235,46 @@ def inspect(
             f"{node.key} is not a view or a constraint: inspect() assesses those; "
             "read or query() any other member"
         )
-    entry = _runtime.evaluate(current, index)
-    assert entry.assessment is not None
+    assessment = current.world.entry(index).assessment
+    assert assessment is not None
     return cast(
         ViewAssessment[T] | ConstraintAssessment,
-        _runtime.copy_assessment(current, index, entry.assessment),
+        _state.copy_assessment(current.linked, index, assessment),
     )
 
 
 def decision_state(point: Space, reference: object) -> QueryResult[DecisionState[object]]:
-    _execution.driver_only("decision state")
-    current = state(point)
-    index = decision_index(point, reference)
-    # Runtime state reads already snapshot committed values and contextualize
-    # adapter failures before crossing this boundary.
-    return _runtime.decision_state(current, index)
+    driver_only("decision state")
+    return _state.decision_state(state(point), decision_index(point, reference))
 
 
-def decision_index(point: Space, reference: object) -> int:
-    current = state(point)
-    return current.model.decision(point._scope, reference)
+def decision_index(point: Space, reference: object) -> NodeId:
+    return state(point).model.decision(point._scope, reference)
 
 
 def candidates(point: Space, reference: object) -> QueryResult[tuple[object, ...]] | None:
-    _execution.driver_only("domain enumeration")
+    """A choice's listed values (its domain's enumeration, each value its membership
+    accepts), ranked by its domain's order where it has one (None: known by membership
+    only), under its guard."""
+    from ._world import candidates as listed
+
+    driver_only("domain enumeration")
     current = state(point)
-    return _runtime.candidate_values(current, decision_index(point, reference))
+    index = decision_index(point, reference)
+    result = listed(current.world, index)
+    if isinstance(result, Available) and result.value is None:
+        return None
+    if isinstance(result, Available):
+        node = current.linked.nodes[index]
+        assert node.semantics is not None
+        values = cast(tuple[object, ...], result.value)
+        return Available(
+            tuple(
+                snapshot(node.semantics, value, owner=node.owner, role="public value snapshot")
+                for value in values
+            )
+        )
+    return cast(QueryResult[tuple[object, ...]], result)
 
 
 def bind_field(point: Space, reference: ValueRef[T] | View[T]) -> BoundValue[T] | BoundDecision[T]:
@@ -340,26 +284,34 @@ def bind_field(point: Space, reference: ValueRef[T] | View[T]) -> BoundValue[T] 
     ``query()`` its accepted result, exactly the attribute read and
     ``point.query``; its assessment is ``point.inspect``.
     """
-    current = state(point)
-    _execution.check_snapshot(current)
-    current.model.resolve(point._scope, reference)
+    reader = _reader(point)
+    if reader is not None:
+        reader._enter()
+        model = reader.world.evaluator.model
+    else:
+        model = _driver(point).model
+    model.resolve(point._scope, reference)
     try:
-        current.model.decision(point._scope, reference)
+        model.decision(point._scope, reference)
     except RequestError:
         return BoundValue(point, reference)
     return BoundDecision(point, reference)
 
 
 def root(point: Space) -> Space:
-    current = state(point)
-    _execution.check_snapshot(current)
+    reader = _reader(point)
+    if reader is not None:  # a method reads through the world it runs in
+        return reader.root(point)
+    current = _driver(point)
     return point if point._scope == 0 else attach(current, 0)
 
 
 def child(point: Space, record: Declaration) -> Space:
-    """A child node's configuration."""
-    current = state(point)
-    _execution.check_snapshot(current)
+    """A child node's configuration (on a receiver, the child's receiver)."""
+    reader = _reader(point)
+    if reader is not None:  # a method reads through the world it runs in
+        return reader.child(point, record)
+    current = _driver(point)
     scope = current.linked.scopes[point._scope]
     child_scope = scope.children.get(record)
     if child_scope is None:
@@ -367,24 +319,26 @@ def child(point: Space, record: Declaration) -> Space:
     return attach(current, child_scope)
 
 
-def _scope_choice(current: Snapshot, scope: int, decision: object) -> Choice:
+def _scope_choice(linked: LinkedModel, scope: int, decision: object) -> Choice:
     """The Choice of a Decision over nodes in compiled scope ``scope``."""
     from ._nodes import unwrap
 
     record = unwrap(decision)
-    choices = current.linked.scopes[scope].choices
+    choices = linked.scopes[scope].choices
     try:
-        return current.linked.choices[choices[record]]
+        return linked.choices[choices[record]]
     except (KeyError, TypeError) as error:
         raise RequestError("the Decision over nodes is not part of this compiled scope") from error
 
 
 def selected_candidate(point: Space, decision: Declaration) -> Space | None:
     """The configuration of the candidate a Decision over nodes selects, or None."""
-    current = state(point)
-    _execution.check_snapshot(current)
-    choice = _scope_choice(current, point._scope, decision)
-    case = _read_index(point, choice.selector)
+    reader = _reader(point)
+    if reader is not None:  # a method reads through the world it runs in
+        return reader.selected_candidate(point, decision)
+    current = _driver(point)
+    choice = _scope_choice(current.linked, point._scope, decision)
+    case = _state.value(current, choice.selector)
     for key, candidate in choice.cases:
         if key == case:
             return None if candidate is None else attach(current, candidate)
@@ -393,11 +347,13 @@ def selected_candidate(point: Space, decision: Declaration) -> Space | None:
 
 def candidate(point: Space, decision: object, case: str) -> Space | None:
     """A candidate's configuration whether or not it is selected (None for a None case)."""
-    current = state(point)
-    _execution.check_snapshot(current)
+    reader = _reader(point)
+    if reader is not None:  # a method reads through the world it runs in
+        return reader.candidate(point, decision, case)
+    current = _driver(point)
     if type(case) is not str:
         raise RequestError("a candidate key must be a string")
-    choice = _scope_choice(current, point._scope, decision)
+    choice = _scope_choice(current.linked, point._scope, decision)
     for key, index in choice.cases:
         if key == case:
             return None if index is None else attach(current, index)

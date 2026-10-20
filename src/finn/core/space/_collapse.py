@@ -4,9 +4,9 @@
 """Collapse forwarding chains: evaluation edges jump past pure aliases.
 
 A rewrite of the linked node table after ordering. Scopes, node identities
-and keys are untouched; only evaluation edges change, each bypass recorded in
+and keys stay as they are; only evaluation edges change, each bypass recorded in
 the reader's ``via``. ``forwards`` and ``guard_implies`` are also the runtime's
-test for the same shortcut on method reads (``occurrence``).
+test for the same shortcut on method reads (``_world.MethodReader``).
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def _reads_any(node: Node, targets: set[int]) -> bool:
 def collapse(nodes: list[Node], order: tuple[int, ...]) -> tuple[int, ...]:
     """Collapse chains of forwarding aliases to their source, in place.
 
-    Scopes, node identities and keys are untouched: every alias stays a node
+    Scopes, node identities and keys stay as they are: every alias stays a node
     that can be read and explained by its authored name. Only evaluation
     edges change. An alias's own output jumps to the end of its chain, and a
     reader's edge to an alias goes straight to that source when the alias's

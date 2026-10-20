@@ -5,8 +5,9 @@
 
 A partition's network in its shell (``in_shell``) reads its target's shell row
 (``finn.platform.shells``), whose offer places an ``IODMA_hls`` end on each free side that
-meets the host: forced, so nothing is
-persisted; binding no RTL, so the module is the ``ip`` shell's; its cycles a frame
+meets the host: the end a choice of the channel's, set by the cut's interim channel rule (its
+one possible kind) and persisted; binding no RTL, so the module is the ``ip`` shell's; its
+cycles a frame
 the channel's, so an exploration's bottleneck can name it, and FIFO sizing reads
 both boundaries through it; its resources by its widths are the shell's, which
 the shell sums with its partition's and its static region's. On the Chain
@@ -70,7 +71,7 @@ from finn.transformation.kernels import (
     explore_kernel_choices,
     kernel_choices_config,
 )
-from finn.transformation.kernels.cut import CutKernelPartition
+from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
 
 # -- an end's arithmetic -------------------------------------------------------------------
 
@@ -200,6 +201,16 @@ def chain_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None
     return in_shell(model, model.graph.node, name="chain")
 
 
+def cut_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None) -> InShell:
+    """The Chain's network in the shell of ``target``, its channels' choices made there as
+    the cut makes them (``MakeCutChoices``: the ends the shell offers set by the interim
+    channel rule)."""
+    model = kernel_model() if model is None else model
+    write_target(model, target)
+    model = model.transform(MakeCutChoices())
+    return in_shell(model, model.graph.node, name="chain")
+
+
 def test_the_network_in_its_shell_reads_its_targets_shell_row() -> None:
     bound = chain_network()
     assert bound.row == shell_row("pynq", "Ultra96") and bound.row.ends == (iodma_hls(128),)
@@ -212,6 +223,7 @@ def test_the_network_takes_the_ends_it_is_offered_and_states_its_members_resourc
     model = kernel_model()
     configure_partition(model)
     write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices())
     plain = network(model, model.graph.node, name="chain")
     assert plain.ends == () and not plain.member("x").ended
     offered = network(model, model.graph.node, name="chain", ends=(iodma_hls(128),))
@@ -224,11 +236,16 @@ def test_the_network_takes_the_ends_it_is_offered_and_states_its_members_resourc
     assert shelled.own_resources() == Available(split.total)
 
 
-def test_an_offer_places_a_forced_end_on_each_free_side() -> None:
-    bound = chain_network()
+def test_an_offer_places_an_end_on_each_free_side() -> None:
+    """Each free side's end is a choice of its channel's, open until the cut's interim
+    channel rule sets its one possible kind, and persisted."""
+    assert set(chain_network().undecided()) >= {("x", "end"), ("y", "end")}
+    bound = cut_network()
     assert bound.ends == ("x", "y")
-    # Forced: no key of an end is committed, so none is persisted.
-    assert not [key for key in bound.chosen() if key[1].startswith("end")]
+    assert {key: value for key, value in bound.chosen().items() if key[1] == "end"} == {
+        ("x", "end"): IODMA_HLS,
+        ("y", "end"): IODMA_HLS,
+    }
     x, y = bound.member("x").end_contract, bound.member("y").end_contract
     # x: two INT3 lanes padded to a byte, 6 beats; 48 bits a frame share 16 with 128.
     assert (x.direction, x.port, x.tdata, x.beats, x.lanes) == ("in", "s_axis_0", 8, 6, 2)
@@ -245,7 +262,7 @@ def test_the_shell_s_resources_are_its_partition_s_its_ends_and_its_static_regio
     neither ends nor a static region."""
     model = kernel_model()
     configure_partition(model)
-    bound = chain_network(model=model)
+    bound = cut_network(model=model)
     split = shell_resources(bound)
     assert isinstance(split, ShellResources)
     x, y = bound.member("x").end_contract, bound.member("y").end_contract
@@ -272,9 +289,10 @@ def test_the_shell_s_resources_are_its_partition_s_its_ends_and_its_static_regio
 def test_a_network_waits_for_its_members_resources() -> None:
     waiting = shell_resources(chain_network())
     assert isinstance(waiting, tuple)
-    # The one open choice it waits on: the input generator's memory, owned by its member.
+    # The one open choice it waits on before the cut: each free side's end, owned by its
+    # member.
     assert {(finding.code, finding.owner) for finding in waiting} == {
-        ("decision-unassigned", "adapter.input_gen.input_gen.ram_style")
+        ("decision-unassigned", "end")
     }
 
 
@@ -295,10 +313,15 @@ def test_an_end_binds_no_rtl() -> None:
 
 def test_an_ended_network_persists_and_replays_as_itself() -> None:
     model = kernel_model()
-    bound = chain_network(model=model)
+    write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices())
+    bound = chain_network(ULTRA96, model=model)
     held = persist(model, bound)
-    assert not [key for values in held.values() for key in values if "end" in key.split(".")]
-    again = chain_network(model=model)
+    assert {name: values["end"] for name, values in held.items() if "end" in values} == {
+        "x": IODMA_HLS,
+        "y": IODMA_HLS,
+    }
+    again = chain_network(ULTRA96, model=model)
     assert again.chosen() == bound.chosen() and not again.stale
 
 
@@ -311,7 +334,7 @@ def test_a_row_offering_an_unknown_or_repeated_kind_is_refused() -> None:
 
 
 def test_sizing_reads_a_free_side_its_end_paces() -> None:
-    ended = chain_network()
+    ended = cut_network()
     x = ended.member("x").end_contract
     supply, _ = ends(ended.member("x"))
     assert supply == Pattern(x.times, x.cycles)
@@ -363,16 +386,19 @@ def built(model: ModelWrapper) -> dict[str, dict[str, object]]:
 def test_tfc_with_ultra96_s_ends_at_1e6_fps_names_its_input_end(tfc: ModelWrapper) -> None:
     ip_model, ip = explored(tfc, 1e6, ULTRA96_IP, sizing=True)
     model, report = explored(tfc, 1e6, sizing=True)
-    # The ends change no choice: persisted alike, each MatMul's pumping off on both (the
-    # doubled clock is the shell's, admitted by its root, and no kernel reads it off the
-    # platform); 57 values on 8 nodes and 13 tensors.
+    # The ends change no other choice: persisted alike, each MatMul's pumping off on both
+    # (the doubled clock is the shell's, admitted by its root, and no kernel reads it off
+    # the platform); 84 values on 8 nodes and 13 tensors, each boundary's end among them
+    # (the cut's, on the Zynq shell; kept, out of play, on ip).
     assert kernel_choices_config(model) == kernel_choices_config(ip_model)
     values = built(model)
     assert built(ip_model) == values
     assert all(values[name].items() >= pumping(name).items() for name in values)
-    assert (len(values), sum(map(len, values.values()))) == (21, 57)
-    persisted = kernel_choices_config(model).values()
-    assert not [key for held in persisted for key in held if "end" in key.split(".")]
+    assert (len(values), sum(map(len, values.values()))) == (21, 84)
+    assert {name: held["end"] for name, held in values.items() if "end" in held} == {
+        "Reshape_0_out0": IODMA_HLS,
+        "MatMul_3_out0": IODMA_HLS,
+    }
     # The input end at max(196, 49) + 4 and the output end at max(10, 5) + 4, the
     # partition at its 196; the budget of 200 is met, nothing relaxed.
     rows = report["ends"]

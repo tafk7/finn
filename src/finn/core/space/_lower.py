@@ -195,21 +195,35 @@ class _Lowering:
                     declaration=owner,
                 )
             arguments.append(Argument(name, self.names.reference(scope, source, owner=owner)))
-        supplied = dict.fromkeys(argument.name for argument in arguments)
-        for role, function, values in (
-            ("membership", domain.accepts, {"candidate": None, **supplied}),
-            ("enumeration", domain.candidates, supplied),
-        ):
-            if function is not None:
-                try:
-                    inspect.signature(function).bind(**values)
-                except (TypeError, ValueError) as cause:
-                    raise DefinitionError.broken(
-                        "domain-signature-incompatible",
-                        _OWNER,
-                        f"{owner}: incompatible domain {role} signature",
-                        declaration=owner,
-                    ) from cause
+        declared = {argument.name for argument in arguments}
+        for role, function, named in domain.signatures():
+            # Each callable takes the declared inputs its signature names.
+            values = dict.fromkeys(named)
+            positional: tuple[object, ...] = ()
+            if role == "membership":
+                values["candidate"] = None
+            elif role == "order":
+                positional = (None,)  # the values it ranks
+            try:
+                if not set(named) <= declared:
+                    raise TypeError(f"names {', '.join(sorted(set(named) - declared))}")
+                inspect.signature(function).bind(*positional, **values)
+            except (TypeError, ValueError) as cause:
+                raise DefinitionError.broken(
+                    "domain-signature-incompatible",
+                    _OWNER,
+                    f"{owner}: incompatible domain {role} signature",
+                    declaration=owner,
+                ) from cause
+        read = {name for _, _, named in domain.signatures() for name in named}
+        if declared - read:
+            raise DefinitionError.broken(
+                "domain-signature-incompatible",
+                _OWNER,
+                f"{owner}: domain input {', '.join(sorted(declared - read))} is read by none "
+                "of its callables",
+                declaration=owner,
+            )
         return domain, tuple(arguments)
 
     def callback(self, node: Node, function: BoundFunction) -> dict[str, Any]:

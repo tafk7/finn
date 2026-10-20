@@ -22,8 +22,6 @@ dynamic = ["version"]
 # the exact environment used for development, CI and the images.
 dependencies = [
     "clize>=5.0.1,<6",
-    # finn.core.space evaluates computations on greenlets.
-    "greenlet>=3.2.4,<4",
     "numpy>=1.26.4,<2",
     "onnx>=1.22.0,<1.23",
     "onnxruntime>=1.28.0,<1.29",

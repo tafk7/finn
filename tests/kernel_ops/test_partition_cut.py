@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from qonnx.core.modelwrapper import ModelWrapper
-from support.configure import configured, write_raw
+from support.configure import configured
 from support.ipxact_ports import AXILITE
 from support.models import (
     ROW_MAJOR_W2,
@@ -45,7 +45,6 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest, partition_body
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import configured_network, in_shell
-from finn.kernels.explore import Seam
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (
     InferKernelTensors,
@@ -53,7 +52,7 @@ from finn.transformation.kernels import (
     ToKernelOps,
     kernel_choices_config,
 )
-from finn.transformation.kernels.cut import CutKernelPartition
+from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
 from finn.transformation.kernels.integration import (
     Address,
     Connection,
@@ -71,10 +70,12 @@ ZYNQ = resolve_target(board="Ultra96", period_ns=5.0, shell="pynq")
 def chain(shell: str = "ip") -> ModelWrapper:
     """The Chain, x and the streamed w2 crossing its boundary, its choices saved, for
     Ultra96 on ``shell`` (the default ``ip``, or ``pynq``, w2 presenting one row-major
-    pass a frame: ``streamed_w2_model``, one row)."""
+    pass a frame: ``streamed_w2_model``, one row, each boundary's end made as the cut
+    makes it, ``MakeCutChoices``)."""
     if shell == "pynq":
         model = streamed_w2_model()
         write_target(model, ZYNQ)
+        model = model.transform(MakeCutChoices())
     else:
         model = kernel_model(second_weights=False)
     choose_memories(model)
@@ -289,28 +290,34 @@ def test_an_iodma_end_refuses_w2_repeated_or_tiled_by_name() -> None:
     """The Chain's streamed w2 presents its pass once per row of x, three times a frame,
     which an IODMA end does not repeat (SZ11 (f)): the pynq shell refuses it,
     ``end-repetition``, at any folding; at the Chain's own each pass is also in 2 x 2
-    tiles, which the driver's row-major buffer does not hold, ``end-order``."""
+    tiles, which the driver's row-major buffer does not hold, ``end-order``. The cut can
+    set w2's end to no value (``choice-no-valid-value``, each rule's finding its causes)
+    and leaves it open; emission refuses it, naming the rules it breaks, their findings
+    its causes."""
     repeated = (
-        r"w2\.end: .*end\.iodma_hls\.single_pass: end-repetition: s_axis_1: an iodma_hls end moves "
+        r"end\.iodma_hls\.single_pass: end-repetition: s_axis_1: an iodma_hls end moves "
         r"one pass of a \[4, 4\] buffer a frame, and this free side presents it 3 times a "
         r"frame \(repetition by the host or the end is not designed yet\)"
     )
     tiled = (
-        r"w2\.end: .*end\.iodma_hls\.row_major: end-order: s_axis_1: an iodma_hls end moves a "
+        r"end\.iodma_hls\.row_major: end-order: s_axis_1: an iodma_hls end moves a "
         r"row-major buffer, and this free side presents 4 beats of 4 lanes of \[4, 4\]"
     )
     for folding, refusals in ((None, (tiled, repeated)), (ROW_MAJOR_W2, (repeated,))):
         model = kernel_model(second_weights=False)
         write_target(model, ZYNQ)
         if folding is not None:
-            (second,) = [node for node in model.graph.node if node.name == "second"]
-            # A folding the shell refuses at its end, which the seam refuses to set
-            # (``decision-no-viable-case``): the graph as one FINN did not write is stated by
-            # its raw attributes, for the read side's refusal below.
-            with refused("decision-no-viable-case", owner="w2.end"):
-                configured(model, {second.name: folding})
-            for key, value in folding.items():
-                write_raw(model, second.name, key, value)
+            # A folding the shell refuses at its end: w2's end, open, can take no value
+            # under it, so the interim channel rule sets none.
+            configured(model, {"second": folding})
+        cut = MakeCutChoices()
+        model = model.transform(cut)
+        ((code, causes),) = [(f.code, f.causes) for f in cut.unset["w2.end"]]
+        assert code == "choice-no-valid-value"
+        found = "; ".join(str(cause) for cause in causes)
+        for refusal in refusals:
+            assert re.search(refusal, found)
+        assert ("end-order" in found) == (tiled in refusals)
         choose_memories(model)
         with refused(
             "choices-open",
@@ -318,12 +325,14 @@ def test_an_iodma_end_refuses_w2_repeated_or_tiled_by_name() -> None:
             owner="configured_network",
             node="partition",
             keys=("w2.end",),
-            message="no case is viable",
-        ) as left:
+            message=r"w2\.end: no value is possible: 'iodma_hls' breaks .*single_pass",
+        ) as caught:
             configured_network(model, "partition")
-        for refusal in refusals:
-            assert re.search(refusal, str(left.error))
-        assert ("end-order" in str(left.error)) == (tiled in refusals)
+        # Each open choice no value fits is a cause, with the findings of the rules its
+        # values break, as the cut reports it.
+        ((cause, owner, why),) = [(f.code, f.owner, f.causes) for f in caught.finding.causes]
+        assert (cause, owner) == ("choice-no-valid-value", "w2.end")
+        assert set(why) == set(causes)
 
 
 def test_an_end_or_bus_the_block_design_cannot_wire_is_refused_by_name(tmp_path: Path) -> None:
@@ -406,35 +415,60 @@ def test_the_kernel_ops_domain_is_the_registering_package() -> None:
 
 #: A TFC KernelOp's own choices at their baselines, as conversion stores them: the
 #: least folding, the adder tree, the thresholds' stages in LUTRAM, no block stage.
-TFC_NODE_BASELINES: dict[str, dict[str, object]] = {
-    "Thresholding": {"block_stages": 0, "deep_pipeline": 0, "pe": 1, "ram_style": "distributed"},
-    "MatMul": {"compute.packed.pe": 1, "compute.packed.reducer": "tree", "compute.packed.simd": 1},
+TFC_NODE_DEFAULTS: dict[str, dict[str, object]] = {
+    "Thresholding": {
+        "block_stages": 0,
+        "deep_pipeline": 0,
+        "pe": 1,
+        "ram_style": "distributed",
+        "ultra_stages": 0,
+        "use_axilite": 0,
+    },
+    "MatMul": {
+        "compute": "packed",
+        "compute.packed.compute_pumping": 0,
+        "compute.packed.pe": 1,
+        "compute.packed.reducer": "tree",
+        "compute.packed.simd": 1,
+    },
 }
 
 
 def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
     tfc_streamlined: Path, tmp_path: Path
 ) -> None:
-    """SR6's two moments on TFC_W2A2: conversion stores each KernelOp's own choices at
-    their baselines (28 values on 8 nodes) and no channel's; the cut creates the
-    channels' (25 values on 13 tensors: transports, the weights' memories, the input
-    buffers' memories) on the body's network, where it re-checks the nodes' in
-    context: 53 values, the nodes' the same 28 (none dropped), nothing left open."""
+    """SR6's two moments on TFC_W2A2: conversion stores each KernelOp's own choices,
+    each at its default policy, first valid (44 values on 8 nodes), and no channel's; the
+    cut creates the channels' by the interim channel rule, first valid (35 values on 13
+    tensors: transports, the weights' sources and memories, the input buffers' adapters
+    and memories, the two boundary ends), on the body's network, where it binds the
+    nodes' in context: 79 values, the nodes' the same 44 (none dropped), nothing left
+    open."""
     model = ModelWrapper(str(tfc_streamlined)).transform(ToKernelOps(ULTRA96))
     model = model.transform(InferKernelTensors())
     nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
     converted = {node.name: kernel_op(model, node).choices() for node in nodes}
-    assert converted == {node.name: TFC_NODE_BASELINES[node.op_type] for node in nodes}
-    assert sum(map(len, converted.values())) == 28
+    assert converted == {node.name: TFC_NODE_DEFAULTS[node.op_type] for node in nodes}
+    assert sum(map(len, converted.values())) == 44
     assert model.tensors_stating(CHANNEL) == []
     cutting = CutKernelPartition(tmp_path)
     _, body, _ = partition_body(model.transform(cutting))
-    assert cutting.dropped == {}
+    assert (cutting.dropped, cutting.late, cutting.unset) == ({}, {}, {})
     config = kernel_choices_config(body)
     assert {name: config[name] for name in converted} == converted
     channels = {name: held for name, held in config.items() if name not in converted}
-    assert (len(channels), sum(map(len, channels.values()))) == (13, 25)
+    assert (len(channels), sum(map(len, channels.values()))) == (13, 35)
     assert {held["transport"] for held in channels.values()} == {"direct"}
+    assert sorted(name for name, held in channels.items() if "source" in held) == [
+        f"MatMul_{index}_param0" for index in range(4)
+    ]
+    assert sorted(name for name, held in channels.items() if "adapter" in held) == [
+        f"MultiThreshold_{index}_out0" for index in range(4)
+    ]
+    assert {name: held["end"] for name, held in channels.items() if "end" in held} == {
+        "MatMul_3_out0": "iodma_hls",
+        "Reshape_0_out0": "iodma_hls",
+    }
     bound = in_shell(body, body.graph.node)
     assert bound.stale == {}
-    assert Seam().choices(bound) == ()
+    assert bound.undecided() == ()

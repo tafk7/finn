@@ -542,13 +542,14 @@ class Decision(ValueDecl[T], Generic[T]):
     bindings only that candidate takes; the keyword arguments are shared
     bindings, supplied to every candidate, each of which must declare them.
     ``optional=True`` adds a ``None`` candidate keyed ``"none"``, which places
-    nothing. A Decision's values are its domain, and its domain is its own
-    check: a rule linking a value to anything else (``ultra`` needs UltraRAM)
-    is a ``@constraint`` of the Space that owns the choice, which forcing reads
-    for each case. ``ordered=True`` states that listed values
+    nothing. A Decision's values are its domain, whose membership reads facts only:
+    a rule linking a value to anything else (``ultra`` needs UltraRAM) is a
+    ``@constraint`` of the Space that owns the choice, and a change that breaks it
+    is refused, naming it. ``ordered=True`` states that listed values
     are in an order (a domain states its own, ``divisors_of``); otherwise they
-    are unordered. ``required=True`` marks a choice with no safe default: a flow
-    that sets each choice to its first case leaves this one open. It changes
+    are unordered. The engine sets no choice itself, by default or otherwise.
+    ``required=True`` marks a choice no default policy may set (a FIFO's depth,
+    which a strategy sizes): it stays open until something chooses it. It changes
     nothing in how the Decision accepts or evaluates values;
     ``inspection.decisions`` reports it (``DecisionInfo.required``).
 
@@ -571,7 +572,7 @@ class Decision(ValueDecl[T], Generic[T]):
     domain: Domain[T]
     explicit: ValueSemantics[T] | None
     resolved: bool
-    # ``required=True``: no safe default; left open when choices are set to their first case.
+    # ``required=True``: no default policy may set it; it stays open until chosen.
     required: bool
     # Where this Decision supplies a formal (for the shared-decision rule).
     sites: list[str]

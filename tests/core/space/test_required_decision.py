@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from support.refusals import refused
 
+from core.space._possible_support import listed, open_now
 from finn.core.space import (
     Decision,
     DefinitionError,
@@ -61,12 +62,12 @@ def test_inspection_reports_which_decisions_are_required() -> None:
 
 def test_a_required_decision_evaluates_as_any_other() -> None:
     point = design_space(Core())
-    viable = {item.key: item.cases for item in inspection.viable(point)}
-    assert viable["lanes"] == (1, 2, 4) and viable["buffer.depth"] == (2, 4)
-    assert [item.key for item in inspection.open(point)] == ["reach"]
+    assert listed(point, Core.lanes) == (1, 2, 4)
+    assert listed(point, Core.buffer.depth) == (2, 4)
+    assert listed(point, Core.reach) is None
+    assert {"lanes", "reach", "buffer.depth"} <= set(open_now(point))
     committed = point.with_choices({Core.lanes: 2, Core.reach: 8})
-    assert "lanes" not in {item.key for item in inspection.viable(committed)}
-    assert inspection.open(committed) == ()
+    assert not {"lanes", "reach"} & set(open_now(committed))
 
 
 def test_a_subclass_decision_states_its_own_requirement() -> None:

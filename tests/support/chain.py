@@ -148,11 +148,13 @@ LAYERS = (("first", "w1"), ("second", "w2"))
 
 def configure_chain(chain: Network, **choices: object) -> Network:
     """``chain`` (the Chain) with ``choices`` and each MatMul's packed core configured,
-    then its channels: each weight's memory, each transport direct."""
+    then its channels, which bind as their ends become known and take their first valid
+    choices (the interim channel rule): each weight's memory, each transport direct."""
     folding: dict[str, object] = dict(choices)
     weights: dict[str, object] = {}
     for layer, stream in LAYERS:
         folding |= {
+            f"{layer}.compute": "packed",
             f"{layer}.compute.packed.pe": PE,
             f"{layer}.compute.packed.simd": SIMD,
             f"{layer}.compute.packed.compute_pumping": False,

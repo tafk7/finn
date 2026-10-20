@@ -1,18 +1,20 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""From ``tests``: ``python -m core.space.reference_harness`` prints the acceptance matrix as
-a markdown table; ``python -m core.space.reference_harness walks --seeds 0-99 --steps 40``
-runs the seeded walks (both index paths unless ``--paths`` says otherwise) and prints their
-summary, then each failed walk whole; ``--without "lane 2"`` expects only the kinds of the
-rows the other milestones keep (a milestone's engine walked as if it had removed its rows). It
-exits 1 when a walk failed."""
+"""From ``tests``: ``python -m core.space.reference_harness`` prints the acceptance matrix as a
+markdown table; ``python -m core.space.reference_harness walks --seeds 0-99 --steps 40`` runs
+the seeded walks and prints their
+summary, then each failed walk whole. With no milestone pending (none is: the engine core's
+is accepted), every disagreement with the engine fails its walk. While a later milestone
+with rows is pending, its disagreements are counted; ``--without MILESTONE`` takes its rows
+as removed, so every disagreement fails its walk (its engine walked as if it had removed
+them). It exits 1 when a walk failed. The walks are imported by their command alone, so the
+matrix prints whatever state the walks are in."""
 
 import argparse
 import sys
 
 from .matrix import markdown
-from .walks import expected_kinds, seeds, table, walk
 
 
 def main(argv: list[str]) -> int:
@@ -21,28 +23,20 @@ def main(argv: list[str]) -> int:
     walks = commands.add_parser("walks", help="the seeded walks against the reference model")
     walks.add_argument("--seeds", default="0-9", help="A-B, inclusive, or one seed")
     walks.add_argument("--steps", type=int, default=30)
-    walks.add_argument("--paths", default="index,scan", help="index, scan or both")
     walks.add_argument(
         "--without",
         default="",
-        help='milestones whose rows are taken as removed, comma-separated ("lane 2")',
+        help="pending milestones whose rows are taken as removed, comma-separated",
     )
     arguments = parser.parse_args(argv)
     if arguments.command != "walks":
         print(markdown())
         return 0
-    paths = [path for path in arguments.paths.split(",") if path]
+    from .walks import seeds, table, walk  # noqa: PLC0415
+
     without = [item.strip() for item in arguments.without.split(",") if item.strip()]
-    kinds = expected_kinds(without)
-    tallies = [
-        walk(seed, arguments.steps, path, kinds)
-        for seed in seeds(arguments.seeds)
-        for path in paths
-    ]
-    if without:
-        removed, kept = ", ".join(without), ", ".join(sorted(kinds))
-        print(f"rows taken as removed: {removed}; kinds expected: {kept}\n")
-    print(table(tallies))
+    tallies = [walk(seed, arguments.steps, without) for seed in seeds(arguments.seeds)]
+    print(table(tallies, without))
     failed = [tally for tally in tallies if tally.failure]
     for tally in failed:
         print(f"\n{tally.failure}")

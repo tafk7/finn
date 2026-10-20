@@ -161,11 +161,12 @@ def test_stream_shape_places_independent_choices_and_keeps_narrow_fields_availab
     first = missing.with_choices({Pair.left.lanes: 2})
     assert first.left.bits == 6
     assert first.right.element_bits == 6
-    # The pair's constraint reads the right lanes: only one lane balances the left's 6 bits.
-    assert first.right.query(StreamShape.lanes) == Available(1)
-    # The limit is not supplied, so the left stream's constraint waits: its Space is
-    # undecided, and its view answers all the same.
-    assert inspection.validity(first.left).status == "undecided"
+    # The pair's constraint reads the right lanes: one lane alone balances the left's 6
+    # bits, and nothing fills it in.
+    assert isinstance(first.right.query(StreamShape.lanes), Unresolved)
+    # The limit is not supplied, so the left stream's constraint waits: its Space is open,
+    # and its view answers all the same.
+    assert inspection.validity(first.left).status == "open"
     assert first.query(stream_of(Pair.left)) == Available(StreamValue(Encoding(3), 2, 6))
     assert isinstance(missing.left.query(StreamShape.lanes), Unresolved)
 

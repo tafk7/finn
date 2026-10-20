@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from typing import TypeVar, cast
 from unittest import mock
 
-from finn.core.space import EvaluationError, Model, Space, _linker, _runtime
+from finn.core.space import EvaluationError, Model, Space, _linker
+from finn.core.space._state import copy_result
 from finn.core.space.compiler import root_parameters, root_record
 from finn.core.space.ir import LinkedModel, Node
 from finn.core.space.occurrence import bind, state
@@ -47,12 +48,12 @@ def open_space(node: S, *, collapsed: bool) -> S:
 
 def answers(point: Space) -> list[object]:
     """Every node's public answer, or the evaluation failure it raises."""
-    snapshot = state(point)
+    current = state(point)
     result: list[object] = []
-    for index in range(len(snapshot.linked.nodes)):
+    for index in range(len(current.linked.nodes)):
         try:
-            entry = _runtime.evaluate(snapshot, index)
-            result.append(_runtime.copy_result(snapshot, index, entry.result))
+            answer = current.world.result(index)
+            result.append(copy_result(current.linked, index, answer))
         except EvaluationError as error:
             result.append((type(error).__name__, str(error)))
     return result
@@ -77,12 +78,13 @@ class Counts:
 
 
 def counts(point: Space, read: Callable[[Space], object]) -> Counts:
-    """Static alias structure, and the work of one read on a fresh snapshot."""
+    """Static alias structure, and the work of one read on a fresh configuration: the
+    nodes its world holds an entry for."""
     linked: LinkedModel = state(point).linked
     aliases = {node.index for node in linked.nodes if node.kind == "alias"}
     edges = sum(1 for node in linked.nodes for target in node.dependencies if target in aliases)
     read(point)
-    cache: Mapping[int, object] = state(point).cache
+    cache: Mapping[int, object] = state(point).world.cache
     return Counts(
         len(linked.nodes),
         len(aliases),

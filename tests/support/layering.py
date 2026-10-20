@@ -114,8 +114,8 @@ LAYERS: tuple[Layer, ...] = (
     # What a run says: its findings and the refusals that carry them, its log and its
     # manifest. The standard library only, below the engine.
     Layer("reporting", ("finn.core.reporting",), (), (), "tests/core/reporting"),
-    # The generic Space engine: the standard library and its native dependency.
-    Layer("space", ("finn.core.space",), ("reporting",), ("greenlet",), "tests/core/space"),
+    # The generic Space engine: the standard library only.
+    Layer("space", ("finn.core.space",), ("reporting",), (), "tests/core/space"),
     # Canonical logical values: QONNX's datatypes and their ranges (a tensor's range is
     # part of its datatype fact, qonnx.core.ranges) and numpy, no engine; the findings
     # their refusals carry.
@@ -421,6 +421,9 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "tests.member_cache", ("support.member_cache",), ("kernels",), ("pytest",), "tests/kernels"
     ),
+    # The engine's purity check off for a test that counts the calls its memo saves
+    # (_world.check_purity), which every tree's conftests import.
+    Layer("tests.purity", ("support.purity",), ("space",), ("pytest",), "tests/core/space"),
     # The tests of the lower layers use only those layers and this table
     # (_typeshed: stubs named under TYPE_CHECKING).
     Layer(
@@ -434,8 +437,6 @@ LAYERS: tuple[Layer, ...] = (
         "tests.core.space",
         (
             "core.space",
-            "support.checked_cache",
-            "support.space_checks",
             "support.space_cores",
             "support.space_pipeline",
             "support.space_walk",
@@ -447,6 +448,7 @@ LAYERS: tuple[Layer, ...] = (
             "tests.refusals",
             "tests.value_classes",
             "tests.space_reference",
+            "tests.purity",
         ),
         ("pytest", "_typeshed"),
         "tests/core/space",
@@ -491,6 +493,7 @@ LAYERS: tuple[Layer, ...] = (
             "tests.dataflow",
             "tests.oracle",
             "tests.member_cache",
+            "tests.purity",
         ),
         ("pytest", "numpy", "pyslang", "qonnx.core.datatype", "qonnx.core.ranges"),
         "tests/kernels",

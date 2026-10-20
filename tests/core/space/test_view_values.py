@@ -4,7 +4,7 @@
 
 On a configuration ``point.kitchen.cost`` is the accepted value (a read of a
 view that is not accepted raises ``ValueUnavailableError`` carrying its
-result): refused with its Space, and answering while its Space is undecided. On a
+result): refused with its Space, and answering while its Space is open. On a
 declaration ``kitchen.cost`` is a reference to that value: it supplies a formal.
 Assessment and query are explicit calls on the configuration:
 ``point.inspect(Hall.total)`` and ``point.query(Hall.total)``.
@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from support.space_cores import built
 
 import finn.core.space as space
 from finn.core.space import (
@@ -72,6 +73,19 @@ def chosen(kitchen: int = 2, dining: int = 1) -> Hall:
     return base.with_choices({Hall.kitchen.finish: kitchen, Hall.dining.finish: dining})
 
 
+def too_large(hall: int) -> Hall:
+    """The kitchen at finish 3 makes the hall 36 large, over its 30: the change is refused
+    by the hall's rule, false on its own values; built directly, the configuration reads
+    refused."""
+    report = design_space(Hall()).try_with_choices(
+        {Hall.kitchen.finish: 3, Hall.dining.finish: 1, Hall.hall.finish: hall}
+    )
+    assert not report.accepted
+    assert [(rule.rule, rule.standing) for rule in report.broken] == [("hall.small_enough", ())]
+    choices = {"kitchen.finish": 3, "dining.finish": 1, "hall.finish": hall}
+    return cast(Hall, built(design_space(Hall()), choices))
+
+
 def test_a_view_reads_as_its_accepted_value_on_a_configuration() -> None:
     point = chosen()
     assert point.kitchen.cost == 24 and point.dining.cost == 16
@@ -93,7 +107,7 @@ def test_an_unaccepted_view_read_raises_carrying_its_result() -> None:
     assert unresolved.value.result == base.query(Hall.kitchen.cost)
     assert {finding.owner for finding in unresolved.value.result.findings} == {"kitchen.finish"}
     # A refused Space: the read of its view carries the refusal.
-    refused = chosen(kitchen=3).with_choices({Hall.hall.finish: 1})
+    refused = too_large(hall=1)
     with pytest.raises(ValueUnavailableError) as rejected:
         _ = refused.hall.cost
     assert isinstance(rejected.value.result, Rejected)
@@ -146,21 +160,21 @@ def test_a_view_reference_supplies_a_formal_by_assignment_and_at_the_call() -> N
     assert point.hall.area == 24  # hall.area = kitchen.cost
     assert point.annex.area == 16  # Room(area=dining.cost)
     # A formal supplied by a refused view is refused with the view's refusal.
-    big = chosen(kitchen=3).with_choices({Hall.hall.finish: 2})
+    big = too_large(hall=2)
     assert big.hall.area == 36 and isinstance(big.query(Hall.hall.cost), Rejected)
 
 
-def test_a_view_refuses_with_its_space_and_answers_while_it_is_undecided_in_both_forms() -> None:
+def test_a_view_refuses_with_its_space_and_answers_while_it_is_open_in_both_forms() -> None:
     point = chosen()
     # The garage's presence waits on its Decision: its constraint is unknown under it, the
-    # hall is undecided, and its views answer.
+    # hall is open, and its views answer.
     validity = inspection.validity(point)
-    assert validity.status == "undecided"
+    assert validity.status == "open"
     assert [piece.owner for piece in validity.pieces] == ["garage.small_enough"]
     assert point.checked == 16 and point.total == 40
     assert point.inspect(Hall.checked).validity == validity.result
     # A child refused refuses the hall, and every view of it, in both forms.
-    refused = chosen(kitchen=3).with_choices({Hall.hall.finish: 1})
+    refused = too_large(hall=1)
     validity = inspection.validity(refused)
     assert validity.status == "refused"
     assert [piece.owner for piece in validity.pieces] == ["hall.small_enough"]

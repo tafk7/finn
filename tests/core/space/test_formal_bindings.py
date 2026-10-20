@@ -147,7 +147,7 @@ def test_a_subclass_changes_what_belongs_to_the_space_class() -> None:
     class Large(Wing):
         kitchen = Plain(area=19)
 
-    point = design_space(Large())
+    point = design_space(Large()).with_choices({Large.kitchen.finish: 1})
     assert point.kitchen.area == 19 and point.kitchen.finish == 1
     assert [item.key for item in inspection.decisions(point)] == [
         "kitchen.finish",

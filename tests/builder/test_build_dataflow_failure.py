@@ -161,14 +161,14 @@ def test_a_members_refusal_names_its_node_or_tensor_on_the_console(capsys, tmp_p
     """A refusal carried out of a network names its member in its details: each line
     starts with it, unless its message does already."""
     found = [
-        blocker("decision-no-viable-case", "no case").about(node="MatMul_1"),
+        blocker("choice-no-valid-value", "no value").about(node="MatMul_1"),
         blocker("transport-refused", "too wide").about(tensor="x"),
         Finding(FindingKind.BLOCKER, "y", "test", "MatMul_2: y", (("node", "MatMul_2"),)),
     ]
     err, _ = logged_failure(capsys, tmp_path, Refusal(found))
     assert err.splitlines()[:4] == [
         "ERROR: step_fails refused: 3 findings (Refusal)",
-        "ERROR:   MatMul_1: test: decision-no-viable-case: no case",
+        "ERROR:   MatMul_1: test: choice-no-valid-value: no value",
         "ERROR:   x: test: transport-refused: too wide",
         "ERROR:   test: y: MatMul_2: y",
     ]

@@ -66,9 +66,9 @@ from finn.custom_op.kernels.shell import verify_partition
 from finn.kernels.explore import (
     FIFOS_BY_MODEL,
     DebugPlaceholder,
+    Defaults,
     Explorer,
     MaxThroughput,
-    Rebaseline,
     SizeFifos,
     TargetThroughput,
 )
@@ -303,19 +303,21 @@ def step_size_fifos(
     """Size each channel of the partition from the beat patterns at both its ends, at the
     current folding: a direct connection, or a FIFO of the least depth that keeps its
     producer within its idle time, plus ``fifo_margin`` words. A held channel is kept.
-    ``fifo_ram_style`` commits a memory style with each FIFO's depth; None commits none:
-    the FIFO keeps the style settling gives it (its held style, else an earlier one, else
-    ``auto``, FinnLib's own choice by depth and width), and its depth is sized for that
-    style. Writes report/step_size_fifos.json."""
+    ``fifo_ram_style`` commits a memory style with each FIFO's depth; with None the FIFO
+    keeps its held style, else its earlier one, else takes ``auto`` (FinnLib's own choice by
+    depth and width, the interim channel rule's), and its depth is sized for that style.
+    Writes report/step_size_fifos.json."""
     strategy = SizeFifos(margin=fifo_margin, ram_style=fifo_ram_style)
     _explore(model, cfg, "step_size_fifos", strategy)
     return model
 
 
-def step_baseline_choices(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
-    """Set every choice of the partition that is not held back to its baseline, so a
-    resumed build starts over. Writes report/step_baseline_choices.json."""
-    _explore(model, cfg, "step_baseline_choices", Rebaseline())
+def step_default_choices(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
+    """Set every choice of the partition that is not held back to its default, so a
+    resumed build starts over: a kernel's by conversion's policies, a channel's by the
+    interim channel rule; a FIFO's depth is left open. Writes
+    report/step_default_choices.json."""
+    _explore(model, cfg, "step_default_choices", Defaults())
     return model
 
 
@@ -332,15 +334,25 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
     """Cut the KernelOps into one StreamingDataflowPartition, leaving the nodes before
     and after it on the host; the build's model is the parent graph from here on. The
     partition is named ``partition``: its node, its body (partition/partition.onnx), its
-    IP and its block-design instance. Each channel's choices are created here, and each
-    KernelOp's checked again in context: one made stale by an edit since conversion is
-    reset to its baseline, noted as a limitation (``choice-stale``, owned by the choice, the
-    kernel's findings its causes)."""
+    IP and its block-design instance. Each channel's choices are created here (the interim
+    channel rule), and each KernelOp's checked again in context: one made stale by an edit
+    since conversion is dropped (a kernel's left open for a strategy, a channel's derived
+    again by the interim channel rule), noted as a limitation
+    (``choice-stale``, owned by the choice, the kernel's findings its causes); one the
+    body never had set at conversion is set by conversion's policies
+    (``choice-converted-late``), and one no value could be set for is left open, noted
+    (``choice-no-valid-value``)."""
     cut = CutKernelPartition(Path(cfg.output_dir) / "partition")
     model = model.transform(cut)
     for key, found in cut.dropped.items():
-        message = f"dropped as stale at the cut and re-baselined: {stale_text(key, found)}"
+        message = (
+            "dropped as stale at the cut (a kernel's left open for a strategy, a channel's "
+            f"derived again by the interim channel rule): {stale_text(key, found)}"
+        )
         note(Finding(FindingKind.LIMITATION, "choice-stale", key, message, causes=found))
+    for found in (*cut.late.values(), *cut.unset.values()):
+        for finding in found:
+            note(finding)
     return model
 
 
@@ -546,7 +558,7 @@ KERNEL_STRATEGY_STEPS: list[StepFunction] = [
     step_target_throughput,
     step_max_throughput,
     step_size_fifos,
-    step_baseline_choices,
+    step_default_choices,
     step_placeholder_choices,
 ]
 
@@ -561,7 +573,7 @@ build_dataflow_step_lookup: dict[str, StepFunction] = {
 
 
 #: The steps every premade list starts with: the partition from the export, its FIFOs
-#: sized at the baseline folding, and checked.
+#: sized at the folding conversion gives, and checked.
 _PARTITION: list[StepFunction] = [
     step
     for phase in (

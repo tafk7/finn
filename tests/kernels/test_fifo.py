@@ -123,11 +123,10 @@ def test_fifo_auto_takes_ultraram_only_on_a_platform_that_has_it(
     ("uram", "choices", "status", "pieces"),
     (
         (True, {"ram_style": "auto"}, "valid", []),
-        (False, {"ram_style": "ultra"}, "refused", [("uram_present", {"uram-absent"})]),
         (
             True,
             {},
-            "undecided",
+            "open",
             [
                 ("capacity_supported", {"decision-unassigned"}),
                 ("uram_present", {"decision-unassigned"}),
@@ -139,7 +138,7 @@ def test_fifo_s_capacity_reads_the_storage_its_view_presents(
     uram: bool, choices: dict[str, str], status: str, pieces: list[tuple[str, set[str]]]
 ) -> None:
     """``capacity_supported`` reads the planned storage, a value, not the ``storage``
-    view: valid, refused and undecided each answer, with no dependency cycle."""
+    view: valid and open each answer, with no dependency cycle (refused: below)."""
     platform = replace(FULL_DSP48E2, uram=uram)
     point = design_space(fifo_node(word_bits=8, depth=64, platform=platform))
     point = point.with_choices(**choices) if choices else point
@@ -147,6 +146,19 @@ def test_fifo_s_capacity_reads_the_storage_its_view_presents(
     assert pieces_of(point) == pieces
     if status == "valid":
         assert point.storage == point.planned_storage == FifoStorage("shift", 64)
+
+
+def test_ultra_storage_without_ultraram_is_refused_by_the_fifo_s_rule() -> None:
+    """Set without UltraRAM, ``ultra`` is refused by the rule that names it, nothing
+    standing: a commit that breaks a rule is refused."""
+    platform = replace(FULL_DSP48E2, uram=False)
+    point = design_space(fifo_node(word_bits=8, depth=64, platform=platform))
+    report = point.try_with_choices(ram_style="ultra")
+    assert not report.accepted
+    assert [
+        (rule.rule, rule.standing, {finding.code for finding in rule.result.findings})
+        for rule in report.broken
+    ] == [("uram_present", (), {"uram-absent"})]
 
 
 #: The HWCustomOp flow's FIFO model (``finn.custom_op.fpgadataflow.resource_models``) at

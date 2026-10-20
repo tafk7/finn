@@ -10,7 +10,13 @@ the root's own pins (``None``).
 """
 
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP48E2, choose, with_adapter_memories, with_direct_transports
+from support.helpers import (
+    FULL_DSP48E2,
+    choose,
+    dotp_extents,
+    with_adapter_memories,
+    with_direct_transports,
+)
 
 from finn.core.space import Rejected, Space, view
 from finn.dataflow.datatypes import ordinary_integer_bounds
@@ -55,6 +61,7 @@ def placing(*, w_port: str | None = "in1_V") -> Network:
                 result_range=ordinary_integer_bounds(INT8),
                 x_tensor=X,
                 w_tensor=W,
+                **dotp_extents(W),
                 platform=FULL_DSP48E2,
             ),
         }

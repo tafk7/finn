@@ -50,7 +50,7 @@ from support.packaging import (
 )
 from support.refusals import refused
 from support.tfc import EXPORT, SHAPE, ULTRA96, built, io_settings, partition, run_steps
-from support.tfc_built import SET_FOLDING, TFC_BUILT
+from support.tfc_built import SET_FOLDING, TFC_BUILT, TFC_STORED
 
 import finn.kernels.explore as explore_module
 from finn.builder import build_dataflow_steps
@@ -67,10 +67,10 @@ from finn.builder.build_dataflow_steps import (
     KERNEL_STRATEGY_STEPS,
     build_dataflow_phases,
     build_dataflow_step_lookup,
-    step_baseline_choices,
     step_build_bitfile,
     step_convert_to_hw,
     step_create_dataflow_partition,
+    step_default_choices,
     step_deployment_package,
     step_make_driver,
     step_max_throughput,
@@ -125,7 +125,7 @@ from finn.transformation.kernels import (
     kernel_choices_config,
     shell_bottleneck,
 )
-from finn.transformation.kernels.cut import BaselineChoices, CutKernelPartition
+from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
 from finn.transformation.kernels.integration import Address, Connection, integration
 from finn.transformation.kernels.package import boundary_facts
 
@@ -275,13 +275,14 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     # The report is listed by path; its findings are in it, and the step notes none.
     assert indexed["step_convert_to_hw"]["reports"] == ["report/kernel_ops.json"]
     assert indexed["step_convert_to_hw"]["findings"] == []
-    # Each KernelOp's own choices are created as it is converted, each at its baseline
-    # (28 values on the 8 nodes); a channel's wait for the cut.
+    # Each KernelOp's own choices are created as it is converted, each by its policy (44
+    # values on the 8 nodes: each core and its pumping, each thresholds' AXI-Lite and
+    # UltraRAM stages among them); a channel's wait for the cut.
     created = kernel_choices_config(converted)
     assert list(created) == [
         node.name for node in converted.graph.node if node.domain == KERNEL_OPS_DOMAIN
     ]
-    assert sum(map(len, created.values())) == 28
+    assert sum(map(len, created.values())) == 44
     # Cut once, before the exploration: the build's model is the parent graph, the input
     # flatten and the label select on the host around one partition, named partition,
     # whose body is its file; the exploration reads and saves the body.
@@ -295,7 +296,7 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert body_file == str(Path(cfg.output_dir) / "partition" / "partition.onnx")
     assert seen["step_verify_partition"].graph.node[1].name == "partition"
     # The partition's body: the one tfc.py makes by hand, every choice it left open saved
-    # at its baseline and its FIFOs sized (the default strategy step, step_size_fifos: it
+    # by its policy and its FIFOs sized (the default strategy step, step_size_fifos: it
     # stores every value, and the partition is built from them).
     _, body = partition(source, tmp_path / "by_hand")
     assert [node.op_type for node in built.graph.node] == ["Thresholding", "MatMul"] * 4
@@ -317,8 +318,7 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     assert json.loads((output / "report" / "kernel_choices.json").read_text()) == (
         kernel_choices_config(built)
     )
-    # Every folding at its first viable case, one lane: the baseline's, stored at
-    # conversion, every value saved.
+    # Every folding at its first valid value, one lane: conversion's, every value saved.
     report = strategy_report(cfg, "step_size_fifos")
     folding = {
         f"{node}.{attribute}": entry
@@ -559,7 +559,7 @@ def test_each_strategy_step_reports_what_it_changed_in_its_own_file(tmp_path: Pa
     is written once, by step_verify_partition, from the final choices. A user's step of
     its own (``step_hold_first``) holds the first MatMul before them."""
     strategies = {
-        "step_baseline_choices": "baseline",
+        "step_default_choices": "defaults",
         "step_target_throughput": "target_throughput",
         "step_max_throughput": "max_throughput",
         "step_size_fifos": "size_fifos",
@@ -713,6 +713,7 @@ def test_an_output_is_listed_after_the_outputs_it_is_made_from(tmp_path: Path) -
         assert failed_checks(config(tmp_path, steps=steps)) == {}
     model = kernel_model()
     write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -738,6 +739,7 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     code."""
     model = kernel_model()
     write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -830,6 +832,7 @@ def test_the_bitfiles_objective_is_the_target_its_partition_records(
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     model = kernel_model()
     write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -875,6 +878,7 @@ def test_the_bitfiles_clock_findings_are_noted(
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     model = kernel_model()
     write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -890,9 +894,9 @@ def test_the_bitfiles_clock_findings_are_noted(
 def test_a_choice_stale_at_the_cut_is_noted(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A node's choice its facts refuse in context (written raw) is reset at the
-    cut and noted once: a limitation owned by the choice, the finding attached for the
-    manifest."""
+    """A node's choice its facts refuse in context (written raw) is dropped at the cut,
+    left open for a strategy, and noted once: a limitation owned by the choice, the
+    finding attached for the manifest."""
     model = open_model()
     write_raw(model, "first", "compute.packed.simd", 2)  # past the space, as another tool wrote it
     write_raw(model, "first", "compute.packed.pe", 3)
@@ -912,16 +916,15 @@ def test_a_choice_stale_at_the_cut_is_noted(
     )
     assert "domain-membership" in finding.message
     # The key is named once, with the value and the values it could take; the kernel's
-    # findings are kept as the note's causes: its own, and beside it the selector's
-    # (``compute`` left with no viable case).
+    # finding is kept as the note's cause: its domain's, nothing beside it.
     assert finding.message.count("compute.packed.pe") == 1
+    assert finding.message.startswith("dropped as stale at the cut (a kernel's left open")
     assert "first.compute.packed.pe = 3: " in finding.message
     assert "not one of 1, 2, 4 (domain-membership)" in finding.message
     assert {(cause.code, cause.owner) for cause in finding.causes} == {
         ("domain-membership", "compute.packed.pe"),
-        ("decision-no-viable-case", "compute"),
     }
-    (own,) = [cause for cause in finding.causes if cause.code == "domain-membership"]
+    (own,) = finding.causes
     assert dict(own.details) == {"value": 3, "candidates": (1, 2, 4)}
 
 
@@ -938,16 +941,17 @@ def test_a_step_that_moves_the_target_s_folding_leaves_the_bitfile_no_objective(
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     model = kernel_model()
     write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     settings: dict[str, dict[str, Any]] = {
         "step_hold_first": {},
         "step_max_throughput": {"max_throughput_within": {"lut": 0.5}},
-        "step_baseline_choices": {},
+        "step_default_choices": {},
     }
     cfg = config(tmp_path)
     cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": ""})
-    others: list[StepFunction] = [step_hold_first, step_max_throughput, step_baseline_choices]
+    others: list[StepFunction] = [step_hold_first, step_max_throughput, step_default_choices]
     for folding in others:
         parent = step_target_throughput(parent, cfg, target_fps=CHAIN_FPS)
         parent = folding(parent, cfg, **settings[folding.__name__])
@@ -1052,17 +1056,25 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
         200,
         None,
     )
-    # On Ultra96 (DSP48E2) every MatMul's core is forced: no case is tried, and the
-    # target is met.
-    assert (target["cases"], target["unfolded"], target["met"]) == ({}, {}, True)
-    # Of TFC's 57 choices, every one saved: the target throughput changes the folding off
-    # its baseline (6 of 12) and gives each MatMul's pumping, a choice at SIMD 2 and
-    # more, its baseline; the rest keep the baselines stored at their creation (a node's
-    # at conversion, a channel's at the cut), transports direct (no step_size_fifos).
-    # The report names who set each.
-    assert target["committed"] == 10
+    # On Ultra96 (DSP48E2) each MatMul's core, reopened, has one possible value, packed,
+    # folded and kept; the target is met.
+    assert {key: row["taken"] for key, row in target["cases"].items()} == {
+        f"MatMul_{index}.compute": "packed" for index in range(4)
+    }
+    assert (target["unfolded"], target["met"]) == ({}, True)
+    # Of TFC's 84 choices, every one saved: the target throughput changes the folding off
+    # conversion's (6 of 12), and the interim channel rule sets the output adapter the new
+    # folding brings into play on five channels; the rest keep the values stored at their
+    # creation (a node's at conversion, a channel's at the cut), each MatMul's pumping
+    # given back off, transports direct (no step_size_fifos). The report names who set
+    # each.
+    assert target["committed"] == 11
     made_by = [entry["by"] for held in report["choices"].values() for entry in held.values()]
-    assert (made_by.count("target_throughput"), made_by.count("saved")) == (10, 47)
+    assert (
+        made_by.count("target_throughput"),
+        made_by.count("interim channel rule"),
+        made_by.count("saved"),
+    ) == (6, 5, 73)
     assert report["open"] == []
     assert report["fifos"] == "not sized here (no size_fifos): each transport as it was"
     # The Zynq shell's input end binds: 196 beats and a call's 4 cycles (SZ3 (a): a
@@ -1106,12 +1118,13 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     # At the period the input end sets.
     assert (sizing["strategy"], sizing["period"], sizing["fifo_bits"]) == ("size_fifos", 200, 0)
     # It reopens the 13 transports and changes none.
-    assert [target["strategy"]["committed"], sizing["committed"]] == [10, 0]
+    assert [target["strategy"]["committed"], sizing["committed"]] == [11, 0]
     assert sizing["reopened"] == 13
     assert report["fifos"] == "sized by size_fifos: 13 channels, 0 FIFOs placed"
-    # The ends change no choice: TFC is built with the baseline build's 57 values.
-    assert sized == TFC_BUILT
-    assert sum(map(len, TFC_BUILT.values())) == 57
+    # The ends change no choice: TFC is built with the 57 values of the build before the
+    # engine core, and the 27 forcing left unstored (``TFC_STORED``).
+    assert sized == TFC_STORED
+    assert sum(map(len, TFC_BUILT.values())) == 57 and sum(map(len, sized.values())) == 84
     rows = sizing["channels"]
     assert {row["transport"] for row in rows.values()} == {"direct"}
     whys = {name: row["why"] for name, row in rows.items()}
@@ -1180,7 +1193,7 @@ def test_a_partitions_bottleneck_is_read_from_its_saved_choices() -> None:
     # point as it is built.
     made = kernel_model()
     expected = explore_kernel_choices(kernel_model()).cost.bottleneck
-    assert shell_bottleneck(made.transform(BaselineChoices())) == expected
+    assert shell_bottleneck(made.transform(MakeCutChoices())) == expected
 
 
 #: Z0's strategy steps and their setting: the Zynq landing's baseline build explored TFC
@@ -1278,7 +1291,7 @@ def test_the_export_of_tfc_on_pynq_names_both_ends_iodmas_and_every_connection(
     assert module_name(point.module) == "finn_partition__023b52bd70edebcc"
     persisted = json.loads((output / "report" / "kernel_choices.json").read_text())
     assert persisted == kernel_choices_config(body)
-    assert persisted == TFC_BUILT
+    assert persisted == TFC_STORED
 
 
 #: The block design Z0's build wrote for TFC (its ip_config.tcl's custom section, its
@@ -1668,6 +1681,7 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
     so is a parent graph that states no bitfile."""
     model = kernel_model()
     write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -1717,6 +1731,7 @@ def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     bitfile, the partition and both designs or keys, before anything is written."""
     model = kernel_model()
     write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)

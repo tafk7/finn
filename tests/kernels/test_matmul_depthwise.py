@@ -19,6 +19,7 @@ from support.helpers import (
     WeightDelivery,
     built,
     choose,
+    keyed,
     labels,
     matmul_assembly,
     matmul_point,
@@ -32,6 +33,8 @@ from finn.core.space import Available, Unresolved, inspection
 from finn.dataflow.gemm import Form
 from finn.dataflow.plan import Step
 from finn.dataflow.traversal import Traversal
+from finn.kernels.matmul import MatMulKernel
+from finn.kernels.members import decision
 
 FACTS = dict(
     m=2,
@@ -62,6 +65,14 @@ def point(core="int8_dsp58", **facts):
 
 def parameters(module, label):
     return dict(placed(module, label).parameters)
+
+
+def test_the_realization_comes_before_the_cores_choices():
+    """The cores' facts read the realization (the datapath it gives them): in the flow
+    order it comes before their choices, and, declared first, before ``compute`` too."""
+    keys = [item.key for item in inspection.decisions(MatMulKernel)]
+    assert keys[:2] == ["realization", "compute"]
+    assert all(key.startswith("compute.") for key in keys[2:])
 
 
 def test_depthwise_rows_pass_once_with_a_frame_per_window():
@@ -109,14 +120,19 @@ def test_a_dense_form_replays_each_row_per_output_fold():
 
 
 def test_only_the_int8_dsp58_core_reads_a_depthwise_form():
-    # The packed core refuses the form, so MatMul is refused and its ends with it: the
-    # channels wait on them, and a choice of theirs is refused naming the core's rule.
+    # The packed core refuses the form: selecting it is refused, naming the core's rule,
+    # the native realization standing in its way.
     with pytest.raises(ValueError, match="compute.packed.core_supported: dotp-form"):
         point("packed")
     facts = {**FACTS, "pe": 2, "simd": 3}
-    # External weights exclude the dense realization; natively, one core fits.
+    # External weights exclude the dense realization; natively, one core fits. On
+    # DSP48E2 neither is possible, and the realization's policy (first valid) says why.
     assert matmul_assembly(**facts).module is not None
-    with pytest.raises(ValueError, match="realizations compatible with this configuration: none"):
+    with pytest.raises(
+        ValueError,
+        match="realization: choice-no-valid-value: .*'native' breaks native_readable; "
+        "'dense' breaks carried, realization_supported",
+    ):
         matmul_assembly(**{**facts, "platform": FULL_DSP48E2})
 
 
@@ -132,25 +148,24 @@ def test_native_is_offered_only_where_a_core_reads_the_depthwise_operands(
     platform, activation, offered
 ):
     # The realization states its need where its case is declared, so a native case
-    # whose core would refuse it is never offered (it would leave compute no case).
+    # whose core would refuse it is not possible (it would leave compute no case).
     facts = {**FACTS, "platform": platform, "activation_dtype": DataType[activation]}
     weights = tuple(tuple((r + c) % 5 - 2 for c in range(4)) for r in range(9))
     space = matmul_point(**facts, weights=weights)
-    kernel = space.member("matmul")
-    verdicts = {item.key: item for item in (*inspection.viable(kernel), *inspection.forced(kernel))}
-    realization = verdicts["realization"]
-    found = getattr(realization, "cases", None) or (realization.value,)
-    assert found == offered
+    ((_, realization),) = space.viable([("matmul", "realization")])
+    assert realization.cases == offered
     if offered == ("dense",):
-        assert "matmul-native" in realization.refused["'native'"]
-        # Committed, native is its value (a rule never refuses a commit), and the rule
-        # refuses the configuration.
-        native = choose(space, {"matmul.realization": "native"}).member("matmul")
-        found = inspection.validity(native)
-        assert found.status == "refused"
-        assert ("native_readable", {"matmul-native"}) in [
-            (piece.owner, {finding.code for finding in piece.result.findings})
-            for piece in found.pieces
+        refused = {
+            item.value: [(rule.rule, rule.standing) for rule in item.broken]
+            for item in realization.values or ()
+            if isinstance(item, inspection.Refused)
+        }
+        assert refused == {"native": [("native_readable", ())]}
+        # Committed, native is refused by the same rule (a commit that breaks a rule is).
+        trial = space.trial(keyed({"matmul.realization": "native"}))
+        assert not trial.accepted
+        assert [(f.code, f.owner) for why in trial.refused.values() for f in why] == [
+            ("matmul-native", "native_readable")
         ]
 
 
@@ -199,9 +214,9 @@ def test_one_network_carries_the_weights_of_whichever_realization_is_committed()
             },
         )
         # Whether the weight channel has a value is the weights' presence, a fact: its
-        # source is forced.
+        # source's one case is set by the interim channel rule as the channel is built.
         assert folded.member("w").valued and folded.member("w").tensor.shape == shape
-        assert folded.forced(("w",))[("w", "source")] == "memstream"
+        assert folded.chosen()[("w", "source")] == "memstream"
         configured = choose(
             folded,
             {
@@ -265,8 +280,11 @@ def test_the_dense_realization_needs_known_weights_and_either_may_be_chosen_on_d
     external = {**DENSE, "weight_delivery": WeightDelivery.EXTERNAL, "weights": None}
     with pytest.raises(ValueError, match="matmul-realization"):
         matmul_assembly(platform=FULL_DSP48E2, realization="dense", **external)
-    with pytest.raises(ValueError, match="native, dense"):
-        matmul_assembly(platform=FULL_DSP58, **DENSE)
+    # Left out on DSP58, where both are possible, the realization takes its policy, first
+    # valid in the flow order: native, and the INT8 core that reads it.
+    default = matmul_assembly(platform=FULL_DSP58, **DENSE)
+    assert default.network.chosen()[("matmul", "realization")] == "native"
+    assert "matmul.compute.int8_dsp58" in labels(default.module)
     for realization, core in (("native", "int8_dsp58"), ("dense", "packed")):
         built = matmul_assembly(platform=FULL_DSP58, realization=realization, core=core, **DENSE)
         assert f"matmul.compute.{core}" in labels(built.module)
@@ -289,3 +307,49 @@ def test_narrow_weights_follow_known_weights(weights, delivery, narrow):
         platform=FULL_DSP48E2, **{**facts, "weights": weights, "weight_delivery": delivery}
     )
     assert parameters(built.module, "matmul.compute.packed")["NARROW_WEIGHTS"] == narrow
+
+
+@pytest.mark.parametrize("realization", ["native", "dense"])
+@pytest.mark.parametrize("core", ["packed", "int8_dsp58"])
+def test_a_cores_folding_factors_are_listed_from_facts_and_simd_fits_its_datapath(
+    realization, core
+):
+    """PE's and SIMD's domains read the operation's facts alone, whichever realization:
+    PE the channels' divisors, SIMD the divisors of the widest K (window times channels).
+    A native datapath's K is the window's, so the SIMDs that divide the widest K and not
+    the window's are listed and refused by their fit (``dotp-simd``). The packed core
+    refuses a native depthwise operation: selecting it is refused, and its factors are
+    listed with the core still open, each possible as far as anything decides."""
+    weights = tuple(tuple((r + c) % 5 - 2 for c in range(4)) for r in range(9))
+    network = matmul_point(realization=realization, **FACTS, weights=weights)
+    selected = network.trial(keyed({"matmul.compute": core}))
+    assert selected.accepted == (realization == "dense" or core == "int8_dsp58")
+    if not selected.accepted:
+        assert [(f.code, f.owner) for why in selected.refused.values() for f in why] == [
+            ("dotp-form", "compute.packed.core_supported")
+        ]
+    kernel = (selected.network if selected.accepted else network).member("matmul")
+    pe, simd = inspection.viable(
+        kernel,
+        [decision(kernel, f"compute.{core}.{name}").reference for name in ("pe", "simd")],
+    )
+    widest = (1, 2, 3, 4, 6, 9, 12, 18, 36)
+    assert [item.value for item in pe.values or ()] == [1, 2, 4] and pe.cases == (1, 2, 4)
+    assert [item.value for item in simd.values or ()] == list(widest)
+    if realization == "dense" or not selected.accepted:
+        assert simd.cases == widest
+    else:
+        assert simd.cases == (1, 3, 9)
+        refused = {
+            item.value: {
+                (rule.rule, finding.code)
+                for rule in item.broken
+                for finding in rule.result.findings
+            }
+            for item in simd.values or ()
+            if isinstance(item, inspection.Refused)
+        }
+        assert set(refused) == {2, 4, 6, 12, 18, 36}
+        assert all(
+            found == {("compute.int8_dsp58.simd_fits", "dotp-simd")} for found in refused.values()
+        )

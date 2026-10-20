@@ -85,13 +85,15 @@ SPEC = KernelSpec(
     probes=(
         Probe(
             "an operation the RTL does not implement",
-            lambda: placed(eltwise(), {"pe": 1}, operation="DIV"),
+            lambda: placed(eltwise(), operation="DIV"),
             frozenset({"eltwise-operation"}),
+            {"pe": 1},
         ),
         Probe(
             "a scale on integer operands",
-            lambda: placed(eltwise(), {"pe": 1}, b_scale=2.0),
+            lambda: placed(eltwise(), b_scale=2.0),
             frozenset({"eltwise-scale"}),
+            {"pe": 1},
         ),
         Probe(
             "floating-point arithmetic without DSP58",
@@ -103,10 +105,10 @@ SPEC = KernelSpec(
                         "rhs_channel": tensor((CHANNELS,), "FLOAT32"),
                     },
                 },
-                {"pe": 1},
                 platform=FULL_DSP48E2,
             ),
             frozenset({"eltwise-target"}),
+            {"pe": 1},
         ),
     ),
     sweeps=(SweepCases("kernels.sweeps.eltwise_numeric", ("CASES",), ("sweep-eltwise",)),),

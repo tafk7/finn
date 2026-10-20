@@ -1,72 +1,107 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Seeded random walks: the engine against the reference model after every step.
+"""Seeded random walks: the reference model held to its four invariants after every step,
+and the engine compared with it.
 
-A seed draws a small description (:func:`generate`: facts, value choices with small
-listed, computed or membership-only domains, a selector over cases holding choices of
-their own, sometimes one level deeper, a ``when``-guarded scope, constraints over two or
-three reads, a derived value and a view) and a walk of changes over it (commit a value,
-sometimes one outside its domain; replace; clear; change a fact). After every step the
-harness's comparison (:mod:`.compare`) asks both sides every question: each choice's
-state, each value's answer, each rule, validity, and the change's verdict.
+A seed draws a small description (:func:`generate`) and a walk of changes over it. The
+**model drives the walk**: a change it accepts is applied, one it refuses is not. At every
+step (each change tried, accepted or refused):
 
-**The filter.** A disagreement gets a **kind** (:func:`classify`): a mechanism the
-model's answers show at work in the configuration (a conflict, a case's trial reading a
-choice kept unchecked, ...) that reaches the question.
-A disagreement whose kind a row of the acceptance matrix still names (``matrix.ROWS``) is
-expected, and counted; any other fails the walk, printing the seed, the step, the
-description and both answers. Moving or removing a row moves the filter with it.
+**The model's four invariants** (the semantics note's § 12), strict in every walk:
 
-**Refinement** (on both sides): over a step that only commits choices nothing was stored
-for, no answer to a piece that existed before the step moves down the information order
-(a value or a forced value becomes unresolved or open, a settled verdict undecided, a
-refusal disappears) unless the configuration reads refused after the step. A commitment
-adds pieces of its own (its own check, and its presence where its guard waits): kept
-unchecked, it adds an unknown piece rather than refining one, so validity may go from
-valid to undecided, but only through the step's added unknown pieces, waiting on what
-they wait on (:func:`violations`). An engine move the model does not make is a
-disagreement like any other; one the model makes is a question for the model.
+1. *History-independence.* The walked configuration answers every question (each choice's
+   state, each value's answer, each rule, validity, each listed choice's possible values
+   and ranking) as ``Configuration(space, facts, stored)`` built from nothing. And the
+   **bind**, ``change(Configuration(space, facts), Change(commit=stored))``, is accepted
+   with the same answers, for every configuration the walk reaches by accepted changes
+   that set (FN3: what a step publishes binds again unrefused). Why (§ 16.15): such a
+   change leaves the set of counted pairs (3) no larger, so the configuration's false
+   pieces are those its facts made false from the start, which the configuration the bind
+   starts from (its facts, nothing stored) counts too. Its scope (§ 16.16): after a
+   clear-only step that revealed a masked rule (3), the bind may be refused, by the origins
+   so revealed and nothing else; that is counted as expected, never anywhere else.
+2. *Additions move answers only up the information order* (:func:`below`, the order
+   defined in one place) over a step that only sets choices nothing was stored for, with no
+   exception: no accepted addition leaves a Space newly refused (§ 16.15 removes § 16.14's).
+3. *No accepted change that sets a choice or a fact to a new value adds a (false piece,
+   origin) pair* (§ 16.15): every pair counted in the published configuration is counted in
+   the one before it. A change setting no new value (§ 16.18: its commits repeat stored
+   values), only clearing and unsetting, is never refused (§ 16.16), and may add a pair
+   only by **masking**: each pair it adds must, before the step, read (its origin, or
+   through its origin's or its piece's body reads) a view refused through its Space, or a
+   fact the step unsets.
+4. *Every refusal names exactly the origins of the pairs it would add, and their standing
+   choices*, checked by brute force: each named origin is false on its own values in the
+   would-be configuration; the origins named are exactly those of the pairs counted there
+   and not before; each origin's standing choices are exactly those whose clearing, added
+   to the change, makes the origin no longer false.
 
-**A cold build** beside the walked one: at every step the engine's configuration built
-from nothing (``support.space_walk.fresh``) answers every question as the walked one, and
-a change on it as on the walked one. The model is always cold.
+For 3 and 4 the module counts a configuration's pairs again (:func:`counted_pairs`, from
+the model docstring's readings 2 and 3: each false piece of the root's validity with the
+origins it is false through) and what stands in an origin's way (:class:`Structure`,
+reading 4), so the check is not the model checking itself: it reads the model's evaluation
+of each configuration (its ``Solution``) and never its change code nor its pairs.
 
-``python -m core.space.reference_harness walks --seeds 0-99 --steps 40`` (from
-``tests``) prints a line per seed and index path, the kinds met and the kinds the rows
-name that no walk met.
+**The engine** (the engine core's) answers the same questions at every configuration
+the model reaches, and the same change at every step. Its own **permanent checks** are
+strict always: the walked engine configuration answers every question, and every change,
+as one built from nothing (``support.space_walk.fresh``). A disagreement with the model is
+**counted, not failed, while a milestone with rows is pending** (:func:`pending`): tallied
+by question. The matrix has none (the engine core's milestone is accepted), so the walks
+are strict: every disagreement fails the walk, as it does with a pending milestone's rows
+taken as removed (``--without``). An engine error always fails.
+Refinement on the engine side (its answers over an addition, in the same order) is a
+disagreement like any other where the model holds. Where the engine refuses a change the
+model accepts, the engine side takes the model's configuration by a bind from nothing; if
+it refuses that too, it is out of step until a later configuration binds.
+
+A failure prints the seed, the step, the description, the steps so far and the answers
+involved. ``python -m core.space.reference_harness walks`` (from ``tests``) prints a line
+per seed and the totals.
 """
 
 from __future__ import annotations
 
 import itertools
 import random
-import sys
+import time
 import traceback
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeVar
 
 from support.space_walk import fresh
 
 from core.space import reference as model
-from core.space.reference.description import ChoiceInfo
-from core.space.reference.model import same
-from finn.core.space import _runtime
+from core.space.reference.description import Order
+from core.space.reference.model import EMPTY_DOMAIN_REFUSES, same
 
 from .compare import (
     Disagreement,
     agrees,
     answer_form,
     change_form,
+    possible_form,
     rule_form,
     state_form,
     validity_form,
 )
 from .engine import Engine, NotTranslatable, Point, build
-from .forms import AnswerForm, ChangeForm, Form, Refusal, RuleForm, StateForm, ValidityForm
+from .forms import (
+    AnswerForm,
+    ChangeForm,
+    Form,
+    PossibleForm,
+    RuleForm,
+    StateForm,
+    ValidityForm,
+)
 from .matrix import MILESTONES, ROWS
+
+#: what a call on the engine's side returns
+T = TypeVar("T")
 
 # --- the generator --------------------------------------------------------------------------------
 
@@ -85,9 +120,9 @@ class Generated:
     description: model.Space
     text: str
     facts: Mapping[str, int]
-    #: descriptions drawn before it and skipped: not expressible in the engine, or a cycle
-    untranslatable: int = 0
-    cycles: int = 0
+    #: descriptions drawn before it and skipped, by why: "untranslatable" (the engine cannot
+    #: express it), "cycle", or another definition error's kind
+    skipped: Counter[str] = field(default_factory=Counter)
 
 
 @dataclass(frozen=True)
@@ -96,11 +131,19 @@ class _Fn:
 
     text: str
     reads: tuple[str, ...]
-    call: Callable[..., Any]
+    call: Callable[[model.Reads], Any]
 
 
 class _Draw:
-    """One description drawn from ``rng``: its scopes, built bottom-up, and their text."""
+    """One description drawn from ``rng``, and its text.
+
+    Membership reads facts only: facts, and ``h``, a derived value over facts that refuses
+    on some. A listed domain may carry an ``order`` reading a choice. The root holds two to
+    six value choices in all, a selector whose cases hold choices (sometimes one level
+    deeper), a derived value ``d`` over facts and root choices (sometimes refusing), a
+    ``when``-guarded scope ``g`` (its guard sometimes reading ``d``; in the root, or in the
+    selector's first case, so that selecting it brings the guard into play), views (some
+    refusing) and rules over two or three reads."""
 
     def __init__(self, rng: random.Random) -> None:
         self.rng = rng
@@ -108,6 +151,10 @@ class _Draw:
         self.facts = tuple(f"f{index}" for index in range(rng.randint(1, 2)))
         self.ints: list[str] = []  # value choices, by path
         self.selectors: dict[str, tuple[str, ...]] = {}
+        self.over_facts: list[str] = []  # derived values over facts alone, for membership
+        self.derived_d = False  # whether the root holds ``d``
+        self.guard_in: str | None = None  # the case ``g`` sits in, or ``None`` (the root)
+        self.guard_view: str | None = None  # ``g``'s view's path, if it has one
         self.lines: list[str] = [f"facts {', '.join(self.facts)}"]
 
     def name(self, prefix: str) -> str:
@@ -116,6 +163,9 @@ class _Draw:
     def fact(self) -> str:
         return self.rng.choice(self.facts)
 
+    def roots(self) -> list[str]:
+        return [item for item in self.ints if "." not in item]
+
     # -- domains and functions
 
     def domain(self) -> tuple[model.Domain, str]:
@@ -123,45 +173,48 @@ class _Draw:
         draw = rng.random()
         if draw < 0.03:
             return model.listed(), "listed()"
-        if draw < 0.5:
+        if draw < 0.38:
             values = tuple(sorted(rng.sample(VALUES, rng.randint(1, 3))))
             return model.listed(*values), f"listed{values}"
-        if draw < 0.6:
+        if draw < 0.48:
             values = tuple(sorted(rng.sample(VALUES, rng.randint(2, 3))))
-            fact = self.fact()
             if rng.random() < 0.5:
+                fact = self.fact()
                 return (
-                    model.listed(*values, member=lambda v, r: v <= r[fact], reads=(fact,)),
+                    model.listed(*values, member=_at_most(fact), reads=(fact,)),
                     f"listed{values} where value <= {fact}",
                 )
-            return model.listed(
-                *values, member=lambda v, r: v != 1
-            ), f"listed{values} where value != 1"
-        if draw < 0.82:
+            return model.listed(*values, member=_not_one), f"listed{values} where value != 1"
+        if draw < 0.58:
+            # an order reading a choice: it ranks, and checks nothing
+            values = tuple(sorted(rng.sample(VALUES, rng.randint(2, 3))))
+            roots = self.roots()
+            if roots:
+                read = rng.choice(roots)
+                return (
+                    model.listed(*values, order=_reversed_past(read), order_reads=(read,)),
+                    f"listed{values}, reversed while {read} >= 2",
+                )
+            return model.listed(*values), f"listed{values}"
+        if draw < 0.72:
             fact = self.fact()
             shape = rng.choice((0, 0, 1, 1, 2))
             if shape == 0:
-                return (
-                    model.computed(lambda r: tuple(v for v in (1, 2, 3) if v <= r[fact]), (fact,)),
-                    f"computed: 1..3 up to {fact}",
-                )
+                return model.computed(_up_to(fact), (fact,)), f"computed: 1..3 up to {fact}"
             if shape == 1:
-                return (
-                    model.computed(
-                        lambda r: tuple(v for v in (1, 2, 3) if r[fact] % v == 0), (fact,)
-                    ),
-                    f"computed: divisors of {fact} up to 3",
-                )
-            return (
-                model.computed(lambda r: tuple(v for v in VALUES if v > r[fact]), (fact,)),
-                f"computed: 0..3 above {fact}",
-            )
+                return model.computed(_dividing(fact), (fact,)), f"computed: divisors of {fact}"
+            # empty once the fact is 3 or more: reading 9 now and then
+            return model.computed(_above(fact), (fact,)), f"computed: 0..3 above {fact}"
+        if draw < 0.84 and self.over_facts:
+            read = rng.choice(self.over_facts)
+            return model.computed(_dividing(read), (read,)), f"computed: divisors of {read}"
         if rng.random() < 0.5:
             fact = self.fact()
-            return model.membership(
-                lambda v, r: 0 <= v <= r[fact], (fact,)
-            ), f"membership: 0 <= value <= {fact}"
-        return model.membership(lambda v, r: v % 2 == 0), "membership: even"
+            return (
+                model.membership(_between(fact), (fact,)),
+                f"membership: 0 <= value <= {fact}",
+            )
+        return model.membership(_even), "membership: even"
 
     def choice(self, scope: str, indent: str) -> model.Choice:
         name = self.name("c")
@@ -175,34 +228,29 @@ class _Draw:
         """A predicate over two or three integer reads."""
         rng = self.rng
         if len(reads) == 3:
-            a, b, c = reads
             k = rng.randint(2, 6)
-            return _Fn(f"{a} + {b} + {c} <= {k}", tuple(reads), lambda r: r[a] + r[b] + r[c] <= k)
+            return _Fn(f"{' + '.join(reads)} <= {k}", tuple(reads), _sum_at_most(tuple(reads), k))
         a, b = reads
         shape = rng.randrange(6)
-        if shape == 0:
-            return _Fn(f"{a} <= {b}", (a, b), lambda r: r[a] <= r[b])
-        if shape == 1:
-            return _Fn(f"{a} < {b}", (a, b), lambda r: r[a] < r[b])
-        if shape == 2:
-            return _Fn(f"{a} != {b}", (a, b), lambda r: r[a] != r[b])
-        if shape == 3:
-            return _Fn(f"{a} == {b}", (a, b), lambda r: r[a] == r[b])
         k = rng.randint(1, 4)
-        if shape == 4:
-            return _Fn(f"{a} + {b} <= {k}", (a, b), lambda r: r[a] + r[b] <= k)
-        return _Fn(f"{a} + {b} >= {k}", (a, b), lambda r: r[a] + r[b] >= k)
+        texts = (
+            f"{a} <= {b}",
+            f"{a} < {b}",
+            f"{a} != {b}",
+            f"{a} == {b}",
+            f"{a} + {b} <= {k}",
+            f"{a} + {b} >= {k}",
+        )
+        return _Fn(texts[shape], (a, b), _relation(shape, a, b, k))
 
-    def case_rule(self, selector: str, reads: Sequence[str]) -> _Fn:
+    def case_rule(self, selector: str, read: str) -> _Fn:
         """A predicate tying a selector's case to an integer read: one case needs it small."""
-        cases = self.selectors[selector]
-        case = self.rng.choice(cases)
-        (other,) = reads
+        case = self.rng.choice(self.selectors[selector])
         k = self.rng.randint(0, 3)
         return _Fn(
-            f"{selector} != {case!r} or {other} <= {k}",
-            (selector, other),
-            lambda r: r[selector] != case or r[other] <= k,
+            f"{selector} != {case!r} or {read} <= {k}",
+            (selector, read),
+            _case_small(selector, case, read, k),
         )
 
     def constraint(
@@ -213,9 +261,9 @@ class _Draw:
         rng = self.rng
         name = self.name("r")
         options = [read for read in pool if read != needs]
-        if self.selectors and rng.random() < 0.25:
+        if self.selectors and rng.random() < 0.25 and (needs or options):
             selector = rng.choice(sorted(self.selectors))
-            fn = self.case_rule(selector, [needs or rng.choice(options)])
+            fn = self.case_rule(selector, needs or rng.choice(options))
         else:
             size = 3 if rng.random() < 0.2 else 2
             picked = [needs] if needs else []
@@ -226,8 +274,33 @@ class _Draw:
             rng.shuffle(picked)
             fn = self.relation(picked)
         self.lines.append(f"{indent}rule {name}: {fn.text}")
-        call = fn.call
-        return model.Constraint(name, fn.reads, lambda r: bool(call(r)), f"code-{name}")
+        return model.Constraint(name, fn.reads, _holds(fn.call), f"code-{name}")
+
+    # -- derived values and views
+
+    def facts_only(self, indent: str) -> model.Derived:
+        """``h``: a derived value over facts alone, refusing past a bound."""
+        reads = tuple(self.rng.sample(self.facts, self.rng.randint(1, len(self.facts))))
+        k = self.rng.randint(2, 5)
+        self.over_facts.append("h")
+        self.lines.append(f"{indent}derived h: {' + '.join(reads)}, refused 'h-big' past {k}")
+        return model.Derived("h", reads, _capped(reads, k, "h-big"))
+
+    def derived(self, indent: str) -> model.Derived:
+        """``d``: a sum over facts and root choices, refusing now and then."""
+        rng = self.rng
+        readable = [*self.facts, *self.roots()]
+        reads = tuple(rng.sample(readable, min(len(readable), rng.randint(1, 2))))
+        draw = rng.random()
+        if draw < 0.3:
+            self.lines.append(f"{indent}derived d: {' + '.join(reads)}, refused 'd-odd' when odd")
+            return model.Derived("d", reads, _even_total(reads))
+        if draw < 0.6:
+            k = rng.randint(2, 5)
+            self.lines.append(f"{indent}derived d: {' + '.join(reads)}, refused 'd-big' past {k}")
+            return model.Derived("d", reads, _capped(reads, k, "d-big"))
+        self.lines.append(f"{indent}derived d: {' + '.join(reads)}")
+        return model.Derived("d", reads, _total(reads))
 
     # -- scopes
 
@@ -240,11 +313,18 @@ class _Draw:
         if depth == 0 and self.rng.random() < 0.2:
             selectors = (self.selector(path, depth + 1, inner),)
         constraints: tuple[model.Constraint, ...] = ()
+        pool = [*self.facts, *self.roots()]
         if choices and self.rng.random() < 0.5:
-            pool = [*self.facts, *(item for item in self.ints if "." not in item)]
             rule = self.constraint(pool, inner, needs=_join(path, choices[0].name))
             constraints = (rule,) if rule else ()
-        return model.Scope(case, choices=choices, selectors=selectors, constraints=constraints)
+        elif self.rng.random() < 0.3:
+            # a rule over the root's values alone: reached by selecting its case
+            rule = self.constraint(pool, inner)
+            constraints = (rule,) if rule else ()
+        children = (self.guarded(path, inner),) if path == self.guard_in else ()
+        return model.Scope(
+            case, choices=choices, selectors=selectors, constraints=constraints, children=children
+        )
 
     def selector(self, scope: str, depth: int, indent: str) -> model.Selector:
         name = "s" if depth == 0 else "t"
@@ -252,60 +332,68 @@ class _Draw:
         cases = ("a", "b", "c")[: self.rng.choice((2, 2, 3))] if depth == 0 else ("x", "y")
         required = self.rng.random() < 0.1
         self.lines.append(f"{indent}selector {name}" + (" (required)" if required else ""))
-        built = tuple(self.case(path, case, depth, indent + "  ") for case in cases)
         self.selectors[path] = cases
+        built = tuple(self.case(path, case, depth, indent + "  ") for case in cases)
         return model.Selector(name, built, required)
 
-    def guarded(self, indent: str) -> model.Scope:
+    def guarded(self, scope: str, indent: str) -> model.Scope:
+        """``g``, guarded by a ``when``: in the root, or now and then in a case of ``s`` (so
+        selecting that case brings its guard into play)."""
         rng = self.rng
-        roots = [item for item in self.ints if "." not in item]
-        if "s" in self.selectors and rng.random() < 0.3:
+        roots = self.roots()
+        draw = rng.random()
+        when: model.When
+        if "s" in self.selectors and not scope and draw < 0.25:
             case = rng.choice(self.selectors["s"])
-            when = model.When(("s",), lambda r: r["s"] == case)
-            text = f"s == {case!r}"
-        else:
-            read = rng.choice([*roots, *self.facts]) if roots else self.fact()
+            when, text = model.When(("s",), _is_case("s", case)), f"s == {case!r}"
+        elif self.derived_d and draw < (0.75 if scope else 0.5):
             k = rng.randint(1, 3)
-            when = model.When((read,), lambda r: r[read] >= k)
-            text = f"{read} >= {k}"
+            when, text = model.When(("d",), _at_least("d", k)), f"d >= {k}"
+        else:
+            read = rng.choice([*roots, *self.facts])
+            k = rng.randint(1, 3)
+            when, text = model.When((read,), _at_least(read, k)), f"{read} >= {k}"
+        path = _join(scope, "g")
         self.lines.append(f"{indent}scope g when {text}:")
         inner = indent + "  "
-        choices = (self.choice("g", inner),)
+        choices = (self.choice(path, inner),)
+        own = _join(path, choices[0].name)
         constraints: tuple[model.Constraint, ...] = ()
         if rng.random() < 0.5:
-            rule = self.constraint([*self.facts, *roots], inner, needs=f"g.{choices[0].name}")
+            rule = self.constraint([*self.facts, *roots], inner, needs=own)
             constraints = (rule,) if rule else ()
         views: tuple[model.View, ...] = ()
-        if rng.random() < 0.3:
-            own = f"g.{choices[0].name}"
-            views = (model.View("w", (own,), lambda r: r[own] * 2),)
-            self.lines.append(f"{inner}view w: {own} * 2")
+        if rng.random() < 0.4:
+            k = rng.randint(2, 6)
+            views = (model.View("w", (own,), _capped_double(own, k)),)
+            self.guard_view = _join(path, "w")
+            self.lines.append(f"{inner}view w: {own} * 2, refused 'w-big' past {k}")
         return model.Scope("g", choices=choices, constraints=constraints, views=views, when=when)
 
     def space(self) -> model.Space:
         rng = self.rng
         indent = "  "
         self.lines.append("root:")
+        over_facts = (self.facts_only(indent),) if rng.random() < 0.4 else ()
         choices = [self.choice("", indent) for _ in range(rng.randint(1, 3))]
-        selectors = (self.selector("", 0, indent),) if rng.random() < 0.75 else ()
-        children = (self.guarded(indent),) if rng.random() < 0.5 else ()
-        roots = [item for item in self.ints if "." not in item]
-        derived: tuple[model.Derived, ...] = ()
-        readable = [*self.facts, *roots]
-        if rng.random() < 0.6:
-            reads = tuple(rng.sample(readable, min(len(readable), rng.randint(1, 2))))
-            derived = (model.Derived("d", reads, _total(reads)),)
-            self.lines.append(f"{indent}derived d: {' + '.join(reads)}")
-            readable.append("d")
+        derived = (self.derived(indent),) if rng.random() < 0.6 else ()
+        self.derived_d = bool(derived)
+        has_selector = rng.random() < 0.75
+        guarded = rng.random() < 0.5
+        if has_selector and guarded and rng.random() < 0.4:
+            self.guard_in = "s.a"
+        selectors = (self.selector("", 0, indent),) if has_selector else ()
+        children = (self.guarded("", indent),) if guarded and self.guard_in is None else ()
+        readable = [*self.facts, *self.roots(), *(item.name for item in derived)]
         views: tuple[model.View, ...] = ()
         if rng.random() < 0.6:
             reads = tuple(rng.sample(readable, min(len(readable), rng.randint(1, 2))))
             k = rng.randint(1, 5)
-            views = (model.View("v", reads, _capped(reads, k)),)
+            views = (model.View("v", reads, _capped(reads, k, "too-big")),)
             self.lines.append(f"{indent}view v: {' + '.join(reads)}, refused 'too-big' past {k}")
-        pool = [*readable, *(item for item in self.ints if "." in item)]
-        if children and children[0].views and rng.random() < 0.5:
-            pool.append("g.w")  # a child's view: not a cycle
+        pool = [*readable, *(item.name for item in over_facts), *(i for i in self.ints if "." in i)]
+        if self.guard_view is not None and rng.random() < 0.5:
+            pool.append(self.guard_view)  # a descendant's view: not a cycle
         if views and rng.random() < 0.2:
             pool.append("v")  # a view of the rules' own Space: a cycle, drawn again
         constraints = []
@@ -319,7 +407,7 @@ class _Draw:
                 "",
                 choices=tuple(choices),
                 selectors=selectors,
-                derived=derived,
+                derived=(*over_facts, *derived),
                 views=views,
                 constraints=tuple(constraints),
                 children=children,
@@ -327,14 +415,97 @@ class _Draw:
         )
 
 
+# The functions a description is built of: each a closure over its own reads, so a drawn
+# description is plain data the engine translates.
+
+
+def _at_most(fact: str) -> Callable[[Any, model.Reads], bool]:
+    return lambda v, r: bool(v <= r[fact])
+
+
+def _not_one(v: Any, r: model.Reads) -> bool:
+    return bool(v != 1)
+
+
+def _between(fact: str) -> Callable[[Any, model.Reads], bool]:
+    return lambda v, r: bool(0 <= v <= r[fact])
+
+
+def _even(v: Any, r: model.Reads) -> bool:
+    return bool(v % 2 == 0)
+
+
+def _up_to(read: str) -> Callable[[model.Reads], tuple[int, ...]]:
+    return lambda r: tuple(v for v in (1, 2, 3) if v <= r[read])
+
+
+def _dividing(read: str) -> Callable[[model.Reads], tuple[int, ...]]:
+    return lambda r: tuple(v for v in (1, 2, 3) if r[read] % v == 0)
+
+
+def _above(read: str) -> Callable[[model.Reads], tuple[int, ...]]:
+    return lambda r: tuple(v for v in VALUES if v > r[read])
+
+
+def _reversed_past(read: str) -> Order:
+    return lambda values, r: tuple(reversed(values)) if r[read] >= 2 else values
+
+
+def _sum_at_most(reads: tuple[str, ...], k: int) -> Callable[[model.Reads], bool]:
+    return lambda r: sum(r[item] for item in reads) <= k
+
+
+def _relation(shape: int, a: str, b: str, k: int) -> Callable[[model.Reads], bool]:
+    relations: tuple[Callable[[model.Reads], bool], ...] = (
+        lambda r: bool(r[a] <= r[b]),
+        lambda r: bool(r[a] < r[b]),
+        lambda r: bool(r[a] != r[b]),
+        lambda r: bool(r[a] == r[b]),
+        lambda r: bool(r[a] + r[b] <= k),
+        lambda r: bool(r[a] + r[b] >= k),
+    )
+    return relations[shape]
+
+
+def _case_small(selector: str, case: str, read: str, k: int) -> Callable[[model.Reads], bool]:
+    return lambda r: bool(r[selector] != case or r[read] <= k)
+
+
+def _holds(call: Callable[[model.Reads], Any]) -> Callable[[model.Reads], bool]:
+    return lambda r: bool(call(r))
+
+
+def _is_case(selector: str, case: str) -> Callable[[model.Reads], bool]:
+    return lambda r: bool(r[selector] == case)
+
+
+def _at_least(read: str, k: int) -> Callable[[model.Reads], bool]:
+    return lambda r: bool(r[read] >= k)
+
+
 def _total(reads: tuple[str, ...]) -> Callable[[model.Reads], int]:
     return lambda r: sum(r[item] for item in reads)
 
 
-def _capped(reads: tuple[str, ...], k: int) -> Callable[[model.Reads], object]:
+def _even_total(reads: tuple[str, ...]) -> Callable[[model.Reads], object]:
     def body(r: model.Reads) -> object:
         total = sum(r[item] for item in reads)
-        return model.Refuse("too-big") if total > k else total
+        return model.Refuse("d-odd") if total % 2 else total
+
+    return body
+
+
+def _capped(reads: tuple[str, ...], k: int, code: str) -> Callable[[model.Reads], object]:
+    def body(r: model.Reads) -> object:
+        total = sum(r[item] for item in reads)
+        return model.Refuse(code) if total > k else total
+
+    return body
+
+
+def _capped_double(read: str, k: int) -> Callable[[model.Reads], object]:
+    def body(r: model.Reads) -> object:
+        return model.Refuse("w-big") if r[read] * 2 > k else r[read] * 2
 
     return body
 
@@ -344,9 +515,10 @@ def _join(scope: str, name: str) -> str:
 
 
 def generate(rng: random.Random) -> tuple[Generated, Engine]:
-    """A description and its engine, drawn until one has two to six value choices, is
-    acyclic (``validate``) and the engine can express (``build``); the others are counted."""
-    untranslatable = cycles = 0
+    """A description and its engine, drawn until one has two to six value choices, is a
+    definition (``validate``: cycles and other definition errors are skipped) and the engine
+    can express (``build``); the others are counted by why."""
+    skipped: Counter[str] = Counter()
     while True:
         draw = _Draw(rng)
         description = draw.space()
@@ -356,23 +528,25 @@ def generate(rng: random.Random) -> tuple[Generated, Engine]:
         try:
             description.validate()
         except model.DefinitionError as error:
-            if error.kind != "cycle":
-                raise
-            cycles += 1
+            skipped[error.kind] += 1
             continue
         try:
             engine = build(description)
         except NotTranslatable:
-            untranslatable += 1
+            skipped["untranslatable"] += 1
             continue
-        text = "\n".join(draw.lines)
-        return Generated(description, text, facts, untranslatable, cycles), engine
+        return Generated(description, "\n".join(draw.lines), facts, skipped), engine
 
 
 # --- the questions --------------------------------------------------------------------------------
 
-#: a question: what is asked ("state", "answer", "rule", "validity") and of which path
+#: a question: what is asked ("state", "answer", "rule", "validity", "possible", "ordered")
+#: and of which path; "ordered" (a listed domain's ranking) is the model's alone
 Question = tuple[str, str]
+
+#: the kinds of question both sides answer, and the walk's own: a change, and the engine's
+#: refinement over an addition
+ENGINE_QUESTIONS = ("state", "answer", "rule", "validity", "possible")
 
 
 def questions(index: model.Index) -> list[Question]:
@@ -380,10 +554,28 @@ def questions(index: model.Index) -> list[Question]:
     found += [("answer", path) for path in sorted({*index.choices, *index.derived, *index.views})]
     found += [("rule", path) for path in sorted(index.constraints)]
     found.append(("validity", ""))
+    listed = sorted(path for path, info in index.choices.items() if info.domain.listed)
+    found += [("possible", path) for path in listed]
+    found += [("ordered", path) for path in listed if index.choices[path].cases is None]
     return found
 
 
-def model_forms(solution: model.Solution, asked: Iterable[Question]) -> dict[Question, Form]:
+def ordered_form(solution: model.Solution, path: str) -> AnswerForm:
+    """A listed domain's ranking as an answer (the model's alone: the engine builds no order)."""
+    answer = solution.ordered(path)
+    if isinstance(answer, model.Known):
+        return AnswerForm("value", answer.value)
+    if isinstance(answer, model.Unresolved):
+        return AnswerForm("unresolved", blockers=frozenset(answer.waits))
+    if isinstance(answer, model.Refused):
+        return AnswerForm("refused")
+    return AnswerForm("inapplicable")
+
+
+def model_forms(
+    solution: model.Solution, asked: Iterable[Question], possible: bool = True
+) -> dict[Question, Form]:
+    """The model's answers; ``possible``: with the possible values (one change per value)."""
     forms: dict[Question, Form] = {}
     for question in asked:
         what, path = question
@@ -393,8 +585,13 @@ def model_forms(solution: model.Solution, asked: Iterable[Question]) -> dict[Que
             forms[question] = answer_form(solution, path)
         elif what == "rule":
             forms[question] = rule_form(solution, path)
-        else:
+        elif what == "validity":
             forms[question] = validity_form(solution)
+        elif what == "possible":
+            if possible:
+                forms[question] = possible_form(solution, path)
+        else:
+            forms[question] = ordered_form(solution, path)
     return forms
 
 
@@ -408,64 +605,175 @@ def engine_forms(point: Point, asked: Iterable[Question]) -> dict[Question, Form
             forms[question] = point.answer(path)
         elif what == "rule":
             forms[question] = point.rule(path)
-        else:
+        elif what == "validity":
             forms[question] = point.validity()
+        elif what == "possible":
+            forms[question] = point.possible(path)
     return forms
 
 
 def ask(question: Question) -> str:
     what, path = question
-    return "validity" if what == "validity" else f"the {what} of {path}"
+    labels = {"possible": "the possible values of", "ordered": "the ranking of"}
+    return "validity" if what == "validity" else f"{labels.get(what, f'the {what} of')} {path}"
 
 
-# --- the classification ---------------------------------------------------------------------------
-
-#: the kinds a walk can tell, each one a row names, most specific first: a disagreement
-#: several explain is counted under the first the matrix still names
-PRIORITY = (
-    "own-reason-forcing",
-    "inactive-under-refused-selector",
-    "trial-reads-unchecked",
-    "trial-reads-waiting",
-    "conflict",
-)
+def _equal(left: Form, right: Form) -> bool:
+    return agrees(left, right) and agrees(right, left)
 
 
-def expected_kinds(without: Iterable[str] = ()) -> frozenset[str]:
-    """The kinds the matrix's rows still name; ``without``: as if the rows of those
-    milestones were removed (a milestone's engine walked before it removes them)."""
-    removed = set(without)
-    unknown = removed - set(MILESTONES)
-    if unknown:
-        raise ValueError(f"no such milestone: {', '.join(sorted(unknown))}")
-    return frozenset(row.kind for row in ROWS if row.kind and row.milestone not in removed)
+def differences(left: Mapping[Question, Form], right: Mapping[Question, Form]) -> list[Question]:
+    """The questions both answer, answered otherwise (blockers too: both sides are one)."""
+    return [
+        question
+        for question in left
+        if question in right and not _equal(left[question], right[question])
+    ]
 
 
-class Reach:
-    """What an answer can carry to, in one description: a node's answer feeds every node
-    reading it, every node whose scope's presence reads it (a selector, a guard's reads)
-    and, for a choice or a rule, every view whose Space's validity counts it; a rule feeds
-    every choice it depends on (forcing tries that choice's cases against it), and a choice
-    every stored choice whose own check reads it. A mechanism at work on some choices
-    reaches a question when the question's node is among what they feed, to closure."""
+# --- the information order (invariant 2) ---------------------------------------------------------
+
+
+def below(before: Form, after: Form, setting: tuple[object] | None = None) -> str | None:
+    """How ``after`` fails to be at or above ``before`` in the information order, or
+    ``None``; ``setting``: the step sets this choice, to that value.
+
+    The order, per answer (an answer may move only up it over an addition):
+
+    - a **choice's state**: open may become anything (set, waiting, dormant when the step
+      sets it or its case is decided; absent when its scope turns out absent); waiting may
+      become set or dormant (its presence decided), keeping its value; set and dormant stay
+      as they are; absent stays absent, or turns dormant when the step sets it (its scope
+      is absent: the value is kept out of play);
+    - a **value's answer**: unresolved may become anything; a value stays the same value;
+      inapplicable stays; refused stays refused, its codes only growing (a view refused
+      with its Space carries the Space's false pieces, which an addition may add to);
+    - a **rule**: unknown may become anything; true and inapplicable stay; false stays
+      false, its codes only growing;
+    - **validity**: open may become valid or refused; valid stays valid; refused stays
+      refused, its false pieces only growing.
+
+    Possible values are not ordered: an added value can stand in another value's way, so
+    a possible value becomes impossible by design."""
+    if isinstance(before, StateForm) and isinstance(after, StateForm):
+        return _state_below(before, after, setting)
+    if isinstance(before, AnswerForm) and isinstance(after, AnswerForm):
+        if before.kind == "unresolved":
+            return None
+        if before.kind != after.kind:
+            return f"{before.kind} -> {after.kind}"
+        if before.kind == "value" and not same(before.value, after.value):
+            return f"value {before.value!r} -> {after.value!r}"
+        if not before.codes <= after.codes:
+            return f"refused, losing {sorted(before.codes - after.codes)}"
+        return None
+    if isinstance(before, RuleForm) and isinstance(after, RuleForm):
+        if before.kind == "unknown":
+            return None
+        if before.kind != after.kind:
+            return f"{before.kind} -> {after.kind}"
+        if not before.codes <= after.codes:
+            return f"false, losing {sorted(before.codes - after.codes)}"
+        return None
+    if isinstance(before, ValidityForm) and isinstance(after, ValidityForm):
+        if before.verdict == "open":
+            return None
+        if before.verdict != after.verdict:
+            return f"{before.verdict} -> {after.verdict}"
+        if not before.false <= after.false:
+            return f"refused, losing {sorted(before.false - after.false)}"
+        return None
+    return None
+
+
+def _state_below(before: StateForm, after: StateForm, setting: tuple[object] | None) -> str | None:
+    if setting is not None:
+        (value,) = setting
+        if before.kind not in ("open", "absent"):
+            return f"{before.kind} before the step set it"
+        if after.kind not in ("set", "waiting", "dormant") or not same(after.value, value):
+            return f"set to {value!r}, but {after.kind} {after.value!r}"
+        if before.kind == "absent" and after.kind != "dormant":
+            return f"absent, set: {after.kind}"
+        return None
+    allowed = {
+        "open": ("set", "waiting", "dormant", "open", "absent"),
+        "waiting": ("waiting", "set", "dormant"),
+        "set": ("set",),
+        "dormant": ("dormant",),
+        "absent": ("absent",),
+    }
+    if after.kind not in allowed[before.kind]:
+        return f"{before.kind} -> {after.kind}"
+    if before.kind not in ("open", "absent") and not same(before.value, after.value):
+        return f"{before.kind} {before.value!r} -> {after.kind} {after.value!r}"
+    return None
+
+
+def order_problems(
+    before: Mapping[Question, Form], after: Mapping[Question, Form], committed: Mapping[str, object]
+) -> dict[Question, str]:
+    """Over an addition committing ``committed``: the answers that moved down the order
+    (:func:`below`)."""
+    found: dict[Question, str] = {}
+    for question, old in before.items():
+        if question not in after or question[0] == "possible":
+            continue
+        what, path = question
+        setting = (committed[path],) if what == "state" and path in committed else None
+        move = below(old, after[question], setting)
+        if move is not None:
+            found[question] = move
+    return found
+
+
+# --- the counted pairs and what stands in the way, written again (invariants 1, 3 and 4) ---------
+
+
+class Structure:
+    """What stands in an origin's way, written again from the model docstring's reading 4,
+    over the description's tables alone.
+
+    - The **body reads** of a node: its declared reads, followed through derived values'
+      and views' bodies (never a view's Space's validity).
+    - The **presence reads** of a scope: the selector and the ``when`` reads of it and of
+      every scope above it.
+    - The **closure** of a node: the closure of the node under body reads and the presence
+      reads of the scope of every node met (a fact has no scope): what it reads, and what
+      decides whether it and what it reads exist.
+    - The **deciders** of a scope: the choices among the closure of its presence reads.
+    """
 
     def __init__(self, index: model.Index) -> None:
         self.index = index
-        self.feeds: dict[str, set[str]] = {
-            node: set()
-            for node in (*index.choices, *index.derived, *index.views, *index.constraints)
-        }
-        for node in self.feeds:
-            for source in self._sources(node):
-                self.feeds[source].add(node)
-        for rule, choices in index.constraint_reads.items():
-            self.feeds[rule].update(choices)
-        for choice, reads in index.check_reads.items():
-            for read in reads:
-                self.feeds[read].add(choice)
-        self._closures: dict[frozenset[str], frozenset[str]] = {}
 
-    def _presence(self, scope: str) -> set[str]:
+    def scope(self, path: str) -> str:
+        index = self.index
+        for table in (index.constraints, index.derived, index.views):
+            if path in table:
+                return table[path][1]
+        return index.choices[path].scope
+
+    def reads(self, path: str) -> tuple[str, ...]:
+        """A constraint's, a derived value's or a view's declared reads; nothing else's."""
+        index = self.index
+        for table in (index.constraints, index.derived, index.views):
+            if path in table:
+                found: tuple[str, ...] = table[path][0].reads
+                return found
+        return ()
+
+    def bodies(self, path: str) -> frozenset[str]:
+        found: set[str] = set()
+        stack = list(self.reads(path))
+        while stack:
+            read = stack.pop()
+            if read not in found:
+                found.add(read)
+                stack.extend(self.reads(read))
+        return frozenset(found)
+
+    def presence(self, scope: str) -> set[str]:
         found: set[str] = set()
         current: str | None = scope
         while current is not None:
@@ -477,421 +785,472 @@ class Reach:
             current = info.parent
         return found
 
-    def _sources(self, node: str) -> set[str]:
-        """What ``node``'s answer reads."""
-        index = self.index
-        if node in index.choices:
-            reads: tuple[str, ...] = index.choices[node].domain.reads
-            scope = index.choices[node].scope
-        elif node in index.derived:
-            reads, scope = index.derived[node][0].reads, index.derived[node][1]
-        elif node in index.views:
-            reads, scope = index.views[node][0].reads, index.views[node][1]
-        else:
-            reads, scope = index.constraints[node][0].reads, index.constraints[node][1]
-        found = {*reads, *self._presence(scope)}
-        if node in index.views:
-            found |= {
-                path
-                for table in (index.choices, index.constraints)
-                for path in table
-                if index.within(index.scope_of(path), scope)
-            }
-        return {item for item in found if item in self.feeds and item != node}
+    def closure(self, seeds: Iterable[str]) -> frozenset[str]:
+        found: set[str] = set()
+        stack = list(seeds)
+        while stack:
+            path = stack.pop()
+            if path in found:
+                continue
+            found.add(path)
+            stack.extend(self.reads(path))
+            if path not in self.index.facts:
+                stack.extend(self.presence(self.scope(path)))
+        return frozenset(found)
 
-    def closure(self, paths: Iterable[str]) -> frozenset[str]:
-        """Everything ``paths`` feed, themselves included."""
-        start = frozenset(paths)
-        if start not in self._closures:
-            found = set(start)
-            stack = [path for path in start if path in self.feeds]
-            while stack:
-                for item in self.feeds[stack.pop()]:
-                    if item not in found:
-                        found.add(item)
-                        stack.append(item)
-            self._closures[start] = frozenset(found)
-        return self._closures[start]
+    def deciders(self, scope: str) -> frozenset[str]:
+        return frozenset(p for p in self.closure(self.presence(scope)) if p in self.index.choices)
 
-    def reaches(self, paths: Iterable[str], subjects: Iterable[str] | None) -> bool:
-        """Whether a mechanism at work on ``paths`` reaches any of ``subjects`` (``None``,
-        or a subject that is not a node, as a conflict of the root: the whole)."""
-        if subjects is None:
-            return True
-        listed = set(subjects)
-        if any(subject not in self.feeds for subject in listed):
-            return True
-        return bool(self.closure(paths) & listed)
+    def over_facts(self, path: str) -> bool:
+        """Whether a derived value reads, through derived values, facts alone."""
+        return all(
+            read in self.index.facts or read in self.index.derived for read in self.bodies(path)
+        )
 
 
-def presence(solution: model.Solution, scope: str) -> str:
-    """A scope's presence as the model's answers show it: ``present``, ``absent``,
-    ``unknown`` or ``refused``."""
-    index = solution.index
-    info = index.scopes[scope]
-    if info.parent is None:
-        return "present"
-    parts = [presence(solution, info.parent)]
-    if info.selector is not None:
-        state = solution.state(info.selector)
-        if isinstance(state, (model.Readable, model.Forced)):
-            parts.append("present" if same(state.value, info.case) else "absent")
-        elif isinstance(state, (model.RefusedChoice, model.GuardRefused)):
-            parts.append("refused")
-        elif isinstance(state, model.Inactive):
-            parts.append("absent")
-        else:
-            parts.append("unknown")
-    if info.when is not None:
-        answers = {read: solution.read(read) for read in info.when.reads}
-        if all(isinstance(answer, model.Known) for answer in answers.values()):
-            values = {read: answer.value for read, answer in answers.items()}  # type: ignore[union-attr]
-            parts.append("present" if info.when.test(values) else "absent")
-        elif any(
-            isinstance(answer, model.Refused) and read in index.choices
-            for read, answer in answers.items()
-        ):
-            parts.append("refused")
-        else:
-            parts.append("unknown")
-    for state_ in ("absent", "refused", "unknown"):
-        if state_ in parts:
-            return state_
-    return "present"
-
-
-def mechanisms(solution: model.Solution) -> dict[str, set[str]]:
-    """The mechanisms the model's answers show at work in one configuration, by kind, each
-    with the choices it acts on."""
-    index = solution.index
-    found: dict[str, set[str]] = {}
-
-    def add(kind: str, *paths: str) -> None:
-        found.setdefault(kind, set()).update(paths)
-
-    for path in index.choices:
-        state = solution.state(path)
-        cases: tuple[model.CaseReasons, ...] = ()
-        if isinstance(state, model.Forced):
-            cases = state.others
-        elif isinstance(state, model.Open):
-            cases = state.impossible
-        elif isinstance(state, model.RefusedChoice) and not state.stored:
-            cases = state.cases
-            if state.peers or any(r.kind is model.ReasonKind.CONFLICT for r in state.reasons):
-                add("conflict", path, *state.peers)
-        elif isinstance(state, (model.Readable, model.GuardRefused)) and state.conflict:
-            add("conflict", path, *state.conflict)
-        elif isinstance(state, model.Inactive) and _under_refused(
-            solution, index.choices[path].scope
-        ):
-            # its case not the one an admitted inner selector holds, under a refused outer
-            # one: inactive, where the engine reads it under the refused guard
-            add("inactive-under-refused-selector", path)
-        for case, reasons in cases:
-            for reason in reasons:
-                if _reads_unchecked(solution, path, case, reason):
-                    add("trial-reads-unchecked", path)
-    for conflict in solution.conflicts():
-        add("conflict", *conflict.participants)
-    return found
-
-
-def _reads_unchecked(
-    solution: model.Solution, choice: str, case: object, reason: model.Reason
-) -> bool:
-    """Whether a case of an open choice was refused by a rule reading a stored choice the
-    case makes present, kept unchecked: the case's trial settles the presence the stored
-    choice waits on, so it reads it as its value (``trial-reads-unchecked``). The case makes
-    it present when it is a selector's case holding it, or when a ``when`` guard above it
-    reads the choice (a value choice's case, or a selector's). The rule may be the case's
-    own or one outside it (a rule of the root reading the stored choice): the same trial
-    reads the same value."""
-    index = solution.index
-    if reason.subject not in index.constraints:
-        return False
-    rule, _ = index.constraints[reason.subject]
-    held = _join(choice, str(case)) if index.choices[choice].cases is not None else None
-
-    def made_present(read: str) -> bool:
-        scope = index.choices[read].scope
-        if held is not None and index.within(scope, held):
-            return True
-        return choice in _guard_reads(index, scope)
-
-    return any(
-        read in index.choices
-        and made_present(read)
-        and isinstance(solution.state(read), model.Unchecked)
-        for read in rule.reads
-    )
-
-
-def _guard_reads(index: model.Index, scope: str) -> set[str]:
-    """What the ``when`` guards at and above ``scope`` read."""
-    found: set[str] = set()
-    current: str | None = scope
-    while current is not None:
-        info = index.scopes[current]
-        if info.when is not None:
-            found.update(info.when.reads)
-        current = info.parent
-    return found
-
-
-def outside(solution: model.Solution, choice: str, value: object) -> bool:
-    """Whether ``value`` is outside ``choice``'s domain, by membership alone (its presence
-    aside); ``False`` where the domain's reads wait."""
-    domain = solution.index.choices[choice].domain
-    reads: dict[str, object] = {}
-    for read in domain.reads:
-        answer = solution.read(read)
-        if not isinstance(answer, model.Known):
-            return False
-        reads[read] = answer.value
-    if domain.values is not None:
-        values: Sequence[object] | None = domain.values
-    elif domain.enumerate is not None:
-        values = domain.enumerate(reads)
-    else:
-        values = None
-    if values is not None and not any(same(item, value) for item in values):
-        return True
-    return domain.member is not None and not domain.member(value, reads)
-
-
-def _own_reason(
-    base: model.Solution, published: model.Solution, choice: str, engine: Refusal | None
-) -> str | None:
-    """Whether a named value outside its domain, refused by the model with its own reason,
-    is the shape the engine answers otherwise in: its guard unknown before the change, the
-    engine refusing it as inactive, forcing having read its false own check
-    (``own-reason-forcing``). Its guard false where the change would publish it, the value
-    is refused as inactive, its own check not evaluated: no shape."""
-    scope = published.index.choices[choice].scope
-    inactive = engine is not None and ("inactive", choice) in engine.codes
-    if presence(published, scope) == "absent":
-        return None
-    if presence(base, scope) == "unknown" and inactive:
-        return "own-reason-forcing"
+def _known(answers: Mapping[str, model.Answer]) -> dict[str, Any] | None:
+    if all(isinstance(answer, model.Known) for answer in answers.values()):
+        return {
+            path: answer.value
+            for path, answer in answers.items()
+            if isinstance(answer, model.Known)
+        }
     return None
 
 
-def _under_refused(solution: model.Solution, scope: str) -> bool:
-    """Whether a selector above ``scope`` is refused (its own check false, no possible case,
-    or admitted under a refused selector itself)."""
+def _existence(index: model.Index, facts: model.FactsOnly, choice: str) -> model.Answer:
+    """Whether every membership input of ``choice`` exists over the facts (§ 16.17, read
+    through the model's facts reader): ``Known(False)`` when one does not apply."""
+    info = index.choices[choice]
+    answers = [facts.applies(read, info.scope) for read in info.domain.reads]
+    if any(answer == model.Known(False) for answer in answers):
+        return model.Known(False)
+    if any(isinstance(answer, model.Refused) for answer in answers):
+        return model.Refused(())
+    if any(isinstance(answer, model.Unresolved) for answer in answers):
+        return model.Unresolved(())
+    return model.Known(True)
+
+
+def input_absent(index: model.Index, facts: model.FactsOnly, choice: str) -> bool:
+    """Whether a membership input of ``choice`` does not apply for these facts (§ 16.17)."""
+    return _existence(index, facts, choice) == model.Known(False)
+
+
+def listing(index: model.Index, facts: model.FactsOnly, choice: str) -> model.Answer:
+    """A listed domain's membership list over the facts: ``Known`` of a tuple, else what
+    keeps it from being made (an input refused or not applying: ``Refused``; a missing
+    fact: unresolved)."""
+    domain = index.choices[choice].domain
+    existence = _existence(index, facts, choice)
+    if existence != model.Known(True):
+        return existence if isinstance(existence, model.Unresolved) else model.Refused(())
+    answers = {read: facts.value(read) for read in domain.reads}
+    if any(isinstance(answer, model.Refused) for answer in answers.values()):
+        return model.Refused(())
+    values = _known(answers)
+    if values is None:
+        return model.Unresolved(())
+    listed: Sequence[Any] = domain.values if domain.values is not None else ()
+    if domain.enumerate is not None:
+        listed = domain.enumerate(values)
+    member = domain.member
+    return model.Known(tuple(v for v in listed if member is None or member(v, values)))
+
+
+def outside(index: model.Index, facts: model.FactsOnly, choice: str, value: object) -> bool:
+    """Whether ``value`` is not of ``choice``'s type over ``facts``: outside its domain, or
+    its membership reads a refused input or one that does not apply. A membership waiting
+    on a missing fact is not."""
+    domain = index.choices[choice].domain
+    existence = _existence(index, facts, choice)
+    if existence != model.Known(True):
+        return not isinstance(existence, model.Unresolved)
+    answers = {read: facts.value(read) for read in domain.reads}
+    if any(isinstance(answer, model.Refused) for answer in answers.values()):
+        return True
+    values = _known(answers)
+    if values is None:
+        return False
+    if domain.listed:
+        found = listing(index, facts, choice)
+        assert isinstance(found, model.Known)
+        return not any(same(item, value) for item in found.value)
+    assert domain.member is not None
+    return not domain.member(value, values)
+
+
+def false_on_its_own(
+    structure: Structure, solution: model.Solution, origin: str, kind: str
+) -> bool:
+    """Whether ``origin`` is false on its own values in ``solution``'s configuration: its
+    declared inputs all known (from the solution, or from the facts alone for a derived value
+    over facts, as membership reads it), and its predicate false or its body refusing; or,
+    for a listed domain, its choice present and its list empty, or an input of it not
+    applying (§ 16.17)."""
     index = solution.index
-    current: str | None = scope
-    while current is not None:
-        info = index.scopes[current]
-        if info.selector is not None and isinstance(
-            solution.state(info.selector), (model.RefusedChoice, model.GuardRefused)
-        ):
-            return True
-        current = info.parent
-    return False
+    scope = structure.scope(origin)
+    present = solution.presence(scope) is model.Presence.PRESENT
+    if kind == "empty-domain":
+        facts = model.FactsOnly(index, solution.configuration.facts)
+        found = listing(index, facts, origin)
+        empty = isinstance(found, model.Known) and not found.value
+        return present and (empty or input_absent(index, facts, origin))
+    reads = structure.reads(origin)
+    if kind == "derived" and structure.over_facts(origin):
+        facts = model.FactsOnly(index, solution.configuration.facts)
+        values = _known({read: facts.value(read) for read in reads})
+    else:
+        values = _known({read: solution.read(read) for read in reads}) if present else None
+    if values is None:
+        return False
+    if kind == "constraint":
+        return not index.constraints[origin][0].predicate(values)
+    body = index.derived[origin][0].compute if kind == "derived" else index.views[origin][0].body
+    return isinstance(body(values), model.Refuse)
 
 
-def change_mechanisms(
-    base: model.Solution,
-    published: model.Configuration,
-    solution: model.Solution,
-    result: model.Accepted | model.Rejected,
-    form: ChangeForm,
-) -> dict[str, set[str]]:
-    """What only a change's verdict shows: a named value outside its domain the model
-    refuses with its own reason (:func:`_own_reason`), and the choices the engine
-    reaches beyond the model's refusals, forcing having read that value, or the model
-    beyond the engine's, as inactive, forcing not having read it (a case the value made
-    impossible possible again, and forced; not under a refused selector, the next); a
-    retained choice the model reaches as inactive under a refused selector; a choice the
-    model keeps unchecked that the engine refuses as inactive (``trial-reads-waiting``)."""
-    found: dict[str, set[str]] = {}
-    engine = {refusal.choice: refusal for refusal in form.refusals}
-    if isinstance(result, model.Rejected):
-        refused = {refusal.choice for refusal in result.refusals}
-        for refusal in result.refusals:
-            choice = refusal.choice
-            if refusal.kind == "named" and outside(solution, choice, published.stored[choice]):
-                kind = _own_reason(base, solution, choice, engine.get(choice))
-                if kind:
-                    found.setdefault(kind, set()).add(choice)
-                beyond = {
-                    other
-                    for other, item in engine.items()
-                    if other not in refused
-                    and item.kind == "reached"
-                    and item.codes == {("inactive", other)}
-                }
-                short = {
-                    item.choice
-                    for item in result.refusals
-                    if item.kind == "reached"
-                    and item.choice not in engine
-                    and any(r.kind is model.ReasonKind.INACTIVE for r in item.reasons)
-                    and not _under_refused(solution, solution.index.choices[item.choice].scope)
-                }
-                if beyond or short:
-                    found.setdefault("own-reason-forcing", set()).update({choice, *beyond, *short})
-            elif refusal.kind == "reached" and _under_refused(
-                solution, solution.index.choices[choice].scope
-            ):
-                found.setdefault("inactive-under-refused-selector", set()).add(choice)
-    for choice, item in engine.items():
-        if ("inactive", choice) in item.codes and isinstance(
-            solution.state(choice), model.Unchecked
-        ):
-            found.setdefault("trial-reads-waiting", set()).add(choice)
-    return found
+#: a piece of validity, told by its kind and its subject
+PieceId = tuple[str, str]
+#: a counted pair: a false piece and an origin it is false through
+Pair = tuple[PieceId, str]
+
+
+def counted_pairs(structure: Structure, solution: model.Solution) -> dict[Pair, str]:
+    """The counted pairs of ``solution``'s configuration (readings 2 and 3), with each
+    origin's kind: each false piece of the root's validity with each origin it is false
+    through. A piece is followed back through the inputs it reads that are refused (a
+    guard's piece through its ``when``'s refused reads; a listed domain's through its
+    membership's, over the facts), through derived values, views, and nodes refused through
+    a guard (to that guard's refused reads), to the nodes false on their own values; a
+    constraint or a listed domain false on its own values is its own origin."""
+    index = solution.index
+    facts = model.FactsOnly(index, solution.configuration.facts)
+
+    def node_kind(path: str) -> str:
+        return "derived" if path in index.derived else "view"
+
+    def follow(path: str, found: dict[str, str]) -> None:
+        if not isinstance(solution.read(path), model.Refused) or path in found:
+            return
+        scope = structure.scope(path)
+        if solution.presence(scope) is model.Presence.REFUSED:
+            top = scope  # the highest refused scope holds the refused guard
+            while True:
+                parent = index.scopes[top].parent
+                if parent is None or solution.presence(parent) is not model.Presence.REFUSED:
+                    break
+                top = parent
+            when = index.scopes[top].when
+            assert when is not None, top
+            for read in when.reads:
+                follow(read, found)
+            return
+        refused = [
+            read for read in structure.reads(path) if isinstance(solution.read(read), model.Refused)
+        ]
+        for read in refused:
+            follow(read, found)
+        if not refused and false_on_its_own(structure, solution, path, node_kind(path)):
+            found[path] = node_kind(path)
+
+    def follow_facts(path: str, found: dict[str, str]) -> None:
+        if not isinstance(facts.value(path), model.Refused) or path in index.facts:
+            return
+        refused = [
+            read for read in structure.reads(path) if isinstance(facts.value(read), model.Refused)
+        ]
+        for read in refused:
+            follow_facts(read, found)
+        if not refused and false_on_its_own(structure, solution, path, "derived"):
+            found[path] = "derived"
+
+    pairs: dict[Pair, str] = {}
+    for piece in solution.validity("").false:
+        found: dict[str, str] = {}
+        if piece.kind is model.PieceKind.CONSTRAINT:
+            refused = [
+                read
+                for read in structure.reads(piece.subject)
+                if isinstance(solution.read(read), model.Refused)
+            ]
+            for read in refused:
+                follow(read, found)
+            if not refused and false_on_its_own(structure, solution, piece.subject, "constraint"):
+                found[piece.subject] = "constraint"
+        elif piece.kind is model.PieceKind.EMPTY_DOMAIN:
+            if false_on_its_own(structure, solution, piece.subject, "empty-domain"):
+                found[piece.subject] = "empty-domain"
+            for read in index.choices[piece.subject].domain.reads:
+                follow_facts(read, found)
+        else:
+            when = index.scopes[piece.subject].when
+            assert when is not None
+            for read in when.reads:
+                follow(read, found)
+        for origin, kind in found.items():
+            pairs[((piece.kind.value, piece.subject), origin)] = kind
+    return pairs
+
+
+def added_pairs(
+    structure: Structure, before: model.Solution, after: model.Solution
+) -> dict[Pair, str]:
+    """The pairs counted in ``after`` and not in ``before`` (a piece not false before counts
+    as false through nothing), with each origin's kind; an empty domain's only while
+    reading 9's switch is on. Each one's origin refuses the change from one to the other."""
+    was = counted_pairs(structure, before)
+    return {
+        pair: kind
+        for pair, kind in counted_pairs(structure, after).items()
+        if pair not in was and (kind != "empty-domain" or EMPTY_DOMAIN_REFUSES)
+    }
+
+
+def would_be(
+    configuration: model.Configuration, edit: model.Change
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The facts and stored choices ``edit`` would publish."""
+    stored = {k: v for k, v in configuration.stored.items() if k not in edit.clear}
+    stored.update(edit.commit)
+    facts = {k: v for k, v in configuration.facts.items() if k not in edit.unset}
+    facts.update(edit.facts)
+    return facts, stored
 
 
 @dataclass
-class Context:
-    """One configuration as the classification sees it: its model answers and the
-    mechanisms at work in it."""
+class Checked:
+    """What one change's checks ran, and what they found."""
 
-    solution: model.Solution
-    reach: Reach
-    found: dict[str, set[str]] = field(init=False)
-
-    def __post_init__(self) -> None:
-        self.found = mechanisms(self.solution)
+    runs: Counter[str] = field(default_factory=Counter)
+    problems: list[str] = field(default_factory=list)
+    #: the origins of the pairs an accepted clear-only step revealed (§ 16.16)
+    revealed: set[str] = field(default_factory=set)
 
 
-def _subjects(question: Question, expected: Form, engine: Form) -> set[str] | None:
-    """The nodes a disagreement is about; ``None`` where it is about the whole."""
-    what, path = question
-    if what in ("state", "answer", "rule"):
-        return {path}
-    if isinstance(expected, ValidityForm) and isinstance(engine, ValidityForm):
-        paths = {subject for _, subject in expected.false ^ engine.false}
-        paths |= engine.blockers - expected.blockers
-        return paths or None
-    if isinstance(expected, ChangeForm) and isinstance(engine, ChangeForm):
-        left = {refusal.choice: refusal for refusal in expected.refusals}
-        right = {refusal.choice: refusal for refusal in engine.refusals}
-        paths = {
-            choice for choice in left.keys() | right.keys() if left.get(choice) != right.get(choice)
-        }
-        paths |= expected.unchecked ^ engine.unchecked
-        return paths or None
-    return None
+def clear_only(configuration: model.Configuration, edit: model.Change) -> bool:
+    """Whether ``edit``, from ``configuration``, sets no new value (§ 16.18: every committed
+    value is the one stored, every fact set its own value), so is made only of clears and
+    unsets, which are never refused (§ 16.16)."""
+    stored, facts = configuration.stored, configuration.facts
+    repeats = all(path in stored and same(stored[path], v) for path, v in edit.commit.items())
+    return repeats and all(name in facts and same(facts[name], v) for name, v in edit.facts.items())
 
 
-def classify(
-    contexts: Sequence[Context],
-    question: Question,
-    expected: Form,
-    engine: Form,
-    extra: Mapping[str, set[str]] | None = None,
-) -> tuple[str, ...]:
-    """The kinds that may explain a disagreement on ``question``, most specific first: the
-    mechanisms at work in ``contexts`` (and ``extra``, a change's own) that reach what the
-    disagreement is about (:class:`Reach`)."""
-    reach = contexts[0].reach
-    subjects = _subjects(question, expected, engine)
-    found: dict[str, set[str]] = {}
-    for context in contexts:
-        for kind, paths in context.found.items():
-            found.setdefault(kind, set()).update(paths)
-    for kind, paths in (extra or {}).items():
-        found.setdefault(kind, set()).update(paths)
-    return tuple(
-        kind for kind in PRIORITY if kind in found and reach.reaches(found[kind], subjects)
+def masking_problems(
+    structure: Structure, before: model.Solution, edit: model.Change, added: Mapping[Pair, str]
+) -> list[str]:
+    """Each pair ``added`` by the clear-only ``edit`` that is not masking revealed: its origin,
+    or what its origin's or its piece's body reads, is neither a view that ``before`` reads
+    refused through its Space nor a fact ``edit`` unsets (§ 16.16)."""
+
+    def masked(path: str) -> bool:
+        if path in edit.unset:
+            return True
+        if path not in structure.index.views:
+            return False
+        answer = before.read(path)
+        return isinstance(answer, model.Refused) and any(
+            reason.kind is model.ReasonKind.SPACE_REFUSED and reason.subject == path
+            for reason in answer.reasons
+        )
+
+    problems = []
+    for (piece, origin), _ in sorted(added.items()):
+        reads = {origin, *structure.bodies(origin), *structure.bodies(piece[1])}
+        if not any(masked(path) for path in reads):
+            problems.append(
+                f"3 clears: the clear-only change adds {(piece, origin)}, not by revealing a rule "
+                "masked by a view's Space or an unset fact (§ 16.16)"
+            )
+    return problems
+
+
+def check_change(
+    structure: Structure,
+    configuration: model.Configuration,
+    edit: model.Change,
+    result: model.Accepted | model.Rejected,
+) -> Checked:
+    """Invariants 3 and 4 (and the assignment that comes first) on ``result``, ``edit``'s
+    result from ``configuration``, computed independently of the model's change code."""
+    checked = Checked()
+    index = configuration.index
+    facts, stored = would_be(configuration, edit)
+    reader = model.FactsOnly(index, facts)
+    # assignment: the named values, and every stored value under new facts
+    names = sorted(stored) if not _same_facts(facts, configuration.facts) else sorted(edit.commit)
+    wrong = {path for path in names if outside(index, reader, path, stored[path])}
+    checked.runs["assignment"] += 1
+    assigned = (
+        {item.choice for item in result.refusals if isinstance(item, model.AssignmentRefusal)}
+        if isinstance(result, model.Rejected)
+        else set()
     )
+    if wrong != assigned:
+        checked.problems.append(
+            f"assignment: values not of their type {sorted(wrong)}, refused as such "
+            f"{sorted(assigned)}"
+        )
+        return checked
+    if wrong:
+        assert isinstance(result, model.Rejected)
+        if len(result.refusals) != len(wrong) or result.validity is not None:
+            checked.problems.append("assignment: an assignment refusal reports alone (reading 12)")
+        return checked
+    before = configuration.solve()
+    after = model.Configuration(configuration.space, facts, stored).solve()
+    added = added_pairs(structure, before, after)
+    expected = {origin: kind for (_, origin), kind in added.items()}
+    if clear_only(configuration, edit):
+        checked.runs["3 clears"] += 1
+        if isinstance(result, model.Rejected):
+            checked.problems.append(
+                "3 clears: a change made only of clears and unsets is refused (§ 16.16)"
+            )
+            return checked
+        checked.problems.extend(masking_problems(structure, before, edit, added))
+        checked.revealed = set(expected)
+        return checked
+    if isinstance(result, model.Accepted):
+        checked.runs["3 accepted"] += 1
+        published = result.configuration
+        if not (_same_facts(published.facts, facts) and _same_facts(published.stored, stored)):
+            checked.problems.append(
+                "3 accepted: the change publishes otherwise than it assigns (nothing is cleared "
+                "or filled in behind the caller's back)"
+            )
+        if added:
+            checked.problems.append(
+                "3 accepted: the change is accepted, but adds (false piece, origin) pairs: "
+                f"{sorted(added)}"
+            )
+        return checked
+    checked.runs["4 refusals"] += 1
+    named = {item.origin: item for item in result.refusals if isinstance(item, model.RuleRefusal)}
+    if {origin: item.kind for origin, item in named.items()} != expected:
+        checked.problems.append(
+            f"4 refusals: named {sorted((o, i.kind) for o, i in named.items())}, the origins of "
+            f"the pairs the change adds: {sorted(expected.items())}"
+        )
+        return checked
+    for origin, item in sorted(named.items()):
+        if not false_on_its_own(structure, after, origin, item.kind):
+            checked.problems.append(
+                f"4 refusals: {origin} is named, but not false on its own values"
+            )
+        checked.runs["4 standing"] += 1
+        checked.problems.extend(
+            _standing(structure, configuration, edit, stored, origin, item, after)
+        )
+    return checked
 
 
-# --- refinement -----------------------------------------------------------------------------------
+def _same_facts(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
+    return a.keys() == b.keys() and all(same(a[key], b[key]) for key in a)
 
 
-def moved_down(before: Form, after: Form, committed: bool = False) -> str | None:
-    """How an answer moved down the information order from ``before`` to ``after``, or
-    ``None``. ``committed``: the choice the step committed (open or forced before)."""
-    if isinstance(before, StateForm) and isinstance(after, StateForm):
-        if committed:
-            if (
-                before.kind == "forced"
-                and after.kind == "readable"
-                and not same(before.value, after.value)
+def _standing(
+    structure: Structure,
+    configuration: model.Configuration,
+    edit: model.Change,
+    stored: Mapping[str, Any],
+    origin: str,
+    refusal: model.RuleRefusal,
+    after: model.Solution,
+) -> list[str]:
+    """The standing choices by clearing: for each stored choice the change does not name,
+    that does not decide the origin's own existence, and that the origin reads as a value
+    (among its body reads), adding its clearing to the change makes the origin no longer
+    false exactly when it is named standing; and then the model's change, so cleared, no
+    longer names the origin. A choice that only decides whether something the origin reads
+    exists (in its closure, not among its body reads) is never standing (§ 16.4, § 16.15),
+    whatever clearing it does; one read as a value is a candidate even when it also decides
+    such an existence (§ 16.22)."""
+    problems: list[str] = []
+    named = set(edit.commit) | set(edit.clear)
+    closure = structure.closure({origin})
+    bodies = structure.bodies(origin) if refusal.kind != "empty-domain" else frozenset()
+    deciding = {path for path in closure if path in stored and path not in bodies}
+    deciding |= structure.deciders(structure.scope(origin))
+    candidates = sorted(set(stored) - named - deciding)
+    stray = set(refusal.standing) - set(candidates)
+    if stray:
+        problems.append(f"4 standing: {origin} names {sorted(stray)}, not standing by any reading")
+    for path in candidates:
+        cleared = model.Change(
+            commit=edit.commit, clear=(*edit.clear, path), facts=edit.facts, unset=edit.unset
+        )
+        facts, rest = would_be(configuration, cleared)
+        solution = model.Configuration(configuration.space, facts, rest).solve()
+        clears = not false_on_its_own(structure, solution, origin, refusal.kind)
+        if clears != (path in refusal.standing):
+            problems.append(
+                f"4 standing: clearing {path} {'clears' if clears else 'does not clear'} {origin}, "
+                f"named standing {sorted(refusal.standing)}"
+            )
+        elif clears:
+            result = model.change(configuration, cleared)
+            if isinstance(result, model.Rejected) and any(
+                isinstance(item, model.RuleRefusal) and item.origin == origin
+                for item in result.refusals
             ):
-                return f"forced {before.value!r}, committed {after.value!r}"
-            return None
-        if before.kind == "readable" and after.kind in ("unchecked", "open"):
-            return f"readable -> {after.kind}"
-        if before.kind == "forced" and not (
-            after.kind == "refused" or (after.kind == "forced" and same(before.value, after.value))
+                problems.append(
+                    f"4 standing: clearing {path} clears {origin}, but it is still named"
+                )
+    return problems
+
+
+def bind_problems(
+    walked: model.Configuration,
+    result: model.Accepted | model.Rejected,
+    revealed: Collection[str] = frozenset(),
+) -> tuple[list[str], bool]:
+    """Invariant 1's bind: ``result``, ``walked``'s stored set committed as one change from
+    an empty configuration with the same facts, is accepted, and answers as ``walked``; or
+    (§ 16.16) refused by origins of ``revealed``, those clear-only steps of the walk revealed
+    from behind a view's Space, and nothing else. And whether it was refused so."""
+    if isinstance(result, model.Rejected):
+        if result.refusals and all(
+            isinstance(item, model.RuleRefusal) and item.origin in revealed
+            for item in result.refusals
         ):
-            return f"forced {before.value!r} -> {after.kind} {after.value!r}"
-        if before.kind == "refused" and after.kind != "refused":
-            return f"refused -> {after.kind}"
-        if before.kind == "inactive" and after.kind != "inactive":
-            return f"inactive -> {after.kind}"
-        return None
-    if isinstance(before, AnswerForm) and isinstance(after, AnswerForm):
-        if before.kind == "value" and (
-            after.kind != "value" or not same(before.value, after.value)
-        ):
-            return f"value {before.value!r} -> {after.kind} {after.value!r}"
-        if before.kind in ("refused", "inapplicable") and after.kind != before.kind:
-            return f"{before.kind} -> {after.kind}"
-        return None
-    if isinstance(before, RuleForm) and isinstance(after, RuleForm):
-        if before.kind != "unknown" and after.kind != before.kind:
-            return f"{before.kind} -> {after.kind}"
-        return None
-    if isinstance(before, ValidityForm) and isinstance(after, ValidityForm):
-        if before.verdict == "refused" and after.verdict != "refused":
-            return f"refused -> {after.verdict}"
-        if before.verdict == "valid" and after.verdict == "undecided":
-            return "valid -> undecided"
-    return None
+            return [], True
+        named = sorted(
+            (item.origin, item.kind)
+            if isinstance(item, model.RuleRefusal)
+            else (item.choice, "assignment")
+            for item in result.refusals
+        )
+        return [
+            f"1 bind: refused by {named}; what a walk publishes binds again unrefused (FN3), "
+            f"but for rules a clear revealed ({sorted(revealed)})"
+        ], False
+    asked = [q for q in questions(walked.index) if q[0] != "possible"]
+    moved = differences(
+        model_forms(walked.solve(), asked), model_forms(result.configuration.solve(), asked)
+    )
+    problems = (
+        [f"1 bind: accepted, answering otherwise: {[ask(q) for q in moved]}"] if moved else []
+    )
+    return problems, False
 
 
-def added_unknown(after: Mapping[Question, Form], committed: Iterable[str]) -> frozenset[str]:
-    """What the step's added unknown pieces wait on: each committed choice kept unchecked
-    after the step adds its own check, unknown, waiting on its blockers (its guard among
-    them where it waits on its presence)."""
-    waits: set[str] = set()
-    for path in committed:
-        state = after.get(("state", path))
-        if isinstance(state, StateForm) and state.kind == "unchecked":
-            waits |= state.blockers
-    return frozenset(waits)
+# --- the engine comparison: counted while a milestone is pending ----------------------------------
 
 
-def violations(
-    before: Mapping[Question, Form], after: Mapping[Question, Form], committed: Iterable[str]
-) -> dict[Question, str]:
-    """The answers that moved down from ``before`` to ``after`` (one side's), unless the
-    configuration reads refused after the step.
-
-    The one exception is validity's valid to undecided through the pieces the step added: a
-    commitment kept unchecked adds a piece, it does not refine one. Every piece that existed
-    before the step is still held to the order (each rule, value and state is asked on its
-    own), and validity may become undecided only where some committed choice is kept
-    unchecked, and then waits only on what those choices wait on."""
-    validity = after[("validity", "")]
-    assert isinstance(validity, ValidityForm)
-    if validity.verdict == "refused":
-        return {}
-    named = set(committed)
-    added = added_unknown(after, named)
-    found = {}
-    for question, old in before.items():
-        new = after[question]
-        if (
-            isinstance(old, ValidityForm)
-            and isinstance(new, ValidityForm)
-            and old.verdict == "valid"
-            and new.verdict == "undecided"
-            and added
-            and new.blockers <= added
-        ):
-            continue
-        move = moved_down(old, new, question[0] == "state" and question[1] in named)
-        if move:
-            found[question] = move
-    return found
+def pending(without: Iterable[str] = ()) -> tuple[str, ...]:
+    """The milestones whose rows are pending, ``without`` those taken as removed. While any
+    is, the walks count disagreements; once none is, each one fails a walk."""
+    removed = set(without)
+    unknown = removed - set(MILESTONES)
+    if unknown:
+        raise ValueError(f"no such milestone: {', '.join(sorted(unknown))}")
+    return tuple(
+        milestone
+        for milestone in MILESTONES
+        if milestone not in removed and any(row.milestone == milestone for row in ROWS)
+    )
 
 
 # --- the walk -------------------------------------------------------------------------------------
@@ -902,347 +1261,468 @@ class Tally:
     """What one walk did and met."""
 
     seed: int
-    path: str
     steps: int = 0
     accepted: int = 0
-    #: configurations compared question by question (the start and every accepted step)
+    #: steps the model alone tried (unsetting a fact, which the engine cannot): checked,
+    #: never applied
+    model_only: int = 0
+    #: descriptions drawn and skipped, by why
+    skipped: Counter[str] = field(default_factory=Counter)
+    #: the model's invariant checks run, by name
+    checks: Counter[str] = field(default_factory=Counter)
+    #: the engine's own permanent checks run, by name
+    engine_checks: Counter[str] = field(default_factory=Counter)
+    #: configurations compared with the engine; the engine took the model's by a bind; or
+    #: could not, and was out of step
     compared: int = 0
-    questions: int = 0
-    kinds: Counter[str] = field(default_factory=Counter)
-    untranslatable: int = 0
-    cycles: int = 0
-    refinement_steps: int = 0
-    refinement_checks: int = 0
-    #: engine moves down where the model holds, counted by the kind that explains them
-    refinement_moves: Counter[str] = field(default_factory=Counter)
-    cold_checks: int = 0
+    rebound: int = 0
+    out_of_step: int = 0
+    #: disagreements with the engine (counted while a milestone is pending), by question
+    by_question: Counter[str] = field(default_factory=Counter)
+    engine_errors: int = 0
+    #: binds refused by rules clear-only steps revealed (§ 16.16), as invariant 1 allows
+    binds_refused: int = 0
+    seconds: float = 0.0
+    #: what failed: an invariant's name, "engine", "disagreement" or "error"
+    failed: str | None = None
     failure: str | None = None
 
 
-@dataclass(frozen=True)
-class Compared:
-    """One configuration compared: its context, both sides' answers, and the kinds of the
-    questions they disagree on."""
-
-    context: Context
-    expected: dict[Question, Form]
-    engine: dict[Question, Form]
-    kinds: dict[Question, tuple[str, ...]]
-
-
 class WalkFailure(AssertionError):
-    """A walk met what no row names: a disagreement of another kind, a refinement
-    violation, a cold build answering otherwise, or an error."""
+    """A walk broke an invariant, an engine check, or (strict) met a disagreement, or an
+    error was raised."""
+
+
+class _EngineError(Exception):
+    """An exception the engine side raised: always a failure."""
+
+
+@dataclass(frozen=True)
+class _State:
+    """Where the walk is: the model's configuration and its answers, and the engine's point
+    (``None`` out of step) and its answers."""
+
+    configuration: model.Configuration
+    solution: model.Solution
+    forms: dict[Question, Form]
+    point: Point | None
+    engine: dict[Question, Form] | None
 
 
 class _Walk:
-    def __init__(self, seed: int, steps: int, path: str, kinds: frozenset[str]) -> None:
+    def __init__(self, seed: int, steps: int, strict: bool) -> None:
         self.rng = random.Random(seed)
         self.steps = steps
-        self.kinds = kinds
+        self.strict = strict
         self.generated, self.engine = generate(self.rng)
         self.index = self.generated.description.validate()
-        self.reach = Reach(self.index)
+        self.structure = Structure(self.index)
         self.asked = questions(self.index)
-        self.tally = Tally(
-            seed, path, untranslatable=self.generated.untranslatable, cycles=self.generated.cycles
-        )
+        self.engine_asked = [q for q in self.asked if q[0] in ENGINE_QUESTIONS]
+        self.tally = Tally(seed, skipped=self.generated.skipped)
         self.step = 0
         self.history: list[str] = []
+        #: each selector's case before a switch, for a switch back
+        self.previous: dict[str, object] = {}
+        #: the origins clear-only steps revealed from behind a view's Space (§ 16.16)
+        self.revealed: set[str] = set()
 
     # -- reporting
 
-    def fail(self, what: str) -> None:
+    def fail(self, failed: str, what: str) -> None:
         lines = [
-            f"seed {self.tally.seed}, {self.tally.path} path, step {self.step}: {what}",
+            f"seed {self.tally.seed}, step {self.step}: {what}",
             "description:",
             *(f"  {line}" for line in self.generated.text.splitlines()),
             f"start facts: {dict(self.generated.facts)}",
             "steps:",
             *(f"  {line}" for line in self.history),
         ]
+        self.tally.failed = failed
         self.tally.failure = "\n".join(lines)
         raise WalkFailure(self.tally.failure)
 
-    def note(self, kinds: Sequence[str], disagreement: Disagreement) -> str:
-        """Count an expected disagreement under its kind, or fail the walk."""
-        for kind in kinds:
-            if kind in self.kinds:
-                self.tally.kinds[kind] += 1
-                return kind
-        found = f" (kinds at work, none a row's: {', '.join(kinds)})" if kinds else ""
-        self.fail(f"a disagreement no row names{found}\n{disagreement.describe()}")
-        raise AssertionError  # unreachable
+    def invariant(self, name: str, problems: Sequence[str]) -> None:
+        self.tally.checks[name] += 1
+        if problems:
+            self.fail(name, "invariant " + "\n".join(problems))
 
-    # -- comparing
-
-    def compare(self, configuration: model.Configuration, point: Point) -> Compared:
-        """Every question on both sides; the kinds of the disagreements, by question."""
-        solution = configuration.solve()
-        expected = model_forms(solution, self.asked)
-        engine = engine_forms(point, self.asked)
-        context = Context(solution, self.reach)
-        self.tally.compared += 1
-        found: dict[Question, tuple[str, ...]] = {}
-        for question in self.asked:
-            self.tally.questions += 1
-            if agrees(expected[question], engine[question]):
-                continue
-            disagreement = Disagreement("walk", ask(question), expected[question], engine[question])
-            kinds = classify([context], question, expected[question], engine[question])
-            self.note(kinds, disagreement)
-            found[question] = kinds
-        self.cold(point, engine)
-        return Compared(context, expected, engine, found)
-
-    def cold(self, point: Point, walked: Mapping[Question, Form]) -> None:
-        """The engine's configuration built from nothing answers as the walked one."""
-        rebuilt = engine_forms(Point(point.engine, fresh(point.point)), self.asked)
-        self.tally.cold_checks += 1
-        for question in self.asked:
-            if not _equal(walked[question], rebuilt[question]):
-                disagreement = Disagreement(
-                    "cold build", ask(question), rebuilt[question], walked[question]
-                )
-                self.fail(
-                    "the walked configuration answers otherwise than one built from nothing "
-                    "(model column: built from nothing; engine column: walked)\n"
-                    + disagreement.describe()
-                )
-
-    def change(
-        self, configuration: model.Configuration, point: Point, edit: model.Change, base: Context
-    ) -> tuple[model.Configuration, Point] | None:
-        """``edit`` on both sides, compared; the successor where both accept it."""
-        result = model.change(configuration, edit)
-        published = _published(configuration, edit)
-        solution = published.solve()
-        expected = change_form(solution, result)
-        form, successor = point.change(edit)
-        cold_form, _ = Point(point.engine, fresh(point.point)).change(edit)
-        if not _equal(form, cold_form):
-            disagreement = Disagreement("cold build", "the change", cold_form, form)
+    def disagree(self, what: str, label: str, expected: Form, engine: Form) -> None:
+        """Fail the walk on a disagreement with the engine (strict), or count it."""
+        if self.strict:
             self.fail(
-                "the change on the walked configuration and on one built from nothing differ "
-                "(model column: built from nothing; engine column: walked)\n"
-                + disagreement.describe()
+                "disagreement",
+                f"the engine disagrees ({what})\n"
+                + Disagreement("walk", label, expected, engine).describe(),
             )
-        agreed = agrees(expected, form)
-        self.history.append(
-            f"{_edit(edit)}: model {'accepted' if expected.accepted else 'refused'}, engine "
-            f"{'accepted' if form.accepted else 'refused'}" + ("" if agreed else " (disagree)")
+        self.tally.by_question[what] += 1
+
+    def on_engine(self, call: Callable[[], T]) -> T:
+        try:
+            return call()
+        except Exception as error:
+            raise _EngineError(traceback.format_exc()) from error
+
+    # -- the model's invariants
+
+    def history_independence(
+        self, configuration: model.Configuration, forms: Mapping[Question, Form]
+    ) -> None:
+        """Invariant 1: as built from nothing, and the bind."""
+        cold = model.Configuration(
+            configuration.space, dict(configuration.facts), dict(configuration.stored)
         )
-        if not agreed:
-            extra = change_mechanisms(base.solution, published, solution, result, form)
-            kinds = classify(
-                [base, Context(solution, self.reach)], ("change", ""), expected, form, extra
+        moved = differences(forms, model_forms(cold.solve(), self.asked))
+        self.invariant(
+            "1 history",
+            [f"built from nothing, {ask(q)} differs: walked {forms[q]}" for q in moved],
+        )
+        empty = model.Configuration(configuration.space, dict(configuration.facts))
+        result = model.change(empty, model.Change(commit=dict(configuration.stored)))
+        problems, refused = bind_problems(configuration, result, self.revealed)
+        self.invariant("1 bind", problems)
+        self.tally.binds_refused += refused
+
+    def additions(self, before: _State, forms: Mapping[Question, Form], edit: model.Change) -> None:
+        """Invariant 2."""
+        found = order_problems(before.forms, forms, edit.commit)
+        self.invariant(
+            "2 additions",
+            [
+                f"{ask(q)} moves down the information order: {move}\n  before {before.forms[q]}\n"
+                f"  after {forms[q]}"
+                for q, move in sorted(found.items())
+            ],
+        )
+
+    # -- the engine
+
+    def engine_state(self, point: Point) -> dict[Question, Form]:
+        """The engine's answers at ``point``, and its permanent check: as built from nothing."""
+        forms = self.on_engine(lambda: engine_forms(point, self.engine_asked))
+        rebuilt = self.on_engine(
+            lambda: engine_forms(Point(point.engine, fresh(point.point)), self.engine_asked)
+        )
+        self.tally.engine_checks["cold"] += 1
+        for question in differences(forms, rebuilt):
+            self.fail(
+                "engine",
+                "the walked engine configuration answers otherwise than one built from nothing "
+                "(model column: built from nothing; engine column: walked)\n"
+                + Disagreement(
+                    "cold build", ask(question), rebuilt[question], forms[question]
+                ).describe(),
             )
-            self.note(kinds, Disagreement("walk", f"the change {_edit(edit)}", expected, form))
-        if isinstance(result, model.Accepted) and successor is not None:
-            return result.configuration, successor
-        return None
+        return forms
+
+    def compare(self, forms: Mapping[Question, Form], engine: Mapping[Question, Form]) -> None:
+        self.tally.compared += 1
+        for question in self.engine_asked:
+            if not agrees(forms[question], engine[question]):
+                self.disagree(question[0], ask(question), forms[question], engine[question])
+
+    def engine_change(self, point: Point, edit: model.Change) -> tuple[ChangeForm, Point | None]:
+        """``edit`` on the engine; its permanent check: as on a configuration built from
+        nothing."""
+        form, successor = self.on_engine(lambda: point.change(edit))
+        cold, _ = self.on_engine(lambda: Point(point.engine, fresh(point.point)).change(edit))
+        self.tally.engine_checks["cold change"] += 1
+        if not _equal(form, cold):
+            self.fail(
+                "engine",
+                "the change on the walked engine configuration and on one built from nothing "
+                "differ (model column: built from nothing; engine column: walked)\n"
+                + Disagreement("cold build", "the change", cold, form).describe(),
+            )
+        return form, successor
+
+    def bind_engine(self, configuration: model.Configuration) -> Point | None:
+        """The engine's configuration of ``configuration`` built from nothing, or ``None``."""
+        start = self.on_engine(lambda: self.engine.open(dict(configuration.facts)))
+        if not configuration.stored:
+            return start
+        _, point = self.on_engine(
+            lambda: start.change(model.Change(commit=dict(configuration.stored)))
+        )
+        return point
+
+    def engine_refinement(
+        self,
+        before: _State,
+        forms: Mapping[Question, Form],
+        engine: Mapping[Question, Form],
+        edit: model.Change,
+    ) -> None:
+        """The engine's answers over an addition it took itself, in the same order: a move
+        down where the model's answer does not move is a disagreement like any other."""
+        assert before.engine is not None
+        self.tally.engine_checks["refinement"] += 1
+        found = order_problems(before.engine, engine, edit.commit)
+        for question, move in sorted(found.items()):
+            # shown by the answers that disagree: after the step, or else before it
+            pair = (forms[question], engine[question])
+            if agrees(*pair):
+                pair = (before.forms[question], before.engine[question])
+            self.disagree("refinement", f"{ask(question)} moves down: {move}", *pair)
 
     # -- drawing
 
-    def draw(self, configuration: model.Configuration, solution: model.Solution) -> model.Change:
+    def draw(self, state: _State) -> model.Change:
         rng = self.rng
+        configuration, solution = state.configuration, state.solution
         stored = configuration.stored
-        unstored = [path for path in sorted(self.index.choices) if path not in stored]
-        draw = rng.random()
-        if draw < 0.5 and unstored:
-            return model.Change(
-                commit=self.values(rng.sample(unstored, 1), configuration, solution)
-            )
-        if draw < 0.6 and len(unstored) > 1:
-            return model.Change(
-                commit=self.values(rng.sample(unstored, 2), configuration, solution)
-            )
-        if draw < 0.75 and stored:
+        index = self.index
+        unstored = [path for path in sorted(index.choices) if path not in stored]
+        selectors = sorted(path for path, info in index.choices.items() if info.cases is not None)
+        roll = rng.random()
+        if roll < 0.3 and unstored:
+            # now and then a choice out of play: under a case not selected, or an open selector
+            out = [path for path in unstored if _out_of_play(solution.state(path))]
+            pool = out if out and rng.random() < 0.3 else unstored
+            return model.Change(commit=self.values(rng.sample(pool, 1), state))
+        if roll < 0.4 and len(unstored) > 1:
+            count = min(len(unstored), rng.choice((2, 2, 3)))
+            return model.Change(commit=self.values(rng.sample(unstored, count), state))
+        if roll < 0.52 and stored:
             path = rng.choice(sorted(stored))
-            return model.Change(commit=self.values([path], configuration, solution, other=True))
-        if draw < 0.88 and stored:
-            return model.Change(clear=(rng.choice(sorted(stored)),))
-        fact = rng.choice(sorted(self.index.facts))
-        options = [value for value in FACT_VALUES if configuration.facts.get(fact) != value]
-        return model.Change(facts={fact: rng.choice(options)})
+            commit = self.values([path], state, other=True)
+            if unstored and rng.random() < 0.3:
+                commit.update(self.values(rng.sample(unstored, 1), state))
+            return model.Change(commit=commit)
+        if roll < 0.62 and stored:
+            count = min(len(stored), rng.choice((1, 1, 2)))
+            return model.Change(clear=tuple(rng.sample(sorted(stored), count)))
+        if roll < 0.72 and selectors:
+            path = rng.choice(selectors)
+            cases = index.choices[path].cases
+            assert cases is not None
+            back = self.previous.get(path)
+            if (
+                path in stored
+                and back is not None
+                and not same(back, stored[path])
+                and rng.random() < 0.5
+            ):
+                self.previous.pop(path)
+                return model.Change(commit={path: back})
+            if path in stored:
+                self.previous[path] = stored[path]
+                others = [case for case in cases if not same(case, stored[path])]
+                return model.Change(commit={path: rng.choice(others)})
+            return model.Change(commit={path: rng.choice(cases)})
+        facts = sorted(index.facts)
+        if roll < 0.95 or not configuration.facts:
+            fact = rng.choice(facts)
+            options = [value for value in FACT_VALUES if configuration.facts.get(fact) != value]
+            return model.Change(facts={fact: rng.choice(options)})
+        return model.Change(unset=(rng.choice(sorted(configuration.facts)),))
 
-    def values(
-        self,
-        paths: Sequence[str],
-        configuration: model.Configuration,
-        solution: model.Solution,
-        other: bool = False,
-    ) -> dict[str, object]:
-        """A value for each of ``paths``: mostly a possible one, sometimes any listed one,
-        now and then one outside its domain; ``other``: not the one stored."""
+    def values(self, paths: Sequence[str], state: _State, other: bool = False) -> dict[str, object]:
+        """A value for each of ``paths``: mostly a possible one or a listed one, now and then
+        one outside its domain; ``other``: not the one stored."""
         rng = self.rng
         found: dict[str, object] = {}
+        stored = state.configuration.stored
         for path in paths:
             info = self.index.choices[path]
             if rng.random() < 0.1:
                 found[path] = NO_CASE if info.cases is not None else OUTSIDE
                 continue
-            listed = _listed(info, configuration.facts)
-            possible = solution.possible(path) if path not in configuration.stored else None
-            pool = list(possible) if possible and rng.random() < 0.6 else list(listed)
+            pool: list[object] = list(self.listed(path, state.configuration))
+            possible = state.forms.get(("possible", path))
+            if isinstance(possible, PossibleForm) and possible.values and rng.random() < 0.6:
+                pool = [
+                    value for value, outcome in possible.values if outcome.kind == "possible"
+                ] or pool
             if other:
-                pool = [value for value in pool if not same(value, configuration.stored[path])]
+                pool = [value for value in pool if not same(value, stored[path])]
             found[path] = (
                 rng.choice(pool) if pool else (NO_CASE if info.cases is not None else OUTSIDE)
             )
         return found
 
+    def listed(self, path: str, configuration: model.Configuration) -> tuple[object, ...]:
+        info = self.index.choices[path]
+        if info.cases is not None:
+            return info.cases
+        found = (
+            listing(self.index, model.FactsOnly(self.index, configuration.facts), path)
+            if info.domain.listed
+            else None
+        )
+        if isinstance(found, model.Known):
+            return tuple(found.value)
+        return VALUES
+
     # -- the walk
+
+    def state(self, configuration: model.Configuration, point: Point | None) -> _State:
+        solution = configuration.solve()
+        forms = model_forms(solution, self.asked)
+        self.history_independence(configuration, forms)
+        engine = self.engine_state(point) if point is not None else None
+        if engine is not None:
+            self.compare(forms, engine)
+        return _State(configuration, solution, forms, point, engine)
 
     def run(self) -> Tally:
         tally = self.tally
-        configuration = model.Configuration(self.generated.description, self.generated.facts)
-        point = self.engine.open(dict(self.generated.facts))
+        started = time.perf_counter()
         try:
-            compared = self.compare(configuration, point)
+            configuration = model.Configuration(self.generated.description, self.generated.facts)
+            point = self.on_engine(lambda: self.engine.open(dict(self.generated.facts)))
+            state = self.state(configuration, point)
             for self.step in range(1, self.steps + 1):
-                edit = self.draw(configuration, compared.context.solution)
-                tally.steps += 1
-                moved = self.change(configuration, point, edit, compared.context)
-                if moved is None:
-                    continue
-                tally.accepted += 1
-                commits_only = not (
-                    edit.clear or edit.facts or set(edit.commit) & set(configuration.stored)
-                )
-                configuration, point = moved
-                after = self.compare(configuration, point)
-                if commits_only:
-                    self.refinement(edit, compared, after)
-                compared = after
+                state = self.walk_step(state)
         except WalkFailure:
             pass
-        except Exception:  # noqa: BLE001 - an error on either side fails the walk, shown whole
-            if tally.failure is None:
-                try:
-                    self.fail("an error\n" + traceback.format_exc())
-                except WalkFailure:
-                    pass
+        except _EngineError as error:
+            tally.engine_errors += 1
+            self.fail_quietly("engine", "an engine error\n" + str(error))
+        except Exception:  # noqa: BLE001 - an error on the model's side fails the walk, shown whole
+            self.fail_quietly("error", "an error\n" + traceback.format_exc())
+        tally.seconds = time.perf_counter() - started
         return tally
 
-    def refinement(self, edit: model.Change, before: Compared, after: Compared) -> None:
-        """A step that only committed choices nothing was stored for: no answer of the
-        engine's moves down where the model's does not, but as a disagreement a row names."""
+    def fail_quietly(self, failed: str, what: str) -> None:
+        if self.tally.failure is None:
+            try:
+                self.fail(failed, what)
+            except WalkFailure:
+                pass
+
+    def walk_step(self, state: _State) -> _State:
         tally = self.tally
-        tally.refinement_steps += 1
-        tally.refinement_checks += len(before.engine)
-        by_model = violations(before.expected, after.expected, edit.commit)
-        by_engine = violations(before.engine, after.engine, edit.commit)
-        for question, move in sorted(by_model.items()):
-            self.fail(
-                f"the model moves {ask(question)} down the information order: {move} "
-                f"(a question for the model)\n  before: {before.expected[question]}\n  after: "
-                f"{after.expected[question]}"
-            )
-        for question, move in sorted(by_engine.items()):
-            kinds = (*before.kinds.get(question, ()), *after.kinds.get(question, ()))
-            for kind in kinds:
-                if kind in self.kinds:
-                    tally.refinement_moves[kind] += 1
-                    break
-            else:
+        edit = self.draw(state)
+        tally.steps += 1
+        configuration = state.configuration
+        result = model.change(configuration, edit)
+        checked = check_change(self.structure, configuration, edit, result)
+        for name, count in checked.runs.items():
+            tally.checks[name] += count
+        verdict = "accepted" if isinstance(result, model.Accepted) else "refused"
+        if edit.unset:
+            tally.model_only += 1
+            self.history.append(f"{_edit(edit)}: model {verdict} (the model's alone, not applied)")
+            if checked.problems:
                 self.fail(
-                    f"the engine moves {ask(question)} down the information order where the "
-                    f"model does not: {move}\n  before: model {before.expected[question]}, "
-                    f"engine {before.engine[question]}\n  after: model "
-                    f"{after.expected[question]}, engine {after.engine[question]}"
+                    checked.problems[0].split(":")[0], "invariant " + "\n".join(checked.problems)
                 )
+            return state
+        engine: ChangeForm | None = None
+        successor: Point | None = None
+        if state.point is not None:
+            engine, successor = self.engine_change(state.point, edit)
+        self.history.append(
+            f"{_edit(edit)}: model {verdict}"
+            + (
+                f", engine {'accepted' if engine.accepted else 'refused'}"
+                if engine
+                else ", engine out of step"
+            )
+        )
+        if checked.problems:
+            self.fail(checked.problems[0].split(":")[0], "invariant " + "\n".join(checked.problems))
+        if engine is not None:
+            expected = change_form(configuration, edit, result)
+            if not agrees(expected, engine):
+                self.disagree("change", f"the change {_edit(edit)}", expected, engine)
+        if not isinstance(result, model.Accepted):
+            return state
+        tally.accepted += 1
+        self.revealed |= checked.revealed
+        addition = bool(edit.commit) and not (
+            edit.clear or edit.facts or set(edit.commit) & set(configuration.stored)
+        )
+        solution = result.configuration.solve()
+        forms = model_forms(solution, self.asked)
+        self.history_independence(result.configuration, forms)
+        if addition:
+            self.additions(state, forms, edit)
+        point = successor
+        if point is None:
+            point = self.bind_engine(result.configuration)
+            tally.rebound += point is not None
+            tally.out_of_step += point is None
+        engine_forms_ = self.engine_state(point) if point is not None else None
+        if engine_forms_ is not None:
+            self.compare(forms, engine_forms_)
+            if addition and successor is not None and state.engine is not None:
+                self.engine_refinement(state, forms, engine_forms_, edit)
+        return _State(result.configuration, solution, forms, point, engine_forms_)
 
 
-def _listed(info: ChoiceInfo, facts: Mapping[str, object]) -> tuple[object, ...]:
-    if info.cases is not None:
-        return info.cases
-    domain = info.domain
-    if domain.values is not None:
-        return domain.values
-    if domain.enumerate is not None and all(read in facts for read in domain.reads):
-        return tuple(domain.enumerate({read: facts[read] for read in domain.reads}))
-    return VALUES
-
-
-def _published(configuration: model.Configuration, edit: model.Change) -> model.Configuration:
-    stored = {k: v for k, v in configuration.stored.items() if k not in edit.clear}
-    stored.update(edit.commit)
-    facts = {k: v for k, v in configuration.facts.items() if k not in edit.unset}
-    facts.update(edit.facts)
-    return model.Configuration(configuration.space, facts, stored)
-
-
-def _equal(left: Form, right: Form) -> bool:
-    return agrees(left, right) and agrees(right, left)
+def _out_of_play(state: model.ChoiceState) -> bool:
+    return isinstance(state, model.Absent) or (isinstance(state, model.Open) and bool(state.waits))
 
 
 def _edit(edit: model.Change) -> str:
     parts = [f"{path} = {value!r}" for path, value in edit.commit.items()]
     parts += [f"clear {path}" for path in edit.clear]
     parts += [f"fact {name} = {value!r}" for name, value in edit.facts.items()]
+    parts += [f"unset fact {name}" for name in edit.unset]
     return ", ".join(parts) or "(nothing)"
 
 
-def walk(seed: int, steps: int, path: str = "index", kinds: frozenset[str] | None = None) -> Tally:
-    """One seeded walk of ``steps`` changes, the engine reading ``path`` ("index": its
-    readers index for every cache; "scan": for none); ``kinds``: the kinds expected, the
-    matrix's rows' by default. It never raises: a failure is in ``Tally.failure``."""
-    previous = _runtime.INDEX_FROM
-    _runtime.INDEX_FROM = 0 if path == "index" else sys.maxsize
-    try:
-        return _Walk(seed, steps, path, expected_kinds() if kinds is None else kinds).run()
-    finally:
-        _runtime.INDEX_FROM = previous
+def walk(seed: int, steps: int, without: Iterable[str] = ()) -> Tally:
+    """One seeded walk of ``steps`` changes. ``without``: milestones whose rows are taken as
+    removed; once no milestone with rows is pending, a disagreement fails the walk. It never
+    raises: a failure is in ``Tally.failure``."""
+    return _Walk(seed, steps, not pending(without)).run()
 
 
-def unmet(tallies: Iterable[Tally]) -> list[str]:
-    """The kinds the matrix's rows name that no walk met."""
-    met = {kind for tally in tallies for kind in tally.kinds}
-    met |= {kind for tally in tallies for kind in tally.refinement_moves}
-    return sorted(expected_kinds() - met)
+# --- the summary ----------------------------------------------------------------------------------
 
 
-def _counts(counts: Counter[str]) -> str:
-    return ", ".join(f"{kind} {count}" for kind, count in sorted(counts.items())) or "-"
+def _counts(counts: Mapping[str, int]) -> str:
+    return ", ".join(f"{kind} {count}" for kind, count in sorted(counts.items()) if count) or "-"
 
 
-def table(tallies: Sequence[Tally]) -> str:
-    """The walks' summary: a line per seed and path, then the totals, the kinds met and the
-    kinds the rows name that no walk met."""
+def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
+    """The walks' summary: a line per seed, then the totals."""
     lines = [
-        "| seed | path | steps | accepted | configurations compared | skipped (untranslatable, "
-        "cycles) | disagreements by kind | refinement steps, checks | refinement moves by kind "
-        "| result |",
+        "| seed | steps | accepted | invariant checks | failed | engine's own checks | "
+        "disagreements by question | engine errors | seconds | result |",
         "|---|---|---|---|---|---|---|---|---|---|",
     ]
-    total: Counter[str] = Counter()
-    moves: Counter[str] = Counter()
+    totals: dict[str, Counter[str]] = {
+        name: Counter() for name in ("checks", "engine_checks", "by_question", "skipped")
+    }
     for tally in tallies:
-        total.update(tally.kinds)
-        moves.update(tally.refinement_moves)
+        for name, counter in totals.items():
+            counter.update(getattr(tally, name))
         lines.append(
-            f"| {tally.seed} | {tally.path} | {tally.steps} | {tally.accepted} | "
-            f"{tally.compared} | {tally.untranslatable}, {tally.cycles} | "
-            f"{_counts(tally.kinds)} | {tally.refinement_steps}, {tally.refinement_checks} | "
-            f"{_counts(tally.refinement_moves)} | {'FAILED' if tally.failure else 'ok'} |"
+            f"| {tally.seed} | {tally.steps} | {tally.accepted} | "
+            f"{sum(tally.checks.values())} | {tally.failed or '-'} | "
+            f"{sum(tally.engine_checks.values())} | {_counts(tally.by_question)} | "
+            f"{tally.engine_errors} | {tally.seconds:.2f} | "
+            f"{'FAILED' if tally.failure else 'ok'} |"
         )
 
     def summed(name: str) -> int:
         return sum(getattr(tally, name) for tally in tallies)
 
-    failed = sum(1 for tally in tallies if tally.failure)
+    failed = Counter(tally.failed for tally in tallies if tally.failed)
+    seconds = sum(tally.seconds for tally in tallies)
+    waiting = pending(without)
+    mode = (
+        f"counted (pending: {', '.join(waiting)})"
+        if waiting
+        else "strict (no milestone with rows pending)"
+    )
     lines += [
         "",
-        f"walks {len(tallies)}, failed {failed}; steps {summed('steps')}, accepted "
-        f"{summed('accepted')}; configurations compared {summed('compared')}, questions "
-        f"{summed('questions')}, cold builds compared {summed('cold_checks')}",
-        f"descriptions skipped: untranslatable {summed('untranslatable')}, cycles "
-        f"{summed('cycles')}",
-        f"refinement: steps {summed('refinement_steps')}, checks {summed('refinement_checks')}, "
-        f"engine moves the rows explain: {_counts(moves)}",
-        f"disagreements by kind: {_counts(total)}",
-        f"kinds a row names that no walk met: {', '.join(unmet(tallies)) or 'none'}",
+        f"walks {len(tallies)}, failed {sum(failed.values())} ({_counts(failed)}); steps "
+        f"{summed('steps')}, accepted {summed('accepted')}, the model's alone "
+        f"{summed('model_only')}; {seconds:.1f} s, {seconds / max(len(tallies), 1):.2f} s per walk",
+        f"descriptions skipped: {_counts(totals['skipped'])}",
+        f"invariant checks: {_counts(totals['checks'])}; binds refused by rules a clear "
+        f"revealed (§ 16.16) {summed('binds_refused')}",
+        f"engine's own checks: {_counts(totals['engine_checks'])}; configurations compared "
+        f"{summed('compared')}, engine rebound to the model's {summed('rebound')}, out of step "
+        f"{summed('out_of_step')}",
+        f"engine disagreements ({mode}) by question: {_counts(totals['by_question'])}",
+        f"engine errors: {summed('engine_errors')}",
     ]
     return "\n".join(lines)
 
@@ -1255,22 +1735,27 @@ def seeds(text: str) -> Iterator[int]:
 
 __all__ = [
     "FACT_VALUES",
-    "PRIORITY",
-    "Reach",
-    "Context",
+    "Checked",
     "Generated",
+    "Pair",
+    "PieceId",
+    "Question",
+    "Structure",
     "Tally",
     "WalkFailure",
-    "added_unknown",
-    "change_mechanisms",
-    "classify",
-    "expected_kinds",
+    "below",
+    "bind_problems",
+    "check_change",
+    "added_pairs",
+    "clear_only",
+    "counted_pairs",
+    "differences",
     "generate",
-    "mechanisms",
-    "moved_down",
+    "masking_problems",
+    "order_problems",
+    "pending",
+    "questions",
     "seeds",
     "table",
-    "unmet",
-    "violations",
     "walk",
 ]

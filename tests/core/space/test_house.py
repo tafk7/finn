@@ -11,14 +11,13 @@ The house is declared in ``_toys_support``, which the collapse tests share.
 
 from __future__ import annotations
 
-import pytest
+from support.space_cores import built
 
 from core.space._choices_support import committed, replay
 from core.space._results_support import codes
 from core.space._toys_support import Boiler, HeatPump, House, Room, Thermostat
 from finn.core.space import (
     Available,
-    ConfigurationError,
     Decision,
     Inapplicable,
     Located,
@@ -64,15 +63,27 @@ def test_a_structural_choice_reads_as_the_selected_candidate() -> None:
     assert isinstance(boiler.query(House.heat_pump.cop), Inapplicable)
     pump = boiler.with_choices({House.heating: "heat_pump", House.heat_pump.cop: 4})
     assert isinstance(pump.heating, HeatPump) and pump.heating.cop == 4
-    # A stale candidate-local choice is refused when switching away.
-    assert not pump.try_with_choices(heating="boiler").accepted
+    # A stale candidate-local choice is kept, dormant, when switching away.
+    back = pump.with_choices(heating="boiler")
+    assert isinstance(back.query(House.heat_pump.cop), Inapplicable)
+    again = back.with_choices(heating="heat_pump").heating
+    assert isinstance(again, HeatPump) and again.cop == 4
     cleared = pump.with_choices(pump.heating.field(HeatPump.cop).clear(), heating="boiler")
     assert cleared.thermostat.kw == 24
 
 
 def test_the_relation_and_the_budget_own_their_refusals() -> None:
     house = design_space(House(budget=80))
-    point = house.with_choices(
+    choices = {
+        "want_garage": True,
+        "heating": "boiler",
+        "hall.finish": 1,
+        "kitchen.finish": 1,
+        "dining.finish": 3,
+        "garage.finish": 1,
+    }
+    # The change breaks both of the house's rules, on the values it names alone.
+    report = house.try_with_choices(
         {
             House.want_garage: True,
             House.heating: "boiler",
@@ -82,6 +93,13 @@ def test_the_relation_and_the_budget_own_their_refusals() -> None:
             House.garage.finish: 1,
         }
     )
+    assert not report.accepted
+    assert [(rule.rule, rule.standing) for rule in report.broken] == [
+        ("matched", ()),
+        ("within_budget", ()),
+    ]
+    # Built directly (as a saved graph), the same choices read refused, naming both.
+    point = built(house, choices)
     refused = point.inspect(House.total)
     assert isinstance(refused.output_result, Available)
     validity = inspection.validity(point)
@@ -90,8 +108,7 @@ def test_the_relation_and_the_budget_own_their_refusals() -> None:
     assert set(results) == {"matched", "within_budget"}
     assert codes(results["matched"]) == {"mismatch"}
     assert "kitchen.finish=1, dining.finish=3" in {
-        finding.message
-        for finding in refused.accepted_result.findings  # type: ignore[union-attr]
+        finding.message for finding in refused.accepted_result.findings
     }
     assert codes(results["within_budget"]) == {"over-budget"}
     assert isinstance(point.query(House.garage.cost), Available)
@@ -101,8 +118,10 @@ def test_the_garage_is_present_only_when_wanted() -> None:
     house = design_space(House(budget=500))
     without = house.with_choices(want_garage=False)
     assert isinstance(without.garage.query(Room.finish), Inapplicable)
-    with pytest.raises(ConfigurationError):
-        without.with_choices({House.garage.finish: 2})
+    # Set while the garage is not wanted, its finish is kept, dormant.
+    dormant = without.with_choices({House.garage.finish: 2})
+    assert isinstance(dormant.garage.query(Room.finish), Inapplicable)
+    assert dormant.with_choices(want_garage=True).garage.cost == 40
     wanted = house.with_choices(want_garage=True)
     assert wanted.with_choices({House.garage.finish: 2}).garage.cost == 40
 
@@ -155,6 +174,9 @@ def test_an_estate_customizes_the_house_it_inherits() -> None:
         }
     )
     assert point.hall.area == 14  # hall.area = kitchen.area reads the subclass's kitchen
-    assert point.kitchen.finish == 2  # its one case: forced
+    # Its one case is not filled in: the kitchen's finish is open, and the total waits on it.
+    assert isinstance(point.query(Estate.kitchen.finish), Unresolved)
+    assert isinstance(point.query(Estate.total), Unresolved)
     assert point.thermostat.kw == 6
+    point = point.with_choices({Estate.kitchen.finish: 2})
     assert point.total == 14 + 28 + 32 + 20 + 36 + 2

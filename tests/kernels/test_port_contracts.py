@@ -25,7 +25,8 @@ from support.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
     choose,
-    codes,
+    dotp_extents,
+    keyed,
     matmul_point,
     with_adapter_memories,
     with_direct_transports,
@@ -44,7 +45,6 @@ from finn.dataflow.traversal import (
     tile,
     vector_major,
 )
-from finn.kernels.base import NETLIST
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
@@ -122,6 +122,7 @@ def placed(
                 result_range=ordinary_integer_bounds(R),
                 x_tensor=a_tensor,
                 w_tensor=w_tensor,
+                **dotp_extents(w_tensor),
                 platform=FULL_DSP58,
             ),
         }
@@ -199,10 +200,10 @@ def test_a_producer_presenting_another_order_is_a_plan_its_stream_adapts():
     assert rows.member("w_s").plan.steps == (Step.REORDER, Step.WIDTH)
     # dotp's own port is untouched by the producer's order.
     assert isinstance(narrow.member("compute").w.query(AxiStreamPort.contract), Available)
-    # A channel that admits no adapter refuses the plan, naming it.
-    fixed = placed(weights_form=columns_first, adaptable=False)
-    refused = fixed.member("w_s").query(Channel.netlist)
-    assert "channel-plan" in codes(refused) and "reorder" in str(refused)
+    # A channel that admits no adapter refuses the folding that needs one, naming the
+    # adapter it would need (a change that breaks a rule is refused).
+    with pytest.raises(ValueError, match="channel-form: needs a reorder adapter"):
+        placed(weights_form=columns_first, adaptable=False)
 
 
 def test_a_producer_s_lane_order_is_wires():
@@ -224,31 +225,35 @@ def test_a_producer_s_lane_order_is_wires():
     assert classify(window_fastest, finnlib).adaptation is Adaptation.LANE_PERMUTATION
 
 
-def test_one_kernel_refusal_reaches_every_stream_on_its_ends():
-    # Unsigned weights are refused by dotp's weight port, so the core and MatMul are
-    # refused, and every end MatMul presents with them (an end is a product): each
-    # channel waits unbound, refused naming the weight port's rule.
-    point = choose(
-        matmul_point(
-            m=3,
-            n=4,
-            k=4,
-            activation_dtype=DataType["INT3"],
-            weights_dtype=DataType["UINT3"],
-            platform=FULL_DSP48E2,
-        ),
-        {
-            "matmul.compute": "packed",
-            "matmul.compute.packed.pe": 2,
-            "matmul.compute.packed.simd": 2,
-            "matmul.compute.packed.compute_pumping": False,
-            "matmul.compute.packed.reducer": "tree",
-        },
+def test_one_kernel_refusal_reaches_the_change_that_selects_it():
+    # Unsigned weights are refused by dotp's weight port: no core is possible, each
+    # refused by its port's rule, and the change selecting the packed core is refused,
+    # naming it (where it used to leave MatMul, and every end and channel on it, refused).
+    point = matmul_point(
+        m=3,
+        n=4,
+        k=4,
+        activation_dtype=DataType["INT3"],
+        weights_dtype=DataType["UINT3"],
+        platform=FULL_DSP48E2,
     )
-    for name in ("x", "w", "y"):
-        refused = point.query(name, NETLIST)
-        assert codes(refused) == {"dtype-family"}
-        assert {finding.owner for finding in refused.findings} == {"compute.packed.w.element_taken"}
+    ((_, compute),) = point.viable([("matmul", "compute")])
+    assert compute.cases == ()
+    trial = point.trial(
+        keyed(
+            {
+                "matmul.compute": "packed",
+                "matmul.compute.packed.pe": 2,
+                "matmul.compute.packed.simd": 2,
+                "matmul.compute.packed.compute_pumping": False,
+                "matmul.compute.packed.reducer": "tree",
+            }
+        )
+    )
+    assert not trial.accepted
+    assert {(f.code, f.owner) for why in trial.refused.values() for f in why} == {
+        ("dtype-family", "compute.packed.w.element_taken")
+    }
 
 
 def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4", pe: int | None = 2) -> Any:
@@ -315,9 +320,12 @@ def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():
         ("kernel-extents", "c is 4 (lhs axis 1) and 3 (rhs axis 0)")
     }
     # An operand of another element: its port carries its tensor's, and the kernel
-    # refuses the pair.
-    other = eltwise_between((4,), rhs_dtype="INT3").member("add")
-    assert other.rhs.element == ScalarEncoding(DataType["INT3"])
-    refused = other.query(EltwiseKernel.module)
-    assert isinstance(refused, Rejected)
-    assert "eltwise-integer-pair" in {finding.code for finding in refused.findings}
+    # refuses the pair on its facts, its PE still open; setting PE breaks no rule that
+    # was not broken before, so it is accepted, and the kernel stays refused.
+    other = eltwise_between((4,), rhs_dtype="INT3", pe=None)
+    assert other.member("add").rhs.element == ScalarEncoding(DataType["INT3"])
+    pair = {("eltwise-integer-pair", "implementation_supported")}
+    assert {(f.code, f.owner) for f in other.checked(["add"])[("add", "")]} == pair
+    trial = other.trial(keyed({"add.pe": 2}))
+    assert trial.accepted
+    assert {(f.code, f.owner) for f in trial.network.checked(["add"])[("add", "")]} == pair

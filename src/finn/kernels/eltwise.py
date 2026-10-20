@@ -18,14 +18,19 @@ from __future__ import annotations
 
 import math
 import struct
+from collections.abc import Callable
+from typing import cast
 
 from finn.core.space import (
     Decision,
+    Domain,
     Param,
     Rejected,
     constraint,
+    default_semantics,
     derived,
     divisors_of,
+    domain,
     reject,
 )
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
@@ -41,6 +46,29 @@ from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.platform.capabilities import DspBlock, Platform, Resources
 
 c = Index("c")
+
+#: The largest value of the RTL's PE parameter, a 32-bit integer.
+_PE_MAX = 0xFFFFFFFF
+
+
+def _pe_values(extent: object) -> Domain[int]:
+    """The positive divisors of ``extent`` the RTL's PE parameter holds (up to
+    ``_PE_MAX``), ascending: ``divisors_of``'s, bounded."""
+    divisors = cast(Callable[..., tuple[int, ...]], divisors_of(extent).candidates)
+
+    def accepts(*, candidate: int, extent: int) -> bool:
+        return type(extent) is int and 0 < candidate <= _PE_MAX and extent % candidate == 0
+
+    def candidates(*, extent: int) -> tuple[int, ...]:
+        return tuple(value for value in divisors(extent=extent) if value <= _PE_MAX)
+
+    return domain(
+        accepts=accepts,
+        candidates=candidates,
+        semantics=default_semantics(int),
+        ordered=True,
+        extent=extent,
+    )
 
 
 class EltwiseKernel(LeafKernel):
@@ -63,8 +91,9 @@ class EltwiseKernel(LeafKernel):
     lhs_tensor: Tensor = Param(required=False)
     rhs_tensor: Tensor = Param(required=False)
     channels = extent_of(c)  # the innermost axis
-    # PE elements of the innermost axis a beat.
-    pe: int = Decision(domain=divisors_of(channels))
+    # PE elements of the innermost axis a beat: a divisor of the channels the RTL's PE
+    # parameter, a 32-bit integer, holds.
+    pe: int = Decision(domain=_pe_values(channels))
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def lhs_dtype(self) -> QONNXDataType:
@@ -104,14 +133,16 @@ class EltwiseKernel(LeafKernel):
 
     @constraint
     def implementation_supported(self) -> bool | Rejected:
+        """The operation, the operands' types, the scale and the platform's DSP block are
+        ones the RTL implements: facts alone, so a kernel wrong on them is refused before
+        its PE is set."""
         operation = self.operation
-        pe = self.pe
         a = self.lhs_dtype
         b = self.rhs_dtype
         scale = self.native_scale
         target = self.platform.dsp
-        if operation not in ("ADD", "SUB", "SBR", "MUL") or not 1 <= pe <= 0xFFFFFFFF:
-            return reject("eltwise-operation", "positive PE and ADD, SUB, SBR or MUL are required")
+        if operation not in ("ADD", "SUB", "SBR", "MUL"):
+            return reject("eltwise-operation", "ADD, SUB, SBR or MUL is required")
         both_int = a.name != "FLOAT32" and b.name != "FLOAT32"
         if both_int and (a.bitwidth() != b.bitwidth() or a.signed() != b.signed()):
             return reject(

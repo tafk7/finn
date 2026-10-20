@@ -1,13 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Two cores sharing a ``width``, the helpers that commit choices on a point and read its
-forced ones, Spaces whose forced Decisions read each other (``Exclusive``, ``Mutual``,
-``Gated``), and a chain whose changes reach far and move few forced answers (``chain``),
-which the forcing tests, the successor's cache tests and the bounded change's walks share."""
+"""Two cores sharing a ``width``, the helper that commits choices on a point by key, the
+one that builds a configuration directly from stored choices (``built``), and a chain
+whose changes reach far (``chain``), which the possible values' tests, the successor's
+tests and the bounded change's walks share."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from finn.core.space import (
@@ -16,7 +17,6 @@ from finn.core.space import (
     Rejected,
     Space,
     constraint,
-    derived,
     divisors_of,
     inspection,
     reject,
@@ -53,85 +53,25 @@ def commit(point: Any, choices: dict[str, object]) -> Any:
     return point.with_choices({owned[key]: value for key, value in choices.items()})
 
 
-def forced(point: Any) -> dict[str, object]:
-    return {item.key: item.value for item in inspection.forced(point)}
+def built(point: Any, choices: Mapping[str, object]) -> Any:
+    """The configuration of ``point``'s facts and these stored choices (by key), built
+    directly, as a saved graph is, not by a change: no rule is checked, so one that breaks
+    a rule reads refused (a change to it would be refused). Each value must be of its
+    choice's type, dormant ones included."""
+    from finn.core.space._assign import check  # noqa: PLC0415
+    from finn.core.space._state import State, prepare  # noqa: PLC0415
+    from finn.core.space._world import World  # noqa: PLC0415
+    from finn.core.space.occurrence import attach, state  # noqa: PLC0415
 
-
-class Free(Space):
-    peer: bool = Param()
-
-
-class Never(Space):
-    peer: bool = Param()
-
-    @constraint
-    def never(self) -> bool | Rejected:
-        return reject("never-viable", "this case is never viable")
-
-
-class Unless(Space):
-    """Refuses while its peer (a Boolean about another Decision) holds."""
-
-    peer: bool = Param()
-
-    @constraint
-    def alone(self) -> bool | Rejected:
-        if self.peer:
-            return reject("peer-holds", "this case is not viable beside its peer")
-        return True
-
-
-class Exclusive(Space):
-    """``x`` has one viable case while ``y`` is open, and ``y`` one while ``x`` is: the two
-    together are refused. The plain rounds force the one they visit first and refuse the
-    other."""
-
-    @derived
-    def x_is_a(self) -> bool:
-        return isinstance(self.x, Unless)
-
-    @derived
-    def y_is_b(self) -> bool:
-        return isinstance(self.y, Unless)
-
-    x: Unless | Never = Decision({"a": Unless, "b": Never}, peer=y_is_b)
-    y: Never | Unless = Decision({"a": Never, "b": Unless}, peer=x_is_a)
-    other: int = Decision(values=(1, 2))
-
-
-class Mutual(Space):
-    """Given ``y`` at b, ``x`` has one case (a); given ``x`` at a, ``y`` has one (b);
-    open, neither does."""
-
-    @derived
-    def x_is_a(self) -> bool:
-        return isinstance(self.x, Free)
-
-    @derived
-    def y_is_b(self) -> bool:
-        return isinstance(self.y, Free)
-
-    x: Free | Unless = Decision({"a": Free, "b": Unless}, peer=y_is_b)
-    y: Unless | Free = Decision({"a": Unless, "b": Free}, peer=x_is_a)
-
-
-class Gated(Space):
-    """``x`` is forced while ``y`` is open, and its verdict reads ``y`` open. A change to
-    ``gate`` forces ``y`` too, which ``x``'s verdict then did not see. ``x``'s case reads
-    ``y`` and then ``gate``, so while ``gate`` is open no case of ``y`` refuses it, and
-    ``y`` stays open."""
-
-    @derived
-    def y_is_a(self) -> bool:
-        return isinstance(self.y, Unless) and self.gate == 2
-
-    @derived
-    def gate_shut(self) -> bool:
-        return self.gate == 2
-
-    x: Unless | Never = Decision({"a": Unless, "b": Never}, peer=y_is_a)
-    gate: int = Decision(values=(1, 2))
-    y: Unless | Free = Decision({"a": Unless, "b": Free}, peer=gate_shut)
+    current = state(point)
+    keys = current.linked.keys
+    values = {keys[key]: (value, "choice") for key, value in choices.items()}
+    world = World.start(current.evaluator, current.world.facts, prepare(current.linked, values))
+    for index in world.stored:
+        found = check(world, index)
+        if isinstance(found, Rejected):
+            raise ValueError(f"{current.linked.nodes[index].key} is not of its type: {found}")
+    return attach(State(current.model, world), point._scope)
 
 
 class Stage(Space):
@@ -142,9 +82,8 @@ class Stage(Space):
 
 class Hop(Space):
     """Between two stages: two wide stages side by side are refused, and its depth is the
-    upstream stage's size. Its constraints read both stages' sizes, so a stage's verdict
-    reads its neighbours' and theirs read theirs: a change to one stage reaches every open
-    Decision of the chain, and moves the forced answers next to it only."""
+    upstream stage's size. Its constraints read both stages' sizes, so a change to one
+    stage reaches the hops next to it only."""
 
     up: int = Param()
     down: int = Param()

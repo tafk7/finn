@@ -3,8 +3,9 @@
 
 """Immutable linked representation shared by compilation and evaluation.
 
-The table stores each occurrence once. Integer references describe potential
-edges; the evaluator records demanded edges separately for every cached result.
+The table stores each occurrence once. Node references (``NodeId``) describe
+potential edges; the evaluator records demanded edges separately for every cached
+result.
 """
 
 from __future__ import annotations
@@ -12,13 +13,19 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, TypeAlias
 
 from .semantics import ValueSemantics
 
 if TYPE_CHECKING:
     from ._configuration import Space
     from .domains import Domain
+
+# A node's identity in its model: its position in ``LinkedModel.nodes``. Every
+# reference to a node, here and in the evaluator, is a ``NodeId``, so a later
+# identity (an instance, a template node) changes this name and the few places that
+# turn a node into a cache key or a bit.
+NodeId: TypeAlias = int
 
 NodeKind = Literal[
     "param",
@@ -39,39 +46,39 @@ NodeKind = Literal[
 @dataclass(frozen=True, slots=True)
 class Argument:
     name: str
-    node: int
+    node: NodeId
 
 
 @dataclass(frozen=True, slots=True)
 class Node:
-    index: int
+    index: NodeId
     scope: int
     key: str
     kind: NodeKind
     semantics: ValueSemantics[object] | None = None
-    guard: int | None = None
+    guard: NodeId | None = None
     arguments: tuple[Argument, ...] = ()
     function: Callable[..., object] | None = None
     call_style: Literal["explicit", "self"] = "explicit"
     value: object = None
     required: bool = True
-    # A Decision with no safe baseline (``Decision(required=True)``); ``required``
+    # A Decision no default policy may set (``Decision(required=True)``); ``required``
     # above is a formal's, that something must supply it.
     required_choice: bool = False
     domain: Domain[object] | None = None
     domain_arguments: tuple[Argument, ...] = ()
-    output: int | None = None
+    output: NodeId | None = None
     # A view: its Space's validity node. A validity node: its pieces, in order: the
-    # Space's constraints, its stored choices' own checks (its Decisions), and its
-    # placed Spaces' validity nodes.
-    constraints: tuple[int, ...] = ()
-    alternatives: tuple[tuple[str, int], ...] = ()
-    selector: int | None = None
+    # Space's constraints, its Decisions (each a piece only where its domain lists no
+    # value, or its guard is refused), and its placed Spaces' validity nodes.
+    constraints: tuple[NodeId, ...] = ()
+    alternatives: tuple[tuple[str, NodeId], ...] = ()
+    selector: NodeId | None = None
     source_owner: str | None = None
     origin: str | None = None
     # Structural edges that bypass forwarding aliases: (alias, its source).
-    via: tuple[tuple[int, int], ...] = ()
-    selection_index: Mapping[str, int] | None = field(
+    via: tuple[tuple[NodeId, NodeId], ...] = ()
+    selection_index: Mapping[str, NodeId] | None = field(
         default=None, init=False, repr=False, compare=False
     )
 
@@ -87,7 +94,7 @@ class Node:
         return self.source_owner if self.source_owner is not None else self.key
 
     @property
-    def dependencies(self) -> tuple[int, ...]:
+    def dependencies(self) -> tuple[NodeId, ...]:
         """Known structural/explicit edges; self-method reads are observed at runtime."""
         refs = [arg.node for arg in (*self.arguments, *self.domain_arguments)]
         if self.guard is not None:
@@ -107,16 +114,16 @@ class Scope:
     parent: int | None
     name: str
     space_type: type[Space]
-    members: Mapping[object, int]
+    members: Mapping[object, NodeId]
     children: Mapping[object, int] = field(default_factory=dict)
-    named_members: Mapping[str, int] = field(default_factory=dict)
+    named_members: Mapping[str, NodeId] = field(default_factory=dict)
     named_children: Mapping[str, int] = field(default_factory=dict)
-    guard: int | None = None
+    guard: NodeId | None = None
     choices: Mapping[object, int] = field(default_factory=dict)
     # The node declaration instantiated here (None for a Space class compiled alone).
     record: object = None
     # The node answering this Space's validity (``kind == "validity"``).
-    validity: int | None = None
+    validity: NodeId | None = None
 
     def __post_init__(self) -> None:
         for attr in (
@@ -137,10 +144,10 @@ class Choice:
     index: int
     scope: int
     key: str
-    selector: int
+    selector: NodeId
     cases: tuple[tuple[str, int | None], ...]
-    members: Mapping[str, int]
-    guard: int | None = None
+    members: Mapping[str, NodeId]
+    guard: NodeId | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "members", MappingProxyType(dict(self.members)))
@@ -150,16 +157,17 @@ class Choice:
 class LinkedModel:
     nodes: tuple[Node, ...]
     scopes: tuple[Scope, ...]
-    order: tuple[int, ...]
-    parameters: tuple[int, ...]
-    decisions: tuple[int, ...]
-    keys: Mapping[str, int]
+    order: tuple[NodeId, ...]
+    parameters: tuple[NodeId, ...]
+    decisions: tuple[NodeId, ...]
+    keys: Mapping[str, NodeId]
     choices: tuple[Choice, ...] = ()
     # Formals supplied by a named shared Decision: edits may pass through them.
-    editable_aliases: frozenset[int] = frozenset()
+    editable_aliases: frozenset[NodeId] = frozenset()
     # Each node's forwarding source: an alias chain collapsed to its source.
-    forward: tuple[int, ...] = ()
-    selector_choices: Mapping[int, int] = field(init=False, repr=False)
+    forward: tuple[NodeId, ...] = ()
+    # A selector's Choice (its index in ``choices``), by the selector node.
+    selector_choices: Mapping[NodeId, int] = field(init=False, repr=False)
     ranks: tuple[int, ...] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:

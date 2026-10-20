@@ -20,7 +20,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.matmul import datatype_range
 from finn.platform.capabilities import DspBlock
-from support.helpers import full_platform
+from support.helpers import dotp_extents, full_platform
 from support.kernel_specs.base import ORACLE, KernelSpec, Probe, SweepCases, placed
 
 ROWS, REDUCTION, OUTPUTS = 2, 6, 4
@@ -47,12 +47,13 @@ def dotp(
         y = (x_channel * w_channel).sum(axis=1) if depthwise else x_channel @ w_channel
         return {"y_channel": y}
 
+    inputs = {
+        "x_channel": Tensor(x_shape, ScalarEncoding(a)),
+        "w_channel": Tensor((reduction, OUTPUTS), ScalarEncoding(w)),
+    }
     return dict(
         space_type=space_type,
-        inputs={
-            "x_channel": Tensor(x_shape, ScalarEncoding(a)),
-            "w_channel": Tensor((reduction, OUTPUTS), ScalarEncoding(w)),
-        },
+        inputs=inputs,
         outputs={"y_channel": (ROWS, OUTPUTS)},
         reference=reference,
         **({"factors": ({"pe": 2, "simd": 3},)} if pumped else {}),
@@ -61,6 +62,8 @@ def dotp(
             "platform": full_platform(dsp),
             "form": form,
             "result_range": datatype_range(reduction, ScalarEncoding(a), ScalarEncoding(w)),
+            # What a parent states from the operation's facts (``helpers.dotp_extents``).
+            **dotp_extents(inputs["w_channel"]),
         },
     )
 

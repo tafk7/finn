@@ -17,7 +17,8 @@ then UltraRAM. Reset is synchronous, active-high, and discards pending words.
 FIFO starts empty, so no initial contents are asked of it. ``auto`` never takes UltraRAM the
 platform lacks: where the RTL's own selection would, the kernel gives it ``block``.
 
-The FIFO's ``auto`` is FinnLib's selection, not Vivado's: it is its first case, and its
+The FIFO's ``auto`` is FinnLib's selection, not Vivado's: it is listed first (first valid
+takes it), and its
 statement is the storage the RTL selects, exact. One part is Vivado's: a decomposed
 memory's ``hi`` space shallower than its primitive, which the RTL leaves ``auto``; it
 is stated by a model of Vivado's placement (``_hi_style``).

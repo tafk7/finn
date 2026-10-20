@@ -19,11 +19,12 @@ aspects, the word split over them; UltraRAM by the URAM288 aspects, a word never
 LUTRAM by the fabric's LUTRAM primitives, with a read multiplexer over its banks and,
 where it is written, a write decode. Each style is exact up to Vivado's packing.
 
-A memory's style is its kernel's choice (``memory_styles``): the explicit styles,
-ordered by the size of what the memory holds, then ``auto``, which hands the choice to
-Vivado. ``auto`` is placed by Vivado, not stated: Vivado places it by family, by tool
-version and, for a read-only table, by more than the memory, so no statement of it
-would be exact, and ``memory`` takes none (``auto_unstated``). A FIFO's ``auto`` is
+A memory's style is its kernel's choice (``memory_styles``): the explicit styles and
+``auto``, which hands the choice to Vivado, always; its order ranks the explicit styles by
+the size of what the memory holds, then ``auto``. ``auto`` is placed by Vivado, not
+stated: Vivado places it by family, by tool version and, for a read-only table, by more
+than the memory, so no statement of it would be exact, and ``memory`` takes none
+(``auto_unstated``). A FIFO's ``auto`` is
 FinnLib's own selection, which its kernel states (``finn.kernels.fifo``). A choice that
 stores in UltraRAM states what it needs of its platform as constraints of its kernel
 (``uram_constraint``; ``uram_init_constraint`` for a memory with initial contents).
@@ -300,30 +301,41 @@ MEMORY_STYLES = ("distributed", "block", "ultra")
 
 BLOCK_FIRST_BITS = 8192
 """The least bits a memory holds for which its kernel offers block RAM first: half a
-RAMB18's 16 384 data bits, and 128 LUTs or more in LUTRAM; below it, LUTRAM first. A
-baseline, the kernel's preference, which a budget may move; not a placement rule."""
+RAMB18's 16 384 data bits, and 128 LUTs or more in LUTRAM; below it, LUTRAM first. The
+kernel's preference, which a first valid policy takes and a budget may move; not a
+placement rule."""
 
 AUTO_UNSTATED = "placed by Vivado, not stated"
 """Why a memory in ``auto`` states no resources."""
 
 
 def memory_styles(size: object) -> Domain[str]:
-    """A memory's style: the explicit styles first, in its kernel's preference for the
-    ``size`` in bits the memory holds (block RAM first from ``BLOCK_FIRST_BITS``, LUTRAM
-    first below; UltraRAM after both), then ``auto``, last: Vivado's placement, which
-    states nothing (``auto_unstated``), so no baseline takes it while an explicit style
-    is viable. Unordered: the order is a baseline, not a scale."""
+    """A memory's style: the explicit styles and ``auto``, always (its membership reads
+    nothing). Its order ranks them by its kernel's preference for the ``size`` in bits the
+    memory holds, which may read the kernel's choices: block RAM first from
+    ``BLOCK_FIRST_BITS``, LUTRAM first below; UltraRAM after both; then ``auto``, last:
+    Vivado's placement, which states nothing (``auto_unstated``), so no policy taking the
+    first valid style takes it while an explicit style is valid. Unordered: the ranking
+    is a preference, not a scale."""
+    styles = (*MEMORY_STYLES, "auto")
 
-    def accepts(*, candidate: str, size: int) -> bool:
-        return candidate in MEMORY_STYLES or candidate == "auto"
+    def accepts(*, candidate: str) -> bool:
+        return candidate in styles
 
-    def candidates(*, size: int) -> tuple[str, ...]:
-        if size >= BLOCK_FIRST_BITS:
-            return ("block", "distributed", "ultra", "auto")
-        return ("distributed", "block", "ultra", "auto")
+    def candidates() -> tuple[str, ...]:
+        return styles
+
+    def order(values: tuple[str, ...], *, size: int) -> tuple[str, ...]:
+        first = "block" if size >= BLOCK_FIRST_BITS else "distributed"
+        preference = (first, *(style for style in styles if style != first))
+        return tuple(sorted(values, key=preference.index))
 
     return domain(
-        accepts=accepts, candidates=candidates, semantics=default_semantics(str), size=size
+        accepts=accepts,
+        candidates=candidates,
+        order=order,
+        semantics=default_semantics(str),
+        size=size,
     )
 
 

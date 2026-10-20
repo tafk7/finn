@@ -28,7 +28,7 @@ class Payload:
 PAYLOAD = ValueSemantics.immutable_nominal(Payload)
 
 
-def test_discarded_candidate_snapshots_release_the_actual_cached_callback_outputs() -> None:
+def test_discarded_candidates_release_their_outputs_past_the_memo_budget() -> None:
     produced: list[ReferenceType[Payload]] = []
 
     class Example(Space):
@@ -41,6 +41,8 @@ def test_discarded_candidate_snapshots_release_the_actual_cached_callback_output
             return payload
 
     model = inspection.model(Example)
+    # The model's memo keeps four outcomes, the least recently used dropped first.
+    model.evaluator.memo.budget = 4
     base = design_space(Example())
     assert inspection.model(base) is model  # a plain root reuses the Space class's model
 
@@ -58,11 +60,16 @@ def test_discarded_candidate_snapshots_release_the_actual_cached_callback_output
     assert all(reference() is not None for reference in produced)
     del candidates
     gc.collect()
-    assert all(reference() is None for reference in produced)
+    # Each value's membership and output were kept last: the memo holds the last two
+    # outputs, and nothing else holds any.
+    alive = [index for index, reference in enumerate(produced) if reference() is not None]
+    assert alive == [14, 15]
     assert design_space(Example()).try_with_choices().accepted
 
 
 def test_successor_retains_only_the_outputs_its_change_does_not_reach() -> None:
+    """A successor's outputs are retained through the parent world, bounded by
+    ``FLATTEN``, and released with the chain."""
     produced: list[ReferenceType[Payload]] = []
 
     class Example(Space):
@@ -75,6 +82,9 @@ def test_successor_retains_only_the_outputs_its_change_does_not_reach() -> None:
             produced.append(ref(payload))
             return payload
 
+    # With a budget of one the model's memo keeps only its latest outcome: the output for
+    # one, until the membership of two is kept.
+    inspection.model(Example).evaluator.memo.budget = 1
     earlier = design_space(Example()).with_choices(factor=1)
     earlier.query(Example.output)
     replaced = earlier.with_choices(factor=2)
@@ -86,9 +96,14 @@ def test_successor_retains_only_the_outputs_its_change_does_not_reach() -> None:
     assert len(produced) == 1
     del kept
     gc.collect()
-    assert produced[0]() is None  # replaced never held it
+    # Replaced holds it through its parent's world (where its early cutoff starts from),
+    # until it is released itself; the memo, past its budget, does not.
+    assert produced[0]() is not None
     assert replaced.query(Example.output) == Available(Payload(2))
     assert len(produced) == 2
+    del replaced
+    gc.collect()
+    assert produced[0]() is None
 
 
 def test_concurrent_reads_evaluate_one_cached_output_per_snapshot() -> None:

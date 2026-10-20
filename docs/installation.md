@@ -660,7 +660,7 @@ the strategy steps theirs (below); `step_package_partition` `ooc_synth`;
 clock report's objective
 is the `target_fps` the partition's body records where `step_target_throughput` folded
 it (`finn.choices/objective_fps`), and none where a later step that may change the folding
-(a hold, a maximum throughput, going back to the baselines) explored it since. The build's manifest records the steps it runs, and
+(a hold, a maximum throughput, going back to the defaults) explored it since. The build's manifest records the steps it runs, and
 each setting with its value or default and its readers (`plan`). JSON is read strictly: a key a nested object does not declare, a null
 where a field is not optional, a wrong type and an unknown value are refused, naming
 their place (`configuration.target: ...`), as a `ConfigurationRefused`. A build
@@ -668,22 +668,26 @@ directory's configuration that does not decode is refused in the output director
 states, when it states one as a string: logged there and recorded in a new manifest, as
 `refused`; otherwise on the console only.
 
-The strategy steps choose the KernelOps' choices through the DSE seam, one strategy
-each; a build lists them like any step, in `steps`. Each opens the
-partition's body, takes every choice the body leaves open at its baseline (the first
-viable case its kernel lists: the least parallelism; each memory in the explicit style
-the size of what it holds orders first, `auto` last; every transport `direct`), runs
-its strategy, which reopens the choices it decides, explores, and settles the rest back
-to their earlier values (or their baselines where those are no longer valid), and saves
-every value in the body.
+Every choice is given its value where it is made, and the design-space engine sets
+none itself. Conversion gives each KernelOp's choices their default policies, once: a
+value the kernel's author fixes, or the first valid value its kernel lists (the least
+parallelism; each memory in the explicit style the size of what it holds orders first,
+`auto` last), or none for a required choice (a FIFO's depth). The cut makes each
+channel's choices the same way, first valid (every transport `direct`): an interim rule,
+until the ends are designed. The strategy steps then choose the KernelOps' choices
+through the DSE seam, one strategy each; a build lists them like any step, in `steps`.
+Each opens the partition's body, runs its strategy, which reopens the choices it
+decides, explores, and gives the rest back their earlier values (setting one by its
+policy where its earlier value is no longer valid, and saying so), and saves every
+value in the body. A change that breaks a kernel's rule is refused, naming the rule.
 
 | Step | Settings | What it does |
 |---|---|---|
 | `step_target_throughput` | `target_fps` (required), `relax_target_fps` (default true) | folds the least parallelism that meets `target_fps` at the target's clock |
 | `step_max_throughput` | `max_throughput_within` (required: `{"lut": 0.5}`) | the fewest cycles a frame whose resources stay within the fractions of the part's |
 | `step_size_fifos` | `fifo_margin` (default 0), `fifo_ram_style` (default none: FinnLib's `auto`) | sizes each channel's FIFO at the folding before it |
-| `step_baseline_choices` | none | sets every value not held back to its baseline |
-| `step_placeholder_choices` | none | for debugging, sets each open required choice to its first case |
+| `step_default_choices` | none | sets every value not held back to its default: conversion's policies for the kernels', the interim rule for the channels' |
+| `step_placeholder_choices` | none | for debugging, sets each open required choice to its first possible value |
 
 `step_target_throughput` tries each case of an unordered choice, such as a MatMul's
 core on a DSP58 part, and states the bottleneck reached and whether `target_fps` is
@@ -694,7 +698,7 @@ whose resources (the shell's: its partition, ends and static region) stay within
 placed by Vivado, not stated), it budgets what is stated, a lower bound, and warns,
 naming it. A hold is recorded in the partition's body (`finn.choices/held`, the held
 keys; the values are the ones the body states), so every later strategy step of the build
-keeps it, going back to the baselines included. The build has no step that fixes values: a user fixes them with
+keeps it, going back to the defaults included. The build has no step that fixes values: a user fixes them with
 `Hold` in a step of their own, listed before the strategies that should fold around them:
 
 ```python
@@ -717,7 +721,7 @@ choice without Python, since the step is named there by its import path
 `step_size_fifos` sizes each
 channel from both ends' beat patterns at the bottleneck (`direct` where none is
 needed), `fifo_margin` words added to a FIFO it places. The default phase is
-`[step_size_fifos, step_verify_partition]`: the baseline folding, its FIFOs sized; a
+`[step_size_fifos, step_verify_partition]`: conversion's folding, its FIFOs sized; a
 target throughput is `step_target_throughput` listed before it, with `target_fps` (the
 example above). FIFO depths are sized at the folding before them: run `step_size_fifos`
 after the last step that may change the folding. The FIFOs are checked against their
@@ -735,9 +739,9 @@ check, so a simulation can run a FIFO the model calls too small. A required choi
 open (a FIFO's depth) is refused by name when the partition is built.
 
 Each strategy step writes its report, `report/<step>.json`, listed under it in the
-build's manifest: its strategy with the values it changed, reopened, kept and
-re-baselined, attempts and time; every value with who set it (the body, the baseline or
-the strategy); the holds; whether it sized FIFOs and how its FIFOs were judged
+build's manifest: its strategy with the values it changed, reopened, kept and set by
+their policy, attempts and time; every value with who set it (saved in the body, the
+strategy, the strategy by the choice's policy, or the interim channel rule); the holds; whether it sized FIFOs and how its FIFOs were judged
 (`fifos_judged`: `model` where it sized or checked them, else `not checked`; where it
 checked, what the check found, `fifo_check`); per-member cycles and buffering, the
 bottleneck, and the shell's resources against the part's. A point that uses more of a

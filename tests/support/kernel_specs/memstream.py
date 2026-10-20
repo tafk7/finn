@@ -69,8 +69,9 @@ SPEC = KernelSpec(
         ),
         Probe(
             "a pumped memory of one-bit words",
-            lambda: placed(one_bit(), {"ram_style": "auto", "pumped_memory": True}),
+            lambda: placed(one_bit()),
             frozenset({"memstream-pumping"}),
+            {"ram_style": "auto", "pumped_memory": True},
         ),
     ),
     sweeps=(

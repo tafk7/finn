@@ -46,10 +46,10 @@ The part and the clock period are the model's build target (``read_target(model)
 
 The partition's choices are its nodes' and its channels' (each on its tensor,
 ``finn.channel``), every one stored where it is created and replaced by the
-exploration: the network is replayed from them (a stale choice refuses, named), a
-Decision with one viable case is forced, and an open choice refuses, named
-(``configured_network``). PackagePartition packages only the design the partition's
-check verified (``verify_partition``, which refuses a FIFO too small for its stream):
+exploration: the network is replayed from them (a stale choice refuses, named), nothing
+is filled in, and an open choice refuses, named (``configured_network``).
+PackagePartition packages only the design the partition's check verified
+(``verify_partition``, which refuses a FIFO too small for its stream):
 before anything is staged or keyed, a body that records no verified design, or whose
 design changed since, is refused (``refuse_unverified``). ``ip_key``, ``ooc_member_resources``
 and ``ElaboratePartition`` only bind. The body's graph

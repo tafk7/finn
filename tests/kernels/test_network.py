@@ -5,27 +5,41 @@
 
 On the Chain (``support.chain``): its members ranked kernels first, then each channel
 after the members it reads; a channel bound once its ends are known, and once per set
-of facts; a change reaching one kernel and the channels that read it; what replay drops
-named, what the change names refused; its module, one composed netlist, each member under
-its node; its stored choices replayed as each member binds; a kernel given bound; and a
-change that keeps a network's class.
+of facts; a change reaching one kernel and the channels that read it; what the change
+names refused, by its value's domain or by the rule it would break; its module, one
+composed netlist, each member under its node; its stored choices set as each member
+binds, as one change (a value outside its domain dropped, a rule they break refusing the
+network); the interim channel rule where a channel is rebuilt from new facts; a kernel
+given bound; and a change that keeps a network's class.
 """
 
 from __future__ import annotations
+
+from dataclasses import replace
+from typing import cast
 
 import pytest
 from qonnx.core.datatype import DataType
 from support import chain
 from support.helpers import FULL_DSP48E2, built, choose, keyed, labels, matmul_point
 
-from finn.core.space import Space, Unresolved, design_space
+from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.space import Decision, Space, Unresolved, derived, design_space, inspection
 from finn.kernels.base import CYCLES
-from finn.kernels.network import Interface, Network, NetworkError, Wire, wire
+from finn.kernels.members import reasons
+from finn.kernels.network import Fact, Interface, Network, NetworkError, Wire, wire
+from finn.platform.capabilities import Platform
 
 FOLDING = {
-    f"{layer}.compute.packed.{key}": value
+    f"{layer}.{key}": value
     for layer in ("first", "second")
-    for key, value in (("pe", 2), ("simd", 2), ("compute_pumping", False), ("reducer", "tree"))
+    for key, value in (
+        ("compute", "packed"),
+        ("compute.packed.pe", 2),
+        ("compute.packed.simd", 2),
+        ("compute.packed.compute_pumping", False),
+        ("compute.packed.reducer", "tree"),
+    )
 }
 
 
@@ -56,8 +70,9 @@ def test_a_channel_waits_with_its_choices_until_its_ends_are_known() -> None:
     network = chain.network()
     held = network.unbound("x")
     assert held is not None and held.member == "first" and isinstance(held.result, Unresolved)
-    # Its cycles wait on what its end waits on: the kernel's folding.
-    assert network.waits("x", network.query("x", CYCLES)) == (("first", "compute.packed.pe"),)
+    # Its cycles wait on what its end waits on: the kernel's core, open (its folding's
+    # presence waits on it).
+    assert network.waits("x", network.query("x", CYCLES)) == (("first", "compute"),)
     with pytest.raises(NetworkError, match="x is not bound"):
         network.member("x")
     folded = choose(network, FOLDING)
@@ -80,25 +95,48 @@ def test_a_change_reaches_its_kernel_and_the_channels_that_read_it() -> None:
     assert all(
         changed.member(name) is not folded.member(name) for name in ("first", "x", "w1", "hidden")
     )
-    # Its stored choices replayed on the channels it rebound.
-    assert changed.chosen(("hidden",)) == folded.chosen(("hidden",))
+    # Its stored choices kept on the channels it rebuilt from their new facts, and the
+    # output adapter those facts bring into play at its first valid value (the interim
+    # channel rule): PE 1 against the thresholding's 2 lanes.
+    assert changed.chosen(("hidden",)) == {
+        **folded.chosen(("hidden",)),
+        ("hidden", "output_adapter"): "vpc",
+    }
 
 
 def with_transports(network: Network) -> Network:
     return choose(network, {f"{name}.transport": "direct" for name in network.channels})
 
 
-def test_a_trial_names_what_replay_drops_and_refuses_what_the_change_names() -> None:
+def test_a_trial_refuses_what_the_change_names_and_keeps_what_it_puts_out_of_play() -> None:
     folded = with_transports(choose(chain.network(), FOLDING))
     fifo = choose(folded, {"hidden.transport": "fifo", "hidden.transport.fifo.buffer.depth": 16})
+    # The FIFO's depth, under a case no longer selected, is kept, dormant: nothing drops.
     trial = fifo.trial(keyed({"hidden.transport": "direct"}))
-    assert trial.accepted and set(trial.dropped) == {("hidden", "transport.fifo.buffer.depth")}
-    assert ("hidden", "transport.fifo.buffer.depth") not in trial.network.chosen()
+    assert trial.accepted and not trial.rederived
+    states = dict(trial.network.states(("hidden",)))
+    assert states[("hidden", "transport.fifo.buffer.depth")] == inspection.Dormant(16)
+    assert fifo.with_choices(keyed({"hidden.transport": "direct"})).chosen(("hidden",)) == {
+        ("hidden", "transport"): "direct",
+        ("hidden", "transport.fifo.buffer.depth"): 16,
+    }
+    # A value outside its domain refuses the change, by its key.
     refused = fifo.trial(keyed({"first.compute.packed.pe": 3}))
     assert not refused.accepted and refused.network is fifo
     assert list(refused.refused) == [("first", "compute.packed.pe")]
-    with pytest.raises(NetworkError, match="hidden.transport.fifo.buffer.depth"):
-        fifo.with_choices(keyed({"hidden.transport": "direct"}))
+    assert [f.code for f in refused.refused[("first", "compute.packed.pe")]] == [
+        "domain-membership"
+    ]
+    # A rule it would break refuses it, by the rule's key, with the stored choices
+    # standing in its way: pumping needs lanes to split.
+    pumped = choose(folded, {"first.compute.packed.compute_pumping": True})
+    broken = pumped.trial(keyed({"first.compute.packed.simd": 1}))
+    rule = ("first", "compute.packed.pumping_has_lanes")
+    assert list(broken.refused) == [rule]
+    assert [f.code for f in broken.refused[rule]] == ["dotp-pumping"]
+    assert broken.standing == {rule: (("first", "compute.packed.compute_pumping"),)}
+    with pytest.raises(NetworkError, match="pumping_has_lanes.*standing: first.compute.packed"):
+        pumped.with_choices(keyed({"first.compute.packed.simd": 1}))
 
 
 def test_its_module_is_one_netlist_in_the_order_declared() -> None:
@@ -120,26 +158,111 @@ def test_a_network_reads_only_its_own_members() -> None:
         Network({"x": wire(tensor=chain.X_TENSOR, consumer=Interface("k", "x_end"))})
 
 
-def test_stored_choices_are_replayed_as_each_member_binds() -> None:
-    """A network given its members' stored choices replays each as the member binds: a
-    kernel's on its point, a channel's once its ends are known (until then it holds
-    them); what replay refuses is dropped, with why."""
+def test_stored_choices_are_set_as_each_member_binds() -> None:
+    """A network given its members' stored choices sets them as each member binds, as one
+    change: a kernel's on its point, a channel's once its ends are known (until then it
+    holds them). A value outside its domain is dropped, with why, and left open; nothing
+    is filled in."""
     stored = chain.chain().chosen()
     replayed = Network(chain.members(), stored=stored)
     assert replayed.chosen() == stored and not replayed.dropped
     stale = Network(chain.members(), stored={**stored, ("first", "compute.packed.pe"): 3})
     assert list(stale.dropped) == [("first", "compute.packed.pe")]
-    # Its own domain refuses 3, and its selector, left with no viable case, stands beside it.
+    # Its own domain refuses 3: no other piece stands beside it.
     assert {(f.code, f.owner) for f in stale.dropped[("first", "compute.packed.pe")]} == {
         ("domain-membership", "compute.packed.pe"),
-        ("decision-no-viable-case", "compute"),
     }
+    assert ("first", "compute.packed.pe") in stale.undecided()
     waiting = Network(chain.members(), stored={("x", "transport"): "direct"})
     held = waiting.unbound("x")
     assert held is not None and held.stored == {"transport": "direct"}
     assert waiting.chosen()[("x", "transport")] == "direct" and not waiting.dropped
     with pytest.raises(NetworkError, match="nobody.pe: no member of the network stores it"):
         Network(chain.members(), stored={("nobody", "pe"): 1})
+
+
+class Board(Space):
+    """A member that states the platform of the Chain's hidden channel: with UltraRAM or
+    without, by its own choice."""
+
+    uram: bool = Decision(values=(True, False))
+
+    @derived
+    def platform(self) -> Platform:
+        return replace(FULL_DSP48E2, uram=self.uram, uram_init=self.uram)
+
+
+def boarded() -> dict[str, Space | Wire]:
+    """The Chain's members, its hidden channel's platform read from a ``Board``."""
+    members = chain.members()
+    hidden = cast(Wire, members["hidden"])
+    return {
+        "board": Board(),
+        **members,
+        "hidden": Wire({**hidden.facts, "platform": Fact("board", "platform")}),
+    }
+
+
+ULTRA_FIFO = {
+    "board.uram": True,
+    "hidden.transport": "fifo",
+    "hidden.transport.fifo.buffer.depth": 16,
+    "hidden.transport.fifo.buffer.ram_style": "ultra",
+}
+
+
+def test_a_stored_set_that_breaks_a_rule_refuses_the_network_by_name() -> None:
+    """Stored choices are set together as the member binds: a rule they break refuses the
+    network, naming it once, its findings carried about the member (a FIFO in UltraRAM on
+    a platform without it)."""
+    stored = keyed({**ULTRA_FIFO, "board.uram": False})
+    with pytest.raises(
+        NetworkError, match="hidden: its stored choices are refused: .*uram"
+    ) as caught:
+        Network(boarded(), stored={**chain.chain().chosen(), **stored})
+    rule = "transport.fifo.buffer.uram_present"
+    assert str(caught.value).count(rule) == 1
+    assert [(f.code, f.owner, dict(f.details)) for f in caught.value.findings] == [
+        ("uram-absent", rule, {"tensor": "hidden"})
+    ]
+
+
+def test_reasons_name_each_key_once_with_the_choices_standing_in_its_way() -> None:
+    """A refusal's text: each key once, in order, a finding it owns by code and message,
+    another's whole, and the stored choices standing in its way where any do."""
+    owned = Finding(FindingKind.REJECTION, "dotp-pumping", "rule", "pumping requires SIMD >= 2")
+    other = Finding(FindingKind.REJECTION, "uram-absent", "elsewhere", "no UltraRAM")
+    found = {"rule": (owned, other), "a": (other,)}
+    assert reasons(found, {"rule": ("simd", "pumping")}) == (
+        "a: elsewhere: uram-absent: no UltraRAM; rule: dotp-pumping: pumping requires "
+        "SIMD >= 2; elsewhere: uram-absent: no UltraRAM (standing: simd, pumping)"
+    )
+
+
+def test_a_channel_rebuilt_from_new_facts_rederives_only_what_they_refuse() -> None:
+    """Interim (the ends pass replaces it): a channel rebuilt from new facts keeps every
+    stored choice the new facts accept; one they refuse is derived again, first valid, and
+    named with its old value, its new one and why. A change of the channel's own choices
+    alone takes nothing, and a choice a change left open stays open."""
+    network = choose(Network(boarded()), {**{"activate.pe": chain.PE}, **FOLDING})
+    network = choose(network, ULTRA_FIFO)
+    trial = network.trial(keyed({"board.uram": False}))
+    assert trial.accepted
+    assert list(trial.rederived) == [("hidden", "transport.fifo.buffer.ram_style")]
+    (finding,) = trial.rederived[("hidden", "transport.fifo.buffer.ram_style")]
+    assert finding.code == "choice-rederived"
+    assert dict(finding.details) == {"value": "ultra", "rederived": "auto"}
+    assert [cause.code for cause in finding.causes] == ["uram-absent"]
+    assert trial.network.chosen(("hidden",)) == {
+        **network.chosen(("hidden",)),
+        ("hidden", "transport.fifo.buffer.ram_style"): "auto",
+    }
+    # A transport a change left open stays open when its channel is rebuilt.
+    reopened = network.trial({}, (("hidden", "transport"),)).network
+    assert dict(reopened.states(("hidden",)))[("hidden", "transport")] == inspection.Open()
+    rebuilt = reopened.trial(keyed({"board.uram": False}))
+    assert rebuilt.accepted and not rebuilt.rederived
+    assert ("hidden", "transport") in rebuilt.network.undecided()
 
 
 def test_a_kernel_given_bound_is_used_as_it_is() -> None:

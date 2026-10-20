@@ -75,17 +75,15 @@ def generator(**changes):
     ((FifoKernel, fifo_facts()), (InputGeneratorKernel, generator_facts())),
 )
 def test_an_ultra_memory_needs_the_platforms_ultraram(space_type, facts):
-    # The style is committed (its domain holds it); the rule on the platform refuses the
-    # configuration.
+    # The style's domain holds it; the rule on the platform refuses committing it, at the
+    # rule, nothing standing.
     without = design_space(space_type(**facts, platform=replace(FULL_DSP48E2, uram=False)))
     report = without.try_with_choices(ram_style="ultra")
-    assert report.accepted
-    validity = inspection.validity(report.instance)
-    assert validity.status == "refused"
+    assert not report.accepted
     assert [
-        (piece.owner, {finding.code for finding in piece.result.findings})
-        for piece in validity.pieces
-    ] == [("uram_present", {"uram-absent"})]
+        (rule.rule, rule.standing, {finding.code for finding in rule.result.findings})
+        for rule in report.broken
+    ] == [("uram_present", (), {"uram-absent"})]
     # The memory starts empty: UltraRAM that takes no initial contents is enough.
     platform = replace(FULL_DSP48E2, uram_init=False)
     report = design_space(space_type(**facts, platform=platform)).try_with_choices(
@@ -229,19 +227,35 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
         lambda: eltwise(b_scale=0.5),
         lambda: eltwise(operation="MUL", lhs=DataType["FLOAT32"], b_scale=0.5),
         lambda: eltwise(lhs=DataType["FLOAT32"], platform=FULL_DSP48E2),
-        lambda: threshold(thresholds=((-2, 0, 3),), pe=None),  # no sets axis
         lambda: threshold(thresholds=(((2, 1),),)),
         lambda: threshold(thresholds=(((0, 20),),)),
         lambda: threshold(threshold_dtype=DataType["UINT5"]),
         lambda: threshold(bias=1 << 31),
         lambda: threshold(bias=-10),
-        lambda: threshold(use_axilite=True, thresholds=(((0, 1),), ((0, 1),))),
     ],
 )
 def test_unsupported_cases_are_refused_without_constructing_invalid_interfaces(factory):
     point = factory()
     assessment = point.inspect(type(point).module)
     assert isinstance(assessment.accepted_result, Rejected)
+
+
+@pytest.mark.parametrize(
+    ("factory", "code"),
+    [
+        # No sets axis: refused on its facts already; committed, use_axilite makes its
+        # AXI-Lite bus read the table's shape, a rule newly false through the shape.
+        (lambda: threshold(thresholds=((-2, 0, 3),), pe=None), "threshold-shape"),
+        # Two configuration sets: runtime-writable thresholds address one.
+        (
+            lambda: threshold(use_axilite=True, thresholds=(((0, 1),), ((0, 1),))),
+            "threshold-config-sets",
+        ),
+    ],
+)
+def test_committing_a_choice_that_breaks_a_rule_is_refused_naming_it(factory, code):
+    with pytest.raises(ValueError, match=code):
+        factory()
 
 
 @pytest.mark.parametrize(

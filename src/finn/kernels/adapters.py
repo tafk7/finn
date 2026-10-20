@@ -51,9 +51,9 @@ after it), and ``TransposeKernel`` (``finn.kernels.transpose``) is
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import ClassVar, TypeVar
 
 from finn.core.space import (
     Param,
@@ -169,6 +169,20 @@ def _side(name: str, side: str) -> BeatSequence:
     return derived(read)
 
 
+_F = TypeVar("_F", bound=Callable[..., object])
+
+
+def _reading(*paths: str) -> Callable[[_F], _F]:
+    """Declare what a method reads by names its source computes (``__reads__``: dotted
+    paths from ``self``), which stand in for its source in the reads the engine infers."""
+
+    def declare(function: _F) -> _F:
+        function.__reads__ = paths  # type: ignore[attr-defined]
+        return function
+
+    return declare
+
+
 class StreamAdapter(ComposedKernel):
     """A fixed chain of FinnLib modules carrying out a channel's plan, or refusing it.
 
@@ -224,9 +238,15 @@ class StreamAdapter(ComposedKernel):
     vpc_leaving = _side("vpc", "sink")
 
     @view
+    @_reading("realization")
     def stages(self) -> tuple[Stage, ...]:
         """Each child's module and its ports' contracts, labelled below the adapter
-        Decision: its candidate (the chain), then the stage."""
+        Decision: its candidate (the chain), then the stage. Each chain declares what its
+        own stages read (``_chain``); this base places no stage."""
+        return self._stages()
+
+    def _stages(self) -> tuple[Stage, ...]:
+        """``stages``: each stage's child read by the name its chain gives it."""
         kinds = [stage.kind for stage in self.realization]
         chain = "_".join(type(self).modules)
         found: list[Stage] = []
@@ -277,11 +297,21 @@ INPUT_CHAINS: tuple[tuple[str, ...], ...] = (
 
 
 def _chain(modules: tuple[str, ...]) -> type[StreamAdapter]:
-    """The candidate placing ``modules`` in order, each child named by its stage."""
+    """The candidate placing ``modules`` in order, each child named by its stage. Its
+    ``stages`` reads its children by the names its chain fixes, which it declares
+    (``__reads__``: the realization, and each stage's module and ports' contracts)."""
     members: dict[str, object] = {"modules": modules}
-    for index, kind in enumerate(modules):
-        name = _stage_name(modules, index)
+    names = [_stage_name(modules, index) for index in range(len(modules))]
+    for name, kind in zip(names, modules):
         members[name] = _input_gen(name) if kind == "input_gen" else _vpc(name)
+
+    parts = ("module", "input.contract", "output.contract")
+
+    @_reading("realization", *(f"{name}.{part}" for name in names for part in parts))
+    def stages(self: StreamAdapter) -> tuple[Stage, ...]:
+        return StreamAdapter._stages(self)
+
+    members["stages"] = view(stages)
     return composite("_".join(modules), members, base=StreamAdapter)
 
 

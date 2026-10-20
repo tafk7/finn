@@ -22,8 +22,8 @@ from qonnx.core.datatype import DataType
 from support.conformance import (
     KERNEL,
     Sample,
-    _candidates,
     _ends,
+    _possible,
     _values,
     _words,
     design_cycles,
@@ -91,7 +91,7 @@ def test_each_row_is_presented_pe_elements_a_beat_in_float32() -> None:
 
 
 def test_pe_divides_the_innermost_axis() -> None:
-    assert _candidates(unchosen(**pwpolyf_gelu()), f"{KERNEL}.pe") == (1, 2, 4, 8)
+    assert _possible(unchosen(**pwpolyf_gelu()), (KERNEL, "pe")) == (1, 2, 4, 8)
 
 
 def test_a_float_input_has_no_adapter_sample() -> None:

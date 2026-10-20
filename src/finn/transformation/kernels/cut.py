@@ -10,10 +10,14 @@ returns the parent graph, which the build keeps as its model. The partition is n
 instance. The body carries the parent's target. Everything after the cut opens the body
 through the node (``finn.core.graph.partition.partition_body``).
 
-The cut is where each channel first has both its ends, so it sets the channel choices
-to their baselines, and checks the nodes' choices again in context: a node choice that
-does not fit there is reset to its baseline and reported (``dropped``). A required choice (a
-FIFO's depth) stays open for a strategy.
+The cut is where each channel first has both its ends, so it makes the channel choices:
+**interim**, until the ends pass, each takes its first valid value
+(``finn.kernels.network.interim_channel_defaults``). It binds the nodes' choices again in
+context: a stored value outside its domain there is dropped as stale, left open for a
+strategy and reported (``dropped``); a node choice left open by a body that never went
+through conversion is set by conversion's policies, reported (``late``); a choice no value
+can be set for is left open and reported (``unset``). A required choice (a FIFO's depth)
+stays open for a strategy.
 
 Channel choices may be stored only in a partition's body. A model with host nodes that
 stores some is refused (a build fixes them in a step after the cut, with ``Hold``); a
@@ -36,7 +40,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, PARTITION_DOMAIN, PARTITION_OP
 from finn.core.reporting.findings import Finding
 from finn.custom_op.kernels.network import PARTITION
-from finn.custom_op.kernels.shell import baseline_choices
+from finn.custom_op.kernels.shell import make_cut_choices
 from finn.transformation.kernels.convert import between_kernel_ops
 
 #: The partition PartitionFromLambda puts the KernelOps in; every other node stays on
@@ -48,32 +52,39 @@ def _kernel_ops_together(node: NodeProto) -> str | int:
     return _KERNEL_OPS if node.domain == KERNEL_OPS_DOMAIN else -1
 
 
-class BaselineChoices(Transformation):
-    """What the cut does to the body it makes, for a body made by hand: every open
-    choice at its baseline, and the nodes' stored choices checked in context
-    (``shell.baseline_choices``). ``dropped`` lists those reset, by owner and key
-    (``MatMul_0.compute.packed.pe``), with the kernel's findings."""
+class MakeCutChoices(Transformation):
+    """What the cut does to the body it makes, for a body made by hand: the channels'
+    choices made, the nodes' stored choices bound in context, and a node choice the body
+    leaves open set by conversion's policies (``shell.make_cut_choices``). ``dropped``
+    lists the stored choices dropped as stale, ``late`` the node choices set late and
+    ``unset`` the choices no value could be set for, by owner and key
+    (``MatMul_0.compute.packed.pe``), each with its findings."""
 
     def __init__(self) -> None:
         super().__init__()
         self.dropped: dict[str, tuple[Finding, ...]] = {}
+        self.late: dict[str, tuple[Finding, ...]] = {}
+        self.unset: dict[str, tuple[Finding, ...]] = {}
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
-        self.dropped = baseline_choices(model)
+        made = make_cut_choices(model)
+        self.dropped, self.late, self.unset = dict(made.stale), dict(made.late), dict(made.unset)
         return model, False
 
 
 class CutKernelPartition(Transformation):
     """Cut the model's KernelOps into the partition ``PARTITION``, its body saved in
-    ``directory`` at its baselines (see the module docstring). Refuses a model that
-    holds a partition already or no KernelOps, one with host nodes between KernelOps or
-    storing channel choices, and one with a host node named ``PARTITION``. ``dropped``
-    lists the node choices reset at the cut, by owner and key, with the kernel's findings."""
+    ``directory`` with its channels' choices made (see the module docstring). Refuses a
+    model that holds a partition already or no KernelOps, one with host nodes between
+    KernelOps or storing channel choices, and one with a host node named ``PARTITION``.
+    ``dropped``, ``late`` and ``unset``: as ``MakeCutChoices``'."""
 
     def __init__(self, directory: Path) -> None:
         super().__init__()
         self.directory = Path(directory)
         self.dropped: dict[str, tuple[Finding, ...]] = {}
+        self.late: dict[str, tuple[Finding, ...]] = {}
+        self.unset: dict[str, tuple[Finding, ...]] = {}
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         if model.get_nodes_by_op_type(PARTITION_OP):
@@ -125,7 +136,8 @@ class CutKernelPartition(Transformation):
         op = getCustomOp(node)
         cut_file = Path(str(op.get_nodeattr("model")))
         body = ModelWrapper(str(cut_file))
-        self.dropped = baseline_choices(body)
+        made = make_cut_choices(body)
+        self.dropped, self.late, self.unset = dict(made.stale), dict(made.late), dict(made.unset)
         body_file = self.directory / f"{PARTITION}.onnx"
         body.save(str(body_file))
         cut_file.unlink()
@@ -134,4 +146,4 @@ class CutKernelPartition(Transformation):
         return parent, False
 
 
-__all__ = ["BaselineChoices", "CutKernelPartition"]
+__all__ = ["CutKernelPartition", "MakeCutChoices"]

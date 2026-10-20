@@ -77,11 +77,22 @@ class ReferenceUseError(SpaceError, TypeError):
 
 
 class ConfigurationError(SpaceError):
-    """A well-formed configuration replacement could not be published."""
+    """A well-formed configuration replacement could not be published: its message names
+    each value refused and each rule the change would break, with the stored choices
+    standing in its way; ``report`` holds the whole answer."""
 
     def __init__(self, report: ConfigurationResult[Any]) -> None:
         self.report = report
-        super().__init__("configuration change refused; inspect the report")
+        reasons = [
+            f"{outcome.owner} refused" for outcome in report.outcomes if outcome.status == "refused"
+        ]
+        for rule in report.broken:
+            standing = (
+                f" (standing in its way: {', '.join(rule.standing)})" if rule.standing else ""
+            )
+            reasons.append(f"would break {rule.rule}{standing}")
+        detail = "; ".join(reasons) if reasons else "inspect the report"
+        super().__init__(f"configuration change refused: {detail}")
 
 
 __all__ = [

@@ -17,6 +17,7 @@ from typing import cast
 
 import pytest
 from support.refusals import refused
+from support.space_cores import built
 
 from core.space._choices_support import committed, replay
 from core.space._results_support import codes
@@ -95,12 +96,17 @@ def test_a_relation_of_siblings_is_their_parents_and_owns_its_refusal() -> None:
     point = design_space(Aligned(extent=12))
     assert isinstance(point.query(Aligned.factor), Unresolved)
     assert choose(point, 3, 3).factor == 3
-    refused = choose(point, 3, 4).inspect(Aligned.factor)
+    # Setting the two factors apart breaks ``aligned`` on the values the change names.
+    report = point.try_with_choices({Aligned.first.factor: 3, Aligned.second.factor: 4})
+    assert not report.accepted
+    assert [(rule.rule, rule.standing) for rule in report.broken] == [("aligned", ())]
+    apart = built(point, {"first.factor": 3, "second.factor": 4})
+    refused = apart.inspect(Aligned.factor)
     assert isinstance(refused.accepted_result, Rejected)
     assert [(f.owner, f.message) for f in refused.accepted_result.findings] == [
         ("aligned", "first.factor=3, second.factor=4")
     ]
-    validity = inspection.validity(choose(point, 3, 4))
+    validity = inspection.validity(apart)
     assert [piece.owner for piece in validity.pieces] == ["aligned"]
 
 
@@ -134,15 +140,23 @@ def test_members_range_over_present_nodes_and_the_budget_counts_them() -> None:
     assert owners(point.query(Budgeted.costs)) == {"b.factor"}
     assert isinstance(point.query(Budgeted.c.cost), Inapplicable)
     validity = inspection.validity(point)
-    assert validity.status == "undecided"
+    assert validity.status == "open"
     assert [piece.owner for piece in validity.pieces] == ["within"]
     assert owners(point.query(Budgeted.total)) == {"b.factor"}
     point = point.with_choices({Budgeted.b.factor: 2})
     assert point.total == 3 + 4
     assert point.costs == (Located("a", "cost", 3), Located("b", "cost", 4))
     third = point.with_choices(use_third=True)
-    third = third.with_choices({Budgeted.c.factor: 1})
-    refused = third.query(Budgeted.total)
+    # The third member's cost puts the budget over: ``within`` is false on its own values,
+    # the first two factors standing in its way (``use_third`` decides whether ``c`` is
+    # there, so it does not).
+    report = third.try_with_choices({Budgeted.c.factor: 1})
+    assert not report.accepted
+    assert [(rule.rule, rule.standing) for rule in report.broken] == [
+        ("within", ("a.factor", "b.factor"))
+    ]
+    over = built(third, {"use_third": True, "a.factor": 4, "b.factor": 2, "c.factor": 1})
+    refused = over.query(Budgeted.total)
     assert codes(refused) == {"over-budget"} and owners(refused) == {"within"}
 
 
@@ -367,8 +381,12 @@ def test_a_structural_choice_reduces_to_primitives(
     assert isinstance(start.query(physical), Unresolved)
     tuned = start.with_choices({space_type.choice: "tuned", extra: 2})
     assert tuned.query(physical) == Available(6)
-    # A candidate-local choice of an inactive candidate is refused, not stored.
-    assert not tuned.try_with_choices({space_type.choice: "fixed"}).accepted
+    # A candidate-local choice of an inactive candidate is kept, dormant.
+    dormant = tuned.with_choices({space_type.choice: "fixed"})
+    assert dormant.query(physical) == Available(8)
+    assert isinstance(dormant.query(extra), Inapplicable)
+    stored = committed(dormant)
+    assert [stored[key] for key in stored if key.endswith("tuned.extra")] == [2]
     fixed = tuned.with_choices({space_type.choice: "fixed"}, tuned.tuned.field(Tuned.extra).clear())
     assert fixed.query(physical) == Available(8)
     assert isinstance(fixed.query(extra), Inapplicable)

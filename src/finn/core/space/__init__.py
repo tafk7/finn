@@ -4,9 +4,7 @@
 
 from . import inspection
 from ._configuration import BoundDecision, BoundValue, Space
-from ._execution import (
-    NativeEvaluationError,
-)
+from ._failure import NativeEvaluationError
 from .compiler import Model, design_space
 from .declarations import (
     Const,
@@ -25,7 +23,7 @@ from .declarations import (
     view,
 )
 from .domains import Domain, divisors_of, domain
-from .edits import Change, ChangeOutcome, ChangeRequest, ConfigurationResult
+from .edits import BrokenRule, Change, ChangeOutcome, ChangeRequest, ConfigurationResult
 from .errors import (
     ConfigurationError,
     DefinitionError,
@@ -100,6 +98,7 @@ __all__ = [
     "ChangeRequest",
     "ChangeOutcome",
     "ConfigurationResult",
+    "BrokenRule",
     # Errors and native cleanup diagnostics
     "DefinitionError",
     "RequestError",

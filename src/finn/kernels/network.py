@@ -25,24 +25,33 @@ findings, and its stored choices wait with it. A read that does not apply (a ker
 without known weights states no contents) leaves the fact absent.
 
 Each member is configured from its facts, its class and arguments (a kernel's
-``Facts``, a channel's read from the wiring), with the choices it stores replayed as it
-is bound (``stored``): what replay refuses of them is dropped, each with why
-(``dropped``). A configured member is kept by its facts and choices, by value, in the
-build's member cache (``finn.kernels.members``), so a network bound again from equal
-facts evaluates nothing again.
+``Facts``, a channel's read from the wiring), with the choices it stores set as it is
+bound, as one change from nothing stored (``stored``; ``finn.kernels.members``): a stored
+value outside its domain over the member's facts is dropped, with why (``dropped``: stale);
+a stored set that breaks a rule refuses the network, naming the rule. Nothing is filled in:
+a network bound again binds exactly what it stores. A configured member is kept by its
+facts and choices, by value, in the build's member cache, so a network bound again from
+equal facts evaluates nothing again.
 
 A network is immutable, like a point. ``trial({(owner, key): value}, clear=...)`` is
 a change, atomic over the members it reaches:
 
-1. each kernel named: the engine's own trial on its point, atomic;
+1. each kernel named: one change of the engine's on its point, refused where a value is
+   outside its domain or a rule it reaches would be newly false, naming the rule and the
+   stored choices standing in its way;
 2. each member that changed: every fact it gives a channel read again (its ends, and
    for a parameter channel what it states: these may read a choice, MatMul's
    ``realization``);
-3. each channel named, or given another fact: bound again (from the member cache), its
-   stored choices replayed with the change's. What replay refuses of the stored choices is
-   ``dropped``, with why; a refusal of a choice the change names refuses the change;
-4. every member touched by a change of values checked: its validity
-   (``inspection.validity``), which no Decision left without a viable case passes.
+3. each channel named with the same facts: one change on its point, as a kernel's. Each
+   channel given other facts is rebuilt from them, a change of facts on the channel it
+   was (a channel never bound before is bound, as above), with the change's choices.
+   Rebuilt, it takes the **interim channel rule** (``interim_channel_defaults``): the
+   stored choices the new facts refuse (outside their domain, or standing in the way of a
+   rule they make false) are derived again, first valid, each named with its old value,
+   its new one and why (``Trial.rederived``), and the open choices the new facts bring
+   into play take their first valid values; a choice the change names or clears is never
+   one of them;
+4. every channel rebuilt from new facts checked: its validity (``inspection.validity``).
 
 Keys are pairs, ``(owner, key)``: a member by name and the decision key in its space
 (``("first", "compute.packed.pe")``). Findings keep their owner, the key or the
@@ -59,12 +68,12 @@ member's netlist under its node (its name, unless the network is given another,
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from collections.abc import Callable, Collection, Hashable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Generic, Self, TypeVar
+from typing import Any, Generic, Self, TypeVar, cast
 
-from finn.core.reporting.findings import Finding
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
     Available,
     Inapplicable,
@@ -90,11 +99,25 @@ from finn.kernels.artifacts.module import (
 )
 from finn.kernels.base import BOUNDARY, CLOCK2X, NETLIST, Clocking, PortEnd
 from finn.kernels.channels import Channel
-from finn.kernels.configure import chosen, refusals, undecided
+from finn.kernels.configure import chosen, refusal
 from finn.kernels.control import CONTROL, Control, Exported, top_bus
 from finn.kernels.control import presented as presented_buses
-from finn.kernels.members import Configured, Facts, commit, configured, rejection, replayed
+from finn.kernels.defaults import defaulted
+from finn.kernels.members import (
+    Configured,
+    Facts,
+    Refusal,
+    commit,
+    configured,
+    current,
+    observed,
+    reasons,
+    rejection,
+    replayed,
+    uncached,
+)
 from finn.kernels.members import decision as decision_of
+from finn.kernels.members import key as member_key
 from finn.platform.capabilities import Resources
 
 T = TypeVar("T")
@@ -112,7 +135,13 @@ def dotted(key: Key) -> str:
 
 
 class NetworkError(ValueError):
-    """A network that cannot be built as declared, or a member read that is no member's."""
+    """A network that cannot be built as declared, or a member read that is no member's.
+    ``findings``: the coded reasons where the engine gave any (a member whose stored
+    choices are refused: each rule's or value's findings, about the member)."""
+
+    def __init__(self, message: str, findings: Iterable[Finding] = ()) -> None:
+        super().__init__(message)
+        self.findings = tuple(findings)
 
 
 # -- the module ---------------------------------------------------------------------------
@@ -207,6 +236,9 @@ class Fact:
     name: str
 
 
+FactsKey = tuple[tuple[str, object], ...]
+"""A channel's facts, by name, in name order."""
+
 # A wire, an unbound channel and a trial are records the network reads, never values a
 # Space holds: plain dataclasses, since a frozen one is a value class, which holds
 # immutable values only.
@@ -244,11 +276,13 @@ def wire(**facts: object) -> Wire:
 class Unbound:
     """A channel whose facts are not known: the read of member ``member`` waits or is
     refused (``result``, its findings naming ``member``'s keys), and the choices it
-    stores wait with it."""
+    stores wait with it. ``was``: the channel as it was last bound, and its facts, where it
+    was (a change that gives it facts again rebuilds it from that point)."""
 
     member: str
     result: Unresolved | Rejected
     stored: Mapping[str, object]
+    was: tuple[FactsKey, Space] | None = None
 
 
 N = TypeVar("N")
@@ -257,24 +291,21 @@ N = TypeVar("N")
 @dataclass
 class Trial(Generic[N]):
     """A change tried on a network: the network it reaches (the one tried, where it is
-    refused), the stored choices replay dropped, each with why, and why it is refused, by
-    key (a member's own refusal by ``(name, "")``)."""
+    refused); the stored channel choices the interim channel rule derived again, each with
+    one finding (``choice-rederived``: its old value, its new one, and why the new facts
+    refuse the old, its causes); and why it is refused, by key: a value outside its domain
+    by the choice's key, a rule broken by the rule's key (a member's own refusal by
+    ``(name, "")``), each with the stored choices standing in its way (``standing``)."""
 
     network: N
-    dropped: Mapping[Key, tuple[Finding, ...]]
+    rederived: Mapping[Key, tuple[Finding, ...]]
     refused: Mapping[Key, tuple[Finding, ...]]
+    standing: Mapping[Key, tuple[Key, ...]] = field(default_factory=dict)
 
     @property
     def accepted(self) -> bool:
         return not self.refused
 
-
-def _forced(point: Space) -> dict[str, object]:
-    return {item.key: item.value for item in inspection.forced(point)}
-
-
-FactsKey = tuple[tuple[str, object], ...]
-"""A channel's facts, by name, in name order."""
 
 #: ``Channel``, called with facts by name, each checked by the engine.
 _CHANNEL: Any = Channel
@@ -286,9 +317,188 @@ def _channel(
     change: Mapping[str, object],
     clear: Collection[str],
 ) -> Configured:
-    """The channel bound from ``facts``, its ``stored`` choices replayed with ``change``
-    (``finn.kernels.members``)."""
+    """The channel bound from ``facts``, its ``stored`` choices and ``change`` set as one
+    change (``finn.kernels.members``)."""
     return configured(Facts(_CHANNEL, dict(facts)), stored, change, clear)
+
+
+def interim_channel_defaults(
+    point: Space, kept: Collection[str] = ()
+) -> Space | tuple[Finding, ...]:
+    """**Interim**, until the ends pass decides how a channel's choices are made: the
+    channel ``point`` with each open choice in play that is not required (a FIFO's depth
+    is, and stays open) set to its first valid value, in the flow order (each after what
+    its presence, its list and its facts read), the choices ``kept`` names left open;
+    ``finn.kernels.defaults.defaulted``, a channel's choices being all first valid. Or why
+    a choice can take no value (``choice-no-valid-value``, owned by its key). A channel
+    refused on its own facts is returned as it is: its validity says why. Where the network
+    builds channels: at the cut, every channel (``finn.custom_op.kernels.shell``); in a
+    change, a channel rebuilt from new facts (``Network.trial``)."""
+    if isinstance(inspection.validity(point).result, Rejected):
+        return point
+    return defaulted(point, kept=kept)
+
+
+def _rederived(
+    key: str, old: object, new: inspection.ChoiceState | None, why: tuple[Finding, ...]
+) -> Finding:
+    """The finding of a stored channel choice the interim rule derived again
+    (``choice-rederived``): its old value, its new one (none where it stays open, a
+    required one), why the new facts refuse the old (its causes)."""
+    value = new.value if isinstance(new, inspection.Set) else None
+    details = tuple(
+        (name, each)
+        for name, each in (("value", old), ("rederived", value))
+        if type(each) in (bool, int, float, str)
+    )
+    taken = "left open (required)" if value is None else f"first valid {value!r}"
+    return Finding(
+        FindingKind.LIMITATION,
+        "choice-rederived",
+        key,
+        f"{old!r} is refused by the channel's new facts: {taken} (the interim channel rule)",
+        details,
+        why,
+    )
+
+
+Rebuilt = tuple[Space, Mapping[str, Finding]] | Refusal
+"""A channel rebuilt from new facts (``_rebuilt``): its point and each choice derived again,
+by key; or why the change is refused."""
+
+
+def _rebuilt(
+    read: FactsKey,
+    stored: Mapping[str, object],
+    change: Mapping[str, object],
+    cleared: Collection[str],
+    was: tuple[FactsKey, Space] | None,
+) -> Rebuilt:
+    """A channel rebuilt from new facts ``read`` (``_rebuild``), kept in the open member
+    cache by its new facts, what it stores, the change, and the facts and choices of the
+    channel it was: a network bound again rebuilds nothing again."""
+    cache = current()
+    found = None if cache is None else _rebuilt_key(read, stored, change, cleared, was)
+    if cache is None or found is None:
+        return _rebuild(read, stored, change, cleared, was)
+
+    def again() -> Rebuilt:
+        with uncached():
+            return _rebuild(read, stored, change, cleared, was)
+
+    made: Rebuilt = cache.get(
+        found, lambda: _rebuild(read, stored, change, cleared, was), again, _observed_rebuilt
+    )
+    return made
+
+
+def _rebuilt_key(
+    read: FactsKey,
+    stored: Mapping[str, object],
+    change: Mapping[str, object],
+    cleared: Collection[str],
+    was: tuple[FactsKey, Space] | None,
+) -> Hashable | None:
+    """``_rebuilt``'s key in the member cache (``finn.kernels.members.key``), or None where
+    a part does not hash."""
+    now = member_key(Facts(_CHANNEL, dict(read)), stored, change, cleared)
+    if now is None:
+        return None
+    if was is None:
+        return ("rebuilt", now, None)
+    before = member_key(Facts(_CHANNEL, dict(was[0])), chosen(was[1]), {}, ())
+    return None if before is None else ("rebuilt", now, before)
+
+
+def _observed_rebuilt(entry: Rebuilt) -> object:
+    """What a network reads of a rebuilt channel, to compare in the verifying mode."""
+    if isinstance(entry, Refusal):
+        return (None, dict(entry.why), dict(entry.standing))
+    point, again = entry
+    return (observed(Configured(point)), dict(again))
+
+
+def _rebuild(
+    read: FactsKey,
+    stored: Mapping[str, object],
+    change: Mapping[str, object],
+    cleared: Collection[str],
+    was: tuple[FactsKey, Space] | None,
+) -> Rebuilt:
+    """A channel rebuilt from new facts ``read``, ``change`` set and ``cleared`` cleared
+    (the module docstring, step 3): a change of facts on the channel it ``was``, where it
+    was bound before with facts of the same names; else bound from the new facts with its
+    ``stored`` choices, as the network binds it (a fact that goes missing is no change of
+    facts). The stored choices the new facts refuse, those outside their domain and those
+    standing in the way of a rule the new facts make false, are cleared in the same change,
+    and the interim channel rule gives them and every choice the new facts bring into play
+    their first valid values (``interim_channel_defaults``). Returns the channel and each
+    choice derived again (``_rederived``), by key; or why the change is refused: a value of
+    its own, a rule the new facts and the change break with nothing stored in its way, or a
+    choice no value can be set for."""
+    named = {*change, *cleared}
+    refused: dict[str, tuple[Finding, ...]] = {}
+    if was is not None and {fact for fact, _ in was[0]} == {fact for fact, _ in read}:
+        before = was[1]
+        # Cleared while unbound: no longer stored, so cleared here too.
+        gone = (*(key for key in chosen(before) if key not in stored), *cleared)
+        first = commit(before, change, gone, dict(read))
+        if isinstance(first, Refusal):
+            blocking = {
+                key: why
+                for key, why in first.why.items()
+                if key in named or (key not in first.outside and not first.standing.get(key))
+            }
+            if blocking:
+                return Refusal(blocking, first.standing, first.outside)
+            for key, why in first.why.items():
+                for each in (key,) if key in first.outside else first.standing[key]:
+                    refused[each] = (*refused.get(each, ()), *why)
+            first = commit(before, change, (*gone, *refused), dict(read))
+            if isinstance(first, Refusal):
+                return first
+        point = first
+        # Open before (left open by a change, or not in play), or named: kept open.
+        opened = {
+            key for key, state in inspection.states(before) if isinstance(state, inspection.Open)
+        }
+        kept = opened | named | set(gone)
+    else:
+        bound = _channel(read, stored, change, cleared)
+        if bound.point is None:
+            return Refusal(bound.refused, bound.standing)
+        point, refused, kept = bound.point, dict(bound.dropped), named
+    done = interim_channel_defaults(point, kept)
+    if isinstance(done, tuple):
+        return Refusal({finding.owner: (finding,) for finding in done})
+    states = dict(inspection.states(done))
+    return done, {
+        key: _rederived(key, stored[key], states.get(key), why) for key, why in refused.items()
+    }
+
+
+def _keyed(
+    name: str,
+    found: Refusal,
+    refused: dict[Key, tuple[Finding, ...]],
+    standing: dict[Key, tuple[Key, ...]],
+) -> None:
+    """``found``, member ``name``'s refusal, added to a trial's, by key."""
+    refused |= {(name, key): why for key, why in found.why.items()}
+    standing |= {
+        (name, key): tuple((name, each) for each in keys)
+        for key, keys in found.standing.items()
+        if keys
+    }
+
+
+def _same(held: Unbound | None, other: Unbound) -> bool:
+    """Whether ``held`` holds what ``other`` does: the same read, the same choices."""
+    return (
+        held is not None
+        and (held.member, held.result, held.stored) == (other.member, other.result, other.stored)
+        and held.was is other.was
+    )
 
 
 # -- the network ----------------------------------------------------------------------------
@@ -312,6 +522,21 @@ def _kernel(name: str, member: Space | Facts, stored: Mapping[str, object]) -> C
     else:
         point = member
     return replayed(point, stored)
+
+
+def _bound(name: str, member: Configured, subject: str) -> Space:
+    """The point of member ``name`` as a network binds it; a ``NetworkError`` naming why
+    its stored choices are refused: a rule they break together, or a value outside its
+    domain, each by its key with its findings (``reasons``; nothing stands in a rule's way
+    at a bind, which sets every stored choice), those findings, each once, about the
+    member (its ``subject``, ``node`` or ``tensor``)."""
+    if member.point is None:
+        found = (finding for why in member.refused.values() for finding in why)
+        raise NetworkError(
+            f"{name}: its stored choices are refused: " + reasons(member.refused, member.standing),
+            dict.fromkeys(finding.about(**{subject: name}) for finding in found),
+        )
+    return member.point
 
 
 def _ranked(kernels: Sequence[str], wires: Mapping[str, Wire]) -> tuple[str, ...]:
@@ -376,9 +601,10 @@ class Network:
         cache), its declaration (a Space with its facts, not yet bound) or its point, or a
         channel's ``Wire``. Its kernels are bound, then each channel from what it reads.
 
-        ``stored``: the choices each member stores, by key, replayed as it is bound (a
-        channel's once its facts are known; until then it holds them): what replay
-        refuses of them is dropped, with why (``dropped``). ``nodes``: each member's node
+        ``stored``: the choices each member stores, by key, set as it is bound, as one
+        change (a channel's once its facts are known; until then it holds them): a value
+        outside its domain is dropped, with why (``dropped``); a rule they break refuses
+        the network (``NetworkError``), naming it. ``nodes``: each member's node
         in the module, the prefix of its instances and of the ends it presents (its name
         where none is given); two members of one node are refused."""
         kernels: dict[str, Space | Facts] = {}
@@ -418,8 +644,7 @@ class Network:
         dropped: dict[Key, tuple[Finding, ...]] = {}
         for name, declared in kernels.items():
             kernel = _kernel(name, declared, held.get(name, {}))
-            assert kernel.point is not None
-            points[name] = kernel.point
+            points[name] = _bound(name, kernel, "node")
             dropped |= {(name, key): why for key, why in kernel.dropped.items()}
         unbound: dict[str, Unbound] = {}
         facts: dict[str, FactsKey] = {}
@@ -429,8 +654,7 @@ class Network:
                 unbound[name] = Unbound(read.member, read.result, held.get(name, {}))
                 continue
             channel = _channel(read, held.get(name, {}), {}, ())
-            assert channel.point is not None and not channel.refused
-            points[name], facts[name] = channel.point, read
+            points[name], facts[name] = _bound(name, channel, "tensor"), read
             dropped |= {(name, key): why for key, why in channel.dropped.items()}
         self._points = MappingProxyType(points)
         self._unbound = MappingProxyType(unbound)
@@ -497,8 +721,9 @@ class Network:
 
     @property
     def dropped(self) -> Mapping[Key, tuple[Finding, ...]]:
-        """The stored choices replay refused as this network was bound, by key, each with
-        why (a network made by a change names its own, ``Trial.dropped``)."""
+        """The stored choices dropped as this network was bound, by key, each a value
+        outside its domain over its member's facts, with why (stale); none in a network
+        made by a change."""
         return self._dropped
 
     def wiring(self, name: str) -> Wire:
@@ -576,35 +801,40 @@ class Network:
     def _bound_members(self, names: Iterable[str] | None) -> Iterable[tuple[str, Space]]:
         return ((name, self._points[name]) for name in self._wanted(names) if name in self._points)
 
-    def viable(
+    def states(
         self, names: Iterable[str] | None = None
-    ) -> tuple[tuple[Key, inspection.Viable], ...]:
-        """Each open Decision with enumerable cases (of ``names`` only, where named), by
-        key, ranked: each member's in its own rank order (``inspection.viable``), read
-        once per point."""
+    ) -> tuple[tuple[Key, inspection.ChoiceState], ...]:
+        """Every choice of each bound member (of ``names`` only, where named), by key, with
+        its state (``inspection.states``: set, waiting, dormant, open or absent), ranked:
+        each member's in its flow order, read once per point. An unbound channel's stored
+        choices wait with its read (``unbound``)."""
         return tuple(
-            ((name, item.key), item)
+            ((name, key), state)
             for name, point in self._bound_members(names)
-            for item in inspection.viable(point)
+            for key, state in self._answer(name, "states", inspection.states)
         )
 
-    def open(self, names: Iterable[str] | None = None) -> tuple[tuple[Key, inspection.Open], ...]:  # noqa: A003 - the inspection's name
-        """Each open Decision known by membership only (of ``names`` only, where named),
-        by key, ranked."""
-        return tuple(
-            ((name, item.key), item)
-            for name, point in self._bound_members(names)
-            for item in inspection.open(point)
-        )
-
-    def forced(self, names: Iterable[str] | None = None) -> dict[Key, object]:
-        """Each Decision forced to its one viable case (of ``names`` only, where named), by
-        key, with that case."""
-        return {
-            (name, key): value
-            for name, point in self._bound_members(names)
-            for key, value in _forced(point).items()
-        }
+    def viable(self, keys: Iterable[Key]) -> tuple[tuple[Key, inspection.Viable], ...]:
+        """Each choice ``keys`` names, by key, in the order given, with its listed values,
+        each possible or refused as setting it alone would be (``inspection.viable``):
+        each refused value with the rules it would break and the stored choices standing
+        in their way. A key of no bound member's choice is a ``NetworkError``."""
+        wanted = list(keys)
+        by_member: dict[str, list[str]] = {}
+        for name, key in wanted:
+            if name not in self._points:
+                raise NetworkError(f"{dotted((name, key))}: no bound member of the network owns it")
+            if decision_of(self._points[name], key) is None:
+                raise NetworkError(f"{dotted((name, key))}: not a choice of {name}")
+            by_member.setdefault(name, []).append(key)
+        found: dict[Key, inspection.Viable] = {}
+        for name, below in by_member.items():
+            point = self._points[name]
+            references = [cast(Any, decision_of(point, key)).reference for key in below]
+            found |= {
+                (name, key): item for key, item in zip(below, inspection.viable(point, references))
+            }
+        return tuple((key, found[key]) for key in wanted)
 
     def _answer(self, name: str, question: str, answer: Callable[[Space], T]) -> T:
         """``answer`` of bound member ``name``'s point, read once of this network, and kept
@@ -617,8 +847,8 @@ class Network:
 
     def chosen(self, names: Iterable[str] | None = None) -> dict[Key, object]:
         """Every choice stored (of ``names`` only, where named), by key, ranked: each bound
-        member's committed Decisions, those kept unchecked among them, by their stored
-        values, and the choices an unbound channel holds: what saving writes (``persist``)."""
+        member's, by their stored values, whatever their state (set, waiting or dormant),
+        and the choices an unbound channel holds: what saving writes (``persist``)."""
         found: dict[Key, object] = {}
         for name in self._wanted(names):
             held = self._unbound.get(name)
@@ -635,32 +865,19 @@ class Network:
         return None if point is None else decision_of(point, below)
 
     def undecided(self) -> tuple[Key, ...]:
-        """Every applicable Decision neither committed nor forced, by key, ranked: the
-        open choices with cases, then those known by membership only, and those whose
-        cases wait on another choice (``configure.undecided``). A choice stored but kept
-        unchecked is not open (``unchecked``)."""
+        """Every open choice in play, by key, ranked: each bound member's choices unset in
+        a scope that is present (``inspection.Open``, waiting on nothing), in its flow
+        order. A choice whose presence waits on another open choice is not in play yet,
+        and a stored one is not open, whatever its state."""
         return tuple(
-            (name, key)
-            for name, point in self._bound_members(None)
-            for key in self._answer(name, "undecided", lambda at: tuple(undecided(at, "*")))
-        )
-
-    def unchecked(self) -> tuple[tuple[Key, inspection.Unchecked], ...]:
-        """Every choice stored and kept unchecked (its own check cannot conclude yet), by
-        key, ranked: each bound member's ``inspection.unchecked``, its stored value and what
-        it waits on, keys of that member's own. Apart from ``undecided``, which counts only
-        the open choices: an unchecked choice is stored, and committing it again changes
-        nothing. A network that holds one is not complete (generation refuses it); an
-        unbound channel's stored choices wait with its read (``unbound``)."""
-        return tuple(
-            ((name, item.key), item)
-            for name, point in self._bound_members(None)
-            for item in self._answer(name, "unchecked", inspection.unchecked)
+            key
+            for key, state in self.states()
+            if isinstance(state, inspection.Open) and not state.waits
         )
 
     def validity(self, name: str) -> inspection.Validity:
         """Member ``name``'s validity (``inspection.validity``); an unbound channel's is its
-        read's: refused with the read's findings, or undecided on what the read waits on
+        read's: refused with the read's findings, or open on what the read waits on
         (one piece, owned by the member read)."""
         held = self._unbound.get(name)
         if held is None:
@@ -668,7 +885,7 @@ class Network:
         piece = (inspection.Piece(held.member, held.result),)
         if isinstance(held.result, Rejected):
             return inspection.Validity("refused", piece, held.result)
-        return inspection.Validity("undecided", piece, held.result)
+        return inspection.Validity("open", piece, held.result)
 
     # -- a change ---------------------------------------------------------------------------
 
@@ -705,22 +922,29 @@ class Network:
         return tuple(sorted(resolved.items(), key=lambda item: item[0]))
 
     def _stored(self, name: str) -> Mapping[str, object]:
-        """What member ``name`` stores, replayed as it is bound again: its committed
-        choices, by their stored values, those kept unchecked among them (a commitment whose
-        check waits is replayed as any other, and dropped with why where replay refuses it)."""
+        """What member ``name`` stores: a bound member's choices, by their stored values,
+        whatever their state, or the choices an unbound channel holds."""
         held = self._unbound.get(name)
         if held is not None:
             return held.stored
         return self._answer(name, "chosen", chosen)
 
+    def _was(self, name: str) -> tuple[FactsKey, Space] | None:
+        """Channel ``name`` as it was last bound, and its facts, where it was."""
+        held = self._unbound.get(name)
+        if held is not None:
+            return held.was
+        return (self._facts[name], self._points[name])
+
     def trial(
         self, changes: Mapping[Key, object], clear: Collection[Key] = (), *, check: bool = True
     ) -> Trial[Self]:
-        """``changes`` committed and ``clear`` cleared, atomically over the members they
-        reach; see the module docstring. ``check`` false skips step 4 (a reopen's clear,
-        or a probe of what forces a choice)."""
+        """``changes`` set and ``clear`` cleared, atomically over the members they reach;
+        see the module docstring. ``check`` false skips step 4 (a reopen's clear, or the
+        cut, which leaves a refused channel for emission to name)."""
         names = set(self._ranked)
         refused: dict[Key, tuple[Finding, ...]] = {}
+        standing: dict[Key, tuple[Key, ...]] = {}
         by_member: dict[str, dict[str, object]] = {}
         clears: dict[str, list[str]] = {}
         for key, value in changes.items():
@@ -743,81 +967,92 @@ class Network:
             if name not in by_member and name not in clears:
                 continue
             outcome = commit(points[name], by_member.get(name, {}), clears.get(name, ()))
-            if isinstance(outcome, Space):
-                points[name] = outcome
-                changed.append(name)
-            else:
-                refused |= {(name, key): why for key, why in outcome.items()}
+            if isinstance(outcome, Refusal):
+                _keyed(name, outcome, refused, standing)
+                continue
+            points[name] = outcome
+            changed.append(name)
         if refused:
-            return Trial(self, {}, refused)
-        dropped: dict[Key, tuple[Finding, ...]] = {}
+            return Trial(self, {}, refused, standing)
+        rederived: dict[Key, tuple[Finding, ...]] = {}
+        rebuilt: list[str] = []
         for name in self.channels:
             named = name in by_member or name in clears
             if not named and not any(read in changed for read in self._wires[name].reads):
                 continue
-            stored = self._stored(name)
+            change, cleared = by_member.get(name, {}), tuple(clears.get(name, ()))
             read = self._resolve(name, points, unbound)
             if isinstance(read, Unbound):
-                if by_member.get(name):
-                    refused |= {(name, key): read.result.findings for key in by_member[name]}
+                if change:
+                    refused |= {(name, key): read.result.findings for key in change}
                     continue
                 kept = {
-                    key: value for key, value in stored.items() if key not in clears.get(name, ())
+                    key: value for key, value in self._stored(name).items() if key not in cleared
                 }
-                if self._unbound.get(name) != Unbound(read.member, read.result, kept):
-                    unbound[name] = Unbound(read.member, read.result, kept)
+                held = Unbound(read.member, read.result, kept, self._was(name))
+                if not _same(self._unbound.get(name), held):
+                    unbound[name] = held
                     points.pop(name, None)
                     facts.pop(name, None)
                     changed.append(name)
                 continue
-            if read == facts.get(name) and not named:
+            if name in points and read == facts[name]:
+                if not named:
+                    continue
+                outcome = commit(points[name], change, cleared)
+                if isinstance(outcome, Refusal):
+                    _keyed(name, outcome, refused, standing)
+                    continue
+                points[name] = outcome
+                changed.append(name)
                 continue
-            channel = _channel(read, stored, by_member.get(name, {}), clears.get(name, ()))
-            if channel.refused:
-                refused |= {(name, key): why for key, why in channel.refused.items()}
+            built = _rebuilt(read, self._stored(name), change, cleared, self._was(name))
+            if isinstance(built, Refusal):
+                _keyed(name, built, refused, standing)
                 continue
-            assert channel.point is not None
-            dropped |= {(name, key): why for key, why in channel.dropped.items()}
-            points[name], facts[name] = channel.point, read
+            points[name], again = built
+            facts[name] = read
+            rederived |= {(name, key): (finding,) for key, finding in again.items()}
             unbound.pop(name, None)
             changed.append(name)
+            rebuilt.append(name)
         if refused:
-            return Trial(self, dropped, refused)
+            return Trial(self, rederived, refused, standing)
         network = self._made(points, unbound, facts)
         if check:
-            refused = network.checked(name for name in changed if name in points)
+            refused = network.checked(rebuilt)
             if refused:
-                return Trial(self, dropped, refused)
-        return Trial(network, dropped, {})
+                return Trial(self, rederived, refused)
+        return Trial(network, rederived, {})
 
     def checked(self, members: Iterable[str]) -> dict[Key, tuple[Finding, ...]]:
-        """Why each of ``members`` is refused, its validity's findings (``refusals``): a
-        Decision left without a viable case by its key (why each case is refused its
-        causes), the rest by ``(name, "")``."""
+        """Why each of ``members`` is refused, by ``(name, "")``: its validity's false
+        pieces' findings (``refusal``)."""
         refused: dict[Key, tuple[Finding, ...]] = {}
         for name in members:
-            rest: list[Finding] = []
-            for finding in refusals(self.member(name)):
-                if finding.code == "decision-no-viable-case":
-                    key = (name, finding.owner)
-                    refused[key] = (replace(finding, owner=dotted(key)),)
-                else:
-                    rest.append(finding)
-            if rest:
-                refused[(name, "")] = tuple(rest)
+            found = refusal(inspection.validity(self.member(name)))
+            if found:
+                refused[(name, "")] = found
         return refused
 
     def with_choices(self, changes: Mapping[Key, object]) -> Self:
-        """``changes`` committed as the engine accepts them (a member's own refusal is its
-        validity's to state, not checked here), every stored choice kept; a refusal, or a
-        stored choice the change would drop, is a ``NetworkError`` naming each."""
+        """``changes`` set as the engine accepts them (a channel rebuilt from new facts is
+        not checked here: its validity is its own to state); a refusal is a
+        ``NetworkError`` naming each refused value or rule, with the stored choices
+        standing in its way."""
         trial = self.trial(changes, check=False)
-        why = {**trial.refused, **trial.dropped}
-        if why:
+        if trial.refused:
             raise NetworkError(
                 "choices are not accepted: "
                 + "; ".join(
-                    f"{dotted(key)}: " + "; ".join(map(str, found)) for key, found in why.items()
+                    f"{dotted(key)}: "
+                    + "; ".join(map(str, found))
+                    + (
+                        f" (standing: {', '.join(map(dotted, trial.standing[key]))})"
+                        if trial.standing.get(key)
+                        else ""
+                    )
+                    for key, found in trial.refused.items()
                 )
             )
         return trial.network
@@ -901,6 +1136,7 @@ __all__ = [
     "assembled",
     "compose",
     "dotted",
+    "interim_channel_defaults",
     "merged",
     "module_abi",
     "wire",

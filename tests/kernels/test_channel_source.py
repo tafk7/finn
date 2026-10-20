@@ -6,13 +6,13 @@
 The MatMul sits in a network (``support.helpers.matmul_point``) that gives it its
 weights: the weight channel carries what MatMul states for it, its ``contents`` and
 its tensor over their range. Known weights give the channel a value, so its
-``source`` applies (``memstream``, its one candidate, forced) and stores them;
-unknown weights leave the channel without a source, and it is the boundary ``in1_V``.
-The channel's ends are MatMul's, known once its folding is: its choices are committed
-after the kernel's. These tests cover the forced source, laziness, the memory's own
-choices, their replay on another network, the platform's capabilities, the invariant
-that a channel with a value has its source as its only producer, and the weight
-channel's FIFO.
+``source`` applies (``memstream``, its one candidate, set first valid as the network
+builds the channel: the interim channel rule) and stores them; unknown weights leave the
+channel without a source, and it is the boundary ``in1_V``. The channel's ends are
+MatMul's, known once its folding is: its choices are made after the kernel's. These
+tests cover the source, laziness, the memory's own choices, their replay on another
+network, the platform's capabilities, the invariant that a channel with a value has its
+source as its only producer, and the weight channel's FIFO.
 """
 
 from dataclasses import replace
@@ -49,7 +49,6 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import NETLIST
 from finn.kernels.channels import Channel
-from finn.kernels.configure import commit
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -162,11 +161,12 @@ def test_known_weights_give_the_weight_channel_its_source():
         assert isinstance(module, Composed)
         assert {p.name for p in module.abi.pins if isinstance(p, Bus)} == ports
         assert labels(module) == instances
-    # Known weights: the channel has a value, and its one source is forced, never committed.
+    # Known weights: the channel has a value, and its one source is set, first valid, as
+    # the network builds the channel (the interim channel rule): stored as any choice.
     w = stored_.member("w")
-    assert w.valued and stored_.forced(("w",))[("w", "source")] == "memstream"
+    assert w.valued and stored_.chosen(("w",))[("w", "source")] == "memstream"
     state = w.field(handle(w, "source")).state
-    assert isinstance(state, Available) and state.value.status == "unassigned"
+    assert isinstance(state, Available) and state.value.status == "committed"
     assert isinstance(w.source, MemStreamKernel)
     assert w.source.image == (0x22C, 0x6BE, 0xDD3, 0x941)
     # The weight channel's producer is its source, a leaf below the channel.
@@ -206,22 +206,31 @@ def test_the_channel_owns_its_source_and_its_choices():
     # The choice belongs to the memory kernel the channel places as its source.
     assert local.scope == "source.memstream" and not local.selector
     assert not any(key[1].startswith("memory") for key in base(weights=WEIGHTS).decisions())
-    # Its choices apply as soon as the source is forced: the explicit styles, LUTRAM first
+    # Its choices apply as soon as the source is set: the explicit styles, LUTRAM first
     # for a table of 64 bits, and ``auto`` last.
     chosen = folded(base(weights=WEIGHTS)).member("w").source
     assert chosen.field(MemStreamKernel.ram_style).candidates() == Available(
         ("distributed", "block", "ultra", "auto")
     )
-    # Without a value the source is inapplicable, and so are its choices.
+    # Without a value the source is absent, and so are its choices: one set is accepted
+    # and kept, dormant, out of play.
     unvalued = folded(base()).trial(keyed({"w.source.memstream.ram_style": "block"}))
-    assert unvalued.refused and all(
-        finding.code == "inapplicable" for why in unvalued.refused.values() for finding in why
-    )
+    assert unvalued.accepted
+    states = dict(unvalued.network.states(("w",)))
+    assert states[("w", "source.memstream.ram_style")] == inspection.Dormant("block")
 
 
-def test_the_stored_memory_needs_its_own_choices_and_refuses_bad_weights():
-    uncommitted = configured(base(weights=WEIGHTS))
-    assert isinstance(module_of(uncommitted, "matmul"), Unresolved)
+def test_the_stored_memory_takes_its_choices_with_its_channel_and_refuses_bad_weights():
+    # The memory's choices are set, first valid, as the network builds the weight channel
+    # (the interim channel rule): LUTRAM for a table of 64 bits, unpumped.
+    built_with = configured(base(weights=WEIGHTS))
+    assert built_with.chosen(("w",)) == {
+        ("w", "source"): "memstream",
+        ("w", "source.memstream.ram_style"): "distributed",
+        ("w", "source.memstream.pumped_memory"): False,
+        ("w", "transport"): "direct",
+    }
+    assert isinstance(module_of(built_with, "matmul"), Available)
     # Weights outside their type are refused where MatMul states their range on the
     # weight channel's tensor; the channel, which carries it, is refused with it.
     outside = base(weights=((4,) * 4,) * 4)
@@ -231,9 +240,9 @@ def test_the_stored_memory_needs_its_own_choices_and_refuses_bad_weights():
     assert owners(refused) == {"carried_weights"}
     assert codes(outside.query("w", NETLIST)) == {"dtype-storage"}
     # The view presenting it is a product: refused with MatMul, whose cores read the
-    # refused value, so no core is possible either.
+    # refused value.
     presented = outside.member("matmul").query(MatMulKernel.w_carried)
-    assert codes(presented) == {"dtype-storage", "decision-no-viable-case"}
+    assert codes(presented) == {"dtype-storage"}
     # A shape error is refused by MatMul: its K is its activations', not the weights'.
     wrong = base(weights=((0,),)).member("matmul").query(MatMulKernel.carried)
     assert isinstance(wrong, Rejected) and codes(wrong) == {"matmul-tensor"}
@@ -284,7 +293,9 @@ def test_the_cores_do_not_wait_on_the_source():
             "matmul.compute.packed.reducer": "tree",
         },
     )
-    assert isinstance(module_of(point, "matmul"), Unresolved)
+    # The weight channel, built once the folding is known, takes its memory's choices
+    # (the interim channel rule), so the module is complete.
+    assert isinstance(module_of(point, "matmul"), Available)
     # The packed core does not wait for the memory: its weights' range is the one their
     # owner states on the channel.
     compute = point.member("matmul").compute
@@ -303,16 +314,19 @@ def test_the_cores_do_not_wait_on_the_source():
 def test_the_sources_choices_round_trip_through_another_network():
     point = configured(base(weights=WEIGHTS), style="block")
     saved = point.chosen()
-    # Only choices made on purpose: the forced source and adapter selector are not saved.
+    # Every choice is stored: the source and the adapter too, set where the network
+    # builds their channels (the interim channel rule).
     assert sorted(f"{owner}.{key}" for owner, key in saved) == [
         "matmul.compute",
         "matmul.compute.packed.compute_pumping",
         "matmul.compute.packed.pe",
         "matmul.compute.packed.reducer",
         "matmul.compute.packed.simd",
+        "w.source",
         "w.source.memstream.pumped_memory",
         "w.source.memstream.ram_style",
         "w.transport",
+        "x.adapter",
         "x.adapter.input_gen.input_gen.ram_style",
         "x.transport",
         "y.transport",
@@ -322,9 +336,11 @@ def test_the_sources_choices_round_trip_through_another_network():
     # Replay under different facts: the same choices, a new image.
     other = base(weights=tuple(row[::-1] for row in WEIGHTS)).with_choices(saved)
     assert other.member("w").source.image != point.member("w").source.image
-    # Without known weights the channel has no source: its choices are stale, refused.
-    with pytest.raises(NetworkError, match="w.source.memstream.ram_style: .*inapplicable"):
-        base().with_choices(saved)
+    # Without known weights the channel has no source: its choices are kept, dormant.
+    unvalued = base().with_choices(saved)
+    states = dict(unvalued.states(("w",)))
+    assert states[("w", "source")] == inspection.Dormant("memstream")
+    assert states[("w", "source.memstream.ram_style")] == inspection.Dormant("block")
     # Facts that invalidate a saved folding refuse replay atomically: five outputs.
     wider = tuple((*row, 0) for row in WEIGHTS)
     with pytest.raises(NetworkError, match="matmul.compute.packed.pe"):
@@ -339,34 +355,41 @@ def test_several_weight_sets_without_known_weights_leave_the_set_channel_unused(
     assert "channel-unused" in codes(answer)
 
 
-def test_a_non_viable_source_is_refused_and_committed_is_refused_by_its_candidate():
+def test_a_source_no_value_of_which_can_be_set_refuses_the_change_that_brings_it_into_play():
     # Several sets need the set channel; a memory without one refuses itself.
-    network = Network(
-        {
-            **{name: stored(FULL_DSP48E2).wiring(name) for name in ("x", "y")},
-            "w": wire(
-                tensor=Fact("matmul", "carried_weights"),
-                contents=Fact("matmul", "stored_weights"),
-                sets=2,
-                consumer=Interface("matmul", "w_end"),
-                platform=FULL_DSP48E2,
-            ),
-            "matmul": MatMulKernel(
-                **KNOWN,
-                x_tensor=Tensor((3, 4), INT3),
-                w_contents=(WEIGHTS, WEIGHTS),
-            ),
-        }
-    )
-    w = folded(network).member("w")
-    answer = w.query(Channel.source)
-    assert isinstance(answer, Rejected) and codes(answer) == {"decision-no-viable-case"}
-    assert "memstream-set-channel" in answer.findings[0].message
-    # Committed on purpose, the case is accepted (committing never checks a kernel
-    # case's validity), and the candidate then refuses the configuration.
-    chosen = commit(w, {"source": "memstream"})
-    refusal = inspection.validity(chosen.source).result
-    assert isinstance(refusal, Rejected) and "memstream-set-channel" in codes(refusal)
+    members = {
+        **{name: stored(FULL_DSP48E2).wiring(name) for name in ("x", "y")},
+        "w": wire(
+            tensor=Fact("matmul", "carried_weights"),
+            contents=Fact("matmul", "stored_weights"),
+            sets=2,
+            consumer=Interface("matmul", "w_end"),
+            platform=FULL_DSP48E2,
+        ),
+        "matmul": MatMulKernel(
+            **KNOWN,
+            x_tensor=Tensor((3, 4), INT3),
+            w_contents=(WEIGHTS, WEIGHTS),
+        ),
+    }
+    folding = {**FOLDING, "matmul.compute.packed.pe": 2, "matmul.compute.packed.simd": 2}
+    # The folding brings the weight channel's source into play, and no value of it can be
+    # set by the interim channel rule (replaced by the ends pass): the channel would newly
+    # read refused, so the fold is refused naming w.source, its one value's refusal the
+    # cause. A strategy can now be stopped by a channel it does not decide, where forcing
+    # accepted the fold and left the channel silently refused.
+    trial = Network(members).trial(keyed(folding))
+    (why,) = trial.refused[("w", "source")]
+    assert why.code == "choice-no-valid-value"
+    assert "memstream-set-channel" in {cause.code for cause in why.causes}
+    # Bound with the folding stored, the network sets nothing: the source stays open,
+    # and setting it is refused by the memory's rule.
+    w = Network(members, stored=keyed(folding)).member("w")
+    report = w.try_with_choices({handle(w, "source"): "memstream"})
+    assert not report.accepted
+    assert "memstream-set-channel" in {
+        finding.code for rule in report.broken for finding in rule.result.findings
+    }
 
 
 @pytest.mark.parametrize(
@@ -382,14 +405,15 @@ def test_the_platform_narrows_the_source_memory(platform, refused):
     trial = point.trial(keyed({"w.source.memstream.ram_style": "ultra"}))
     assert trial.accepted == (not refused)
     if refused:
-        # The style is committed (its domain holds it), and the memory then refuses the
-        # platform: the channel's source has no possible case, the memory's rule its cause.
-        (why,) = trial.refused.values()
-        assert {finding.code for finding in why} == {"decision-no-viable-case"}
-        assert {cause.code for finding in why for cause in finding.causes} == refused
+        # The style's domain holds it, and the memory's rule refuses it on the platform:
+        # the change is refused, naming the rule.
+        ((rule, why),) = trial.refused.items()
+        assert rule[0] == "w" and rule[1].startswith("source.memstream.")
+        assert {finding.code for finding in why} == refused
     # The platform does not narrow pumping: the doubled clock is the shell's, which
     # its root supplies.
-    assert ("w", "source.memstream.pumped_memory") not in point.forced()
+    ((_, pumping),) = point.viable([("w", "source.memstream.pumped_memory")])
+    assert pumping.cases == (False, True)
 
 
 def test_a_channel_with_a_value_has_its_source_as_its_only_producer():
@@ -508,23 +532,19 @@ def test_fifo_depth_is_owned_by_the_channel_and_only_demanded_when_selected():
     saved = deep.chosen()
     assert ("w", "transport.fifo.buffer.depth") in saved
     assert built(base().with_choices(saved), "matmul") == built(deep, "matmul")
-    # In the channel's space, removing the FIFO requires clearing its stale depth and
-    # memory style atomically.
+    # In the channel's space, removing the FIFO keeps its depth and memory style,
+    # dormant: out of play, and back with the FIFO.
     fifo = deep.member("w")
-    stale = fifo.try_with_choices({handle(fifo, "transport"): "direct"})
-    assert not stale.accepted
-    direct = fifo.with_choices(
-        fifo.field(handle(fifo, "transport")).change("direct"),
-        fifo.field(handle(fifo, "transport.fifo.buffer.depth")).clear(),
-        fifo.field(handle(fifo, "transport.fifo.buffer.ram_style")).clear(),
-    )
-    assert direct.netlist == w.netlist
-    # In the network, the change drops them, named.
-    trial = deep.trial(keyed({"w.transport": "direct"}))
-    assert set(trial.dropped) == {
-        ("w", "transport.fifo.buffer.depth"),
-        ("w", "transport.fifo.buffer.ram_style"),
+    direct = fifo.try_with_choices({handle(fifo, "transport"): "direct"})
+    assert direct.accepted and set(direct.dormant) == {
+        "transport.fifo.buffer.depth",
+        "transport.fifo.buffer.ram_style",
     }
+    assert direct.instance.netlist == w.netlist
+    # In the network the same: nothing is dropped, and the module is the direct one.
+    trial = deep.trial(keyed({"w.transport": "direct"}))
+    assert trial.accepted and not trial.rederived
+    assert ("w", "transport.fifo.buffer.depth") in trial.network.chosen()
     assert built(trial.network, "matmul") == built(point, "matmul")
 
 

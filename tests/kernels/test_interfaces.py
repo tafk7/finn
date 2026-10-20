@@ -21,6 +21,7 @@ from support.helpers import (
     built,
     choose,
     cycles_of,
+    dotp_extents,
     placed,
     with_adapter_memories,
     with_direct_transports,
@@ -83,6 +84,7 @@ def activated(*, writable: bool) -> Network:
                 result_range=ordinary_integer_bounds(R),
                 x_tensor=X,
                 w_tensor=WEIGHT_TENSOR,
+                **dotp_extents(WEIGHT_TENSOR),
                 platform=FULL_DSP48E2,
             ),
             "activate": ThresholdingAxiKernel(
@@ -168,9 +170,9 @@ def test_writable_thresholds_present_their_bus_at_the_port_they_are_given():
 
 
 def test_writable_thresholds_without_a_control_port_are_not_offered():
-    # The platform has a control port, but no port is named for the bus: the case is
-    # refused by a constraint of the kernel, so the Decision is forced; committed all the
-    # same (a constraint never gates a commit), the configuration is refused by it.
+    # The platform has a control port, but no port is named for the bus: the value is
+    # refused by a constraint of the kernel, nothing standing, so only False is possible;
+    # committed, the change is refused by the same rule.
     point = design_space(
         ThresholdingAxiKernel(
             threshold_dtype=R,
@@ -180,16 +182,15 @@ def test_writable_thresholds_without_a_control_port_are_not_offered():
             platform=FULL_DSP48E2,
         )
     )
-    (forced,) = [item for item in inspection.forced(point) if item.key == "use_axilite"]
-    assert forced.value is False and "threshold-control" in forced.refused["True"]
+    (viable,) = inspection.viable(point, [ThresholdingAxiKernel.use_axilite])
+    assert viable.cases == (False,)
+    (refused,) = [item for item in viable.values or () if isinstance(item, inspection.Refused)]
+    assert refused.value is True
+    assert [(rule.rule, rule.standing) for rule in refused.broken] == [("control_for_writes", ())]
     report = point.try_with_choices(use_axilite=True)
-    assert report.accepted
-    validity = inspection.validity(report.instance)
-    assert validity.status == "refused"
+    assert not report.accepted
     assert {
-        (piece.owner, finding.code)
-        for piece in validity.pieces
-        for finding in piece.result.findings
+        (rule.rule, finding.code) for rule in report.broken for finding in rule.result.findings
     } == {("control_for_writes", "threshold-control")}
 
 
@@ -239,7 +240,7 @@ def test_several_threshold_sets_take_a_set_selector_stream():
 
     def selected(sets: Tensor) -> Network:
         """A thresholding of two sets, its values, its set indices ``sets`` and its levels
-        each a channel, every choice at its baseline."""
+        each a channel, every choice set: the kernel's by hand, the transports direct."""
         network = Network(
             {
                 "values": wire(

@@ -1,13 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""What a policy reads of an open Decision beyond its viable cases: whether its domain
+"""What a policy reads of an open Decision beyond its possible values: whether its domain
 orders them, the Space class that declares it, and the Decisions known by membership
-only (``inspection.open``), whose values a policy proposes."""
+only (their values listed as ``None``), whose values a policy proposes."""
 
 from __future__ import annotations
 
 from support.refusals import refused
 
+from core.space._possible_support import listed, open_now
 from finn.core.space import (
     Decision,
     DefinitionError,
@@ -55,9 +56,10 @@ def test_ordered_applies_to_listed_values_only() -> None:
 
 def test_a_decision_known_by_membership_only_is_open_until_committed() -> None:
     point = design_space(Core(width=4))
-    assert [item.key for item in inspection.open(point)] == ["buffer.depth"]
-    assert inspection.open(point)[0].ordered
-    # It is never among the enumerable choices.
-    assert "buffer.depth" not in {item.key for item in inspection.viable(point)}
+    assert "buffer.depth" in open_now(point)
+    info = {item.key: item for item in inspection.decisions(point)}["buffer.depth"]
+    assert info.ordered
+    # It lists no values: a policy proposes them.
+    assert listed(point, Core.buffer.depth) is None
     committed = point.with_choices({Core.buffer.depth: 16})
-    assert inspection.open(committed) == ()
+    assert "buffer.depth" not in open_now(committed)

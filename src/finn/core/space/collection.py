@@ -113,7 +113,7 @@ def _check_choice_annotation(decision: NodeDecision) -> None:
                 "choice-annotation-excludes-candidate",
                 _OWNER,
                 f"{label}: candidate {key!r} is a {record.space_type.__qualname__} node, which the "
-                f"annotation {annotation!r} does not admit",
+                f"annotation {annotation!r} does not accept",
                 declaration=label,
             )
 

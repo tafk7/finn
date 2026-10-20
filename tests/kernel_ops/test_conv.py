@@ -51,7 +51,7 @@ from finn.dataflow.traversal import vector_major
 from finn.harness.ops import check_parity
 from finn.transformation.kernels import ToKernelOps
 from finn.transformation.kernels.convert import between_kernel_ops, kernel_ops_by_anchor
-from finn.transformation.kernels.cut import BaselineChoices
+from finn.transformation.kernels.cut import MakeCutChoices
 from finn.util.draws import boundary_inputs
 
 
@@ -95,11 +95,11 @@ FOLDED = [
 
 def folded(name: str, simd: int, pe: int, directory: Path) -> ModelWrapper:
     """The single layer ``name``'s body, its SIMD and PE chosen on its node by hand, and
-    what that opens (pumping, at SIMD 2 and more) given its baseline (``BaselineChoices``)."""
+    what that opens (pumping, at SIMD 2 and more) set as the cut sets it (``MakeCutChoices``)."""
     body = single_layer(name, directory)
     (node,) = body.graph.node
     configured(body, {node.name: {"compute.packed.simd": simd, "compute.packed.pe": pe}})
-    return body.transform(BaselineChoices())
+    return body.transform(MakeCutChoices())
 
 
 @pytest.mark.parametrize(("name", "simd", "pe", "nest"), FOLDED)
@@ -178,7 +178,7 @@ def test_a_window_inside_the_partition_is_its_edges_reorder(
     pe: int, simd: int, steps: tuple[str, ...]
 ) -> None:
     # Converted, not cut: its channels' choices created as the cut creates them.
-    point, _ = configured_network(thresholded(pe, simd).transform(BaselineChoices()), "inside")
+    point, _ = configured_network(thresholded(pe, simd).transform(MakeCutChoices()), "inside")
     assert tuple(hop.step.value for hop in point.channel("a").plan.hops) == steps
     labels = [label for label, _ in point.module.fragment.instances if label.startswith("a.")]
     assert "a.adapter.input_gen.input_gen" in labels
@@ -209,13 +209,14 @@ def test_cnvs_six_convolutions_each_convert_to_one_conv(cnv_streamlined: Path) -
         (f"Im2Col_{layer}", f"MatMul_{layer}") for layer in range(6)
     ]
     assert not [node for node in model.graph.node if node.op_type == "Im2Col"]
-    # Each KernelOp's own choices created as it converts, each at its baseline: 59 values
-    # on CNV's 17 KernelOps (SR6).
+    # Each KernelOp's own choices created as it converts, each set by its default policy:
+    # 93 values on CNV's 17 KernelOps, every choice in play (each MatMul and Conv's core and
+    # its pumping, each Thresholding's AXI-Lite and UltraRAM stages among them).
     converted = [
         kernel_op(model, node) for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN
     ]
     assert len(converted) == 17
-    assert sum(len(op.choices()) for op in converted) == 59
+    assert sum(len(op.choices()) for op in converted) == 93
     assert between_kernel_ops(model) == (
         "MaxPoolNHWC_0",
         "MaxPoolNHWC_1",

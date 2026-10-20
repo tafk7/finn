@@ -4,8 +4,10 @@
 """The engine side of the harness: a model description built as an engine Space, and the
 engine asked the model's questions, each answer put in the comparable form (``forms``).
 
-Everything that depends on how the engine is **authored** or **asked** at this commit is in
-this one module, so a milestone that changes either changes it here:
+This is the adapter to the engine core. Everything that depends on how the engine is
+**authored** or **asked** is in this one module, so a change of the engine's API is a port of
+this file alone. The engine answers each question itself, in the model's terms: no legacy
+form, and no answer the adapter computes in the engine's place.
 
 - **Spelling.** A rule of the description is a constraint in the model, and in the engine
   every rule is a ``@constraint`` of the Space that owns it, which its Space's validity
@@ -14,15 +16,23 @@ this one module, so a milestone that changes either changes it here:
   choice and a fact, for some of the choice's cases) and ``Obligation`` (a rule stated
   beside a view of its Space) are each a plain ``@constraint`` reading its inputs
   explicitly; ``ByName`` is a ``@constraint`` method reading its inputs by attribute name,
-  ``getattr(self, name)``; ``Membership`` is the one rule that is not a constraint: a
-  choice's domain reading the rule's other inputs (a linking rule written as membership).
-  A view carries no rule. A domain with a membership predicate is a ``domain(accepts=,
-  candidates=)``: membership is the model's whole membership, the enumeration the listed
-  values.
-- **Questions.** ``Point.validity`` is the engine's own answer (``inspection.validity``):
-  its false pieces' codes, or what its unknown pieces wait on. The choices kept unchecked,
-  and what each waits on, are the engine's own list (``inspection.unchecked``): a stored
-  choice's state and a change's unchecked choices are read from it.
+  ``getattr(self, name)``. A view carries no rule. A domain with a membership predicate is
+  a ``domain(accepts=, candidates=)``: membership is the model's whole membership, the
+  enumeration the listed values. A domain's ``order`` is not built: no compared answer
+  reads it.
+- **Questions**, each the engine's own answer:
+
+  - a choice's state is ``inspection.states``' (set, waiting with what it waits on,
+    dormant, open with what its presence waits on, absent);
+  - a change's report: refused, its type checks refused (``ChangeOutcome``, status
+    ``"refused"``) as ``assignment`` refusals with their codes, and each ``BrokenRule`` as
+    a ``rule`` refusal (its origin, its result's codes, its standing choices); accepted,
+    what it puts dormant, brings into play and opens;
+  - possible values are ``inspection.viable``'s: ``Possible`` with what it moves,
+    ``Refused`` with its broken rules; ``None`` where the engine lists nothing;
+  - validity is ``inspection.validity`` (``"valid"``, ``"refused"``, ``"open"``);
+  - a definition is refused for a dependency cycle (when building or asked) and for a
+    domain whose membership reads a choice (at compile).
 
 The description becomes one Space class per scope, built with ``composite``. Every member
 keeps the description's path as its key: a choice ``compute.packed.pe`` is the engine's
@@ -44,7 +54,8 @@ from core.space.reference.model import same
 from finn.core.space import (
     Available,
     Decision,
-    Inapplicable,
+    DefinitionError,
+    EvaluationError,
     Param,
     QueryResult,
     Rejected,
@@ -61,13 +72,16 @@ from finn.core.space import (
     selected,
     view,
 )
-from finn.core.space.edits import ChangeRequest
+from finn.core.space.edits import BrokenRule, ChangeOutcome, ChangeRequest
 
 from .forms import (
     AnswerForm,
     ChangeForm,
     Code,
-    Refusal,
+    DefinitionForm,
+    OutcomeForm,
+    PossibleForm,
+    RefusalForm,
     RuleForm,
     StateForm,
     ValidityForm,
@@ -105,15 +119,6 @@ class Requirement:
 
 
 @dataclass(frozen=True)
-class Membership:
-    """The rule as part of ``choice``'s domain: its membership reads the rule's other
-    inputs, and a value the rule makes false is outside the domain. ``choice`` is one of
-    the rule's reads, in the rule's own scope."""
-
-    choice: str
-
-
-@dataclass(frozen=True)
 class ByName:
     """A ``@constraint`` method of its Space, reading each input by name (``getattr(self,
     name)`` over a list of names, through child nodes for a child's member): the engine
@@ -129,14 +134,14 @@ class Obligation:
     view: str
 
 
-Rule = Admission | Plain | Requirement | Membership | Obligation | ByName
+Rule = Admission | Plain | Requirement | Obligation | ByName
 
 
 @dataclass(frozen=True)
 class Spelling:
-    """How a case's rules are written today (by rule path; ``Admission`` when absent) and
-    the value types the description does not state (by path; a listed domain's are read
-    from its values, everything else is ``int``)."""
+    """How a case's rules are written in the engine (by rule path; ``Admission`` when
+    absent) and the value types the description does not state (by path; a listed domain's
+    are read from its values, everything else is ``int``)."""
 
     rules: Mapping[str, Rule] = field(default_factory=dict)
     types: Mapping[str, type] = field(default_factory=dict)
@@ -187,39 +192,28 @@ def _input(path: str) -> str:
     return "in-" + path.replace(".", "-")
 
 
-class _Acyclic(model.Index):
-    """The description's index without the model's cycle check: a description the model
-    refuses as a cycle is still built in the engine, to see what the engine answers."""
+class _Unchecked(model.Index):
+    """The description's index without the model's definition checks (cycles, a domain
+    reading a choice): a description the model refuses is still built in the engine, to see
+    what the engine answers."""
+
+    def _check_domains(self) -> None:
+        return None
 
     def _check_cycles(self) -> None:
         return None
 
 
-#: the spelling that writes a rule into a choice's domain, not as a member of its Space
-_IN_DOMAIN = (Membership,)
-
-
 class _Builder:
     """The engine Space classes of one description, one per scope, built on demand."""
 
-    def __init__(self, space: model.Space, spelling: Spelling, cycles: bool = False) -> None:
-        self.index = _Acyclic(space) if cycles else space.validate()
+    def __init__(self, space: model.Space, spelling: Spelling, unchecked: bool = False) -> None:
+        self.index = _Unchecked(space) if unchecked else space.validate()
         self.spelling = spelling
         index = self.index
-        self.memberships: dict[str, list[str]] = {}
         for path, rule in spelling.rules.items():
             if path not in index.constraints:
                 raise NotTranslatable(f"{path}: spelled, but not a rule of the description")
-            if isinstance(rule, Membership):
-                owner = index.constraints[path][1]
-                if (
-                    rule.choice not in index.constraints[path][0].reads
-                    or rule.choice not in index.choices
-                    or index.choices[rule.choice].scope != owner
-                    or index.choices[rule.choice].cases is not None
-                ):
-                    raise NotTranslatable(f"{path}: a membership of a value choice it reads")
-                self.memberships.setdefault(rule.choice, []).append(path)
             if isinstance(rule, Requirement) and (
                 rule.choice not in index.choices or index.kind(rule.fact) is None
             ):
@@ -373,20 +367,10 @@ class _Builder:
     def _choice(self, scope: str, path: str) -> object:
         info = self.index.choices[path]
         domain_ = info.domain
-        rules = [self.index.constraints[rule][0] for rule in self.memberships.get(path, ())]
-        simple = (
-            domain_.values is not None
-            and domain_.member is None
-            and not domain_.reads
-            and not rules
-        )
+        simple = domain_.values is not None and domain_.member is None and not domain_.reads
         if simple and domain_.values:
             return Decision(values=domain_.values, required=info.required)
-        reads = tuple(
-            dict.fromkeys(
-                (*domain_.reads, *(read for rule in rules for read in rule.reads if read != path))
-            )
-        )
+        reads = domain_.reads
         names = [f"a{position}" for position in range(len(reads))]
 
         def readings(arguments: Mapping[str, object]) -> dict[str, object]:
@@ -403,10 +387,7 @@ class _Builder:
             values = listing(arguments)
             if values is not None and not any(same(item, candidate) for item in values):
                 return False
-            read = readings(arguments)
-            if not all(rule.predicate({**read, path: candidate}) for rule in rules):
-                return False
-            return domain_.member is None or bool(domain_.member(candidate, read))
+            return domain_.member is None or bool(domain_.member(candidate, readings(arguments)))
 
         def candidates(**arguments: object) -> tuple[object, ...]:
             values = listing(arguments)
@@ -542,9 +523,6 @@ class _Builder:
             members[_input(path)] = self.member(scope, _input(path))
             annotations[_input(path)] = self.value_type(path)
         for path in mine:
-            rule = self.spelling.rules.get(path)
-            if isinstance(rule, _IN_DOMAIN):
-                continue
             if path in index.choices and index.choices[path].cases is not None:
                 members[_name(path)] = self.selector(scope, path)
                 members["key-" + _name(path)] = self.member(scope, path)
@@ -613,11 +591,11 @@ class Engine:
 
 
 def build(
-    description: model.Space, spelling: Spelling | None = None, cycles: bool = False
+    description: model.Space, spelling: Spelling | None = None, unchecked: bool = False
 ) -> Engine:
     """The engine Space class of ``description``, spelled as ``spelling`` says; with
-    ``cycles``, built even where the model refuses the description as a cycle."""
-    builder = _Builder(description, spelling or Spelling(), cycles)
+    ``unchecked``, built even where the model refuses the description as no definition."""
+    builder = _Builder(description, spelling or Spelling(), unchecked)
     root = builder.space_class("")
     return Engine(
         description,
@@ -626,6 +604,37 @@ def build(
         builder.index,
         dict(builder.aliases),
     )
+
+
+def definition(
+    description: model.Space,
+    spelling: Spelling | None = None,
+    facts: Mapping[str, object] | None = None,
+) -> DefinitionForm:
+    """Whether the engine takes ``description`` as a definition: a dependency cycle reported
+    when building the Space, or when asked (its validity, every rule and every view of the
+    configuration with ``facts``), is ``"cycle"``; a domain whose membership reads a choice,
+    refused at compile, is ``"domain-reads-choice"``; otherwise ``None``."""
+    try:
+        engine = build(description, spelling, unchecked=True)
+        point = engine.open(dict(facts or {}))
+        point.validity()
+        for path in sorted(engine.index.constraints):
+            point.rule(path)
+        for path in sorted(engine.index.views):
+            point.answer(path)
+    except DefinitionError as error:
+        codes = {finding.code for finding in error.findings}
+        if "cyclic-dependency" in codes:
+            return DefinitionForm("cycle")
+        if "domain-reads-choice" in codes:
+            return DefinitionForm("domain-reads-choice")
+        raise
+    except EvaluationError as error:
+        if error.role == "dependency cycle":
+            return DefinitionForm("cycle")
+        raise
+    return DefinitionForm(None)
 
 
 @dataclass(frozen=True)
@@ -643,21 +652,10 @@ class Point:
     def _members(self) -> dict[str, Any]:
         return {item.key: item.reference for item in inspection.members(self.point)}
 
-    def unchecked(self) -> dict[str, frozenset[str]]:
-        """The stored choices kept unchecked, by path, each with what it waits on (the
-        engine's list: the choices still open or unchecked, and the inputs not supplied,
-        that its own check and its guard read)."""
-        return {
-            item.key: frozenset(self.engine.path(key) for key in item.blockers) - {item.key}
-            for item in inspection.unchecked(self.point)
-        }
-
     def stored(self) -> dict[str, object]:
-        """The committed choices, by path."""
+        """The committed choices, dormant ones included, by path."""
         current = occurrence.state(self.point)
-        return {
-            current.linked.nodes[index].key: value for index, value in current.assignments.items()
-        }
+        return {current.linked.nodes[index].key: value for index, value in current.stored.items()}
 
     def _query(self, path: str) -> QueryResult[Any]:
         index = self.engine.index
@@ -669,51 +667,23 @@ class Point:
             return self.point.query(self._decisions()[path])
         return self.point.query(self._members()[path])
 
+    def _paths(self, keys: Iterable[str]) -> frozenset[str]:
+        return frozenset(self.engine.path(key) for key in keys)
+
     # -- the questions
 
     def state(self, path: str) -> StateForm:
-        engine = self.engine
-        handle = self._decisions()[path]
-        state = self.point.field(handle).state
-        stored = self.stored()
-        if path in stored:
-            if isinstance(state, Inapplicable):
-                return StateForm("inactive", stored[path])
-            unchecked = self.unchecked()
-            if path in unchecked:
-                return StateForm("unchecked", stored[path], blockers=unchecked[path])
-            if isinstance(state, Rejected):
-                return StateForm("refused", codes=engine.codes(state.findings))
-            answer = self._query(path)
-            if isinstance(answer, Available):
-                return StateForm("readable", stored[path])
-            if isinstance(answer, Rejected):
-                return StateForm("refused", codes=engine.codes(answer.findings))
-            if isinstance(state, Unresolved) or isinstance(answer, Unresolved):
-                # an engine fault, not a disagreement: stored, read unresolved, not listed
-                raise RuntimeError(f"{path}: stored and unresolved, but not listed unchecked")
-            return StateForm("inactive", stored[path])
-        if isinstance(state, Inapplicable):
-            return StateForm("inactive")
-        if isinstance(state, Rejected):
-            return StateForm("refused", codes=engine.codes(state.findings))
-        if isinstance(state, Unresolved):
-            return StateForm("open", blockers=engine.blockers(state.findings, path))
-        forced = {item.key: item.value for item in inspection.forced(self.point)}
-        if path in forced:
-            return StateForm("forced", forced[path])
-        viable = {item.key: item.cases for item in inspection.viable(self.point)}
-        answer = self._query(path)
-        if isinstance(answer, Rejected):
-            return StateForm("refused", codes=engine.codes(answer.findings))
-        if path in viable:
-            return StateForm("open", possible=tuple(viable[path]))
-        blockers = (
-            engine.blockers(answer.findings, path)
-            if isinstance(answer, Unresolved)
-            else frozenset()
-        )
-        return StateForm("open", blockers=blockers)
+        """A choice's state (``inspection.states``)."""
+        found = dict(inspection.states(self.point))[path]
+        if isinstance(found, inspection.Set):
+            return StateForm("set", found.value)
+        if isinstance(found, inspection.Waiting):
+            return StateForm("waiting", found.value, self._paths(found.waits) - {path})
+        if isinstance(found, inspection.Dormant):
+            return StateForm("dormant", found.value)
+        if isinstance(found, inspection.Open):
+            return StateForm("open", blockers=self._paths(found.waits))
+        return StateForm("absent")
 
     def answer(self, path: str) -> AnswerForm:
         """A fact's, a choice's, a derived value's or a view's answer."""
@@ -732,16 +702,13 @@ class Point:
         return AnswerForm("inapplicable")
 
     def rule(self, path: str) -> RuleForm:
-        """A rule's answer, read from wherever its spelling puts it."""
-        spelled = self.engine.spelling.rule(path)
-        if isinstance(spelled, _IN_DOMAIN):
-            raise NotTranslatable(f"{path}: a rule in a domain has no answer of its own")
+        """A rule's answer."""
         result = self.point.query(self._members()[path])
         return _rule(self.engine, result)
 
     def validity(self) -> ValidityForm:
         """The engine's validity of the configuration (``inspection.validity``): refused
-        with its false pieces' codes, undecided with what its unknown pieces wait on (each
+        with its false pieces' codes, open with what its unknown pieces wait on (each
         piece's own key aside), or valid."""
         engine = self.engine
         answer = inspection.validity(self.point)
@@ -750,15 +717,32 @@ class Point:
                 *(engine.codes(piece.result.findings) for piece in answer.pieces)
             )
             return ValidityForm("refused", false)
-        if answer.status == "undecided":
+        if answer.status == "open":
             blockers = frozenset().union(
                 *(
                     engine.blockers(piece.result.findings, engine.path(piece.owner))
                     for piece in answer.pieces
                 )
             )
-            return ValidityForm("undecided", blockers=blockers)
+            return ValidityForm("open", blockers=blockers)
         return ValidityForm("valid")
+
+    def possible(self, path: str) -> PossibleForm:
+        """A choice's possible values (``inspection.viable``): each listed value possible,
+        with what it moves, or impossible, with each rule it breaks; ``None`` where the
+        engine lists nothing."""
+        (found,) = inspection.viable(self.point, [self._decisions()[path]])
+        if found.values is None:
+            return PossibleForm(None)
+        outcomes: list[tuple[object, OutcomeForm]] = []
+        for item in found.values:
+            if isinstance(item, inspection.Possible):
+                moved = (self._paths(item.dormant), self._paths(item.in_play))
+                outcome = OutcomeForm("possible", *moved, self._paths(item.opened))
+            else:
+                outcome = OutcomeForm("impossible", refusals=_broken(self.engine, item.broken))
+            outcomes.append((item.value, outcome))
+        return PossibleForm(tuple(outcomes))
 
     def change(self, edit: model.Change) -> tuple[ChangeForm, Point | None]:
         """``edit`` applied: its comparable result, and the configuration it publishes."""
@@ -777,23 +761,11 @@ class Point:
         else:
             report = self.point.try_with_choices(commits, *clears)
         if not report.accepted:
-            refusals = frozenset(
-                Refusal(
-                    outcome.owner,
-                    "named" if outcome.requested else "reached",
-                    _own_codes(engine, outcome.owner, outcome.result),
-                )
-                for outcome in report.outcomes
-                if outcome.status == "refused" and outcome.owner in decisions
-            )
+            refusals = _assignments(engine, report.outcomes) | _broken(engine, report.broken)
             return ChangeForm(False, refusals=refusals), None
-        successor = Point(engine, report.instance)
-        unchecked = frozenset(successor.unchecked())
-        reported = {outcome.owner for outcome in report.outcomes if outcome.unchecked}
-        if not reported <= unchecked:
-            # an engine fault: a choice the change reports unchecked is not listed so
-            raise RuntimeError(f"reported unchecked, not listed: {sorted(reported - unchecked)}")
-        return ChangeForm(True, unchecked=unchecked), successor
+        moved = (self._paths(report.dormant), self._paths(report.in_play))
+        form = ChangeForm(True, *moved, self._paths(report.opened))
+        return form, Point(engine, report.instance)
 
 
 def _rule(engine: Engine, result: QueryResult[Any]) -> RuleForm:
@@ -806,15 +778,34 @@ def _rule(engine: Engine, result: QueryResult[Any]) -> RuleForm:
     return RuleForm("inapplicable")
 
 
-def _own_codes(engine: Engine, owner: str, result: QueryResult[bool]) -> frozenset[Code]:
-    """A refused choice's own codes: the findings it owns (a refused guard's, reported
-    beside them, are compared through validity), ``inactive`` for a choice whose scope is
-    not present."""
-    if isinstance(result, Inapplicable):
-        return frozenset({("inactive", owner)})
-    if isinstance(result, (Rejected, Unresolved)):
-        return engine.codes(result.findings, only=owner)
-    return frozenset()
+def _assignments(engine: Engine, outcomes: Iterable[ChangeOutcome]) -> frozenset[RefusalForm]:
+    """A refused change's type-check refusals: each outcome refused (a choice named, or a
+    stored one a facts change checked again), with every code of its type check's answer
+    (a domain input's origin's codes where it refuses through that input)."""
+    found: set[RefusalForm] = set()
+    for outcome in outcomes:
+        if outcome.status != "refused":
+            continue
+        result = outcome.result
+        codes: frozenset[Code] = (
+            engine.codes(result.findings) if isinstance(result, Rejected) else frozenset()
+        )
+        found.add(RefusalForm("assignment", engine.path(outcome.owner), codes))
+    return frozenset(found)
+
+
+def _broken(engine: Engine, broken: Iterable[BrokenRule]) -> frozenset[RefusalForm]:
+    """Each rule a change breaks, at its origin: its own codes and the stored choices
+    standing in its way."""
+    return frozenset(
+        RefusalForm(
+            "rule",
+            engine.path(item.rule),
+            engine.codes(item.result.findings),
+            frozenset(engine.path(key) for key in item.standing),
+        )
+        for item in broken
+    )
 
 
 __all__ = [
@@ -823,11 +814,11 @@ __all__ = [
     "Engine",
     "NotTranslatable",
     "Obligation",
-    "Membership",
     "Plain",
     "Point",
     "Requirement",
     "Rule",
     "Spelling",
     "build",
+    "definition",
 ]
