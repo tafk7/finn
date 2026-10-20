@@ -669,6 +669,17 @@ class _Summary:
 _Push: TypeAlias = "tuple[Ref, Mode, tuple[str, ...]]"
 
 
+def _way(name: str, exit: Exit, way: tuple[str, ...]) -> tuple[str, ...]:
+    """A way out of a placed Space (at ``name``), under the placing template's keys. A way
+    out through a formal keeps the formal as a step: the hop across the slot, from the
+    child's formal to what the placing template binds it to, is what its author needs to
+    see (a forwarding alias inside one template is no step)."""
+    found = tuple(member_key(name, step) for step in way)
+    if exit[0] == "formal":
+        found = (*found, member_key(name, exit[1]))
+    return found
+
+
 class _Domains:
     """The composed domain rule (see the module docstring)."""
 
@@ -916,7 +927,7 @@ class _Domains:
         if outcome.refusal is not None:
             return _Outcome(outcome.refusal.under(name), reentered=reentered)
         lifted: list[_Push] = [
-            (ref, mode, tuple(member_key(name, step) for step in outcome.exits[exit]))
+            (ref, mode, _way(name, exit, outcome.exits[exit]))
             for exit in outcome.exits
             for ref, mode in lift(held, (exit,))
         ]
@@ -1014,7 +1025,7 @@ class _Domains:
                     return summary
             for entry in below.entries:
                 pushes: list[_Push] = [
-                    (ref, mode, tuple(member_key(name, step) for step in entry.exits[exit]))
+                    (ref, mode, _way(name, exit, entry.exits[exit]))
                     for exit in entry.exits
                     for ref, mode in lift(held, (exit,))
                 ]

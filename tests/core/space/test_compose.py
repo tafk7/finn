@@ -94,12 +94,13 @@ def test_a_cores_domain_reading_a_formal_bound_under_its_case_compiles() -> None
 
 def test_a_cores_domain_reading_a_formal_bound_to_what_reads_a_choice_is_refused() -> None:
     # The line: "compute.core.pe: its domain's membership reads the choice realization
-    # (datapath -> realization); ...".
+    # (datapath -> realization); ...". The route keeps the hop across the slot: the core's
+    # formal, then the placing Space's value it is bound to.
     with refused(
         "domain-reads-choice",
         error=DefinitionError,
         owner="compute.core.pe",
-        message=r"reads the choice realization \(datapath -> realization\)",
+        message=r"reads the choice realization \(compute\.core\.width -> datapath -> realization\)",
     ):
         compile_model(Realized)
 
