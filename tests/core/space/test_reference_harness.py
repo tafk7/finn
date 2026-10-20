@@ -41,6 +41,7 @@ from core.space.reference_harness import (
     RefusalForm,
     Row,
     RuleForm,
+    SetupError,
     StateForm,
     ValidityForm,
     markdown,
@@ -236,6 +237,50 @@ def test_an_accepted_change_of_facts_carries_its_dropped_values_and_new_rules_as
         RefusalForm("rule", "half", frozenset({("odd-v", "half")})),
     }
     assert not agrees(form, replace(form, dropped=frozenset()))
+
+
+def ranged() -> Space:
+    """``x`` below the fact ``n``; ``k`` asks ``y`` to be at most ``n``."""
+    return Space(
+        ("n",),
+        Scope(
+            "",
+            choices=(
+                Choice("x", computed(lambda r: tuple(range(r["n"])), ("n",))),
+                Choice("y", listed(1, 2)),
+            ),
+            constraints=(Constraint("k", ("y", "n"), lambda r: r["y"] <= r["n"], "y-over"),),
+        ),
+    )
+
+
+RANGED = Case("ranged", ranged())
+K_OVER = RefusalForm("rule", "k", frozenset({("y-over", "k")}), frozenset({"y"}))
+
+
+def test_the_engines_accepted_change_of_facts_carries_the_old_value_of_what_it_drops() -> None:
+    # ``n = 1``: ``x = 2`` is dropped (its old value the receiver's), ``k`` turns false with
+    # ``y`` standing; the engine's report in the model's form.
+    edit = Change(facts={"n": 1})
+    pair = RANGED.start({"n": 3}, {"x": 2, "y": 2})
+    engine, _ = pair.engine.change(edit)
+    expected = change_form(pair.model, edit, reference.change(pair.model, edit))
+    assert engine == expected
+    assert engine.dropped == {DroppedForm("x", 2, frozenset({("domain-membership", "x")}))}
+    assert engine.broken == {K_OVER}
+
+
+def test_a_bind_compares_from_a_configuration_with_nothing_stored() -> None:
+    # Both sides read a bind against the configuration it is asked of, the model's against
+    # its facts with nothing stored, so the harness asks it of nothing else. The bind of a
+    # value outside its domain drops it, its old value the saved one.
+    bound = RANGED.start({"n": 1}).check_bind({"x": 2, "y": 2})
+    assert bound.model.stored == {"y": 2} and bound.engine.stored() == {"y": 2}
+    form, _ = RANGED.start({"n": 1}).engine.bind({"x": 2, "y": 2})
+    assert form.dropped == {DroppedForm("x", 2, frozenset({("domain-membership", "x")}))}
+    assert form.broken == {K_OVER}
+    with pytest.raises(SetupError, match="nothing stored"):
+        RANGED.start({"n": 3}, {"y": 1}).check_bind({"y": 2})
 
 
 def test_the_codes_of_an_empty_list_and_a_refused_guard() -> None:

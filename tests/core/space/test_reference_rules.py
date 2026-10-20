@@ -7,8 +7,10 @@ A linking rule and a requirement (cases 5 and 6 of the reference cases; cases 1 
 ``test_reference_cases``), the canon's two examples, and the hand cases of the reference
 model's rewrite: a change is assignment, refused where it makes a rule newly false, naming
 the rule at its origin and the stored choices standing in its way; a selector switched
-away puts its case's choices dormant. Each rule is a constraint in the model; the engine
-spells it as it is authored (``Spelling`` beside each case).
+away puts its case's choices dormant; a change of facts is a new design space, never
+refused, dropping what falls outside and reporting the rules it breaks, a batch its facts
+then its choices, and a bind the same instantiation from nothing. Each rule is a constraint
+in the model; the engine spells it as it is authored (``Spelling`` beside each case).
 """
 
 from __future__ import annotations
@@ -547,6 +549,88 @@ def test_a_facts_change_drops_each_value_outside_its_new_domain() -> None:
 def test_a_facts_change_clearing_a_value_outside_its_new_domain_is_accepted() -> None:
     # The cleared ``mode.a.depth`` is named: left out without being reported (§ 16.25).
     sized().check_change(Change(facts={"n": 12}, clear=("mode.a.depth",)))
+
+
+# A batch is its facts, then its choices as a change of choices on their design space
+# (§ 16.25); a bind is the same instantiation from nothing (SZ90). ``k`` asks ``c`` to be at
+# most the fact ``f``, ``l`` the same of ``x``.
+
+BOUNDED = Case(
+    "a batch of facts and choices",
+    Space(
+        ("f",),
+        Scope(
+            "",
+            choices=(Choice("c", listed(1, 2, 3, 4)), Choice("x", listed(1, 2, 3, 4))),
+            constraints=(
+                Constraint("k", ("c", "f"), lambda r: r["c"] <= r["f"], "c-over"),
+                Constraint("l", ("x", "f"), lambda r: r["x"] <= r["f"], "x-over"),
+            ),
+        ),
+    ),
+)
+
+
+def broken_by_facts() -> Pair:
+    """``c = 3`` at ``f = 4``, then ``f = 2``: accepted, ``k`` reported with ``c`` standing,
+    and the design space reads refused (compared on the way)."""
+    return BOUNDED.start({"f": 4}, {"c": 3}).reach(Change(facts={"f": 2}))
+
+
+def test_a_design_space_new_facts_left_reading_refused_reads_refused_through_the_rule() -> None:
+    pair = broken_by_facts()
+    pair.check_validity()
+    pair.check_rule("k")
+
+
+def test_a_batch_whose_choices_add_back_a_pair_its_facts_removed_is_refused() -> None:
+    # The receiver holds ``k`` false through ``c = 3`` at ``f = 2``. ``f = 3`` removes the
+    # pair; ``c = 4`` beside it adds it back against the facts' design space: refused, ``c``
+    # named, so nothing standing.
+    broken_by_facts().check_change(Change(facts={"f": 3}, commit={"c": 4}))
+
+
+def test_a_batch_breaking_a_rule_through_a_choice_it_sets_is_its_facts_then_its_choices() -> None:
+    # The equivalence: ``f = 2`` makes ``k`` false with ``c = 3``; the batch sets ``c = 4``,
+    # ``k`` false through the same origin: accepted, ``k`` reported with ``c`` standing, the
+    # same design space as the facts, then the choices.
+    start = BOUNDED.start({"f": 4}, {"c": 3})
+    batch = start.check_change(Change(facts={"f": 2}, commit={"c": 4}))
+    steps = start.reach(Change(facts={"f": 2})).check_change(Change(commit={"c": 4}))
+    assert batch is not None and steps is not None
+    assert batch.model == steps.model and batch.engine.stored() == steps.engine.stored()
+    batch.check_validity()
+    batch.check_rule("k")
+
+
+def test_a_bind_keeps_saved_choices_that_break_a_rule_and_drops_one_outside_its_domain() -> None:
+    # Under ``f = 2``: ``c = 3`` breaks ``k`` and is kept, reported, ``c`` standing; ``x = 5``
+    # is not of its type and is dropped. The design space reads refused through ``k``.
+    bound = BOUNDED.start({"f": 2}).check_bind({"c": 3, "x": 5})
+    bound.check_validity()
+    bound.check_state("c")
+    bound.check_state("x")
+
+
+# New facts emptying a present choice's listed domain (reading 9, settled by § 16.24):
+# accepted, the empty-domain piece false and reported, a value stored there dropped first.
+
+COUNTED = Case(
+    "a domain the facts empty",
+    Space(
+        ("n",), Scope("", choices=(Choice("x", computed(lambda r: tuple(range(r["n"])), ("n",))),))
+    ),
+)
+
+
+def test_new_facts_emptying_a_domain_are_accepted_and_report_its_empty_list() -> None:
+    COUNTED.start({"n": 2}).check_change(Change(facts={"n": 0}))
+
+
+def test_new_facts_emptying_a_stored_choices_domain_drop_it_and_report_the_empty_list() -> None:
+    emptied = COUNTED.start({"n": 2}, {"x": 1}).reach(Change(facts={"n": 0}))
+    emptied.check_validity()
+    emptied.check_state("x")
 
 
 # A named choice under an open selector waits on it.
