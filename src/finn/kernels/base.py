@@ -77,7 +77,7 @@ from finn.kernels.artifacts.module import (
     Module,
     merge,
 )
-from finn.kernels.control import CONTROL, Exported, presented
+from finn.kernels.control import CONTROL, presented
 from finn.kernels.defaults import Fixed, stated_defaults
 from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import RESOURCES_SEMANTICS, total
@@ -187,17 +187,15 @@ def _inputs(pin: Pin) -> tuple[str, ...]:
 
 
 def merged(
-    netlists: Iterable[tuple[str, Fragment]], presented: Iterable[Exported] = ()
+    netlists: Iterable[tuple[str, Fragment]], presented: Iterable[BusExport] = ()
 ) -> Fragment | Rejected:
     """Each netlist under its node, in order, and the control buses presented (each a
-    ``BusExport`` with the writes its configuration takes): a kernel with children's
-    netlist, and a network's."""
-    exports = tuple(
-        BusExport(item.node, item.child, item.port, item.registers) for item in presented
-    )
+    ``BusExport`` with the writes its configuration takes, ``finn.kernels.control.presented``):
+    a kernel with children's netlist, and a network's."""
     try:
         return merge(
-            *(netlist.under(node) for node, netlist in netlists), Fragment(exports=exports)
+            *(netlist.under(node) for node, netlist in netlists),
+            Fragment(exports=tuple(presented)),
         )
     except ArtifactError as error:
         return reject("kernel-netlist", str(error))
