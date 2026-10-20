@@ -37,10 +37,11 @@ from ._nodes import (
 )
 from .declarations import MISSING, UNSUPPLIED
 from .errors import DefinitionError, RequestError
-from .ir import LinkedModel
+from .ir import Linked, LinkedModel
 from .references import ValueHandle, resolve_decision, resolve_reference
 
 if TYPE_CHECKING:
+    from ._structure import Structure
     from ._world import Evaluator
 
 _OWNER = "space.compiler"
@@ -50,14 +51,18 @@ S = TypeVar("S", bound=Space)
 
 @dataclass(frozen=True, slots=True)
 class Model(Generic[S]):
-    """A compiled declaration: its structure, with no inputs or choices. What is read
-    of its structure alone (inspection's Decisions below a scope) is kept with it
-    (``_read``). Its ``evaluator`` is what every configuration of it shares: what each
-    ``self`` method may read, inferred from its source when the model is made, the memo
-    of authored functions, and the model's lock (``_world.Evaluator``)."""
+    """A compiled declaration: its structure, with no inputs or choices. ``linked`` is what
+    the engine reads of it: the root class's template placed as scopes, made when
+    addressed, each node resolved from its template when read (``_structure.Structure``;
+    a table built by hand, in tests). What is read of its structure alone (inspection's
+    Decisions below a scope) is kept with it (``_read``). ``lock`` is the model's one lock:
+    resolution and every configuration's evaluation take it. Its ``evaluator`` is what
+    every configuration of it shares: what each ``self`` method may read, inferred from its
+    source as its nodes are read, the memo of authored functions (``_world.Evaluator``)."""
 
     space_type: type[S]
-    linked: LinkedModel
+    linked: Linked
+    lock: RLock = field(default_factory=RLock, repr=False, compare=False)
     _read: dict[tuple[str, int], object] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
@@ -67,6 +72,13 @@ class Model(Generic[S]):
         from ._world import Evaluator
 
         object.__setattr__(self, "evaluator", Evaluator(cast("Model[Space]", self)))
+
+    @property
+    def structure(self) -> Structure | None:
+        """Its structure (None for a table built by hand)."""
+        from ._structure import Structure
+
+        return self.linked if isinstance(self.linked, Structure) else None
 
     def resolve(self, scope: int, reference: object) -> int:
         """Resolve a declaration in this exact scope without consulting its class."""
@@ -150,27 +162,32 @@ def _definition_classes(space_types: tuple[type[Space], ...]) -> tuple[type[Spac
     return tuple(result)
 
 
-def _publish(space_type: type[S], linked: LinkedModel) -> Model[S]:
-    from ._reads import check_domains
+def _publish(space_type: type[S], table: LinkedModel) -> Model[S]:
+    from ._reads import check_domains, infer
+    from ._structure import Structure, modes
+    from ._template import link_template
 
-    scope_types = tuple(dict.fromkeys(scope.space_type for scope in linked.scopes))
+    scope_types = tuple(dict.fromkeys(scope.space_type for scope in table.scopes))
     _validate_constructors(scope_types)
-    model = Model(space_type, linked)
     # Every domain's membership reads facts only (what each method may read is inferred
-    # when the model is made).
-    check_domains(linked, model.evaluator.reads)
+    # from its source). Interim: checked on link_space's table, then dropped.
+    check_domains(table, infer(table))
     # Publication happens only after the complete definition linked successfully.
     for definition in _definition_classes(scope_types):
         type.__setattr__(definition, "_space_definition_finalized", True)
     reason = f"{space_type.__name__} was prepared"
-    for scope in linked.scopes:
+    for scope in table.scopes:
         if isinstance(scope.record, NodeDecl):
             scope.record.freeze(reason)
-    return model
+    permuted, eager = modes()
+    lock = RLock()
+    structure = Structure(link_template(space_type), lock, permuted=permuted, eager=eager)
+    return Model(space_type, cast(Linked, structure), lock)
 
 
 def compile_model(space_type: type[S]) -> Model[S]:
-    """The canonical model of a Space class whose formals are all runtime inputs."""
+    """The canonical model of a Space class whose formals are all runtime inputs: its
+    template, placed as scopes on demand (``_structure``)."""
 
     if not isinstance(space_type, type) or not issubclass(space_type, Space):
         raise DefinitionError.broken(
@@ -184,6 +201,9 @@ def compile_model(space_type: type[S]) -> Model[S]:
                     "model-cache-invalid", _OWNER, "invalid prepared-model cache on Space class"
                 )
             return cached
+        # Interim (piece 2b replaces both): link_space still runs, once, for its
+        # cross-template cycle check and the domain rule (``_publish``); its table is
+        # dropped. Its refusals come first, as before templates.
         model = _publish(space_type, link_space(space_type))
         type.__setattr__(space_type, "_space_prepared_model", model)
         return model

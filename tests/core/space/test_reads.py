@@ -17,7 +17,7 @@ from typing import cast
 from finn.core.space import Decision, Param, Space, constraint, derived, view
 from finn.core.space._reads import ModelReads, existence_guards, infer, summary
 from finn.core.space.compiler import compile_model
-from finn.core.space.ir import LinkedModel
+from finn.core.space.ir import Linked
 
 
 class Leaf(Space):
@@ -88,17 +88,17 @@ class Outer(Space):
         return width
 
 
-def _model() -> tuple[LinkedModel, ModelReads]:
+def _model() -> tuple[Linked, ModelReads]:
     linked = compile_model(Outer).linked
     return linked, infer(linked)
 
 
-def _keys(linked: LinkedModel, nodes: frozenset[int] | None) -> set[str]:
+def _keys(linked: Linked, nodes: frozenset[int] | None) -> set[str]:
     assert nodes is not None
     return {linked.nodes[index].key for index in nodes}
 
 
-def _reads(linked: LinkedModel, reads: ModelReads, key: str) -> set[str]:
+def _reads(linked: Linked, reads: ModelReads, key: str) -> set[str]:
     return _keys(linked, reads.methods[linked.keys[key]])
 
 

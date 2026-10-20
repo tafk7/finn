@@ -142,8 +142,8 @@ def test_a_gearbox_change_after_a_warm_chain_answers_as_a_recomputation() -> Non
         assert result.accepted, (values, clears)
         point = result.instance
         current = occurrence.state(point)
-        for index in range(len(current.linked.nodes)):
-            current.world.entry(index)
+        for node in current.linked.nodes:
+            current.world.entry(node.index)
     got = point.try_with_choices({owned["l0.adapter"]: "gearbox"})
     want = fresh(point).try_with_choices({owned["l0.adapter"]: "gearbox"})
     assert got.accepted and want.accepted

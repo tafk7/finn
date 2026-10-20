@@ -35,7 +35,7 @@ from .declarations import (
     declared_path,
 )
 from .errors import EvaluationError, RequestError
-from .ir import Choice, LinkedModel, NodeId
+from .ir import Choice, Linked, NodeId
 from .results import (
     Available,
     ConstraintAssessment,
@@ -101,7 +101,7 @@ def attach(current: State, scope: int) -> Space:
 
 
 def prepare_values(
-    linked: LinkedModel,
+    linked: Linked,
     pending: Mapping[NodeId, object],
     role: str,
 ) -> dict[NodeId, object]:
@@ -126,7 +126,7 @@ def bind(model: Model[S], parameters: Mapping[NodeId, object]) -> S:
     return cast(S, attach(_state.bind(cast(Model[Space], model), frozen), 0))
 
 
-def _node_scope(linked: LinkedModel, point: Space, reference: object) -> int | None:
+def _node_scope(linked: Linked, point: Space, reference: object) -> int | None:
     """For a node reference, the node's scope; None for anything else."""
     from ._nodes import NodeDecl
     from .references import descend
@@ -319,7 +319,7 @@ def child(point: Space, record: Declaration) -> Space:
     return attach(current, child_scope)
 
 
-def _scope_choice(linked: LinkedModel, scope: int, decision: object) -> Choice:
+def _scope_choice(linked: Linked, scope: int, decision: object) -> Choice:
     """The Choice of a Decision over nodes in compiled scope ``scope``."""
     from ._nodes import unwrap
 

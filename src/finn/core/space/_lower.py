@@ -24,7 +24,7 @@ from ._bindings import PlacementBinding
 from ._configuration import Space
 from ._names import Names
 from ._signatures import BoundFunction
-from ._table import MemberTask, ScopeDraft, Table, Time
+from ._table import MemberTask, ScopeDraft, Table
 from .declarations import (
     CaseRef,
     ChoiceMemberRef,
@@ -86,17 +86,11 @@ class _Lowering:
 
     def run(self) -> None:
         requires = self.table.requires
-        template = self.table.template_of is not None
         for task in self.table.members:
             self.table.applying = requires.get(task.index)
-            if template:
-                self.table.begin(self.time(task))
             self.link_member(task)
-        for position, guard_task in enumerate(self.table.guards):
+        for guard_task in self.table.guards:
             self.table.applying = requires.get(guard_task.index)
-            if template:
-                made = guard_task.time
-                self.table.begin(("B", "alloc", position) if made is None else ("B", "lower", made))
             node = self.table.nodes[guard_task.index]
             self.table.nodes[guard_task.index] = replace(
                 node,
@@ -106,17 +100,6 @@ class _Lowering:
             )
         self.link_expressions()
         self.table.applying = None
-        self.table.begin(None)
-
-    def time(self, task: MemberTask) -> Time:
-        """Template mode: a member task's time (``_table.Time``)."""
-        if task.owner_scope is not None:
-            return ("A", "named", self.table.named.index(task.index))
-        draft = self.table.drafts[task.scope]
-        position = list(draft.effective.members).index(task.name)
-        if draft.stub is not None:
-            return ("A", "stub", task.scope, position)
-        return ("A", "own", position)
 
     # -- expressions ----------------------------------------------------------------------
 
@@ -126,8 +109,6 @@ class _Lowering:
             task = self.table.expression_tasks[cursor]
             cursor += 1
             self.table.applying = self.table.requires.get(task.index)
-            if task.time is not None:
-                self.table.begin(("C", task.time))
             if task.operator not in {"add", "sub", "mul", "floordiv", "mod", "neg"}:
                 raise DefinitionError.broken(
                     "expression-operator-unsupported",

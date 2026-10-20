@@ -92,10 +92,13 @@ def test_a_chain_collapses_to_its_source_but_keeps_every_scope_and_key() -> None
     collapsed = open_space(Outer(width=3), collapsed=True)
     plain = open_space(Outer(width=3), collapsed=False)
     linked, before = state(collapsed).linked, state(plain).linked
-    assert [node.key for node in linked.nodes] == [node.key for node in before.nodes]
-    assert [scope.name for scope in linked.scopes] == [scope.name for scope in before.scopes]
+    # The two number their nodes apart: compared by key.
+    assert sorted(node.key for node in linked.nodes) == sorted(node.key for node in before.nodes)
+    assert sorted(scope.name for scope in linked.scopes) == sorted(
+        scope.name for scope in before.scopes
+    )
     chain = linked.keys["middle.leaf.width"]
-    assert before.nodes[chain].output == before.keys["middle.width"]
+    assert before.nodes[before.keys["middle.leaf.width"]].output == before.keys["middle.width"]
     assert linked.nodes[chain].output == linked.keys["width"]  # straight to the source
     assert linked.forward[chain] == linked.keys["width"]
     # The alias of a guarded node, read from outside it, keeps its hop.

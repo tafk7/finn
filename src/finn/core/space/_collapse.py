@@ -11,6 +11,7 @@ test for the same shortcut on method reads (``_world.MethodReader``).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any, cast
 
@@ -22,9 +23,7 @@ def forwards(node: Node) -> bool:
     return node.kind == "alias" and node.output is not None and node.domain is None
 
 
-def guard_implies(
-    nodes: list[Node] | tuple[Node, ...], required: int | None, guard: int | None
-) -> bool:
+def guard_implies(nodes: Sequence[Node], required: int | None, guard: int | None) -> bool:
     """Whether ``required`` holds whenever ``guard`` does: it is ``guard`` or an outer guard."""
     if required is None:
         return True

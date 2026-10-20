@@ -129,7 +129,9 @@ class _Allocation:
     # -- Space classes -------------------------------------------------------------------
 
     def check_recursion(self) -> None:
-        """Reject a Space class that places itself, before allocating occurrences."""
+        """Reject a Space class that places itself, before allocating occurrences. In
+        template mode a class already linked places nothing recursively (its own linking
+        checked it), so the walk stops there."""
 
         pending = [self.table.space_type]
         children_of: dict[type[Space], tuple[type[Space], ...]] = {}
@@ -138,6 +140,13 @@ class _Allocation:
             space_type = pending[cursor]
             cursor += 1
             if space_type in children_of:
+                continue
+            if (
+                self.table.template_of is not None
+                and space_type is not self.table.space_type
+                and "_space_template" in space_type.__dict__
+            ):
+                children_of[space_type] = ()
                 continue
             effective = self.table.collected(space_type)
             children: list[type[Space]] = []

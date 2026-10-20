@@ -29,7 +29,7 @@ from .declarations import (
 )
 from .edits import BrokenRule
 from .errors import RequestError
-from .ir import LinkedModel, NodeId, NodeKind
+from .ir import Linked, NodeId, NodeKind
 from .occurrence import candidate as _candidate
 from .occurrence import decision_index, model_of, state
 from .references import DecisionHandle, ValueHandle, decision_key
@@ -154,19 +154,23 @@ class ModelStatistics:
 
 
 def statistics(subject: Space | Model[S] | type[Space]) -> ModelStatistics:
-    """Count direct structure on demand, with no runtime or closure retention."""
+    """Count direct structure on demand, with no runtime or closure retention. It reads
+    every scope and node: it addresses and resolves the whole design space (piece 3 counts
+    it from templates)."""
 
     if not isinstance(subject, (Model, Space, type)):
         raise RequestError("statistics requires a compiled model")
     linked = _context(subject)[0].linked
-    placements = len(linked.scopes) - 1
-    authored = sum(len(scope.named_members) for scope in linked.scopes)
+    # By iteration (a structure's ``len(nodes)`` bounds its ids; it counts no nodes).
+    scopes, nodes = tuple(linked.scopes), tuple(node for node in linked.nodes)
+    placements = len(scopes) - 1
+    authored = sum(len(scope.named_members) for scope in scopes)
     return ModelStatistics(
         authored + placements,
-        len(linked.scopes),
-        len(linked.nodes),
-        sum(len(node.dependencies) for node in linked.nodes),
-        len(linked.choices),
+        len(scopes),
+        len(nodes),
+        sum(len(node.dependencies) for node in nodes),
+        len(tuple(linked.choices)),
         len(linked.decisions),
     )
 
@@ -186,9 +190,10 @@ def model(subject: Space | Model[S] | type[Space]) -> Model[Space]:
     return _context(subject)[0]
 
 
-def _scope_set(linked: LinkedModel, root: int) -> set[int]:
+def _scope_set(linked: Linked, root: int) -> set[int]:
     # Scopes are allocated after their parent. No repeated ancestor traversal
-    # or stored transitive closure is needed to inspect a subtree.
+    # or stored transitive closure is needed to inspect a subtree. It reads every scope:
+    # it addresses the whole design space (piece 3 answers from templates).
     included = {root}
     for scope in linked.scopes:
         if scope.parent in included:
@@ -196,7 +201,7 @@ def _scope_set(linked: LinkedModel, root: int) -> set[int]:
     return included
 
 
-def _node_info(linked: LinkedModel, index: int) -> NodeInfo:
+def _node_info(linked: Linked, index: int) -> NodeInfo:
     node = linked.nodes[index]
     reference = (
         DecisionHandle[object](linked, index)
@@ -216,7 +221,7 @@ def _node_info(linked: LinkedModel, index: int) -> NodeInfo:
 
 
 def _decision_info(
-    linked: LinkedModel,
+    linked: Linked,
     index: int,
 ) -> DecisionInfo[object]:
     node = linked.nodes[index]
@@ -240,7 +245,8 @@ def _decision_info(
 
 def decisions(subject: Space | Model[S] | type[Space]) -> tuple[DecisionInfo[object], ...]:
     """Discover all owning decisions below this scope, including inactive cases, in the
-    flow order (``_flow``). Read once per compiled model and scope."""
+    flow order (``_flow``). Read once per compiled model and scope. The flow order reads
+    the whole design space (piece 3 answers it from templates)."""
 
     compiled, scope = _context(subject)
     found = compiled._read.get(("decisions", scope))
@@ -323,7 +329,8 @@ def value_handle(subject: Space | Model[S] | type[Space], reference: object) -> 
 
 
 def choices(subject: Space | Model[S] | type[Space]) -> tuple[ChoiceInfo, ...]:
-    """Every Decision over nodes below this scope, with its candidates."""
+    """Every Decision over nodes below this scope, with its candidates (it addresses the
+    whole design space)."""
     compiled, scope = _context(subject)
     linked = compiled.linked
     included = _scope_set(linked, scope)
@@ -348,7 +355,8 @@ def choices(subject: Space | Model[S] | type[Space]) -> tuple[ChoiceInfo, ...]:
 
 
 def members(subject: Space | Model[S] | type[Space]) -> tuple[NodeInfo, ...]:
-    """Inspect every named member below this scope (including forwarding aliases)."""
+    """Inspect every named member below this scope (including forwarding aliases; it
+    addresses the whole design space)."""
 
     compiled, scope = _context(subject)
     included = _scope_set(compiled.linked, scope)

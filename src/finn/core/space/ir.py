@@ -3,17 +3,19 @@
 
 """Immutable linked representation shared by compilation and evaluation.
 
-The table stores each occurrence once. Node references (``NodeId``) describe
-potential edges; the evaluator records demanded edges separately for every cached
-result.
+A node (``Node``) is one occurrence of a member in a placed scope. ``link_space``'s table
+(``LinkedModel``) stores every one; a model's structure (``_structure``) resolves each into
+the same ``Node`` when it is read. The engine reads either through ``Linked``. Node
+references (``NodeId``) describe potential edges; the evaluator records demanded edges
+separately for every cached result.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, TypeAlias
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeAlias
 
 from .semantics import ValueSemantics
 
@@ -21,10 +23,9 @@ if TYPE_CHECKING:
     from ._configuration import Space
     from .domains import Domain
 
-# A node's identity in its model: its position in ``LinkedModel.nodes``. Every
-# reference to a node, here and in the evaluator, is a ``NodeId``, so a later
-# identity (an instance, a template node) changes this name and the few places that
-# turn a node into a cache key or a bit.
+# A node's identity in its model: in a model's structure (``_structure``), its scope's
+# base plus its template node (a scope's block; numbered in the order scopes are
+# addressed, so nothing orders by it); in ``link_space``'s one table, its position there.
 NodeId: TypeAlias = int
 
 NodeKind = Literal[
@@ -186,3 +187,44 @@ class LinkedModel:
             "selector_choices",
             MappingProxyType({item.selector: item.index for item in self.choices}),
         )
+
+
+class _Ranked(Protocol):
+    def __getitem__(self, index: int, /) -> Any: ...
+
+
+class Linked(Protocol):
+    """What the engine reads of a linked model: a model's structure (``_structure``), its
+    nodes resolved on demand, or a table holding every node (``LinkedModel``:
+    ``link_space``'s, or one built by hand). ``ranks`` orders decisions (a structure's: in
+    declaration order)."""
+
+    @property
+    def nodes(self) -> Sequence[Node]: ...
+
+    @property
+    def scopes(self) -> Sequence[Scope]: ...
+
+    @property
+    def choices(self) -> Sequence[Choice]: ...
+
+    @property
+    def keys(self) -> Mapping[str, NodeId]: ...
+
+    @property
+    def selector_choices(self) -> Mapping[NodeId, int]: ...
+
+    @property
+    def editable_aliases(self) -> Collection[NodeId]: ...
+
+    @property
+    def forward(self) -> Sequence[NodeId]: ...
+
+    @property
+    def parameters(self) -> tuple[NodeId, ...]: ...
+
+    @property
+    def decisions(self) -> tuple[NodeId, ...]: ...
+
+    @property
+    def ranks(self) -> _Ranked: ...

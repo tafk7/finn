@@ -64,22 +64,13 @@ class Binding:
 
 UNSUPPLIED_BINDING = Binding("unsupplied")
 
-# Template mode: when a reference is lowered, as the linker's phases order it (member
-# tasks, then guards, then integer expressions), local to the template; the expansion
-# places it in the order ``link_space`` lowers its one table. A task's time is one of
-# ("A", "own", member), ("A", "stub", stub, member), ("A", "named", position),
-# ("B", "alloc", position), ("B", "lower", event) and ("C", event); an event is
-# (its task's time, its position in the task).
-Time = tuple[object, ...]
-
 
 @dataclass(frozen=True, slots=True)
 class Read:
-    """Template mode: one read of ``decision.member``: when, its reader's key, and the
-    Decision over nodes it exists only where it applies (None: everywhere)."""
+    """Template mode: one read of ``decision.member``, in the order the template lowers
+    its reads: its reader's key, and the Decision over nodes it exists only where it
+    applies (None: everywhere)."""
 
-    # The event it is in: (its task's time, its position in the task).
-    time: Time
     owner: str
     requires: int | None
 
@@ -202,8 +193,6 @@ class GuardTask:
     index: int
     source_scope: int
     condition: ValueRef[bool]
-    # Template mode: the event that made it while lowering (None: made by allocation).
-    time: Time | None = None
 
 
 @dataclass(frozen=True)
@@ -213,8 +202,6 @@ class ExpressionTask:
     owner: str
     operator: IntOperator
     operands: tuple[int | ValueRef[int], ...]
-    # Template mode: the event that made it.
-    time: Time | None = None
 
 
 @dataclass
@@ -255,9 +242,6 @@ class Table:
     named: list[int] = field(default_factory=list)
     stub_selects: dict[int, tuple[int, int, str]] = field(default_factory=dict)
     stub_reads: dict[int, list[Read]] = field(default_factory=dict)
-    # Template mode: the task being lowered, and the events in it so far.
-    task_time: Time | None = None
-    events: int = 0
 
     def collected(self, space_type: type[Space]) -> EffectiveSpace:
         effective = self.effective.get(space_type)
@@ -314,19 +298,8 @@ class Table:
         if condition is None:
             return outer
         index = self.reserve(source_scope, key, "guard", BOOL, guard=outer, source_owner=owner)
-        self.guards.append(GuardTask(index, source_scope, condition, self.stamp()))
+        self.guards.append(GuardTask(index, source_scope, condition))
         return index
-
-    def begin(self, time: Time | None) -> None:
-        """Template mode: lowering a task starts (``Time``)."""
-        self.task_time, self.events = time, 0
-
-    def stamp(self) -> Time | None:
-        """Template mode: the time of an event in the task being lowered."""
-        if self.task_time is None:
-            return None
-        self.events += 1
-        return (self.task_time, self.events)
 
     def local_name(self, scope: int, child: int) -> str:
         """A descendant scope's name relative to ``scope``."""

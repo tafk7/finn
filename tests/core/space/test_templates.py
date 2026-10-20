@@ -1,10 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 """Templates (``_template``): each Space class's own scope compiled once, the Spaces it
-places stubs; and the eager expansion, equal to ``link_space`` by key.
+places stubs; a model's structure (``_structure``), its scopes made when addressed and its
+nodes resolved when read; and the eager expansion. Both equal ``link_space`` by key.
 
-``expand(C)`` rebuilds ``link_space(C)``'s model from templates alone; its ``NodeId``s
-differ, so the two are compared in a canonical form by key (``_templates_support``). Here
+A structure fully resolved, in either numbering, and ``expand(C)`` rebuild
+``link_space(C)``'s model from templates alone; their ``NodeId``s differ, so they are
+compared in a canonical form by key (``_templates_support``). Here
 the engine's corpus: every Space class the space tests and the engine's support modules
 define, and the classes below for the edge cases. The kernels, the rest of the test
 support, the Chain's members and stage 7's chain are the kernel tree's
@@ -18,7 +20,7 @@ from pathlib import Path
 import pytest
 
 from core.space._templates_support import assert_expands, defined, links
-from core.space._toys_support import Boiler, HeatPump, Room, Thermostat
+from core.space._toys_support import Boiler, HeatPump, House, Room, Thermostat
 from finn.core.space import (
     Decision,
     Param,
@@ -27,10 +29,17 @@ from finn.core.space import (
     _template,
     composite,
     derived,
+    design_space,
+    inspection,
     supplied,
     view,
 )
-from finn.core.space._template import Template, expand, link_template
+from finn.core.space._linker import link_space
+from finn.core.space._structure import EAGER, Structure, expand
+from finn.core.space._template import Template, link_template
+from finn.core.space.errors import RequestError
+from finn.core.space.references import ValueHandle
+from finn.core.space.results import Unresolved
 
 HERE = Path(__file__).resolve().parent
 
@@ -93,8 +102,10 @@ class ReadsItself(Space):
 
 
 class ReadsLater(Space):
-    """A selection read by the child and by the parent: owned by the first reader as
-    ``link_space`` lowers, here the child's member before the parent's expression."""
+    """A selection read by the child and by the parent: one node, owned in the child's
+    template, where its choice is (``link_space`` owned it by its first reader as it
+    lowered its one table: the child's member before the parent's expression, the
+    parent's member before the child's)."""
 
     first = ReadsItself()
     second = ReadsItself()
@@ -260,12 +271,16 @@ def test_a_named_decision_used_only_by_one_child_is_its_own() -> None:
     assert linked.nodes[linked.keys["depth"]].scope == 0
 
 
-def test_a_selection_read_by_several_templates_is_one_owned_by_its_first_reader() -> None:
+def test_a_selection_read_by_several_templates_is_one_owned_in_its_choices_template() -> None:
     linked = expand(ReadsLater)
     assert linked.nodes[linked.keys["first.pump.$member.cop"]].owner == "first.cop"
-    assert linked.nodes[linked.keys["second.pump.$member.cop"]].owner == "earlier"
+    # link_space: "earlier", the parent's member, lowered before the child's.
+    assert linked.nodes[linked.keys["second.pump.$member.cop"]].owner == "second.cop"
     (choice,) = (choice for choice in linked.choices if choice.key == "second.pump")
     assert choice.members == {"cop": linked.keys["second.pump.$member.cop"]}
+    # Read by the parent alone: owned by its reader there.
+    through = expand(ReadsThroughAChild)
+    assert through.nodes[through.keys["heater.pump.$member.cop"]].owner == "cop"
 
 
 def test_a_choice_never_applies_where_its_formal_is_unsupplied() -> None:
@@ -318,3 +333,64 @@ def test_a_template_counts_its_own_nodes_by_kind() -> None:
     # The literals 1 and 4 are values on their stubs, not nodes.
     assert link_template(OwnedAtChild).scopes[2].bindings["first"].value == 1
     assert len(link_template(Room).nodes) == len(link_template(Room).keys)
+
+
+# -- the structure: scopes made when addressed, nodes resolved when read -----------------------
+
+
+def test_keys_are_matched_against_stub_names_never_split_on_dots() -> None:
+    structure = Structure(link_template(Dotted))  # nothing addressed but the root
+    # The case guard of ``compute.packed.packed.compute`` belongs to the scope that places
+    # it: splitting the key at its last dot names the candidate's scope instead.
+    guard = structure.keys["compute.packed.packed.compute.$selected"]
+    assert structure.scopes[structure.nodes[guard].scope].name == "compute.packed"
+    kw = structure.keys["compute.packed.packed.compute.kw"]
+    assert structure.scopes[structure.nodes[kw].scope].name == "compute.packed.packed.compute"
+    for permuted in (False, True):
+        whole = Structure(link_template(Dotted), permuted=permuted)
+        assert all(whole.keys[node.key] == node.index for node in whole.nodes)
+    with pytest.raises(KeyError):
+        structure.keys["compute.packed.packed.compute"]  # a scope, no node
+
+
+def test_a_design_space_read_for_one_value_makes_part_of_a_composite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(EAGER, raising=False)  # the eager test mode makes everything at once
+    Street = composite("Street", {f"house{number}": House(budget=100) for number in range(4)})
+    point = design_space(Street())
+    kitchen = point.house0.kitchen  # type: ignore[attr-defined]
+    assert isinstance(kitchen.query(Room.cost), Unresolved)  # its finish is open
+    structure = inspection.model(point).structure
+    assert structure is not None
+    read = structure.counts()
+    # The root's Scope places its four houses; the house read places its own; nothing of
+    # the other three houses is placed.
+    names = {record.name for record in structure.records}
+    assert "house0.kitchen" in names and not any(name.startswith("house1.") for name in names)
+    structure.resolve_all()
+    whole = structure.counts()
+    table = link_space(Street)
+    assert whole == {
+        "scopes addressed": len(table.scopes),
+        "scopes in play": len(table.scopes),
+        "nodes resolved": len(table.nodes),
+    }
+    # The kitchen's scope alone has a node resolved: its cost, what that reads, and its
+    # validity's pieces are none of the other houses'.
+    assert read == {"scopes addressed": 12, "scopes in play": 1, "nodes resolved": 5}
+
+
+def test_an_identity_standing_for_another_is_no_node() -> None:
+    structure = Structure(link_template(Room))
+    guard = link_template(Room).placement_guard  # the root's own placement: no guard
+    with pytest.raises(IndexError):
+        structure.nodes[guard]
+    with pytest.raises(RequestError):
+        ValueHandle(structure, guard)
+
+
+def test_resolution_takes_the_models_lock() -> None:
+    model = inspection.model(House)
+    assert model.structure is not None
+    assert model.lock is model.evaluator.lock is model.structure.lock

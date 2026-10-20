@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Literal, TypeAlias, cast
 
 from ._world import World, public_value
 from .errors import EvaluationError, RequestError
-from .ir import LinkedModel, NodeId
+from .ir import Linked, NodeId
 from .results import (
     Available,
     ConstraintAssessment,
@@ -58,7 +58,7 @@ class State:
     answers: dict[tuple[str, int], object] = field(default_factory=dict, repr=False)
 
     @property
-    def linked(self) -> LinkedModel:
+    def linked(self) -> Linked:
         return self.model.linked
 
     @property
@@ -76,9 +76,7 @@ class State:
         return MappingProxyType(self.world.stored)
 
 
-def prepare(
-    linked: LinkedModel, pending: Mapping[NodeId, tuple[object, str]]
-) -> dict[NodeId, object]:
+def prepare(linked: Linked, pending: Mapping[NodeId, tuple[object, str]]) -> dict[NodeId, object]:
     """Values as a configuration holds them: the entire request recognized by each
     node's semantics (each value with the role it is supplied in) before any snapshot
     adapter is invoked, then each frozen."""
@@ -194,9 +192,7 @@ def decision_state(state: State, node: NodeId) -> QueryResult[DecisionState[obje
     return cast(QueryResult[DecisionState[object]], answer)
 
 
-def copy_result(
-    linked: LinkedModel, node: NodeId, answer: QueryResult[object]
-) -> QueryResult[object]:
+def copy_result(linked: Linked, node: NodeId, answer: QueryResult[object]) -> QueryResult[object]:
     """A public answer detached from the entry it was read from, by its semantics."""
     if not isinstance(answer, Available):
         return answer
@@ -206,7 +202,7 @@ def copy_result(
     return Available(public_value(spec, answer))
 
 
-def _copy_readiness(linked: LinkedModel, assessment: ReadinessAssessment) -> ReadinessAssessment:
+def _copy_readiness(linked: Linked, assessment: ReadinessAssessment) -> ReadinessAssessment:
     return ReadinessAssessment(
         {
             key: copy_result(linked, linked.keys[key], answer)
@@ -216,7 +212,7 @@ def _copy_readiness(linked: LinkedModel, assessment: ReadinessAssessment) -> Rea
     )
 
 
-def copy_assessment(linked: LinkedModel, node: NodeId, assessment: Assessment) -> Assessment:
+def copy_assessment(linked: Linked, node: NodeId, assessment: Assessment) -> Assessment:
     """An assessment detached from its entry: every value in it copied by its semantics
     (a constraint's answers are exact bools and findings, shared as they are)."""
     if isinstance(assessment, ConstraintAssessment):

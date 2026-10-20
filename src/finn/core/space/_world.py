@@ -57,7 +57,6 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from contextvars import Context, copy_context
 from dataclasses import dataclass, field
-from threading import RLock
 from typing import TYPE_CHECKING, TypeAlias, TypeVar, cast
 
 from finn.core.reporting.findings import Finding, FindingKind
@@ -87,7 +86,7 @@ from ._reads import ModelReads, flow_order, infer, presence_readers
 from .declarations import Param, declared_path
 from .errors import EvaluationError, RequestError, ValueUnavailableError
 from .graph import Located
-from .ir import Argument, Choice, LinkedModel, Node, NodeId, NodeKind
+from .ir import Argument, Choice, Linked, Node, NodeId, NodeKind
 from .references import descend
 from .results import (
     Available,
@@ -182,9 +181,10 @@ class Called:
 
 class Evaluator:
     """What every world of one model shares: its structure and its methods' inferred
-    reads, the order its choices flow in, the bit table, the memo of authored functions,
-    the work counters, and the model's lock (worlds share their parents' entries and the
-    memo, so evaluation of one model is serialized)."""
+    reads (both answered node by node, as read), the order its choices flow in, the bit
+    table, the memo of authored functions, the work counters, and the model's lock (worlds
+    share their parents' entries and the memo, so evaluation of one model is serialized;
+    the structure resolves under it too)."""
 
     __slots__ = (
         "model",
@@ -202,13 +202,13 @@ class Evaluator:
 
     def __init__(self, model: Model[Space]) -> None:
         self.model = model
-        self.linked: LinkedModel = model.linked
+        self.linked: Linked = model.linked
         self.nodes = self.linked.nodes
         self.reads: ModelReads = infer(self.linked)
         self.bits = BitTable()
         self.memo: Memo[Called] = Memo()
         self.counters = Counters()
-        self.lock = RLock()
+        self.lock = model.lock
         # The run in progress (under the lock), if any.
         self.run: _Run | None = None
         self._presence: Mapping[NodeId, tuple[NodeId, ...]] | None = None
@@ -216,8 +216,9 @@ class Evaluator:
 
     def flow(self) -> tuple[NodeId, ...]:
         """The model's choices in the flow order (found once per model, on first use:
-        ``_reads.flow_order``). Each loop in it is noted, a finding stated without
-        refusing (``flow-loop``): its choices are taken in declaration order."""
+        ``_reads.flow_order``; it resolves the whole design space). Each loop in it is
+        noted, a finding stated without refusing (``flow-loop``): its choices are taken in
+        declaration order."""
         with self.lock:
             if self._flow is None:
                 found = flow_order(self.linked, self.reads)
@@ -238,7 +239,8 @@ class Evaluator:
 
     def presence_readers(self, source: NodeId) -> tuple[NodeId, ...]:
         """The choices whose presence may read the choice or fact ``source`` (found once
-        per model, on first use: ``_reads.presence_readers``)."""
+        per model, on first use: ``_reads.presence_readers``; it resolves the whole design
+        space)."""
         with self.lock:
             if self._presence is None:
                 self._presence = presence_readers(self.linked, self.reads.methods)

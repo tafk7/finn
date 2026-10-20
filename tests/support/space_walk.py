@@ -160,7 +160,7 @@ class _Walk:
         of the stored draws) cleared."""
         current = occurrence.state(point)
         stored = dict(current.stored)
-        pool = sorted(self.keys)
+        pool = list(self.keys)  # declaration order (never by NodeId: ids follow addressing)
         for _ in range(200):
             i = self.rng.choice(pool)
             if i in stored and self.rng.random() < 0.2:
@@ -175,7 +175,7 @@ class _Walk:
     def draw_fact(self, point: Space) -> dict[NodeId, object]:
         """A root formal set to another of the values the walk was given for it."""
         current = occurrence.state(point)
-        index = self.rng.choice(sorted(self.formals))
+        index = self.rng.choice(list(self.formals))  # in the order the walk was given them
         options = [v for v in self.formals[index] if not same(v, current.facts.get(index))]
         return {index: self.rng.choice(options)} if options else {}
 
@@ -255,8 +255,8 @@ class _Walk:
             self.differ("stored choices", (keys[i] for i in set(got.stored) ^ set(want.stored)))
         nodes = got.linked.nodes
         if self.everything:
-            for i in range(len(nodes)):
-                got.world.entry(i)
+            for node in nodes:
+                got.world.entry(node.index)
         wrong: list[str] = []
         unread: list[str] = []
         for i in sorted(got.world.cache):

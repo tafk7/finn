@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
+import pytest
 from core.space._templates_support import assert_expands, defined, links, reached
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
@@ -22,11 +23,16 @@ from support.chain import MEMBERS, chain
 
 import finn.custom_op
 import finn.kernels
-from finn.core.space import composite, inspection
-from finn.core.space._template import expand, link_template
+from finn.core.space import Space, composite, design_space, inspection
+from finn.core.space._linker import link_space
+from finn.core.space._structure import EAGER, expand
+from finn.core.space._template import link_template
+from finn.core.space.results import Unresolved
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import in_shell, make_cut_choices
 from finn.kernels.channels import Channel
+from finn.kernels.configure import commit
+from finn.kernels.matmul import MatMulKernel
 from finn.kernels.network import Fact, Interface
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
@@ -107,9 +113,12 @@ def _mlp(layers: int) -> ModelWrapper:
     return model
 
 
-def test_stage_7s_chain_of_eight_kernels_expands_as_it_links() -> None:
+def _chain(layers: int) -> tuple[type[Space], dict[str, object]]:
+    """Stage 7's chain of ``2 * layers`` kernels as one Space (its kernels' declarations and
+    the channels from the shell's wiring), and the values conversion and the cut store, by
+    key."""
     target = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)
-    model = _mlp(4).transform(ToKernelOps(target)).transform(InferKernelTensors())
+    model = _mlp(layers).transform(ToKernelOps(target)).transform(InferKernelTensors())
     nodes = list(model.graph.node)
     make_cut_choices(model)
     net = in_shell(model, nodes)
@@ -126,9 +135,39 @@ def test_stage_7s_chain_of_eight_kernels_expands_as_it_links() -> None:
                 value = getattr(members[value.member], value.name)
             given[fact] = value
         members[name] = Channel(**given)
-    whole = composite("templates_chain_8", members)
+    stored = {f"{member}.{key}": value for (member, key), value in net.chosen().items()}
+    return composite(f"templates_chain_{2 * layers}", members), stored
+
+
+def test_stage_7s_chain_of_eight_kernels_expands_as_it_links() -> None:
+    whole, _ = _chain(4)
     assert_expands([whole])
     templates = reached(link_template(whole))
     # Seventeen classes, and the composite.
     assert len(templates) == 18
     assert len(expand(whole).scopes) == 468
+
+
+def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(EAGER, raising=False)  # the eager test mode makes everything at once
+    whole, stored = _chain(4)
+    point = design_space(whole())
+    structure = inspection.model(point).structure
+    assert structure is not None
+    assert isinstance(point.mm0.query(MatMulKernel.cycles), Unresolved)  # type: ignore[attr-defined]
+    read = structure.counts()
+    table = link_space(whole)
+    assert read["scopes addressed"] < len(table.scopes) // 10
+    assert read["scopes in play"] < read["scopes addressed"]
+    assert read["nodes resolved"] < len(table.nodes) // 100
+    # Committing the stored values lists every choice (``inspection.decisions``, in the
+    # flow order): it still reads the whole design space (piece 3 answers it from
+    # templates).
+    commit(point, stored)
+    assert structure.counts() == {
+        "scopes addressed": len(table.scopes),
+        "scopes in play": len(table.scopes),
+        "nodes resolved": len(table.nodes),
+    }

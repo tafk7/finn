@@ -13,8 +13,9 @@ In template mode a reference into a child resolves in the child's template: its 
 imported into the child's stub (``Table.imported``), and a deeper path goes through
 nested stubs (``Table.nested``). A ``decision.member`` read through a child's choice
 reads the selection its candidates share in the child's template, or else makes one in
-the stub; each read through a choice is recorded with its time (``_table.Time``), so the
-expansion owns a selection several templates make by its first reader.
+the stub; each read through a choice is recorded (``_table.Read``). A selection several
+templates make for one scope is one node where they are placed, owned in the choice's own
+template where it reads it (``_structure``).
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from dataclasses import replace
 from typing import cast
 
 from ._nodes import NodeDecision, NodeDecl, unwrap
-from ._table import ChoiceDraft, ExpressionTask, Read, Table, Time, member_key
+from ._table import ChoiceDraft, ExpressionTask, Read, Table, member_key
 from .declarations import (
     CaseRef,
     ChoiceMemberRef,
@@ -129,9 +130,8 @@ class Names:
                 declaration=owner,
             )
         choice = self.table.choice_drafts[index]
-        time = self.table.stamp()
-        if time is not None:
-            self.read_through(choice, source.member, Read(time, owner, self.table.applying))
+        if self.table.template_of is not None:
+            self.read_through(choice, source.member, Read(owner, self.table.applying))
         if source.member in choice.members:
             return choice.members[source.member]
         identity = (choice.index, source.member)
@@ -201,10 +201,10 @@ class Names:
         """Template mode: ``decision.member`` through a child's choice. The selection its
         candidates share in the child's template, imported, where the choice applies at
         the stub; else one made in the stub, over the candidates' members (none where the
-        choice never applies at the stub: typed as ``choice_member`` types it there). The
-        expansion makes one node of the selections made for one member in one scope,
-        owned by its first reader in the order ``link_space`` lowers its table."""
-        read = Read(cast(Time, self.table.stamp()), owner, self.table.applying)
+        choice never applies at the stub: typed as ``choice_member`` types it there). Where
+        the templates are placed, the selections made for one member in one scope are one
+        node (``_structure``)."""
+        read = Read(owner, self.table.applying)
         template = self.table.stub(target).template
         index = template.choice_index.get(decision)
         if index is None:
@@ -422,8 +422,6 @@ class Names:
             )
         self.expression_nodes[identity] = index
         self.table.expression_tasks.append(
-            ExpressionTask(
-                index, scope, owner, source.operator, tuple(source.operands), self.table.stamp()
-            )
+            ExpressionTask(index, scope, owner, source.operator, tuple(source.operands))
         )
         return index

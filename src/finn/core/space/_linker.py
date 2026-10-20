@@ -13,6 +13,11 @@ reserves every member's node, ``_lower`` gives each node its payload
 (references resolved by ``_names``), the nodes are ordered by their known
 dependencies, ``_check`` validates their semantics and ``_collapse`` bypasses
 forwarding aliases. The table is then frozen into the ``LinkedModel``.
+
+A model no longer holds this table: its structure (``_structure``) places each class's
+template (``_template``, the same phases in template mode) as scopes, made when addressed.
+Interim, until templates check them: ``compile_model`` still links the table once, for its
+cross-template cycle check and the domain rule, and drops it.
 """
 
 from __future__ import annotations
