@@ -4,56 +4,70 @@
 """Seeded random walks: the reference model held to its four invariants after every step,
 and the engine compared with it.
 
-A seed draws a small description (:func:`generate`) and a walk of changes over it. The
-**model drives the walk**: a change it accepts is applied, one it refuses is not. At every
-step (each change tried, accepted or refused):
+A seed draws a small description (:func:`generate`) and a walk of changes over it: changes
+of choices, and now and then a change of facts, alone or with a change of choices beside it
+(a batch). The **model drives the walk**: a change it accepts is applied, one it refuses is
+not. At every step (each change tried, accepted or refused):
 
-**The model's four invariants** (the semantics note's § 12), strict in every walk:
+**The model's four invariants** (the semantics note's § 12), strict in every walk, hold for
+**steps of choices**:
 
 1. *History-independence.* The walked configuration answers every question (each choice's
    state, each value's answer, each rule, validity, each listed choice's possible values
-   and ranking) as ``Configuration(space, facts, stored)`` built from nothing. And the
-   **bind**, ``change(Configuration(space, facts), Change(commit=stored))``, is accepted
+   and ranking) as ``Configuration(space, facts, stored)`` built from nothing; and
+   ``bind(space, facts, stored)`` publishes it, dropping nothing. And the change from
+   nothing, ``change(Configuration(space, facts), Change(commit=stored))``, is accepted
    with the same answers, for every configuration the walk reaches by accepted changes
-   that set (FN3: what a step publishes binds again unrefused). Why (§ 16.15): such a
-   change leaves the set of counted pairs (3) no larger, so the configuration's false
-   pieces are those its facts made false from the start, which the configuration the bind
-   starts from (its facts, nothing stored) counts too. Its scope (§ 16.16): after a
-   clear-only step that revealed a masked rule (3), the bind may be refused, by the origins
-   so revealed and nothing else; that is counted as expected, never anywhere else.
+   of choices that set (FN3: what a step publishes binds again unrefused). Why (§ 16.15):
+   such a change leaves the set of counted pairs (3) no larger, so the configuration's
+   false pieces are those its facts made false, which the configuration the change starts
+   from (its facts, nothing stored) counts too. Its scope: it may be refused by the
+   origins a clear-only step revealed from behind a view's Space (§ 16.16, 3) or a facts
+   step made newly false (§ 16.24), and nothing else; that is counted as expected.
 2. *Additions move answers only up the information order* (:func:`below`, the order
    defined in one place) over a step that only sets choices nothing was stored for, with no
    exception: no accepted addition leaves a Space newly refused (§ 16.15 removes § 16.14's).
-3. *No accepted change that sets a choice or a fact to a new value adds a (false piece,
+3. *No accepted change of choices that sets a choice to a new value adds a (false piece,
    origin) pair* (§ 16.15): every pair counted in the published configuration is counted in
-   the one before it. A change setting no new value (§ 16.18: its commits repeat stored
-   values), only clearing and unsetting, is never refused (§ 16.16), and may add a pair
-   only by **masking**: each pair it adds must, before the step, read (its origin, or
-   through its origin's or its piece's body reads) a view refused through its Space, or a
-   fact the step unsets.
+   the one before it. A change of choices setting no new value (§ 16.18: its commits repeat
+   stored values), only clearing, is never refused (§ 16.16), and may add a pair only by
+   **masking**: each pair it adds must, before the step, read (its origin, or through its
+   origin's or its piece's body reads) a view refused through its Space, or a fact the step
+   unsets.
 4. *Every refusal names exactly the origins of the pairs it would add, and their standing
    choices*, checked by brute force: each named origin is false on its own values in the
    would-be configuration; the origins named are exactly those of the pairs counted there
    and not before; each origin's standing choices are exactly those whose clearing, added
    to the change, makes the origin no longer false.
 
-For 3 and 4 the module counts a configuration's pairs again (:func:`counted_pairs`, from
-the model docstring's readings 2 and 3: each false piece of the root's validity with the
-origins it is false through) and what stands in an origin's way (:class:`Structure`,
-reading 4), so the check is not the model checking itself: it reads the model's evaluation
-of each configuration (its ``Solution``) and never its change code nor its pairs.
+**A facts step** instantiates a new design space (§ 16.24, :func:`check_facts`): it is never
+refused for its facts, and is checked against a bind of its result. Its facts alone publish
+exactly ``bind(space, new facts, stored)``'s configuration, with the same values dropped;
+those are exactly the stored values not of their type under the new facts, and the rest are
+kept; the report's rules are exactly the origins of the pairs new against the receiver, with
+their standing choices checked by clearing in the published design space. A batch is its
+facts, then its choices as a change of choices on their design space (§ 16.25): the same
+answer and design space, the choices held to invariants 3 and 4 from there.
+
+For 3, 4 and the facts steps the module counts a configuration's pairs again
+(:func:`counted_pairs`, from the model docstring's readings 2 and 3: each false piece of the
+root's validity with the origins it is false through), what stands in an origin's way
+(:class:`Structure`, reading 4) and what is of its type (:func:`outside`), so the check is
+not the model checking itself: it reads the model's evaluation of each configuration (its
+``Solution``) and never its change code nor its pairs.
 
 **The engine** (the engine core's) answers the same questions at every configuration
 the model reaches, and the same change at every step. Its own **permanent checks** are
 strict always: the walked engine configuration answers every question, and every change,
 as one built from nothing (``support.space_walk.fresh``). A disagreement with the model is
 **counted, not failed, while a milestone with rows is pending** (:func:`pending`): tallied
-by question. The matrix has none (the engine core's milestone is accepted), so the walks
-are strict: every disagreement fails the walk, as it does with a pending milestone's rows
-taken as removed (``--without``). An engine error always fails.
+by question. The facts-instance milestone is pending: the engine still refuses a change of
+facts the model takes as a new design space, and a facts step's change is tallied as
+``"facts change"``, apart from every other question's. With the milestone's rows taken as
+removed (``--without``), every disagreement fails the walk. An engine error always fails.
 Refinement on the engine side (its answers over an addition, in the same order) is a
 disagreement like any other where the model holds. Where the engine refuses a change the
-model accepts, the engine side takes the model's configuration by a bind from nothing; if
+model accepts, the engine side takes the model's configuration by a change from nothing; if
 it refuses that too, it is out of step until a later configuration binds.
 
 A failure prints the seed, the step, the description, the steps so far and the answers
@@ -76,7 +90,7 @@ from support.space_walk import fresh
 
 from core.space import reference as model
 from core.space.reference.description import Order
-from core.space.reference.model import EMPTY_DOMAIN_REFUSES, same
+from core.space.reference.model import same
 
 from .compare import (
     Disagreement,
@@ -997,14 +1011,10 @@ def added_pairs(
     structure: Structure, before: model.Solution, after: model.Solution
 ) -> dict[Pair, str]:
     """The pairs counted in ``after`` and not in ``before`` (a piece not false before counts
-    as false through nothing), with each origin's kind; an empty domain's only while
-    reading 9's switch is on. Each one's origin refuses the change from one to the other."""
+    as false through nothing), with each origin's kind. Each one's origin refuses a change of
+    choices from one to the other, and is reported by a change of facts (§ 16.24)."""
     was = counted_pairs(structure, before)
-    return {
-        pair: kind
-        for pair, kind in counted_pairs(structure, after).items()
-        if pair not in was and (kind != "empty-domain" or EMPTY_DOMAIN_REFUSES)
-    }
+    return {pair: kind for pair, kind in counted_pairs(structure, after).items() if pair not in was}
 
 
 def would_be(
@@ -1072,15 +1082,30 @@ def check_change(
     edit: model.Change,
     result: model.Accepted | model.Rejected,
 ) -> Checked:
-    """Invariants 3 and 4 (and the assignment that comes first) on ``result``, ``edit``'s
-    result from ``configuration``, computed independently of the model's change code."""
+    """``edit``'s ``result`` from ``configuration``, checked independently of the model's
+    change code: a change of facts by :func:`check_facts`; a change of choices by invariants
+    3 and 4, and the assignment that comes first."""
+    facts, _ = would_be(configuration, edit)
+    if not _same_facts(facts, configuration.facts):
+        return check_facts(structure, configuration, edit, result)
     checked = Checked()
+    _check_choices(structure, configuration, edit, result, checked)
+    return checked
+
+
+def _check_choices(
+    structure: Structure,
+    configuration: model.Configuration,
+    edit: model.Change,
+    result: model.Accepted | model.Rejected,
+    checked: Checked,
+) -> None:
+    """Invariants 3 and 4, and the assignment, on a change of choices, into ``checked``."""
     index = configuration.index
     facts, stored = would_be(configuration, edit)
     reader = model.FactsOnly(index, facts)
-    # assignment: the named values, and every stored value under new facts
-    names = sorted(stored) if not _same_facts(facts, configuration.facts) else sorted(edit.commit)
-    wrong = {path for path in names if outside(index, reader, path, stored[path])}
+    # assignment: the named values
+    wrong = {path for path in sorted(edit.commit) if outside(index, reader, path, stored[path])}
     checked.runs["assignment"] += 1
     assigned = (
         {item.choice for item in result.refusals if isinstance(item, model.AssignmentRefusal)}
@@ -1092,12 +1117,12 @@ def check_change(
             f"assignment: values not of their type {sorted(wrong)}, refused as such "
             f"{sorted(assigned)}"
         )
-        return checked
+        return
     if wrong:
         assert isinstance(result, model.Rejected)
         if len(result.refusals) != len(wrong) or result.validity is not None:
             checked.problems.append("assignment: an assignment refusal reports alone (reading 12)")
-        return checked
+        return
     before = configuration.solve()
     after = model.Configuration(configuration.space, facts, stored).solve()
     added = added_pairs(structure, before, after)
@@ -1108,10 +1133,10 @@ def check_change(
             checked.problems.append(
                 "3 clears: a change made only of clears and unsets is refused (§ 16.16)"
             )
-            return checked
+            return
         checked.problems.extend(masking_problems(structure, before, edit, added))
-        checked.revealed = set(expected)
-        return checked
+        checked.revealed |= set(expected)
+        return
     if isinstance(result, model.Accepted):
         checked.runs["3 accepted"] += 1
         published = result.configuration
@@ -1125,7 +1150,7 @@ def check_change(
                 "3 accepted: the change is accepted, but adds (false piece, origin) pairs: "
                 f"{sorted(added)}"
             )
-        return checked
+        return
     checked.runs["4 refusals"] += 1
     named = {item.origin: item for item in result.refusals if isinstance(item, model.RuleRefusal)}
     if {origin: item.kind for origin, item in named.items()} != expected:
@@ -1133,7 +1158,7 @@ def check_change(
             f"4 refusals: named {sorted((o, i.kind) for o, i in named.items())}, the origins of "
             f"the pairs the change adds: {sorted(expected.items())}"
         )
-        return checked
+        return
     for origin, item in sorted(named.items()):
         if not false_on_its_own(structure, after, origin, item.kind):
             checked.problems.append(
@@ -1143,7 +1168,140 @@ def check_change(
         checked.problems.extend(
             _standing(structure, configuration, edit, stored, origin, item, after)
         )
+
+
+def check_facts(
+    structure: Structure,
+    configuration: model.Configuration,
+    edit: model.Change,
+    result: model.Accepted | model.Rejected,
+) -> Checked:
+    """A facts step (§ 16.24, § 16.25), checked against a bind of its result.
+
+    - Its facts alone are never refused, and publish exactly the bind of the stored choices
+      under the new facts (``model.bind``), with the same values dropped;
+    - what they drop is exactly what is not of its type under the new facts (read here over
+      the facts alone), with its old value, and they keep the rest;
+    - the report's rules are exactly the origins of the pairs the published design space
+      counts and the receiver does not, with their standing choices checked by clearing
+      each in the published design space (none left out for being named);
+    - a batch is its facts, then its choices as a change of choices on their design space:
+      the same answer, the same published design space and the same refusals, the choices
+      held to invariants 3 and 4 from there; accepted, it drops what the facts alone drop
+      but the choices it names, and reports against the receiver as above."""
+    checked = Checked()
+    checked.runs["facts"] += 1
+    index = configuration.index
+    facts, _ = would_be(configuration, edit)
+    batch = bool(edit.commit or edit.clear)
+    alone = (
+        model.change(configuration, model.Change(facts=edit.facts, unset=edit.unset))
+        if batch
+        else result
+    )
+    if not isinstance(alone, model.Accepted):
+        checked.problems.append("facts: a change of facts alone is refused (§ 16.24)")
+        return checked
+    bound = model.bind(configuration.space, facts, configuration.stored)
+    if not _same_published(alone.configuration, bound.configuration) or not (
+        alone.dropped == bound.dropped
+    ):
+        checked.problems.append(
+            "facts: the change of facts publishes otherwise than the bind of its stored choices "
+            "under the new facts"
+        )
+    reader = model.FactsOnly(index, facts)
+    stored = configuration.stored
+    wrong = {path for path in stored if outside(index, reader, path, stored[path])}
+    checked.runs["facts dropped"] += bool(wrong)
+    kept = {path: value for path, value in stored.items() if path not in wrong}
+    if {item.choice for item in alone.dropped} != wrong or not all(
+        same(item.value, stored[item.choice]) for item in alone.dropped
+    ):
+        checked.problems.append(
+            f"facts: dropped {sorted(item.choice for item in alone.dropped)}, the values not "
+            f"of their type under the new facts: {sorted(wrong)}"
+        )
+    if not _same_facts(alone.configuration.stored, kept):
+        checked.problems.append("facts: the change of facts keeps otherwise than it drops")
+    choices = model.Change(commit=edit.commit, clear=edit.clear)
+    if not batch:
+        _report_problems(structure, configuration, alone, checked)
+        return checked
+    checked.runs["facts batch"] += 1
+    second = model.change(alone.configuration, choices)
+    _check_choices(structure, alone.configuration, choices, second, checked)
+    if isinstance(result, model.Rejected) or isinstance(second, model.Rejected):
+        if not (isinstance(second, model.Rejected) and result == second):
+            checked.problems.append(
+                "facts batch: the batch and its facts then its choices answer otherwise"
+            )
+        return checked
+    named = set(edit.commit) | set(edit.clear)
+    if not _same_published(result.configuration, second.configuration) or result.dropped != tuple(
+        item for item in alone.dropped if item.choice not in named
+    ):
+        checked.problems.append(
+            "facts batch: the batch publishes or drops otherwise than its facts then its choices"
+        )
+    _report_problems(structure, configuration, result, checked)
     return checked
+
+
+def _same_published(a: model.Configuration, b: model.Configuration) -> bool:
+    return _same_facts(a.facts, b.facts) and _same_facts(a.stored, b.stored)
+
+
+def _report_problems(
+    structure: Structure, receiver: model.Configuration, result: model.Accepted, checked: Checked
+) -> None:
+    """The accepted report's rules (§ 16.24): the origins of the pairs ``result``'s design
+    space counts and ``receiver`` does not, each false on its own values there, its standing
+    choices those whose clearing in it makes the origin no longer false; into ``checked``."""
+    published = result.configuration
+    after = published.solve()
+    added = added_pairs(structure, receiver.solve(), after)
+    expected = {origin: kind for (_, origin), kind in added.items()}
+    named = {item.origin: item for item in result.broken}
+    if {origin: item.kind for origin, item in named.items()} != expected:
+        checked.problems.append(
+            f"facts report: names {sorted((o, i.kind) for o, i in named.items())}, the origins "
+            f"of the pairs new against the receiver: {sorted(expected.items())}"
+        )
+        return
+    checked.runs["facts report"] += bool(named)
+    problems = checked.problems
+    for origin, item in sorted(named.items()):
+        if not false_on_its_own(structure, after, origin, item.kind):
+            problems.append(f"facts report: {origin} is named, but not false on its own values")
+        candidates = _candidates(structure, published.stored, origin, item.kind, set())
+        stray = set(item.standing) - set(candidates)
+        if stray:
+            problems.append(
+                f"facts report: {origin} names {sorted(stray)}, not standing by any reading"
+            )
+        for path in candidates:
+            rest = {key: value for key, value in published.stored.items() if key != path}
+            solution = model.Configuration(published.space, published.facts, rest).solve()
+            clears = not false_on_its_own(structure, solution, origin, item.kind)
+            if clears != (path in item.standing):
+                problems.append(
+                    f"facts report: clearing {path} {'clears' if clears else 'does not clear'} "
+                    f"{origin}, named standing {sorted(item.standing)}"
+                )
+
+
+def _candidates(
+    structure: Structure, stored: Mapping[str, Any], origin: str, kind: str, named: set[str]
+) -> list[str]:
+    """The stored choices that may stand in ``origin``'s way: not ``named``, and not
+    deciding existence, the origin's own or only that of something it reads (§ 16.4,
+    § 16.15); one the origin also reads as a value is a candidate (§ 16.22)."""
+    closure = structure.closure({origin})
+    bodies = structure.bodies(origin) if kind != "empty-domain" else frozenset()
+    deciding = {path for path in closure if path in stored and path not in bodies}
+    deciding |= structure.deciders(structure.scope(origin))
+    return sorted(set(stored) - named - deciding)
 
 
 def _same_facts(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
@@ -1169,11 +1327,7 @@ def _standing(
     such an existence (§ 16.22)."""
     problems: list[str] = []
     named = set(edit.commit) | set(edit.clear)
-    closure = structure.closure({origin})
-    bodies = structure.bodies(origin) if refusal.kind != "empty-domain" else frozenset()
-    deciding = {path for path in closure if path in stored and path not in bodies}
-    deciding |= structure.deciders(structure.scope(origin))
-    candidates = sorted(set(stored) - named - deciding)
+    candidates = _candidates(structure, stored, origin, refusal.kind, named)
     stray = set(refusal.standing) - set(candidates)
     if stray:
         problems.append(f"4 standing: {origin} names {sorted(stray)}, not standing by any reading")
@@ -1205,14 +1359,17 @@ def bind_problems(
     walked: model.Configuration,
     result: model.Accepted | model.Rejected,
     revealed: Collection[str] = frozenset(),
+    broken: Collection[str] = frozenset(),
 ) -> tuple[list[str], bool]:
     """Invariant 1's bind: ``result``, ``walked``'s stored set committed as one change from
     an empty configuration with the same facts, is accepted, and answers as ``walked``; or
-    (§ 16.16) refused by origins of ``revealed``, those clear-only steps of the walk revealed
-    from behind a view's Space, and nothing else. And whether it was refused so."""
+    refused by origins of ``revealed``, those clear-only steps of the walk revealed from
+    behind a view's Space (§ 16.16), or of ``broken``, those facts steps of the walk made
+    newly false (§ 16.24), and nothing else. And whether it was refused so."""
     if isinstance(result, model.Rejected):
+        allowed = {*revealed, *broken}
         if result.refusals and all(
-            isinstance(item, model.RuleRefusal) and item.origin in revealed
+            isinstance(item, model.RuleRefusal) and item.origin in allowed
             for item in result.refusals
         ):
             return [], True
@@ -1222,9 +1379,12 @@ def bind_problems(
             else (item.choice, "assignment")
             for item in result.refusals
         )
+        exempt = f"a clear revealed ({sorted(revealed)})" + (
+            f" or new facts broke ({sorted(broken)})" if broken else ""
+        )
         return [
             f"1 bind: refused by {named}; what a walk publishes binds again unrefused (FN3), "
-            f"but for rules a clear revealed ({sorted(revealed)})"
+            f"but for rules {exempt}"
         ], False
     asked = [q for q in questions(walked.index) if q[0] != "possible"]
     moved = differences(
@@ -1233,6 +1393,9 @@ def bind_problems(
     problems = (
         [f"1 bind: accepted, answering otherwise: {[ask(q) for q in moved]}"] if moved else []
     )
+    bound = model.bind(walked.space, walked.facts, walked.stored)
+    if bound.dropped or not _same_published(bound.configuration, walked):
+        problems.append("1 bind: the bind of a configuration's own choices drops or moves one")
     return problems, False
 
 
@@ -1280,7 +1443,8 @@ class Tally:
     #: disagreements with the engine (counted while a milestone is pending), by question
     by_question: Counter[str] = field(default_factory=Counter)
     engine_errors: int = 0
-    #: binds refused by rules clear-only steps revealed (§ 16.16), as invariant 1 allows
+    #: binds refused by rules clear-only steps revealed (§ 16.16) or facts steps broke
+    #: (§ 16.24), as invariant 1 allows
     binds_refused: int = 0
     seconds: float = 0.0
     #: what failed: an invariant's name, "engine", "disagreement" or "error"
@@ -1326,6 +1490,8 @@ class _Walk:
         self.previous: dict[str, object] = {}
         #: the origins clear-only steps revealed from behind a view's Space (§ 16.16)
         self.revealed: set[str] = set()
+        #: the origins facts steps made newly false (§ 16.24)
+        self.broken: set[str] = set()
 
     # -- reporting
 
@@ -1379,7 +1545,7 @@ class _Walk:
         )
         empty = model.Configuration(configuration.space, dict(configuration.facts))
         result = model.change(empty, model.Change(commit=dict(configuration.stored)))
-        problems, refused = bind_problems(configuration, result, self.revealed)
+        problems, refused = bind_problems(configuration, result, self.revealed, self.broken)
         self.invariant("1 bind", problems)
         self.tally.binds_refused += refused
 
@@ -1514,7 +1680,20 @@ class _Walk:
         if roll < 0.95 or not configuration.facts:
             fact = rng.choice(facts)
             options = [value for value in FACT_VALUES if configuration.facts.get(fact) != value]
-            return model.Change(facts={fact: rng.choice(options)})
+            new = {fact: rng.choice(options)}
+            if rng.random() < 0.3:
+                # now and then a batch: the facts and a change of choices (§ 16.25)
+                kind = rng.random()
+                if stored and kind < 0.35:
+                    return model.Change(facts=new, clear=(rng.choice(sorted(stored)),))
+                if stored and kind < 0.7:
+                    path = rng.choice(sorted(stored))
+                    return model.Change(facts=new, commit=self.values([path], state, other=True))
+                if unstored:
+                    return model.Change(
+                        facts=new, commit=self.values(rng.sample(unstored, 1), state)
+                    )
+            return model.Change(facts=new)
         return model.Change(unset=(rng.choice(sorted(configuration.facts)),))
 
     def values(self, paths: Sequence[str], state: _State, other: bool = False) -> dict[str, object]:
@@ -1623,14 +1802,19 @@ class _Walk:
         )
         if checked.problems:
             self.fail(checked.problems[0].split(":")[0], "invariant " + "\n".join(checked.problems))
+        facts_step = "facts" in checked.runs
         if engine is not None:
             expected = change_form(configuration, edit, result)
             if not agrees(expected, engine):
-                self.disagree("change", f"the change {_edit(edit)}", expected, engine)
+                # a facts step's: the facts-instance milestone's rows (the engine still refuses
+                # a change of facts the model takes as a new design space)
+                what = "facts change" if facts_step else "change"
+                self.disagree(what, f"the change {_edit(edit)}", expected, engine)
         if not isinstance(result, model.Accepted):
             return state
         tally.accepted += 1
         self.revealed |= checked.revealed
+        self.broken |= {item.origin for item in result.broken}
         addition = bool(edit.commit) and not (
             edit.clear or edit.facts or set(edit.commit) & set(configuration.stored)
         )
@@ -1717,7 +1901,7 @@ def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
         f"{summed('model_only')}; {seconds:.1f} s, {seconds / max(len(tallies), 1):.2f} s per walk",
         f"descriptions skipped: {_counts(totals['skipped'])}",
         f"invariant checks: {_counts(totals['checks'])}; binds refused by rules a clear "
-        f"revealed (§ 16.16) {summed('binds_refused')}",
+        f"revealed (§ 16.16) or new facts broke (§ 16.24) {summed('binds_refused')}",
         f"engine's own checks: {_counts(totals['engine_checks'])}; configurations compared "
         f"{summed('compared')}, engine rebound to the model's {summed('rebound')}, out of step "
         f"{summed('out_of_step')}",
@@ -1746,6 +1930,7 @@ __all__ = [
     "below",
     "bind_problems",
     "check_change",
+    "check_facts",
     "added_pairs",
     "clear_only",
     "counted_pairs",
