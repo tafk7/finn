@@ -284,6 +284,27 @@ def test_a_bind_compares_from_any_design_space_with_its_facts() -> None:
     RANGED.start({"n": 1}, {"x": 0, "y": 1}).check_bind({"x": 2, "y": 2})
 
 
+def test_a_binds_outcomes_read_from_nothing_stored_whatever_the_receiver_holds() -> None:
+    # The harness compares no outcome status (the model's bind has none), so the engine's
+    # are read here against what the model's bind keeps and drops: each saved choice kept
+    # is ``"changed"`` and each dropped ``"dropped"`` (requested), from a design space
+    # storing nothing, the kept choices themselves, or other values.
+    saved = {"x": 2, "y": 2}
+    result = reference.bind(ranged(), {"n": 1}, saved)
+    dropped = {item.choice for item in result.dropped}
+    expected = tuple(
+        (path, "changed" if path in result.configuration.stored else "dropped", True)
+        for path in saved
+    )
+    assert dropped == {"x"} and expected == (("x", "dropped", True), ("y", "changed", True))
+    nothing = RANGED.start({"n": 1}).engine
+    _, holding = nothing.bind(saved)
+    assert holding.stored() == dict(result.configuration.stored)
+    other = RANGED.start({"n": 1}, {"x": 0, "y": 1}).engine
+    for receiver in (nothing, holding, other):
+        assert receiver.bind_outcomes(saved) == expected
+
+
 def test_the_codes_of_an_empty_list_and_a_refused_guard() -> None:
     # ``domain-empty`` and ``guard-refused``, the engine core's codes too. ``on-n`` is false
     # through the guard: it carries the guard's origin, ``gate``.

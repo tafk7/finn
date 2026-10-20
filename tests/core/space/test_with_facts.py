@@ -730,12 +730,12 @@ def test_bind_keeps_saved_choices_that_break_a_rule_and_drops_one_outside_its_do
     assert broken(report) == [("fits", ("c",))]
     assert inspection.validity(report.instance).status == "refused"
     assert committed(report.instance) == {"c": 3, "other": 2}
-    # The same saved choices again: the receiver itself, the rule reported from nothing
-    # stored.
+    # The same saved choices again: the receiver itself, the report read from nothing
+    # stored (each kept choice ``"changed"``, the rule broken).
     held = report.instance
     again = bind(held, {Rated.c: 3, Rated.other: 2})
     assert again.instance is held
-    assert [o.status for o in again.outcomes] == ["unchanged", "unchanged"]
+    assert [o.status for o in again.outcomes] == ["changed", "changed"]
     assert broken(again) == [("fits", ("c",))]
     # Exactly the saved choices: what the receiver held and they do not name is gone.
     fewer = bind(held, {Rated.other: 1})
@@ -767,3 +767,56 @@ def test_a_bind_moves_from_its_facts_with_nothing_stored_whatever_the_receiver_s
     assert nothing.dormant == held.dormant == ("lanes",)
     assert nothing.in_play == held.in_play == () and nothing.opened == held.opened == ()
     same_design_space(nothing.instance, held.instance)
+
+
+def whole_report(report: ConfigurationResult[Any]) -> tuple[object, ...]:
+    """Everything a bind reports: each outcome (owner, status, requested, result), the rules
+    broken and what moved."""
+    return (
+        report.accepted,
+        tuple((o.owner, o.status, o.requested, o.result) for o in report.outcomes),
+        report.broken,
+        report.dormant,
+        report.in_play,
+        report.opened,
+    )
+
+
+@pytest.mark.parametrize(
+    ("nothing", "saved", "other", "expected"),
+    [
+        pytest.param(
+            Rated(cap=2, extent=10),
+            {Rated.c: 3, Rated.lanes: 4, Rated.other: 2},
+            {"c": 1, "lanes": 5, "other": 1},
+            [("c", "changed"), ("lanes", "dropped"), ("other", "changed")],
+            id="drops-and-breaks",
+        ),
+        pytest.param(
+            Gated(extent=12),
+            {Gated.enabled: False, Gated.lanes: 4},
+            {"enabled": True, "lanes": 6},
+            [("enabled", "changed"), ("lanes", "changed")],
+            id="moves",
+        ),
+    ],
+)
+def test_a_bind_reports_the_same_from_any_design_space_with_its_facts(
+    nothing: Space, saved: dict[Any, object], other: dict[str, object], expected: list[Any]
+) -> None:
+    """The same saved choices bound from a design space with nothing stored, from one
+    holding them and from one holding other values: one report, read from nothing stored.
+    Every saved choice kept is ``"changed"`` and every one dropped ``"dropped"``, whatever
+    the receiver holds; the receiver holding them is the design space published."""
+    empty = design_space(nothing)
+    from_nothing = bind(empty, saved)
+    holding = from_nothing.instance
+    from_holding = bind(holding, saved)
+    from_other = bind(empty.with_choices(**other), saved)
+    assert from_holding.instance is holding
+    assert [(o.owner, o.status) for o in from_nothing.outcomes] == expected
+    assert all(o.requested for o in from_nothing.outcomes)
+    assert whole_report(from_holding) == whole_report(from_nothing)
+    assert whole_report(from_other) == whole_report(from_nothing)
+    same_design_space(from_holding.instance, from_nothing.instance)
+    same_design_space(from_other.instance, from_nothing.instance)

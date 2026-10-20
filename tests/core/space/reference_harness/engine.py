@@ -784,6 +784,18 @@ class Point:
             raise AssertionError(f"the engine refused a bind: {form}")
         return form, point
 
+    def bind_outcomes(self, stored: Mapping[str, object]) -> tuple[tuple[str, str, bool], ...]:
+        """Each outcome of ``stored``'s bind (``finn.core.space.bind``), in the saved order:
+        its choice's path, its status and whether it was requested. The model's bind has no
+        statuses; a hand case reads them against what it keeps and drops."""
+        decisions = self._decisions()
+        saved = {decisions[path]: value for path, value in stored.items()}
+        report = space_bind(self.point, saved)
+        return tuple(
+            (self.engine.path(outcome.owner), outcome.status, outcome.requested)
+            for outcome in report.outcomes
+        )
+
     def _form(
         self, report: ConfigurationResult[Space], before: Mapping[str, object]
     ) -> tuple[ChangeForm, Point | None]:

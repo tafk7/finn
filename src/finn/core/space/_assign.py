@@ -405,10 +405,12 @@ def bound(current: State, requests: Sequence[Change[object]]) -> Assigned:
     """``current``'s facts with exactly the saved choices ``requests`` set, under the
     model's lock: the design space of those facts instantiated with them (``_instantiate``),
     each value outside its domain dropped. Never refused; a clear is a ``RequestError``.
-    It reads against the facts with nothing stored, whatever ``current`` stores: its rules
-    are those false through an origin that design space is not false through, and what
-    it moves is from that design space. Where the bound set is ``current``'s own (the same
-    objects), ``current`` is the design space it publishes."""
+    Its whole report reads against the facts with nothing stored, whatever ``current``
+    stores: each saved choice kept is ``"changed"`` and each dropped ``"dropped"``, its
+    rules are those false through an origin that design space is not false through, and
+    what it moves is from that design space. So the report is the same from any design
+    space with these facts. Where the bound set is ``current``'s own (the same objects),
+    ``current`` is the design space it publishes, with that same report."""
     linked = current.linked
     nodes = linked.nodes
     normalized = normalize(current, requests)
@@ -429,20 +431,21 @@ def bound(current: State, requests: Sequence[Change[object]]) -> Assigned:
         if kept:
             world = current.world
         made_false = _broken(_held(current, empty), world, frozenset())
-        outcomes: list[ChangeOutcome] = []
-        for item in requests:
-            index, result = item.node, checks[item.node]
-            status: Literal["unchanged", "changed", "dropped"] = "dropped"
-            if index in world.stored:
-                status = (
-                    "unchanged" if held.get(index, _MISSING) is world.stored[index] else "changed"
-                )
-            outcomes.append(ChangeOutcome(nodes[index].owner, result, status))
+        # Each saved choice from nothing stored: set (``"changed"``) where kept, else
+        # ``"dropped"``, whatever ``current`` holds.
+        outcomes = tuple(
+            ChangeOutcome(
+                nodes[item.node].owner,
+                checks[item.node],
+                "changed" if item.node in world.stored else "dropped",
+            )
+            for item in requests
+        )
         moved = _moved_from(empty, world, set())
         if kept:
-            return Assigned(current, tuple(outcomes), made_false, moved)
+            return Assigned(current, outcomes, made_false, moved)
         _publish(world, trial=False)
-        return Assigned(State(current.model, world), tuple(outcomes), made_false, moved)
+        return Assigned(State(current.model, world), outcomes, made_false, moved)
 
 
 def tried(current: State, index: NodeId, value: object) -> Assigned:
@@ -584,15 +587,16 @@ def bind(point: S, /, *choices: ChangeRequest | Mapping[Any, object]) -> Configu
     those facts is the same instantiation, keeping the choices that fall within their
     domains: each value is checked under ``point``'s facts as if its choice existed, and
     one outside its domain, or whose domain's input refuses or does not apply, is dropped
-    (``"dropped"``); one waiting on a missing fact is kept, waiting. Never refused for
-    constraints: the report's ``broken`` names every rule the saved choices break under
-    these facts (false through an origin the facts with nothing stored are not), each with
-    the stored choices standing in its way, and the design space reads refused. Its
-    ``dormant``, ``in_play`` and ``opened`` read against the same baseline, so what it
-    drops, breaks and moves is the same from any design space with these facts. A change
-    of facts (``try_with_facts``) is this instantiation under the new facts. The point's
-    own stored choices are replaced and not reported, so bind from a design space with
-    nothing stored, as FINN will."""
+    (``"dropped"``); one waiting on a missing fact is kept, waiting. Each saved choice kept
+    is ``"changed"``, as set on the facts with nothing stored, whatever ``point`` holds.
+    Never refused for constraints: the report's ``broken`` names every rule the saved
+    choices break under these facts (false through an origin the facts with nothing stored
+    are not), each with the stored choices standing in its way, and the design space reads
+    refused. Its ``dormant``, ``in_play`` and ``opened`` read against the same baseline, so
+    the whole report (each outcome, the rules broken, what moved) is the same from any
+    design space with these facts. A change of facts (``try_with_facts``) is this
+    instantiation under the new facts. The point's own stored choices are replaced and not
+    reported, so bind from a design space with nothing stored, as FINN will."""
     driver_only("configuration binding")
     return _report(point, bound(state(point), _requests(point, choices)))
 
