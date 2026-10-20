@@ -110,8 +110,10 @@ class Assigned:
 
 
 def normalize(current: State, changes: Sequence[Change[object]]) -> dict[NodeId, Change[object]]:
-    """Each change by its choice: every one of this configuration, naming an owned
-    Decision of its scope, once."""
+    """Each change by its choice: every one of this design space, naming an owned
+    Decision of its scope, once. Its scope and node are asked of the model
+    (``holds_scope``, ``holds_node``: an addressed scope, a node of one), never compared
+    with a length."""
     linked = current.linked
     pending: dict[NodeId, Change[object]] = {}
     for item in changes:
@@ -119,9 +121,9 @@ def normalize(current: State, changes: Sequence[Change[object]]) -> dict[NodeId,
             raise RequestError("changes must come from a bound decision field")
         if item.base is not current:
             raise RequestError("all changes must target this exact base snapshot")
-        if type(item.scope) is not int or not 0 <= item.scope < len(linked.scopes):
+        if not linked.holds_scope(item.scope):
             raise RequestError("change scope does not belong to this model")
-        if type(item.node) is not int or not 0 <= item.node < len(linked.nodes):
+        if not linked.holds_node(item.node):
             raise RequestError("change node does not belong to this model")
         node = linked.nodes[item.node]
         if node.kind != "decision" or node.scope != item.scope:

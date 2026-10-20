@@ -170,6 +170,7 @@ class Structure:
         self._bases: list[int] = []
         self._by_base: dict[int, ScopeRecord] = {}
         self._next = _TOP if permuted else 0
+        self.allocated = 0  # NodeIds allocated: one block per addressed scope
         self._choice_owners: list[tuple[ScopeRecord, int]] = []
         # A selection's one node by (scope, choice, member), and its owner.
         self._merged: dict[tuple[int, int, str], tuple[NodeId, str | None] | None] = {}
@@ -211,6 +212,7 @@ class Structure:
             base = self._next
         else:
             base, self._next = self._next, self._next + size
+        self.allocated += size
         position: Position
         if parent is None:
             name, position = "", (0, ())
@@ -464,6 +466,24 @@ class Structure:
         if self.ident(record, node) != index:
             raise IndexError(index)
         return record, node
+
+    def holds_scope(self, index: object) -> bool:
+        """Whether ``index`` is an addressed scope of this model (scopes are numbered from
+        0 in the order they are addressed)."""
+        return type(index) is int and 0 <= index < len(self.records)
+
+    def holds_node(self, index: object) -> bool:
+        """Whether ``index`` is a node of this model: in the block of an addressed scope, and
+        a node there (``canonical``), not an identity standing for another node (an import,
+        a formal's binding, the placement guard, a selection made in another template) or
+        for one its placement excludes. The same question in every mode."""
+        if type(index) is not int:
+            return False
+        try:
+            self.canonical(index)
+        except IndexError:
+            return False
+        return True
 
     # -- resolution ----------------------------------------------------------------------------
 
@@ -1319,9 +1339,10 @@ class Structure:
 
 
 class _Nodes(Sequence[Node]):
-    """``nodes[i]`` resolves; ``len`` is one past the highest ``NodeId`` allocated so far (a
-    bound on the ids, not a count of nodes: count by iterating); iterating addresses and
-    resolves the whole design space."""
+    """``nodes[i]`` resolves (``IndexError`` where ``i`` is no node: ``holds_node``);
+    ``len`` is the number of ``NodeId``s allocated so far, one block per addressed scope,
+    holes included, the same in every mode: neither a count of nodes (count by iterating)
+    nor a bound on their ids; iterating addresses and resolves the whole design space."""
 
     def __init__(self, structure: Structure) -> None:
         self._structure = structure
@@ -1341,8 +1362,7 @@ class _Nodes(Sequence[Node]):
         return self._one(index)
 
     def __len__(self) -> int:
-        structure = self._structure
-        return _TOP if structure.permuted else structure._next
+        return self._structure.allocated
 
     def __iter__(self) -> Iterator[Node]:
         for index in tuple(self._structure.all_nodes()):

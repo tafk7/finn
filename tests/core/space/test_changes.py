@@ -57,7 +57,8 @@ def test_malformed_batch_structure_and_types_precede_every_snapshot_callback() -
         replace(first, scope=True),
         replace(first, scope=-1),
         replace(first, node=True),
-        # Past every identity allocated (a structure's ids need not start at 0).
+        # No identity of this model: as many as are allocated is past every block, or (in
+        # the permuted mode, its blocks allocated downward from a large base) below them.
         replace(first, node=len(state(base).linked.nodes)),
         other.field(Trial.second).change(1),
         base.field(Trial.second).change(cast(int, "wrong")),

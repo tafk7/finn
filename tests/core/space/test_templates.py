@@ -16,6 +16,7 @@ imports the engine only.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -35,7 +36,7 @@ from finn.core.space import (
     supplied,
     view,
 )
-from finn.core.space._structure import EAGER, Structure, expand
+from finn.core.space._structure import EAGER, PERMUTE, Structure, expand
 from finn.core.space._template import Template, link_template
 from finn.core.space.errors import RequestError
 from finn.core.space.references import ValueHandle
@@ -394,6 +395,49 @@ def test_an_identity_standing_for_another_is_no_node() -> None:
         structure.nodes[guard]
     with pytest.raises(RequestError):
         ValueHandle(structure, guard)
+
+
+@pytest.mark.parametrize("permuted", [False, True])
+def test_a_change_names_a_node_of_an_addressed_scope(
+    monkeypatch: pytest.MonkeyPatch, permuted: bool
+) -> None:
+    """A change's scope and node are asked of the model (``holds_scope``, ``holds_node``),
+    the same in either numbering: an identity in an addressed scope's block that stands
+    for another, or outside every block, names no node; a scope not addressed, none."""
+    monkeypatch.delenv(EAGER, raising=False)
+    if permuted:
+        monkeypatch.setenv(PERMUTE, "1")
+    else:
+        monkeypatch.delenv(PERMUTE, raising=False)
+
+    class Reads(Space):  # a class of its own: its model is made under this mode
+        heater = Heater()
+        thermostat = Thermostat(kw=heater.heating.kw)
+        cop = View(heater.pump.cop)  # type: ignore[union-attr]
+
+    point = design_space(Reads())
+    structure = inspection.model(point).structure
+    assert structure is not None and structure.permuted is permuted
+    handles = {item.key: item.reference for item in inspection.decisions(point)}
+    change = point.field(handles["heater.heating"]).change("boiler")
+    assert point.try_with_choices(change).accepted
+    # The root's block: its imports and its children's formals' bindings stand for nodes
+    # of the children's scopes.
+    root = structure.records[0]
+    block = [structure._id(root, node) for node in range(len(root.template.nodes))]
+    standing = [index for index in block if not structure.holds_node(index)]
+    assert len(standing) >= 2
+    ends = [(record.base, record.base + len(record.template.nodes)) for record in structure.records]
+    outside = [min(start for start, _ in ends) - 1, max(end for _, end in ends)]
+    assert not any(structure.holds_node(index) for index in outside)
+    for index in (*standing, *outside):
+        with pytest.raises(RequestError, match="change node does not belong"):
+            point.try_with_choices(replace(change, node=index))
+    assert not structure.holds_scope(len(structure.records))
+    with pytest.raises(RequestError, match="change scope does not belong"):
+        point.try_with_choices(replace(change, scope=len(structure.records)))
+    # ``len(nodes)``: the identities allocated, one block per addressed scope.
+    assert len(structure.nodes) == sum(end - start for start, end in ends)
 
 
 def test_resolution_takes_the_models_lock() -> None:

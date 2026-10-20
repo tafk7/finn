@@ -197,6 +197,16 @@ class LinkedModel:
         """A node as a header reads it (``NodeHeader``): the node itself."""
         return self.nodes[index]
 
+    def holds_scope(self, index: object) -> bool:
+        """Whether ``index`` is one of its scopes: a table holds every scope, numbered from
+        0."""
+        return type(index) is int and 0 <= index < len(self.scopes)
+
+    def holds_node(self, index: object) -> bool:
+        """Whether ``index`` is one of its nodes: a table holds every node, numbered from
+        0."""
+        return type(index) is int and 0 <= index < len(self.nodes)
+
 
 class Questions(Protocol):
     """The answers to the questions about a whole design space (``_whole``)."""
@@ -253,7 +263,10 @@ class Linked(Protocol):
     nodes resolved on demand, or a table holding every node (``LinkedModel``: ``expand``'s,
     or one built by hand). ``ranks`` orders decisions (a structure's: by the flow order);
     ``header`` reads a node without resolving it; ``whole`` answers the questions about
-    the whole design space (None for a table built by hand)."""
+    the whole design space (None for a table built by hand). ``holds_scope`` and
+    ``holds_node`` say whether an identity is one of its scopes or nodes, the same way in
+    every mode (never by comparing it with a length: a structure's ``NodeId``s come in
+    blocks with holes)."""
 
     @property
     def nodes(self) -> Sequence[Node]: ...
@@ -289,3 +302,7 @@ class Linked(Protocol):
     def whole(self) -> Questions | None: ...
 
     def header(self, index: NodeId, /) -> NodeHeader: ...
+
+    def holds_scope(self, index: object, /) -> bool: ...
+
+    def holds_node(self, index: object, /) -> bool: ...

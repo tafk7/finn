@@ -39,12 +39,10 @@ class ValueHandle(ValueRef[T], Generic[T]):
     semantics: ValueSemantics[T] | None = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if type(self._node) is not int or not 0 <= self._node < len(self._linked.nodes):
+        # An identity that stands for another, or none here, is no node (``holds_node``).
+        if not self._linked.holds_node(self._node):
             raise RequestError("handle does not identify a compiled node")
-        try:
-            node = self._linked.header(self._node)  # read, not resolved
-        except IndexError as cause:  # an identity that stands for another, or none here
-            raise RequestError("handle does not identify a compiled node") from cause
+        node = self._linked.header(self._node)  # read, not resolved
         object.__setattr__(self, "semantics", cast(ValueSemantics[T] | None, node.semantics))
 
     def _resolve(self, linked: Linked) -> int:

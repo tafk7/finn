@@ -83,7 +83,7 @@ class Model(Generic[S]):
         """Resolve a declaration in this exact scope without consulting its class."""
 
         if isinstance(reference, ValueHandle):
-            if type(scope) is not int or not 0 <= scope < len(self.linked.scopes):
+            if not self.linked.holds_scope(scope):
                 raise RequestError("reference scope does not belong to this model")
             return reference._resolve(self.linked)
         return resolve_reference(
