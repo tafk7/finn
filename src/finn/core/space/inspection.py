@@ -38,6 +38,7 @@ from .results import (
     Available,
     ConstraintAssessment,
     DecisionState,
+    Inapplicable,
     QueryResult,
     Rejected,
     Unresolved,
@@ -488,8 +489,10 @@ def _pieces_in(
             found.append(Piece(name, held))
         return found
     for key, result in assessment.results.items():
+        if isinstance(result, Inapplicable):
+            continue  # a placed Space that is absent (or a piece that does not apply): none
         piece = linked.keys[key]
-        if linked.nodes[piece].kind == "validity":
+        if linked.header(piece).kind == "validity":
             found.extend(_pieces_in(world, piece, wanted, result))
         elif isinstance(result, (Rejected, Unresolved)) and isinstance(result, wanted):
             found.append(Piece(key, result))
@@ -648,21 +651,21 @@ def states(point: Space) -> tuple[tuple[str, ChoiceState], ...]:
     the choices its cases hold)."""
     driver_only("choice states")
     current = state(point)
-    nodes = current.linked.nodes
+    header = current.linked.header  # a choice's key, resolving nothing of an absent one
     return tuple(
-        (nodes[index].key, _state_of(current, index))
+        (header(index).key, _state_of(current, index))
         for index in _flow(current.model, point._scope)
     )
 
 
 def _state_of(current: State, index: NodeId) -> ChoiceState:
     world = current.world
-    node = current.linked.nodes[index]
     found, guard = presence(world, index)
     if index not in world.stored:
         if found == "absent":
             return Absent()
-        return Open(_waits(guard) if found == "unknown" else (), node.required_choice)
+        required = current.linked.header(index).required_choice
+        return Open(_waits(guard) if found == "unknown" else (), required)
     value = _Copies(current)(index, world.stored[index])
     if found == "absent":
         return Dormant(value)

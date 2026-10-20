@@ -975,7 +975,7 @@ class _Unresolved(_Lazy):
 
 class _Existence(_Lazy):
     def _get(self, index: NodeId) -> tuple[NodeId, ...]:
-        if self._mapping.structure.nodes[index].guard is None:
+        if self._mapping.structure.header(index).guard is None:
             raise KeyError(index)
         return self._mapping.guards(index)
 
@@ -996,12 +996,14 @@ def _structure_reads(structure: Structure) -> ModelReads:
 def existence_guards(linked: Linked, node: NodeId) -> tuple[NodeId, ...]:
     """The guards deciding whether ``node`` exists, innermost first: its own guard, and
     each guard that one is evaluated under (an enclosing scope's ``when``, a candidate's
-    selection), to the root."""
+    selection), to the root. Read from the nodes' headers (``Linked.header``): a guard's
+    identity, never a node resolved, so finding them resolves nothing of a scope that is
+    absent."""
     found: list[NodeId] = []
-    current = linked.nodes[node].guard
+    current = linked.header(node).guard
     while current is not None:
         found.append(current)
-        current = linked.nodes[current].guard
+        current = linked.header(current).guard
     return tuple(found)
 
 

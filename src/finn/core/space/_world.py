@@ -115,7 +115,7 @@ if TYPE_CHECKING:
 Assessment: TypeAlias = ViewAssessment[object] | ConstraintAssessment
 T = TypeVar("T")
 
-_INAPPLICABLE = Inapplicable()
+INAPPLICABLE = Inapplicable()
 
 # How many evaluations deep a run goes on the Python stack before the depth guard
 # unwinds it. Each level through a method's read takes about a dozen Python frames.
@@ -605,7 +605,7 @@ class World:
             if node.kind == "constraint" and isinstance(inactive, Rejected):
                 # Under a guard refused through an input its scope is not in play: the
                 # constraint does not apply, and the guard's piece stands for it.
-                inactive = _INAPPLICABLE
+                inactive = INAPPLICABLE
             # A Space's validity under a guard that waits is still its pieces' AND: each
             # piece inside reads the same guard first and answers unknown.
             if inactive is not None and not (
@@ -755,7 +755,7 @@ def _guard_result(node: Node, answer: QueryResult[object]) -> NonValue | None:
         return answer
     if type(answer.value) is not bool:
         raise EvaluationError(node.owner, "applicability", "guard must return bool")
-    return None if answer.value else _INAPPLICABLE
+    return None if answer.value else INAPPLICABLE
 
 
 def _guard_assessment(node: Node, answer: NonValue) -> Assessment | None:
@@ -902,7 +902,7 @@ def _select(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
         raise EvaluationError(node.owner, "selection", "selector is not a declared case")
     target = node.selection_index.get(case)
     if target is None:
-        return Entry(_INAPPLICABLE, reads, tuple(trace))
+        return Entry(INAPPLICABLE, reads, tuple(trace))
     entry, reads = world.read(trace, target, reads)
     return Entry(entry.result, reads, tuple(trace))
 
@@ -960,11 +960,32 @@ def _validity(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
 
     A constraint, a choice or a placed Space whose guard is refused through a refused
     input is one guard piece (``guard-refused``, the input's refusal beside), once per
-    guard node."""
+    guard node.
+
+    A placed Space's piece is read from its guard first (the guard its placing scope
+    places it under, a node of this Space's scope or above): where the guard is false or
+    does not apply, the placed Space is absent and its validity answers inapplicable
+    whatever its pieces are, so the piece is that answer, read from the guard alone, and
+    the placed Space's validity is neither read nor resolved (an absent scope resolves no
+    node for it). Elsewhere the placed Space's validity is read as it answers, after its
+    guard. The trace holds what decides the piece either way: the guard, and the placed
+    Space's validity where it was read."""
+    linked = world.evaluator.linked
     nodes = world.evaluator.nodes
     answers: dict[str, QueryResult[bool]] = {}
     guards: set[NodeId] = set()
     for index in node.constraints:
+        header = linked.header(index)
+        placed: Entry | None = None
+        if header.kind == "validity" and header.guard is not None:
+            placed, reads = world.read(trace, header.guard, reads)
+            held = placed.result
+            if isinstance(held, Inapplicable):
+                answers[header.key] = held  # what the placed Space's validity answers
+                continue
+            if isinstance(held, Available) and held.value is False:
+                answers[header.key] = INAPPLICABLE
+                continue
         piece = nodes[index]
         if piece.kind == "decision":
             found, reads = _choice_piece(world, piece, trace, reads, guards)
@@ -974,7 +995,10 @@ def _validity(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
         entry, reads = world.read(trace, index, reads)
         answer = cast(QueryResult[bool], entry.result)
         if isinstance(answer, (Inapplicable, Rejected)) and piece.guard is not None:
-            guard, reads = world.read(trace, piece.guard, reads)
+            if placed is None:
+                guard, reads = world.read(trace, piece.guard, reads)
+            else:
+                guard = placed  # read above, first
             if isinstance(guard.result, Rejected):
                 if piece.guard in guards:
                     continue
@@ -2003,6 +2027,7 @@ _FRAMES: Mapping[NodeKind, Callable[[World, Node, _Trace, ReadSet], Entry]] = {
 __all__ = [
     "DEPTH",
     "FLATTEN",
+    "INAPPLICABLE",
     "Called",
     "Entry",
     "Evaluator",

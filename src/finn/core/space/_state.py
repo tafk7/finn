@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, TypeAlias, cast
 
-from ._world import World, public_value
+from ._world import INAPPLICABLE, World, public_value
 from .errors import EvaluationError, RequestError
 from .ir import Linked, NodeId
 from .results import (
@@ -154,14 +154,32 @@ def presence(world: World, node: NodeId) -> tuple[Presence, QueryResult[object]]
     """Whether the node ``node`` is present in ``world``, and its guard's answer: present
     where its guard holds (or it has none); absent where the guard is false, does not
     apply, or is refused (a guard refused through a refused input puts its scope out of
-    play); unknown while it waits."""
-    guard = world.evaluator.nodes[node].guard
-    if guard is None:
+    play); unknown while it waits.
+
+    Its guards (its existence guards, from the nodes' headers: no node of its own
+    resolved) are read outermost first, as the guard's own evaluation reads them: where
+    one does not hold (false, or does not apply), every guard inside it does not apply,
+    the node's own guard too, so the node is absent and its guard answers inapplicable,
+    and nothing inside that guard is read. An absent scope's choice is so found absent
+    from the guard its placing scope places it under, resolving no node of its own. In a
+    world where guards are taken as holding (``World.membership``), its own guard is read
+    at once."""
+    guards = world.evaluator.reads.guards(node)
+    if not guards:
         return "present", Available(True)
-    answer = world.result(guard)
+    if not world.assumed:
+        for outer in reversed(guards[1:]):
+            held = world.result(outer)
+            if isinstance(held, Inapplicable):
+                return "absent", held  # what each guard inside it answers
+            if isinstance(held, Available) and held.value is False:
+                return "absent", INAPPLICABLE
+            if not (isinstance(held, Available) and held.value is True):
+                break  # unknown or refused: the node's own guard decides, as it reads it
+    answer = world.result(guards[0])
     if isinstance(answer, Available):
         if type(answer.value) is not bool:
-            owner = world.evaluator.nodes[node].owner
+            owner = world.evaluator.linked.header(node).owner
             raise EvaluationError(owner, "applicability", "guard must return bool")
         return ("present" if answer.value else "absent"), answer
     if isinstance(answer, Unresolved):

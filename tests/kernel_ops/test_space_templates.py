@@ -214,29 +214,64 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     """``commit`` of the chain's stored values on a design space made from scratch, before
     any trial or ``viable``. Listing its choices (``inspection.decisions``, in the flow
     order) makes every scope's record and resolves no node; the change resolves what it
-    and its checks read. Of the scopes with a node resolved, 91 are present (the line's
-    present scopes at the baseline); the others are absent (a case not selected), each
-    with a node resolved for the root's validity (a placed Space's validity piece, read to
-    find it inapplicable) or for what the change moved (the presence of each choice whose
-    presence may read a choice it sets)."""
+    and its checks read. An absent scope's validity is read from its guard and its
+    choices' presence from their guards, so no scope absent at the baseline has a node
+    resolved for either. The scopes with a node resolved are the 91 present at the
+    baseline (the line's present scopes) and 16 more, each of unknown presence in the
+    design space before the change (the MatMuls' ``compute.int8_dsp58`` cases, their
+    tensors and the adapters placed under them): the list of what the change moved
+    (``_assign._moved``) reads the presence before the change of each choice whose presence
+    may read a choice it sets, and the channels' ``output_adapter`` and ``x.adapter`` are
+    guarded by a ``when`` reading the MatMuls' views, whose validity there reads those
+    cases' (their selector still open). Then ``viable`` of the middle MatMul's choices and
+    one change of its ``compute.packed.pe``: what trials resolve more."""
     monkeypatch.delenv(EAGER, raising=False)
     whole, stored = _chain(4)
     point = design_space(whole())
     structure = inspection.model(point).structure
     assert structure is not None
     committed = commit(point, stored)
-    counts = structure.counts()
-    assert counts == {
+    assert structure.counts() == {
         "scopes addressed": 468,
-        "scopes in play": 229,
-        "nodes resolved": 2704,
+        "scopes in play": 107,
+        "nodes resolved": 2521,
         "const nodes resolved": 468,
     }
-    world = state(committed).world
-    present = [
-        index
-        for index in structure._in_play
-        if (guard := structure.guard_of(structure.records[index])) is None
-        or world.result(guard) == Available(True)
-    ]
-    assert len(present) == 91
+    in_play = set(structure._in_play)
+    world, before = state(committed).world, state(point).world
+
+    def holds(guard: int | None, world: Any) -> bool:
+        return guard is None or world.result(guard) == Available(True)
+
+    def present(index: int) -> bool:
+        record: Any = structure.records[index]
+        while record is not None:
+            if not holds(structure.guard_of(record), world):
+                return False
+            record = record.parent
+        return True
+
+    present_scopes = {record.index for record in structure.records if present(record.index)}
+    assert len(present_scopes) == 91
+    assert present_scopes <= in_play
+    for index in in_play - present_scopes:
+        guard = structure.guard_of(structure.records[index])
+        assert guard is not None and isinstance(before.result(guard), Unresolved)
+    handles = {item.key: item.reference for item in inspection.decisions(committed)}
+    middle = [key for key in handles if key.startswith("mm2.")]
+    assert len(middle) == 9
+    inspection.viable(committed, [handles[key] for key in middle])
+    assert structure.counts() == {
+        "scopes addressed": 468,
+        "scopes in play": 122,
+        "nodes resolved": 2628,
+        "const nodes resolved": 478,
+    }
+    report = committed.try_with_choices({handles["mm2.compute.packed.pe"]: 2})
+    assert report.accepted
+    assert structure.counts() == {
+        "scopes addressed": 468,
+        "scopes in play": 122,
+        "nodes resolved": 2628,
+        "const nodes resolved": 478,
+    }
