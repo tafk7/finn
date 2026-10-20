@@ -584,7 +584,7 @@ def viewed_child() -> Space:
     )
 
 
-def test_a_clear_revealing_a_masked_rule_is_accepted_and_its_bind_refusal_counted() -> None:
+def test_a_clear_revealing_a_masked_rule_is_accepted_and_its_bind_reports_the_rule() -> None:
     masked = Configuration(viewed_child(), {}, {"c.x": 3, "c.y": 1})
     edit = Change(clear=("c.x",))
     result = change(masked, edit)
