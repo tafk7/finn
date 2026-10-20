@@ -266,7 +266,9 @@ class Linked(Protocol):
     the whole design space (None for a table built by hand). ``holds_scope`` and
     ``holds_node`` say whether an identity is one of its scopes or nodes, the same way in
     every mode (never by comparing it with a length: a structure's ``NodeId``s come in
-    blocks with holes)."""
+    blocks with holes). An identity standing for another node is not one of its nodes:
+    ``holds_node`` is the question for an identity, not for a read, and never follows it
+    (a table has none)."""
 
     @property
     def nodes(self) -> Sequence[Node]: ...

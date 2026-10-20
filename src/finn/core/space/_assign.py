@@ -113,7 +113,10 @@ def normalize(current: State, changes: Sequence[Change[object]]) -> dict[NodeId,
     """Each change by its choice: every one of this design space, naming an owned
     Decision of its scope, once. Its scope and node are asked of the model
     (``holds_scope``, ``holds_node``: an addressed scope, a node of one), never compared
-    with a length."""
+    with a length. A choice has one identity, the one its handles give: an id standing
+    for another node (an import, a formal's binding: ``_structure``) is no node, refused
+    here and never followed into the node it stands for, so the duplicate check and
+    every map keyed by a change's node (``stored``) see one id per choice."""
     linked = current.linked
     pending: dict[NodeId, Change[object]] = {}
     for item in changes:

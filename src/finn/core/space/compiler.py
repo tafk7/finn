@@ -80,7 +80,9 @@ class Model(Generic[S]):
         return self.linked if isinstance(self.linked, Structure) else None
 
     def resolve(self, scope: int, reference: object) -> int:
-        """Resolve a declaration in this exact scope without consulting its class."""
+        """Resolve a declaration in this exact scope without consulting its class: a
+        node's own id (a handle holds one; a scope's members and choices are read through
+        what each identity stands for), never an id standing for another."""
 
         if isinstance(reference, ValueHandle):
             if not self.linked.holds_scope(scope):

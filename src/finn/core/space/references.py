@@ -39,7 +39,8 @@ class ValueHandle(ValueRef[T], Generic[T]):
     semantics: ValueSemantics[T] | None = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        # An identity that stands for another, or none here, is no node (``holds_node``).
+        # An identity that stands for another, or none here, is no node (``holds_node``):
+        # a handle holds a node's own id, so equality and hash are by it.
         if not self._linked.holds_node(self._node):
             raise RequestError("handle does not identify a compiled node")
         node = self._linked.header(self._node)  # read, not resolved

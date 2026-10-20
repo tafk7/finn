@@ -29,6 +29,7 @@ from finn.core.space import (
     Space,
     View,
     _template,
+    bind,
     composite,
     derived,
     design_space,
@@ -39,7 +40,7 @@ from finn.core.space import (
 from finn.core.space._structure import EAGER, PERMUTE, Structure, expand
 from finn.core.space._template import Template, link_template
 from finn.core.space.errors import RequestError
-from finn.core.space.references import ValueHandle
+from finn.core.space.references import DecisionHandle, ValueHandle
 from finn.core.space.results import Unresolved
 
 HERE = Path(__file__).resolve().parent
@@ -438,6 +439,56 @@ def test_a_change_names_a_node_of_an_addressed_scope(
         point.try_with_choices(replace(change, scope=len(structure.records)))
     # ``len(nodes)``: the identities allocated, one block per addressed scope.
     assert len(structure.nodes) == sum(end - start for start, end in ends)
+
+
+@pytest.mark.parametrize("permuted", [False, True])
+def test_an_identity_standing_for_a_decision_is_refused_beside_its_own(
+    monkeypatch: pytest.MonkeyPatch, permuted: bool
+) -> None:
+    """A choice has one identity. An id that stands for a decision (a formal's binding to
+    a fresh Decision, an import of a child's Decision) is refused wherever an identity is
+    keyed by: a change naming it, alone or beside the decision's own id, is a
+    ``RequestError`` (never followed into the decision, so never two changes of one
+    choice, nor one choice stored under two ids), in a bind as in a change; and no handle
+    is made from it, so a handle's equality and hash, and ``Model.resolve`` and
+    ``decision`` of one, are by the decision's own id."""
+    if permuted:
+        monkeypatch.setenv(PERMUTE, "1")
+    else:
+        monkeypatch.delenv(PERMUTE, raising=False)
+
+    class Standing(Space):  # a class of its own: its model is made under this mode
+        room = Room(area=Decision(values=(10, 20)))
+        fetcher = Fetcher(contents=4)
+        lanes = View(fetcher.lanes)
+
+    point = design_space(Standing())
+    model = inspection.model(point)
+    structure = model.structure
+    assert structure is not None and structure.permuted is permuted
+    handles = {item.key: item.reference for item in inspection.decisions(point)}
+    root = structure.records[0]
+    standing: dict[str, int] = {}
+    for node in range(len(root.template.nodes)):
+        index, own = structure._id(root, node), structure.ident(root, node)
+        if own is not None and own != index and structure.nodes[own].kind == "decision":
+            standing[structure.nodes[own].key] = index
+    assert set(standing) == {"room.area", "fetcher.lanes"}
+    for key, value in (("room.area", 20), ("fetcher.lanes", 2)):
+        change = point.field(handles[key]).change(value)
+        assert point.try_with_choices(change).accepted
+        assert model.decision(change.scope, handles[key]) == change.node
+        index = standing[key]
+        # Named by the scope the decision is in, or by the scope whose block holds the id.
+        for other in (replace(change, node=index), replace(change, node=index, scope=0)):
+            for batch in ((other,), (change, other), (other, change)):
+                with pytest.raises(RequestError, match="change node does not belong"):
+                    point.try_with_choices(*batch)
+                with pytest.raises(RequestError, match="change node does not belong"):
+                    bind(point, *batch)
+        for kind in (ValueHandle, DecisionHandle):
+            with pytest.raises(RequestError, match="handle does not identify"):
+                kind(structure, index)
 
 
 def test_resolution_takes_the_models_lock() -> None:
