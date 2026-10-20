@@ -82,11 +82,11 @@ from ._failure import (
 )
 from ._memo import BitTable, Counters, Kept, Key, Memo, ReadSet, Trace
 from ._nodes import NodeDecl, unwrap
-from ._reads import ModelReads, flow_order, infer, presence_readers
+from ._reads import ModelReads, infer
 from .declarations import Param, declared_path
 from .errors import EvaluationError, RequestError, ValueUnavailableError
 from .graph import Located
-from .ir import Argument, Choice, Linked, Node, NodeId, NodeKind
+from .ir import Argument, Choice, Linked, Node, NodeId, NodeKind, Questions
 from .references import descend
 from .results import (
     Available,
@@ -196,7 +196,6 @@ class Evaluator:
         "counters",
         "lock",
         "run",
-        "_presence",
         "_flow",
     )
 
@@ -211,19 +210,26 @@ class Evaluator:
         self.lock = model.lock
         # The run in progress (under the lock), if any.
         self.run: _Run | None = None
-        self._presence: Mapping[NodeId, tuple[NodeId, ...]] | None = None
         self._flow: tuple[NodeId, ...] | None = None
 
+    def _whole(self) -> Questions:
+        whole = self.linked.whole
+        if whole is None:
+            raise RequestError(
+                "a table built by hand has no templates: it answers no question about its "
+                "whole design space (its flow order, its presence readers)"
+            )
+        return whole
+
     def flow(self) -> tuple[NodeId, ...]:
-        """The model's choices in the flow order (found once per model, on first use:
-        ``_reads.flow_order``; it resolves the whole design space). Each loop in it is
-        noted, a finding stated without refusing (``flow-loop``): its choices are taken in
-        declaration order."""
+        """The model's choices in the flow order (found once per model, on first use, from
+        its templates: ``_whole``). Each loop in it is noted, a finding stated without
+        refusing (``flow-loop``): its choices are taken in declaration order."""
         with self.lock:
             if self._flow is None:
-                found = flow_order(self.linked, self.reads)
+                found = self._whole().flow()
                 for loop in found.loops:
-                    keys = tuple(self.nodes[index].key for index in loop)
+                    keys = tuple(self.linked.header(index).key for index in loop)
                     note(
                         Finding(
                             FindingKind.LIMITATION,
@@ -239,12 +245,9 @@ class Evaluator:
 
     def presence_readers(self, source: NodeId) -> tuple[NodeId, ...]:
         """The choices whose presence may read the choice or fact ``source`` (found once
-        per model, on first use: ``_reads.presence_readers``; it resolves the whole design
-        space)."""
+        per model, on first use, from its templates: ``_whole``)."""
         with self.lock:
-            if self._presence is None:
-                self._presence = presence_readers(self.linked, self.reads.methods)
-            return self._presence.get(source, ())
+            return self._whole().readers(source)
 
 
 class Deeper(BaseException):

@@ -11,7 +11,7 @@ evaluates one query and follows the reads its entries recorded.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeAlias, TypeVar, cast, overload
 
@@ -19,6 +19,7 @@ from ._assign import check, placed, tried
 from ._configuration import Space
 from ._failure import driver_only
 from ._state import State, copy_assessment, copy_result, decision_state, presence
+from ._structure import Structure
 from ._world import Entry, World, listed_values
 from .compiler import Model, compile_model
 from .declarations import (
@@ -154,15 +155,17 @@ class ModelStatistics:
 
 
 def statistics(subject: Space | Model[S] | type[Space]) -> ModelStatistics:
-    """Count direct structure on demand, with no runtime or closure retention. It reads
-    every scope and node: it addresses and resolves the whole design space (piece 3 counts
-    it from templates)."""
+    """Count direct structure on demand, with no runtime or closure retention. A model's
+    structure counts from its templates, each counted at every placement: once per shape
+    of placement, times the placements of that shape (``Structure.statistics``; no node
+    resolved); a table, from its nodes."""
 
     if not isinstance(subject, (Model, Space, type)):
         raise RequestError("statistics requires a compiled model")
     linked = _context(subject)[0].linked
-    # By iteration (a structure's ``len(nodes)`` bounds its ids; it counts no nodes).
-    scopes, nodes = tuple(linked.scopes), tuple(node for node in linked.nodes)
+    if isinstance(linked, Structure):
+        return ModelStatistics(*linked.statistics())
+    scopes, nodes = tuple(linked.scopes), tuple(linked.nodes)
     placements = len(scopes) - 1
     authored = sum(len(scope.named_members) for scope in scopes)
     return ModelStatistics(
@@ -190,10 +193,12 @@ def model(subject: Space | Model[S] | type[Space]) -> Model[Space]:
     return _context(subject)[0]
 
 
-def _scope_set(linked: Linked, root: int) -> set[int]:
-    # Scopes are allocated after their parent. No repeated ancestor traversal
-    # or stored transitive closure is needed to inspect a subtree. It reads every scope:
-    # it addresses the whole design space (piece 3 answers from templates).
+def _scope_set(linked: Linked, root: int) -> Collection[int]:
+    """``root`` and every scope below it: a structure's from its scope records (every scope
+    addressed, no node resolved); a table's from its scopes, each allocated after its
+    parent."""
+    if isinstance(linked, Structure):
+        return linked.subtree(root)
     included = {root}
     for scope in linked.scopes:
         if scope.parent in included:
@@ -201,8 +206,20 @@ def _scope_set(linked: Linked, root: int) -> set[int]:
     return included
 
 
+def _scope_name(linked: Linked, scope: int) -> str:
+    if isinstance(linked, Structure):
+        return linked.records[scope].name
+    return linked.scopes[scope].name
+
+
+def _scope_type(linked: Linked, scope: int) -> type[Space]:
+    if isinstance(linked, Structure):
+        return linked.records[scope].template.space_type
+    return linked.scopes[scope].space_type
+
+
 def _node_info(linked: Linked, index: int) -> NodeInfo:
-    node = linked.nodes[index]
+    node = linked.header(index)
     reference = (
         DecisionHandle[object](linked, index)
         if node.kind == "decision"
@@ -212,7 +229,7 @@ def _node_info(linked: Linked, index: int) -> NodeInfo:
         reference,
         node.key,
         node.kind,
-        linked.scopes[node.scope].name,
+        _scope_name(linked, node.scope),
         node.owner,
         node.source_owner is not None,
         None if node.guard is None else ValueHandle[bool](linked, node.guard),
@@ -224,7 +241,7 @@ def _decision_info(
     linked: Linked,
     index: int,
 ) -> DecisionInfo[object]:
-    node = linked.nodes[index]
+    node = linked.header(index)
     if node.kind != "decision":
         raise RequestError("decision inspection requires an owning Decision")
     choice_index = linked.selector_choices.get(index)
@@ -232,11 +249,11 @@ def _decision_info(
     return DecisionInfo(
         DecisionHandle[object](linked, index),
         decision_key(linked, index),
-        linked.scopes[node.scope].name,
+        _scope_name(linked, node.scope),
         node.owner,
         choice is not None,
         () if choice is None else tuple(name for name, _ in choice.cases),
-        linked.scopes[node.scope].space_type,
+        _scope_type(linked, node.scope),
         choice is None and node.domain is not None and node.domain.ordered,
         node.required_choice,
         node.domain is not None and node.domain.candidates is not None,
@@ -245,8 +262,8 @@ def _decision_info(
 
 def decisions(subject: Space | Model[S] | type[Space]) -> tuple[DecisionInfo[object], ...]:
     """Discover all owning decisions below this scope, including inactive cases, in the
-    flow order (``_flow``). Read once per compiled model and scope. The flow order reads
-    the whole design space (piece 3 answers it from templates)."""
+    flow order (``_flow``). Read once per compiled model and scope, from its templates
+    and scope records (``_whole``): no node is resolved."""
 
     compiled, scope = _context(subject)
     found = compiled._read.get(("decisions", scope))
@@ -260,11 +277,11 @@ def decisions(subject: Space | Model[S] | type[Space]) -> tuple[DecisionInfo[obj
 def _flow(compiled: Model[Space], scope: int) -> tuple[NodeId, ...]:
     """The choices below ``scope`` in the flow order: each after every choice its
     presence, its list or its Space's facts read (a selector before the choices its cases
-    hold), ties in declaration order (``_reads.flow_order``)."""
+    hold), ties in declaration order (``_whole.flow_order``)."""
     linked = compiled.linked
     included = _scope_set(linked, scope)
     return tuple(
-        index for index in compiled.evaluator.flow() if linked.nodes[index].scope in included
+        index for index in compiled.evaluator.flow() if linked.header(index).scope in included
     )
 
 
@@ -329,23 +346,23 @@ def value_handle(subject: Space | Model[S] | type[Space], reference: object) -> 
 
 
 def choices(subject: Space | Model[S] | type[Space]) -> tuple[ChoiceInfo, ...]:
-    """Every Decision over nodes below this scope, with its candidates (it addresses the
-    whole design space)."""
+    """Every Decision over nodes below this scope, with its candidates (every scope
+    addressed, no node resolved)."""
     compiled, scope = _context(subject)
     linked = compiled.linked
     included = _scope_set(linked, scope)
     return tuple(
         ChoiceInfo(
             choice.key,
-            linked.scopes[choice.scope].name,
+            _scope_name(linked, choice.scope),
             tuple(
                 CaseInfo(name, None, None)
                 if index is None
-                else CaseInfo(name, linked.scopes[index].name, linked.scopes[index].space_type)
+                else CaseInfo(name, _scope_name(linked, index), _scope_type(linked, index))
                 for name, index in choice.cases
             ),
             DecisionHandle[str](linked, choice.selector)
-            if linked.nodes[choice.selector].kind == "decision"
+            if linked.header(choice.selector).kind == "decision"
             else None,
             None if choice.guard is None else ValueHandle[bool](linked, choice.guard),
         )
@@ -355,20 +372,19 @@ def choices(subject: Space | Model[S] | type[Space]) -> tuple[ChoiceInfo, ...]:
 
 
 def members(subject: Space | Model[S] | type[Space]) -> tuple[NodeInfo, ...]:
-    """Inspect every named member below this scope (including forwarding aliases; it
-    addresses the whole design space)."""
+    """Inspect every named member below this scope (including forwarding aliases; every
+    scope below addressed, no node resolved)."""
 
     compiled, scope = _context(subject)
-    included = _scope_set(compiled.linked, scope)
+    linked = compiled.linked
     indices = {
         index
-        for current in compiled.linked.scopes
-        if current.index in included
-        for index in current.named_members.values()
+        for current in _scope_set(linked, scope)
+        for index in linked.scopes[current].named_members.values()
     }
     return tuple(
-        _node_info(compiled.linked, index)
-        for index in sorted(indices, key=lambda item: compiled.linked.nodes[item].key)
+        _node_info(linked, index)
+        for index in sorted(indices, key=lambda item: linked.header(item).key)
     )
 
 

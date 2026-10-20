@@ -29,9 +29,9 @@ is checked from the inference per template when a model is made
 A model's structure resolves its nodes on demand, so there the inference is per template:
 each function's paths resolve against its template once, and a node's reads, existence
 guards and case guards are found for it when first asked (``_TemplateInference``,
-``_Mapping``). ``presence_readers``, ``flow_order`` and ``summary`` read every node: on a
-structure they address and resolve the whole design space (piece 3 answers them from
-templates).
+``_Mapping``). The questions about the whole design space (the flow order, the presence
+readers) walk the same reads per template (``_whole``). ``summary``, a diagnostic, reads
+every node.
 """
 
 from __future__ import annotations
@@ -41,11 +41,9 @@ import inspect
 import textwrap
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
-from heapq import heapify, heappop, heappush
 from types import CodeType, MappingProxyType
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
-from .declarations import Param
 from .ir import Argument, Linked, LinkedModel, NodeId
 
 if TYPE_CHECKING:
@@ -860,7 +858,7 @@ class _Mapping:
                     if parent is None
                     else parent.template.scopes[cast(int, record.stub)].named_members.get(item.name)
                 )
-                index = None if node is None else structure.ident(cast(ScopeRecord, parent), node)
+                index = None if node is None else structure.ident(cast("ScopeRecord", parent), node)
                 if index is not None:
                     self._add(index, item.presence, nodes)
                 elif item.helper is not None:
@@ -1025,236 +1023,6 @@ def case_guards(linked: Linked) -> dict[NodeId, tuple[NodeId, str]]:
     return found
 
 
-def presence_readers(
-    linked: Linked, methods: Mapping[NodeId, frozenset[NodeId] | None]
-) -> dict[NodeId, tuple[NodeId, ...]]:
-    """For each choice and fact, the choices whose presence may read it: those whose
-    guards (their own and every enclosing one's) may read it, through what each guard
-    reads (a selector's value, a ``when``'s value and what that reads), found from the
-    model's structure and its methods' inferred reads (``methods``). A dynamic method may
-    read any choice or fact. A change can move the presence of these choices only. It
-    reads every node (on a structure, the whole design space)."""
-    nodes = linked.nodes
-    sources = frozenset(
-        (*linked.parameters, *(node.index for node in nodes if node.kind == "decision"))
-    )
-    reached: dict[NodeId, frozenset[NodeId]] = {}
-
-    def reach(start: NodeId) -> frozenset[NodeId]:
-        found: set[NodeId] = set()
-        seen, pending = {start}, [start]
-        while pending:
-            index = pending.pop()
-            if index != start and index in reached:
-                found |= reached[index]
-                continue
-            node = nodes[index]
-            if index in sources:
-                found.add(index)
-            following = list(node.dependencies)
-            if node.call_style == "self" and node.function is not None:
-                read = methods.get(index)
-                if read is None:
-                    return sources
-                following.extend(read)
-            for dependency in following:
-                if dependency not in seen:
-                    seen.add(dependency)
-                    pending.append(dependency)
-        return frozenset(found)
-
-    readers: dict[NodeId, list[NodeId]] = {}
-    guarded = [node for node in nodes if node.kind == "decision" and node.guard is not None]
-    # Outer guards first, so an inner guard's walk takes what an outer one reaches.
-    for node in sorted(guarded, key=lambda item: len(existence_guards(linked, item.index))):
-        guard = cast(NodeId, node.guard)
-        if guard not in reached:
-            reached[guard] = reach(guard)
-        for source in reached[guard]:
-            readers.setdefault(source, []).append(node.index)
-    return {source: tuple(found) for source, found in readers.items()}
-
-
-@dataclass(frozen=True, slots=True)
-class Flow:
-    """The model's choices in the flow order (``order``), and its loops (``loops``: each
-    set of choices reading one another, in declaration order)."""
-
-    order: tuple[NodeId, ...]
-    loops: tuple[tuple[NodeId, ...], ...]
-
-
-def flow_order(linked: Linked, reads: ModelReads) -> Flow:
-    """The choices in the **flow order**: each after every choice its presence, its list
-    or its Space's facts read, ties in declaration order (``LinkedModel.decisions``: a
-    Space's own choices in the order it declares them, before those of the Spaces it
-    places). An enclosing selector comes before the choices in its cases: their presence
-    reads it.
-
-    What a choice reads so (``_Upstream``) is followed from its existence guards, its
-    domain's inputs and the formals of its scope and of every enclosing one, through
-    every value each may read (a dynamic method: every node of its Space and of the Spaces
-    below it), to the first choice on each way. Kahn's algorithm orders
-    the choices by those reads, the next ready choice the first declared. Choices that
-    read one another (a loop) are taken as one, where the first of them declared would
-    be, and in declaration order among themselves. It reads every choice (on a structure,
-    the whole design space)."""
-    decisions = linked.decisions
-    ranks = {decision: position for position, decision in enumerate(decisions)}
-    upstream = _Upstream(linked, reads)
-    reading = {decision: upstream(decision) for decision in decisions}
-    loops = _loops(decisions, reading, ranks)
-    unit = {member: loop[0] for loop in loops for member in loop}
-    members = {loop[0]: loop for loop in loops}
-    # The graph over units (a loop's first member stands for it): each unit's readers,
-    # and how many units it waits on.
-    readers: dict[NodeId, set[NodeId]] = {}
-    waiting: dict[NodeId, set[NodeId]] = {}
-    for decision in decisions:
-        own = unit.get(decision, decision)
-        waits = waiting.setdefault(own, set())
-        for source in reading[decision]:
-            source = unit.get(source, source)
-            if source != own:
-                waits.add(source)
-                readers.setdefault(source, set()).add(own)
-    count = {node: len(waits) for node, waits in waiting.items()}
-    ready = [(ranks[node], node) for node, waits in count.items() if not waits]
-    heapify(ready)
-    order: list[NodeId] = []
-    while ready:
-        _, node = heappop(ready)
-        order.extend(members.get(node, (node,)))
-        for reader in readers.get(node, ()):
-            count[reader] -= 1
-            if not count[reader]:
-                heappush(ready, (ranks[reader], reader))
-    return Flow(tuple(order), loops)
-
-
-class _Upstream:
-    """What each choice's presence, list and Space's facts read: the first choices on
-    every way back from its existence guards, its domain's inputs and its scopes' formals
-    (a scope's formals' choices found once, for every choice below it). A way ends at a
-    choice, at a fact and at a Space's validity (a view's Space is not followed). A
-    dynamic method's reads are not known: it may read every node of its Space and of the
-    Spaces below it, and each is followed (the domain rule's over-approximation)."""
-
-    def __init__(self, linked: Linked, reads: ModelReads) -> None:
-        self.linked = linked
-        self.reads = reads
-        self.scopes: dict[int, frozenset[NodeId]] = {}
-        self.below: dict[int, tuple[NodeId, ...]] = {}
-
-    def subtree(self, scope: int) -> tuple[NodeId, ...]:
-        """Every node of ``scope`` and of the scopes below it (what a dynamic method of
-        ``scope`` may read)."""
-        found = self.below.get(scope)
-        if found is None:
-            # Scopes are allocated after their parent: one pass finds the subtree.
-            inside = {scope}
-            for held in self.linked.scopes:
-                if held.parent in inside:
-                    inside.add(held.index)
-            found = self.below[scope] = tuple(
-                node.index for node in self.linked.nodes if node.scope in inside
-            )
-        return found
-
-    def __call__(self, decision: NodeId) -> frozenset[NodeId]:
-        node = self.linked.nodes[decision]
-        found = self.reached((*self.reads.guards(decision), *self.inputs(node.domain_arguments)))
-        return (found | self.formals(node.scope)) - {decision}
-
-    @staticmethod
-    def inputs(arguments: tuple[Argument, ...]) -> tuple[NodeId, ...]:
-        return tuple(argument.node for argument in arguments)
-
-    def formals(self, scope: int) -> frozenset[NodeId]:
-        """The choices the formals of ``scope`` and of every enclosing scope read."""
-        found = self.scopes.get(scope)
-        if found is None:
-            held = self.linked.scopes[scope]
-            own = self.reached(
-                tuple(index for member, index in held.members.items() if isinstance(member, Param))
-            )
-            outer = frozenset() if held.parent is None else self.formals(held.parent)
-            found = self.scopes[scope] = own | outer
-        return found
-
-    def reached(self, starts: tuple[NodeId, ...]) -> frozenset[NodeId]:
-        nodes, methods = self.linked.nodes, self.reads.methods
-        found: set[NodeId] = set()
-        seen: set[NodeId] = set()
-        pending = list(starts)
-        while pending:
-            index = pending.pop()
-            if index in seen:
-                continue
-            seen.add(index)
-            current = nodes[index]
-            if current.kind == "decision":
-                found.add(index)
-                continue
-            if current.kind in ("param", "validity"):
-                continue
-            pending.extend(current.dependencies)
-            pending.extend(source for _, source in current.via)
-            if current.call_style == "self" and current.function is not None:
-                read = methods.get(index)
-                pending.extend(self.subtree(current.scope) if read is None else read)
-        return frozenset(found)
-
-
-def _loops(
-    decisions: tuple[NodeId, ...],
-    reading: Mapping[NodeId, frozenset[NodeId]],
-    ranks: Mapping[NodeId, int],
-) -> tuple[tuple[NodeId, ...], ...]:
-    """The sets of choices that read one another (strongly connected, more than one), each
-    in declaration order (``ranks``), the sets by their first member's (Tarjan's
-    algorithm, without recursion)."""
-    index: dict[NodeId, int] = {}
-    low: dict[NodeId, int] = {}
-    stack: list[NodeId] = []
-    on_stack: set[NodeId] = set()
-    found: list[tuple[NodeId, ...]] = []
-    for root in decisions:
-        if root in index:
-            continue
-        index[root] = low[root] = len(index)
-        stack.append(root)
-        on_stack.add(root)
-        frames = [(root, iter(sorted(reading[root])))]
-        while frames:
-            node, sources = frames[-1]
-            source = next(sources, None)
-            if source is not None:
-                if source not in index:
-                    index[source] = low[source] = len(index)
-                    stack.append(source)
-                    on_stack.add(source)
-                    frames.append((source, iter(sorted(reading[source]))))
-                elif source in on_stack:
-                    low[node] = min(low[node], index[source])
-                continue
-            frames.pop()
-            if frames:
-                parent = frames[-1][0]
-                low[parent] = min(low[parent], low[node])
-            if low[node] == index[node]:
-                component: list[NodeId] = []
-                while True:
-                    member = stack.pop()
-                    on_stack.discard(member)
-                    component.append(member)
-                    if member == node:
-                        break
-                if len(component) > 1:
-                    found.append(tuple(sorted(component, key=ranks.__getitem__)))
-    return tuple(sorted(found, key=lambda loop: ranks[loop[0]]))
-
-
 def infer(linked: Linked) -> ModelReads:
     """What every ``self`` method of ``linked`` may read, every node's existence guards,
     and which of them are a selector's cases. A model's structure (``_structure``) answers
@@ -1304,13 +1072,10 @@ def summary(linked: Linked, reads: ModelReads) -> dict[str, object]:
 
 
 __all__ = [
-    "Flow",
     "ModelReads",
     "Path",
     "case_guards",
     "existence_guards",
-    "flow_order",
     "infer",
-    "presence_readers",
     "summary",
 ]

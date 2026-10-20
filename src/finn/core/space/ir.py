@@ -22,6 +22,7 @@ from .semantics import ValueSemantics
 
 if TYPE_CHECKING:
     from ._configuration import Space
+    from ._whole import Flow
     from .domains import Domain
 
 # A node's identity in its model: in a model's structure (``_structure``), its scope's
@@ -171,6 +172,9 @@ class LinkedModel:
     editable_aliases: frozenset[NodeId] = frozenset()
     # Each node's forwarding source: an alias chain collapsed to its source.
     forward: tuple[NodeId, ...] = ()
+    # Its answers to the questions about the whole design space, where it is a structure's
+    # (``_structure.materialize``), in its numbering; None for a table built by hand.
+    whole: Questions | None = field(default=None, compare=False, repr=False)
     # A selector's Choice (its index in ``choices``), by the selector node.
     selector_choices: Mapping[NodeId, int] = field(init=False, repr=False)
     ranks: tuple[int, ...] = field(init=False, repr=False)
@@ -189,6 +193,56 @@ class LinkedModel:
             MappingProxyType({item.selector: item.index for item in self.choices}),
         )
 
+    def header(self, index: NodeId) -> Node:
+        """A node as a header reads it (``NodeHeader``): the node itself."""
+        return self.nodes[index]
+
+
+class Questions(Protocol):
+    """The answers to the questions about a whole design space (``_whole``)."""
+
+    def flow(self) -> Flow: ...
+
+    def readers(self, source: NodeId) -> tuple[NodeId, ...]: ...
+
+
+class NodeHeader(Protocol):
+    """What is read of a node without resolving its references (but its guard's
+    identity): a structure's ``Header``, or a table's ``Node``."""
+
+    @property
+    def index(self) -> NodeId: ...
+
+    @property
+    def scope(self) -> int: ...
+
+    @property
+    def key(self) -> str: ...
+
+    @property
+    def kind(self) -> NodeKind: ...
+
+    @property
+    def semantics(self) -> ValueSemantics[object] | None: ...
+
+    @property
+    def source_owner(self) -> str | None: ...
+
+    @property
+    def owner(self) -> str: ...
+
+    @property
+    def origin(self) -> str | None: ...
+
+    @property
+    def domain(self) -> Domain[object] | None: ...
+
+    @property
+    def required_choice(self) -> bool: ...
+
+    @property
+    def guard(self) -> NodeId | None: ...
+
 
 class _Ranked(Protocol):
     def __getitem__(self, index: int, /) -> Any: ...
@@ -197,8 +251,9 @@ class _Ranked(Protocol):
 class Linked(Protocol):
     """What the engine reads of a linked model: a model's structure (``_structure``), its
     nodes resolved on demand, or a table holding every node (``LinkedModel``: ``expand``'s,
-    or one built by hand). ``ranks`` orders decisions (a structure's: in declaration
-    order)."""
+    or one built by hand). ``ranks`` orders decisions (a structure's: by the flow order);
+    ``header`` reads a node without resolving it; ``whole`` answers the questions about
+    the whole design space (None for a table built by hand)."""
 
     @property
     def nodes(self) -> Sequence[Node]: ...
@@ -229,3 +284,8 @@ class Linked(Protocol):
 
     @property
     def ranks(self) -> _Ranked: ...
+
+    @property
+    def whole(self) -> Questions | None: ...
+
+    def header(self, index: NodeId, /) -> NodeHeader: ...

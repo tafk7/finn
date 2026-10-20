@@ -33,9 +33,13 @@ candidates, and its first reader owns it, as any other.
 The structure is the model's linked view (``ir.Linked``): what the engine reads of a
 linked model, with the same names and meanings (``nodes``, ``scopes``, ``choices``,
 ``keys``, ``selector_choices``, ``editable_aliases``, ``forward``, ``parameters``,
-``decisions``, ``ranks``). What iterates over every node or scope (``decisions``, a
-``for`` over ``nodes``, ``scopes`` or ``choices``) addresses and resolves the whole design
-space. Addressing and resolution write shared state, under the model's lock.
+``decisions``, ``ranks``; ``header`` and ``whole``). The questions about the whole design
+space are answered from templates and scope records, resolving no node: ``decisions``
+(every choice, in declaration order), ``whole`` (the flow order, which ``ranks`` gives
+positions in, and the presence readers: ``_whole``), ``header`` (a node as its template
+states it), ``subtree``. A ``for`` over ``nodes``, ``scopes`` or ``choices`` addresses the
+whole design space, and over ``nodes`` resolves it. Addressing and resolution write shared
+state, under the model's lock.
 
 ``NodeId``s follow the order scopes are addressed, so nothing may order by them; two test
 modes, read when a model is made, show it: ``FINN_SPACE_PERMUTE=1`` allocates the blocks
@@ -52,7 +56,7 @@ from bisect import bisect_right, insort
 from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from threading import RLock
-from typing import Any, cast, overload
+from typing import TYPE_CHECKING, Any, cast, overload
 
 from ._collapse import forwards, guard_implies
 from ._configuration import Space
@@ -60,8 +64,12 @@ from ._ordering import dependency_order
 from ._table import Binding, member_key
 from ._template import Template, TemplateChoice, link_template
 from .errors import DefinitionError
-from .ir import Argument, Choice, LinkedModel, Node, NodeId, Scope
-from .semantics import STRING
+from .ir import Argument, Choice, LinkedModel, Node, NodeId, NodeKind, Scope
+from .semantics import STRING, ValueSemantics
+
+if TYPE_CHECKING:
+    from ._whole import Flow, Whole
+    from .domains import Domain
 
 _OWNER = "space.structure"
 
@@ -116,6 +124,32 @@ class ScopeRecord:
         return parent.template.index.slot_positions[cast(int, self.stub)]
 
 
+@dataclass(frozen=True, slots=True)
+class Header:
+    """A node as its template and its scope's binding state it, its references not
+    resolved (but its guard's identity): what the questions about the whole design space
+    (``_whole``), inspection's lists and a handle read of a node. The node resolved holds
+    the same values. ``record`` and ``node``: where its content is written (a formal bound
+    by a node: the binding, a node of the placing template; else its own template's)."""
+
+    index: NodeId
+    scope: int
+    key: str
+    kind: NodeKind
+    semantics: ValueSemantics[object] | None
+    source_owner: str | None
+    origin: str | None
+    domain: Domain[object] | None
+    required_choice: bool
+    guard: NodeId | None
+    record: ScopeRecord
+    node: int
+
+    @property
+    def owner(self) -> str:
+        return self.source_owner if self.source_owner is not None else self.key
+
+
 class Structure:
     """A model's scopes and nodes, made and resolved on demand; its linked view
     (``ir.Linked``). See the module docstring."""
@@ -146,7 +180,9 @@ class Structure:
         self._scopes: dict[int, Scope] = {}
         self._choices: dict[int, Choice] = {}
         self._in_play: set[int] = set()
+        self._headers: dict[NodeId, Header] = {}
         self._decisions: tuple[NodeId, ...] | None = None
+        self._whole: Whole | None = None
         self.nodes = _Nodes(self)
         self.raw_nodes = _RawNodes(self)
         self.scopes = _Scopes(self)
@@ -745,13 +781,163 @@ class Structure:
             for index in range(len(self._choice_owners)):
                 self.choices[index]
 
+    def header(self, index: NodeId) -> Header:
+        """``index``'s node as its template and its scope's binding state it, its references
+        not resolved (``Header``; kept). ``IndexError`` where it is no node."""
+        found = self._headers.get(index)
+        if found is not None:
+            return found
+        with self.lock:
+            found = self._headers.get(index)
+            if found is None:
+                found = self._headers[index] = self._header(index)
+            return found
+
+    def _header(self, index: NodeId) -> Header:
+        # As ``_build`` resolves the node, branch by branch, but for its references.
+        record, at = self.canonical(index)
+        template = record.template
+        node = template.nodes[at]
+        key = member_key(record.name, node.key)
+        owner = self._owners.get(index)
+        if node.kind == "param" and record.parent is not None:
+            binding = cast(Binding, record.binding(template.formal_names[at]))
+            if binding.kind in ("literal", "unsupplied"):
+                kind: NodeKind = "const" if binding.kind == "literal" else "present"
+                return Header(
+                    index,
+                    record.index,
+                    key,
+                    kind,
+                    node.semantics,
+                    owner,
+                    node.origin,
+                    None,
+                    False,
+                    self._guard(record, node.guard, key),
+                    record,
+                    at,
+                )
+            parent = record.parent
+            written = parent.template.nodes[cast(int, binding.node)]
+            return Header(
+                index,
+                record.index,
+                key,
+                written.kind,
+                written.semantics,
+                owner if owner is not None else self._owned(parent, written),
+                written.origin,
+                written.domain,
+                written.required_choice,
+                self._guard(parent, written.guard, key),
+                parent,
+                cast(int, binding.node),
+            )
+        selection = template.index.selections.get(at)
+        if selection is not None and selection[0] in record.never:
+            choice = template.choices[selection[0]]
+            return Header(
+                index,
+                record.index,
+                key,
+                "select",
+                node.semantics,
+                owner,
+                None,
+                None,
+                False,
+                self._guard(record, choice.guard, key),
+                record,
+                at,
+            )
+        scope = cast(ScopeRecord, self.scope_of(record, node.scope)).index
+        never = template.selectors.get(at)
+        if never is not None and never in record.never:
+            return Header(
+                index,
+                scope,
+                key,
+                "const",
+                STRING,
+                owner,
+                node.origin,
+                None,
+                False,
+                self._guard(record, node.guard, key),
+                record,
+                at,
+            )
+        return Header(
+            index,
+            scope,
+            key,
+            node.kind,
+            node.semantics,
+            owner if owner is not None else self._owned(record, node),
+            node.origin,
+            node.domain,
+            node.required_choice,
+            self._guard(record, node.guard, key),
+            record,
+            at,
+        )
+
+    @staticmethod
+    def _owned(record: ScopeRecord, node: Node) -> str | None:
+        return None if node.source_owner is None else member_key(record.name, node.source_owner)
+
+    def subtree(self, scope: int) -> frozenset[int]:
+        """The scope ``scope`` and every scope below it, by index (every scope addressed,
+        records only)."""
+        with self.lock:
+            self.address_all()
+            inside = {scope}
+            for record in self.records:  # a scope is made after its parent
+                if record.parent is not None and record.parent.index in inside:
+                    inside.add(record.index)
+            return frozenset(inside)
+
+    @property
+    def whole(self) -> Whole:
+        """Its answers to the questions about the whole design space (``_whole``), from its
+        templates."""
+        if self._whole is None:
+            from ._whole import Whole  # noqa: PLC0415 - a cycle
+
+            with self.lock:
+                if self._whole is None:
+                    self._whole = Whole(self)
+        return self._whole
+
+    def flow(self) -> Flow:
+        """Its choices in the flow order, with its loops (``_whole.Whole.flow``)."""
+        return self.whole.flow()
+
+    def readers(self, source: NodeId) -> tuple[NodeId, ...]:
+        """The choices whose presence may read ``source`` (``_whole.Whole.readers``)."""
+        return self.whole.readers(source)
+
     @property
     def decisions(self) -> tuple[NodeId, ...]:
-        """Every decision in declaration order (``rank``). It addresses and resolves the
-        whole design space (piece 3 answers it from templates)."""
+        """Every decision in declaration order (``rank``), from its templates: every scope
+        addressed, no node resolved."""
         with self.lock:
             if self._decisions is None:
-                found = [index for index in self.all_nodes() if self.raw(index).kind == "decision"]
+                self.address_all()
+                found: list[NodeId] = []
+                for record in self.records:
+                    template = record.template
+                    for node in range(len(template.nodes)):
+                        kind = template.nodes[node].kind
+                        if kind not in ("decision", "param"):
+                            continue
+                        index = self.ident(record, node)
+                        if (
+                            index == self._id(record, node)
+                            and self.header(index).kind == "decision"
+                        ):
+                            found.append(index)
                 self._decisions = tuple(sorted(found, key=self.rank))
             return self._decisions
 
@@ -801,13 +987,153 @@ class Structure:
 
     def counts(self) -> dict[str, int]:
         """What is made so far: scopes addressed, scopes with a node resolved, nodes
-        resolved."""
+        resolved, and how many of those are constants."""
         with self.lock:
             return {
                 "scopes addressed": len(self.records),
                 "scopes in play": len(self._in_play),
                 "nodes resolved": len(self._raw),
+                "const nodes resolved": sum(
+                    1 for node in self._raw.values() if node.kind == "const"
+                ),
             }
+
+    # -- statistics ----------------------------------------------------------------------------
+
+    def statistics(self) -> tuple[int, int, int, int, int, int]:
+        """``inspection.statistics``' counts: authored declarations, scopes, nodes, potential
+        edges, Decisions over nodes, owning decisions. Each template is counted at every
+        placement: once per **shape** of placement (its template, the Decisions over nodes
+        that never apply there, whether it is placed under a guard, its formals bound to
+        fresh Decisions, the named shared Decisions its placing template owns in it), on
+        one scope of that shape (its record: no node resolved), times the number of
+        placements of that shape. A formal's node is counted where its binding is written,
+        by its placing template. A node's potential edges are its references as its
+        template states them, each to its own node (two references of one node that
+        forward to one source count twice: the one table of every placement counted them
+        after collapse)."""
+        with self.lock:
+            totals: dict[tuple[object, ...], tuple[int, ...]] = {}
+            return cast(tuple[int, int, int, int, int, int], self._counted(self.records[0], totals))
+
+    def _shape(self, record: ScopeRecord) -> tuple[object, ...]:
+        """What ``record``'s scope and the scopes below it count by: its template, its
+        Decisions over nodes that never apply, whether it is placed under a guard, its
+        formals bound to fresh Decisions, the named shared Decisions owned in it."""
+        template = record.template
+        decided = frozenset(
+            name
+            for name in template.formals
+            if (binding := record.binding(name)) is not None and binding.kind == "local-decision"
+        )
+        return (
+            id(template),
+            record.never,
+            self.guard_of(record) is not None,
+            decided,
+            self._owned_here(record),
+        )
+
+    def _owned_here(self, record: ScopeRecord) -> int:
+        """How many named shared Decisions its placing template owns in ``record``'s
+        scope."""
+        parent = record.parent
+        if parent is None:
+            return 0
+        return sum(
+            1
+            for node in parent.template.scopes[cast(int, record.stub)].named_members.values()
+            if self.ident(parent, node) is not None
+        )
+
+    def _counted(
+        self, record: ScopeRecord, totals: dict[tuple[object, ...], tuple[int, ...]]
+    ) -> tuple[int, ...]:
+        """The counts of ``record``'s scope and of the scopes below it (by shape, once)."""
+        shape = self._shape(record)
+        held = totals.get(shape)
+        if held is not None:
+            return held
+        template = record.template
+        own = template.scopes[0]
+        authored = sum(
+            1 for node in own.named_members.values() if self.ident(record, node) is not None
+        )
+        nodes = edges = decisions = 0
+        for node in range(len(template.nodes)):
+            index = self.ident(record, node)
+            if index is None or index != self._id(record, node):
+                continue
+            nodes += 1
+            if node in template.formal_names and record.parent is not None:
+                continue  # counted by its placing template, where its binding is written
+            edges += self._edges(record, node)
+            if self.header(index).kind == "decision":
+                decisions += 1
+        found = [authored, 1, nodes, edges, len(template.choices), decisions]
+        for stub in template.index.placed:
+            child = self.child(record, stub)
+            if child is None:
+                continue
+            found[0] += 1 + self._owned_here(child)  # the placement, the names owned there
+            for name in child.template.formals:
+                index = cast(NodeId, self.ident(child, child.template.formals[name]))
+                found[3] += self._edges(child, child.template.formals[name])
+                found[5] += self.header(index).kind == "decision"
+            for position, count in enumerate(self._counted(child, totals)):
+                found[position] += count
+        result = totals[shape] = tuple(found)
+        return result
+
+    def _edges(self, record: ScopeRecord, node: int) -> int:
+        """How many nodes a node of ``record``'s scope references (``Node.dependencies``,
+        before collapse), from its template: its references mapped to their identities,
+        no node resolved (as ``_build`` maps them)."""
+        template = record.template
+        spec = template.nodes[node]
+        if spec.kind == "param" and record.parent is not None:
+            binding = cast(Binding, record.binding(template.formal_names[node]))
+            if binding.kind in ("literal", "unsupplied"):  # a constant, or not supplied
+                return 0 if self._guard(record, spec.guard, spec.key) is None else 1
+            parent = record.parent
+            return self._mapped_edges(parent, parent.template.nodes[cast(int, binding.node)])
+        selection = template.index.selections.get(node)
+        if selection is not None and selection[0] in record.never:
+            choice = template.choices[selection[0]]
+            guard = self._guard(record, choice.guard, spec.key)
+            return 1 + (guard is not None)  # its selector and its guard
+        never = template.selectors.get(node)
+        if never is not None and never in record.never:  # a constant
+            return 0 if self._guard(record, spec.guard, spec.key) is None else 1
+        if node == template.validity:
+            return self._mapped_edges(record, spec, self._pieces(record))
+        if spec.kind == "members":
+            spec = replace(
+                spec,
+                alternatives=tuple(
+                    (label, target)
+                    for label, target in spec.alternatives
+                    if not self._dropped(record, target)
+                ),
+            )
+        return self._mapped_edges(record, spec)
+
+    def _mapped_edges(
+        self, record: ScopeRecord, node: Node, constraints: tuple[NodeId, ...] | None = None
+    ) -> int:
+        def ref(index: int) -> NodeId:
+            return self._reference(record, index, node.key)
+
+        found: list[NodeId | None] = [
+            *(ref(argument.node) for argument in node.arguments),
+            *(ref(argument.node) for argument in node.domain_arguments),
+            self._guard(record, node.guard, node.key),
+            None if node.output is None else ref(node.output),
+            None if node.selector is None else ref(node.selector),
+            *((ref(target) for target in node.constraints) if constraints is None else constraints),
+            *(ref(target) for _, target in node.alternatives),
+        ]
+        return len({index for index in found if index is not None})
 
     # -- the linked view's pieces ------------------------------------------------------------------
 
@@ -1139,18 +1465,16 @@ class _SelectorChoices(_Lookup):
 
 
 class _Ranks(_Lookup):
-    """A decision's place in declaration order (``Structure.rank``)."""
+    """A decision's place in the flow order (``Structure.flow``): what ``_assign`` orders
+    the choices it reports by. Asking it answers the flow order (once per model)."""
 
-    def __getitem__(self, index: object) -> tuple[object, ...]:
+    def __getitem__(self, index: object) -> int:
         if type(index) is not int:
             raise KeyError(index)
-        try:
-            return self._structure.rank(index)
-        except IndexError as cause:
-            raise KeyError(index) from cause
+        return self._structure.whole.position(index)
 
     def __iter__(self) -> Iterator[NodeId]:
-        return iter(self._structure.decisions)
+        return iter(self._structure.flow().order)
 
 
 class _EditableAliases(Collection[NodeId]):
@@ -1273,7 +1597,33 @@ def materialize(structure: Structure, *, collapsed: bool = True) -> LinkedModel:
             choices,
             frozenset(number[index] for index in ids if structure.editable(index)),
             tuple(number[structure.source(index)] if collapsed else number[index] for index in ids),
+            _Renumbered(structure, number),
         )
+
+
+class _Renumbered:
+    """A structure's answers to the questions about its whole design space, in a table's
+    numbering (``materialize``)."""
+
+    def __init__(self, structure: Structure, number: Mapping[NodeId, int]) -> None:
+        self._structure = structure
+        self._number = number
+        self._back = {position: index for index, position in number.items()}
+
+    def flow(self) -> Flow:
+        from ._whole import Flow  # noqa: PLC0415 - a cycle
+
+        found, number = self._structure.flow(), self._number
+        return Flow(
+            tuple(number[index] for index in found.order),
+            tuple(tuple(number[index] for index in loop) for loop in found.loops),
+        )
+
+    def readers(self, source: NodeId) -> tuple[NodeId, ...]:
+        held = self._back.get(source)
+        if held is None:
+            return ()
+        return tuple(self._number[index] for index in self._structure.readers(held))
 
 
 __all__ = ["EAGER", "PERMUTE", "ScopeRecord", "Structure", "expand", "materialize", "modes"]

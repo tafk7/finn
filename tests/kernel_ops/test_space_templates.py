@@ -4,8 +4,10 @@
 class the kernels, the KernelOps and the test support define, of the Chain's members and of
 stage 7's chain of eight kernels as one Space, fully resolved, equal to its eager form
 ``expand`` by key (``core.space._templates_support``; the engine's own corpus and edge
-cases are ``core.space.test_templates``); and their domain rule, composed per template,
-equal to the line's on ``expand`` (``core.space._domains_support``)."""
+cases are ``core.space.test_templates``); their domain rule, composed per template, equal
+to the line's on ``expand`` (``core.space._domains_support``); and their answers to the
+questions about the whole design space, from templates, equal to the line's
+(``core.space._whole_support``; the engine's are ``core.space.test_whole``)."""
 
 from __future__ import annotations
 
@@ -17,6 +19,7 @@ import numpy as np
 import pytest
 from core.space._domains_support import domain_differences
 from core.space._templates_support import assert_expands, defined, links, reached
+from core.space._whole_support import differences
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
@@ -28,7 +31,8 @@ import finn.kernels
 from finn.core.space import Space, composite, design_space, inspection
 from finn.core.space._structure import EAGER, expand
 from finn.core.space._template import link_template
-from finn.core.space.results import Unresolved
+from finn.core.space.occurrence import state
+from finn.core.space.results import Available, Unresolved
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import in_shell, make_cut_choices
 from finn.kernels.channels import Channel
@@ -160,6 +164,34 @@ def test_stage_7s_chain_of_eight_kernels_resolves_as_it_expands() -> None:
     assert len(expand(whole).scopes) == 468
 
 
+def _answers_as_the_line(classes: list[type[Space]]) -> int:
+    """Each class's answers to the questions about its whole design space, from templates,
+    equal the line's; no method gained an inferred read; the number of choices compared."""
+    failures: list[str] = []
+    decisions = 0
+    for space_type in classes:
+        compared = differences(space_type)
+        failures.extend(compared.differences)
+        if compared.gained:
+            failures.append(f"{space_type.__qualname__}: reads gained {compared.gained}")
+        decisions += compared.decisions
+    assert not failures, "\n".join(failures)
+    return decisions
+
+
+def test_the_kernels_and_the_test_support_answer_as_the_line() -> None:
+    modules = [f"support.{path.stem}" for path in sorted(SUPPORT.glob("*.py"))]
+    classes = [*_kernels(), *(cls for cls in defined(modules) if links(cls))]
+    net = chain()
+    classes.extend(inspection.model(net.member(name)).space_type for name in MEMBERS)
+    assert _answers_as_the_line(list(dict.fromkeys(classes))) > 50
+
+
+def test_stage_7s_chain_of_eight_kernels_answers_as_the_line() -> None:
+    whole, _ = _chain(4)
+    assert _answers_as_the_line([whole]) == 189
+
+
 def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -174,12 +206,37 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
     assert read["scopes addressed"] < len(table.scopes) // 10
     assert read["scopes in play"] < read["scopes addressed"]
     assert read["nodes resolved"] < len(table.nodes) // 100
-    # Committing the stored values lists every choice (``inspection.decisions``, in the
-    # flow order): it still reads the whole design space (piece 3 answers it from
-    # templates).
-    commit(point, stored)
-    assert structure.counts() == {
-        "scopes addressed": len(table.scopes),
-        "scopes in play": len(table.scopes),
-        "nodes resolved": len(table.nodes),
+
+
+def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``commit`` of the chain's stored values on a design space made from scratch, before
+    any trial or ``viable``. Listing its choices (``inspection.decisions``, in the flow
+    order) makes every scope's record and resolves no node; the change resolves what it
+    and its checks read. Of the scopes with a node resolved, 91 are present (the line's
+    present scopes at the baseline); the others are absent (a case not selected), each
+    with a node resolved for the root's validity (a placed Space's validity piece, read to
+    find it inapplicable) or for what the change moved (the presence of each choice whose
+    presence may read a choice it sets)."""
+    monkeypatch.delenv(EAGER, raising=False)
+    whole, stored = _chain(4)
+    point = design_space(whole())
+    structure = inspection.model(point).structure
+    assert structure is not None
+    committed = commit(point, stored)
+    counts = structure.counts()
+    assert counts == {
+        "scopes addressed": 468,
+        "scopes in play": 229,
+        "nodes resolved": 2704,
+        "const nodes resolved": 468,
     }
+    world = state(committed).world
+    present = [
+        index
+        for index in structure._in_play
+        if (guard := structure.guard_of(structure.records[index])) is None
+        or world.result(guard) == Available(True)
+    ]
+    assert len(present) == 91

@@ -375,10 +375,16 @@ def test_a_design_space_read_for_one_value_makes_part_of_a_composite(
         "scopes addressed": len(table.scopes),
         "scopes in play": len(table.scopes),
         "nodes resolved": len(table.nodes),
+        "const nodes resolved": sum(1 for node in table.nodes if node.kind == "const"),
     }
     # The kitchen's scope alone has a node resolved: its cost, what that reads, and its
     # validity's pieces are none of the other houses'.
-    assert read == {"scopes addressed": 12, "scopes in play": 1, "nodes resolved": 5}
+    assert read == {
+        "scopes addressed": 12,
+        "scopes in play": 1,
+        "nodes resolved": 5,
+        "const nodes resolved": 1,
+    }
 
 
 def test_an_identity_standing_for_another_is_no_node() -> None:
