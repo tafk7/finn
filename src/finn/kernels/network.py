@@ -107,6 +107,7 @@ from finn.kernels.members import (
     Configured,
     Facts,
     Refusal,
+    changed,
     commit,
     configured,
     current,
@@ -118,6 +119,7 @@ from finn.kernels.members import (
 )
 from finn.kernels.members import decision as decision_of
 from finn.kernels.members import key as member_key
+from finn.kernels.members import refusal as refusal_of
 from finn.platform.capabilities import Resources
 
 T = TypeVar("T")
@@ -429,21 +431,25 @@ def _rebuild(
     (the module docstring, step 3): a change of facts on the channel it ``was``, where it
     was bound before with facts of the same names; else bound from the new facts with its
     ``stored`` choices, as the network binds it (a fact that goes missing is no change of
-    facts). The stored choices the new facts refuse, those outside their domain and those
-    standing in the way of a rule the new facts make false, are cleared in the same change,
-    and the interim channel rule gives them and every choice the new facts bring into play
-    their first valid values (``interim_channel_defaults``). Returns the channel and each
-    choice derived again (``_rederived``), by key; or why the change is refused: a value of
-    its own, a rule the new facts and the change break with nothing stored in its way, or a
-    choice no value can be set for."""
+    facts). The stored choices the new facts refuse, those outside their domain (the change
+    drops them) and those standing in the way of a rule the new facts make false (cleared
+    after it, a change of clears alone), are taken out, and the interim channel rule gives
+    them and every choice the new facts bring into play their first valid values
+    (``interim_channel_defaults``). Returns the channel and each choice derived again
+    (``_rederived``), by key; or why the change is refused: a value of its own, a rule the
+    new facts and the change break with nothing stored in its way (or beside a value they
+    drop), or a choice no value can be set for."""
     named = {*change, *cleared}
     refused: dict[str, tuple[Finding, ...]] = {}
     if was is not None and {fact for fact, _ in was[0]} == {fact for fact, _ in read}:
         before = was[1]
         # Cleared while unbound: no longer stored, so cleared here too.
         gone = (*(key for key in chosen(before) if key not in stored), *cleared)
-        first = commit(before, change, gone, dict(read))
-        if isinstance(first, Refusal):
+        report = changed(before, change, gone, dict(read))
+        if not isinstance(report, Refusal) and not report.accepted:
+            # Refused by a choice the change names (its value, or a rule it breaks): where
+            # stored choices stand in each rule's way, made again with them cleared.
+            first = refusal_of(report)
             blocking = {
                 key: why
                 for key, why in first.why.items()
@@ -452,12 +458,39 @@ def _rebuild(
             if blocking:
                 return Refusal(blocking, first.standing, first.outside)
             for key, why in first.why.items():
-                for each in (key,) if key in first.outside else first.standing[key]:
+                for each in first.standing[key]:
                     refused[each] = (*refused.get(each, ()), *why)
-            first = commit(before, change, (*gone, *refused), dict(read))
-            if isinstance(first, Refusal):
-                return first
-        point = first
+            report = changed(before, change, (*gone, *refused), dict(read))
+            if not isinstance(report, Refusal) and not report.accepted:
+                return refusal_of(report)
+        if isinstance(report, Refusal):
+            return report
+        # Accepted: the stored values the new facts put outside their domains are dropped;
+        # a rule they make false refuses where one is dropped too, or nothing stored but
+        # what the change names stands in its way; else those standing are cleared.
+        dropped = {
+            outcome.owner: () if isinstance(outcome.result, Available) else outcome.result.findings
+            for outcome in report.outcomes
+            if outcome.status == "dropped"
+        }
+        broken = {rule.rule: rule.result.findings for rule in report.broken}
+        standing = {
+            rule.rule: tuple(key for key in rule.standing if key not in named)
+            for rule in report.broken
+        }
+        blocking = {
+            key: why for key, why in broken.items() if dropped or key in named or not standing[key]
+        }
+        if blocking:
+            return Refusal(blocking, standing)
+        refused |= dropped
+        for key, why in broken.items():
+            for each in standing[key]:
+                refused[each] = (*refused.get(each, ()), *why)
+        stood = tuple(dict.fromkeys(each for keys in standing.values() for each in keys))
+        point = commit(report.instance, {}, stood) if stood else report.instance
+        if isinstance(point, Refusal):  # a change of clears alone is never refused
+            return point
         # Open before (left open by a change, or not in play), or named: kept open.
         opened = {
             key for key, state in inspection.states(before) if isinstance(state, inspection.Open)
