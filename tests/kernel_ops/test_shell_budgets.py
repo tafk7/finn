@@ -13,8 +13,9 @@ No KernelOp names a control port, so a partition of KernelOps presents no AXI-Li
 the buses are counted here on a network built from the kernels directly, AXI-Lite
 thresholdings each given its port, its netlist's counts (``bus_counts``, the pins its
 module would have) checked by the same ``budgets`` and rows a partition's network reads.
-No kernel initiates a memory port (no bus protocol states one), so that count is always
-zero.
+No kernel initiates a memory port (no bus protocol states one), so on a network that count
+is always zero: it is counted here on a netlist and boundary buses built directly, a
+boundary initiator beside the streams standing for a mover's memory port.
 """
 
 from __future__ import annotations
@@ -38,6 +39,21 @@ from finn.core.reporting.findings import Finding
 from finn.core.space import Available
 from finn.custom_op.kernels.shell import configured_network, in_shell
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.kernels.artifacts.abi import (
+    Bus,
+    Clock,
+    ClockAlignment,
+    Derived,
+    Direction,
+    Endpoint,
+    Member,
+    Reset,
+    Signal,
+    StandardProtocol,
+)
+from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.artifacts.module import Abi, BusExport, Fragment, Leaf
+from finn.kernels.artifacts.top import module_abi
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform.shells import IP_ROW, ShellRow, budgets, bus_counts, shell_row
@@ -214,3 +230,71 @@ def test_the_shells_netlist_presents_each_bus_with_its_writes() -> None:
         for index in range(2)
     ]
     assert all(len(item.registers.writes) == 6 for item in exports)
+
+
+def lite(name: str, endpoint: Endpoint, clock: str, reset: str) -> Bus:
+    """An AXI-Lite bus ``name`` of a write handshake, on ``clock`` and ``reset``."""
+    return Bus(
+        name,
+        StandardProtocol.AXILITE,
+        (Member("awvalid", f"{name}_awvalid"), Member("awready", f"{name}_awready")),
+        endpoint,
+        associated_clock=clock,
+        associated_reset=reset,
+    )
+
+
+def stream(name: str, endpoint: Endpoint) -> Bus:
+    """An AXI-Stream bus ``name`` of one byte, on ``ap_clk``."""
+    members = (
+        Member("tdata", f"{name}_tdata", 8),
+        Member("tvalid", f"{name}_tvalid"),
+        Member("tready", f"{name}_tready"),
+    )
+    return Bus(name, StandardProtocol.AXIS, members, endpoint, associated_clock="ap_clk")
+
+
+def core(*, pumped: bool) -> Leaf:
+    """A leaf presenting an AXI-Lite configuration bus (``cfg``), on ``clk``; ``pumped``,
+    also on ``clk2x``, a clock at twice ``clk``."""
+    clocks = ("clk", "clk2x") if pumped else ("clk",)
+    pins = (
+        Signal("clk", Direction.IN, 1, Clock()),
+        *((Signal("clk2x", Direction.IN, 1, Clock(Derived("clk", 2))),) if pumped else ()),
+        Signal("rst", Direction.IN, 1, Reset(False, True, clocks)),
+        lite("cfg", Endpoint.TARGET, "clk", "rst"),
+    )
+    alignments = (ClockAlignment("clk", "clk2x"),) if pumped else ()
+    return Leaf(
+        "test.core",
+        "1",
+        "core",
+        (),
+        Abi(pins, (), alignments),
+        (CopiedSource("fixture", "core.sv", provides=("module:core",)),),
+    )
+
+
+@pytest.mark.parametrize(
+    ("pumped", "expected"), [(False, (2, 1, False)), (True, (2, 1, True))], ids=["plain", "pumped"]
+)
+def test_a_boundary_initiator_beside_the_streams_is_a_memory_port(
+    pumped: bool, expected: tuple[int, int, bool]
+) -> None:
+    """A netlist and its boundary built directly, as a boundary mover's memory port would
+    present one: no network has a bus initiator beside its streams. The protocols name no
+    AXI-MM, so the initiator is an AXI-Lite one (``m_axi_gmem``), which counts both as a
+    memory port and as an AXI-Lite bus; the leaf's presented AXI-Lite bus is the other; the
+    two streams count nothing. A pumped leaf takes the doubled clock. The shell's count
+    (``bus_counts``) is the top's pins' (``bus_counts_of_abi``)."""
+    fragment = Fragment(
+        (("core", core(pumped=pumped)),),
+        exports=(BusExport("core", lite("cfg", Endpoint.TARGET, "clk", "rst"), "core_s_axilite"),),
+    )
+    boundary = (
+        stream("s_axis_0", Endpoint.TARGET),
+        stream("m_axis_0", Endpoint.INITIATOR),
+        lite("m_axi_gmem", Endpoint.INITIATOR, "ap_clk", "ap_rst_n"),
+    )
+    abi = module_abi(fragment, boundary)
+    assert bus_counts(fragment, boundary) == bus_counts_of_abi(abi) == expected
