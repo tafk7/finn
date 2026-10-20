@@ -17,7 +17,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from finn.kernels.artifacts.abi import (
+    CLOCK,
     CLOCK2X,
+    RESET,
     Bus,
     Clock,
     Clocking,
@@ -55,22 +57,25 @@ def top_bus(child: Bus, port: str, clock: str, reset: str) -> Bus:
     )
 
 
+def top_buses(fragment: Fragment, boundary: Iterable[Bus]) -> tuple[Bus, ...]:
+    """A composed module's buses, in pin order: each boundary bus (inputs, then outputs),
+    then each presented bus as a target port of its own name (``top_bus``), on ``ap_clk``
+    and ``ap_rst_n``."""
+    buses = tuple(boundary)
+    return (
+        *(bus for bus in buses if bus.endpoint is Endpoint.TARGET),
+        *(bus for bus in buses if bus.endpoint is not Endpoint.TARGET),
+        *(top_bus(item.bus, item.port, CLOCK, RESET) for item in fragment.exports),
+    )
+
+
 def module_abi(fragment: Fragment, boundary: Iterable[Bus]) -> Abi:
     """A composed module's pins: its clocks and reset (``ap_clk2x`` when an instance takes
-    a doubled clock), each boundary bus (inputs, then outputs), then each presented bus."""
+    a doubled clock, ``doubled``), then its buses (``top_buses``)."""
     takes = doubled(fragment)
     clocking = Clocking(doubled=CLOCK2X if takes else None, doubling=takes)
-    buses = list(boundary)
     return Abi(
-        (
-            *clocking.signals(),
-            *(bus for bus in buses if bus.endpoint is Endpoint.TARGET),
-            *(bus for bus in buses if bus.endpoint is not Endpoint.TARGET),
-            *(
-                top_bus(item.bus, item.port, clocking.clock, clocking.reset)
-                for item in fragment.exports
-            ),
-        ),
+        (*clocking.signals(), *top_buses(fragment, boundary)),
         (),
         clocking.alignments(),
     )
@@ -90,4 +95,4 @@ def compose(
     )
 
 
-__all__ = ["compose", "doubled", "module_abi", "top_bus"]
+__all__ = ["compose", "doubled", "module_abi", "top_bus", "top_buses"]
