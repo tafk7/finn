@@ -200,8 +200,15 @@ def _same(left: Mapping[NodeId, object], right: Mapping[NodeId, object]) -> bool
 
 def _moved(before: World, after: World, sources: set[NodeId]) -> Moved:
     """What a change moves: for each choice whose presence may read a choice or fact the
-    change moved (``sources``), its presence before and after (``presence``: refused
-    guards count as absent)."""
+    change moved (``sources``), in the flow order, its presence after and, where that
+    decides a list, before (``presence``: refused guards count as absent). A stored
+    choice is ``dormant`` where it is absent after and was not absent before, ``in_play``
+    where it is present after and was not present before; an open choice is ``opened``
+    where it is present after and was not present before. So the presence before is read
+    only for a choice absent after and stored, or present after: a choice of unknown
+    presence after, or absent and open, is in no list whatever it was, and its presence
+    before (which may read the scopes of every case its guards wait on) is not read. The
+    lists are those of reading both everywhere. Keys are read from the nodes' headers."""
     evaluator = after.evaluator
     linked = evaluator.linked
     candidates = {choice for source in sources for choice in evaluator.presence_readers(source)}
@@ -209,19 +216,19 @@ def _moved(before: World, after: World, sources: set[NodeId]) -> Moved:
     in_play: list[NodeId] = []
     opened: list[NodeId] = []
     for index in sorted(candidates, key=linked.ranks.__getitem__):
-        was, now = presence(before, index)[0], presence(after, index)[0]
-        if index in after.stored:
-            if was != "absent" and now == "absent":
+        now = presence(after, index)[0]
+        if now == "unknown":
+            continue
+        stored = index in after.stored
+        if now == "absent":
+            if stored and presence(before, index)[0] != "absent":
                 dormant.append(index)
-            if was != "present" and now == "present":
-                in_play.append(index)
-        elif was != "present" and now == "present":
-            opened.append(index)
-    keys = linked.nodes
+        elif presence(before, index)[0] != "present":
+            (in_play if stored else opened).append(index)
     return Moved(
-        tuple(keys[index].key for index in dormant),
-        tuple(keys[index].key for index in in_play),
-        tuple(keys[index].key for index in opened),
+        tuple(linked.header(index).key for index in dormant),
+        tuple(linked.header(index).key for index in in_play),
+        tuple(linked.header(index).key for index in opened),
     )
 
 

@@ -217,14 +217,15 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     and its checks read. An absent scope's validity is read from its guard and its
     choices' presence from their guards, so no scope absent at the baseline has a node
     resolved for either. The scopes with a node resolved are the 91 present at the
-    baseline (the line's present scopes) and 16 more, each of unknown presence in the
-    design space before the change (the MatMuls' ``compute.int8_dsp58`` cases, their
-    tensors and the adapters placed under them): the list of what the change moved
-    (``_assign._moved``) reads the presence before the change of each choice whose presence
-    may read a choice it sets, and the channels' ``output_adapter`` and ``x.adapter`` are
-    guarded by a ``when`` reading the MatMuls' views, whose validity there reads those
-    cases' (their selector still open). Then ``viable`` of the middle MatMul's choices and
-    one change of its ``compute.packed.pe``: what trials resolve more."""
+    baseline (the line's present scopes) and 4 more, of unknown presence in the design
+    space before the change: the first MatMul's ``compute.int8_dsp58`` case and its three
+    tensors. The list of what the change moved (``_assign._moved``) reads, of each choice
+    whose presence may read a choice the change sets, its presence after, and before only
+    where that decides a list: ``x.adapter`` is stored and present after, so whether it
+    comes into play reads its presence before, where its guard reads the first MatMul's
+    views, whose validity there reads that case's (its selector still open). Then
+    ``viable`` of the middle MatMul's choices and one change of its ``compute.packed.pe``:
+    what trials resolve more."""
     monkeypatch.delenv(EAGER, raising=False)
     whole, stored = _chain(4)
     point = design_space(whole())
@@ -233,8 +234,8 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     committed = commit(point, stored)
     assert structure.counts() == {
         "scopes addressed": 468,
-        "scopes in play": 107,
-        "nodes resolved": 2521,
+        "scopes in play": 95,
+        "nodes resolved": 2452,
         "const nodes resolved": 468,
     }
     in_play = set(structure._in_play)
@@ -253,8 +254,21 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
 
     present_scopes = {record.index for record in structure.records if present(record.index)}
     assert len(present_scopes) == 91
-    assert present_scopes <= in_play
-    for index in in_play - present_scopes:
+    read_for_the_report = {
+        record.index
+        for record in structure.records
+        if record.name.startswith("mm0.compute.int8_dsp58")
+    }
+    assert {structure.records[index].name for index in read_for_the_report} == {
+        "mm0.compute.int8_dsp58",
+        "mm0.compute.int8_dsp58.x",
+        "mm0.compute.int8_dsp58.w",
+        "mm0.compute.int8_dsp58.y",
+    }
+    assert not read_for_the_report & present_scopes
+    assert read_for_the_report <= in_play
+    assert in_play - read_for_the_report == present_scopes
+    for index in read_for_the_report:
         guard = structure.guard_of(structure.records[index])
         assert guard is not None and isinstance(before.result(guard), Unresolved)
     handles = {item.key: item.reference for item in inspection.decisions(committed)}
@@ -263,15 +277,15 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     inspection.viable(committed, [handles[key] for key in middle])
     assert structure.counts() == {
         "scopes addressed": 468,
-        "scopes in play": 122,
-        "nodes resolved": 2628,
+        "scopes in play": 114,
+        "nodes resolved": 2582,
         "const nodes resolved": 478,
     }
     report = committed.try_with_choices({handles["mm2.compute.packed.pe"]: 2})
     assert report.accepted
     assert structure.counts() == {
         "scopes addressed": 468,
-        "scopes in play": 122,
-        "nodes resolved": 2628,
+        "scopes in play": 114,
+        "nodes resolved": 2582,
         "const nodes resolved": 478,
     }
