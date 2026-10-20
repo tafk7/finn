@@ -6,7 +6,8 @@
 ``module`` holds what is built: a FinnLib module (``Leaf``) or a flat netlist
 of them (``Composed``), with its pins (``abi``) and files (``contributions``).
 ``build`` writes a module's sources (ordered by ``sources``) and, for a
-composed module, its netlist; ``hls`` stages an HLS request's sources; ``rtl``
+composed module, its netlist; ``top`` wraps a netlist as a top, with FINN's top
+conventions (its clocks, reset and buses); ``hls`` stages an HLS request's sources; ``rtl``
 checks declared pins against the RTL; ``ipxact`` emits the Tcl that packages an
 emitted module as a Vivado IP, and ``interface`` describes its pins
 (``interface.json``); ``projection`` takes the canonical digest that keys a module.

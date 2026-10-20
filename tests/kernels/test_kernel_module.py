@@ -32,12 +32,11 @@ from finn.core.space import (
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
+from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Pin, Signal
 from finn.kernels.artifacts.contributions import Contribution
 from finn.kernels.artifacts.module import Held, Leaf
 from finn.kernels.base import (
     PORT_END,
-    Clocking,
     ComposedKernel,
     Kernel,
     LeafKernel,

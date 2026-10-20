@@ -11,7 +11,7 @@ with that port and the writes that put its configuration into the bus's register
 network (``finn.kernels.network``) each collect their members' controls
 (``presented``) and present each in their netlist (``BusExport``), prefixing its port
 with the member's node (``first_s_axilite``); the top module renames the bus to that port
-(``top_bus``), associated with its clock and reset. One kernel is
+(``finn.kernels.artifacts.top.top_bus``), associated with its clock and reset. One kernel is
 presented at one port.
 
 A kernel not given a port, or that exposes no bus in its configuration
@@ -26,7 +26,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from finn.core.space import Rejected, ViewKey, default_semantics, reject
-from finn.kernels.artifacts.abi import Bus, Direction, Endpoint, Member
+from finn.kernels.artifacts.abi import Bus, Direction
 from finn.kernels.artifacts.module import Held, RegisterMap
 
 
@@ -53,22 +53,6 @@ class Exported:
     child: Bus
     port: str
     registers: RegisterMap = RegisterMap()
-
-
-def top_bus(child: Bus, port: str, clock: str, reset: str) -> Bus:
-    """The child's bus as a top target port: members renamed ``<port>_<MEMBER>``."""
-    return Bus(
-        port,
-        child.protocol,
-        tuple(
-            Member(item.logical, f"{port}_{item.logical.upper()}", item.width)
-            for item in child.signals
-        ),
-        Endpoint.TARGET,
-        child.role,
-        clock,
-        reset,
-    )
 
 
 def held_bus(bus: Bus) -> Held:
@@ -109,5 +93,4 @@ __all__ = [
     "Exported",
     "held_bus",
     "presented",
-    "top_bus",
 ]

@@ -39,9 +39,9 @@ from finn.core.space import (
 )
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Clocking, Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, Clocking, LeafKernel, interface
+from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, interface
 from finn.kernels.port import native_stream
 from finn.kernels.utilization import RESOURCES_SEMANTICS, lutram, memory, uram_constraint
 from finn.platform.capabilities import Fabric, Platform, Resources

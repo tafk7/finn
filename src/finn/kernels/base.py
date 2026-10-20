@@ -57,18 +57,7 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, bind_extents
-from finn.kernels.artifacts.abi import (
-    Bus,
-    Clock,
-    ClockAlignment,
-    Data,
-    Derived,
-    Direction,
-    Free,
-    Pin,
-    Reset,
-    Signal,
-)
+from finn.kernels.artifacts.abi import Bus, Clocking, Direction, Pin, Signal
 from finn.kernels.artifacts.contributions import (
     Contribution,
     CopiedSource,
@@ -151,9 +140,6 @@ RESOURCES = ViewKey("resources", RESOURCES_SEMANTICS)
 a leaf's own statement; a kernel with children's, a channel's among them, the sum over
 its members."""
 
-# The composed module's clocking pins: its interface convention, not a routing rule.
-CLOCK, CLOCK2X, RESET = "ap_clk", "ap_clk2x", "ap_rst_n"
-
 
 @dataclass(frozen=True)
 class PortEnd:
@@ -174,56 +160,6 @@ class PortEnd:
 
 PORT_END = default_semantics(PortEnd)
 """A ``PortEnd``'s value semantics: a frozen value, compared by value."""
-
-
-@dataclass(frozen=True)
-class Clocking:
-    """A module's clock and reset pins.
-
-    ``clock`` is free-running and ``reset`` synchronous, active low unless
-    ``active_low`` is False (FinnLib's native ``clk`` and ``rst``). A
-    ``doubled`` pin, when the module has one, is a clock at twice ``clock``
-    while ``doubling``, and otherwise an unused input held low.
-    """
-
-    clock: str = CLOCK
-    reset: str = RESET
-    doubled: str | None = None
-    doubling: bool = False
-    active_low: bool = True
-
-    def signals(self) -> tuple[Signal, ...]:
-        doubled = () if self.doubled is None else (self.doubled,)
-        clocks = (self.clock, *doubled) if self.doubling else (self.clock,)
-        return (
-            Signal(self.clock, Direction.IN, 1, Clock(Free())),
-            *(
-                Signal(
-                    name,
-                    Direction.IN,
-                    1,
-                    Clock(Derived(self.clock, 2)) if self.doubling else Data(),
-                )
-                for name in doubled
-            ),
-            Signal(
-                self.reset,
-                Direction.IN,
-                1,
-                Reset(active_low=self.active_low, synchronous=True, synchronous_to=clocks),
-            ),
-        )
-
-    def alignments(self) -> tuple[ClockAlignment, ...]:
-        if self.doubled is None or not self.doubling:
-            return ()
-        return (ClockAlignment(self.clock, self.doubled),)
-
-    def held(self) -> tuple[tuple[str, int], ...]:
-        """The doubled clock input, held low while unused."""
-        if self.doubled is None or self.doubling:
-            return ()
-        return ((self.doubled, 0),)
 
 
 NATIVE_CLOCKING = Clocking(clock="clk", reset="rst", active_low=False)
@@ -647,11 +583,8 @@ __all__ = [
     "BEATS",
     "BOUNDARY",
     "BUFFERING",
-    "CLOCK",
-    "CLOCK2X",
     "CLOCKED",
     "CYCLES",
-    "Clocking",
     "ComposedKernel",
     "HELD",
     "Kernel",
@@ -661,7 +594,6 @@ __all__ = [
     "PINS",
     "PORT_END",
     "PortEnd",
-    "RESET",
     "RESOURCES",
     "extent_of",
     "interface",

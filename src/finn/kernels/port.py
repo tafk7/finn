@@ -59,17 +59,15 @@ from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Access, Affine, Index, Pace, Refused, Schedule, plain_index
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd
-from finn.kernels.artifacts.abi import Direction, Endpoint, Pin
+from finn.kernels.artifacts.abi import CLOCK, RESET, Direction, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import (
     ACCESS,
     BEATS,
-    CLOCK,
     CLOCKED,
     HELD,
     NATIVE_CLOCKING,
     PINS,
-    RESET,
 )
 from finn.kernels.transport import (
     AxisBeat,
