@@ -7,10 +7,11 @@ On the Chain (``support.chain``): its members ranked kernels first, then each ch
 after the members it reads; a channel bound once its ends are known, and once per set
 of facts; a change reaching one kernel and the channels that read it; what the change
 names refused, by its value's domain or by the rule it would break; its module, one
-composed netlist, each member under its node; its stored choices set as each member
-binds, as one change (a value outside its domain dropped, a rule they break refusing the
-network); the interim channel rule where a channel is rebuilt from new facts; a kernel
-given bound; and a change that keeps a network's class.
+composed netlist, each member under its node, refused where its pins cannot be formed;
+its stored choices set as each member binds, as one change (a value outside its domain
+dropped, a rule they break refusing the network); the interim channel rule where a channel
+is rebuilt from new facts; a kernel given bound; and a change that keeps a network's
+class.
 """
 
 from __future__ import annotations
@@ -21,10 +22,19 @@ from typing import cast
 import pytest
 from qonnx.core.datatype import DataType
 from support import chain
-from support.helpers import FULL_DSP48E2, built, choose, keyed, labels, matmul_point
+from support.helpers import FULL_DSP48E2, built, choose, keyed, labels, matmul_point, module_of
 
 from finn.core.reporting.findings import Finding, FindingKind
-from finn.core.space import Decision, Space, Unresolved, derived, design_space, inspection
+from finn.core.space import (
+    Available,
+    Decision,
+    Rejected,
+    Space,
+    Unresolved,
+    derived,
+    design_space,
+    inspection,
+)
 from finn.kernels.base import CYCLES
 from finn.kernels.members import reasons
 from finn.kernels.network import Fact, Interface, Network, NetworkError, Wire, wire
@@ -283,6 +293,21 @@ def test_each_member_sits_under_its_node_in_the_module() -> None:
     assert renamed.member("x").consumer.label == "mm_first.compute.packed.x"
     with pytest.raises(NetworkError, match="members share a node in the module: x: x, first"):
         Network(chain.members(), nodes={"first": "x"})
+
+
+def test_a_top_whose_pins_cannot_be_formed_is_refused_as_its_netlist() -> None:
+    """Two boundary channels at one port: the netlist is made, but the top's pins name that
+    port twice, so its module is refused (``kernel-netlist``), not raised."""
+    members = chain.members()
+    members["y"] = Wire({**cast(Wire, members["y"]).facts, "port": "s_axis_0"})
+    clashing = Network(members, stored=chain.chain().chosen())
+    netlist = clashing.netlist()
+    assert isinstance(netlist, Available)
+    module = module_of(clashing, chain.STEM)
+    assert isinstance(module, Rejected)
+    assert [(f.code, f.message) for f in module.findings] == [
+        ("kernel-netlist", "an ABI names one pin twice")
+    ]
 
 
 class Labelled(Network):

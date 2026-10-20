@@ -11,11 +11,13 @@ recognised and refused.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
-from finn.kernels.artifacts.module import Abi
+from finn.kernels.artifacts.module import Fragment
+from finn.kernels.artifacts.top import doubled, top_buses
 from finn.kernels.ends import ENDS, IODMA_HLS, EndOffer, iodma_hls
 from finn.kernels.utilization import SHELL_CHARACTERISED, Fit
 from finn.platform.boards import BOARDS
@@ -128,17 +130,19 @@ class ShellRow:
             raise ValueError(f"a shell offers each kind of end once, not {kinds}")
 
 
-def bus_counts(abi: Abi) -> tuple[int, int, bool]:
-    """What a module's pins ask of a shell: the AXI-Lite buses it presents, the AXI memory
-    ports it initiates (a bus beside its streams that it initiates), and whether it takes
-    an aligned doubled clock."""
-    buses = [pin for pin in abi.pins if isinstance(pin, Bus)]
+def bus_counts(fragment: Fragment, boundary: Iterable[Bus]) -> tuple[int, int, bool]:
+    """What the top of ``fragment`` and its ``boundary`` buses asks of a shell, counted
+    from the pins it would have (``finn.kernels.artifacts.top``) without building it: the
+    AXI-Lite buses it presents, the AXI memory ports it initiates (a bus beside its streams
+    that it initiates: a boundary bus, since each presented bus is a target port), and
+    whether it takes an aligned doubled clock (an instance's doubled clock, ``doubled``)."""
+    buses = top_buses(fragment, boundary)
     control = sum(bus.protocol is StandardProtocol.AXILITE for bus in buses)
     memory = sum(
         bus.protocol is not StandardProtocol.AXIS and bus.endpoint is Endpoint.INITIATOR
         for bus in buses
     )
-    return control, memory, bool(abi.clock_alignments)
+    return control, memory, doubled(fragment)
 
 
 def budgets(row: ShellRow, counts: tuple[int, int, bool], ends: int) -> tuple[Finding, ...]:

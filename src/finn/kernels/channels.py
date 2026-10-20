@@ -68,16 +68,14 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Traversal, period, unreplayed
 from finn.kernels.adapters import ADAPTERS, OUTPUT_ADAPTERS, Stage, StreamAdapter
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import Bus, Endpoint
+from finn.kernels.artifacts.abi import CLOCK, RESET, Bus, Endpoint
 from finn.kernels.artifacts.module import Fragment, Leaf, Link, LinkEnd, Marker, merge
 from finn.kernels.base import (
     BOUNDARY,
     BUFFERING,
-    CLOCK,
     CYCLES,
     NETLIST,
     PORT_END,
-    RESET,
     RESOURCES,
     ComposedKernel,
     PortEnd,

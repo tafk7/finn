@@ -61,8 +61,10 @@ declaration inside the member's space; the network names the member beside them.
 member's netlist under its node (its name, unless the network is given another,
 ``nodes``: a graph's names with ``\\W`` as ``_``), in the order the network was declared
 (its instance order, which the text follows), with every boundary channel's AXIS bus
-(``compose``). A kernel with children merges its own netlist with the same function
-(``merged``).
+(``finn.kernels.artifacts.top.compose``), made of its ``netlist`` (the merged fragment and
+the boundary buses), which a shell counts without building the top
+(``finn.platform.shells.bus_counts``). A kernel with children merges its own netlist with
+the same function (``finn.kernels.base.merged``).
 """
 
 from __future__ import annotations
@@ -88,19 +90,13 @@ from finn.core.space import (
     reject,
 )
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import Bus, Clock, Derived, Endpoint, abi_pins
-from finn.kernels.artifacts.module import (
-    Abi,
-    BusExport,
-    Composed,
-    Fragment,
-    ProducerIdentity,
-    merge,
-)
-from finn.kernels.base import BOUNDARY, CLOCK2X, NETLIST, Clocking, PortEnd
+from finn.kernels.artifacts.abi import Bus
+from finn.kernels.artifacts.module import Composed, Fragment, ProducerIdentity
+from finn.kernels.artifacts.top import compose
+from finn.kernels.base import BOUNDARY, NETLIST, PortEnd, merged
 from finn.kernels.channels import Channel
 from finn.kernels.configure import chosen, refusal
-from finn.kernels.control import CONTROL, Control, Exported, top_bus
+from finn.kernels.control import CONTROL, Control
 from finn.kernels.control import presented as presented_buses
 from finn.kernels.defaults import defaulted
 from finn.kernels.members import (
@@ -144,77 +140,6 @@ class NetworkError(ValueError):
     def __init__(self, message: str, findings: Iterable[Finding] = ()) -> None:
         super().__init__(message)
         self.findings = tuple(findings)
-
-
-# -- the module ---------------------------------------------------------------------------
-
-
-def merged(
-    netlists: Iterable[tuple[str, Fragment]], presented: Iterable[Exported] = ()
-) -> Fragment | Rejected:
-    """Each netlist under its node, in order, and the control buses presented (each a
-    ``BusExport`` with the writes its configuration takes)."""
-    exports = tuple(
-        BusExport(item.node, item.child, item.port, item.registers) for item in presented
-    )
-    try:
-        return merge(
-            *(netlist.under(node) for node, netlist in netlists), Fragment(exports=exports)
-        )
-    except ArtifactError as error:
-        return reject("kernel-netlist", str(error))
-
-
-def module_abi(fragment: Fragment, boundary: Iterable[Bus]) -> Abi:
-    """A composed module's pins: its clocks and reset (``ap_clk2x`` when an instance takes
-    a doubled clock), each boundary bus (inputs, then outputs), then each presented bus."""
-    doubled = any(
-        isinstance(info.role, Clock) and isinstance(info.role.rate, Derived)
-        for _, leaf in fragment.instances
-        for info in abi_pins(leaf.abi.pins).values()
-    )
-    clocking = Clocking(doubled=CLOCK2X if doubled else None, doubling=doubled)
-    buses = list(boundary)
-    return Abi(
-        (
-            *clocking.signals(),
-            *(bus for bus in buses if bus.endpoint is Endpoint.TARGET),
-            *(bus for bus in buses if bus.endpoint is not Endpoint.TARGET),
-            *(
-                top_bus(item.bus, item.port, clocking.clock, clocking.reset)
-                for item in fragment.exports
-            ),
-        ),
-        (),
-        clocking.alignments(),
-    )
-
-
-def assembled(
-    producer: ProducerIdentity, stem: str, abi: Abi, fragment: Fragment
-) -> Composed | Rejected:
-    """The composed module of ``fragment`` with ``abi``, named ``stem``, derived by
-    ``producer``."""
-    try:
-        return Composed(producer.producer_id, producer.contract_version, stem, abi, fragment)
-    except ArtifactError as error:
-        return reject("kernel-netlist", str(error))
-
-
-def compose(
-    producer: ProducerIdentity,
-    stem: str,
-    netlists: Iterable[tuple[str, Fragment]],
-    boundary: Iterable[Bus],
-    presented: Iterable[Exported] = (),
-) -> Composed | Rejected:
-    """One composed module: each netlist under its node in order (``merged``), the pins
-    of ``module_abi`` and the module ``assembled``: a network's. A kernel with children
-    merges its netlist with ``merged`` too."""
-    fragment = merged(netlists, presented)
-    if isinstance(fragment, Rejected):
-        return fragment
-    return assembled(producer, stem, module_abi(fragment, boundary), fragment)
 
 
 # -- the wiring ---------------------------------------------------------------------------
@@ -1095,12 +1020,12 @@ class Network:
 
     # -- what it is ---------------------------------------------------------------------------
 
-    def module(self, producer: ProducerIdentity, stem: str) -> QueryResult[Composed]:
-        """Its composed module (``compose``): each member's netlist under its node, in the
-        order declared, with each boundary channel's AXIS bus and each control bus its
-        kernels present (``CONTROL``, at the port each was given); or why not, every member's
-        refusal (or, where none refuses, what they wait on), each finding naming its member
-        (``located``)."""
+    def netlist(self) -> QueryResult[tuple[Fragment, tuple[Bus, ...]]]:
+        """What its top is made of: each member's netlist under its node, in the order
+        declared, merged with each control bus its kernels present (``CONTROL``, at the
+        port each was given), and each boundary channel's AXIS bus; or why not, every
+        member's refusal (or, where none refuses, what they wait on), each finding naming
+        its member (``located``), or the merge's own (``kernel-netlist``)."""
         netlists: list[tuple[str, Fragment]] = []
         boundary: list[Bus] = []
         controls: list[tuple[str, Control]] = []
@@ -1138,8 +1063,22 @@ class Network:
         exported = presented_buses(controls)
         if isinstance(exported, Rejected):
             return exported
-        built = compose(producer, stem, netlists, boundary, exported)
-        return built if isinstance(built, Rejected) else Available(built)
+        fragment = merged(netlists, exported)
+        if isinstance(fragment, Rejected):
+            return fragment
+        return Available((fragment, tuple(boundary)))
+
+    def module(self, producer: ProducerIdentity, stem: str) -> QueryResult[Composed]:
+        """Its composed module (``finn.kernels.artifacts.top.compose``) of its ``netlist``;
+        or why not, the netlist's refusal or wait, or the top's own (``kernel-netlist``)."""
+        found = self.netlist()
+        if not isinstance(found, Available):
+            return found
+        fragment, boundary = found.value
+        try:
+            return Available(compose(producer, stem, fragment, boundary))
+        except ArtifactError as error:
+            return reject("kernel-netlist", str(error))
 
     def located(self, name: str, finding: Finding) -> Finding:
         """A finding of member ``name``'s (or of the member an unbound channel's read
@@ -1169,11 +1108,7 @@ __all__ = [
     "Trial",
     "Unbound",
     "Wire",
-    "assembled",
-    "compose",
     "dotted",
     "interim_channel_defaults",
-    "merged",
-    "module_abi",
     "wire",
 ]

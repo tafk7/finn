@@ -37,7 +37,7 @@ the kernel's extents or domains.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any, ClassVar, cast
 
@@ -57,18 +57,8 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, bind_extents
-from finn.kernels.artifacts.abi import (
-    Bus,
-    Clock,
-    ClockAlignment,
-    Data,
-    Derived,
-    Direction,
-    Free,
-    Pin,
-    Reset,
-    Signal,
-)
+from finn.kernels.artifacts import ArtifactError
+from finn.kernels.artifacts.abi import Bus, Clocking, Direction, Pin, Signal
 from finn.kernels.artifacts.contributions import (
     Contribution,
     CopiedSource,
@@ -79,11 +69,13 @@ from finn.kernels.artifacts.contributions import (
 from finn.kernels.artifacts.module import (
     Abi,
     BuildError,
+    BusExport,
     Composed,
     Fragment,
     Held,
     Leaf,
     Module,
+    merge,
 )
 from finn.kernels.control import CONTROL, presented
 from finn.kernels.defaults import Fixed, stated_defaults
@@ -151,9 +143,6 @@ RESOURCES = ViewKey("resources", RESOURCES_SEMANTICS)
 a leaf's own statement; a kernel with children's, a channel's among them, the sum over
 its members."""
 
-# The composed module's clocking pins: its interface convention, not a routing rule.
-CLOCK, CLOCK2X, RESET = "ap_clk", "ap_clk2x", "ap_rst_n"
-
 
 @dataclass(frozen=True)
 class PortEnd:
@@ -176,56 +165,6 @@ PORT_END = default_semantics(PortEnd)
 """A ``PortEnd``'s value semantics: a frozen value, compared by value."""
 
 
-@dataclass(frozen=True)
-class Clocking:
-    """A module's clock and reset pins.
-
-    ``clock`` is free-running and ``reset`` synchronous, active low unless
-    ``active_low`` is False (FinnLib's native ``clk`` and ``rst``). A
-    ``doubled`` pin, when the module has one, is a clock at twice ``clock``
-    while ``doubling``, and otherwise an unused input held low.
-    """
-
-    clock: str = CLOCK
-    reset: str = RESET
-    doubled: str | None = None
-    doubling: bool = False
-    active_low: bool = True
-
-    def signals(self) -> tuple[Signal, ...]:
-        doubled = () if self.doubled is None else (self.doubled,)
-        clocks = (self.clock, *doubled) if self.doubling else (self.clock,)
-        return (
-            Signal(self.clock, Direction.IN, 1, Clock(Free())),
-            *(
-                Signal(
-                    name,
-                    Direction.IN,
-                    1,
-                    Clock(Derived(self.clock, 2)) if self.doubling else Data(),
-                )
-                for name in doubled
-            ),
-            Signal(
-                self.reset,
-                Direction.IN,
-                1,
-                Reset(active_low=self.active_low, synchronous=True, synchronous_to=clocks),
-            ),
-        )
-
-    def alignments(self) -> tuple[ClockAlignment, ...]:
-        if self.doubled is None or not self.doubling:
-            return ()
-        return (ClockAlignment(self.clock, self.doubled),)
-
-    def held(self) -> tuple[tuple[str, int], ...]:
-        """The doubled clock input, held low while unused."""
-        if self.doubled is None or self.doubling:
-            return ()
-        return ((self.doubled, 0),)
-
-
 NATIVE_CLOCKING = Clocking(clock="clk", reset="rst", active_low=False)
 """FinnLib's native ``clk`` and synchronous active-high ``rst``."""
 
@@ -245,6 +184,21 @@ def _inputs(pin: Pin) -> tuple[str, ...]:
     if isinstance(pin, Signal):
         return (pin.name,) if pin.direction is Direction.IN else ()
     return tuple(name for name, direction in pin.member_directions() if direction is Direction.IN)
+
+
+def merged(
+    netlists: Iterable[tuple[str, Fragment]], presented: Iterable[BusExport] = ()
+) -> Fragment | Rejected:
+    """Each netlist under its node, in order, and the control buses presented (each a
+    ``BusExport`` with the writes its configuration takes, ``finn.kernels.control.presented``):
+    a kernel with children's netlist, and a network's."""
+    try:
+        return merge(
+            *(netlist.under(node) for node, netlist in netlists),
+            Fragment(exports=tuple(presented)),
+        )
+    except ArtifactError as error:
+        return reject("kernel-netlist", str(error))
 
 
 class Kernel(Space):
@@ -562,9 +516,7 @@ class ComposedKernel(Kernel, protocol=True):
     def composed_fragment(self) -> Fragment | Rejected:
         """A kernel with children's ``fragment``: each member's netlist under its node, and
         the control buses its members present with the writes their configuration takes
-        (``finn.kernels.network.merged``). A kernel that places none is refused."""
-        from finn.kernels.network import merged  # noqa: PLC0415 - the network imports the base
-
+        (``merged``). A kernel that places none is refused."""
         if not self.netlists:
             return reject(
                 "kernel-module",
@@ -647,11 +599,8 @@ __all__ = [
     "BEATS",
     "BOUNDARY",
     "BUFFERING",
-    "CLOCK",
-    "CLOCK2X",
     "CLOCKED",
     "CYCLES",
-    "Clocking",
     "ComposedKernel",
     "HELD",
     "Kernel",
@@ -661,8 +610,8 @@ __all__ = [
     "PINS",
     "PORT_END",
     "PortEnd",
-    "RESET",
     "RESOURCES",
     "extent_of",
     "interface",
+    "merged",
 ]

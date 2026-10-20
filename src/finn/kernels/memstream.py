@@ -65,7 +65,7 @@ from finn.dataflow.traversal import (
     pack,
     vector_major,
 )
-from finn.kernels.artifacts.abi import Bus, Endpoint, Member, Pin, StandardProtocol
+from finn.kernels.artifacts.abi import Bus, Clocking, Endpoint, Member, Pin, StandardProtocol
 from finn.kernels.artifacts.contributions import (
     Contribution,
     CopiedSource,
@@ -73,7 +73,7 @@ from finn.kernels.artifacts.contributions import (
     hex_image,
 )
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import NATIVE_CLOCKING, Clocking, LeafKernel, interface
+from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, interface
 from finn.kernels.control import held_bus
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import (
