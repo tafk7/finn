@@ -92,7 +92,8 @@ from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available, QueryResult, Rejected, Space, Unresolved, inspection
 from finn.custom_op.kernels.base import KernelOp, kernel_op, typed
-from finn.kernels.artifacts.module import Composed, ProducerIdentity
+from finn.kernels.artifacts.abi import Bus
+from finn.kernels.artifacts.module import Composed, Fragment, ProducerIdentity
 from finn.kernels.base import RESOURCES
 from finn.kernels.channels import Channel
 from finn.kernels.ends import EndOffer
@@ -213,6 +214,14 @@ class Partition(Network):
         if question not in self._memo:
             self._memo[question] = answer()
         return self._memo[question]
+
+    def netlist(self) -> QueryResult[tuple[Fragment, tuple[Bus, ...]]]:
+        """What its module is made of (``Network.netlist``), read once: the shell's counts
+        and its module read the same."""
+        found: QueryResult[tuple[Fragment, tuple[Bus, ...]]] = self._read(
+            "netlist", super().netlist
+        )
+        return found
 
     def module_of(self) -> QueryResult[Composed]:
         """Its module, the partition's IP (``finn_<name>``), as far as its members

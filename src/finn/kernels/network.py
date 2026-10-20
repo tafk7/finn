@@ -61,8 +61,10 @@ declaration inside the member's space; the network names the member beside them.
 member's netlist under its node (its name, unless the network is given another,
 ``nodes``: a graph's names with ``\\W`` as ``_``), in the order the network was declared
 (its instance order, which the text follows), with every boundary channel's AXIS bus
-(``finn.kernels.artifacts.top.compose``). A kernel with children merges its own netlist
-with the same function (``finn.kernels.base.merged``).
+(``finn.kernels.artifacts.top.compose``), made of its ``netlist`` (the merged fragment and
+the boundary buses), which a shell counts without building the top
+(``finn.platform.shells.bus_counts``). A kernel with children merges its own netlist with
+the same function (``finn.kernels.base.merged``).
 """
 
 from __future__ import annotations
@@ -1018,12 +1020,12 @@ class Network:
 
     # -- what it is ---------------------------------------------------------------------------
 
-    def module(self, producer: ProducerIdentity, stem: str) -> QueryResult[Composed]:
-        """Its composed module (``finn.kernels.artifacts.top.compose``): each member's
-        netlist under its node, in the order declared, with each boundary channel's AXIS bus
-        and each control bus its kernels present (``CONTROL``, at the port each was given);
-        or why not, every member's refusal (or, where none refuses, what they wait on), each
-        finding naming its member (``located``), or the top's own (``kernel-netlist``)."""
+    def netlist(self) -> QueryResult[tuple[Fragment, tuple[Bus, ...]]]:
+        """What its top is made of: each member's netlist under its node, in the order
+        declared, merged with each control bus its kernels present (``CONTROL``, at the
+        port each was given), and each boundary channel's AXIS bus; or why not, every
+        member's refusal (or, where none refuses, what they wait on), each finding naming
+        its member (``located``), or the merge's own (``kernel-netlist``)."""
         netlists: list[tuple[str, Fragment]] = []
         boundary: list[Bus] = []
         controls: list[tuple[str, Control]] = []
@@ -1064,6 +1066,15 @@ class Network:
         fragment = merged(netlists, exported)
         if isinstance(fragment, Rejected):
             return fragment
+        return Available((fragment, tuple(boundary)))
+
+    def module(self, producer: ProducerIdentity, stem: str) -> QueryResult[Composed]:
+        """Its composed module (``finn.kernels.artifacts.top.compose``) of its ``netlist``;
+        or why not, the netlist's refusal or wait, or the top's own (``kernel-netlist``)."""
+        found = self.netlist()
+        if not isinstance(found, Available):
+            return found
+        fragment, boundary = found.value
         try:
             return Available(compose(producer, stem, fragment, boundary))
         except ArtifactError as error:
