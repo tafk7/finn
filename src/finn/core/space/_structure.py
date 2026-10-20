@@ -23,7 +23,12 @@ node: reading it is an ``IndexError``.
 A ``decision.member`` selection several templates make for one scope (the scope's own
 template, a parent reading through it) is one node, owned in the choice's own template
 where that template reads it (its first reader there), else in the nearest template
-above that reads it.
+above that reads it. A template's first reader is the first in its declaration order
+(the member each reader belongs to, in member order: ``_template._declared``), never the
+order it was lowered in; placed where the choice never applies, the first that exists
+there. A selection the candidates share is owned by the choice: a finding's owner is the
+choice's key (``_allocate.shared_members``); where the choice never applies it has no
+candidates, and its first reader owns it, as any other.
 
 The structure is the model's linked view (``ir.Linked``): what the engine reads of a
 linked model, with the same names and meanings (``nodes``, ``scopes``, ``choices``,
@@ -462,9 +467,7 @@ class Structure:
         scope = cast(ScopeRecord, self.scope_of(record, node.scope))
         selection = template.index.selections.get(index)
         if selection is not None and selection[0] in record.never:
-            return self._never_select(
-                record, template.choices[selection[0]], selection[1], nid, key
-            )
+            return self._never_select(record, template.choices[selection[0]], index, nid, key)
         never = template.selectors.get(index)
         if never is not None and never in record.never:
             # A selector that never applies here: inapplicable, no key.
@@ -573,25 +576,20 @@ class Structure:
         return self._mapped(parent, written, nid, record.index, key)
 
     def _never_select(
-        self, record: ScopeRecord, choice: TemplateChoice, member: str, nid: NodeId, key: str
+        self, record: ScopeRecord, choice: TemplateChoice, node: int, nid: NodeId, key: str
     ) -> Node:
-        """``decision.member`` through a choice that never applies here: no alternatives,
-        typed as the first candidate class declaring the member."""
-        if not choice.never_declared[member]:
-            reader = member_key(record.name, choice.readers[member][0].owner)
-            raise DefinitionError.broken(
-                "candidate-member-absent",
-                _OWNER,
-                f"{reader}: no candidate of {member_key(record.name, choice.key)} has a "
-                f"member {member}",
-                declaration=reader,
-            )
+        """``decision.member`` through a choice that never applies here: no alternatives, and
+        the type the template checked its readers against. Its guard is the choice's,
+        ``supplied`` of the formal left unsupplied here, which never holds: the selection,
+        and whatever reads it, is inapplicable, so its value is never read here, and its
+        type is the same at every placement (its readers are checked once, in the
+        template)."""
         return Node(
             nid,
             record.index,
             key,
             "select",
-            choice.never_semantics[member],
+            record.template.nodes[node].semantics,
             guard=self._guard(record, choice.guard, key),
             selector=self._reference(record, choice.selector, key),
         )

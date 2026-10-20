@@ -134,6 +134,54 @@ def test_helpers_and_properties_are_read_in_the_scope_they_are_reached_through()
     assert _reads(linked, reads, "by_property") == {"leaf.width"}
 
 
+class Mutual(Space):
+    """Two helpers that call each other, each reading another member."""
+
+    width: int = Param()
+    lanes: int = Decision(values=(1, 2))
+
+    def first(self, depth: int) -> int:
+        return self.width if depth == 0 else self.second(depth - 1)
+
+    def second(self, depth: int) -> int:
+        return self.lanes if depth == 0 else self.first(depth - 1)
+
+    @derived
+    def by_first(self) -> int:
+        return self.first(3)
+
+    @derived
+    def by_second(self) -> int:
+        return self.second(3)
+
+
+class PlacesMutual(Space):
+    inner = Mutual(width=4)
+
+    @derived
+    def through(self) -> int:
+        return self.inner.second(2)
+
+
+def test_helpers_calling_each_other_each_read_what_both_read() -> None:
+    """Inferred once per template and function, a helper cycle closes on what both read:
+    each method's reads are the union, wherever it is reached first."""
+    linked = compile_model(Mutual).linked
+    reads = infer(linked)
+    assert (
+        _reads(linked, reads, "by_first")
+        == _reads(linked, reads, "by_second")
+        == {
+            "width",
+            "lanes",
+        }
+    )
+    linked = compile_model(PlacesMutual).linked
+    reads = infer(linked)
+    assert _reads(linked, reads, "through") == {"inner.width", "inner.lanes"}
+    assert _reads(linked, reads, "inner.by_first") == {"inner.width", "inner.lanes"}
+
+
 def test_presence_reads_the_guards_on_the_way() -> None:
     linked, reads = _model()
     assert _reads(linked, reads, "by_presence") == {"guarded.$guard"}

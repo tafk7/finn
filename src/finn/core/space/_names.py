@@ -56,9 +56,13 @@ class Names:
 
     def __init__(self, table: Table) -> None:
         self.table = table
-        self.expression_nodes: dict[tuple[int, Expr], int] = {}
+        # Each expression and projection once per scope and per Decision over nodes its
+        # readers exist only where it applies (``Table.applying``): a node made for a
+        # candidate's reader is not placed where that Decision never applies, so a reader
+        # placed there too has its own.
+        self.expression_nodes: dict[tuple[int, Expr, int | None], int] = {}
         self.expression_counts: dict[str, int] = {}
-        self.projections: dict[tuple[int, Projection[object]], int] = {}
+        self.projections: dict[tuple[int, Projection[object], int | None], int] = {}
         self.choice_member_nodes: dict[tuple[int, str], int] = {}
         self.placed_scopes: dict[int, tuple[int, ...]] = {}
         # Template mode: selections made in a stub's choice, by (stub, choice, member).
@@ -181,21 +185,12 @@ class Names:
         choice.selects[node] = source.member
         return node
 
-    def read_through(self, choice: ChoiceDraft, member: str, read: Read) -> None:
-        """Template mode: a read of ``decision.member`` through an own choice; where it may
-        never apply, the type the selection takes where it never does (as
-        ``choice_member`` types it there: the first candidate class declaring it)."""
-        reads = choice.readers.setdefault(member, [])
-        reads.append(read)
-        if len(reads) > 1 or choice.never_formal is None:
-            return
-        declared = [
-            effective.semantics.get(effective.members[member])
-            for effective in map(self.table.collected, choice.space_types.values())
-            if member in effective.members
-        ]
-        choice.never_declared[member] = bool(declared)
-        choice.never_semantics[member] = declared[0] if declared else None
+    @staticmethod
+    def read_through(choice: ChoiceDraft, member: str, read: Read) -> None:
+        """Template mode: a read of ``decision.member`` through an own choice, in the order
+        the template lowers its reads (its owner where several templates read it:
+        ``_structure``)."""
+        choice.readers.setdefault(member, []).append(read)
 
     def stub_choice_member(self, target: int, decision: object, member: str, *, owner: str) -> int:
         """Template mode: ``decision.member`` through a child's choice. The selection its
@@ -362,7 +357,7 @@ class Names:
 
     def projection(self, scope: int, source: Projection[object], *, owner: str) -> int:
         """``spec.payload_bits``: a derived node reading one attribute of a value."""
-        identity = (scope, source)
+        identity = (scope, source, self.table.applying)
         cached = self.projections.get(identity)
         if cached is not None:
             return cached
@@ -399,7 +394,8 @@ class Names:
         owner: str,
         index: int | None = None,
     ) -> int:
-        """Register each source expression once per instantiated scope.
+        """Register each source expression once per scope (and per Decision over nodes
+        its readers exist only where it applies: ``projections``).
 
         A named expression owns its authored node. Anonymous shared expressions
         use their first consumer's source owner; every later consumer retains
@@ -407,7 +403,7 @@ class Names:
         Their applicability comes from the scope, never the first consumer.
         """
 
-        identity = (scope, source)
+        identity = (scope, source, self.table.applying)
         previous = self.expression_nodes.get(identity)
         if previous is not None:
             return previous

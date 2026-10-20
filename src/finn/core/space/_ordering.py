@@ -61,15 +61,20 @@ def dependency_order(
         if len(component) > 1 or root in dependencies[root]:
             cycles.append(tuple(sorted(names[index] for index in component)))
     if cycles:
-        findings = tuple(
-            Finding(
-                FindingKind.AUTHORING,
-                "cyclic-dependency",
-                members[0],
-                "cyclic dependencies: " + ", ".join(members),
-                details=(("members", members),),
-            )
-            for members in sorted(cycles)
-        )
-        raise DefinitionError("model contains cyclic dependencies", findings=findings)
+        raise cyclic(cycles)
     return tuple(finished)
+
+
+def cyclic(cycles: list[tuple[str, ...]]) -> DefinitionError:
+    """``cyclic-dependency``: one finding per cycle, naming its members (sorted)."""
+    findings = tuple(
+        Finding(
+            FindingKind.AUTHORING,
+            "cyclic-dependency",
+            members[0],
+            "cyclic dependencies: " + ", ".join(members),
+            details=(("members", members),),
+        )
+        for members in sorted(cycles)
+    )
+    return DefinitionError("model contains cyclic dependencies", findings=findings)

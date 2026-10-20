@@ -610,7 +610,7 @@ class _Allocation:
                     declaration=key,
                 )
             first = self.table.nodes[uses[0]]
-            self.table.applying = self.applying(uses, owner, key)
+            self.table.applying = self.applying(uses, owner, key, identity)
             node = self.table.reserve(
                 owner,
                 key,
@@ -640,7 +640,9 @@ class _Allocation:
                     member = self.table.members[position].name
                     stub.bindings[member] = Binding("named", node=use)
 
-    def applying(self, uses: list[int], owner: int, key: str) -> int | None:
+    def applying(
+        self, uses: list[int], owner: int, key: str, identity: tuple[int, int]
+    ) -> int | None:
         """Template mode: the Decision over nodes a named shared Decision exists only where
         it applies, where its every use is in that choice's candidates. Where only some
         are, the Decision is owned by the same scope wherever the choice applies or not;
@@ -653,11 +655,16 @@ class _Allocation:
             [self.table.nodes[use].scope for use in always]
         ):
             return None
+        decision = self.named_declarations[identity]
+        common = self.table.drafts[owner]
         raise DefinitionError.broken(
             "template-owner-per-placement",
             _OWNER,
-            f"{key}: the shared Decision is used in the candidates of a Decision over "
-            "nodes that may never apply, so the scope owning it depends on the placement",
+            f"{key}: the shared Decision{at(decision.origin)} is used in the candidates of a "
+            "Decision over nodes that may never apply (guarded by supplied()) and elsewhere, "
+            "so the scope owning it would depend on the placement; declare the shared "
+            "Decision in the scope common to all its uses (a Decision member of "
+            f"{common.effective.space_type.__qualname__})",
             declaration=key,
         )
 

@@ -30,21 +30,20 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, cast
 
+from . import _compose
 from ._allocate import allocate
 from ._check import check
 from ._collapse import collapse
 from ._configuration import Space
 from ._lower import lower
 from ._nodes import NodeDecision, NodeDecl, slot_declaration
-from ._ordering import dependency_order
 from ._table import Binding, Read, ScopeDraft, Table
 from .errors import DefinitionError
 from .ir import Node
-from .semantics import ValueSemantics
 
 _OWNER = "space.template"
 
@@ -87,7 +86,8 @@ class TemplateChoice:
     """A Decision over nodes of the own scope: as ``ir.Choice``, with what a placement
     where it never applies needs (``never_formal`` unsupplied there): the selector's
     value there, every selection made for it (node -> member) and those its candidates
-    share, each read of a member through it, and the type its selection takes there."""
+    share, and each read of a member through it. A selection there has no alternatives
+    and keeps the type the template checked its readers against (``_structure``)."""
 
     index: int
     key: str
@@ -101,8 +101,6 @@ class TemplateChoice:
     selects: Mapping[int, str]
     shared: frozenset[int]
     readers: Mapping[str, tuple[Read, ...]]
-    never_semantics: Mapping[str, ValueSemantics[object] | None]
-    never_declared: Mapping[str, bool]
     dropped: frozenset[str]
 
 
@@ -176,6 +174,8 @@ class Template:
     keys: Mapping[str, int]
     # What placing it as scopes looks up (``TemplateIndex``).
     index: TemplateIndex
+    # What the checks composed across slots found of it, per placement (``_compose``).
+    composed: dict[str, object] = field(default_factory=dict, compare=False, repr=False)
 
     @property
     def members(self) -> Mapping[object, int]:
@@ -286,11 +286,12 @@ def _places(space_type: type[Space]) -> list[type[Space]]:
 
 
 def _link(space_type: type[Space]) -> Template:
-    from .compiler import _definition_classes  # noqa: PLC0415 - a cycle
+    from .compiler import _definition_classes, _validate_constructors  # noqa: PLC0415 - a cycle
 
     template = _compile(space_type)
-    # What the template was compiled from no longer changes (as for a prepared model).
-    reason = f"{space_type.__name__}'s template was linked"
+    _validate_constructors((space_type,))
+    # What the template was compiled from no longer changes: the class is prepared.
+    reason = f"{space_type.__name__} was prepared"
     for scope in template.scopes[1:]:
         if scope.parent == 0 and scope.record is not None:
             scope.record.freeze(reason)
@@ -303,10 +304,10 @@ def _link(space_type: type[Space]) -> Template:
 def _compile(space_type: type[Space]) -> Template:
     table = allocate(space_type, link_template)
     lower(table)
-    order = dependency_order(
-        tuple(node.dependencies for node in table.nodes),
-        tuple(node.key for node in table.nodes),
-    )
+    # What crosses a slot: a placed Space's nodes that read what its placement does not
+    # place, and cycles through the Spaces it places (``_compose``).
+    _compose.check_placements(table)
+    order = _compose.order(table)
     check(table, order)
     forward = collapse(list(table.nodes), order)
     nodes = tuple(table.nodes)
@@ -361,7 +362,7 @@ def _compile(space_type: type[Space]) -> Template:
         _frozen(table.requires),
         tuple(table.named),
         _frozen(table.stub_selects),
-        _frozen({node: tuple(reads) for node, reads in table.stub_reads.items()}),
+        _frozen({node: _declared(table, reads) for node, reads in table.stub_reads.items()}),
         tuple(structure),
         _frozen({choice.selector: choice.index for choice in table.choice_drafts}),
         order,
@@ -442,6 +443,17 @@ def _scope(draft: ScopeDraft, table: Table) -> TemplateScope:
     )
 
 
+def _declared(table: Table, reads: list[Read]) -> tuple[Read, ...]:
+    """Reads of a selection in the template's declaration order: by the member of its own
+    scope each reader belongs to (a template-local key's first segment: a member's name
+    has none), in member order, and those of no member (a named shared Decision) last;
+    reads of one member in the order they were lowered."""
+    members = {name: position for position, name in enumerate(table.kinds[table.space_type])}
+    return tuple(
+        sorted(reads, key=lambda read: members.get(read.owner.split(".", 1)[0], len(members)))
+    )
+
+
 def _choice(table: Table, index: int) -> TemplateChoice:
     draft = table.choice_drafts[index]
     owner = table.drafts[draft.scope].effective
@@ -458,9 +470,7 @@ def _choice(table: Table, index: int) -> TemplateChoice:
         next(iter(decision.candidates)),
         _frozen(draft.selects),
         frozenset(draft.shared),
-        _frozen({member: tuple(reads) for member, reads in draft.readers.items()}),
-        _frozen(draft.never_semantics),
-        _frozen(draft.never_declared),
+        _frozen({member: _declared(table, reads) for member, reads in draft.readers.items()}),
         frozenset(draft.dropped),
     )
 

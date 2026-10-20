@@ -154,15 +154,12 @@ class ChoiceDraft:
     space_types: dict[str, type[Space]] = field(default_factory=dict)
     # Template mode. The formal whose absence makes the choice never apply (its guard is
     # ``supplied(formal)``); every selection made for it (node -> member), those its
-    # candidates share, each read of a member through it, and the type a selection takes
-    # where the choice never applies (``never_declared``: whether a candidate declares
-    # the member, else refused there); shared selections dropped for disagreeing types.
+    # candidates share, each read of a member through it; shared selections dropped for
+    # disagreeing types.
     never_formal: str | None = None
     selects: dict[int, str] = field(default_factory=dict)
     shared: set[int] = field(default_factory=set)
     readers: dict[str, list[Read]] = field(default_factory=dict)
-    never_semantics: dict[str, ValueSemantics[object] | None] = field(default_factory=dict)
-    never_declared: dict[str, bool] = field(default_factory=dict)
     dropped: set[str] = field(default_factory=set)
 
     def freeze(self) -> Choice:

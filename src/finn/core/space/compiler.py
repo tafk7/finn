@@ -26,7 +26,6 @@ from threading import RLock
 from typing import TYPE_CHECKING, Generic, TypeVar, cast
 
 from ._configuration import Space
-from ._linker import link_space
 from ._nodes import (
     NodeDecl,
     missing_formal,
@@ -37,7 +36,7 @@ from ._nodes import (
 )
 from .declarations import MISSING, UNSUPPLIED
 from .errors import DefinitionError, RequestError
-from .ir import Linked, LinkedModel
+from .ir import Linked
 from .references import ValueHandle, resolve_decision, resolve_reference
 
 if TYPE_CHECKING:
@@ -162,32 +161,11 @@ def _definition_classes(space_types: tuple[type[Space], ...]) -> tuple[type[Spac
     return tuple(result)
 
 
-def _publish(space_type: type[S], table: LinkedModel) -> Model[S]:
-    from ._reads import check_domains, infer
-    from ._structure import Structure, modes
-    from ._template import link_template
-
-    scope_types = tuple(dict.fromkeys(scope.space_type for scope in table.scopes))
-    _validate_constructors(scope_types)
-    # Every domain's membership reads facts only (what each method may read is inferred
-    # from its source). Interim: checked on link_space's table, then dropped.
-    check_domains(table, infer(table))
-    # Publication happens only after the complete definition linked successfully.
-    for definition in _definition_classes(scope_types):
-        type.__setattr__(definition, "_space_definition_finalized", True)
-    reason = f"{space_type.__name__} was prepared"
-    for scope in table.scopes:
-        if isinstance(scope.record, NodeDecl):
-            scope.record.freeze(reason)
-    permuted, eager = modes()
-    lock = RLock()
-    structure = Structure(link_template(space_type), lock, permuted=permuted, eager=eager)
-    return Model(space_type, cast(Linked, structure), lock)
-
-
 def compile_model(space_type: type[S]) -> Model[S]:
     """The canonical model of a Space class whose formals are all runtime inputs: its
-    template, placed as scopes on demand (``_structure``)."""
+    template, placed as scopes on demand (``_structure``). Its templates are linked first
+    (each checked, with the cycles through the Spaces it places); then the domain rule,
+    composed per template up to this root (``_compose``)."""
 
     if not isinstance(space_type, type) or not issubclass(space_type, Space):
         raise DefinitionError.broken(
@@ -201,10 +179,18 @@ def compile_model(space_type: type[S]) -> Model[S]:
                     "model-cache-invalid", _OWNER, "invalid prepared-model cache on Space class"
                 )
             return cached
-        # Interim (piece 2b replaces both): link_space still runs, once, for its
-        # cross-template cycle check and the domain rule (``_publish``); its table is
-        # dropped. Its refusals come first, as before templates.
-        model = _publish(space_type, link_space(space_type))
+        from ._compose import check_domains
+        from ._structure import Structure, modes
+        from ._template import link_template
+
+        template = link_template(space_type)
+        # Every domain's membership reads facts only (what each method may read is
+        # inferred from its source).
+        check_domains(template)
+        permuted, eager = modes()
+        lock = RLock()
+        structure = Structure(template, lock, permuted=permuted, eager=eager)
+        model = Model(space_type, cast(Linked, structure), lock)
         type.__setattr__(space_type, "_space_prepared_model", model)
         return model
 

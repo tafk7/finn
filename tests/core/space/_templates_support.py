@@ -181,8 +181,11 @@ def defined(names: Iterable[str]) -> Iterator[type[Space]]:
 
 
 def links(space_type: type[Space]) -> bool:
+    """Whether both link it: the refusals templates make that ``link_space`` does not
+    (``test_compose``) are not compared."""
     try:
         link_space(space_type)
+        link_template(space_type)
     except DefinitionError:
         return False
     return True

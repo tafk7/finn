@@ -45,7 +45,13 @@ HERE = Path(__file__).resolve().parent
 
 
 def test_the_space_tests_classes_expand_as_they_link() -> None:
-    modules = [f"core.space.{path.stem}" for path in sorted(HERE.glob("*.py"))] + [
+    # ``test_compose``'s classes differ from ``link_space`` on purpose (a node of an
+    # expression per Decision over nodes its readers exist under; the template's refusals).
+    modules = [
+        f"core.space.{path.stem}"
+        for path in sorted(HERE.glob("*.py"))
+        if path.stem != "test_compose"
+    ] + [
         "support.space_cores",
         "support.space_pipeline",
         "support.space_walk",
