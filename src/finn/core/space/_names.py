@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""What an authored reference names in a placed scope, as a node of the table.
+"""What an authored reference names in a template's own scope, as a node of its table.
 
 A member, a path of records (``kitchen.area``), a Decision over nodes' case or
 member (``heating.kw``), a projection (``spec.payload_bits``) and an integer
@@ -9,13 +9,13 @@ expression each resolve to one node; those that need one get it reserved here, o
 and source. ``members_candidates`` lists the exports ``Members`` reads (views and derived
 values), named as the reading scope sees them.
 
-In template mode a reference into a child resolves in the child's template: its node is
-imported into the child's stub (``Table.imported``), and a deeper path goes through
-nested stubs (``Table.nested``). A ``decision.member`` read through a child's choice
-reads the selection its candidates share in the child's template, or else makes one in
-the stub; each read through a choice is recorded (``_table.Read``). A selection several
-templates make for one scope is one node where they are placed, owned in the choice's own
-template where it reads it (``_structure``).
+A reference into a child resolves in the child's template: its node is imported into the
+child's stub (``Table.imported``), and a deeper path goes through nested stubs
+(``Table.nested``). A ``decision.member`` read through a child's choice reads the
+selection its candidates share in the child's template, or else makes one in the stub;
+each read through a choice is recorded (``_table.Read``). A selection several templates
+make for one scope is one node where they are placed, owned in the choice's own template
+where it reads it (``_structure``).
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ class Names:
         self.projections: dict[tuple[int, Projection[object], int | None], int] = {}
         self.choice_member_nodes: dict[tuple[int, str], int] = {}
         self.placed_scopes: dict[int, tuple[int, ...]] = {}
-        # Template mode: selections made in a stub's choice, by (stub, choice, member).
+        # Selections made in a stub's choice, by (stub, choice, member).
         self.stub_choice_members: dict[tuple[int, int, str], int] = {}
 
     def members_candidates(self, scope: int, key: ViewKey[object]) -> list[tuple[str, str, int]]:
@@ -74,17 +74,11 @@ class Names:
         result: list[tuple[str, str, int]] = []
         for child in self.placed(scope):
             name = self.table.local_name(scope, child)
-            stub = self.table.drafts[child].stub
-            if stub is not None:
-                exported = stub.template.members.get(key)
-                if exported is not None:
-                    self.check_export(child, key, stub.template.nodes[exported].kind)
-                    result.append((name, key.name, self.table.imported(child, exported)))
-                continue
-            target = self.table.drafts[child].members.get(key)
-            if target is not None:
-                self.check_export(child, key, self.table.nodes[target].kind)
-                result.append((name, key.name, target))
+            template = self.table.stub(child).template
+            exported = template.members.get(key)
+            if exported is not None:
+                self.check_export(child, key, template.nodes[exported].kind)
+                result.append((name, key.name, self.table.imported(child, exported)))
         return result
 
     def placed(self, scope: int) -> tuple[int, ...]:
@@ -134,8 +128,7 @@ class Names:
                 declaration=owner,
             )
         choice = self.table.choice_drafts[index]
-        if self.table.template_of is not None:
-            self.read_through(choice, source.member, Read(owner, self.table.applying))
+        self.read_through(choice, source.member, Read(owner, self.table.applying))
         if source.member in choice.members:
             return choice.members[source.member]
         identity = (choice.index, source.member)
@@ -146,34 +139,21 @@ class Names:
         for case, child in choice.cases:
             if child is None:
                 continue
-            if self.table.drafts[child].stub is not None:
-                member = self.table.stub_named(child, source.member)
-            else:
-                member = self.table.drafts[child].named_members.get(source.member)
-            if member is None:
-                continue
-            alternatives.append((case, member))
-        semantics: ValueSemantics[object] | None = None
+            member = self.table.stub_named(child, source.member)
+            if member is not None:
+                alternatives.append((case, member))
         if not alternatives:
-            declared = [
-                effective.semantics.get(effective.members[source.member])
-                for effective in map(self.table.collected, choice.space_types.values())
-                if source.member in effective.members
-            ]
-            if not choice.never or not declared:
-                raise DefinitionError.broken(
-                    "candidate-member-absent",
-                    _OWNER,
-                    f"{owner}: no candidate of {choice.key} has a member {source.member}",
-                    declaration=owner,
-                )
-            # Never applicable here: the selection reads inapplicable, typed as declared.
-            semantics = semantics or declared[0]
+            raise DefinitionError.broken(
+                "candidate-member-absent",
+                _OWNER,
+                f"{owner}: no candidate of {choice.key} has a member {source.member}",
+                declaration=owner,
+            )
         node = self.table.reserve(
             target,
             f"{choice.key}.$member.{source.member}",
             "select",
-            semantics,
+            None,
             guard=choice.guard,
             source_owner=owner,
         )
@@ -187,13 +167,13 @@ class Names:
 
     @staticmethod
     def read_through(choice: ChoiceDraft, member: str, read: Read) -> None:
-        """Template mode: a read of ``decision.member`` through an own choice, in the order
-        the template lowers its reads (its owner where several templates read it:
-        ``_structure``)."""
+        """A read of ``decision.member`` through an own choice (its owner where several
+        templates read it: ``_structure``; the reads in declaration order:
+        ``_template``)."""
         choice.readers.setdefault(member, []).append(read)
 
     def stub_choice_member(self, target: int, decision: object, member: str, *, owner: str) -> int:
-        """Template mode: ``decision.member`` through a child's choice. The selection its
+        """``decision.member`` through a child's choice. The selection its
         candidates share in the child's template, imported, where the choice applies at
         the stub; else one made in the stub, over the candidates' members (none where the
         choice never applies at the stub: typed as ``choice_member`` types it there). Where

@@ -2,15 +2,16 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Templates (``_template``): each Space class's own scope compiled once, the Spaces it
 places stubs; a model's structure (``_structure``), its scopes made when addressed and its
-nodes resolved when read; and the eager expansion. Both equal ``link_space`` by key.
+nodes resolved when read; and the eager expansion, ``expand(C)``: every node of the design
+space in one table, from templates.
 
-A structure fully resolved, in either numbering, and ``expand(C)`` rebuild
-``link_space(C)``'s model from templates alone; their ``NodeId``s differ, so they are
-compared in a canonical form by key (``_templates_support``). Here
-the engine's corpus: every Space class the space tests and the engine's support modules
-define, and the classes below for the edge cases. The kernels, the rest of the test
-support, the Chain's members and stage 7's chain are the kernel tree's
-(``kernel_ops/test_space_templates``): this tree imports the engine only.
+A structure fully resolved, in either numbering, equals ``expand(C)`` in a canonical form
+by key (``_templates_support``); that both are the line's one table of every placement is
+checked against the line's digests in the design corpus. Here the engine's corpus: every
+Space class the space tests and the engine's support modules define, and the classes
+below for the edge cases. The kernels, the rest of the test support, the Chain's members
+and stage 7's chain are the kernel tree's (``kernel_ops/test_space_templates``): this tree
+imports the engine only.
 """
 
 from __future__ import annotations
@@ -34,7 +35,6 @@ from finn.core.space import (
     supplied,
     view,
 )
-from finn.core.space._linker import link_space
 from finn.core.space._structure import EAGER, Structure, expand
 from finn.core.space._template import Template, link_template
 from finn.core.space.errors import RequestError
@@ -44,14 +44,8 @@ from finn.core.space.results import Unresolved
 HERE = Path(__file__).resolve().parent
 
 
-def test_the_space_tests_classes_expand_as_they_link() -> None:
-    # ``test_compose``'s classes differ from ``link_space`` on purpose (a node of an
-    # expression per Decision over nodes its readers exist under; the template's refusals).
-    modules = [
-        f"core.space.{path.stem}"
-        for path in sorted(HERE.glob("*.py"))
-        if path.stem != "test_compose"
-    ] + [
+def test_the_space_tests_classes_resolve_as_they_expand() -> None:
+    modules = [f"core.space.{path.stem}" for path in sorted(HERE.glob("*.py"))] + [
         "support.space_cores",
         "support.space_pipeline",
         "support.space_walk",
@@ -109,9 +103,9 @@ class ReadsItself(Space):
 
 class ReadsLater(Space):
     """A selection read by the child and by the parent: one node, owned in the child's
-    template, where its choice is (``link_space`` owned it by its first reader as it
-    lowered its one table: the child's member before the parent's expression, the
-    parent's member before the child's)."""
+    template, where its choice is (the line's one table owned it by its first reader as
+    it was lowered: the child's member before the parent's expression, the parent's
+    member before the child's)."""
 
     first = ReadsItself()
     second = ReadsItself()
@@ -264,7 +258,7 @@ EDGE_CASES = (
 
 
 @pytest.mark.parametrize("space_type", EDGE_CASES, ids=lambda space_type: space_type.__name__)
-def test_an_edge_case_expands_as_it_links(space_type: type[Space]) -> None:
+def test_an_edge_case_resolves_as_it_expands(space_type: type[Space]) -> None:
     assert_expands([space_type])
 
 
@@ -280,7 +274,7 @@ def test_a_named_decision_used_only_by_one_child_is_its_own() -> None:
 def test_a_selection_read_by_several_templates_is_one_owned_in_its_choices_template() -> None:
     linked = expand(ReadsLater)
     assert linked.nodes[linked.keys["first.pump.$member.cop"]].owner == "first.cop"
-    # link_space: "earlier", the parent's member, lowered before the child's.
+    # The line: "earlier", the parent's member, lowered before the child's.
     assert linked.nodes[linked.keys["second.pump.$member.cop"]].owner == "second.cop"
     (choice,) = (choice for choice in linked.choices if choice.key == "second.pump")
     assert choice.members == {"cop": linked.keys["second.pump.$member.cop"]}
@@ -376,7 +370,7 @@ def test_a_design_space_read_for_one_value_makes_part_of_a_composite(
     assert "house0.kitchen" in names and not any(name.startswith("house1.") for name in names)
     structure.resolve_all()
     whole = structure.counts()
-    table = link_space(Street)
+    table = expand(Street)
     assert whole == {
         "scopes addressed": len(table.scopes),
         "scopes in play": len(table.scopes),

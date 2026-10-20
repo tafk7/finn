@@ -1,32 +1,28 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 """The templates' tests' comparison (``test_templates``; the kernel tree's
-``test_space_templates``): a model's structure, fully resolved, and its eager form
-``expand(C)``, against ``link_space(C)`` in a canonical form by key, independent of
-numbering; and the Space classes a set of modules defines.
+``test_space_templates``): a model's structure, fully resolved in either numbering, against
+its eager form ``expand(C)``, in a canonical form by key, independent of numbering; and the
+Space classes a set of modules defines.
 
-They are equal but for one rule: a ``decision.member`` selection several templates read is
-owned in its choice's own template where that template reads it (``_structure``), where
-``link_space`` owned it by its first reader as it lowered its one table. Each key whose
-owner so moves is kept in ``MOVED``."""
+Both are built from templates. That they are the line's one table of every placement
+(``6d02612cc``'s ``link_space``) is checked against the line's digests of each class's
+canonical form, kept in the design corpus (the lane's record, ``line/structure.json``),
+with the probe that made them; the selections' owners apart, which a rule now fixes
+(``_structure``)."""
 
 from __future__ import annotations
 
 import importlib
 import re
 from collections.abc import Iterable, Iterator
-from typing import cast
 
 from finn.core.space import Space
-from finn.core.space._linker import link_space
 from finn.core.space._structure import Structure, expand
 from finn.core.space._template import Template, link_template
 from finn.core.space.domains import Domain
 from finn.core.space.errors import DefinitionError
 from finn.core.space.ir import Linked
-
-# Each selection whose owner moves (by class and key): (link_space's owner, the structure's).
-MOVED: dict[tuple[str, str], tuple[str, str]] = {}
 
 # -- the canonical form ------------------------------------------------------------------------
 
@@ -113,47 +109,29 @@ def canonical(model: Linked) -> dict[str, object]:
     return found
 
 
-def _selection(entry: str) -> bool:
-    """A ``decision.member`` selection's node entry."""
-    return entry.startswith("node ") and ".$member." in entry
-
-
-def _owner_masked(value: object) -> object:
-    held = list(value)  # type: ignore[call-overload]
-    held[1] = None
-    return tuple(held)
-
-
 def differences(space_type: type[Space]) -> list[str]:
-    """The first entries where the structure (fully resolved) or ``expand`` differs from
-    ``link_space``, but for a selection's owner (kept in ``MOVED``), if any."""
-    linked = canonical(link_space(space_type))
+    """The first entries where the structure, fully resolved in either numbering, differs
+    from ``expand``, if any."""
+    eager = canonical(expand(space_type))
     found: list[str] = []
     for name, model in (
         ("structure", Structure(link_template(space_type))),
         ("structure, permuted", Structure(link_template(space_type), permuted=True)),
-        ("expand", expand(space_type)),
     ):
         other = canonical(model)
-        for entry in sorted(linked.keys() | other.keys()):
-            held, got = linked.get(entry), other.get(entry)
-            if held == got:
-                continue
-            if _selection(entry) and held is not None and got is not None:
-                if _owner_masked(held) == _owner_masked(got):
-                    owners = (cast(tuple[str, ...], held)[1], cast(tuple[str, ...], got)[1])
-                    MOVED[(space_type.__qualname__, entry[5:])] = owners
-                    continue
-            found.append(
-                f"{space_type.__qualname__}: {entry}\n  link_space: {held}\n  {name}: {got}"
-            )
-            if len(found) == 3:
-                return found
+        for entry in sorted(eager.keys() | other.keys()):
+            held, got = eager.get(entry), other.get(entry)
+            if held != got:
+                found.append(
+                    f"{space_type.__qualname__}: {entry}\n  expand: {held}\n  {name}: {got}"
+                )
+                if len(found) == 3:
+                    return found
     return found
 
 
 def assert_expands(space_types: Iterable[type[Space]]) -> int:
-    """Each class's structure and expansion equal its link; the number compared."""
+    """Each class's structure equals its expansion; the number compared."""
     failures: list[str] = []
     compared = 0
     for space_type in space_types:
@@ -181,10 +159,8 @@ def defined(names: Iterable[str]) -> Iterator[type[Space]]:
 
 
 def links(space_type: type[Space]) -> bool:
-    """Whether both link it: the refusals templates make that ``link_space`` does not
-    (``test_compose``) are not compared."""
+    """Whether its template links (a class that is a refusal's case does not)."""
     try:
-        link_space(space_type)
         link_template(space_type)
     except DefinitionError:
         return False

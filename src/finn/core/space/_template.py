@@ -3,27 +3,29 @@
 
 """Templates: each Space class's own scope, compiled once.
 
-``link_template(C)`` runs the linker's phases in template mode (``_table``): C's own
-scope is allocated, lowered and checked as ``link_space`` does it for a root, and each
-Space C places (a child node, a candidate of a Decision over nodes) is a **stub**: what
-C's body writes for it and nothing of the child's own. A formal binding is the node
-today's linker gives the child's formal (an alias, a fresh Decision), lowered in C; a
-literal or a default is a value on the stub; a reference into a child is an ``import``
-node, whose target is a node of the child class's template, linked first and cached on
-the class. C's own formals are its template's ``param`` nodes: where C is placed, the
-placing template's stub binds each, so a formal has one identity, its scope and its
-formal node, whatever binds it.
+The front end compiles a Space class into its template, and nothing else: there is no
+table of a whole design space. ``link_template(C)`` runs the linker's phases on one
+table (``_table``): C's own scope is allocated, lowered and checked, and each Space C
+places (a child node, a candidate of a Decision over nodes) is a **stub**: what C's body
+writes for it and nothing of the child's own. A formal binding is a node (an alias, a
+fresh Decision), lowered in C; a literal or a default is a value on the stub; a reference
+into a child is an ``import`` node, whose target is a node of the child class's template,
+linked first and cached on the class. C's own formals are its template's ``param`` nodes:
+where C is placed, the placing template's stub binds each, so a formal has one identity,
+its scope and its formal node, whatever binds it.
 
 A Decision over nodes guarded by ``supplied(formal)`` never applies where that formal is
 unsupplied. A template is compiled once, with the choice's candidates; it records the
 formal, and what exists only where the choice applies (``Template.requires``); where the
 template is placed, the rule is applied per placement.
 
+What crosses a slot is checked per template and composed (``_compose``): cycles through
+the Spaces it places and the reads its placements do not place, as it is linked; the
+domain rule, from the root's template, when a model is made (``compiler.compile_model``).
+
 A model's structure (``_structure``) places templates as scopes, made when addressed, and
 resolves each node of a scope from its template when read; ``_structure.expand`` is the
-eager form, every scope placed and every node resolved, into ``link_space``'s model.
-Cross-template cycles and the domain rule are ``link_space``'s (and ``compile_model``'s)
-still.
+eager form, every scope placed and every node resolved, into one table.
 """
 
 from __future__ import annotations

@@ -1,10 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Templates (``finn.core.space._template``) on the kernels: the eager expansion of every
-Space class the kernels, the KernelOps and the test support define, of the Chain's members
-and of stage 7's chain of eight kernels as one Space, equal to ``link_space`` by key
-(``core.space._templates_support``; the engine's own corpus and edge cases are
-``core.space.test_templates``)."""
+"""Templates (``finn.core.space._template``) on the kernels: the structure of every Space
+class the kernels, the KernelOps and the test support define, of the Chain's members and of
+stage 7's chain of eight kernels as one Space, fully resolved, equal to its eager form
+``expand`` by key (``core.space._templates_support``; the engine's own corpus and edge
+cases are ``core.space.test_templates``); and their domain rule, composed per template,
+equal to the line's on ``expand`` (``core.space._domains_support``)."""
 
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from typing import Any, cast
 
 import numpy as np
 import pytest
+from core.space._domains_support import domain_differences
 from core.space._templates_support import assert_expands, defined, links, reached
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
@@ -24,7 +26,6 @@ from support.chain import MEMBERS, chain
 import finn.custom_op
 import finn.kernels
 from finn.core.space import Space, composite, design_space, inspection
-from finn.core.space._linker import link_space
 from finn.core.space._structure import EAGER, expand
 from finn.core.space._template import link_template
 from finn.core.space.results import Unresolved
@@ -40,25 +41,36 @@ from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 SUPPORT = Path(__file__).resolve().parents[1] / "support"
 
 
-def test_the_test_supports_classes_expand_as_they_link() -> None:
+def test_the_test_supports_classes_resolve_as_they_expand() -> None:
     modules = [f"support.{path.stem}" for path in sorted(SUPPORT.glob("*.py"))]
     classes = [space_type for space_type in defined(modules) if links(space_type)]
     assert len(classes) > 10
     assert_expands(classes)
 
 
-def test_the_kernels_expand_as_they_link() -> None:
+def _kernels() -> list[type[Space]]:
     modules = [
         info.name
         for package in (finn.kernels, finn.custom_op)
         for info in pkgutil.walk_packages(package.__path__, package.__name__ + ".")
     ]
-    classes = list(dict.fromkeys(defined(modules)))
+    return list(dict.fromkeys(defined(modules)))
+
+
+def test_the_kernels_resolve_as_they_expand() -> None:
+    classes = _kernels()
     assert len(classes) > 15
     assert assert_expands(classes) == len(classes)
 
 
-def test_the_chains_members_expand_as_they_link() -> None:
+def test_the_kernels_domains_compose_as_the_line_checked_them() -> None:
+    modules = [f"support.{path.stem}" for path in sorted(SUPPORT.glob("*.py"))]
+    classes = [*_kernels(), *(cls for cls in defined(modules) if links(cls)), _chain(4)[0]]
+    differences = [found for found in map(domain_differences, classes) if found is not None]
+    assert not differences, "\n".join(differences)
+
+
+def test_the_chains_members_resolve_as_they_expand() -> None:
     net = chain()  # configured: its channels bound
     classes = {inspection.model(net.member(name)).space_type for name in MEMBERS}
     assert assert_expands(classes) == 3  # the MatMul, the thresholding, the channel
@@ -139,7 +151,7 @@ def _chain(layers: int) -> tuple[type[Space], dict[str, object]]:
     return composite(f"templates_chain_{2 * layers}", members), stored
 
 
-def test_stage_7s_chain_of_eight_kernels_expands_as_it_links() -> None:
+def test_stage_7s_chain_of_eight_kernels_resolves_as_it_expands() -> None:
     whole, _ = _chain(4)
     assert_expands([whole])
     templates = reached(link_template(whole))
@@ -158,7 +170,7 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
     assert structure is not None
     assert isinstance(point.mm0.query(MatMulKernel.cycles), Unresolved)  # type: ignore[attr-defined]
     read = structure.counts()
-    table = link_space(whole)
+    table = expand(whole)
     assert read["scopes addressed"] < len(table.scopes) // 10
     assert read["scopes in play"] < read["scopes addressed"]
     assert read["nodes resolved"] < len(table.nodes) // 100

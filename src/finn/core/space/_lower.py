@@ -1,16 +1,16 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Lower each allocated member into its node's payload.
+"""Lower each member of a template's table (``_table``) into its node's payload.
 
 A supplied formal becomes its binding (a literal, or an alias of what it
 references); a Space class's own member becomes its kind's payload: a formal's
 requirement, a constant, a Decision's domain and its arguments, a callback with
 its arguments, a view's output and its Space's validity, and ``Members`` entries. Guards
 and integer expressions are linked after every member, references resolving
-through ``_names``. In template mode, what a task makes exists only where its own
-node does (``Table.requires``): a candidate's binding, or a case's guard, of a Decision
-over nodes that may never apply.
+through ``_names``. What a task makes exists only where its own node does
+(``Table.requires``): a candidate's binding, or a case's guard, of a Decision over nodes
+that may never apply.
 """
 
 from __future__ import annotations

@@ -12,13 +12,13 @@ child's validity piece listed, a key looked up); making one allocates its block 
 nothing else.
 
 **A node is resolved when it is read**: its ``NodeId`` gives its scope (by its base) and
-its template node, and that is resolved into the ``Node`` ``link_space`` builds for the
-same key, every reference mapped to a ``NodeId`` (a local node in the block; an import,
-the child scope's node; a child's formal, as its placing template binds it), collapse's
-bypass applied by ``_collapse``'s rule; it is kept. A ``NodeId`` that stands for another
-(an import, a formal's binding, the placement guard, a selection made in another
-template) or for a node a placement excludes (a choice that never applies there) is no
-node: reading it is an ``IndexError``.
+its template node, and that is resolved into the ``Node`` of its key (as the line's one
+table of every placement held it), every reference mapped to a ``NodeId`` (a local node
+in the block; an import, the child scope's node; a child's formal, as its placing
+template binds it), collapse's bypass applied by ``_collapse``'s rule; it is kept. A
+``NodeId`` that stands for another (an import, a formal's binding, the placement guard, a
+selection made in another template) or for a node a placement excludes (a choice that
+never applies there) is no node: reading it is an ``IndexError``.
 
 A ``decision.member`` selection several templates make for one scope (the scope's own
 template, a parent reading through it) is one node, owned in the choice's own template
@@ -41,7 +41,8 @@ space. Addressing and resolution write shared state, under the model's lock.
 modes, read when a model is made, show it: ``FINN_SPACE_PERMUTE=1`` allocates the blocks
 downward from a large base, each block's nodes numbered in reverse; ``FINN_SPACE_EAGER=1``
 addresses every scope and resolves every node when the model is made. ``expand`` is the
-eager form: ``link_space``'s model, rebuilt from templates alone.
+eager form: every node of a Space class's design space in one table (``ir.LinkedModel``),
+from its templates.
 """
 
 from __future__ import annotations
@@ -1196,14 +1197,16 @@ class _Forward(Sequence[NodeId]):
 
 
 def expand(space_type: type[Space]) -> LinkedModel:
-    """``link_space(space_type)``'s model, rebuilt from templates alone: a structure with
-    every scope addressed and every node resolved, its ``NodeId``s renumbered in order."""
+    """Every node of ``space_type``'s design space in one table: a structure with every
+    scope addressed and every node resolved, its ``NodeId``s renumbered in order (the eager
+    form, for the tests and their comparisons)."""
     structure = Structure(link_template(space_type), eager=True)
     return materialize(structure)
 
 
-def materialize(structure: Structure) -> LinkedModel:
-    """A structure, fully resolved, as one table (``ir.LinkedModel``)."""
+def materialize(structure: Structure, *, collapsed: bool = True) -> LinkedModel:
+    """A structure, fully resolved, as one table (``ir.LinkedModel``); with ``collapsed``
+    false, its nodes as resolved before collapse, each its own forwarding source."""
     with structure.lock:
         structure.resolve_all()
         ids = sorted(structure.all_nodes())
@@ -1227,7 +1230,9 @@ def materialize(structure: Structure) -> LinkedModel:
                 alternatives=tuple((label, number[target]) for label, target in node.alternatives),
                 via=tuple((number[alias], number[source]) for alias, source in node.via),
             )
-            for node in (structure.node(index) for index in ids)
+            for node in (
+                structure.node(index) if collapsed else structure.raw(index) for index in ids
+            )
         )
         keys = {node.key: node.index for node in nodes}
         if len(keys) != len(nodes):
@@ -1267,7 +1272,7 @@ def materialize(structure: Structure) -> LinkedModel:
             keys,
             choices,
             frozenset(number[index] for index in ids if structure.editable(index)),
-            tuple(number[structure.source(index)] for index in ids),
+            tuple(number[structure.source(index)] if collapsed else number[index] for index in ids),
         )
 
 

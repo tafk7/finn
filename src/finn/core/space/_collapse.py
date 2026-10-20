@@ -3,10 +3,12 @@
 
 """Collapse forwarding chains: evaluation edges jump past pure aliases.
 
-A rewrite of the linked node table after ordering. Scopes, node identities
-and keys stay as they are; only evaluation edges change, each bypass recorded in
-the reader's ``via``. ``forwards`` and ``guard_implies`` are also the runtime's
-test for the same shortcut on method reads (``_world.MethodReader``).
+Inside a template, its forwarding after ordering (``collapse``, the template's
+``forward``); across slots, a model's structure applies the same rule to each node it
+resolves (``_structure``). Scopes, node identities and keys stay as they are; only
+evaluation edges change, each bypass recorded in the reader's ``via``. ``forwards`` and
+``guard_implies`` are also the runtime's test for the same shortcut on method reads
+(``_world.MethodReader``).
 """
 
 from __future__ import annotations

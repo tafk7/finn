@@ -530,7 +530,8 @@ def check_placements(table: Table) -> None:
 
 def check_placement(template: Template, at: Placement, name: str) -> None:
     """No node of ``template`` placed at ``at`` (at scope ``name``) reads a node it does not
-    place: ``reference-not-placed``, as ``link_space`` refused it."""
+    place: ``reference-not-placed`` (as the line's one table of every placement refused
+    it, when lowering the reader there)."""
     for node in range(len(template.nodes)):
         if template.nodes[node].kind == "import" or excluded(template, at, node):
             continue

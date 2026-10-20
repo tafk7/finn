@@ -1,14 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Check a lowered table's value semantics across scopes, in dependency order.
+"""Check a template's lowered table's value semantics, in dependency order.
 
 An alias, a view, a presence and a selection take their sources' semantics
 when they declare none; then every output, alternative, guard, callback
 argument, export and integer operand must agree with what reads it. A shared
 ``decision.member`` whose candidates disagree on its type is dropped when
-nothing reads it. In template mode an import has its target's checked semantics, and a
-child's exports are checked in its own template.
+nothing reads it. An import has its target's checked semantics, and a child's exports
+are checked in its own template.
 """
 
 from __future__ import annotations

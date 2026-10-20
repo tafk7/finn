@@ -5,37 +5,27 @@
 Collapse rewrites evaluation edges only, so both models have the same nodes,
 scopes and keys, and every key answers the same question. The collapsed model is a
 model's structure, as compiled (``_structure``), its nodes collapsed as they are
-resolved; the plain one is ``link_space``'s table with its collapse left out. They number
+resolved; the plain one is the same structure's nodes as resolved before collapse, in one
+table (``_structure.materialize(..., collapsed=False)``). They number
 their nodes apart, so ``answers`` evaluates every node of a configuration by key;
 comparing the two proves that values and diagnostics are unchanged.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TypeVar, cast
-from unittest import mock
 
-from finn.core.space import EvaluationError, Model, Space, _linker
+from finn.core.space import EvaluationError, Model, Space
 from finn.core.space._state import copy_result
-from finn.core.space._structure import Structure, modes
+from finn.core.space._structure import Structure, materialize, modes
 from finn.core.space._template import link_template
 from finn.core.space.compiler import root_parameters, root_record
-from finn.core.space.ir import Linked, Node
+from finn.core.space.ir import Linked
 from finn.core.space.occurrence import bind, state
 
 S = TypeVar("S", bound=Space)
-
-
-@contextmanager
-def uncollapsed() -> Iterator[None]:
-    def identity(nodes: list[Node], order: tuple[int, ...]) -> tuple[int, ...]:
-        return tuple(range(len(nodes)))
-
-    with mock.patch.object(_linker, "collapse", identity):
-        yield
 
 
 def open_space(node: S, *, collapsed: bool) -> S:
@@ -46,8 +36,8 @@ def open_space(node: S, *, collapsed: bool) -> S:
         structure = Structure(link_template(record.space_type), permuted=permuted, eager=eager)
         model = Model(record.space_type, cast(Linked, structure), structure.lock)
     else:
-        with uncollapsed():
-            model = Model(record.space_type, _linker.link_space(record.space_type))
+        structure = Structure(link_template(record.space_type))
+        model = Model(record.space_type, materialize(structure, collapsed=False))
     return cast(S, bind(model, root_parameters(model, record)))
 
 

@@ -11,8 +11,8 @@ import pytest
 from support.refusals import refused
 
 from finn.core.space import Space, default_semantics, design_space, inspection
-from finn.core.space._linker import link_space
 from finn.core.space._nodes import node_record
+from finn.core.space._structure import expand
 from finn.core.space.compiler import compile_model
 from finn.core.space.declarations import (
     Const,
@@ -55,8 +55,8 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
     nodes = model.linked.nodes
     cycles = nodes[model.resolve(0, Example.cycles)]
     assert {argument.name for argument in cycles.arguments} == {"extent", "lanes"}
-    # The dependency order is the linker's (a model's structure resolves on demand).
-    table = link_space(Example)
+    # The dependency order is the eager form's (a model's structure resolves on demand).
+    table = expand(Example)
     position = {index: offset for offset, index in enumerate(table.order)}
     assert all(
         position[dependency] < position[node.index]
@@ -238,8 +238,8 @@ def test_twenty_thousand_dependencies_compile_and_evaluate_iteratively() -> None
     last = model.resolve(0, members["value20000"])
     assert len(model.linked.nodes[last].dependencies) == 1
     # Every member, and the Space's validity node (no pieces: no constraint, no Decision),
-    # in the linker's dependency order (a model's structure resolves on demand).
-    table = link_space(space_type)
+    # in the eager form's dependency order (a model's structure resolves on demand).
+    table = expand(space_type)
     assert len(table.order) == 20_002
     assert table.order[-2:] == (table.keys["value20000"], table.scopes[0].validity)
     assert design_space(space_type()).query(cast(Derived[int], members["value20000"])) == Available(

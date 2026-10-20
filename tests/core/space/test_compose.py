@@ -48,7 +48,7 @@ from finn.core.space.errors import DefinitionError
 HERE = Path(__file__).resolve().parent
 
 
-# -- the domain rule: existence guards across a slot (devi-2's two cases) ---------------------
+# -- the domain rule: existence guards across a slot -------------------------------------------
 
 
 class Core(Space):
@@ -355,9 +355,10 @@ class PlacesShared(Space):
 
 
 def test_an_expression_a_candidate_shares_with_another_reader_is_placed_for_each() -> None:
-    """Piece 1's gap (a): a projection or an expression read by a candidate of a choice
-    that may never apply and by another reader is one node per Decision over nodes its
-    readers exist under, so each reader's is placed wherever it is. The line accepted
+    """A projection or an expression read by a candidate of a choice that may never apply
+    and by another reader is one node per Decision over nodes its readers exist under, so
+    each reader's is placed wherever it is (one node, made for the candidate, was not
+    placed where the choice never applies: ``reference-not-placed``). The line accepted
     both; so do templates, with the line's answers."""
     point = design_space(PlacesShared(spec=Spec(enabled=True, lanes=3)))
     assert point.query(PlacesShared.guard_on.other) == Available(1)
@@ -409,7 +410,7 @@ class PlacesThrough(Space):
 
 
 def test_a_selections_type_where_its_choice_never_applies_is_never_observed() -> None:
-    """Piece 1's gap (b). Where ``source`` never applies (``off``), ``source.width`` is
+    """Where ``source`` never applies (``off``), ``source.width`` is
     read through a choice whose guard, ``supplied(contents)``, never holds there: the
     selection and its readers are inapplicable, so its value is never read; its type is
     the template's, the same at every placement (its readers are checked once). The line

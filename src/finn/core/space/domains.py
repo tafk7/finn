@@ -11,7 +11,7 @@ membership too (one it rejects is not listed), and an empty list means none. A r
 linking a value to anything else (``ultra`` needs UltraRAM, two choices go together) is
 a constraint of the Space that owns the choice. Compilation checks it: a domain whose
 membership or enumeration reaches a choice is a ``DefinitionError``
-(``domain-reads-choice``), naming the way it reads it (``_reads.check_domains``); an input
+(``domain-reads-choice``), naming the way it reads it (``_compose.check_domains``); an input
 under the guards deciding whether the choice itself exists reads as a fact.
 
 Each of the domain's callables takes the inputs its signature names, of those the domain

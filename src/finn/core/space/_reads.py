@@ -22,8 +22,9 @@ source.
 The evaluator checks every read a method makes against its inferred reads, so the
 inference is held to what methods actually do. Each node's **existence guards** are
 here too: the guards that decide whether it exists, its own and every enclosing
-scope's, innermost first. From the two, the **domain rule** is checked when a model is
-made (``check_domains``): a domain's membership reads facts only.
+scope's, innermost first. The **domain rule** (a domain's membership reads facts only)
+is checked from the inference per template when a model is made
+(``_compose.check_domains``).
 
 A model's structure resolves its nodes on demand, so there the inference is per template:
 each function's paths resolve against its template once, and a node's reads, existence
@@ -45,7 +46,6 @@ from types import CodeType, MappingProxyType
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 from .declarations import Param
-from .errors import DefinitionError
 from .ir import Argument, Linked, LinkedModel, NodeId
 
 if TYPE_CHECKING:
@@ -1025,84 +1025,6 @@ def case_guards(linked: Linked) -> dict[NodeId, tuple[NodeId, str]]:
     return found
 
 
-def check_domains(linked: Linked, reads: ModelReads) -> None:
-    """A domain's membership reads facts only: the root's facts, values that read only
-    facts, and formals bound to those, through any depth of composition. From the inputs
-    each Decision's membership and enumeration name, every value they may read is
-    followed (a callback's arguments, a forwarded or selected value and its selector, a
-    view and its Space's validity, a method's inferred reads) with the guard each sits
-    under, but for the guards deciding whether the Decision itself exists (its scope's
-    and every enclosing one's: an input there exists whenever the choice does). A choice
-    met on the way is a ``DefinitionError`` (``domain-reads-choice``): a relation to
-    another choice is a constraint of the Space holding both. So is a method whose reads
-    are not fixed (dynamic): declare them with ``__reads__``. The order's inputs are not
-    followed: an order may read choices."""
-    nodes = linked.nodes
-    for decision in linked.decisions:
-        node = nodes[decision]
-        domain = node.domain
-        if domain is None:
-            continue
-        named = set(domain.membership_inputs)
-        own = set(reads.guards(decision))
-        came: dict[NodeId, NodeId | None] = {}
-        pending: list[NodeId] = []
-        for argument in node.domain_arguments:
-            if argument.name in named and argument.node not in came:
-                came[argument.node] = None
-                pending.append(argument.node)
-        while pending:
-            index = pending.pop()
-            current = nodes[index]
-            if current.kind == "decision":
-                _domain_reads_choice(linked, node.key, index, came)
-            following: list[NodeId] = [
-                *(argument.node for argument in current.arguments),
-                *(target for _, target in current.alternatives),
-                *current.constraints,
-            ]
-            for single in (current.output, current.selector, current.guard):
-                if single is not None:
-                    following.append(single)
-            if current.call_style == "self" and current.function is not None:
-                found = reads.methods.get(index)
-                if found is None:
-                    raise DefinitionError.broken(
-                        "domain-reads-choice",
-                        node.key,
-                        f"{node.key}: its domain's membership reads {current.owner}, whose "
-                        "reads its source does not fix: declare them with __reads__ (a domain "
-                        "reads facts only)",
-                        declaration=node.key,
-                    )
-                following.extend(found)
-            for dependency in following:
-                if dependency in own or dependency in came:
-                    continue  # what decides whether the choice exists holds where it does
-                came[dependency] = index
-                pending.append(dependency)
-
-
-def _domain_reads_choice(
-    linked: Linked, owner: str, choice: NodeId, came: Mapping[NodeId, NodeId | None]
-) -> None:
-    nodes = linked.nodes
-    path: list[str] = []
-    step: NodeId | None = choice
-    while step is not None:
-        path.append(nodes[step].owner)
-        step = came[step]
-    route = " -> ".join(reversed(dict.fromkeys(path)))
-    raise DefinitionError.broken(
-        "domain-reads-choice",
-        owner,
-        f"{owner}: its domain's membership reads the choice {nodes[choice].key} ({route}); "
-        "a domain reads facts only: state the relation as a constraint of the Space holding "
-        "both",
-        declaration=owner,
-    )
-
-
 def presence_readers(
     linked: Linked, methods: Mapping[NodeId, frozenset[NodeId] | None]
 ) -> dict[NodeId, tuple[NodeId, ...]]:
@@ -1337,8 +1259,7 @@ def infer(linked: Linked) -> ModelReads:
     """What every ``self`` method of ``linked`` may read, every node's existence guards,
     and which of them are a selector's cases. A model's structure (``_structure``) answers
     them node by node when first asked, from its templates (``_Mapping``); a table
-    (``link_space``'s, which ``compile_model`` still checks the domain rule on, or one built
-    by hand) all at once."""
+    (``_structure.expand``'s, or one built by hand) all at once."""
     if not isinstance(linked, LinkedModel):
         from ._structure import Structure  # noqa: PLC0415 - a cycle
 
@@ -1387,7 +1308,6 @@ __all__ = [
     "ModelReads",
     "Path",
     "case_guards",
-    "check_domains",
     "existence_guards",
     "flow_order",
     "infer",

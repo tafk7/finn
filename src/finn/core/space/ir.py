@@ -3,9 +3,10 @@
 
 """Immutable linked representation shared by compilation and evaluation.
 
-A node (``Node``) is one occurrence of a member in a placed scope. ``link_space``'s table
-(``LinkedModel``) stores every one; a model's structure (``_structure``) resolves each into
-the same ``Node`` when it is read. The engine reads either through ``Linked``. Node
+A node (``Node``) is one occurrence of a member in a placed scope. A model's structure
+(``_structure``) resolves each when it is read; a table (``LinkedModel``) stores every one
+(``_structure.expand``'s, or one built by hand). The engine reads either through
+``Linked``. Node
 references (``NodeId``) describe potential edges; the evaluator records demanded edges
 separately for every cached result.
 """
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
 
 # A node's identity in its model: in a model's structure (``_structure``), its scope's
 # base plus its template node (a scope's block; numbered in the order scopes are
-# addressed, so nothing orders by it); in ``link_space``'s one table, its position there.
+# addressed, so nothing orders by it); in a table, its position there.
 NodeId: TypeAlias = int
 
 NodeKind = Literal[
@@ -195,9 +196,9 @@ class _Ranked(Protocol):
 
 class Linked(Protocol):
     """What the engine reads of a linked model: a model's structure (``_structure``), its
-    nodes resolved on demand, or a table holding every node (``LinkedModel``:
-    ``link_space``'s, or one built by hand). ``ranks`` orders decisions (a structure's: in
-    declaration order)."""
+    nodes resolved on demand, or a table holding every node (``LinkedModel``: ``expand``'s,
+    or one built by hand). ``ranks`` orders decisions (a structure's: in declaration
+    order)."""
 
     @property
     def nodes(self) -> Sequence[Node]: ...

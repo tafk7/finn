@@ -1,23 +1,21 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The linker's one node table, which its phases fill in turn.
+"""The table of one Space class's template, which the linker's phases fill in turn.
 
-Allocation (``_allocate``) creates every scope, a node for every member and
-the tasks that lower them; lowering (``_lower``, resolving references through
-``_names``) gives each node its payload, reserving the nodes a reference
-needs; ``_check`` validates the linked semantics and ``_collapse`` rewrites
-evaluation edges. ``_linker.link_space`` runs them in that order and freezes
-the table into a ``LinkedModel``. The table holds what crosses a phase; what a
-phase keeps for itself stays in that phase.
+The table holds the class's own scope and, for each Space it places, a **stub**: a scope
+that allocates none of the child's members, only what the class's body writes for it
+(its formals' bindings, and nodes reserved in it on the body's behalf). A reference into
+a child is an ``import`` node in the stub, whose target is a node of the child class's
+template (``template_of``, linked first); a deeper path goes through nested stubs.
 
-**Template mode** (``template_of`` set; ``_template.link_template``): the table holds
-one Space class's own scope and, for each Space it places, a **stub**: a scope that
-allocates none of the child's members, only what the class's body writes for it (its
-formals' bindings, and nodes reserved in it on the body's behalf). A reference into a
-child is an ``import`` node in the stub, whose target is a node of the child class's
-template; a deeper path goes through nested stubs. The phases branch on ``stub`` where
-a scope is one.
+Allocation (``_allocate``) creates the scopes, a node for every member and the tasks
+that lower them; lowering (``_lower``, resolving references through ``_names``) gives
+each node its payload, reserving the nodes a reference needs; the checks composed
+across slots (``_compose``) order it, ``_check`` validates the semantics and
+``_collapse`` finds the forwarding inside it. ``_template.link_template`` runs them in
+that order and freezes the table into a ``Template``. The table holds what crosses a
+phase; what a phase keeps for itself stays in that phase.
 """
 
 from __future__ import annotations
@@ -34,7 +32,7 @@ from .collection import EffectiveSpace, collect_space
 from .declarations import Declaration, ValueRef
 from .errors import DefinitionError
 from .expressions import IntOperator
-from .ir import Choice, Node, NodeKind, Scope
+from .ir import Node, NodeKind, Scope
 from .semantics import BOOL, ValueSemantics
 
 if TYPE_CHECKING:
@@ -53,7 +51,7 @@ BindingForm = Literal["literal", "reference", "local-decision", "named", "unsupp
 
 @dataclass(frozen=True, slots=True)
 class Binding:
-    """How a placing body binds one formal of a child (template mode): a literal or a
+    """How a placing body binds one formal of a child: a literal or a
     default (``value``, no node), a reference or a fresh Decision (its node in the stub),
     a named shared Decision (its use: an editable alias, ``node``), or nothing."""
 
@@ -67,9 +65,8 @@ UNSUPPLIED_BINDING = Binding("unsupplied")
 
 @dataclass(frozen=True, slots=True)
 class Read:
-    """Template mode: one read of ``decision.member``, in the order the template lowers
-    its reads: its reader's key, and the Decision over nodes it exists only where it
-    applies (None: everywhere)."""
+    """One read of ``decision.member``: its reader's key, and the Decision over nodes it
+    exists only where it applies (None: everywhere)."""
 
     owner: str
     requires: int | None
@@ -113,13 +110,11 @@ class ScopeDraft:
     children: dict[object, int] = field(default_factory=dict)
     named_children: dict[str, int] = field(default_factory=dict)
     choices: dict[object, int] = field(default_factory=dict)
-    # The value inputs nothing supplies here: a guard on their supply never holds.
-    unsupplied: set[str] = field(default_factory=set)
-    # The node answering this Space's validity, reserved with the scope.
+    # The node answering the own scope's validity, reserved with the scope.
     validity: int | None = None
-    # Template mode: a child's scope that allocates none of its members.
+    # A child's scope that allocates none of its members.
     stub: Stub | None = None
-    # Template mode: a candidate of a Decision over nodes of the own scope (choice, case).
+    # A candidate of a Decision over nodes of the own scope (choice, case).
     candidate: tuple[int, str] | None = None
 
     def freeze(self) -> Scope:
@@ -148,11 +143,7 @@ class ChoiceDraft:
     selector: int
     cases: list[tuple[str, int | None]] = field(default_factory=list)
     members: dict[str, int] = field(default_factory=dict)
-    # Its guard never holds here: no candidate is placed, and it has no key; the
-    # Space classes its candidates would place type what is read through it.
-    never: bool = False
-    space_types: dict[str, type[Space]] = field(default_factory=dict)
-    # Template mode. The formal whose absence makes the choice never apply (its guard is
+    # The formal whose absence makes the choice never apply (its guard is
     # ``supplied(formal)``); every selection made for it (node -> member), those its
     # candidates share, each read of a member through it; shared selections dropped for
     # disagreeing types.
@@ -161,17 +152,6 @@ class ChoiceDraft:
     shared: set[int] = field(default_factory=set)
     readers: dict[str, list[Read]] = field(default_factory=dict)
     dropped: set[str] = field(default_factory=set)
-
-    def freeze(self) -> Choice:
-        return Choice(
-            self.index,
-            self.scope,
-            self.key,
-            self.selector,
-            tuple(self.cases),
-            self.members,
-            self.guard,
-        )
 
 
 @dataclass(frozen=True)
@@ -203,9 +183,12 @@ class ExpressionTask:
 
 @dataclass
 class Table:
-    """The nodes and scopes of one linked Space class, and what each phase passes on."""
+    """The nodes and scopes of one Space class's template, and what each phase passes
+    on."""
 
     space_type: type[Space]
+    # Each placed class's template, linked first.
+    template_of: Callable[[type[Space]], Template]
     nodes: list[Node] = field(default_factory=list)
     drafts: list[ScopeDraft] = field(default_factory=list)
     choice_drafts: list[ChoiceDraft] = field(default_factory=list)
@@ -224,14 +207,13 @@ class Table:
     # Lowering -> checks: integer expressions, and each callback argument's target.
     expression_tasks: list[ExpressionTask] = field(default_factory=list)
     argument_checks: list[tuple[BoundArgument, int, str]] = field(default_factory=list)
-    # For the linked model. Formals supplied by a named shared Decision.
+    # Formals supplied by a named shared Decision.
     editable_aliases: set[int] = field(default_factory=set)
-    # Template mode: each child class's template (linked first), the node standing for
-    # the guard the own scope is placed under, each import's target, the Decision over
-    # nodes each node exists only where it applies (and the one whose nodes are being
-    # made), the named shared Decisions in order, and each selection made in a stub's
-    # choice (node -> stub, the choice in the stub's template, member).
-    template_of: Callable[[type[Space]], Template] | None = None
+    # The node standing for the guard the own scope is placed under, each import's
+    # target, the Decision over nodes each node exists only where it applies (and the
+    # one whose nodes are being made), the named shared Decisions in order, and each
+    # selection made in a stub's choice (node -> stub, the choice in the stub's template,
+    # member).
     placement_guard: int | None = None
     imports: dict[int, int] = field(default_factory=dict)
     requires: dict[int, int] = field(default_factory=dict)
@@ -304,11 +286,11 @@ class Table:
         name = self.drafts[child].name
         return name[len(prefix) + 1 :] if prefix else name
 
-    # -- template mode: stubs ---------------------------------------------------------------
+    # -- stubs ------------------------------------------------------------------------------
 
     def stub(self, scope: int) -> Stub:
         stub = self.drafts[scope].stub
-        assert stub is not None, "template mode: a stub expected"
+        assert stub is not None, "a stub expected"
         return stub
 
     def imported(self, scope: int, target: int) -> int:
@@ -385,7 +367,7 @@ class Table:
                 draft.source_scope,
                 placing.record,
                 stub=Stub(
-                    cast("Callable[[type[Space]], Template]", self.template_of)(placing.space_type),
+                    self.template_of(placing.space_type),
                     slot=child,
                     bindings=dict(placing.bindings),
                     requires=stub.requires,
