@@ -449,6 +449,7 @@ LAYERS: tuple[Layer, ...] = (
         (
             "core.space",
             "support.space_cores",
+            "support.space_oracle",
             "support.space_pipeline",
             "support.space_walk",
         ),
@@ -509,6 +510,16 @@ LAYERS: tuple[Layer, ...] = (
         ),
         ("pytest", "numpy", "pyslang", "qonnx.core.datatype", "qonnx.core.ranges"),
         "tests/kernels",
+    ),
+    # The class-based oracle's targets and its tool (support.space_oracle): the design
+    # spaces of FINN's kernels and flow it compares (the toys, stage 7's chain, TFC). The
+    # rest of the package is the engine's (tests.core.space).
+    Layer(
+        "tests.space_oracle_targets",
+        ("support.space_oracle.targets", "support.space_oracle.__main__"),
+        ("space", "kernels", "transformation.kernels", "tests.core.space"),
+        ("qonnx", "support.one_space", "support.tfc"),
+        "tests/kernel_ops",
     ),
 )
 

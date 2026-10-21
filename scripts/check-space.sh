@@ -14,13 +14,18 @@ gate_pytest tests/core/space
 # (tests/support/refusals.py), which every layer's tests use, the two cores the engine's tests
 # share (tests/support/space_cores.py), the chain two engine tests walk
 # (tests/support/space_pipeline.py), the walk an engine test and a kernel test share
-# (tests/support/space_walk.py), and the pre-commit check every gate's gate_ruff runs, are
-# checked with the lowest layer.
+# (tests/support/space_walk.py), the class-based oracle's engine-only modules
+# (tests/support/space_oracle, but for its targets and tool), and the pre-commit check every
+# gate's gate_ruff runs, are checked with the lowest layer.
 gate_ruff src/finn/core/reporting tests/core/reporting src/finn/core/space tests/core/space \
     tests/support/layering.py tests/support/refusals.py tests/support/value_classes.py \
     tests/support/space_cores.py tests/support/space_pipeline.py tests/support/space_walk.py \
-    scripts/_gate_precommit.py
+    scripts/_gate_precommit.py \
+    tests/support/space_oracle/__init__.py tests/support/space_oracle/forms.py \
+    tests/support/space_oracle/today.py tests/support/space_oracle/compare.py
 gate_mypy -p finn.core.reporting -p finn.core.space
 gate_mypy tests/core/reporting tests/core/space tests/support/layering.py \
     tests/support/refusals.py tests/support/value_classes.py tests/support/space_cores.py \
-    tests/support/space_pipeline.py tests/support/space_walk.py
+    tests/support/space_pipeline.py tests/support/space_walk.py \
+    tests/support/space_oracle/__init__.py tests/support/space_oracle/forms.py \
+    tests/support/space_oracle/today.py tests/support/space_oracle/compare.py
