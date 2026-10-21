@@ -649,7 +649,8 @@ def self_workload(api, shape: str, depth: int, width: int) -> dict[str, object]:
 
 def kernel_fixtures(api):
     """Each kernel workload by name: its root node, the step that configures a point of
-    it, and the member path of the module view measured.
+    it, and the member path of the netlist view measured (the library module the kernel
+    builds, at its empty label).
 
     Each kernel is its own root, bound as a network binds it (``finn.kernels.network``):
     the FIFO; the packed Dotp core and MatMul on the tensors their channels carry.
@@ -709,7 +710,7 @@ def kernel_fixtures(api):
                 platform=platform,
             ),
             lambda point, index: point.with_choices(ram_style=("block", "distributed")[index % 2]),
-            "module",
+            "netlist",
         ),
         "dotp": (
             PackedDotpKernel(
@@ -730,7 +731,7 @@ def kernel_fixtures(api):
                     "compute_pumping": bool(index % 2),
                 },
             ),
-            "module",
+            "netlist",
         ),
         # The compute core is a Decision over kernels; ``packed`` is its entry.
         "matmul": (
@@ -749,18 +750,19 @@ def kernel_fixtures(api):
                     "compute.packed.reducer": "tree",
                 },
             ),
-            "compute.module",
+            "compute.netlist",
         ),
     }
 
 
 def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
-    """Measure repeated replacement, cold/cached accepted module views and retention."""
+    """Measure repeated replacement, cold/cached accepted netlist views and retention."""
     node, configure, view = kernel_fixtures(api)[name]
     base = api.design_space(node)
 
     def accepted(point):
-        # The view is a member path below the root: the module the kernel builds.
+        # The view is a member path below the root: the netlist of the module the kernel
+        # builds.
         target = point
         for part in view.split("."):
             target = getattr(target, part)
@@ -785,7 +787,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
         started = time.perf_counter()
         result = accepted(point)
         times["cold_view"].append(time.perf_counter() - started)
-        assert result.sources
+        assert result.instances[0][1].sources
         started = time.perf_counter()
         cached = accepted(point)
         times["cached_view"].append(time.perf_counter() - started)
@@ -984,7 +986,7 @@ def markdown(report: dict[str, object]) -> str:
             "## Repeated kernel configurations",
             "",
             "Choices alternate on each immutable replacement, committed by their decision "
-            "keys. Each measures the module view of the kernel it configures: the FIFO's own, "
+            "keys. Each measures the netlist view of the kernel it configures: the FIFO's own, "
             "the packed Dotp core's on its streams, and MatMul's selected compute core's. "
             "Timings exclude source rendering and hardware execution. A view is cold in its "
             "configuration's world; the model's memo, shared by every configuration, may "

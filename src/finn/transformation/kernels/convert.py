@@ -51,7 +51,7 @@ from finn.core.graph.walk import between, upstream
 from finn.core.reporting.findings import Finding, FindingKind, by_code
 from finn.custom_op.kernels.base import KernelOp, Match, kernel_op, unstated
 from finn.custom_op.kernels.network import persist_kernel
-from finn.kernels.base import Kernel
+from finn.kernels.base import KernelSpace
 from finn.platform.target import Target
 from finn.transformation.kernels.infer import infer_node
 
@@ -151,7 +151,7 @@ class ToKernelOps(Transformation):
                     moved = True  # visit the nodes it moved before the anchor first
                     break
                 trial, defaulted = _trial(model, op, match, subgraph)
-                if isinstance(defaulted, Kernel):
+                if isinstance(defaulted, KernelSpace):
                     labels = tuple(_label(model.graph.node[i]) for i in subgraph.indices)
                     model, converted = trial, op.op_type
                     persist_kernel(model, model.graph.node[index], defaulted)
@@ -290,7 +290,7 @@ def _move_upstream(model: ModelWrapper, subgraph: _Subgraph) -> bool:
 
 def _trial(
     model: ModelWrapper, op: type[KernelOp], match: Match, subgraph: _Subgraph
-) -> tuple[ModelWrapper, Kernel | tuple[Finding, ...]]:
+) -> tuple[ModelWrapper, KernelSpace | tuple[Finding, ...]]:
     """Try ``match`` on a copy of the model: replace the covered nodes with one
     KernelOp, named as the anchor, on their outside tensors, and apply its kernel's
     default policies (``KernelOp.defaulted``). Returns the copy and, where every value is
@@ -323,11 +323,11 @@ def _trial(
     node = trial.graph.node[index]
     try:
         defaulted = kernel_op(trial, node).defaulted()
-        if isinstance(defaulted, Kernel):
+        if isinstance(defaulted, KernelSpace):
             infer_node(trial, node)
     except FactUnstated as error:
         return trial, (unstated(op.op_type, str(error), tensor=error.tensor),)
-    if isinstance(defaulted, Kernel):
+    if isinstance(defaulted, KernelSpace):
         return trial, defaulted
     flat = (cause for finding in defaulted for cause in (finding.causes or (finding,)))
     return trial, tuple(dict.fromkeys(flat))

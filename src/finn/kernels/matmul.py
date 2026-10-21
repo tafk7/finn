@@ -84,7 +84,8 @@ which its ``y`` port writes.
 - The activation channel's plan replays each dense row and frames each
   reduction; the channel's adapter carries that out.
 
-Its ``module`` (``finn.kernels.base``) merges its children's netlists.
+It binds no module of its own: its netlist (``finn.kernels.base.KernelSpace``) merges its
+children's.
 """
 
 from __future__ import annotations
@@ -112,7 +113,7 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.gemm import Form, Window
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import require_positive
-from finn.kernels.base import ComposedKernel
+from finn.kernels.base import KernelSpace
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.port import served
 from finn.kernels.values.domains import (
@@ -196,11 +197,10 @@ def block_diagonal(weights: IntegerTensor) -> IntegerTensorValue:
     return IntegerTensorValue.flat((*shape[:-2], shape[-2] * channels, channels), dense)
 
 
-class MatMulKernel(ComposedKernel):
+class MatMulKernel(KernelSpace):
     """Operation facts, and the kernels and Decisions over kernels on its tensors."""
 
     id = "finn.matmul"
-    version = 1
 
     form: Form = Param(default=Form.DENSE)
     # A dense form read through a window: a lowered convolution (module docstring).

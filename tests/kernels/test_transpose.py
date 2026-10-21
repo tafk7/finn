@@ -24,6 +24,7 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.harness.points import rejected
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.channels import Channel
+from finn.kernels.library import library_module
 from finn.kernels.network import dotted
 from finn.kernels.transpose import TransposeKernel
 
@@ -69,9 +70,11 @@ def test_its_input_is_each_matrix_flat_and_its_output_each_column(simd: int) -> 
     columns = flat.transpose(0, 2, 1).reshape(-1, simd).tolist()
     assert _beats(kernel.input_stream.sequence.form) == rows_in
     assert _beats(kernel.output_stream.sequence.form) == columns
-    parameters = dict(kernel.module.parameters)
+    parameters = dict(library_module(kernel).parameters)
     assert parameters == {"BITS": 4, "I": ROWS, "J": COLS, "RAM_STYLE": '"auto"', "SIMD": simd}
-    widths = {pin.name: pin.width for pin in kernel.module.abi.pins if isinstance(pin, Signal)}
+    widths = {
+        pin.name: pin.width for pin in library_module(kernel).abi.pins if isinstance(pin, Signal)
+    }
     assert widths["idat"] == widths["odat"] == 4 * simd
     # Its cycles a frame are the beats its ports carry, as every leaf's: a matrix's
     # elements, SIMD a beat, each batch.
@@ -124,7 +127,7 @@ def test_its_ultra_pages_need_ultraram_but_no_initial_contents() -> None:
     so UltraRAM that takes no initial contents is enough."""
     platform = replace(FULL_DSP48E2, uram_init=False)
     kernel: Any = placed(transpose(), {"simd": 2, "ram_style": "ultra"}, platform=platform)
-    assert dict(kernel.module.parameters)["RAM_STYLE"] == '"ultra"'
+    assert dict(library_module(kernel).parameters)["RAM_STYLE"] == '"ultra"'
 
 
 def test_ultra_pages_without_ultraram_are_refused_by_the_kernel_s_rule() -> None:

@@ -20,13 +20,15 @@ from finn.core.space import (
     derived,
     divisors_of,
     reject,
+    view,
 )
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contributions import Contribution, CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, extent_of
+from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, extent_of
 from finn.kernels.fifo import fifo_resources
+from finn.kernels.library import LibraryModule
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
@@ -57,7 +59,7 @@ def inner_shuffle_resources(
     return banks + rotators + skids
 
 
-class TransposeKernel(LeafKernel):
+class TransposeKernel(KernelSpace):
     """FinnLib ``inner_shuffle``: an (I, J) matrix's rows in, its columns out.
 
     The input is the last two axes of its tensor in row-major order, SIMD
@@ -93,8 +95,6 @@ class TransposeKernel(LeafKernel):
     """
 
     id = "finnlib.inner_shuffle"
-    version = 1
-    rtl_module = "inner_shuffle"
     clock_domain = NATIVE_CLOCKING
 
     # The tensor its input port reads: a fact it is given.
@@ -173,7 +173,7 @@ class TransposeKernel(LeafKernel):
         signals=("odat", "ovld", "ordy"),
     )
 
-    @derived(semantics=RESOURCES_SEMANTICS)
+    @view(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:
         if self.ram_style == "auto":
             return auto_unstated("the transpose's pages")
@@ -186,7 +186,7 @@ class TransposeKernel(LeafKernel):
             fabric=self.platform.fabric,
         )
 
-    @derived
+    @view
     def parameters(self) -> dict[str, int | str]:
         return {
             "BITS": self.input_tensor.element.bits,
@@ -196,9 +196,10 @@ class TransposeKernel(LeafKernel):
             "SIMD": self.simd,
         }
 
-    @derived
-    def sources(self) -> tuple[Contribution, ...]:
-        return (
+    module = LibraryModule(
+        "inner_shuffle",
+        parameters=parameters,
+        sources=(
             CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),
             CopiedSource(
                 "finnlib",
@@ -212,7 +213,8 @@ class TransposeKernel(LeafKernel):
                 provides=("module:inner_shuffle",),
                 requires=("module:elasticmem", "module:fifo"),
             ),
-        )
+        ),
+    )
 
 
 __all__ = ["TransposeKernel", "inner_shuffle_resources"]

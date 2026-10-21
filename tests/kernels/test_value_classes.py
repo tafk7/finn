@@ -9,7 +9,7 @@ from __future__ import annotations
 from support.value_classes import frozen_dataclasses, mutable_fields
 
 from finn.dataflow.datatypes import QONNXDataType
-from finn.kernels.base import KernelDeclaration
+from finn.kernels.declaration import KernelDeclaration
 
 #: Types outside the checker's rule that are immutable, and why.
 IMMUTABLE: dict[object, str] = {

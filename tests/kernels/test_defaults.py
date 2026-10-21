@@ -27,7 +27,7 @@ from finn.core.space import (
     inspection,
     reject,
 )
-from finn.kernels.base import ComposedKernel, Kernel, LeafKernel
+from finn.kernels.base import KernelSpace
 from finn.kernels.defaults import FIRST_VALID, Fixed, defaulted, policies
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.utilization import BLOCK_FIRST_BITS, memory_styles
@@ -206,22 +206,22 @@ def test_a_kernel_class_states_its_policies_as_fixed_values_by_name() -> None:
     assert policies(PackedDotpKernel)["reducer"] == FIRST_VALID
 
 
-def _kernels() -> list[type[Kernel]]:
+def _kernels() -> list[type[KernelSpace]]:
     for module in pkgutil.iter_modules(finn.kernels.__path__):
         importlib.import_module(f"finn.kernels.{module.name}")
-    found: list[type[Kernel]] = []
-    pending: list[type[Kernel]] = [Kernel]
+    found: list[type[KernelSpace]] = []
+    pending: list[type[KernelSpace]] = [KernelSpace]
     while pending:
         for each in pending.pop().__subclasses__():
             pending.append(each)
             if each.__module__.startswith("finn.kernels.") and each not in found:
                 found.append(each)
-    return [each for each in found if each not in (LeafKernel, ComposedKernel)]
+    return found
 
 
 @pytest.mark.parametrize("kernel", _kernels(), ids=lambda kernel: kernel.__qualname__)
 def test_every_kernel_states_its_policies_and_each_choice_but_a_fifo_s_depth_is_first_valid(
-    kernel: type[Kernel],
+    kernel: type[KernelSpace],
 ) -> None:
     """Every kernel's policies are well formed. None fixes a value: each choice's first
     valid value is today's; the FIFO's depth, required, has none."""

@@ -29,6 +29,7 @@ from finn.kernels.artifacts.abi import Signal
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.configure import refusal
 from finn.kernels.eltwise import EltwiseKernel
+from finn.kernels.library import library_module
 from finn.platform.capabilities import DspBlock, Platform
 from kernels.sweeps import eltwise_numeric
 
@@ -49,7 +50,7 @@ def test_eltwise_result_grows_for_integers_and_converts_to_float(
     operation: str, lhs: str, rhs: str, result: str
 ) -> None:
     point = eltwise(operation=operation, lhs=lhs, rhs=rhs)
-    requirements = point.module
+    requirements = library_module(point)
     assert point.result_dtype.name == result
     widths = {port.name: port.width for port in requirements.abi.pins if isinstance(port, Signal)}
     assert widths["adat"] == 2 * resolve_qonnx_datatype_name(lhs).bitwidth()
@@ -60,7 +61,7 @@ def test_eltwise_result_grows_for_integers_and_converts_to_float(
 def test_eltwise_rounds_its_scale_to_binary32_and_lists_its_sources_in_order() -> None:
     integer = eltwise(scale=1.0 + 2**-30)
     assert integer.native_scale == 1.0
-    requirements = integer.module
+    requirements = library_module(integer)
     assert dict(requirements.parameters)["B_SCALE"] == "1.0"
     assert all(isinstance(source, CopiedSource) for source in requirements.sources)
     assert [source.path for source in requirements.sources if isinstance(source, CopiedSource)] == [
@@ -71,7 +72,7 @@ def test_eltwise_rounds_its_scale_to_binary32_and_lists_its_sources_in_order() -
         "rtl/arith/eltwise.sv",
     ]
     floating = eltwise(lhs="FLOAT32", rhs="FLOAT32", scale=0.25)
-    assert dict(floating.module.parameters)["B_SCALE"] == "0.25"
+    assert dict(library_module(floating).parameters)["B_SCALE"] == "0.25"
 
 
 @pytest.mark.parametrize("scale", (1e100, float("inf"), float("nan")))
@@ -153,7 +154,7 @@ def test_eltwise_result_is_known_while_an_optional_parent_platform_is_unset() ->
     assert point.arithmetic.result_dtype.name == "INT4"
     # Its validity waits on the platform; its module, a product, answers meanwhile.
     assert inspection.validity(point.arithmetic).status == "open"
-    assessment = point.arithmetic.inspect(EltwiseKernel.module)
+    assessment = point.arithmetic.inspect(EltwiseKernel.netlist)
     assert isinstance(assessment.output_result, Available)
     assert isinstance(assessment.validity, Unresolved)
     assert assessment.accepted_result == assessment.output_result

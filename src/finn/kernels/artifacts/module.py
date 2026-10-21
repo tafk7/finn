@@ -178,7 +178,6 @@ class Leaf:
     or one HLS request, whose top it is named by."""
 
     implementation_id: str
-    implementation_version: str
     name: str
     parameters: ScalarTable
     abi: Abi
@@ -187,8 +186,8 @@ class Leaf:
     held: Held = Held()
 
     def __post_init__(self) -> None:
-        if not self.implementation_id or not self.implementation_version:
-            raise BuildError("a module needs an implementation id and version")
+        if not self.implementation_id:
+            raise BuildError("a module needs an implementation id")
         if not _IDENTIFIER.fullmatch(self.name):
             raise BuildError(f"{self.name!r} is not an RTL module identifier")
         parameters = _table(self.parameters, label="module parameter table")

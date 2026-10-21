@@ -7,28 +7,60 @@ A kernel with a control interface (an AXI-Lite configuration bus, say) has a for
 naming the port its bus is presented at, given where it is placed (``control: str =
 Param(required=False)``), and exports, under ``CONTROL``, the bus it presents there
 with that port and the writes that put its configuration into the bus's registers
-(``RegisterMap``): a ``Control``. A kernel with children (``Members(CONTROL)``) and a
-network (``finn.kernels.network``) each collect their members' controls
-(``presented``: each a ``BusExport`` from its member's node) and present each in their
-netlist (``finn.kernels.base.merged``), prefixing its port with the member's node
+(``RegisterMap``): a ``Control``. A kernel's netlist view (its ``Members(CONTROL)``,
+``finn.kernels.base.KernelSpace``) and a network (``finn.kernels.network``) each collect
+their members' controls (``presented``: each a ``BusExport`` from its member's node) and
+present each in their netlist (``finn.kernels.base.merged``), prefixing its port with the
+member's node
 (``first_s_axilite``); the top module renames the bus to that port
 (``finn.kernels.artifacts.top.top_bus``), associated with its clock and reset. One kernel is
 presented at one port.
 
-A kernel not given a port, or that exposes no bus in its configuration
-(``Control(None)``), holds the bus inputs constant and leaves its outputs unconnected
-(``held_bus``), and presents it otherwise (``LeafKernel.controlled``): nothing about a
-bus is wired by name.
+A kernel declares its bus in its class body (``ControlBus``), after the members it
+names::
+
+    config = ControlBus(config_bus, presented=use_axilite, port=control, registers=register_map)
+    config = ControlBus(config_bus)  # never presented: held idle
+
+``bus`` is the kernel's ``Bus``; ``presented`` its bool member saying whether it presents
+the bus (a choice of its own), or the constant False; ``port`` its formal naming the port
+the bus is presented at; ``registers`` its ``RegisterMap``. It lowers to
+``<name>_presented``, a derived value (bool), and ``<name>_control``, a view of its
+``Control``, which the kernel exports as ``CONTROL``: ``Control(None)`` while it is not
+presented. Its pins are the bus, and what it holds the bus's inputs while it is not
+presented (``held_bus``: inputs constant, outputs unconnected): a declared bus is held or
+presented by construction (``presents``: its inputs accounted for in its module), and
+nothing about a bus is wired by name. Its pins come before every port's in its kernel's
+module and its hold after theirs (``finn.kernels.declaration.ModuleOrder.ENCLOSING``). A kernel
+declares one at most.
+
+``<name>_presented`` is the kernel's own bus, presented: what a count of the control buses
+sums, one a kernel. A boundary's AXI-Lite initiator is no kernel's bus and is not among
+them (counted as a control bus, it would be counted again as a memory port).
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import KW_ONLY, dataclass
+from typing import TYPE_CHECKING, Any, ClassVar
 
-from finn.core.space import Rejected, ViewKey, default_semantics, reject
-from finn.kernels.artifacts.abi import Bus, Direction
+from finn.core.space import (
+    DefinitionError,
+    Rejected,
+    Space,
+    ViewKey,
+    default_semantics,
+    derived,
+    reject,
+    view,
+)
+from finn.kernels.artifacts.abi import Bus, Direction, Pin
 from finn.kernels.artifacts.module import BusExport, Held, RegisterMap
+from finn.kernels.declaration import KernelDeclaration, ModuleOrder, Product, declared_reads
+
+if TYPE_CHECKING:
+    from finn.kernels.base import KernelSpace
 
 
 @dataclass(frozen=True)
@@ -78,9 +110,80 @@ def presented(controls: Iterable[tuple[str, Control]]) -> tuple[BusExport, ...] 
     )
 
 
+@dataclass(frozen=True, eq=False)
+class ControlBus(KernelDeclaration):
+    """A kernel's control bus: its ``Bus``, whether it presents it, the port it is
+    presented at and the writes of its configuration. The module docstring says what it
+    lowers to."""
+
+    bus: Any
+    _: KW_ONLY
+    presented: Any = False
+    port: Any = None
+    registers: Any = None
+
+    KIND: ClassVar[str] = "control-bus"
+    module_order: ClassVar[ModuleOrder] = ModuleOrder.ENCLOSING
+
+    def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
+        label = f"{owner.__qualname__}.{name}"
+        self.references()  # each member it names, named
+        if self.presented is not False and (self.port is None or self.registers is None):
+            raise DefinitionError.broken(
+                "control-bus-unaddressed",
+                "ControlBus",
+                f"{label}: a bus it may present names the port it is presented at and its "
+                "registers",
+                declaration=label,
+            )
+        declaration = self
+
+        @declared_reads(*self.paths("presented"))
+        def presented_(self: Space) -> bool:
+            """Whether it presents its control bus."""
+            return bool(declaration.value(self, "presented"))
+
+        @declared_reads(f"{name}_presented", *self.paths("bus", "port", "registers"))
+        def control_(self: Space) -> Control:
+            """The control bus it presents, None while it presents none."""
+            if not getattr(self, f"{name}_presented"):
+                return Control(None)
+            return Control(
+                declaration.value(self, "bus"),
+                declaration.value(self, "port"),
+                declaration.value(self, "registers"),
+            )
+
+        return {
+            f"{name}_presented": derived(presented_),
+            f"{name}_control": view(semantics=CONTROL_SEMANTICS)(control_),
+        }
+
+    def reads(self, name: str, product: Product) -> tuple[str, ...]:
+        if product == "pins":
+            return self.paths("bus")
+        if product == "held":
+            return (f"{name}_presented", *self.paths("bus"))
+        return ()
+
+    def pins(self, kernel: KernelSpace, name: str) -> tuple[Pin, ...] | Rejected:
+        bus: Bus = self.value(kernel, "bus")
+        return (bus,)
+
+    def held(self, kernel: KernelSpace, name: str) -> Held | Rejected:
+        if getattr(kernel, f"{name}_presented"):
+            return Held()
+        bus: Bus = self.value(kernel, "bus")
+        return held_bus(bus)
+
+    def presents(self, kernel: KernelSpace, name: str) -> bool:
+        return bool(getattr(kernel, f"{name}_presented"))
+
+
 __all__ = [
     "CONTROL",
     "Control",
+    "ControlBus",
     "held_bus",
     "presented",
 ]

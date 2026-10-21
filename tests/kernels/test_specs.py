@@ -9,7 +9,9 @@
 - the cases its design space refuses where they are drawn from are exactly those the
   spec states, each with its finding codes; and every probe is refused with its codes;
 - what it gathers is there: its conformance cases (one spec each), the sweeps' case
-  lists it names, its unit tests; its reference is the oracle or test-side.
+  lists it names, its unit tests; its reference is the oracle or test-side;
+- every kernel of ``finn.kernels`` that binds a library module is a spec's, so its
+  covering points build its module, checking that its sources provide it.
 
 The simulations are elsewhere: its conformance cases in ``test_conformance.py``,
 the KernelOps' parity in ``tests/kernel_ops/test_parity.py``.
@@ -19,6 +21,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import pkgutil
 import sys
 from dataclasses import replace
 from typing import Any
@@ -36,8 +39,11 @@ from support.kernel_specs import SPECS, conformance_cases
 from support.kernel_specs.base import ORACLE, TEST_SIDE, KernelSpec, Probe
 from support.layering import ROOT
 
+import finn.kernels
 from finn.core.space import Available, Space
+from finn.core.space.declarations import unmet_required
 from finn.harness.points import Covering, covering, refusal, refused_cases, rejected
+from finn.kernels.base import KernelSpace
 from finn.kernels.configure import undecided
 from finn.kernels.network import Network
 
@@ -140,3 +146,28 @@ def test_what_a_spec_gathers_is_there(name: str) -> None:
     for path in spec.unit:
         assert (ROOT / path).is_file(), path
     assert spec.reference == TEST_SIDE or spec.reference.startswith(ORACLE.split("{")[0])
+
+
+def _binding_a_module() -> set[type[KernelSpace]]:
+    """Every kernel class of ``finn.kernels`` that binds a library module and can be
+    placed (no ``required()`` member left unmet)."""
+    for module in pkgutil.iter_modules(finn.kernels.__path__):
+        importlib.import_module(f"finn.kernels.{module.name}")
+    found: set[type[KernelSpace]] = set()
+    pending: list[type[KernelSpace]] = [KernelSpace]
+    while pending:
+        for each in pending.pop().__subclasses__():
+            pending.append(each)
+            if (
+                each.__module__.startswith("finn.kernels.")
+                and each._module is not None
+                and not unmet_required(each)
+            ):
+                found.add(each)
+    return found
+
+
+def test_every_kernel_binding_a_module_is_a_spec_s_so_its_module_is_built() -> None:
+    kernels = _binding_a_module()
+    assert len(kernels) >= 11
+    assert kernels <= {spec.kernel for spec in SPECS}, kernels - {spec.kernel for spec in SPECS}

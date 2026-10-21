@@ -112,7 +112,7 @@ def leaf(request: HlsSource) -> Leaf:
         _stream("src", Endpoint.TARGET, AxisSpelling.UPPER),
         _stream("dst", Endpoint.INITIATOR, AxisSpelling.UPPER),
     )
-    return Leaf("test.hls.pooling", "1", request.function, (), Abi(pins), (request,))
+    return Leaf("test.hls.pooling", request.function, (), Abi(pins), (request,))
 
 
 def _end(instance: str | None, name: str) -> LinkEnd:

@@ -39,6 +39,7 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.configure import commit
 from finn.kernels.dotp import DotpAxiKernel, PackedDotpKernel
+from finn.kernels.library import library_module
 from finn.kernels.matmul import MatMulKernel
 
 FACTS = dict(
@@ -338,7 +339,7 @@ def test_the_core_is_one_possible_case_and_owns_its_folding_factors():
         {"x.adapter": "input_gen", "x.adapter.input_gen.input_gen.ram_style": "auto"},
     )
     compute = point.member("matmul").compute
-    assert isinstance(compute.inspect(DotpAxiKernel.module).accepted_result, Unresolved)
+    assert isinstance(compute.inspect(DotpAxiKernel.netlist).accepted_result, Unresolved)
     assert isinstance(module_of(point, "matmul"), Unresolved)
     point = choose(
         point,
@@ -348,7 +349,7 @@ def test_the_core_is_one_possible_case_and_owns_its_folding_factors():
     assert matmul.result_type == DataType["INT8"]
     assert inspection.validity(matmul).status == "valid"
     assert matmul.compute.y_element.dtype == matmul.result_type
-    _ = matmul.compute.module
+    _ = library_module(matmul.compute)
     assert matmul.compute.y_stream.sequence.form.beats == 4
     # The MatMul contributes its children's netlist; the network's module adds the
     # channels.

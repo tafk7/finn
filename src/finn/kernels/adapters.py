@@ -31,15 +31,16 @@ step: the connection ties it high. A width conversion is a ``vpc`` over vectors 
 the two lane counts' least common multiple: its two sides carry the same elements in
 whole beats, a common multiple of both lane counts, so the vectors are whole.
 
-Each candidate is a kernel with children (``ComposedKernel``): it places its modules
-as kernel children (``InputGeneratorKernel``, ``VpcKernel``) named by stage, each given
-its tensor and the two sides of its step, the beat sequences its ports present, from
-which it derives its generics. Each becomes a ``Stage``: the child's module and its
-ports' contracts, which the channel checks like any other port's, and which the channel
-wires hop by hop, so an adapter presents no port of its own. Its netlist, cycles
-(the most beats any of its stages' ports carries), buffering (the buffers its
-``input_gen`` stages hold, ``BUF_SIZE`` words each, read from the RTL:
-``nest_geometry``) and resources are its stages' own, by the base.
+Each candidate is a kernel with children (a ``KernelSpace`` binding no module): it
+places its modules as kernel children (``InputGeneratorKernel``, ``VpcKernel``) named by
+stage, each given its tensor and the two sides of its step, the beat sequences its ports
+present, from which it derives its generics. Each becomes a ``Stage``: the child's module
+(read from its netlist, ``finn.kernels.library.library_module``) and its ports'
+contracts, which the channel checks like any other port's, and which the channel wires
+hop by hop, so an adapter presents no port of its own. Its netlist, cycles (the most
+beats any of its stages' ports carries), buffering (the buffers its ``input_gen`` stages
+hold, ``BUF_SIZE`` words each, read from the RTL: ``nest_geometry``) and resources are its
+stages' own, by the base's views.
 
 FinnLib's ``replay_buffer`` is not wrapped: ``input_gen`` realizes every replay
 it could. FinnLib's ``inner_shuffle`` realizes one shape of lane regroup
@@ -73,11 +74,12 @@ from finn.kernels.base import (
     CYCLES,
     NETLIST,
     RESOURCES,
-    ComposedKernel,
+    KernelSpace,
     PortContract,
-    declared_reads,
 )
+from finn.kernels.declaration import declared_reads
 from finn.kernels.input_generator import Generate, InputGeneratorKernel, generated
+from finn.kernels.library import library_module
 from finn.kernels.transport import StreamContract
 from finn.kernels.vpc import VpcKernel
 from finn.platform.capabilities import Platform
@@ -177,7 +179,7 @@ def _side(name: str, side: str) -> BeatSequence:
     return derived(read)
 
 
-class StreamAdapter(ComposedKernel):
+class StreamAdapter(KernelSpace):
     """A fixed chain of FinnLib modules carrying out a channel's plan, or refusing it.
 
     Each candidate places its modules as kernel children named by stage
@@ -189,7 +191,6 @@ class StreamAdapter(ComposedKernel):
     """
 
     id = "finn.channel.adapter"
-    version = 1
     modules: ClassVar[tuple[str, ...]] = ()
 
     tensor: Tensor = Param()
@@ -249,15 +250,15 @@ class StreamAdapter(ComposedKernel):
             given: PortContract = kernel.input_contract
             presented: PortContract = kernel.output_contract
             found.append(
-                Stage(kernel.module, given.contract, presented.contract, f"{chain}.{name}")
+                Stage(library_module(kernel), given.contract, presented.contract, f"{chain}.{name}")
             )
         return tuple(found)
 
     exports = {
-        NETLIST: ComposedKernel.netlist,
-        CYCLES: ComposedKernel.cycles,
-        BUFFERING: ComposedKernel.buffering,
-        RESOURCES: ComposedKernel.resources,
+        NETLIST: KernelSpace.netlist,
+        CYCLES: KernelSpace.cycles,
+        BUFFERING: KernelSpace.buffering,
+        RESOURCES: KernelSpace.resources,
     }
 
 
@@ -298,7 +299,7 @@ def _chain(modules: tuple[str, ...]) -> type[StreamAdapter]:
     for name, kind in zip(names, modules):
         members[name] = _input_gen(name) if kind == "input_gen" else _vpc(name)
 
-    parts = ("module", "input_contract", "output_contract")
+    parts = ("netlist", "input_contract", "output_contract")
 
     @declared_reads("realization", *(f"{name}.{part}" for name in names for part in parts))
     def stages(self: StreamAdapter) -> tuple[Stage, ...]:

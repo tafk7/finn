@@ -26,13 +26,14 @@ from __future__ import annotations
 from math import lcm
 from typing import TYPE_CHECKING, ClassVar
 
-from finn.core.space import Param, derived
+from finn.core.space import Param, derived, view
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contributions import Contribution, CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, LeafKernel
+from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
+from finn.kernels.library import LibraryModule
 from finn.kernels.port import native_stream
 from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit
 from finn.platform.capabilities import Resources
@@ -50,13 +51,11 @@ _VPC_LUT = Fit(9.9, (0.022,))
 _VPC_FF = Fit(6.8, (1.0,))
 
 
-class VpcKernel(LeafKernel):
+class VpcKernel(KernelSpace):
     """FinnLib ``vpc``: its tensor's elements in the order they arrive, at another lane
     count; see the module docstring."""
 
     id = "finnlib.vpc"
-    version = 1
-    rtl_module = "vpc"
     clock_domain = NATIVE_CLOCKING
 
     # The tensor whose elements it regroups, a fact, and the two sides of the conversion.
@@ -98,11 +97,11 @@ class VpcKernel(LeafKernel):
     # Its lanes and element come from its ports, positive by construction: the RTL
     # refuses nothing they present, so it states no constraint of its own.
 
-    @derived(semantics=RESOURCES_SEMANTICS)
+    @view(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources:
         return vpc_resources(w=self.element_bits, pi=self.lanes_in, po=self.lanes_out)
 
-    @derived
+    @view
     def parameters(self) -> dict[str, int | str]:
         return {
             "N": lcm(self.lanes_in, self.lanes_out),
@@ -113,9 +112,11 @@ class VpcKernel(LeafKernel):
             "W": self.element_bits,
         }
 
-    @derived
-    def sources(self) -> tuple[Contribution, ...]:
-        return (CopiedSource("finnlib", "rtl/shape/vpc.sv", provides=("module:vpc",)),)
+    module = LibraryModule(
+        "vpc",
+        parameters=parameters,
+        sources=(CopiedSource("finnlib", "rtl/shape/vpc.sv", provides=("module:vpc",)),),
+    )
 
 
 __all__ = ["VpcKernel", "vpc_resources"]

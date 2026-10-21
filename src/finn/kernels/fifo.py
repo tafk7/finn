@@ -37,13 +37,15 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
+    view,
 )
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contributions import Contribution, CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, PortContract
+from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, PortContract
+from finn.kernels.library import LibraryModule
 from finn.kernels.port import data_width, native_stream
 from finn.kernels.utilization import RESOURCES_SEMANTICS, lutram, memory, uram_constraint
 from finn.platform.capabilities import Fabric, Platform, Resources
@@ -209,13 +211,11 @@ def least_depth_holding(words: int, bits: int, style: str, uram: bool) -> int:
         depth += 1
 
 
-class FifoKernel(LeafKernel):
+class FifoKernel(KernelSpace):
     """FinnLib ``fifo``: what arrives of its tensor, presented again on its output; see the
     module docstring."""
 
     id = "finnlib.fifo"
-    version = 2
-    rtl_module = "fifo"
     clock_domain = NATIVE_CLOCKING
 
     # The tensor whose words it buffers, a fact, and what arrives of it.
@@ -286,18 +286,18 @@ class FifoKernel(LeafKernel):
         _ = self.planned_storage
         return True
 
-    @derived(semantics=RESOURCES_SEMANTICS)
+    @view(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources:
         return fifo_resources(
             self.depth, self.word_bits, self.rtl_ram_style, fabric=self.platform.fabric
         )
 
-    @derived
+    @view
     def held_bits(self) -> int:
         """What it holds: its depth of words."""
         return self.depth * self.word_bits
 
-    @derived
+    @view
     def parameters(self) -> dict[str, int | str]:
         return {
             "DATA_WIDTH": self.word_bits,
@@ -305,9 +305,11 @@ class FifoKernel(LeafKernel):
             "RAM_STYLE": f'"{self.rtl_ram_style}"',
         }
 
-    @derived
-    def sources(self) -> tuple[Contribution, ...]:
-        return (CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),)
+    module = LibraryModule(
+        "fifo",
+        parameters=parameters,
+        sources=(CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),),
+    )
 
 
 __all__ = [

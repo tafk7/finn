@@ -58,7 +58,6 @@ def fifo(width: int, *, depth: int = 4, reset: Reset = ACTIVE_HIGH) -> Leaf:
     """FinnLib's ``fifo``, on its native pins."""
     return Leaf(
         "finnlib.fifo",
-        "2",
         "fifo",
         (("DATA_WIDTH", width), ("DEPTH", depth), ("RAM_STYLE", '"auto"')),
         Abi(
@@ -213,7 +212,6 @@ def test_a_lane_permutation_and_padding_both_ways(fixture_root: Path) -> None:
 def test_a_marker_pair_a_held_input_and_open_outputs(fixture_root: Path) -> None:
     marked = Leaf(
         "test.marked",
-        "1",
         "marked",
         (),
         Abi(
@@ -258,7 +256,6 @@ def test_a_marker_pair_a_held_input_and_open_outputs(fixture_root: Path) -> None
 def test_clocks_and_resets_are_driven_by_role_whatever_their_names(fixture_root: Path) -> None:
     pumped = Leaf(
         "test.pumped",
-        "1",
         "pumped",
         (),
         Abi(

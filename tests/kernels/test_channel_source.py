@@ -299,7 +299,7 @@ def test_the_cores_do_not_wait_on_the_source():
     # The packed core does not wait for the memory: its weights' range is the one their
     # owner states on the channel.
     compute = point.member("matmul").compute
-    assert isinstance(compute.inspect(DotpAxiKernel.module).accepted_result, Available)
+    assert isinstance(compute.inspect(DotpAxiKernel.netlist).accepted_result, Available)
     assert compute.parameters["NARROW_WEIGHTS"] == 0  # the weights hold -4
     assert inspection.validity(compute).status == "valid"
     folding = choose(base(weights=WEIGHTS), {"matmul.compute": "packed"})

@@ -58,7 +58,6 @@ def stage(*, width: int = 8, data: bytes = b"00\n") -> Leaf:
     """A FinnLib-like stage: a word in, a word out, a configuration bus held idle."""
     return Leaf(
         "test.stage",
-        "1",
         "stage",
         (("WIDTH", width), ("FLAG", True)),
         Abi(

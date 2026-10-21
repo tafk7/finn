@@ -24,7 +24,7 @@ from finn.core.space import (
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import NETLIST, PORT_CONTRACT, LeafKernel, PortContract
+from finn.kernels.base import NETLIST, PORT_CONTRACT, KernelSpace, PortContract
 from finn.kernels.channels import Channel, boundary_contract
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
@@ -111,10 +111,11 @@ def test_explain_shows_per_channel_and_per_member_evidence():
     channel = inspection.explain(point.member("first"), Channel.netlist)
     visited = {node.declaration.key for node in channel.nodes}
     assert {"netlist", "well_formed", "compatible", "streams"} <= visited
-    member = inspection.explain(point.member("first_source"), LeafKernel.netlist)
+    member = inspection.explain(point.member("first_source"), KernelSpace.netlist)
     visited = {node.declaration.key for node in member.nodes}
-    # A leaf's netlist is its own module, its ``codegen``: no members' netlists.
-    assert {"output_stream", "module", "codegen"} <= visited
+    # A kernel's netlist with a module builds it from its ports' streams, its parameters,
+    # its data and its bus: it places no member, whose netlists it reads none of.
+    assert {"output_stream", "parameters", "init_file", "config_presented", "netlists"} <= visited
 
 
 def test_a_channel_waits_for_its_own_sides_only():

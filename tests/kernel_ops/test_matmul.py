@@ -39,7 +39,6 @@ from finn.custom_op.kernels.thresholding import Thresholding
 from finn.harness.reference import converted
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.kernels import InferKernelTensors
 
@@ -367,9 +366,9 @@ def test_the_domain_resolves_at_its_version_without_a_fallback() -> None:
     for op in (MatMul, Thresholding, Conv):
         assert "op_type" in vars(op) and "op_version" in vars(op)
         assert op_identity(op) == (op.op_type, op.op_version)
-    assert op_identity(MatMul) == ("MatMul", MatMulKernel.version)
-    assert op_identity(Thresholding) == ("Thresholding", ThresholdingAxiKernel.version)
-    assert op_identity(Conv) == ("Conv", MatMulKernel.version)
+    assert op_identity(MatMul) == ("MatMul", 1)
+    assert op_identity(Thresholding) == ("Thresholding", 1)
+    assert op_identity(Conv) == ("Conv", 1)
     assert get_domain_opset_version("finn.custom_op.kernels") == domain.opset_version
     assert domain.__all__ == ["Conv", "MatMul", "Thresholding"]
     assert PLATFORM_KEYS["dsp"].entry in {item.key for item in model.graph.metadata_props}

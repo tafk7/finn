@@ -36,13 +36,15 @@ from finn.core.space import (
     derived,
     divisors_of,
     reject,
+    view,
 )
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import Tensor
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contributions import Contribution, CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, extent_of
+from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, extent_of
+from finn.kernels.library import LibraryModule
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.domains import admit_element
@@ -66,13 +68,11 @@ SOURCES = (
 )
 
 
-class PwPolyKernel(LeafKernel):
+class PwPolyKernel(KernelSpace):
     """``function`` of each element of its input, PE elements a beat; see the module
     docstring."""
 
     id = "finnlib.pwpolyf"
-    version = 1
-    rtl_module = "pwpolyf"
     clock_domain = NATIVE_CLOCKING
 
     # What it computes: a supplied input, not an interchangeable implementation choice.
@@ -156,17 +156,15 @@ class PwPolyKernel(LeafKernel):
             return reject("pwpolyf-target", "the polynomial's DSPFP32 chain requires DSP58")
         return True
 
-    @derived(semantics=RESOURCES_SEMANTICS)
+    @view(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "the pwpolyf module's resources are not characterised")
 
-    @derived
+    @view
     def parameters(self) -> dict[str, int | str]:
         return {"PE": self.pe, "FUNC": f'"{self.function}"'}
 
-    @derived
-    def sources(self) -> tuple[Contribution, ...]:
-        return SOURCES
+    module = LibraryModule("pwpolyf", parameters=parameters, sources=SOURCES)
 
 
 __all__ = ["FLOAT32", "FUNCTIONS", "SOURCES", "PwPolyKernel"]

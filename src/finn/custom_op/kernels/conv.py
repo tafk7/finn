@@ -61,7 +61,7 @@ class Conv(MatMul):
     """qonnx Im2Col then ONNX MatMul, bound to ``MatMulKernel`` read through a window."""
 
     op_type = "Conv"
-    op_version = MatMulKernel.version
+    op_version = 1
     kernel = MatMulKernel
     semantic = {name: ("ints", True, []) for name in GEOMETRY}
     anchor = IM2COL

@@ -61,15 +61,17 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
+    view,
 )
 from finn.dataflow.plan import Unrealizable
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import Adaptation, BeatSequence, LevelEnd, classify
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contributions import Contribution, CopiedSource
+from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
-from finn.kernels.base import NATIVE_CLOCKING, LeafKernel
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
+from finn.kernels.library import LibraryModule
 from finn.kernels.port import LoopEnds, data_width, native_stream
 from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
@@ -185,13 +187,11 @@ def presented(generate: Generate, leaving: BeatSequence) -> BeatSequence:
     )
 
 
-class InputGeneratorKernel(LeafKernel):
+class InputGeneratorKernel(KernelSpace):
     """FinnLib ``input_gen``: its tensor's words in another order, with its loop ends; see
     the module docstring."""
 
     id = "finnlib.input_generator"
-    version = 1
-    rtl_module = "input_gen"
     clock_domain = NATIVE_CLOCKING
 
     # The tensor whose words it reorders, a fact; what arrives of it, and the order and
@@ -271,7 +271,7 @@ class InputGeneratorKernel(LeafKernel):
     ram_style: str = Decision(domain=memory_styles(frame_bits))
     uram_present = uram_constraint(platform, ram_style, ("ultra",))
 
-    @derived
+    @view
     def buffer_words(self) -> int | Rejected:
         """BUF_SIZE, as the RTL derives it (``nest_geometry``)."""
         try:
@@ -279,13 +279,13 @@ class InputGeneratorKernel(LeafKernel):
         except GeometryError as error:
             return reject("input-generator-geometry", str(error))
 
-    @derived
+    @view
     def held_bits(self) -> int:
         """What it holds: its buffer, ``BUF_SIZE`` input words, not one frame."""
         words: int = self.buffer_words
         return words * self.word_bits
 
-    @derived(semantics=RESOURCES_SEMANTICS)
+    @view(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:
         if self.ram_style == "auto":
             return auto_unstated("the input_gen buffer")
@@ -297,7 +297,7 @@ class InputGeneratorKernel(LeafKernel):
             fabric=self.platform.fabric,
         )
 
-    @derived
+    @view
     def parameters(self) -> dict[str, int | str]:
         return {
             "COEFS": _vector(self.strides),
@@ -308,9 +308,7 @@ class InputGeneratorKernel(LeafKernel):
             "RAM_STYLE": f'"{self.ram_style}"',
         }
 
-    @derived
-    def sources(self) -> tuple[Contribution, ...]:
-        return (SOURCE,)
+    module = LibraryModule("input_gen", parameters=parameters, sources=(SOURCE,))
 
 
 # -- the buffer, as the RTL derives it -------------------------------------------------------

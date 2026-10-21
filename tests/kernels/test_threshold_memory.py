@@ -20,6 +20,7 @@ from support.helpers import FULL_DSP48E2
 
 from finn.core.space import ConfigurationResult, Inapplicable, design_space, inspection
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.kernels.library import library_module
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform.capabilities import Platform
 
@@ -48,7 +49,7 @@ def configured(count: int = 3, pe: int = 1, **memory: object) -> ThresholdingAxi
 
 
 def triggers(point: ThresholdingAxiKernel) -> tuple[int, int]:
-    parameters = dict(point.module.parameters)
+    parameters = dict(library_module(point).parameters)
     return parameters["DEPTH_TRIGGER_BRAM"], parameters["DEPTH_TRIGGER_URAM"]
 
 

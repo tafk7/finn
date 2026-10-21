@@ -74,7 +74,7 @@ class MatMul(KernelOp):
     """ONNX MatMul, Y = A @ B, bound to ``MatMulKernel``."""
 
     op_type = "MatMul"
-    op_version = MatMulKernel.version
+    op_version = 1
     kernel = MatMulKernel
     ports = ("x", "w")
     wiring = {

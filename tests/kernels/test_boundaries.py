@@ -38,7 +38,8 @@ from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.platform.capabilities import DspBlock, Fabric, Platform
 from finn.kernels.artifacts.module import Composed, Leaf
-from finn.kernels.base import Kernel
+from finn.kernels.base import KernelSpace
+from finn.kernels.library import library_module
 from finn.kernels.configure import commit
 from finn.kernels.port import axis
 from finn.kernels.transport import AxisBeat
@@ -86,7 +87,7 @@ point = placed.with_choices({
     ("compute", "compute_pumping"): False,
     ("compute", "reducer"): "tree",
 }).member("compute")
-answer = point.module
+answer = library_module(point)
 assert isinstance(answer, Leaf)
 x_axis = axis(*PackedDotpKernel.x.viewed(point, "x"))
 assert isinstance(x_axis, AxisBeat)

@@ -14,11 +14,12 @@ from finn.dataflow.plan import Unrealizable
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.input_generator import Generate, InputGeneratorKernel, generated
+from finn.kernels.library import library_module
 
 
 def test_generator_states_zero_stride_replay_and_multibit_markers() -> None:
     point = generator()
-    requirements = point.module
+    requirements = library_module(point)
     assert requirements.parameters == (
         ("COEFS", "'{0, 1}"),
         ("D", 2),
@@ -32,7 +33,7 @@ def test_generator_states_zero_stride_replay_and_multibit_markers() -> None:
     assert widths["olst"] == 2
     assert all(isinstance(port, Signal) for port in requirements.abi.pins)
     ranked = generator(frame=56, dims=(3, 4, 2, 3), strides=(16, 1, 16, 2))
-    ports = ranked.module.abi.pins
+    ports = library_module(ranked).abi.pins
     assert (
         next(port.width for port in ports if isinstance(port, Signal) and port.name == "olst") == 4
     )

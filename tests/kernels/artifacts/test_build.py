@@ -28,7 +28,6 @@ from finn.kernels.artifacts.module import Abi, BuildError, Composed, Fragment, L
 def _leaf(*, width: int = 8, sources: tuple[CopiedSource, ...] | None = None) -> Leaf:
     return Leaf(
         "fixed",
-        "3",
         "core",
         (("WIDTH", width),),
         Abi(

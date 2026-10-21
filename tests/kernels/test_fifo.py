@@ -22,7 +22,9 @@ from finn.core.space import (
 )
 from finn.core.space.errors import ValueUnavailableError
 from finn.kernels.artifacts.abi import Direction, Signal
+from finn.kernels.artifacts.module import Fragment
 from finn.kernels.fifo import FifoKernel, FifoStorage, fifo_resources
+from finn.kernels.library import library_module
 from finn.platform.capabilities import Fabric
 
 T = TypeVar("T")
@@ -35,15 +37,15 @@ def decided(answer: QueryResult[T]) -> T:
 
 def test_fifo_states_its_word_geometry_once_its_ram_style_is_chosen() -> None:
     base = design_space(fifo_node(word_bits=13, depth=8))
-    assert isinstance(base.inspect(FifoKernel.module).accepted_result, Unresolved)
+    assert isinstance(base.inspect(FifoKernel.netlist).accepted_result, Unresolved)
     with pytest.raises(ValueUnavailableError):
-        _ = base.module
+        _ = library_module(base)
     # Its word is its input port's: one lane of the tensor's INT13 a beat.
     assert base.field(FifoKernel.word_bits).get() == 13
     assert base.field(FifoKernel.word_bits).query() == Available(13)
     assert decided(base.field(FifoKernel.ram_style).state).status == "unassigned"
     chosen = base.with_choices(ram_style="auto")
-    requirements = chosen.module
+    requirements = library_module(chosen)
     assert requirements.parameters == (("DATA_WIDTH", 13), ("DEPTH", 8), ("RAM_STYLE", '"auto"'))
     assert [
         (port.name, port.direction, port.width)
@@ -59,17 +61,18 @@ def test_fifo_states_its_word_geometry_once_its_ram_style_is_chosen() -> None:
         ("ovld", Direction.OUT, 1),
         ("ordy", Direction.IN, 1),
     ]
-    assert chosen.inspect(FifoKernel.module).accepted_result == Available(requirements)
-    assert chosen.field(FifoKernel.module).get() == requirements
-    assert chosen.field(FifoKernel.module).query() == Available(requirements)
-    assert chosen.query(FifoKernel.module) == Available(requirements)
+    netlist = Fragment((("", requirements),))
+    assert chosen.inspect(FifoKernel.netlist).accepted_result == Available(netlist)
+    assert chosen.field(FifoKernel.netlist).get() == netlist
+    assert chosen.field(FifoKernel.netlist).query() == Available(netlist)
+    assert chosen.query(FifoKernel.netlist) == Available(netlist)
     assert isinstance(base.query(FifoKernel.ram_style), Unresolved)
 
 
 @pytest.mark.parametrize("style", ("auto", "shift", "distributed", "block", "ultra"))
 def test_fifo_passes_its_ram_style_to_its_native_parameter(style: str) -> None:
     point = design_space(fifo_node(word_bits=17, depth=64)).with_choices(ram_style=style)
-    assert dict(point.module.parameters)["RAM_STYLE"] == f'"{style}"'
+    assert dict(library_module(point).parameters)["RAM_STYLE"] == f'"{style}"'
 
 
 def pieces_of(point: FifoKernel) -> list[tuple[str, set[str]]]:
@@ -91,11 +94,11 @@ def test_fifo_refuses_an_unsupported_geometry_before_and_after_its_ram_style(dep
             ("capacity_supported", {"fifo-geometry"}),
             ("geometry_supported", {"fifo-geometry"}),
         ]
-    assert isinstance(base.inspect(FifoKernel.module).accepted_result, Rejected)
+    assert isinstance(base.inspect(FifoKernel.netlist).accepted_result, Rejected)
     chosen = base.with_choices(ram_style="auto")
-    assert isinstance(chosen.inspect(FifoKernel.module).accepted_result, Rejected)
+    assert isinstance(chosen.inspect(FifoKernel.netlist).accepted_result, Rejected)
     with pytest.raises(ValueUnavailableError) as error:
-        _ = chosen.module
+        _ = library_module(chosen)
     assert isinstance(error.value.result, Rejected)
 
 
@@ -116,7 +119,7 @@ def test_fifo_auto_takes_ultraram_only_on_a_platform_that_has_it(
         ram_style="auto"
     )
     assert point.storage == storage
-    assert dict(point.module.parameters)["RAM_STYLE"] == rtl_style
+    assert dict(library_module(point).parameters)["RAM_STYLE"] == rtl_style
 
 
 @pytest.mark.parametrize(

@@ -64,6 +64,7 @@ from finn.kernels.artifacts.build import instance_net
 from finn.kernels.artifacts.module import Held, RegisterMap, declared_registers
 from finn.kernels.artifacts.sources import include_directories
 from finn.kernels.dotp import Int8Dsp58DotpKernel
+from finn.kernels.library import library_module
 from finn.kernels.matmul import datatype_range
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform.capabilities import DspBlock
@@ -147,7 +148,7 @@ def _thresholds_alone() -> Any:
 
 
 def test_a_leaf_s_held_inputs_are_driven_to_their_declared_values(tmp_path: Path) -> None:
-    leaf = _thresholds_alone().module
+    leaf = library_module(_thresholds_alone())
     held = dict(leaf.held.inputs)
     assert held["s_axilite_AWVALID"] == 0 and "s_axis_set_tvalid" in held
     bench = stream_bench(
@@ -172,7 +173,7 @@ def test_a_leaf_s_held_inputs_are_driven_to_their_declared_values(tmp_path: Path
 def test_an_input_the_module_declares_no_value_for_is_refused_naming_it(tmp_path: Path) -> None:
     """Held nothing, the leaf's set stream, given no words, has no value: its AXI-Lite bus is
     the testbench's to write (no write declared) and its other streams are given words."""
-    leaf = _thresholds_alone().module
+    leaf = library_module(_thresholds_alone())
     unheld = replace(leaf, held=Held())
     with pytest.raises(Undriven) as refused:
         stream_bench(

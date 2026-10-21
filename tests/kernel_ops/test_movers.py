@@ -541,5 +541,5 @@ def test_tfc_on_the_default_ip_shell_is_tfc_in_the_zynq_shell_without_its_movers
     # The module TFC in the Zynq shell was packaged as before the shells had rows (its
     # thresholds a data file, THRESHOLDS_FILE; its MatMuls after the first INT7, reading each
     # thresholding's range).
-    assert module_of(ip_model, tmp_path / "ip") == "finn_partition__023b52bd70edebcc"
-    assert module_of(zynq_model, tmp_path / "zynq") == "finn_partition__023b52bd70edebcc"
+    assert module_of(ip_model, tmp_path / "ip") == "finn_partition__5d21df0e45b5df72"
+    assert module_of(zynq_model, tmp_path / "zynq") == "finn_partition__5d21df0e45b5df72"

@@ -22,6 +22,7 @@ from support.refusals import refused
 from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.custom_op.kernels.thresholding import Thresholding
+from finn.kernels.library import library_module
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.kernels import InferKernelTensors
@@ -83,7 +84,7 @@ def test_one_row_for_every_channel_is_bound_as_the_graph_states_it() -> None:
         model, {"activate": {"pe": 4, "use_axilite": False, "deep_pipeline": False, **MEMORY}}
     )
     activate = op(model).point()
-    parameters = dict(activate.module.parameters)
+    parameters = dict(library_module(activate).parameters)
     assert (parameters["C"], parameters["PE"]) == (1, 4)
     # One row in INT5, the type the facts derive, padded to four words.
     assert activate.thresholds_file.data == b"17\n01\n08\n00\n"
@@ -188,7 +189,6 @@ def test_the_schema_holds_the_memory_choices_and_bias_is_semantic() -> None:
 
 def test_the_schema_is_pinned_for_its_op_version() -> None:
     assert (Thresholding.op_version, schema_digest(Thresholding)) == (1, "7c279bb322d44f45")
-    assert Thresholding.op_version == ThresholdingAxiKernel.version
 
 
 def test_a_memory_choice_is_written_and_replayed() -> None:
@@ -197,7 +197,7 @@ def test_a_memory_choice_is_written_and_replayed() -> None:
         model, {"activate": {"pe": 2, "use_axilite": False, "deep_pipeline": False, **MEMORY}}
     )
     point = op(model).point()
-    assert dict(point.module.parameters)["DEPTH_TRIGGER_BRAM"] == 4  # stage 1, PE 2
+    assert dict(library_module(point).parameters)["DEPTH_TRIGGER_BRAM"] == 4  # stage 1, PE 2
     with refused("domain-membership", owner="block_stages"):
         configured(model, {"activate": {"block_stages": 3}})
     assert op(model).choices()["block_stages"] == 1

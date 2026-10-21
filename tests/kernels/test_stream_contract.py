@@ -39,6 +39,7 @@ from finn.dataflow.traversal import (
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import Channel, wired
 from finn.kernels.eltwise import EltwiseKernel
+from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.transport import (
@@ -222,8 +223,8 @@ def test_delivery_publishes_a_cyclic_contract_and_waits_only_for_its_own_choice(
     assert output.repetition is Repetition.CYCLIC and output.form == vector_major((4,), 2)
     assert output.payload_bits == output.transport.data_width == 8
     assert base.image == (0xE1, 0x87)
-    assert isinstance(base.query(MemStreamKernel.module), Unresolved)
-    requirements = delivery(ram_style="block", pumped_memory=False).module
+    assert isinstance(base.query(MemStreamKernel.netlist), Unresolved)
+    requirements = library_module(delivery(ram_style="block", pumped_memory=False))
     assert dict(requirements.parameters)["RAM_STYLE"] == '"block"'
 
 
@@ -244,7 +245,9 @@ def test_delivery_refuses_values_outside_the_operand_contract(values, dtype, mes
             platform=FULL_DSP48E2,
         )
     )
-    answer = point.with_choices(ram_style="auto", pumped_memory=False).query(MemStreamKernel.module)
+    answer = point.with_choices(ram_style="auto", pumped_memory=False).query(
+        MemStreamKernel.netlist
+    )
     assert isinstance(answer, Rejected)
     if message:
         assert any(message in finding.message for finding in answer.findings)

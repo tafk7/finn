@@ -32,13 +32,15 @@ from finn.core.space import (
     divisors_of,
     domain,
     reject,
+    view,
 )
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contributions import Contribution, CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, extent_of
+from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, extent_of
+from finn.kernels.library import LibraryModule
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.domains import Integer, admit_element
@@ -71,7 +73,7 @@ def _pe_values(extent: object) -> Domain[int]:
     )
 
 
-class EltwiseKernel(LeafKernel):
+class EltwiseKernel(KernelSpace):
     """PE results a beat of ``lhs`` and ``rhs``, element by element.
 
     Each operand's tensor is walked row-major, PE elements of its innermost axis a
@@ -83,8 +85,6 @@ class EltwiseKernel(LeafKernel):
     """
 
     id = "finnlib.eltwise"
-    version = 1
-    rtl_module = "eltwise"
     clock_domain = NATIVE_CLOCKING
 
     operation: str = Param()
@@ -226,11 +226,11 @@ class EltwiseKernel(LeafKernel):
         lhs_element: ClassVar[ScalarEncoding]
         rhs_element: ClassVar[ScalarEncoding]
 
-    @derived(semantics=RESOURCES_SEMANTICS)
+    @view(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "the eltwise module's resources are not characterised")
 
-    @derived
+    @view
     def parameters(self) -> dict[str, int | str]:
         a, b = self.lhs_dtype, self.rhs_dtype
         return {
@@ -246,9 +246,10 @@ class EltwiseKernel(LeafKernel):
             "FORCE_BEHAVIORAL": 0,
         }
 
-    @derived
-    def sources(self) -> tuple[Contribution, ...]:
-        return tuple(
+    module = LibraryModule(
+        "eltwise",
+        parameters=parameters,
+        sources=tuple(
             CopiedSource("finnlib", path, provides=(f"module:{name}",), requires=requires)
             for path, name, requires in (
                 ("rtl/arith/binopi.sv", "binopi", ()),
@@ -261,7 +262,8 @@ class EltwiseKernel(LeafKernel):
                     ("module:binopi", "module:binopf", "module:int_to_fp32", "module:fifo"),
                 ),
             )
-        )
+        ),
+    )
 
 
 __all__ = ["EltwiseKernel"]
