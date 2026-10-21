@@ -20,16 +20,18 @@ from core.space.reference import (
     Choice,
     Constraint,
     Derived,
+    Members,
     Refuse,
     Scope,
     Selector,
     Space,
+    View,
     When,
     computed,
     listed,
     membership,
 )
-from core.space.reference_harness import Case, Pair, Spelling
+from core.space.reference_harness import Case, Pair, Spelling, check_definition, expected
 
 
 def divisors(extent: int) -> tuple[int, ...]:
@@ -205,17 +207,18 @@ def test_selecting_the_case_of_a_choice_a_root_rule_refuses_names_the_choice_sta
 # -- 2. guards -----------------------------------------------------------------------------------
 #
 # ``core`` selects ``big`` (whose rule needs a budget of 10) or ``small``; ``extra`` is
-# present when the fact ``on`` holds, and its rule needs a budget of 20; ``spare`` is
+# present when the choice ``on`` holds, and its rule needs a budget of 20; ``spare`` is
 # present when the choice ``want`` holds, ``costly`` when it does not, and ``costly``'s
-# rule needs a budget of 20 too.
+# rule needs a budget of 20 too. (``on`` was a fact, left out for an unknown guard; facts
+# are always known now, SZ100 (5), so a guard waits on an open choice.)
 
 GUARDS = Case(
     "guards",
     Space(
-        ("budget", "on"),
+        ("budget",),
         Scope(
             "",
-            choices=(Choice("want", listed(False, True)),),
+            choices=(Choice("want", listed(False, True)), Choice("on", listed(False, True))),
             selectors=(
                 Selector(
                     "core",
@@ -264,7 +267,6 @@ GUARDS = Case(
             ),
         ),
     ),
-    Spelling(types={"on": bool}),
 )
 
 
@@ -273,12 +275,12 @@ def test_a_rule_under_an_unselected_case_does_not_apply() -> None:
 
 
 def test_a_rule_under_an_unselected_case_counts_as_true() -> None:
-    point = GUARDS.start({"budget": 5, "on": False}, {"core": "small", "want": True})
+    point = GUARDS.start({"budget": 5}, {"core": "small", "want": True, "on": False})
     point.check_validity()
 
 
 def test_a_rule_under_a_false_guard_does_not_apply() -> None:
-    GUARDS.start({"budget": 5, "on": False}).check_rule("extra.cap")
+    GUARDS.start({"budget": 5}, {"on": False}).check_rule("extra.cap")
 
 
 def test_a_rule_under_an_unknown_guard_reads_unknown() -> None:
@@ -357,20 +359,11 @@ def test_a_value_outside_a_membership_only_domain_is_refused_at_commit() -> None
     DOMAINS.start({"n": 6}).check_change(Change(commit={"w": 1}))
 
 
-# A membership-only domain is never a piece of validity (§ 4, § 16.12; reading 13): with the
-# fact its membership reads missing, or with its input a derived value refusing on the facts
-# (a value committed there would be refused by assignment), the configuration is valid.
+# A membership-only domain is never a piece of validity (§ 4, § 16.12; reading 13): with its
+# input a derived value refusing on the facts (a value committed there would be refused by
+# assignment), the configuration is valid. (Its twin over a missing fact went with SZ100
+# (5): facts are always known.)
 
-MEMBERSHIP_ONLY = Case(
-    "a membership-only domain over a fact",
-    Space(
-        ("f",),
-        Scope(
-            "",
-            choices=(Choice("c", membership(lambda value, read: 0 <= value <= read["f"], ("f",))),),
-        ),
-    ),
-)
 MEMBERSHIP_REFUSED = Case(
     "a membership-only domain over a derived value that refuses",
     Space(
@@ -384,10 +377,6 @@ MEMBERSHIP_REFUSED = Case(
         ),
     ),
 )
-
-
-def test_a_membership_only_domain_over_a_missing_fact_leaves_the_configuration_valid() -> None:
-    MEMBERSHIP_ONLY.start({}).check_validity()
 
 
 def test_a_membership_only_domain_over_a_refused_input_leaves_the_configuration_valid() -> None:
@@ -497,54 +486,6 @@ def test_selecting_a_case_whose_rule_a_stored_choice_breaks_names_it_standing() 
 
 def test_the_possible_cases_of_a_selector_name_what_each_moves() -> None:
     WAITING_CORE.start({}, {"lanes": 12, PE: 3}).check_possible("compute")
-
-
-# A domain computed from a fact the configuration does not give yet: a value set to it
-# waits on the fact, as one under an open selector waits on the selector.
-
-ON_A_FACT = Case(
-    "a domain waiting on a fact",
-    Space(
-        ("width",),
-        Scope(
-            "",
-            choices=(Choice("pe", computed(lambda read: divisors(read["width"]), ("width",))),),
-        ),
-    ),
-)
-
-
-def test_a_choice_set_while_its_domain_waits_on_a_fact_is_accepted_waiting() -> None:
-    ON_A_FACT.start().check_change(Change(commit={"pe": 3}))
-
-
-def test_a_choice_whose_domain_waits_on_a_fact_waits_on_it() -> None:
-    ON_A_FACT.start({}, {"pe": 3}).check_state("pe")
-
-
-def test_the_fact_a_waiting_choice_lacks_checks_its_type_when_it_comes() -> None:
-    # 3 does not divide 8: the value is dropped and reported (§ 16.24).
-    ON_A_FACT.start({}, {"pe": 3}).check_change(Change(facts={"width": 8}))
-
-
-# A rule over such a choice: the choice waits on the fact, never on itself (reading 14), so
-# what reads it waits on the fact too, not on the choice.
-
-FACT_RULE = Case(
-    "a rule over a choice waiting on a fact",
-    Space(
-        ("width",),
-        Scope(
-            "",
-            choices=(Choice("pe", computed(lambda read: divisors(read["width"]), ("width",))),),
-            constraints=(Constraint("few", ("pe",), lambda read: read["pe"] <= 4, "many-pe"),),
-        ),
-    ),
-)
-
-
-def test_a_rule_over_a_choice_waiting_on_a_fact_waits_on_the_fact() -> None:
-    FACT_RULE.start({}, {"pe": 3}).check_rule("few")
 
 
 # A stored choice of a selector's case that a rule of the case refuses: set under the open
@@ -662,14 +603,6 @@ def test_a_choice_inside_a_domain_over_an_even_width_leaves_the_configuration_va
     REFUSED_INPUT.start({"w": 8}, {"lanes": 4}).check_validity()
 
 
-def test_a_commit_whose_membership_input_waits_on_a_fact_is_accepted_waiting() -> None:
-    REFUSED_INPUT.start().check_change(Change(commit={"lanes": 1}))
-
-
-def test_a_choice_whose_membership_input_waits_on_a_fact_waits_on_it() -> None:
-    REFUSED_INPUT.start({}, {"lanes": 1}).check_state("lanes")
-
-
 # A domain reading a derived value over facts in a guarded scope: ``size``, a value of
 # ``extra``, present when the fact ``on`` holds, and ``lanes`` over its divisors among 1, 2
 # and 4. With ``on`` false the input does not exist for these facts: it is refused
@@ -718,3 +651,180 @@ def test_a_choice_whose_membership_input_is_in_play_is_set() -> None:
 def test_new_facts_putting_a_stored_choices_membership_input_out_of_play_drop_it() -> None:
     point = GUARDED_INPUT.start({"on": True, "n": 4}, {"lanes": 2})
     point.check_change(Change(facts={"on": False}))
+
+
+# -- 6. Members: standing is what the origin's evaluation read (SZ100 (6)) ----------------------
+#
+# RUNNING § 2.2's House: the annex ``g`` (present while ``x >= 2``) and each room of ``s``
+# state a derived value ``e`` of their own choice, exported to the root's ``m``. The
+# scullery refuses ``q = 3``; the annex's ``e`` reads its shed's ``z``, inapplicable while
+# the shed (present while ``g.c >= 2``) is absent. ``small`` asks the rooms' sum to be at
+# most 4; ``fitted`` reads ``x``, the annex's guard's read, beside ``m`` (§ 16.22).
+
+
+def rooms(r: Mapping[str, Any]) -> int:
+    return sum(value for _, value in r["m"])
+
+
+def house(*rules: Constraint) -> Case:
+    shed = Scope(
+        "shed",
+        when=When(("g.c",), lambda read: read["g.c"] >= 2),
+        choices=(Choice("z", listed(1, 2)),),
+    )
+    annex = Scope(
+        "g",
+        when=When(("x",), lambda read: read["x"] >= 2),
+        choices=(Choice("c", listed(1, 2, 3)),),
+        derived=(Derived("e", ("g.c", "g.shed.z"), lambda read: read["g.c"] + read["g.shed.z"]),),
+        children=(shed,),
+    )
+    kitchen = Scope(
+        "kitchen",
+        choices=(Choice("p", listed(1, 2, 3)),),
+        derived=(Derived("e", ("s.kitchen.p",), lambda read: 2 * read["s.kitchen.p"]),),
+    )
+    scullery = Scope(
+        "scullery",
+        choices=(Choice("q", listed(1, 2, 3)),),
+        derived=(
+            Derived(
+                "e",
+                ("s.scullery.q",),
+                lambda read: Refuse("wet") if read["s.scullery.q"] == 3 else 1,
+            ),
+        ),
+    )
+    return Case(
+        "the house and its rooms",
+        Space(
+            (),
+            Scope(
+                "",
+                choices=(Choice("x", listed(1, 2, 3)),),
+                selectors=(Selector("s", (kitchen, scullery)),),
+                children=(annex,),
+                members=(Members("m", ("g.e", "s.kitchen.e", "s.scullery.e")),),
+                constraints=rules,
+            ),
+        ),
+    )
+
+
+HOUSE = house()
+SMALL = house(Constraint("small", ("m",), lambda read: rooms(read) <= 4, "big"))
+FITTED = house(Constraint("fitted", ("x", "m"), lambda read: read["x"] + rooms(read) <= 7, "big"))
+
+
+def test_members_skips_an_entry_whose_scope_is_absent() -> None:
+    HOUSE.start({}, {"x": 1, "g.c": 3, "s": "kitchen", "s.kitchen.p": 2}).check_answer("m")
+
+
+def test_members_skips_a_present_entry_answering_inapplicable() -> None:
+    pair = HOUSE.start({}, {"x": 2, "g.c": 1, "s": "kitchen", "s.kitchen.p": 2})
+    pair.check_answer("g.e")
+    pair.check_answer("m")
+
+
+def test_members_answers_its_entries_with_a_value_by_entry() -> None:
+    stored = {"x": 2, "g.c": 2, "g.shed.z": 1, "s": "kitchen", "s.kitchen.p": 1}
+    HOUSE.start({}, stored).check_answer("m")
+
+
+def test_members_refuses_through_a_refused_entry_even_while_another_waits() -> None:
+    pair = HOUSE.start({}, {"x": 2, "s": "scullery", "s.scullery.q": 3})
+    pair.check_answer("g.e")
+    pair.check_answer("m")
+
+
+def test_members_waits_on_an_entry_that_waits() -> None:
+    HOUSE.start({}, {"x": 2, "s": "scullery", "s.scullery.q": 2}).check_answer("m")
+
+
+def test_a_dormant_entrys_choice_never_stands() -> None:
+    pair = SMALL.start({}, {"x": 1, "g.c": 3, "s": "kitchen"})
+    pair.check_change(Change(commit={"s.kitchen.p": 3}))
+
+
+def test_a_present_entrys_choice_stands() -> None:
+    pair = SMALL.start({}, {"x": 2, "g.c": 2, "g.shed.z": 1, "s": "kitchen"})
+    pair.check_change(Change(commit={"s.kitchen.p": 2}))
+    pair.check_possible("s.kitchen.p")
+
+
+def test_a_choice_read_beside_members_stands_though_it_decides_an_entrys_existence() -> None:
+    stored = {"x": 2, "g.c": 1, "g.shed.z": 1, "s": "kitchen", "s.kitchen.p": 2}
+    FITTED.start({}, stored).check_change(Change(commit={"s.kitchen.p": 3, "g.c": 2}))
+    raised = FITTED.start({}, {**stored, "g.c": 2, "s.kitchen.p": 1})
+    raised.check_change(Change(commit={"x": 3}))
+    raised.check_possible("x")
+
+
+# -- 7. views are read out (SZ100 (3)) ------------------------------------------------------------
+#
+# A stage presents its storage as a view; the parent's rule reads it. Only a view reads a
+# view, so the model refuses the definition (``view-read-in``); today's engine builds it
+# and answers, until T4b.
+
+
+def storage_stage(name: str) -> Scope:
+    return Scope(
+        name,
+        choices=(Choice("depth", listed(1, 2, 4)),),
+        views=(View("storage", (f"{name}.depth",), lambda read: 8 * read[f"{name}.depth"]),),
+    )
+
+
+READ_IN = Space(
+    (),
+    Scope(
+        "",
+        children=(storage_stage("first"), storage_stage("second")),
+        constraints=(
+            Constraint(
+                "fits",
+                ("first.storage", "second.storage"),
+                lambda read: read["first.storage"] + read["second.storage"] <= 40,
+                "too-deep",
+            ),
+        ),
+    ),
+)
+
+
+@expected("view-read-in")
+def test_a_rule_reading_a_view_is_no_definition() -> None:
+    check_definition("a rule reading its children's views", READ_IN)
+
+
+# -- 8. an optional fact left out is None (SZ100 (5)) ---------------------------------------------
+#
+# ``width`` is optional: left out, it reads None, a known value, and ``lanes`` lists 1 and 2
+# then. Today's engine reads an unsupplied optional param as unresolved, until T4c.
+
+OPTIONAL = Case(
+    "an optional fact left out",
+    Space(
+        ("width",),
+        Scope(
+            "",
+            derived=(
+                Derived(
+                    "lanes",
+                    ("width",),
+                    lambda read: 2 if read["width"] is None else read["width"] // 4,
+                ),
+            ),
+        ),
+        optional=("width",),
+    ),
+)
+
+
+@expected("optional-fact-none")
+def test_an_optional_fact_left_out_reads_none() -> None:
+    OPTIONAL.start().check_answer("lanes")
+
+
+def test_an_optional_fact_given_reads_its_value() -> None:
+    OPTIONAL.start({"width": 8}).check_answer("lanes")

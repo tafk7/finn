@@ -143,10 +143,6 @@ def test_a_case_needing_a_capability_the_facts_lack_is_not_possible() -> None:
     REQUIRED.start({"has_big": False}).check_possible("style")
 
 
-def test_a_case_needing_an_unknown_capability_is_possible() -> None:
-    REQUIRED.start().check_possible("style")
-
-
 def test_setting_a_case_needing_a_missing_capability_is_refused_by_the_facts_alone() -> None:
     REQUIRED.start({"has_big": False}).check_change(Change(commit={"style": "big"}))
 

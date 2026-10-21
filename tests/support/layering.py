@@ -449,6 +449,7 @@ LAYERS: tuple[Layer, ...] = (
         (
             "core.space",
             "support.space_cores",
+            "support.space_oracle",
             "support.space_pipeline",
             "support.space_walk",
         ),
@@ -509,6 +510,22 @@ LAYERS: tuple[Layer, ...] = (
         ),
         ("pytest", "numpy", "pyslang", "qonnx.core.datatype", "qonnx.core.ranges"),
         "tests/kernels",
+    ),
+    # The class-based oracle's targets and its tool (support.space_oracle): the design
+    # spaces of FINN's kernels it compares (the toys, stage 7's chain). The rest of the
+    # package is the engine's (tests.core.space). Its TFC target, which reads FINN's builder,
+    # is a support module of its own in no row (as support.tfc is): a module this table
+    # names is in the import closure the XSim groups are keyed by (scripts/emitted_text.py).
+    Layer(
+        "tests.space_oracle_targets",
+        (
+            "support.space_oracle.targets",
+            "support.space_oracle.tool",
+            "support.space_oracle.__main__",
+        ),
+        ("space", "kernels", "tests.core.space"),
+        ("support.one_space",),
+        "tests/kernel_ops",
     ),
 )
 

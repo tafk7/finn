@@ -98,8 +98,9 @@ class Known:
 
 @dataclass(frozen=True)
 class Unresolved:
-    """The value waits: ``waits`` lists the open choices, the missing facts and the
-    open selectors (or a guard's waiting reads) it waits on."""
+    """The value waits: ``waits`` lists the open choices and the open selectors (or a
+    guard's waiting reads) it waits on. Never a fact: facts are always known (SZ100
+    (5))."""
 
     waits: tuple[str, ...]
 
@@ -182,8 +183,8 @@ class Set:
 
 @dataclass(frozen=True)
 class Waiting:
-    """Stored, never read as a value: its presence is unknown, or its membership waits
-    on a missing fact. ``waits`` is what it waits on."""
+    """Stored, never read as a value: its presence is unknown. ``waits`` is what it waits
+    on."""
 
     value: Any
     waits: tuple[str, ...]
@@ -243,10 +244,11 @@ class Dropped:
 @dataclass(frozen=True)
 class RuleRefusal:
     """An origin the change makes a piece newly false through (§ 16.15). ``origin`` is
-    the node where the failure starts; ``kind`` is ``"constraint"``, ``"derived"``, ``"view"`` or
-    ``"empty-domain"`` (``origin`` then the choice whose listed domain lists no
-    value); ``reasons`` its own reason; ``standing`` the stored choices standing in the
-    way, which the caller sets in the same change or clears first.
+    the node where the failure starts; ``kind`` is ``"constraint"``, ``"derived"`` or
+    ``"empty-domain"`` (``origin`` then the choice whose listed domain lists no value; a
+    view feeds no piece, SZ100 (3)); ``reasons`` its own reason; ``standing`` the stored
+    choices standing in the way, which the caller sets in the same change or clears
+    first.
 
     An accepted change of facts reports the same records for the rules its facts make
     newly false (``Accepted.broken``, § 16.24): information, not a refusal; its standing

@@ -4,16 +4,25 @@
 """The harness comparing the engine with its reference model, held to its own rules: the
 model imports the standard library only, every row of the acceptance matrix has exactly
 one witness and every expected failure a row, and the comparison reads blockers as a
-subset and everything else exactly. The walks' own checks are ``test_reference_walks``'s."""
+subset and everything else exactly; and the comparison is live: an implementation with a
+planted fault (``support.space_oracle.today.Planted``, DESIGN § 7) is reported by
+question, in the hand cases and in walks 0-3. The walks' own checks are
+``test_reference_walks``'s."""
 
 from __future__ import annotations
 
 import ast
+import functools
+import re
 import sys
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
+from support.space_oracle import Answers
+from support.space_oracle.today import FAULTS, TODAY, Fault, Historied, Planted, PlantedAnswers
 
 from core.space import reference
 from core.space.reference import (
@@ -21,6 +30,7 @@ from core.space.reference import (
     Choice,
     Constraint,
     Derived,
+    Members,
     Refuse,
     Scope,
     Selector,
@@ -37,6 +47,7 @@ from core.space.reference_harness import (
     DroppedForm,
     NotTranslatable,
     OutcomeForm,
+    Pair,
     PossibleForm,
     RefusalForm,
     Row,
@@ -53,7 +64,9 @@ from core.space.reference_harness.compare import (
     validity_form,
 )
 from core.space.reference_harness.matrix import problems
-from finn.core.space import inspection
+from core.space.reference_harness.walks import Tally, walk
+from finn.core.space import Available
+from finn.core.space import Space as EngineSpace
 
 
 def imported(path: Path) -> list[tuple[int, str, int]]:
@@ -92,8 +105,15 @@ def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() ->
     assert not problems(CASE_MODULES)
 
 
-def test_the_engine_core_and_facts_instance_milestones_are_accepted_their_rows_removed() -> None:
-    assert MILESTONES == ("base",) and ROWS == ()
+def test_the_pending_milestones_are_the_rulings_the_engine_has_not_reached() -> None:
+    # The engine core's and the facts-instance milestones are accepted, their rows removed;
+    # the model holds SZ100's rulings before the engine (T4b: views read out; T4c: an
+    # optional fact left out is None).
+    assert MILESTONES == ("base", "T4b", "T4c")
+    assert [(row.id, row.milestone) for row in ROWS] == [
+        ("view-read-in", "T4b"),
+        ("optional-fact-none", "T4c"),
+    ]
 
 
 # A later milestone with rows, put in the matrix where a test needs one.
@@ -351,13 +371,14 @@ NESTED = Case(
                 ),
             ),
         ),
+        optional=("width",),
     ),
 )
 
 
 def test_every_choice_keeps_its_path_as_its_key() -> None:
-    point = NESTED.start({"width": 4}).engine.point
-    keys = {item.key for item in inspection.decisions(point)}
+    answers = NESTED.start({"width": 4}).engine.answers
+    keys = {key for key, _ in answers.states()}
     assert keys == {"unit.compute", "unit.compute.packed.pe", "unit.compute.stub.rows"}
 
 
@@ -365,6 +386,199 @@ def test_a_selector_is_read_as_its_selected_case() -> None:
     NESTED.start({"width": 4}, {"unit.compute": "stub"}).check_answer("unit.compute")
 
 
-def test_a_fact_cannot_be_set_back_to_unknown_in_the_engine() -> None:
+def test_an_optional_fact_cannot_be_left_out_again_in_the_engine() -> None:
+    # SZ100 (5): unset, an optional fact is None in the model; the engine cannot unsupply a
+    # param it was given.
     with pytest.raises(NotTranslatable):
         NESTED.start({"width": 4}).check_change(Change(unset=("width",)))
+
+
+def test_a_members_entry_is_exported_by_a_child_its_scope_places() -> None:
+    # The engine's Members ranges over the children its Space places, each exporting the
+    # key once: an entry two scopes down, or two entries of one child, cannot be written.
+    def described(*entries: str) -> Space:
+        inner = Scope(
+            "inner",
+            choices=(Choice("c", listed(1, 2)),),
+            derived=(Derived("e", ("unit.inner.c",), lambda r: r["unit.inner.c"]),),
+        )
+        unit = Scope(
+            "unit",
+            choices=(Choice("c", listed(1, 2)),),
+            derived=(
+                Derived("e", ("unit.c",), lambda r: r["unit.c"]),
+                Derived("f", ("unit.c",), lambda r: r["unit.c"]),
+            ),
+            children=(inner,),
+        )
+        return Space((), Scope("", children=(unit,), members=(Members("m", entries),)))
+
+    Case("one entry", described("unit.e")).start({}, {"unit.c": 2}).check_answer("m")
+    for entries in (("unit.inner.e",), ("unit.e", "unit.f")):
+        with pytest.raises(NotTranslatable):
+            Case("not written", described(*entries))
+
+
+# -- planted faults (DESIGN § 7) ---------------------------------------------------------------
+#
+# Today's engine with one answer altered (``today.FAULTS``): one standing choice dropped, one
+# possible value refused, the root's validity swapped, or one member's value moved (the first
+# member answering a value, by key). A harness comparing nothing would pass each.
+
+
+def capped() -> Space:
+    """``a`` and ``b`` sum to at most the fact ``n`` (``cap``); ``double``, ``n`` doubled, is
+    the first member by key answering a value while ``a`` is open."""
+    return Space(
+        ("n",),
+        Scope(
+            "",
+            choices=(Choice("a", listed(1, 2)), Choice("b", listed(1, 2))),
+            derived=(Derived("double", ("n",), lambda r: 2 * r["n"]),),
+            constraints=(
+                Constraint("cap", ("a", "b", "n"), lambda r: r["a"] + r["b"] <= r["n"], "over"),
+            ),
+        ),
+    )
+
+
+CAPPED = Case("capped", capped())
+
+#: each fault, the choices stored, and the hand case's question that reports it
+PLANTED_QUESTIONS: tuple[tuple[Fault, dict[str, object], Callable[[Pair], object], str], ...] = (
+    # ``b = 2`` breaks ``cap`` with ``a`` standing: in the list and in the refused change
+    ("standing", {"a": 2}, lambda pair: pair.check_possible("b"), "the possible values of b"),
+    (
+        "standing",
+        {"a": 2},
+        lambda pair: pair.check_change(Change(commit={"b": 2})),
+        "the change commit {'b': 2}",
+    ),
+    ("possible", {}, lambda pair: pair.check_possible("a"), "the possible values of a"),
+    ("validity", {}, lambda pair: pair.check_validity(), "validity"),
+    ("value", {}, lambda pair: pair.check_answer("double"), "the answer of double"),
+)
+
+
+def test_every_planted_fault_has_a_hand_case() -> None:
+    assert {fault for fault, *_ in PLANTED_QUESTIONS} == set(FAULTS)
+
+
+@pytest.mark.parametrize(
+    ("fault", "stored", "ask", "question"),
+    PLANTED_QUESTIONS,
+    ids=[f"{fault}-{question}" for fault, _, _, question in PLANTED_QUESTIONS],
+)
+def test_a_planted_fault_is_reported_by_its_question_in_a_hand_case(
+    fault: Fault, stored: dict[str, object], ask: Callable[[Pair], object], question: str
+) -> None:
+    ask(CAPPED.start({"n": 3}, stored))  # today's engine agrees
+    with pytest.raises(Disagreement) as caught:
+        ask(CAPPED.start({"n": 3}, stored, implementation=Planted(TODAY, fault)))
+    assert (caught.value.case, caught.value.question) == ("capped", question)
+
+
+def test_a_planted_value_on_a_stored_choice_is_seen() -> None:
+    # A stored choice's answer is read from ``query``, as every other member's is, so a value
+    # moved there alone is a disagreement (its state still reads ``stored``, which is right).
+    planted = CAPPED.start({"n": 3}, {"a": 2}, implementation=Planted(TODAY, "value"))
+    moved = planted.engine.answers.query("a")
+    assert isinstance(moved, Available) and moved.value == ("planted-fault", 2)
+    with pytest.raises(Disagreement) as caught:
+        planted.check_answer("a")
+    assert "planted-fault" in str(caught.value)
+    planted.check_state("a")
+
+
+#: walks 0-3 (the gate's 30 steps, strict) with each fault planted: the question each seed's
+#: walk reports it by. The strict run fails on every disagreement; in the full run one
+#: reaching an optional fact left out is counted under T4c, which could hide a fault. The
+#: value fault moves the first member by key answering a value: the fact ``f0`` in every
+#: one of these descriptions at the start, and each fact's answer is asked, so each walk
+#: reports it there, at step 0 (``VALUE_LINE``).
+PLANTED_WALKS: dict[Fault, dict[int, str]] = {
+    "standing": {0: "facts change", 1: "facts change", 2: "possible", 3: "possible"},
+    "possible": {0: "possible", 1: "possible", 2: "possible", 3: "possible"},
+    "validity": {0: "validity", 1: "validity", 2: "validity", 3: "validity"},
+    "value": {0: "answer", 1: "answer", 2: "answer", 3: "answer"},
+}
+
+FIRST_LINE = re.compile(r"seed (\d+), step \d+: the engine disagrees \((.+); strict run\)")
+VALUE_LINE = re.compile(r"seed \d+, step 0: the engine disagrees \(answer; strict run\)")
+
+
+@functools.cache
+def planted_walk(fault: Fault, seed: int) -> Tally:
+    return walk(seed, 30, strict=True, implementation=Planted(TODAY, fault))
+
+
+@pytest.mark.parametrize("fault", FAULTS)
+def test_a_planted_fault_is_reported_by_question_in_walks_0_to_3(fault: Fault) -> None:
+    reported: dict[int, str] = {}
+    for seed in range(4):
+        tally = planted_walk(fault, seed)
+        assert tally.implementation == f"today, planted {fault}"
+        assert tally.engine_errors == 0
+        if tally.failure is None:
+            continue
+        assert tally.failed == "disagreement", tally.failure
+        lines = tally.failure.splitlines()
+        found = FIRST_LINE.fullmatch(lines[0])
+        assert found is not None and int(found[1]) == seed, lines[0]
+        assert f"implementation: today, planted {fault}" in lines, tally.failure
+        if fault == "value":
+            assert VALUE_LINE.fullmatch(lines[0]) and lines[1] == "walk: the answer of f0"
+        reported[seed] = found[2]
+    assert reported == PLANTED_WALKS[fault]
+
+
+class Renamed:
+    """Today's answers behind a wrapper that alters nothing (``PlantedAnswers`` with no
+    fault it knows): not today's implementation, and agreeing everywhere."""
+
+    name = "today, renamed"
+
+    def open(self, configuration: EngineSpace) -> Answers:
+        return PlantedAnswers(TODAY.open(configuration), cast("Fault", "none"))
+
+    def make(
+        self,
+        space_class: type[EngineSpace],
+        facts: Mapping[str, object],
+        stored: Mapping[str, object],
+    ) -> Answers:
+        return PlantedAnswers(TODAY.make(space_class, facts, stored), cast("Fault", "none"))
+
+
+def test_the_check_against_a_cold_build_runs_for_every_implementation() -> None:
+    # The cold build is the implementation's own (``Implementation.make``), so the check
+    # runs for any implementation (here today's under another name, which agrees
+    # everywhere), at every configuration and change, as the bind checks do.
+    renamed = walk(0, 30, strict=True, implementation=Renamed())
+    assert renamed.failure is None, renamed.failure
+    assert renamed.implementation == "today, renamed"
+    assert renamed.engine_checks["cold"] == renamed.compared
+    assert renamed.engine_checks["cold change"] == renamed.steps - renamed.model_only
+    assert renamed.engine_checks["bind"] == renamed.engine_checks["bind held"] == renamed.compared
+
+
+COLD_LINE = re.compile(
+    r"seed (\d+), step \d+: the walked engine configuration answers otherwise than one built "
+    r"from nothing \(model column: built from nothing; engine column: walked\)"
+)
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_history_is_reported_by_the_cold_build_in_walks_0_to_3(seed: int) -> None:
+    # ``Historied``: what a change reaches answers one member otherwise than the same design
+    # space made from nothing. Opened, it agrees with today's, so only the check against
+    # the implementation's own cold build (``make``) can report it.
+    tally = walk(seed, 30, strict=True, implementation=Historied(TODAY))
+    assert tally.implementation == "today, history planted"
+    assert tally.engine_errors == 0
+    assert tally.failed == "engine", tally.failure
+    assert tally.failure is not None
+    lines = tally.failure.splitlines()
+    found = COLD_LINE.fullmatch(lines[0])
+    assert found is not None and int(found[1]) == seed, lines[0]
+    assert lines[1].startswith("cold build: the "), tally.failure

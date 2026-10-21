@@ -32,6 +32,7 @@ from core.space.reference import (
     Impossible,
     Inapplicable,
     Known,
+    Members,
     Open,
     Piece,
     PieceKind,
@@ -624,38 +625,28 @@ def staged() -> Space:
             ),
         ),
     )
-    return Space(
-        (),
-        Scope(
-            "",
-            children=(stage,),
-            constraints=(
-                Constraint("fits", ("stage.half",), lambda r: r["stage.half"] >= 1, "none"),
-            ),
-        ),
-    )
+    return Space((), Scope("", children=(stage,)))
 
 
-def test_reading_1_a_view_refusing_on_its_own_values_is_an_origin() -> None:
+def test_reading_1_a_view_refused_with_its_space_is_refused_through_and_never_an_origin() -> None:
+    """SZ100 (3): no piece reads a view. ``half`` refusing an odd depth refuses the view
+    with its own reason, and no change: nothing rules on it. Refused with its Space, the
+    view is refused through (FN2 for views): the child's rule is the origin."""
+
     base = Configuration(staged(), {}, {"stage.depth": 2})
     assert base.solve().validity().verdict is T
-    odd = rejected(change(base, Change(commit={"stage.depth": 3})))
-    assert odd.refusals == (
-        RuleRefusal(
-            "stage.half", "view", (Reason(ReasonKind.VIEW_BODY, "stage.half", "stage", "odd"),), ()
-        ),
+    odd = accepted(change(base, Change(commit={"stage.depth": 3})))
+    assert odd.validity.verdict is T
+    assert odd.configuration.solve().view("stage.half") == Refused(
+        (Reason(ReasonKind.VIEW_BODY, "stage.half", "stage", "odd"),)
     )
-    # refused through its Space, the view is no origin: the child's rule is
     deep = rejected(change(base, Change(commit={"stage.depth": 4})))
     assert deep.refusals == (rule("stage.small", "too-deep", "stage"),)
     after = solve_at(staged(), {"stage.depth": 4})
     assert after.view("stage.half") == Refused(
         (Reason(ReasonKind.SPACE_REFUSED, "stage.half", "stage"),)
     )
-    assert false_kinds(after) == {
-        (PieceKind.CONSTRAINT, "fits"),
-        (PieceKind.CONSTRAINT, "stage.small"),
-    }
+    assert false_kinds(after) == {(PieceKind.CONSTRAINT, "stage.small")}
 
 
 def facts_refused() -> Space:
@@ -834,46 +825,75 @@ def test_reading_5_clearing_a_selector_leaves_its_cases_choices_waiting() -> Non
 
 
 def capped() -> Space:
-    """``lanes`` divides the fact ``n``; a rule caps it at 2."""
+    """``lanes`` divides the optional fact ``n`` (SZ100 (5)), any of 1, 2 and 4 while
+    ``n`` is left out (``None``); a rule caps it at 2 once ``n`` is given."""
+
+    def lanes(r: Reads) -> tuple[int, ...]:
+        return (1, 2, 4) if r["n"] is None else divisors(r["n"])
 
     return Space(
         ("n",),
         Scope(
             "",
-            choices=(Choice("lanes", computed(lambda r: divisors(r["n"]), ("n",))),),
+            choices=(Choice("lanes", computed(lanes, ("n",))),),
             selectors=(Selector("mode", (Scope("a"), Scope("b"))),),
-            constraints=(Constraint("cap", ("lanes",), lambda r: r["lanes"] <= 2, "wide"),),
+            constraints=(
+                Constraint(
+                    "cap", ("lanes", "n"), lambda r: r["n"] is None or r["lanes"] <= 2, "wide"
+                ),
+            ),
         ),
+        optional=("n",),
     )
 
 
-def test_reading_6_a_value_waiting_on_a_missing_fact_is_checked_when_it_comes() -> None:
+def test_reading_6_an_optional_fact_left_out_is_none_and_new_facts_check_the_value() -> None:
+    """SZ100 (5): ``n`` left out reads ``None``, a known value, so ``lanes = 2`` is set at
+    once (no value waits on a fact any more). New facts outside its list drop it
+    (§ 16.24); unsetting ``n`` sets it to ``None``, a change of facts like any other."""
+
     base = Configuration(capped(), {}, {"mode": "b"})
-    waiting = accepted(change(base, Change(commit={"lanes": 2})))
-    solution = waiting.configuration.solve()
-    assert solution.state("lanes") == Waiting(2, ("n",))
-    assert solution.read("lanes") == Unresolved(("n",))
-    assert (waiting.validity.verdict, waiting.validity.waits) == (U, ("n",))
+    assert base.facts == {"n": None}
+    assert base.solve().read("n") == Known(None)
+    taken = accepted(change(base, Change(commit={"lanes": 2})))
+    solution = taken.configuration.solve()
+    assert solution.state("lanes") == Set(2)
+    assert solution.read("lanes") == Known(2)
+    assert taken.validity.verdict is T
     # the fact arrives with 2 outside the divisors of 9: dropped, the choice open (§ 16.24)
-    outside_it = accepted(change(waiting.configuration, Change(facts={"n": 9})))
+    outside_it = accepted(change(taken.configuration, Change(facts={"n": 9})))
     assert (outside_it.dropped, outside_it.broken) == ((dropped("lanes", 2),), ())
     assert outside_it.configuration.solve().state("lanes") == Open()
-    supplied = accepted(change(waiting.configuration, Change(facts={"n": 8})))
+    supplied = accepted(change(taken.configuration, Change(facts={"n": 8})))
     assert supplied.configuration.solve().state("lanes") == Set(2)
     assert supplied.in_play == ()
-    # unsetting the fact never refuses: the value waits again
+    # unsetting the fact never refuses: ``None`` again, the value kept in its list
     unset = accepted(change(supplied.configuration, Change(unset=("n",))))
-    assert unset.configuration.solve().state("lanes") == Waiting(2, ("n",))
+    assert unset.configuration.facts == {"n": None}
+    assert unset.configuration.solve().state("lanes") == Set(2)
+
+
+def test_a_required_fact_is_given_with_every_configuration() -> None:
+    """SZ100 (5): a configuration missing a required fact is no configuration, and a
+    required fact cannot be unset."""
+
+    with pytest.raises(ConfigurationError):
+        Configuration(counted(), {})
+    with pytest.raises(ConfigurationError):
+        change(Configuration(counted(), {"n": 2}), Change(unset=("n",)))
+    with pytest.raises(DefinitionError) as raised:
+        Space(("n",), Scope(""), optional=("m",)).validate()
+    assert (raised.value.kind, raised.value.path) == ("malformed", ("m",))
 
 
 def test_a_constraint_new_facts_make_false_is_reported_with_its_standing_choice() -> None:
-    """``lanes = 4`` waits on ``n``, ``cap`` unknown; the facts change supplying ``n``
-    makes it read as its value, and ``cap`` false at its own origin: a new pair. The change
-    is accepted, the design space reads refused, and the report names ``cap`` with
-    ``lanes`` standing (§ 16.24); clearing ``lanes`` is then accepted (§ 16.16)."""
+    """``lanes = 4`` with ``n`` left out: ``cap`` holds. The facts change giving ``n = 8``
+    makes ``cap`` false at its own origin: a new pair. The change is accepted, the design
+    space reads refused, and the report names ``cap`` with ``lanes`` standing (§ 16.24);
+    clearing ``lanes`` is then accepted (§ 16.16)."""
 
     waiting = Configuration(capped(), {}, {"lanes": 4})
-    assert waiting.solve().piece("cap").verdict is U
+    assert waiting.solve().piece("cap").verdict is T
     result = accepted(change(waiting, Change(facts={"n": 8})))
     assert (result.broken, result.dropped) == ((rule("cap", "wide", standing=("lanes",)),), ())
     assert result.configuration.stored == {"lanes": 4}
@@ -941,15 +961,11 @@ def test_reading_13_an_unset_choice_whose_input_does_not_apply_is_a_false_piece(
     )
 
 
-def test_reading_6_an_omitted_fact_leaves_the_input_waiting_and_own_guards_are_not_asked() -> None:
-    """§ 16.17: with ``on`` omitted the input's existence waits on it, and so does a value
-    set; ``extra.p`` reads ``extra.size`` under its own guard, which holds whenever it is
-    present: set while ``extra`` is absent, it is accepted and dormant."""
+def test_reading_6_a_choices_own_guards_are_not_asked() -> None:
+    """§ 16.17: ``extra.p`` reads ``extra.size`` under its own guard, which holds whenever
+    it is present: set while ``extra`` is absent, it is accepted and dormant. (The input's
+    existence waiting on an omitted ``on`` went with SZ100 (5).)"""
 
-    unknown = Configuration(guarded_input(), {"n": 4})
-    waiting = accepted(change(unknown, Change(commit={"lanes": 2})))
-    assert waiting.configuration.solve().state("lanes") == Waiting(2, ("on",))
-    assert waiting.validity.verdict is U
     off = Configuration(guarded_input(), {"on": False, "n": 4})
     dormant = accepted(change(off, Change(commit={"extra.p": 2})))
     assert dormant.configuration.solve().state("extra.p") == Dormant(2)
@@ -1077,7 +1093,8 @@ def test_reading_7_the_constructor_checks_types_and_a_broken_rule_is_legal() -> 
         Configuration(lanes_over_width(), {"w": 7}, {"lanes": 1})
     with pytest.raises(ConfigurationError):
         Configuration(two_numbers(), {"nowhere": 1})
-    assert Configuration(capped(), {}, {"lanes": 5}).solve().state("lanes") == Waiting(5, ("n",))
+    with pytest.raises(ConfigurationError):
+        Configuration(capped(), {}, {"lanes": 5})  # ``n`` left out: its list is 1, 2 and 4
     broken = Configuration(linked(), {}, {"a": 1, "b": 3})
     assert false_kinds(broken.solve()) == {(PieceKind.CONSTRAINT, "linked")}
     # a change adding no pair is accepted, the configuration still refused
@@ -1238,7 +1255,7 @@ def test_reading_9_a_switch_to_the_case_of_a_domain_the_facts_empty_is_refused()
     assert accepted(change(base, Change(commit={"mode": "off"}))).validity.verdict is T
 
 
-def test_an_empty_list_is_a_false_piece_and_a_waiting_list_an_unknown_one() -> None:
+def test_an_empty_list_is_a_false_piece() -> None:
     empty = solve(counted(), {"n": 0})
     assert empty.state("x") == Open()
     assert empty.validity().false == (
@@ -1247,9 +1264,6 @@ def test_an_empty_list_is_a_false_piece_and_a_waiting_list_an_unknown_one() -> N
         ),
     )
     assert empty.possible("x") == ()
-    unknown = solve(counted())
-    assert unknown.validity().unknown == (Piece(PieceKind.EMPTY_DOMAIN, "", "x", U, waits=("n",)),)
-    assert unknown.possible("x") is None
     assert solve(counted(), {"n": 2}).possible("x") == ((0, Possible()), (1, Possible()))
 
 
@@ -1447,102 +1461,216 @@ def test_a_broken_configuration_accepts_its_pair_kept_and_refuses_a_new_one() ->
     assert accepted(change(broken, Change(commit={"y": 1}))).validity.verdict is T
 
 
-def viewed_child() -> Space:
-    """The child ``c`` caps ``x``; its view ``v`` answers ``y``; the root's ``high``
-    asks ``v`` to be at least 2."""
+def child_stating() -> Space:
+    """The child ``c`` caps ``x``; its derived value ``u`` states ``y``; the root's
+    ``high`` asks ``u`` to be at least 2."""
 
     child = Scope(
         "c",
         choices=(Choice("x", listed(1, 2, 3)), Choice("y", listed(1, 2, 3))),
         constraints=(Constraint("small", ("c.x",), lambda r: r["c.x"] <= 1, "big"),),
-        views=(View("v", ("c.y",), lambda r: r["c.y"]),),
+        derived=(Derived("u", ("c.y",), lambda r: r["c.y"]),),
     )
     return Space(
         (),
         Scope(
             "",
             children=(child,),
-            constraints=(Constraint("high", ("c.v",), lambda r: r["c.v"] >= 2, "low"),),
+            constraints=(Constraint("high", ("c.u",), lambda r: r["c.u"] >= 2, "low"),),
         ),
     )
 
 
-def test_a_clear_revealing_a_rule_masked_by_its_views_space_is_accepted() -> None:
-    """§ 16.16, masking: with ``c`` refused, ``v`` refuses with it and ``high`` is false
-    through ``v`` with no origin of its own. Clearing ``x`` leaves ``c`` open, so ``v``
-    answers 1 and ``high`` is false at its own origin: a new pair, but a change made only
-    of clears is never refused, and the configuration reads refused at ``high``."""
-
-    broken = Configuration(viewed_child(), {}, {"c.x": 3, "c.y": 1})
-    assert false_kinds(broken.solve()) == {
-        (PieceKind.CONSTRAINT, "high"),
-        (PieceKind.CONSTRAINT, "c.small"),
-    }
-    cleared = accepted(change(broken, Change(clear=("c.x",))))
-    assert cleared.validity.false == (
-        Piece(PieceKind.CONSTRAINT, "", "high", F, reasons=(constraint_reason("high", "low"),)),
-    )
-    assert cleared.configuration.solve().view("c.v") == Known(1)
-    # a change that also sets is judged by its pairs: committing ``y`` = 2 beside the clear
-    # leaves ``high`` true
-    assert accepted(change(broken, Change(clear=("c.x",), commit={"c.y": 2}))).validity.verdict is U
-
-
 def test_a_clear_beside_a_repeated_value_is_clear_only_and_accepted() -> None:
     """§ 16.18: "sets" means a new value. Committing ``y`` = 1, the value stored, beside
-    the clear that reveals ``high`` sets nothing: the change is clear-only, accepted, and
-    the configuration reads refused at ``high``. Committing a new value that keeps
-    ``high`` false is a change that sets, and is refused."""
+    the clear of ``x`` sets nothing: the change is clear-only, accepted, and the
+    configuration reads refused at ``high`` as before. Committing a new value that makes
+    ``high`` false is a change that sets, and is refused. (The masking this case showed,
+    § 16.16's note, went with SZ100 (3): ``high`` reads a derived value.)"""
 
-    broken = Configuration(viewed_child(), {}, {"c.x": 3, "c.y": 1})
+    broken = Configuration(child_stating(), {}, {"c.x": 3, "c.y": 1})
     repeated = accepted(change(broken, Change(clear=("c.x",), commit={"c.y": 1})))
     assert repeated.configuration.stored == {"c.y": 1}
     assert repeated.validity.false == (
         Piece(PieceKind.CONSTRAINT, "", "high", F, reasons=(constraint_reason("high", "low"),)),
     )
-    other = Configuration(viewed_child(), {}, {"c.x": 3, "c.y": 2})
+    other = Configuration(child_stating(), {}, {"c.x": 3, "c.y": 2})
     assert rejected(change(other, Change(clear=("c.x",), commit={"c.y": 1}))).refusals == (
         rule("high", "low"),
     )
 
 
-def viewed_child_over_a_fact() -> Space:
-    """As :func:`viewed_child`, the child's rule over the fact ``f``."""
+# --- SZ100 (6): Members, and standing as what the origin's evaluation read ----------------
 
-    child = Scope(
-        "c",
-        choices=(Choice("y", listed(1, 2, 3)),),
-        constraints=(Constraint("small", ("f",), lambda r: r["f"] <= 1, "big"),),
-        views=(View("v", ("c.y",), lambda r: r["c.y"]),),
+
+def house(rule: Constraint) -> Space:
+    """RUNNING § 2.2's House: the annex ``g`` (present while ``x >= 2``) and each room of
+    ``s`` state a derived value ``e`` of their own choice (the kitchen's twice its ``p``);
+    ``m`` ranges over the three.
+    The scullery refuses ``q = 3``; the annex's ``e`` reads its shed's ``z``, inapplicable
+    while the shed (present while ``g.c >= 2``) is absent. ``rule`` reads ``m``."""
+
+    shed = Scope(
+        "shed", when=When(("g.c",), lambda r: r["g.c"] >= 2), choices=(Choice("z", listed(1, 2)),)
+    )
+    annex = Scope(
+        "g",
+        when=When(("x",), lambda r: r["x"] >= 2),
+        choices=(Choice("c", listed(1, 2, 3)),),
+        derived=(Derived("e", ("g.c", "g.shed.z"), lambda r: r["g.c"] + r["g.shed.z"]),),
+        children=(shed,),
+    )
+    kitchen = Scope(
+        "kitchen",
+        choices=(Choice("p", listed(1, 2, 3)),),
+        derived=(Derived("e", ("s.kitchen.p",), lambda r: 2 * r["s.kitchen.p"]),),
+    )
+    scullery = Scope(
+        "scullery",
+        choices=(Choice("q", listed(1, 2, 3)),),
+        derived=(
+            Derived(
+                "e", ("s.scullery.q",), lambda r: Refuse("wet") if r["s.scullery.q"] == 3 else 1
+            ),
+        ),
     )
     return Space(
-        ("f",),
+        (),
         Scope(
             "",
-            children=(child,),
-            constraints=(Constraint("high", ("c.v",), lambda r: r["c.v"] >= 2, "low"),),
+            choices=(Choice("x", listed(1, 2, 3)),),
+            selectors=(Selector("s", (kitchen, scullery)),),
+            children=(annex,),
+            members=(Members("m", ("g.e", "s.kitchen.e", "s.scullery.e")),),
+            constraints=(rule,),
         ),
     )
 
 
-def test_an_unset_revealing_a_rule_masked_by_its_views_space_is_accepted() -> None:
-    """``f = 3`` refuses ``c``, masking ``high``; ``y = 1`` is set beside it (no new
-    pair). Unsetting ``f`` reopens ``c`` and reveals ``high`` false at its own origin;
-    setting ``f`` to 1 reveals it too. Both are changes of facts: accepted, reading refused
-    at ``high``, which the report lists with ``c.y`` standing (§ 16.24)."""
+def total(r: Reads) -> int:
+    return sum(value for _, value in r["m"])
 
-    masked = accepted(
-        change(Configuration(viewed_child_over_a_fact(), {"f": 3}), Change(commit={"c.y": 1}))
-    )
-    assert false_kinds(masked.configuration.solve()) == {
-        (PieceKind.CONSTRAINT, "high"),
-        (PieceKind.CONSTRAINT, "c.small"),
+
+#: the rooms' sum at most 4
+SMALL_HOUSE = Constraint("small", ("m",), lambda r: total(r) <= 4, "big")
+#: § 16.22: ``x`` read as a value beside ``m``, though it decides whether the annex exists
+FITTED_HOUSE = Constraint("fitted", ("x", "m"), lambda r: r["x"] + total(r) <= 7, "big")
+
+
+def test_members_answers_its_entries_with_a_value_sorted_and_skips_the_inapplicable() -> None:
+    """The annex absent (``x = 1``): its entry is skipped. Present with its shed absent
+    (``g.c = 1``): its ``e`` reads the shed's ``z``, inapplicable, so the entry is skipped
+    though its scope is present. With the shed present it answers."""
+
+    space = house(SMALL_HOUSE)
+    absent = solve_at(space, {"x": 1, "g.c": 3, "s": "kitchen", "s.kitchen.p": 2})
+    assert absent.read("m") == Known((("s.kitchen.e", 4),))
+    present = solve_at(space, {"x": 2, "g.c": 1, "s": "kitchen", "s.kitchen.p": 2})
+    assert present.presence("g") is Presence.PRESENT
+    assert present.read("g.e") == Inapplicable()
+    assert present.read("m") == Known((("s.kitchen.e", 4),))
+    shed = solve_at(space, {"x": 2, "g.c": 2, "g.shed.z": 1, "s": "kitchen", "s.kitchen.p": 1})
+    assert shed.read("m") == Known((("g.e", 3), ("s.kitchen.e", 2)))
+
+
+def test_members_refuses_through_a_refused_entry_even_while_another_waits() -> None:
+    """The scullery refuses ``q = 3``; the annex's ``c`` is open. Refused comes first: ``m``
+    refuses through the scullery's ``e``, and ``small`` is false through ``m``, its origin
+    the scullery's ``e``. With the scullery's ``q = 2`` it waits on the annex's ``e``: its
+    ``c``, and its shed's ``z``, whose presence ``c`` decides."""
+
+    space = house(SMALL_HOUSE)
+    refused = solve_at(space, {"x": 2, "s": "scullery", "s.scullery.q": 3})
+    assert refused.read("g.e") == Unresolved(("g.c", "g.shed.z"))
+    reason = Reason(ReasonKind.INPUT_REFUSED, "m", "", related=("s.scullery.e",))
+    assert refused.read("m") == Refused((reason,))
+    assert refused.validity().verdict is F
+    assert refused.evaluation.pairs() == {
+        ("constraint", "", "small"): {
+            "s.scullery.e": (
+                "derived",
+                (Reason(ReasonKind.DERIVED_BODY, "s.scullery.e", "s.scullery", "wet"),),
+            )
+        }
     }
-    high = Piece(PieceKind.CONSTRAINT, "", "high", F, reasons=(constraint_reason("high", "low"),))
-    for edit in (Change(unset=("f",)), Change(facts={"f": 1})):
-        revealed = accepted(change(masked.configuration, edit))
-        assert revealed.validity.false == (high,)
-        assert revealed.broken == (rule("high", "low", standing=("c.y",)),)
+    waiting = solve_at(space, {"x": 2, "s": "scullery", "s.scullery.q": 2})
+    assert waiting.read("m") == Unresolved(("g.c", "g.shed.z"))
+    assert waiting.validity().verdict is U
+
+
+def test_reading_4_a_dormant_entrys_choice_never_stands() -> None:
+    """House and Scullery's dormant choice: the annex absent (``x = 1``), ``g.c = 3`` is
+    dormant and its entry is never read. ``s.kitchen.p = 3`` breaks ``small`` with
+    ``s.kitchen.e`` alone (6): nothing stands, though ``m`` declares ``g.e``."""
+
+    base = Configuration(house(SMALL_HOUSE), {}, {"x": 1, "g.c": 3, "s": "kitchen"})
+    assert base.solve().state("g.c") == Dormant(3)
+    assert rejected(change(base, Change(commit={"s.kitchen.p": 3}))).refusals == (
+        rule("small", "big"),
+    )
+
+
+def test_reading_4_a_present_entrys_choice_stands() -> None:
+    """The annex and its shed present: ``g.e = g.c + g.shed.z`` is read (3, beside the
+    kitchen's 4), so both stand in ``small``'s way; ``x``, which only decides whether the
+    annex exists, does not."""
+
+    stored = {"x": 2, "g.c": 2, "g.shed.z": 1, "s": "kitchen"}
+    base = Configuration(house(SMALL_HOUSE), {}, stored)
+    assert rejected(change(base, Change(commit={"s.kitchen.p": 2}))).refusals == (
+        rule("small", "big", standing=("g.c", "g.shed.z")),
+    )
+
+
+def test_reading_4_a_choice_read_as_a_value_beside_members_stands_though_it_decides_existence() -> (
+    None
+):
+    """§ 16.22's shape: ``fitted`` reads ``x``, the annex's guard's read, as a value beside
+    ``m`` (``x + sum <= 7``). From ``x = 2``, the shed absent and the kitchen at 4 (6),
+    ``s.kitchen.p = 3`` with ``g.c = 2`` brings the shed in (``2 + 6 + 3``): ``x`` stands
+    beside the shed's ``z``. From the annex at 3 and the kitchen at 2 (7), ``x = 3`` names
+    the annex's choices and the kitchen's."""
+
+    stored = {"x": 2, "g.c": 1, "g.shed.z": 1, "s": "kitchen", "s.kitchen.p": 2}
+    base = Configuration(house(FITTED_HOUSE), {}, stored)
+    assert base.solve().read("m") == Known((("s.kitchen.e", 4),))
+    assert rejected(change(base, Change(commit={"s.kitchen.p": 3, "g.c": 2}))).refusals == (
+        rule("fitted", "big", standing=("g.shed.z", "x")),
+    )
+    raised = Configuration(house(FITTED_HOUSE), {}, {**stored, "g.c": 2, "s.kitchen.p": 1})
+    assert rejected(change(raised, Change(commit={"x": 3}))).refusals == (
+        rule("fitted", "big", standing=("g.c", "g.shed.z", "s.kitchen.p")),
+    )
+
+
+def test_a_members_entry_is_a_derived_value_below_it() -> None:
+    def entries(*names: str, view: bool = False) -> Space:
+        child = Scope(
+            "k",
+            choices=(Choice("c", listed(1)),),
+            derived=(Derived("e", ("k.c",), lambda r: r["k.c"]),),
+            views=(View("v", ("k.c",), lambda r: r["k.c"]),),
+        )
+        return Space(
+            (),
+            Scope(
+                "",
+                derived=(Derived("d", (), lambda r: 1),),
+                children=(child,),
+                members=(Members("m", names),),
+            ),
+        )
+
+    assert entries("k.e").validate().kind("m") == "members"
+    with pytest.raises(DefinitionError) as raised:
+        entries("d").validate()
+    assert (raised.value.kind, raised.value.path) == ("malformed", ("m", "d"))
+    with pytest.raises(DefinitionError) as raised:
+        entries("k.v").validate()  # SZ100 (3)
+    assert (raised.value.kind, raised.value.path) == ("view-read-in", ("m", "k.v"))
+    with pytest.raises(DefinitionError) as raised:
+        entries("k.x").validate()
+    assert (raised.value.kind, raised.value.path) == ("unknown-read", ("m", "k.x"))
 
 
 # --- assignment ---------------------------------------------------------------------------
@@ -1652,6 +1780,7 @@ def guarded() -> Space:
     return Space(
         ("wide",),
         Scope("", selectors=(Selector("mode", (a, b, Scope("c"))),), children=(extra,)),
+        optional=("wide",),
     )
 
 
@@ -1669,9 +1798,9 @@ def test_a_rule_under_an_unknown_guard_reads_unknown_whatever_its_predicate() ->
     assert (always.verdict, always.waits) == (U, ("mode",))
     never = solution.piece("mode.b.never")
     assert (never.verdict, never.waits) == (U, ("mode",))
-    # a guard that reads a missing fact
+    # a guard over an optional fact left out reads None (SZ100 (5)): false here, not unknown
     refuses = solve(guarded()).piece("extra.refuses")
-    assert (refuses.verdict, refuses.waits) == (U, ("wide",))
+    assert (refuses.verdict, refuses.applies) == (T, False)
     assert solve(guarded(), {"wide": True}, mode="a").piece("extra.refuses").verdict is F
 
 
@@ -1703,7 +1832,7 @@ def test_a_view_refuses_when_its_space_is_refused() -> None:
 
 
 def test_a_view_answers_while_its_space_is_open() -> None:
-    solution = solve(viewed(), {"name": "u"})
+    solution = solve(viewed(), {"limit": 2, "name": "u"})
     assert solution.validity().verdict is U
     assert solution.view("title") == Known("unit u")
     assert solution.view("doubled") == Unresolved(("x",))
@@ -1749,24 +1878,38 @@ def test_a_derived_value_may_refuse_and_its_readers_receive_a_refused_input() ->
 
 
 def stage(name: str) -> Scope:
+    """A stage states its storage as a derived value, and presents it as a view."""
+
     return Scope(
         name,
         choices=(Choice("depth", listed(1, 2, 4)),),
-        views=(View("storage", (f"{name}.depth",), lambda r: 8 * next(iter(r.values()))),),
+        derived=(Derived("bits", (f"{name}.depth",), lambda r: 8 * next(iter(r.values()))),),
+        views=(View("storage", (f"{name}.bits",), lambda r: next(iter(r.values()))),),
     )
 
 
-def test_a_parent_reading_its_childrens_views_is_not_a_cycle() -> None:
+def test_a_parent_rules_on_its_childrens_derived_values_and_composes_their_views() -> None:
+    """SZ100 (3): the parent's rule reads what its children state (derived values); its
+    view ``total`` composes their views. The child is valid on its own, and its view
+    answers while the parent is refused; the parent's view refuses with its Space."""
+
     space = Space(
         (),
         Scope(
             "",
             children=(stage("first"), stage("second")),
+            views=(
+                View(
+                    "total",
+                    ("first.storage", "second.storage"),
+                    lambda r: r["first.storage"] + r["second.storage"],
+                ),
+            ),
             constraints=(
                 Constraint(
                     "fits",
-                    ("first.storage", "second.storage"),
-                    lambda r: r["first.storage"] + r["second.storage"] <= 40,
+                    ("first.bits", "second.bits"),
+                    lambda r: r["first.bits"] + r["second.bits"] <= 40,
                     "too-deep",
                 ),
             ),
@@ -1784,6 +1927,8 @@ def test_a_parent_reading_its_childrens_views_is_not_a_cycle() -> None:
     # the child is valid on its own; its view answers while the parent is refused
     assert refused.validity("first").verdict is T
     assert refused.view("first.storage") == Known(32)
+    assert refused.view("total") == Refused((Reason(ReasonKind.SPACE_REFUSED, "total", ""),))
+    assert solve_at(space, {"first.depth": 1, "second.depth": 2}).view("total") == Known(24)
 
 
 # --- definitions: reads, domains, cycles -------------------------------------------------
@@ -1830,7 +1975,6 @@ def test_a_domain_whose_membership_reaches_a_choice_is_a_definition_error() -> N
         ("y", "d", "x"): domain_reading(
             "d", derived=(Derived("d", ("n", "x"), lambda r: r["n"] + r["x"]),)
         ),
-        ("y", "v"): domain_reading("v", views=(View("v", ("n",), lambda r: r["n"]),)),
         # § 16.17: an input whose existence a choice decides beyond the choice's own guards
         ("y", "s.a.d", "s"): domain_reading(
             "s.a.d",
@@ -1858,58 +2002,109 @@ def test_a_domain_whose_membership_reaches_a_choice_is_a_definition_error() -> N
     ranked().validate()
 
 
-def test_a_constraint_reading_a_view_of_its_own_space_is_a_cycle() -> None:
-    space = Space(
+def test_reading_a_view_in_is_no_definition() -> None:
+    """SZ100 (3): only a view reads a view. A constraint, a derived value, a ``when``
+    guard, a domain's membership, computed list or ``order``, and a ``Members``, reading a
+    view of their own Space, of a Space above or of a child, are ``view-read-in``,
+    checked before cycles (a constraint on a view of its own Space was one)."""
+
+    view = View("total", ("depth",), lambda r: 8 * r["depth"])
+    inner_view = View("w", ("depth",), lambda r: r["depth"])
+
+    def described(**root: Any) -> Space:
+        inner = root.pop("inner", Scope("inner", views=(inner_view,)))
+        return Space(
+            ("n",),
+            Scope(
+                "",
+                choices=(Choice("depth", listed(1, 2)), *root.pop("choices", ())),
+                views=root.pop("views", (view,)),
+                children=(inner,),
+                **root,
+            ),
+        )
+
+    true = Constraint("fits", ("total",), lambda r: True, "c")
+    cases = [
+        (("fits", "total"), described(constraints=(true,))),
+        (
+            ("inner.fits", "total"),
+            described(inner=Scope("inner", views=(inner_view,), constraints=(true,))),
+        ),
+        (
+            ("fits", "inner.w"),
+            described(constraints=(Constraint("fits", ("inner.w",), lambda r: True, "c"),)),
+        ),
+        (("d", "inner.w"), described(derived=(Derived("d", ("inner.w",), lambda r: 1),))),
+        (
+            ("inner", "total"),
+            described(
+                inner=Scope("inner", views=(inner_view,), when=When(("total",), lambda r: True))
+            ),
+        ),
+        (
+            ("y", "total"),
+            described(choices=(Choice("y", membership(lambda v, r: True, ("total",))),)),
+        ),
+        (
+            ("y", "inner.w"),
+            described(choices=(Choice("y", computed(lambda r: (1,), ("inner.w",))),)),
+        ),
+        (
+            ("y", "total"),
+            described(
+                choices=(Choice("y", listed(1, 2, order=lambda v, r: v, order_reads=("total",))),)
+            ),
+        ),
+        (("m", "inner.w"), described(members=(Members("m", ("inner.w",)),))),
+    ]
+    for path, space in cases:
+        with pytest.raises(DefinitionError) as raised:
+            space.validate()
+        assert (raised.value.kind, raised.value.path) == ("view-read-in", path)
+    # a view reads views: its own Space's and its children's
+    described(views=(view, View("both", ("total", "inner.w"), lambda r: 0))).validate()
+
+
+def test_a_cycle_is_still_a_definition_error() -> None:
+    """Views read out close no cycle; derived values in a ring, a guard reading a value
+    of the scope it guards, and views reading each other in a ring still do."""
+
+    ring = Space(
         (),
         Scope(
             "",
-            choices=(Choice("depth", listed(1, 2, 4)),),
-            views=(View("storage", ("depth",), lambda r: 8 * r["depth"]),),
-            constraints=(
-                Constraint("fits", ("storage",), lambda r: r["storage"] <= 16, "too-deep"),
+            derived=(
+                Derived("a", ("b",), lambda r: r["b"]),
+                Derived("b", ("a",), lambda r: r["a"]),
             ),
         ),
     )
-    with pytest.raises(DefinitionError) as raised:
-        space.validate()
-    assert raised.value.kind == "cycle"
-    assert {"constraint:fits", "value:storage", "validity:"} <= set(raised.value.path)
-
-
-def test_a_constraint_reading_a_view_of_the_space_above_is_a_cycle() -> None:
-    inner = Scope(
-        "inner",
-        constraints=(Constraint("fits", ("total",), lambda r: r["total"] <= 16, "too-big"),),
-    )
-    space = Space(
+    guard = Space(
         (),
         Scope(
             "",
-            choices=(Choice("depth", listed(1, 2)),),
-            views=(View("total", ("depth",), lambda r: 8 * r["depth"]),),
-            children=(inner,),
+            children=(
+                Scope(
+                    "g",
+                    when=When(("g.c",), lambda r: r["g.c"] > 1),
+                    choices=(Choice("c", listed(1, 2)),),
+                ),
+            ),
         ),
     )
-    with pytest.raises(DefinitionError) as raised:
-        space.validate()
-    assert raised.value.kind == "cycle"
-    assert "constraint:inner.fits" in raised.value.path
-
-
-def test_a_guard_reading_a_view_of_the_space_above_is_a_cycle() -> None:
-    space = Space(
+    views = Space(
         (),
         Scope(
             "",
-            choices=(Choice("depth", listed(1, 2)),),
-            views=(View("total", ("depth",), lambda r: 8 * r["depth"]),),
-            children=(Scope("extra", when=When(("total",), lambda r: r["total"] > 8)),),
+            views=(View("v", ("w",), lambda r: r["w"]), View("w", ("v",), lambda r: r["v"])),
         ),
     )
-    with pytest.raises(DefinitionError) as raised:
-        space.validate()
-    assert raised.value.kind == "cycle"
-    assert {"guard:extra", "value:total", "validity:"} <= set(raised.value.path)
+    for space, met in ((ring, "value:a"), (guard, "presence:g"), (views, "value:v")):
+        with pytest.raises(DefinitionError) as raised:
+            space.validate()
+        assert raised.value.kind == "cycle"
+        assert met in raised.value.path
 
 
 # --- nested selectors: an outer kernel, an inner kernel, cores --------------------------
@@ -1994,5 +2189,3 @@ def test_validity_counts_a_rule_three_deep() -> None:
     assert refused.validity("kernel.inner").verdict is F
     valid = solve_at(nested(), {**stored, PE: 2}, {"plain_ok": True, "serial_ok": True, "width": 6})
     assert valid.validity().verdict is T
-    waiting = solve_at(nested(), stored, {"plain_ok": True, "serial_ok": True})
-    assert (waiting.validity().verdict, waiting.validity().waits) == (U, ("width",))
