@@ -62,11 +62,23 @@ own choices (``finn.core.space.bind`` against the model's ``bind``, its report c
 from nothing stored and from the walked design space (``"bind held"``).
 Its own **permanent checks** are strict always: the walked engine configuration answers
 every question, and every change, as one built from nothing (``support.space_walk.fresh``),
-and its bind publishes the walked configuration's stored choices. No milestone with rows is
-pending (the facts-instance milestone is accepted), so every disagreement with the model
-fails the walk. While a later milestone with rows is pending (:func:`pending`), they are
-**counted, not failed**, tallied by question; with its rows taken as removed
-(``--without``), each fails the walk. An engine error always fails. Refinement on the engine
+and its bind publishes the walked configuration's stored choices. An engine error always
+fails.
+
+**Two runs, and attribution by cause** (DESIGN § 6). The model holds rulings the engine has
+not reached (SZ100 (3), (5)), each a pending milestone of the matrix with one row.
+
+- The **strict** run (``strict=True``, ``--strict``) draws neither cause: no view in a
+  rule's pool, every fact given at the start, no unset. Every disagreement fails the walk.
+- The **full** run (the default) draws both. Each disagreement is attributed by its cause,
+  computed from the description and the model's configuration, never the engine's answers:
+  T4b, a description the model refuses as ``view-read-in`` that the engine takes otherwise
+  (``engine.definition``; counted once, and the generator draws again); T4c, a question
+  whose subject reaches an optional fact left out (:meth:`Structure.reach`; validity,
+  possible values, a change, a bind and refinement reach the whole description). One
+  attributed to a pending milestone (:func:`pending`) is **counted, not failed**, tallied
+  by question and by milestone; one with no cause fails the walk, and so does one whose
+  milestone is not pending (``--without``: its rows taken as removed). Refinement on the engine
 side (its answers over an addition, in the same order) is a disagreement like any other
 where the model holds. Where the engine refuses a change the model accepts, the engine side
 takes the model's configuration by a bind, which is never refused.
@@ -110,10 +122,11 @@ from .compare import (
     state_form,
     validity_form,
 )
-from .engine import Engine, NotTranslatable, Point, build
+from .engine import Engine, NotTranslatable, Point, build, definition
 from .forms import (
     AnswerForm,
     ChangeForm,
+    DefinitionForm,
     Form,
     PossibleForm,
     RuleForm,
@@ -143,8 +156,12 @@ class Generated:
     text: str
     facts: Mapping[str, int]
     #: descriptions drawn before it and skipped, by why: "untranslatable" (the engine cannot
-    #: express it), "cycle", or another definition error's kind
+    #: express it), "view-read-in", "cycle", or another definition error's kind
     skipped: Counter[str] = field(default_factory=Counter)
+    #: the descriptions drawn before it that read a view in (SZ100 (3)), which the model
+    #: refuses as no definition: each one's text and what the engine's ``definition``
+    #: answered (T4b's disagreements; the full run's alone)
+    read_in: tuple[tuple[str, DefinitionForm], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -169,10 +186,15 @@ class _Draw:
     ``m`` in the root ranges over a derived value ``e`` of ``g`` (in the root) and of each
     case of ``s``, each reading its scope's own choice, and a root rule reads ``m`` with an
     order-free function: a dormant entry's choice is then never read, so never standing,
-    and § 16.22's shape arises when the rule also reads what ``g``'s guard reads."""
+    and § 16.22's shape arises when the rule also reads what ``g``'s guard reads.
 
-    def __init__(self, rng: random.Random) -> None:
+    ``strict``: no view in a rule's pool, so nothing reads a view in (SZ100 (3)); otherwise
+    a root rule now and then reads ``g``'s view or the root's own, which the model refuses
+    as ``view-read-in``."""
+
+    def __init__(self, rng: random.Random, strict: bool = False) -> None:
         self.rng = rng
+        self.strict = strict
         self.names = itertools.count()
         self.facts = tuple(f"f{index}" for index in range(rng.randint(1, 2)))
         #: the optional facts (SZ100 (5)): left out, one reads None, and every function
@@ -480,10 +502,11 @@ class _Draw:
             views = (model.View("v", reads, _capped(reads, k, "too-big")),)
             self.lines.append(f"{indent}view v: {' + '.join(reads)}, refused 'too-big' past {k}")
         pool = [*readable, *(item.name for item in over_facts), *(i for i in self.ints if "." in i)]
-        if self.guard_view is not None and rng.random() < 0.5:
-            pool.append(self.guard_view)  # a descendant's view: not a cycle
-        if views and rng.random() < 0.2:
-            pool.append("v")  # a view of the rules' own Space: a cycle, drawn again
+        # a view read in (SZ100 (3)): a descendant's, or the rules' own Space's; never strict
+        if self.guard_view is not None and rng.random() < 0.5 and not self.strict:
+            pool.append(self.guard_view)
+        if views and rng.random() < 0.2 and not self.strict:
+            pool.append("v")
         constraints = []
         for _ in range(rng.randint(0, 4)):
             rule = self.constraint(pool, indent)
@@ -633,33 +656,45 @@ def _join(scope: str, name: str) -> str:
     return f"{scope}.{name}" if scope else name
 
 
-def generate(rng: random.Random) -> tuple[Generated, Engine]:
+def generate(rng: random.Random, strict: bool = False) -> tuple[Generated, Engine]:
     """A description and its engine, drawn until one has two to six value choices, is a
     definition (``validate``: cycles and other definition errors are skipped) and the engine
-    can express (``build``); the others are counted by why."""
+    can express (``build``); the others are counted by why. Every required fact is given;
+    an optional one is left out now and then (``None``, SZ100 (5)), never when ``strict``.
+
+    A description the model refuses as ``view-read-in`` (SZ100 (3); drawn only when not
+    ``strict``) is checked against the engine's ``definition`` before it is drawn again:
+    each is kept in ``read_in``, with what the engine answered, as T4b's disagreement."""
     skipped: Counter[str] = Counter()
+    read_in: list[tuple[str, DefinitionForm]] = []
     while True:
-        draw = _Draw(rng)
+        draw = _Draw(rng, strict)
         description = draw.space()
         if not 2 <= len(draw.ints) <= 6:
             continue
-        # every required fact given; an optional one now and then left out (None)
-        facts = {
-            fact: rng.choice(FACT_VALUES)
-            for fact in draw.facts
-            if fact not in draw.optional or rng.random() < 0.75
-        }
+        facts: dict[str, int] = {}
+        for fact in draw.facts:
+            given = rng.random() < 0.75 if fact in draw.optional else True
+            value = rng.choice(FACT_VALUES)
+            if given or strict:
+                facts[fact] = value
+        text = "\n".join(draw.lines)
         try:
             description.validate()
         except model.DefinitionError as error:
             skipped[error.kind] += 1
+            if error.kind == "view-read-in":
+                try:
+                    read_in.append((text, definition(description, facts=facts)))
+                except NotTranslatable:
+                    skipped["untranslatable"] += 1
             continue
         try:
             engine = build(description)
         except NotTranslatable:
             skipped["untranslatable"] += 1
             continue
-        return Generated(description, "\n".join(draw.lines), facts, skipped), engine
+        return Generated(description, text, facts, skipped, tuple(read_in)), engine
 
 
 # --- the questions --------------------------------------------------------------------------------
@@ -932,6 +967,38 @@ class Structure:
 
     def deciders(self, scope: str) -> frozenset[str]:
         return frozenset(p for p in self.closure(self.presence(scope)) if p in self.index.choices)
+
+    def reach(self, seeds: Iterable[str]) -> frozenset[str]:
+        """What an answer about ``seeds`` can depend on, for the attribution by cause
+        (DESIGN § 6): the closure, with each choice's membership reads (its type check and
+        its list) and, for a view, every piece of its Space's validity (its constraints,
+        its listed domains, its guards). Never used by the invariants."""
+        index = self.index
+        found: set[str] = set()
+        stack = list(seeds)
+        while stack:
+            path = stack.pop()
+            if path in found:
+                continue
+            found.add(path)
+            if path in index.facts:
+                continue
+            stack.extend(self.reads(path))
+            stack.extend(self.presence(self.scope(path)))
+            if path in index.choices:
+                stack.extend(index.choices[path].domain.reads)
+            if path in index.views:
+                scope = index.views[path][1]
+                stack.extend(p for p, (_, o) in index.constraints.items() if index.within(o, scope))
+                stack.extend(
+                    p
+                    for p, info in index.choices.items()
+                    if info.domain.listed and index.within(info.scope, scope)
+                )
+                for name, info_ in index.scopes.items():
+                    if info_.when is not None and index.within(name, scope):
+                        stack.extend(info_.when.reads)
+        return frozenset(found)
 
     def over_facts(self, path: str) -> bool:
         """Whether a derived value reads, through derived values, facts alone."""
@@ -1480,8 +1547,8 @@ def bind_problems(
 
 
 def pending(without: Iterable[str] = ()) -> tuple[str, ...]:
-    """The milestones whose rows are pending, ``without`` those taken as removed. While any
-    is, the walks count disagreements; once none is, each one fails a walk."""
+    """The milestones whose rows are pending, ``without`` those taken as removed: the full
+    run counts the disagreements attributed to them, and fails on the others."""
     removed = set(without)
     unknown = removed - set(MILESTONES)
     if unknown:
@@ -1516,8 +1583,12 @@ class Tally:
     #: (``finn.core.space.bind``, never refused), where it refused what the model accepted
     compared: int = 0
     rebound: int = 0
-    #: disagreements with the engine (counted while a milestone is pending), by question
+    #: the run: strict (no cause drawn, every disagreement fails) or full
+    strict: bool = False
+    #: disagreements with the engine attributed to a pending milestone and counted, by
+    #: question and by milestone (DESIGN § 6)
     by_question: Counter[str] = field(default_factory=Counter)
+    by_milestone: Counter[str] = field(default_factory=Counter)
     engine_errors: int = 0
     #: binds of a design space reading refused (invariant 1, through ``bind``), reporting a
     #: rule a facts step broke (§ 16.24), as invariant 1 allows
@@ -1550,16 +1621,18 @@ class _State:
 
 
 class _Walk:
-    def __init__(self, seed: int, steps: int, strict: bool) -> None:
+    def __init__(self, seed: int, steps: int, strict: bool, waiting: tuple[str, ...]) -> None:
         self.rng = random.Random(seed)
         self.steps = steps
         self.strict = strict
-        self.generated, self.engine = generate(self.rng)
+        #: the milestones whose disagreements are counted, the others failing
+        self.waiting = waiting
+        self.generated, self.engine = generate(self.rng, strict)
         self.index = self.generated.description.validate()
         self.structure = Structure(self.index)
         self.asked = questions(self.index)
         self.engine_asked = [q for q in self.asked if q[0] in ENGINE_QUESTIONS]
-        self.tally = Tally(seed, skipped=self.generated.skipped)
+        self.tally = Tally(seed, skipped=self.generated.skipped, strict=strict)
         self.step = 0
         self.history: list[str] = []
         #: each selector's case before a switch, for a switch back
@@ -1587,15 +1660,46 @@ class _Walk:
         if problems:
             self.fail(name, "invariant " + "\n".join(problems))
 
-    def disagree(self, what: str, label: str, expected: Form, engine: Form) -> None:
-        """Fail the walk on a disagreement with the engine (strict), or count it."""
-        if self.strict:
+    def disagree(
+        self, what: str, label: str, expected: Form, engine: Form, cause: str | None
+    ) -> None:
+        """Count a disagreement with the engine under the milestone its ``cause`` names
+        (DESIGN § 6), or fail the walk: in the strict run, where it has no cause, or where
+        its milestone is not pending (none of its rows left, or taken as removed)."""
+        if self.strict or cause is None or cause not in self.waiting:
+            reason = (
+                "strict run"
+                if self.strict
+                else "no cause"
+                if cause is None
+                else f"{cause} not pending"
+            )
             self.fail(
                 "disagreement",
-                f"the engine disagrees ({what})\n"
+                f"the engine disagrees ({what}; {reason})\n"
                 + Disagreement("walk", label, expected, engine).describe(),
             )
         self.tally.by_question[what] += 1
+        assert cause is not None
+        self.tally.by_milestone[cause] += 1
+
+    def cause(self, subject: str | None, *configurations: model.Configuration) -> str | None:
+        """The cause a disagreement is attributed to, from the description and the model's
+        configurations alone, never the engine's answers (DESIGN § 6): T4c when its
+        question's subject reaches an optional fact left out (``None``) in one of
+        ``configurations`` (:meth:`Structure.reach`; a ``None`` subject, validity, possible
+        values, a change or a bind, reaches the whole description); else none."""
+        left_out = {
+            name
+            for configuration in configurations
+            for name in self.index.optional
+            if configuration.facts[name] is None
+        }
+        if not left_out:
+            return None
+        if subject is None or left_out & self.structure.reach({subject}):
+            return "T4c"
+        return None
 
     def on_engine(self, call: Callable[[], T]) -> T:
         try:
@@ -1656,11 +1760,19 @@ class _Walk:
             )
         return forms
 
-    def compare(self, forms: Mapping[Question, Form], engine: Mapping[Question, Form]) -> None:
+    def compare(
+        self,
+        configuration: model.Configuration,
+        forms: Mapping[Question, Form],
+        engine: Mapping[Question, Form],
+    ) -> None:
         self.tally.compared += 1
         for question in self.engine_asked:
             if not agrees(forms[question], engine[question]):
-                self.disagree(question[0], ask(question), forms[question], engine[question])
+                what, path = question
+                subject = path if what in ("state", "answer", "rule") else None
+                cause = self.cause(subject, configuration)
+                self.disagree(what, ask(question), forms[question], engine[question], cause)
 
     def engine_change(self, point: Point, edit: model.Change) -> tuple[ChangeForm, Point | None]:
         """``edit`` on the engine; its permanent check: as on a configuration built from
@@ -1704,7 +1816,7 @@ class _Walk:
         ):
             self.tally.engine_checks[question] += 1
             if not agrees(expected, form):
-                self.disagree(question, label, expected, form)
+                self.disagree(question, label, expected, form, self.cause(None, configuration))
             if not _same_facts(self.on_engine(bound.stored), walked):
                 self.fail(
                     "engine",
@@ -1715,6 +1827,7 @@ class _Walk:
     def engine_refinement(
         self,
         before: _State,
+        after: model.Configuration,
         forms: Mapping[Question, Form],
         engine: Mapping[Question, Form],
         edit: model.Change,
@@ -1723,12 +1836,13 @@ class _Walk:
         down where the model's answer does not move is a disagreement like any other."""
         self.tally.engine_checks["refinement"] += 1
         found = order_problems(before.engine, engine, edit.commit)
+        cause = self.cause(None, before.configuration, after)
         for question, move in sorted(found.items()):
             # shown by the answers that disagree: after the step, or else before it
             pair = (forms[question], engine[question])
             if agrees(*pair):
                 pair = (before.forms[question], before.engine[question])
-            self.disagree("refinement", f"{ask(question)} moves down: {move}", *pair)
+            self.disagree("refinement", f"{ask(question)} moves down: {move}", *pair, cause)
 
     # -- drawing
 
@@ -1777,7 +1891,7 @@ class _Walk:
             return model.Change(commit={path: rng.choice(cases)})
         facts = sorted(index.facts)
         unsettable = sorted(f for f in index.optional if configuration.facts[f] is not None)
-        if roll < 0.95 or not unsettable:
+        if roll < 0.95 or not unsettable or self.strict:
             fact = rng.choice(facts)
             options = [value for value in FACT_VALUES if configuration.facts.get(fact) != value]
             new = {fact: rng.choice(options)}
@@ -1841,7 +1955,7 @@ class _Walk:
         forms = model_forms(solution, self.asked)
         self.history_independence(configuration, forms)
         engine = self.engine_state(point)
-        self.compare(forms, engine)
+        self.compare(configuration, forms, engine)
         self.engine_bind(configuration, point)
         return _State(configuration, solution, forms, point, engine)
 
@@ -1849,6 +1963,15 @@ class _Walk:
         tally = self.tally
         started = time.perf_counter()
         try:
+            for text, form in self.generated.read_in:
+                # T4b (SZ100 (3)): the model refuses a view read in, today's engine does not
+                self.disagree(
+                    "definition",
+                    "the definition, drawn before this description:\n" + text,
+                    DefinitionForm("view-read-in"),
+                    form,
+                    "T4b",
+                )
             configuration = model.Configuration(self.generated.description, self.generated.facts)
             point = self.on_engine(lambda: self.engine.open(dict(self.generated.facts)))
             state = self.state(configuration, point)
@@ -1900,7 +2023,10 @@ class _Walk:
         if not agrees(expected, engine):
             # tallied apart: a facts step's change (§ 16.24) and a change of choices
             what = "facts change" if facts_step else "change"
-            self.disagree(what, f"the change {_edit(edit)}", expected, engine)
+            facts, _ = would_be(configuration, edit)
+            published = model.Configuration(configuration.space, facts)
+            cause = self.cause(None, configuration, published)
+            self.disagree(what, f"the change {_edit(edit)}", expected, engine, cause)
         if not isinstance(result, model.Accepted):
             return state
         tally.accepted += 1
@@ -1920,10 +2046,10 @@ class _Walk:
             _, point = self.bind_engine(result.configuration)
             tally.rebound += 1
         engine_forms_ = self.engine_state(point)
-        self.compare(forms, engine_forms_)
+        self.compare(result.configuration, forms, engine_forms_)
         self.engine_bind(result.configuration, point)
         if addition and successor is not None:
-            self.engine_refinement(state, forms, engine_forms_, edit)
+            self.engine_refinement(state, result.configuration, forms, engine_forms_, edit)
         return _State(result.configuration, solution, forms, point, engine_forms_)
 
 
@@ -1939,11 +2065,15 @@ def _edit(edit: model.Change) -> str:
     return ", ".join(parts) or "(nothing)"
 
 
-def walk(seed: int, steps: int, without: Iterable[str] = ()) -> Tally:
-    """One seeded walk of ``steps`` changes. ``without``: milestones whose rows are taken as
-    removed; once no milestone with rows is pending, a disagreement fails the walk. It never
-    raises: a failure is in ``Tally.failure``."""
-    return _Walk(seed, steps, not pending(without)).run()
+def walk(seed: int, steps: int, without: Iterable[str] = (), strict: bool = False) -> Tally:
+    """One seeded walk of ``steps`` changes (DESIGN § 6). ``strict``: the generator draws
+    neither cause (no view read in, every fact given, no unset) and every disagreement fails
+    the walk. Otherwise, the full run: each disagreement is attributed by its cause, T4b (a
+    description the model refuses as ``view-read-in``) or T4c (its question reaching an
+    optional fact left out), and counted under that pending milestone; an unattributed one,
+    or one whose milestone is not pending (``without``: its rows taken as removed), fails
+    the walk. It never raises: a failure is in ``Tally.failure``."""
+    return _Walk(seed, steps, strict, pending(without)).run()
 
 
 # --- the summary ----------------------------------------------------------------------------------
@@ -1954,23 +2084,25 @@ def _counts(counts: Mapping[str, int]) -> str:
 
 
 def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
-    """The walks' summary: a line per seed, then the totals."""
+    """The walks' summary: a line per seed, then the totals, with each pending milestone's
+    count of attributed disagreements (DESIGN § 6)."""
     lines = [
-        "| seed | steps | accepted | invariant checks | failed | engine's own checks | "
-        "disagreements by question | engine errors | seconds | result |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| seed | run | steps | accepted | invariant checks | failed | engine's own checks | "
+        "disagreements by milestone | by question | engine errors | seconds | result |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     totals: dict[str, Counter[str]] = {
-        name: Counter() for name in ("checks", "engine_checks", "by_question", "skipped")
+        name: Counter()
+        for name in ("checks", "engine_checks", "by_question", "by_milestone", "skipped")
     }
     for tally in tallies:
         for name, counter in totals.items():
             counter.update(getattr(tally, name))
         lines.append(
-            f"| {tally.seed} | {tally.steps} | {tally.accepted} | "
-            f"{sum(tally.checks.values())} | {tally.failed or '-'} | "
-            f"{sum(tally.engine_checks.values())} | {_counts(tally.by_question)} | "
-            f"{tally.engine_errors} | {tally.seconds:.2f} | "
+            f"| {tally.seed} | {'strict' if tally.strict else 'full'} | {tally.steps} | "
+            f"{tally.accepted} | {sum(tally.checks.values())} | {tally.failed or '-'} | "
+            f"{sum(tally.engine_checks.values())} | {_counts(tally.by_milestone)} | "
+            f"{_counts(tally.by_question)} | {tally.engine_errors} | {tally.seconds:.2f} | "
             f"{'FAILED' if tally.failure else 'ok'} |"
         )
 
@@ -1980,22 +2112,31 @@ def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
     failed = Counter(tally.failed for tally in tallies if tally.failed)
     seconds = sum(tally.seconds for tally in tallies)
     waiting = pending(without)
-    mode = (
-        f"counted (pending: {', '.join(waiting)})"
+    runs = Counter("strict" if tally.strict else "full" for tally in tallies)
+    full = (
+        f"attributed by cause, counted while pending ({', '.join(waiting)}), else failing"
         if waiting
-        else "strict (no milestone with rows pending)"
+        else "every one failing (no milestone with rows pending)"
+    )
+    mode = "; ".join(
+        f"{run}: {full if run == 'full' else 'every one failing'}" for run in sorted(runs)
+    )
+    milestones = ", ".join(
+        f"{milestone} {totals['by_milestone'][milestone]}" for milestone in MILESTONES[1:]
     )
     lines += [
         "",
-        f"walks {len(tallies)}, failed {sum(failed.values())} ({_counts(failed)}); steps "
-        f"{summed('steps')}, accepted {summed('accepted')}, the model's alone "
-        f"{summed('model_only')}; {seconds:.1f} s, {seconds / max(len(tallies), 1):.2f} s per walk",
+        f"walks {len(tallies)} ({_counts(runs)}), failed {sum(failed.values())} "
+        f"({_counts(failed)}); steps {summed('steps')}, accepted {summed('accepted')}, the "
+        f"model's alone {summed('model_only')}; {seconds:.1f} s, "
+        f"{seconds / max(len(tallies), 1):.2f} s per walk",
         f"descriptions skipped: {_counts(totals['skipped'])}",
         f"invariant checks: {_counts(totals['checks'])}; binds reading refused, reporting rules "
         f"new facts broke (§ 16.24) {summed('binds_broken')}",
         f"engine's own checks: {_counts(totals['engine_checks'])}; configurations compared "
         f"{summed('compared')}, engine rebound to the model's by a bind {summed('rebound')}",
-        f"engine disagreements ({mode}) by question: {_counts(totals['by_question'])}",
+        f"engine disagreements ({mode}): by milestone {milestones or '-'}; by question "
+        f"{_counts(totals['by_question'])}",
         f"engine errors: {summed('engine_errors')}",
     ]
     return "\n".join(lines)

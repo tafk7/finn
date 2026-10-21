@@ -3,13 +3,16 @@
 
 """From ``tests``: ``python -m core.space.reference_harness`` prints the acceptance matrix as a
 markdown table; ``python -m core.space.reference_harness walks --seeds 0-99 --steps 40`` runs
-the seeded walks and prints their summary, then each failed walk whole. With no milestone
-pending (none is: the engine core's and the facts-instance milestones are accepted), every
-disagreement with the engine fails its walk. While a later milestone with rows is pending,
-its disagreements are counted; ``--without MILESTONE`` takes its rows as removed, so every
-disagreement fails its walk (its engine walked as if it had removed them). It exits 1 when a
-walk failed. The walks are imported by their command alone, so the matrix prints whatever
-state the walks are in."""
+the seeded walks and prints their summary, then each failed walk whole.
+
+The full run (the default) draws both of the rulings' causes the engine has not reached
+(DESIGN § 6): each disagreement is attributed by its cause to T4b (a view read in) or T4c (an
+optional fact left out) and counted under that milestone while it is pending; an
+unattributed one fails its walk. ``--without MILESTONE`` takes its rows as removed, so its
+disagreements fail their walks (its engine walked as if it had removed them). ``--strict``
+draws neither cause, and every disagreement fails. It exits 1 when a walk failed. The walks
+are imported by their command alone, so the matrix prints whatever state the walks are
+in."""
 
 import argparse
 import sys
@@ -28,6 +31,12 @@ def main(argv: list[str]) -> int:
         default="",
         help="pending milestones whose rows are taken as removed, comma-separated",
     )
+    walks.add_argument(
+        "--strict",
+        action="store_true",
+        help="draw neither cause (no view read in, every fact given, no unset); any "
+        "disagreement fails",
+    )
     arguments = parser.parse_args(argv)
     if arguments.command != "walks":
         print(markdown())
@@ -35,7 +44,9 @@ def main(argv: list[str]) -> int:
     from .walks import seeds, table, walk  # noqa: PLC0415
 
     without = [item.strip() for item in arguments.without.split(",") if item.strip()]
-    tallies = [walk(seed, arguments.steps, without) for seed in seeds(arguments.seeds)]
+    tallies = [
+        walk(seed, arguments.steps, without, arguments.strict) for seed in seeds(arguments.seeds)
+    ]
     print(table(tallies, without))
     failed = [tally for tally in tallies if tally.failure]
     for tally in failed:

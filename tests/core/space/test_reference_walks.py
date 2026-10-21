@@ -9,10 +9,12 @@ model's invariants hold strictly (history-independence and the bind publishing i
 nothing broken, additions moving answers only up the information order, no accepted change
 adding a (false piece, origin) pair, every refusal naming exactly its origins and their
 standing choices), and the engine's own checks hold (its walked configuration against one
-built from nothing). No milestone with rows is pending, so each disagreement with the model
-fails its walk; while a later one is, they are counted, and with its rows taken as removed,
-each fails its walk. Every invariant's checker is
-also shown catching a deliberately wrong answer on a small description.
+built from nothing). Each seed walks twice (DESIGN § 6): the strict run draws neither of the
+rulings' causes the engine has not reached (no view read in, every fact given, no unset),
+and each disagreement fails it; the full run draws both, attributes each disagreement by its
+cause to T4b or T4c and counts it under that pending milestone, and fails on an unattributed
+one, or on one whose milestone is taken as removed. Every invariant's checker is also shown
+catching a deliberately wrong answer on a small description.
 
 The gate runs a fixed set of seeds; ``python -m core.space.reference_harness walks`` (from
 ``tests``) runs more and prints what they met.
@@ -20,6 +22,7 @@ The gate runs a fixed set of seeds; ``python -m core.space.reference_harness wal
 
 from __future__ import annotations
 
+import functools
 import random
 from collections.abc import Callable, Iterable
 from dataclasses import replace
@@ -48,7 +51,7 @@ from core.space.reference import (
     computed,
     listed,
 )
-from core.space.reference_harness import Row, walks
+from core.space.reference_harness import walks
 from core.space.reference_harness.engine import Point
 from core.space.reference_harness.forms import (
     AnswerForm,
@@ -80,12 +83,21 @@ SEEDS = range(24)
 STEPS = 30
 
 
+@functools.cache
+def gate_walk(seed: int, strict: bool) -> walks.Tally:
+    """The gate's walk of ``seed``, run once per session (never under a monkeypatch)."""
+    return walk(seed, STEPS, strict=strict)
+
+
+@pytest.mark.parametrize("strict", [True, False], ids=["strict", "full"])
 @pytest.mark.parametrize("seed", SEEDS)
 def test_a_seeded_walk_keeps_the_four_invariants_and_the_engines_own_checks(
-    seed: int,
+    seed: int, strict: bool
 ) -> None:
-    tally = walk(seed, STEPS)
+    tally = gate_walk(seed, strict)
     assert tally.failure is None, tally.failure
+    if strict:
+        assert not tally.by_milestone and not tally.model_only
     # each step is a change of choices (its assignment checked) or a facts step; a batch's
     # choices are checked as a change of choices too
     checks = tally.checks
@@ -100,8 +112,15 @@ def test_a_seeded_walk_keeps_the_four_invariants_and_the_engines_own_checks(
     assert tally.engine_errors == 0
 
 
+def test_the_full_run_meets_both_causes_and_counts_each_under_its_milestone() -> None:
+    tallies = [gate_walk(seed, False) for seed in SEEDS]
+    counted = sum((tally.by_milestone for tally in tallies), start=type(tallies[0].checks)())
+    assert counted["T4b"] and counted["T4c"], counted
+    assert set(counted) <= {"T4b", "T4c"}
+
+
 def test_the_gates_walks_exercise_every_invariant() -> None:
-    tallies = [walk(seed, STEPS) for seed in range(6)]
+    tallies = [gate_walk(seed, False) for seed in range(6)]
     checks = sum((tally.checks for tally in tallies), start=type(tallies[0].checks)())
     for name in (
         "2 additions",
@@ -120,31 +139,41 @@ def test_the_gates_walks_exercise_every_invariant() -> None:
 
 
 def test_a_walk_is_the_same_for_the_same_seed() -> None:
-    first, second = walk(5, 12), walk(5, 12)
-    assert (first.steps, first.accepted, first.checks, first.by_question) == (
+    first, second = walk(22, 12), walk(22, 12)
+    assert (first.steps, first.accepted, first.checks, first.by_milestone) == (
         second.steps,
         second.accepted,
         second.checks,
-        second.by_question,
+        second.by_milestone,
     )
 
 
 def test_descriptions_hold_two_to_six_choices_and_skip_views_read_in() -> None:
     rng = random.Random(7)
     skipped = 0
+    left_out = 0
     for _ in range(40):
         generated, engine = generate(rng)
         skipped += generated.skipped["view-read-in"]
+        assert len(generated.read_in) <= generated.skipped["view-read-in"]
         assert 2 <= sum(info.cases is None for info in engine.index.choices.values()) <= 6
         assert generated.text.startswith("facts ")
-    assert skipped  # a rule reading a view is drawn now and then, and skipped (SZ100 (3))
+        assert set(engine.index.facts) - set(generated.facts) <= engine.index.optional
+        left_out += len(set(engine.index.facts) - set(generated.facts))
+    # a rule reading a view is drawn now and then (SZ100 (3)), checked against the engine's
+    # definition and skipped; an optional fact is left out now and then (SZ100 (5))
+    assert skipped and left_out
+    for _ in range(40):
+        generated, engine = generate(rng, strict=True)
+        assert not generated.skipped["view-read-in"] and not generated.read_in
+        assert set(generated.facts) == set(engine.index.facts)
 
 
-# -- the engine comparison: counted while a milestone is pending, strict without -------------------
+# -- the engine comparison: attributed by cause in the full run, failing in the strict one -------
 #
-# The engine agrees with the model on every walk, so a disagreement is made here: the engine
-# answers every choice's state as absent (the model's start holds an open choice), and a
-# milestone with one row is put in the matrix while one is pending.
+# Today's engine differs from the model where the rulings reach (T4b, T4c). Elsewhere it
+# agrees, so a disagreement with no cause is made here: the engine answers every choice's
+# state as absent (the model's start holds an open choice).
 
 
 @pytest.fixture
@@ -160,67 +189,82 @@ def engine_disagrees(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(walks, "engine_forms", absent)
 
 
-def pend(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A later milestone, ``lane 9``, with one row: pending."""
-    row = Row("a-row", "lane 9", "the change", "test_reference_cases::test_it")
-    monkeypatch.setattr(walks, "MILESTONES", ("base", "lane 9"))
-    monkeypatch.setattr(walks, "ROWS", (row,))
+def first_line(tally: walks.Tally) -> str:
+    assert tally.failed == "disagreement" and tally.failure is not None
+    assert "description:" in tally.failure and "| engine" in tally.failure
+    return tally.failure.splitlines()[0]
 
 
 @pytest.mark.usefixtures("engine_disagrees")
-def test_disagreements_are_counted_while_a_milestone_has_rows(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    pend(monkeypatch)
-    assert pending() == ("lane 9",)
-    tally = walk(0, 6)
+def test_a_disagreement_with_no_cause_fails_the_full_run_and_any_fails_the_strict_run() -> None:
+    # seed 1 declares no optional fact: nothing reaches one left out
+    assert first_line(walk(1, 6)) == "seed 1, step 0: the engine disagrees (state; no cause)"
+    strict = walk(1, 6, strict=True)
+    assert first_line(strict) == "seed 1, step 0: the engine disagrees (state; strict run)"
+
+
+def test_a_view_read_in_is_counted_under_t4b_until_it_is_taken_as_removed() -> None:
+    # seed 0 draws a rule reading a view before its description: the model refuses it as
+    # view-read-in, the engine builds it
+    tally = walk(0, 3)
     assert tally.failure is None, tally.failure
-    assert tally.by_question["state"] > 0 and tally.engine_errors == 0
+    assert (tally.by_milestone["T4b"], tally.by_question["definition"]) == (1, 1)
+    assert first_line(walk(0, 3, without=("T4b",))) == (
+        "seed 0, step 0: the engine disagrees (definition; T4b not pending)"
+    )
 
 
-@pytest.mark.usefixtures("engine_disagrees")
+def test_a_question_reaching_an_optional_fact_left_out_is_counted_under_t4c() -> None:
+    # seed 7 leaves its optional f1 out: the engine reads it unresolved, the model None
+    tally = walk(7, 3)
+    assert tally.failure is None, tally.failure
+    assert tally.by_milestone == {"T4c": 1}
+    assert first_line(walk(7, 3, without=("T4c",))) == (
+        "seed 7, step 0: the engine disagrees (rule; T4c not pending)"
+    )
+
+
 def test_with_no_milestone_pending_every_disagreement_fails_its_walk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(walks, "ROWS", ())
     assert pending() == ()
-    strict = walk(0, 6)
-    pend(monkeypatch)
-    assert pending(("lane 9",)) == ()
-    without = walk(0, 6, without=("lane 9",))
-    for tally in (strict, without):
-        assert tally.failed == "disagreement" and tally.failure is not None
-        first = tally.failure.splitlines()[0]
-        assert first == "seed 0, step 0: the engine disagrees (state)"
-        assert "description:" in tally.failure and "| engine" in tally.failure
+    assert first_line(walk(7, 3)) == (
+        "seed 7, step 0: the engine disagrees (rule; T4c not pending)"
+    )
     with pytest.raises(ValueError, match="no such milestone"):
         pending(("lane 10",))
 
 
-def test_the_summary_names_the_mode_and_the_checks(monkeypatch: pytest.MonkeyPatch) -> None:
-    tallies = [walk(0, 3)]
-    pend(monkeypatch)
+def test_the_summary_names_the_runs_the_milestones_and_the_checks() -> None:
+    tallies = [walk(7, 3), walk(7, 3, strict=True)]
     text = table(tallies)
     checks = ", ".join(
-        f"{name} {count}" for name, count in sorted(tallies[0].checks.items()) if count
+        f"{name} {count}"
+        for name, count in sorted((tallies[0].checks + tallies[1].checks).items())
+        if count
     )
     assert (
         f"invariant checks: {checks}; binds reading refused, reporting rules new facts broke "
         "(§ 16.24) 0" in text
     )
-    assert "engine disagreements (counted (pending: lane 9)) by question:" in text
-    assert "excused" not in text
-    assert text.splitlines()[2].startswith("| 0 | 3 |")
-    assert "strict (no milestone with rows pending)" in table(tallies, ("lane 9",))
+    assert "walks 2 (full 1, strict 1)" in text
+    assert (
+        "engine disagreements (full: attributed by cause, counted while pending (T4b, T4c), "
+        "else failing; strict: every one failing): by milestone T4b 0, T4c 1; by question rule 1"
+    ) in text
+    assert text.splitlines()[2].startswith("| 7 | full | 3 |")
+    assert text.splitlines()[3].startswith("| 7 | strict | 3 |")
+    assert "every one failing (no milestone with rows pending)" in table(tallies, ("T4b", "T4c"))
 
 
 def test_a_broken_standing_list_in_the_model_fails_a_walk(monkeypatch: pytest.MonkeyPatch) -> None:
     # The walk end to end: a model naming one standing choice too few fails at the step. The
-    # engine, unbroken, disagrees with it sooner (its possible values name the standing
-    # choices too): counted, under a milestone pending, so the invariant is what fails.
+    # engine, unbroken, would disagree with it sooner (its possible values name the standing
+    # choices too), so the engine's answers are taken as agreeing: the invariant is what fails.
     standing: Callable[..., tuple[str, ...]] = reference.model._standing
     monkeypatch.setattr(reference.model, "_standing", lambda *args: standing(*args)[1:])
-    pend(monkeypatch)
+    monkeypatch.setattr(walks, "agrees", lambda *args: True)
     tally = walk(30, 4)
     assert tally.failed == "4 standing" and tally.failure is not None
     assert tally.failure.startswith("seed 30, step 4: invariant 4 standing: clearing")
