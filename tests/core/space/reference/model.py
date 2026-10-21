@@ -40,7 +40,13 @@ unknown) or absent (unset, its scope absent or not in play).
 reads its inputs: all known, its body answers (a :class:`~.description.Refuse` is a
 refusal at its origin); an input refused, it is refused through it; an input waiting,
 it waits; an input inapplicable, it is inapplicable. A view also refuses, through,
-when its Space's validity is false.
+when its Space's validity is false. A ``Members`` (SZ100 (6)) reads its entries,
+derived values in scopes below it: its value is the (entry, value) pairs of the
+entries that answer a value, sorted by entry. An entry answering inapplicable (its
+scope absent, or present with an inapplicable value) is skipped. Otherwise, in this
+order: any entry refused, by its value or by its presence, refuses the whole through
+it, even while another waits; else any entry unresolved makes it wait. Its reads made
+are the entries that answered a value (reading 4).
 
 **Validity** of a scope is the strong three-valued AND
 (:func:`~.answers.kleene_and`) of the pieces at or below it: each constraint (absent
@@ -107,7 +113,8 @@ corpus; § 16 holds the readings its author gave for this model.
    origin: its Space's false pieces are counted on their own.
 2. *Only an origin feeding a false piece counts* (§ 16.2, kept by § 16.15). A piece's
    origins are found from it, following refused inputs back through derived values,
-   views, and choices and values refused through a guard (to the guard's refused reads);
+   views, ``Members`` (to their refused entries; a ``Members`` is never an origin), and
+   choices and values refused through a guard (to the guard's refused reads);
    a listed domain's list refused through its membership's input, back over the facts.
    A refusing derived value or view nothing rules on reads refused where it is asked,
    is in no pair, and refuses no change. A piece false only through a view refused with
@@ -136,15 +143,24 @@ corpus; § 16 holds the readings its author gave for this model.
    the change reopens, so that the view answers and the piece is false at an origin of
    its own. The design space reads refused, naming it; its change from nothing may be
    refused (a named limit of FN3's invariant, until products leave the Space).
-4. *What stands in the way* (§ 16.4): the stored choices among the origin's declared
-   reads followed through derived values' and views' bodies (not its presence's
-   reads), less every choice the change names (committed or cleared) and every choice
-   deciding the origin's existence: the selectors of the scopes above it, its own
-   included, and the choices its guards' ``when`` reads depend on. An empty domain has
-   nothing standing (membership reads facts only). A choice deciding only whether
-   something the origin reads exists (``s`` for a root rule reading ``s.a.p``) is no
-   declared read, so never stands (§ 16.15); one the origin also reads as a value
-   stands like any other read (§ 16.22).
+4. *What stands in the way* (§ 16.4; SZ100 (6): standing is what the origin's
+   evaluation read): the stored choices the origin's evaluation read for their value,
+   in the design space judged, followed through the reads made by the bodies of the
+   derived values, views and ``Members`` it read. The model evaluates every declared
+   input before a body runs and has no short-circuit, so a node's reads made are its
+   declared reads, but for a ``Members``: its reads made are the entries that answered
+   a value (an entry answering inapplicable is skipped, never read). The exceptions,
+   stated whole: reads made only to decide existence are not followed (each node's own
+   guards, at every node read through and not only the origin; a member's existence
+   reads; a selector read to find its case; a view's Space's validity); less every
+   choice the change names (committed or cleared) and every choice deciding the
+   origin's existence (the selectors of the scopes above it, its own included, and the
+   choices its guards' ``when`` reads depend on). An empty domain, a choice's own
+   domain as an origin, has nothing standing (membership reads facts only). A choice
+   deciding only whether something the origin reads exists (``s`` for a root rule
+   reading ``s.a.p``; the choice of a ``Members`` entry its scope's absence skips) is
+   no read made, so never stands (§ 16.15); one the origin also reads as a value stands
+   like any other read (§ 16.22). The model has no ``present`` origin.
 5. *In play, waiting, dormant* (§ 16.5), by presence before and after, over the
    successor's stored choices: ``in_play``, not present before and present after;
    ``dormant``, present or unknown before and absent or not in play after; ``opened``,
@@ -620,6 +636,8 @@ class _Evaluation:
             return Known(self.stored[path])
         if presence.state is Presence.UNKNOWN:
             return Unresolved(tuple(sorted(presence.waits)))
+        if kind == "members":
+            return self._members(path, scope)
         inputs = self.inputs(self.index.reads_of(path))
         body: Answer
         if inputs.refused:
@@ -647,6 +665,51 @@ class _Evaluation:
         if reasons:
             return Refused(sorted_reasons(reasons))
         return body
+
+    def _members(self, path: str, scope: str) -> Answer:
+        """A ``Members``'s answer: its entries that answer a value, as sorted pairs; an
+        inapplicable entry skipped; any refused entry refusing it through that entry,
+        else any unresolved one making it wait."""
+
+        entries = {entry: self.read(entry) for entry in self.index.reads_of(path)}
+        refused = tuple(sorted(e for e, a in entries.items() if isinstance(a, Refused)))
+        if refused:
+            return Refused((Reason(ReasonKind.INPUT_REFUSED, path, scope, related=refused),))
+        waits = {w for a in entries.values() if isinstance(a, Unresolved) for w in a.waits}
+        if any(isinstance(a, Unresolved) for a in entries.values()):
+            return Unresolved(tuple(sorted(waits)))
+        return Known(
+            tuple(sorted((e, a.value) for e, a in entries.items() if isinstance(a, Known)))
+        )
+
+    def reads_made(self, path: str) -> tuple[str, ...]:
+        """What ``path``'s evaluation read (reading 4): its declared reads, but for a
+        ``Members``, the entries that answered a value."""
+
+        reads = self.index.reads_of(path)
+        if path in self.index.members:
+            return tuple(entry for entry in reads if isinstance(self.read(entry), Known))
+        return reads
+
+    def standing(self, origin: str, kind: str, named: set[str]) -> tuple[str, ...]:
+        """The stored choices standing in an origin's way (reading 4): read for their
+        value by its evaluation, followed through the reads made by the bodies it read,
+        less ``named`` and the choices deciding its existence."""
+
+        if kind == "empty-domain":
+            return ()
+        index = self.index
+        found: set[str] = set()
+        stack = list(self.reads_made(origin))
+        while stack:
+            path = stack.pop()
+            if path in found:
+                continue
+            found.add(path)
+            if path in index.derived or path in index.views or path in index.members:
+                stack.extend(self.reads_made(path))
+        deciders = index.deciders(index.scope_of(origin))
+        return tuple(sorted(p for p in found if p in self.stored and p not in named | deciders))
 
     # -- pieces
 
@@ -819,9 +882,9 @@ class _Evaluation:
                 self._read_origins(read, found)
             return
         kind = self.index.kind(path)
-        assert kind in ("derived", "view"), (path, kind)
+        assert kind in ("derived", "view", "members"), (path, kind)
         inputs = self.inputs(self.index.reads_of(path))
-        if inputs.refused:
+        if inputs.refused or kind == "members":
             for read in inputs.refused:
                 self._read_origins(read, found)
             return
@@ -923,16 +986,11 @@ def _sets_new(configuration: Configuration, edit: Change) -> bool:
     return any(path not in old or not same(old[path], value) for path, value in edit.commit.items())
 
 
-def _standing(
-    index: Index, origin: str, kind: str, stored: Mapping[str, Any], named: set[str]
-) -> tuple[str, ...]:
-    """The stored choices standing in an origin's way (reading 4)."""
+def _standing(evaluation: _Evaluation, origin: str, kind: str, named: set[str]) -> tuple[str, ...]:
+    """The stored choices standing in an origin's way (reading 4), read in the design
+    space judged."""
 
-    if kind == "empty-domain":
-        return ()
-    reads = index.through_bodies(index.reads_of(origin))
-    deciders = index.deciders(index.scope_of(origin))
-    return tuple(sorted(path for path in reads if path in stored and path not in named | deciders))
+    return evaluation.standing(origin, kind, named)
 
 
 def _newly_false(
@@ -941,14 +999,13 @@ def _newly_false(
     """Each origin of a counted pair ``after`` holds and ``before`` does not, once, with
     its standing choices in ``after`` less ``named`` (reading 4); nothing unless ``sets``."""
 
-    index = after.index
     counted = before.evaluation.pairs()
     found: dict[str, RuleRefusal] = {}
     for piece, origins in sorted(after.evaluation.pairs().items() if sets else ()):
         for origin, (kind, reasons) in sorted(origins.items()):
             if origin in counted.get(piece, {}) or origin in found:
                 continue
-            standing = _standing(index, origin, kind, after.configuration.stored, named)
+            standing = _standing(after.evaluation, origin, kind, named)
             found[origin] = RuleRefusal(origin, kind, reasons, standing)
     return found
 

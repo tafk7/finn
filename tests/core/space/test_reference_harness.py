@@ -21,6 +21,7 @@ from core.space.reference import (
     Choice,
     Constraint,
     Derived,
+    Members,
     Refuse,
     Scope,
     Selector,
@@ -368,3 +369,29 @@ def test_a_selector_is_read_as_its_selected_case() -> None:
 def test_a_fact_cannot_be_set_back_to_unknown_in_the_engine() -> None:
     with pytest.raises(NotTranslatable):
         NESTED.start({"width": 4}).check_change(Change(unset=("width",)))
+
+
+def test_a_members_entry_is_exported_by_a_child_its_scope_places() -> None:
+    # The engine's Members ranges over the children its Space places, each exporting the
+    # key once: an entry two scopes down, or two entries of one child, cannot be written.
+    def described(*entries: str) -> Space:
+        inner = Scope(
+            "inner",
+            choices=(Choice("c", listed(1, 2)),),
+            derived=(Derived("e", ("unit.inner.c",), lambda r: r["unit.inner.c"]),),
+        )
+        unit = Scope(
+            "unit",
+            choices=(Choice("c", listed(1, 2)),),
+            derived=(
+                Derived("e", ("unit.c",), lambda r: r["unit.c"]),
+                Derived("f", ("unit.c",), lambda r: r["unit.c"]),
+            ),
+            children=(inner,),
+        )
+        return Space((), Scope("", children=(unit,), members=(Members("m", entries),)))
+
+    Case("one entry", described("unit.e")).start({}, {"unit.c": 2}).check_answer("m")
+    for entries in (("unit.inner.e",), ("unit.e", "unit.f")):
+        with pytest.raises(NotTranslatable):
+            Case("not written", described(*entries))

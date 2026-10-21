@@ -220,9 +220,9 @@ def test_a_broken_standing_list_in_the_model_fails_a_walk(monkeypatch: pytest.Mo
     standing: Callable[..., tuple[str, ...]] = reference.model._standing
     monkeypatch.setattr(reference.model, "_standing", lambda *args: standing(*args)[1:])
     pend(monkeypatch)
-    tally = walk(11, 3)
+    tally = walk(2, 3)
     assert tally.failed == "4 standing" and tally.failure is not None
-    assert tally.failure.startswith("seed 11, step 3: invariant 4 standing: clearing")
+    assert tally.failure.startswith("seed 2, step 3: invariant 4 standing: clearing")
 
 
 # -- invariant 1: history-independence and the bind ------------------------------------------------

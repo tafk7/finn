@@ -19,6 +19,10 @@ A description is a tree of scopes. Each scope holds:
   of it receives a refused input).
 - **views**: products; a body over declared reads that returns a value or a
   :class:`Refuse` with its code.
+- **members** (:class:`Members`, SZ100 (6)): a value over named entries, derived values
+  in scopes strictly below the scope declaring it (never views: SZ100 (3)). Its value
+  is the sorted (entry, value) pairs of the entries that answer a value; an entry
+  answering inapplicable is skipped (the model's docstring, "Reads").
 - **constraints**: a predicate over declared reads, owned by the scope declaring it,
   with the code it refuses with.
 - **children**: scopes always present with their parent, unless their ``when`` guard
@@ -31,8 +35,8 @@ configuration.
 Paths name nodes: a root member's path is its name; a child scope's path is its
 parent's path and its name; a selector's case scope is the selector's path and the
 case's name (``compute.packed``), so a choice in it is ``compute.packed.pe``. Every
-read names an absolute path: a fact, a choice, a selector, a derived value or a view.
-Constraints and scopes are not readable.
+read names an absolute path: a fact, a choice, a selector, a derived value, a view or a
+``Members``. Constraints and scopes are not readable.
 
 Every function receives one mapping, from each declared read's path to its value, and
 reads nothing else.
@@ -48,7 +52,8 @@ graph in which
   which depends on the functions of the derived values it reads and on the ``when``
   guards over facts that decide whether they exist beyond the choice's own (§ 16.17:
   those guards read facts only, so they close no cycle and are not drawn); a derived
-  value's and a view's on their reads; a view's also on its Space's validity;
+  value's and a view's on their reads; a ``Members``'s on its entries; a view's also on
+  its Space's validity;
 - a constraint depends on its reads and its scope's presence;
 - a scope's presence depends on its parent's, its selector's value and its guard's
   reads;
@@ -196,6 +201,15 @@ class View:
 
 
 @dataclass(frozen=True)
+class Members:
+    """The entries that answer a value, as sorted (entry, value) pairs: ``entries`` name
+    derived values in scopes strictly below the declaring scope (SZ100 (6))."""
+
+    name: str
+    entries: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Scope:
     name: str
     choices: tuple[Choice, ...] = ()
@@ -205,6 +219,7 @@ class Scope:
     constraints: tuple[Constraint, ...] = ()
     children: tuple[Scope, ...] = ()
     when: When | None = None
+    members: tuple[Members, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -273,6 +288,7 @@ class Index:
     derived: dict[str, tuple[Derived, str]] = field(default_factory=dict)
     views: dict[str, tuple[View, str]] = field(default_factory=dict)
     constraints: dict[str, tuple[Constraint, str]] = field(default_factory=dict)
+    members: dict[str, tuple[Members, str]] = field(default_factory=dict)
     facts: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
@@ -287,6 +303,7 @@ class Index:
             raise DefinitionError("malformed", ("",), "the root scope has no guard")
         self._add_scope(self.space.root, "", None, None, None, names)
         self._check_reads()
+        self._check_members()
         self._check_domains()
         self._check_cycles()
 
@@ -344,6 +361,11 @@ class Index:
             node = join(path, view.name)
             self._claim(node, taken)
             self.views[node] = (view, path)
+        for members in scope.members:
+            self._name_ok(members.name, path)
+            node = join(path, members.name)
+            self._claim(node, taken)
+            self.members[node] = (members, path)
         for constraint in scope.constraints:
             self._name_ok(constraint.name, path)
             node = join(path, constraint.name)
@@ -378,11 +400,31 @@ class Index:
             yield path, derived.reads
         for path, (view, _) in self.views.items():
             yield path, view.reads
+        for path, (members, _) in self.members.items():
+            yield path, members.entries
         for path, (constraint, _) in self.constraints.items():
             yield path, constraint.reads
         for path, scope in self.scopes.items():
             if scope.when is not None:
                 yield path, scope.when.reads
+
+    def _check_members(self) -> None:
+        """A ``Members`` entry is a derived value in a scope strictly below the declaring
+        scope (SZ100 (6); never a view, SZ100 (3)), named once."""
+
+        for path, (members, scope) in sorted(self.members.items()):
+            if len(set(members.entries)) != len(members.entries):
+                raise DefinitionError("duplicate", (path,), "an entry is named twice")
+            for entry in members.entries:
+                if entry not in self.derived:
+                    raise DefinitionError(
+                        "malformed", (path, entry), "a Members entry is a derived value"
+                    )
+                below = self.derived[entry][1]
+                if below == scope or not self.within(below, scope):
+                    raise DefinitionError(
+                        "malformed", (path, entry), "a Members entry is in a scope below it"
+                    )
 
     def _check_domains(self) -> None:
         """Membership reads facts only: facts, and derived values reading, through
@@ -432,7 +474,8 @@ class Index:
     # -- queries
 
     def kind(self, path: str) -> str | None:
-        """``"fact"``, ``"choice"``, ``"derived"`` or ``"view"``: what a read can name."""
+        """``"fact"``, ``"choice"``, ``"derived"``, ``"view"`` or ``"members"``: what a
+        read can name."""
 
         if path in self.facts:
             return "fact"
@@ -442,6 +485,8 @@ class Index:
             return "derived"
         if path in self.views:
             return "view"
+        if path in self.members:
+            return "members"
         return None
 
     def scope_of(self, path: str) -> str:
@@ -451,6 +496,8 @@ class Index:
             return self.derived[path][1]
         if path in self.views:
             return self.views[path][1]
+        if path in self.members:
+            return self.members[path][1]
         return self.constraints[path][1]
 
     def within(self, scope: str, ancestor: str) -> bool:
@@ -469,8 +516,8 @@ class Index:
         return sorted(self.choices)
 
     def reads_of(self, path: str) -> tuple[str, ...]:
-        """A constraint's, a derived value's or a view's declared reads; a choice's
-        membership reads."""
+        """A constraint's, a derived value's or a view's declared reads; a ``Members``'s
+        entries; a choice's membership reads."""
 
         if path in self.constraints:
             return self.constraints[path][0].reads
@@ -478,31 +525,23 @@ class Index:
             return self.derived[path][0].reads
         if path in self.views:
             return self.views[path][0].reads
+        if path in self.members:
+            return self.members[path][0].entries
         return self.choices[path].domain.reads
 
-    # -- read closures: what stands in an origin's way, and what decides a scope's existence
+    # -- read closures: what decides a scope's existence
 
     def _followed(self, path: str) -> bool:
         """Whether a closure follows ``path``'s reads: a constraint's (a seed), a
-        derived value's or a view's body; never a choice's membership."""
+        derived value's or a view's body, a ``Members``'s entries; never a choice's
+        membership."""
 
-        return path in self.constraints or path in self.derived or path in self.views
-
-    def through_bodies(self, seeds: Iterable[str]) -> frozenset[str]:
-        """``seeds`` followed through constraints', derived values' and views' bodies
-        (a view's Space's validity not followed): every path met, facts and choices
-        included."""
-
-        found: set[str] = set()
-        stack = list(seeds)
-        while stack:
-            path = stack.pop()
-            if path in found:
-                continue
-            found.add(path)
-            if self._followed(path):
-                stack.extend(self.reads_of(path))
-        return frozenset(found)
+        return (
+            path in self.constraints
+            or path in self.derived
+            or path in self.views
+            or path in self.members
+        )
 
     def presence_seeds(self, scope: str) -> frozenset[str]:
         """The selector and the ``when`` reads of ``scope`` and of every scope above it."""
@@ -519,8 +558,10 @@ class Index:
         return frozenset(seeds)
 
     def dependencies(self, seeds: Iterable[str]) -> frozenset[str]:
-        """``seeds`` followed as :meth:`through_bodies` does, adding the presence seeds
-        of the scope of every node met, to closure."""
+        """``seeds`` followed through constraints', derived values' and views' bodies
+        and ``Members``' entries (their declared reads; a view's Space's validity not
+        followed), adding the presence seeds of the scope of every node met, to
+        closure."""
 
         found: set[str] = set()
         stack = list(seeds)
@@ -607,6 +648,7 @@ class Index:
             + [("value", path) for path in sorted(self.derived)]
             + [("function", path) for path in sorted(self.derived)]
             + [("value", path) for path in sorted(self.views)]
+            + [("value", path) for path in sorted(self.members)]
             + [("constraint", path) for path in sorted(self.constraints)]
             + [("presence", path) for path in sorted(self.scopes)]
             + [("validity", path) for path in sorted(self.scopes)]

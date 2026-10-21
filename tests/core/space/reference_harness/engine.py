@@ -47,7 +47,12 @@ keeps the description's path as its key: a choice ``compute.packed.pe`` is the e
 Decision ``compute.packed.pe``. A scope that reads something outside it takes it as a formal
 (``in-<path>``), bound by its parent; a selector's value is read through a derived member
 ``key-<name>`` (``selected``); a child's guard is a derived member ``when-<name>``. Facts
-are the root's optional formals: a missing fact is an unsupplied one.
+are the root's optional formals: a missing fact is an unsupplied one. A ``Members`` is the
+engine's ``Members(KEY)``, a key of its own, each entry its child's value export of that key
+(``exports = {KEY: derived}``); each entry is in a child or a case placed by the
+``Members``'s scope, one per child. Its value, the engine's ``Located`` entries, is read as
+the model's sorted (entry, value) pairs, ``Located.node`` mapped to the entry's path, in
+its answer and wherever a function reads it.
 """
 
 from __future__ import annotations
@@ -64,11 +69,14 @@ from finn.core.space import (
     Decision,
     DefinitionError,
     EvaluationError,
+    Located,
+    Members,
     Param,
     QueryResult,
     Rejected,
     Space,
     Unresolved,
+    ViewKey,
     composite,
     constraint,
     derived,
@@ -234,6 +242,23 @@ class _Builder:
             ):
                 raise NotTranslatable(f"{path}: an obligation of a view of its own Space")
         self.externals = {scope: self._externals(scope) for scope in index.scopes}
+        #: per ``Members``: its export key, and its entries by the child's local name
+        self.keys: dict[str, ViewKey[Any]] = {}
+        self.located: dict[str, dict[str, str]] = {}
+        #: per scope: the export key of each entry it holds
+        self.exported: dict[str, dict[str, str]] = {scope: {} for scope in index.scopes}
+        for path, (members, scope) in sorted(index.members.items()):
+            self.keys[path] = ViewKey(_name(path), int)
+            self.located[path] = {}
+            for entry in members.entries:
+                below = index.derived[entry][1]
+                if index.scopes[below].parent != scope:
+                    raise NotTranslatable(f"{path}: {entry} is not in a child placed by its scope")
+                if path in self.exported[below]:
+                    raise NotTranslatable(f"{path}: two entries in {below}")
+                self.exported[below][path] = entry
+                local = below[len(scope) + 1 :] if scope else below
+                self.located[path][local] = entry
         #: per scope: the declaration of each member it owns, by model path or generated name
         self.declared: dict[str, dict[str, object]] = {scope: {} for scope in index.scopes}
         #: per scope: the node declaration of each child scope and case placed in it
@@ -262,6 +287,9 @@ class _Builder:
             for path, (node, owner) in table.items():
                 if index.within(owner, scope):
                     found.update(node.reads)
+        for path, (members, owner) in index.members.items():
+            if index.within(owner, scope):
+                found.update(members.entries)
         for path, info in index.scopes.items():
             if path != scope and info.when is not None and index.within(path, scope):
                 found.update(info.when.reads)
@@ -352,9 +380,19 @@ class _Builder:
             return self._derived(scope, name)
         if name in index.views:
             return self._view(scope, name)
+        if name in index.members:
+            return Members(self.keys[name])
         if name in index.constraints:
             return self._constraint(scope, name)
         raise NotTranslatable(f"{name}: nothing to declare in {scope or 'the root'}")
+
+    def model_reads(self, read: Mapping[str, Any]) -> dict[str, Any]:
+        """What a function of the description receives: each ``Members``'s ``Located``
+        entries as the model's sorted (entry, value) pairs."""
+        return {
+            path: pairs(self.located[path], value) if path in self.located else value
+            for path, value in read.items()
+        }
 
     def _aliases(self, scope: str, reads: tuple[str, ...]) -> dict[str, Any]:
         return {f"a{position}": self.reference(scope, read) for position, read in enumerate(reads)}
@@ -416,7 +454,7 @@ class _Builder:
         node = self.index.derived[path][0]
 
         def body(read: dict[str, Any]) -> object:
-            output = node.compute(read)
+            output = node.compute(self.model_reads(read))
             if isinstance(output, model.Refuse):
                 return reject(output.code, "the derived value refuses")
             return output
@@ -428,7 +466,7 @@ class _Builder:
         node = self.index.views[path][0]
 
         def body(read: dict[str, Any]) -> object:
-            output = node.body(read)
+            output = node.body(self.model_reads(read))
             if isinstance(output, model.Refuse):
                 return reject(output.code, "the view refuses")
             return output
@@ -440,7 +478,9 @@ class _Builder:
         rule = self.index.constraints[path][0]
 
         def body(read: dict[str, Any]) -> bool | Rejected:
-            return True if rule.predicate(read) else reject(rule.code, "the rule refuses")
+            if rule.predicate(self.model_reads(read)):
+                return True
+            return reject(rule.code, "the rule refuses")
 
         if isinstance(self.spelling.rule(path), ByName):
             return constraint(self._by_name(scope, path, rule.reads, body))
@@ -510,7 +550,7 @@ class _Builder:
         if any(self.index.within(self.owner(read), below) for read in when.reads):
             raise NotTranslatable(f"{below}: its guard reads inside it")
         return derived(**self._aliases(scope, when.reads))(
-            _explicit(when.reads, lambda read: bool(when.test(read)), bool)
+            _explicit(when.reads, lambda read: bool(when.test(self.model_reads(read))), bool)
         )
 
     def space_class(self, scope: str) -> type[Space]:
@@ -521,10 +561,10 @@ class _Builder:
         annotations: dict[str, object] = {}
         mine = [
             path
-            for table in (index.choices, index.derived, index.views, index.constraints)
+            for table in (index.choices, index.derived, index.views, index.members)
             for path in table
             if self.owner(path) == scope
-        ]
+        ] + [path for path in index.constraints if self.owner(path) == scope]
         if scope == "":
             for fact in sorted(index.facts):
                 members[fact] = self.member(scope, fact)
@@ -559,7 +599,13 @@ class _Builder:
         if clashes:
             raise NotTranslatable(f"{scope}: names the harness generates: {clashes}")
         name = "Ref_" + (scope.replace(".", "_") or "root")
-        self.classes[scope] = composite(name, members, annotations=annotations)
+        exports = {
+            self.keys[path]: self.member(scope, entry)
+            for path, entry in sorted(self.exported[scope].items())
+        }
+        self.classes[scope] = composite(
+            name, members, annotations=annotations, exports=exports or None
+        )
         return self.classes[scope]
 
 
@@ -576,6 +622,8 @@ class Engine:
     root: type[Space]
     index: model.Index
     aliases: Mapping[str, str]
+    #: per ``Members``: its entries by the child's local name (``Located.node``)
+    located: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     def open(self, facts: Mapping[str, object]) -> Point:
         """The configuration with ``facts`` and nothing committed."""
@@ -613,6 +661,7 @@ def build(
         root,
         builder.index,
         dict(builder.aliases),
+        builder.located,
     )
 
 
@@ -704,6 +753,8 @@ class Point:
             value = stored[path] if path in stored else result.value
             if path in engine.index.choices and engine.index.choices[path].cases is not None:
                 value = result.value
+            if path in engine.located:
+                value = pairs(engine.located[path], result.value)
             return AnswerForm("value", value)
         if isinstance(result, Unresolved):
             return AnswerForm("unresolved", blockers=engine.blockers(result.findings, path))
@@ -815,6 +866,17 @@ class Point:
             broken=_broken(engine, report.broken),
         )
         return form, Point(engine, report.instance)
+
+
+def pairs(entries: Mapping[str, str], located: object) -> tuple[tuple[str, object], ...]:
+    """A ``Members``'s ``Located`` entries as the model's sorted (entry, value) pairs, each
+    ``Located.node`` mapped to its entry's path."""
+    found: list[tuple[str, object]] = []
+    for item in cast(tuple[Located[object], ...], located):
+        if item.node is None or item.node not in entries:
+            raise AssertionError(f"a Members entry from an unknown child {item.node!r}")
+        found.append((entries[item.node], item.value))
+    return tuple(sorted(found, key=lambda pair: pair[0]))
 
 
 def _rule(engine: Engine, result: QueryResult[Any]) -> RuleForm:

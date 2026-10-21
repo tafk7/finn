@@ -32,6 +32,7 @@ from core.space.reference import (
     Impossible,
     Inapplicable,
     Known,
+    Members,
     Open,
     Piece,
     PieceKind,
@@ -1543,6 +1544,177 @@ def test_an_unset_revealing_a_rule_masked_by_its_views_space_is_accepted() -> No
         revealed = accepted(change(masked.configuration, edit))
         assert revealed.validity.false == (high,)
         assert revealed.broken == (rule("high", "low", standing=("c.y",)),)
+
+
+# --- SZ100 (6): Members, and standing as what the origin's evaluation read ----------------
+
+
+def house(rule: Constraint) -> Space:
+    """RUNNING § 2.2's House: the annex ``g`` (present while ``x >= 2``) and each room of
+    ``s`` state a derived value ``e`` of their own choice (the kitchen's twice its ``p``);
+    ``m`` ranges over the three.
+    The scullery refuses ``q = 3``; the annex's ``e`` reads its shed's ``z``, inapplicable
+    while the shed (present while ``g.c >= 2``) is absent. ``rule`` reads ``m``."""
+
+    shed = Scope(
+        "shed", when=When(("g.c",), lambda r: r["g.c"] >= 2), choices=(Choice("z", listed(1, 2)),)
+    )
+    annex = Scope(
+        "g",
+        when=When(("x",), lambda r: r["x"] >= 2),
+        choices=(Choice("c", listed(1, 2, 3)),),
+        derived=(Derived("e", ("g.c", "g.shed.z"), lambda r: r["g.c"] + r["g.shed.z"]),),
+        children=(shed,),
+    )
+    kitchen = Scope(
+        "kitchen",
+        choices=(Choice("p", listed(1, 2, 3)),),
+        derived=(Derived("e", ("s.kitchen.p",), lambda r: 2 * r["s.kitchen.p"]),),
+    )
+    scullery = Scope(
+        "scullery",
+        choices=(Choice("q", listed(1, 2, 3)),),
+        derived=(
+            Derived(
+                "e", ("s.scullery.q",), lambda r: Refuse("wet") if r["s.scullery.q"] == 3 else 1
+            ),
+        ),
+    )
+    return Space(
+        (),
+        Scope(
+            "",
+            choices=(Choice("x", listed(1, 2, 3)),),
+            selectors=(Selector("s", (kitchen, scullery)),),
+            children=(annex,),
+            members=(Members("m", ("g.e", "s.kitchen.e", "s.scullery.e")),),
+            constraints=(rule,),
+        ),
+    )
+
+
+def total(r: Reads) -> int:
+    return sum(value for _, value in r["m"])
+
+
+#: the rooms' sum at most 4
+SMALL_HOUSE = Constraint("small", ("m",), lambda r: total(r) <= 4, "big")
+#: § 16.22: ``x`` read as a value beside ``m``, though it decides whether the annex exists
+FITTED_HOUSE = Constraint("fitted", ("x", "m"), lambda r: r["x"] + total(r) <= 7, "big")
+
+
+def test_members_answers_its_entries_with_a_value_sorted_and_skips_the_inapplicable() -> None:
+    """The annex absent (``x = 1``): its entry is skipped. Present with its shed absent
+    (``g.c = 1``): its ``e`` reads the shed's ``z``, inapplicable, so the entry is skipped
+    though its scope is present. With the shed present it answers."""
+
+    space = house(SMALL_HOUSE)
+    absent = solve_at(space, {"x": 1, "g.c": 3, "s": "kitchen", "s.kitchen.p": 2})
+    assert absent.read("m") == Known((("s.kitchen.e", 4),))
+    present = solve_at(space, {"x": 2, "g.c": 1, "s": "kitchen", "s.kitchen.p": 2})
+    assert present.presence("g") is Presence.PRESENT
+    assert present.read("g.e") == Inapplicable()
+    assert present.read("m") == Known((("s.kitchen.e", 4),))
+    shed = solve_at(space, {"x": 2, "g.c": 2, "g.shed.z": 1, "s": "kitchen", "s.kitchen.p": 1})
+    assert shed.read("m") == Known((("g.e", 3), ("s.kitchen.e", 2)))
+
+
+def test_members_refuses_through_a_refused_entry_even_while_another_waits() -> None:
+    """The scullery refuses ``q = 3``; the annex's ``c`` is open. Refused comes first: ``m``
+    refuses through the scullery's ``e``, and ``small`` is false through ``m``, its origin
+    the scullery's ``e``. With the scullery's ``q = 2`` it waits on the annex's ``e``: its
+    ``c``, and its shed's ``z``, whose presence ``c`` decides."""
+
+    space = house(SMALL_HOUSE)
+    refused = solve_at(space, {"x": 2, "s": "scullery", "s.scullery.q": 3})
+    assert refused.read("g.e") == Unresolved(("g.c", "g.shed.z"))
+    reason = Reason(ReasonKind.INPUT_REFUSED, "m", "", related=("s.scullery.e",))
+    assert refused.read("m") == Refused((reason,))
+    assert refused.validity().verdict is F
+    assert refused.evaluation.pairs() == {
+        ("constraint", "", "small"): {
+            "s.scullery.e": (
+                "derived",
+                (Reason(ReasonKind.DERIVED_BODY, "s.scullery.e", "s.scullery", "wet"),),
+            )
+        }
+    }
+    waiting = solve_at(space, {"x": 2, "s": "scullery", "s.scullery.q": 2})
+    assert waiting.read("m") == Unresolved(("g.c", "g.shed.z"))
+    assert waiting.validity().verdict is U
+
+
+def test_reading_4_a_dormant_entrys_choice_never_stands() -> None:
+    """House and Scullery's dormant choice: the annex absent (``x = 1``), ``g.c = 3`` is
+    dormant and its entry is never read. ``s.kitchen.p = 3`` breaks ``small`` with
+    ``s.kitchen.e`` alone (6): nothing stands, though ``m`` declares ``g.e``."""
+
+    base = Configuration(house(SMALL_HOUSE), {}, {"x": 1, "g.c": 3, "s": "kitchen"})
+    assert base.solve().state("g.c") == Dormant(3)
+    assert rejected(change(base, Change(commit={"s.kitchen.p": 3}))).refusals == (
+        rule("small", "big"),
+    )
+
+
+def test_reading_4_a_present_entrys_choice_stands() -> None:
+    """The annex and its shed present: ``g.e = g.c + g.shed.z`` is read (3, beside the
+    kitchen's 4), so both stand in ``small``'s way; ``x``, which only decides whether the
+    annex exists, does not."""
+
+    stored = {"x": 2, "g.c": 2, "g.shed.z": 1, "s": "kitchen"}
+    base = Configuration(house(SMALL_HOUSE), {}, stored)
+    assert rejected(change(base, Change(commit={"s.kitchen.p": 2}))).refusals == (
+        rule("small", "big", standing=("g.c", "g.shed.z")),
+    )
+
+
+def test_reading_4_a_choice_read_as_a_value_beside_members_stands_though_it_decides_existence() -> (
+    None
+):
+    """§ 16.22's shape: ``fitted`` reads ``x``, the annex's guard's read, as a value beside
+    ``m`` (``x + sum <= 7``). From ``x = 2``, the shed absent and the kitchen at 4 (6),
+    ``s.kitchen.p = 3`` with ``g.c = 2`` brings the shed in (``2 + 6 + 3``): ``x`` stands
+    beside the shed's ``z``. From the annex at 3 and the kitchen at 2 (7), ``x = 3`` names
+    the annex's choices and the kitchen's."""
+
+    stored = {"x": 2, "g.c": 1, "g.shed.z": 1, "s": "kitchen", "s.kitchen.p": 2}
+    base = Configuration(house(FITTED_HOUSE), {}, stored)
+    assert base.solve().read("m") == Known((("s.kitchen.e", 4),))
+    assert rejected(change(base, Change(commit={"s.kitchen.p": 3, "g.c": 2}))).refusals == (
+        rule("fitted", "big", standing=("g.shed.z", "x")),
+    )
+    raised = Configuration(house(FITTED_HOUSE), {}, {**stored, "g.c": 2, "s.kitchen.p": 1})
+    assert rejected(change(raised, Change(commit={"x": 3}))).refusals == (
+        rule("fitted", "big", standing=("g.c", "g.shed.z", "s.kitchen.p")),
+    )
+
+
+def test_a_members_entry_is_a_derived_value_below_it() -> None:
+    def entries(*names: str, view: bool = False) -> Space:
+        child = Scope(
+            "k",
+            choices=(Choice("c", listed(1)),),
+            derived=(Derived("e", ("k.c",), lambda r: r["k.c"]),),
+            views=(View("v", ("k.c",), lambda r: r["k.c"]),),
+        )
+        return Space(
+            (),
+            Scope(
+                "",
+                derived=(Derived("d", (), lambda r: 1),),
+                children=(child,),
+                members=(Members("m", names),),
+            ),
+        )
+
+    assert entries("k.e").validate().kind("m") == "members"
+    for names, path in ((("k.v",), ("m", "k.v")), (("d",), ("m", "d"))):
+        with pytest.raises(DefinitionError) as raised:
+            entries(*names).validate()
+        assert (raised.value.kind, raised.value.path) == ("malformed", path)
+    with pytest.raises(DefinitionError) as raised:
+        entries("k.x").validate()
+    assert (raised.value.kind, raised.value.path) == ("unknown-read", ("m", "k.x"))
 
 
 # --- assignment ---------------------------------------------------------------------------

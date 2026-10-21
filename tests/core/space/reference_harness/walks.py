@@ -165,7 +165,11 @@ class _Draw:
     deeper), a derived value ``d`` over facts and root choices (sometimes refusing), a
     ``when``-guarded scope ``g`` (its guard sometimes reading ``d``; in the root, or in the
     selector's first case, so that selecting it brings the guard into play), views (some
-    refusing) and rules over two or three reads."""
+    refusing) and rules over two or three reads. Now and then (SZ100 (6)) a ``Members``
+    ``m`` in the root ranges over a derived value ``e`` of ``g`` (in the root) and of each
+    case of ``s``, each reading its scope's own choice, and a root rule reads ``m`` with an
+    order-free function: a dormant entry's choice is then never read, so never standing,
+    and § 16.22's shape arises when the rule also reads what ``g``'s guard reads."""
 
     def __init__(self, rng: random.Random) -> None:
         self.rng = rng
@@ -177,6 +181,9 @@ class _Draw:
         self.derived_d = False  # whether the root holds ``d``
         self.guard_in: str | None = None  # the case ``g`` sits in, or ``None`` (the root)
         self.guard_view: str | None = None  # ``g``'s view's path, if it has one
+        self.guard_reads: tuple[str, ...] = ()  # what ``g``'s guard reads
+        self.members = False  # whether the root holds ``m``
+        self.entries: list[str] = []  # ``m``'s entries, by path
         self.lines: list[str] = [f"facts {', '.join(self.facts)}"]
 
     def name(self, prefix: str) -> str:
@@ -300,6 +307,48 @@ class _Draw:
 
     # -- derived values and views
 
+    def entry(self, scope: str, read: str, indent: str) -> model.Derived:
+        """``e``: an entry of ``m``, its scope's own choice ``read``, refusing past a bound
+        now and then."""
+        k = self.rng.randint(1, 5)
+        path = _join(scope, "e")
+        if self.placed_by_root(scope):
+            self.entries.append(path)
+        if k <= 3:
+            self.lines.append(f"{indent}derived e: {read}, refused 'e-big' past {k}")
+            return model.Derived("e", (read,), _capped((read,), k, "e-big"))
+        self.lines.append(f"{indent}derived e: {read}")
+        return model.Derived("e", (read,), _total((read,)))
+
+    @staticmethod
+    def placed_by_root(scope: str) -> bool:
+        """Whether ``scope`` is a child or a case the root places (``g``, ``s.a``)."""
+        return scope == "g" or (scope.startswith("s.") and scope.count(".") == 1)
+
+    def members_rule(self, indent: str) -> model.Constraint:
+        """A root rule over ``m``: its entries' sum or largest value, beside one other read
+        (``g``'s guard's read now and then: § 16.22), or how many entries it has."""
+        rng = self.rng
+        name = self.name("r")
+        shape = rng.randrange(3)
+        others = [read for read in self.guard_reads if read in self.roots()]
+        if not others or rng.random() < 0.5:
+            others = [*self.facts, *self.roots()]
+        other = rng.choice(others)
+        if shape == 0:
+            k = rng.randint(2, 6)
+            fn = _Fn(f"sum(m) + {other} <= {k}", ("m", other), _members_sum("m", other, k))
+        elif shape == 1:
+            k = rng.randint(1, 4)
+            fn = _Fn(
+                f"max(m, default 0) <= {other} + {k}", ("m", other), _members_max("m", other, k)
+            )
+        else:
+            k = rng.randint(0, 2)
+            fn = _Fn(f"len(m) <= {k}", ("m",), _members_len("m", k))
+        self.lines.append(f"{indent}rule {name}: {fn.text}")
+        return model.Constraint(name, fn.reads, _holds(fn.call), f"code-{name}")
+
     def facts_only(self, indent: str) -> model.Derived:
         """``h``: a derived value over facts alone, refusing past a bound."""
         reads = tuple(self.rng.sample(self.facts, self.rng.randint(1, len(self.facts))))
@@ -334,6 +383,9 @@ class _Draw:
         selectors: tuple[model.Selector, ...] = ()
         if depth == 0 and self.rng.random() < 0.2:
             selectors = (self.selector(path, depth + 1, inner),)
+        derived: tuple[model.Derived, ...] = ()
+        if self.members and depth == 0 and choices:
+            derived = (self.entry(path, _join(path, choices[0].name), inner),)
         constraints: tuple[model.Constraint, ...] = ()
         pool = [*self.facts, *self.roots()]
         if choices and self.rng.random() < 0.5:
@@ -345,7 +397,12 @@ class _Draw:
             constraints = (rule,) if rule else ()
         children = (self.guarded(path, inner),) if path == self.guard_in else ()
         return model.Scope(
-            case, choices=choices, selectors=selectors, constraints=constraints, children=children
+            case,
+            choices=choices,
+            selectors=selectors,
+            derived=derived,
+            constraints=constraints,
+            children=children,
         )
 
     def selector(self, scope: str, depth: int, indent: str) -> model.Selector:
@@ -376,10 +433,12 @@ class _Draw:
             k = rng.randint(1, 3)
             when, text = model.When((read,), _at_least(read, k)), f"{read} >= {k}"
         path = _join(scope, "g")
+        self.guard_reads = when.reads
         self.lines.append(f"{indent}scope g when {text}:")
         inner = indent + "  "
         choices = (self.choice(path, inner),)
         own = _join(path, choices[0].name)
+        entry = (self.entry(path, own, inner),) if self.members else ()
         constraints: tuple[model.Constraint, ...] = ()
         if rng.random() < 0.5:
             rule = self.constraint([*self.facts, *roots], inner, needs=own)
@@ -390,12 +449,15 @@ class _Draw:
             views = (model.View("w", (own,), _capped_double(own, k)),)
             self.guard_view = _join(path, "w")
             self.lines.append(f"{inner}view w: {own} * 2, refused 'w-big' past {k}")
-        return model.Scope("g", choices=choices, constraints=constraints, views=views, when=when)
+        return model.Scope(
+            "g", choices=choices, derived=entry, constraints=constraints, views=views, when=when
+        )
 
     def space(self) -> model.Space:
         rng = self.rng
         indent = "  "
         self.lines.append("root:")
+        self.members = rng.random() < 0.35
         over_facts = (self.facts_only(indent),) if rng.random() < 0.4 else ()
         choices = [self.choice("", indent) for _ in range(rng.randint(1, 3))]
         derived = (self.derived(indent),) if rng.random() < 0.6 else ()
@@ -423,6 +485,11 @@ class _Draw:
             rule = self.constraint(pool, indent)
             if rule is not None:
                 constraints.append(rule)
+        members: tuple[model.Members, ...] = ()
+        if self.entries:
+            members = (model.Members("m", tuple(sorted(self.entries))),)
+            self.lines.append(f"{indent}members m: {', '.join(sorted(self.entries))}")
+            constraints.append(self.members_rule(indent))
         return model.Space(
             self.facts,
             model.Scope(
@@ -433,6 +500,7 @@ class _Draw:
                 views=views,
                 constraints=tuple(constraints),
                 children=children,
+                members=members,
             ),
         )
 
@@ -532,6 +600,23 @@ def _capped_double(read: str, k: int) -> Callable[[model.Reads], object]:
     return body
 
 
+def _values(members: Any) -> list[Any]:
+    """A ``Members``'s values, its (entry, value) pairs' second halves."""
+    return [value for _, value in members]
+
+
+def _members_sum(members: str, read: str, k: int) -> Callable[[model.Reads], bool]:
+    return lambda r: bool(sum(_values(r[members])) + r[read] <= k)
+
+
+def _members_max(members: str, read: str, k: int) -> Callable[[model.Reads], bool]:
+    return lambda r: bool(max(_values(r[members]), default=0) <= r[read] + k)
+
+
+def _members_len(members: str, k: int) -> Callable[[model.Reads], bool]:
+    return lambda r: bool(len(r[members]) <= k)
+
+
 def _join(scope: str, name: str) -> str:
     return f"{scope}.{name}" if scope else name
 
@@ -573,7 +658,10 @@ ENGINE_QUESTIONS = ("state", "answer", "rule", "validity", "possible")
 
 def questions(index: model.Index) -> list[Question]:
     found: list[Question] = [("state", path) for path in sorted(index.choices)]
-    found += [("answer", path) for path in sorted({*index.choices, *index.derived, *index.views})]
+    found += [
+        ("answer", path)
+        for path in sorted({*index.choices, *index.derived, *index.views, *index.members})
+    ]
     found += [("rule", path) for path in sorted(index.constraints)]
     found.append(("validity", ""))
     listed = sorted(path for path, info in index.choices.items() if info.domain.listed)
@@ -757,7 +845,8 @@ class Structure:
     over the description's tables alone.
 
     - The **body reads** of a node: its declared reads, followed through derived values'
-      and views' bodies (never a view's Space's validity).
+      and views' bodies and ``Members``' entries (a ``Members`` reads its entries; never a
+      view's Space's validity).
     - The **presence reads** of a scope: the selector and the ``when`` reads of it and of
       every scope above it.
     - The **closure** of a node: the closure of the node under body reads and the presence
@@ -771,18 +860,22 @@ class Structure:
 
     def scope(self, path: str) -> str:
         index = self.index
-        for table in (index.constraints, index.derived, index.views):
+        for table in (index.constraints, index.derived, index.views, index.members):
             if path in table:
                 return table[path][1]
         return index.choices[path].scope
 
     def reads(self, path: str) -> tuple[str, ...]:
-        """A constraint's, a derived value's or a view's declared reads; nothing else's."""
+        """A constraint's, a derived value's or a view's declared reads; a ``Members``'s
+        entries; nothing else's."""
         index = self.index
         for table in (index.constraints, index.derived, index.views):
             if path in table:
                 found: tuple[str, ...] = table[path][0].reads
                 return found
+        if path in index.members:
+            entries: tuple[str, ...] = index.members[path][0].entries
+            return entries
         return ()
 
     def bodies(self, path: str) -> frozenset[str]:
@@ -918,6 +1011,8 @@ def false_on_its_own(
         found = listing(index, facts, origin)
         empty = isinstance(found, model.Known) and not found.value
         return present and (empty or input_absent(index, facts, origin))
+    if kind == "members":
+        return False  # never refusing on its own values: refused through its entries alone
     reads = structure.reads(origin)
     if kind == "derived" and structure.over_facts(origin):
         facts = model.FactsOnly(index, solution.configuration.facts)
@@ -950,6 +1045,8 @@ def counted_pairs(structure: Structure, solution: model.Solution) -> dict[Pair, 
     facts = model.FactsOnly(index, solution.configuration.facts)
 
     def node_kind(path: str) -> str:
+        if path in index.members:
+            return "members"
         return "derived" if path in index.derived else "view"
 
     def follow(path: str, found: dict[str, str]) -> None:

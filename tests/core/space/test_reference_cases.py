@@ -20,6 +20,7 @@ from core.space.reference import (
     Choice,
     Constraint,
     Derived,
+    Members,
     Refuse,
     Scope,
     Selector,
@@ -718,3 +719,110 @@ def test_a_choice_whose_membership_input_is_in_play_is_set() -> None:
 def test_new_facts_putting_a_stored_choices_membership_input_out_of_play_drop_it() -> None:
     point = GUARDED_INPUT.start({"on": True, "n": 4}, {"lanes": 2})
     point.check_change(Change(facts={"on": False}))
+
+
+# -- 6. Members: standing is what the origin's evaluation read (SZ100 (6)) ----------------------
+#
+# RUNNING § 2.2's House: the annex ``g`` (present while ``x >= 2``) and each room of ``s``
+# state a derived value ``e`` of their own choice, exported to the root's ``m``. The
+# scullery refuses ``q = 3``; the annex's ``e`` reads its shed's ``z``, inapplicable while
+# the shed (present while ``g.c >= 2``) is absent. ``small`` asks the rooms' sum to be at
+# most 4; ``fitted`` reads ``x``, the annex's guard's read, beside ``m`` (§ 16.22).
+
+
+def rooms(r: Mapping[str, Any]) -> int:
+    return sum(value for _, value in r["m"])
+
+
+def house(*rules: Constraint) -> Case:
+    shed = Scope(
+        "shed",
+        when=When(("g.c",), lambda read: read["g.c"] >= 2),
+        choices=(Choice("z", listed(1, 2)),),
+    )
+    annex = Scope(
+        "g",
+        when=When(("x",), lambda read: read["x"] >= 2),
+        choices=(Choice("c", listed(1, 2, 3)),),
+        derived=(Derived("e", ("g.c", "g.shed.z"), lambda read: read["g.c"] + read["g.shed.z"]),),
+        children=(shed,),
+    )
+    kitchen = Scope(
+        "kitchen",
+        choices=(Choice("p", listed(1, 2, 3)),),
+        derived=(Derived("e", ("s.kitchen.p",), lambda read: 2 * read["s.kitchen.p"]),),
+    )
+    scullery = Scope(
+        "scullery",
+        choices=(Choice("q", listed(1, 2, 3)),),
+        derived=(
+            Derived(
+                "e",
+                ("s.scullery.q",),
+                lambda read: Refuse("wet") if read["s.scullery.q"] == 3 else 1,
+            ),
+        ),
+    )
+    return Case(
+        "the house and its rooms",
+        Space(
+            (),
+            Scope(
+                "",
+                choices=(Choice("x", listed(1, 2, 3)),),
+                selectors=(Selector("s", (kitchen, scullery)),),
+                children=(annex,),
+                members=(Members("m", ("g.e", "s.kitchen.e", "s.scullery.e")),),
+                constraints=rules,
+            ),
+        ),
+    )
+
+
+HOUSE = house()
+SMALL = house(Constraint("small", ("m",), lambda read: rooms(read) <= 4, "big"))
+FITTED = house(Constraint("fitted", ("x", "m"), lambda read: read["x"] + rooms(read) <= 7, "big"))
+
+
+def test_members_skips_an_entry_whose_scope_is_absent() -> None:
+    HOUSE.start({}, {"x": 1, "g.c": 3, "s": "kitchen", "s.kitchen.p": 2}).check_answer("m")
+
+
+def test_members_skips_a_present_entry_answering_inapplicable() -> None:
+    pair = HOUSE.start({}, {"x": 2, "g.c": 1, "s": "kitchen", "s.kitchen.p": 2})
+    pair.check_answer("g.e")
+    pair.check_answer("m")
+
+
+def test_members_answers_its_entries_with_a_value_by_entry() -> None:
+    stored = {"x": 2, "g.c": 2, "g.shed.z": 1, "s": "kitchen", "s.kitchen.p": 1}
+    HOUSE.start({}, stored).check_answer("m")
+
+
+def test_members_refuses_through_a_refused_entry_even_while_another_waits() -> None:
+    pair = HOUSE.start({}, {"x": 2, "s": "scullery", "s.scullery.q": 3})
+    pair.check_answer("g.e")
+    pair.check_answer("m")
+
+
+def test_members_waits_on_an_entry_that_waits() -> None:
+    HOUSE.start({}, {"x": 2, "s": "scullery", "s.scullery.q": 2}).check_answer("m")
+
+
+def test_a_dormant_entrys_choice_never_stands() -> None:
+    pair = SMALL.start({}, {"x": 1, "g.c": 3, "s": "kitchen"})
+    pair.check_change(Change(commit={"s.kitchen.p": 3}))
+
+
+def test_a_present_entrys_choice_stands() -> None:
+    pair = SMALL.start({}, {"x": 2, "g.c": 2, "g.shed.z": 1, "s": "kitchen"})
+    pair.check_change(Change(commit={"s.kitchen.p": 2}))
+    pair.check_possible("s.kitchen.p")
+
+
+def test_a_choice_read_beside_members_stands_though_it_decides_an_entrys_existence() -> None:
+    stored = {"x": 2, "g.c": 1, "g.shed.z": 1, "s": "kitchen", "s.kitchen.p": 2}
+    FITTED.start({}, stored).check_change(Change(commit={"s.kitchen.p": 3, "g.c": 2}))
+    raised = FITTED.start({}, {**stored, "g.c": 2, "s.kitchen.p": 1})
+    raised.check_change(Change(commit={"x": 3}))
+    raised.check_possible("x")
