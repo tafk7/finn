@@ -748,7 +748,6 @@ def Select(  # noqa: N802 - a declaration, spelled as one
     *,
     by: object = None,
     when: object = None,
-    required: bool = False,
     **members: object,
 ) -> Any:
     """A selector: ``heating = Select(boiler=Boiler(kw=24), heat_pump=HeatPump, kw=kw)``.
@@ -763,15 +762,12 @@ def Select(  # noqa: N802 - a declaration, spelled as one
     refuses, ``select-no-case``. While the value waits its cases wait; while it refuses
     they are not in play, refusing the Space once, in the selector's name. A case's path
     is ``<selector>.<case>``; ``heating.kw`` reads a member every case declares, and
-    reading the selector gives the case's name.
+    reading the selector gives the case's name. A picked selector's ``when=`` is no
+    ``supplied()`` guard (``select-by-supplied``).
     """
-    if type(required) is not bool:
-        raise DefinitionError.broken(
-            "required-not-bool", _OWNER, f"Select{at(source_origin())}: required= is a bool"
-        )
     from ._nodes import select_choice
 
-    return select_choice(members, by=by, when=guard(when), required=required)
+    return select_choice(members, by=by, when=guard(when))
 
 
 class Required:

@@ -28,6 +28,7 @@ from .declarations import (
     Declaration,
     Param,
     PendingAnnotation,
+    Supplied,
     ValueRef,
     View,
     at,
@@ -726,7 +727,6 @@ def select_choice(
     *,
     by: object,
     when: ValueRef[bool] | None,
-    required: bool,
 ) -> NodeChoice:
     """``Select(a=A, b=B(own=...), c=None, shared=...)``: a selector and its cases.
 
@@ -765,12 +765,13 @@ def select_choice(
             _OWNER,
             f"Select{where}: by= takes a value reference (a derived value, a formal)",
         )
-    if by is not None and required:
+    if by is not None and isinstance(when, Supplied):
         raise DefinitionError.broken(
-            "select-by-required",
+            "select-by-supplied",
             _OWNER,
-            f"Select{where}: a selector picked by a derived value is no choice; required= "
-            "does not apply",
+            f"Select{where}: a selector picked by a derived value takes no supplied() guard "
+            "until facts are known values: whether a formal is supplied is settled where its "
+            "holder is placed, and only a chosen selector reads it there",
         )
     space_types: dict[str, type[Space]] = {}
     records: dict[str, NodeDecl] = {}
@@ -814,7 +815,6 @@ def select_choice(
     choice = node_choice(values, when=when)
     decision = choice._space_decision()
     decision.strict = True
-    decision.required = required
     decision.by = by
     return choice
 

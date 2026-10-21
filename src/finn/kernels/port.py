@@ -612,9 +612,10 @@ def contract(
 @dataclass(frozen=True, eq=False)
 class Served(KernelDeclaration):
     """A port a kernel with children presents as its child's: ``child`` (a child of the
-    kernel, or a Decision over children) and that child's port ``port``. It lowers to
-    ``<name>_stream``, the selected child's stream, and ``<name>_contract``, the child's
-    contract labelled below the kernel (``compute.<case>.x``; ``child.x`` for a child)."""
+    kernel, or a selector over children, ``Select``) and that child's port ``port``. It
+    lowers to ``<name>_stream``, the selected child's stream, and ``<name>_contract``, the
+    child's contract labelled below the kernel (``compute.<case>.x``; ``child.x`` for a
+    child)."""
 
     child: Any
     port: str
@@ -646,7 +647,7 @@ class Served(KernelDeclaration):
 
         members[f"{name}_stream"] = derived(semantics=STREAM, stream=given)(stream)
         try:
-            case = selected(self.child)  # a Decision over children: the key it selects
+            case = selected(self.child)  # a selector over children: the case it selects
         except DefinitionError:
             case = None
         if case is not None:

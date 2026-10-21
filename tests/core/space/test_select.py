@@ -36,6 +36,7 @@ from finn.core.space import (
     inspection,
     reject,
     selected,
+    supplied,
 )
 from finn.core.space.inspection import Dormant, Open, Set, Waiting
 
@@ -492,13 +493,22 @@ def test_a_select_placing_nothing_is_refused() -> None:
         Select(width=2)
 
 
-def test_a_derived_selector_is_never_required_and_reads_a_value() -> None:
-    class Picker(Space):
-        @derived
-        def chain(self) -> str:
-            return "fifo"
-
-    with refused("select-by-required"):
-        Select(by=Picker.chain, required=True, fifo=Fifo, width=2)
+def test_a_derived_selector_reads_a_value() -> None:
     with refused("select-by-not-value"):
         Select(by="fifo", fifo=Fifo, width=2)
+
+
+def test_a_derived_selector_takes_no_supplied_guard() -> None:
+    # Whether a formal is supplied is settled where its holder is placed, and only a chosen
+    # selector reads it there: a picked one is refused it until facts are known values.
+    with refused("select-by-supplied"):
+
+        class Guarded(Space):
+            w: int = Param(required=False)
+            given = supplied(w)
+
+            @derived
+            def chain(self) -> str:
+                return "fifo"
+
+            adapter = Select(by=chain, when=given, fifo=Fifo, width=w)

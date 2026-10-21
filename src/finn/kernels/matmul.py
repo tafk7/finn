@@ -76,8 +76,8 @@ graph with the type, so the next kernel reads it. Each core derives its accumula
 from the range (the core's ``result_range``) and states its results' tensor over it,
 which its ``y`` port writes.
 
-- ``compute`` is a Decision over the dot-product cores. They share the facts
-  and tensors. Each core owns its folding factors (``compute.<core>.pe``,
+- ``compute`` is a selector over the dot-product cores (``Select``). They share
+  the facts and tensors. Each core owns its folding factors (``compute.<core>.pe``,
   ``.simd``, ``.compute_pumping``) and derives every port's beat sequence
   from its schedule.
 - Where the weights come from is the weight channel's ``source``, not MatMul's.
@@ -98,11 +98,11 @@ from finn.core.space import (
     Decision,
     Param,
     Rejected,
+    Select,
     View,
     constraint,
     derived,
     reject,
-    selected,
     supplied,
 )
 from finn.dataflow.datatypes import (
@@ -198,7 +198,7 @@ def block_diagonal(weights: IntegerTensor) -> IntegerTensorValue:
 
 
 class MatMulKernel(KernelSpace):
-    """Operation facts, and the kernels and Decisions over kernels on its tensors."""
+    """Operation facts, and the kernels and selectors over kernels on its tensors."""
 
     id = "finn.matmul"
 
@@ -513,10 +513,10 @@ class MatMulKernel(KernelSpace):
         return True
 
     # The compute cores. Each refuses what its core cannot build and owns its
-    # folding factors; ``packed`` names the entry.
-    packed = PackedDotpKernel()
-    compute: PackedDotpKernel | Int8Dsp58DotpKernel = Decision(
-        {"packed": packed, "int8_dsp58": Int8Dsp58DotpKernel},
+    # folding factors.
+    compute: PackedDotpKernel | Int8Dsp58DotpKernel = Select(
+        packed=PackedDotpKernel,
+        int8_dsp58=Int8Dsp58DotpKernel,
         form=datapath,
         reshape_activations=dense_view,
         window=window,
@@ -527,7 +527,6 @@ class MatMulKernel(KernelSpace):
         columns=n,
         widest_reduction=widest_reduction,
     )
-    compute_case = selected(compute)
 
     # Its ports: the selected core's activations, weights and results.
     x = served(compute, "x")

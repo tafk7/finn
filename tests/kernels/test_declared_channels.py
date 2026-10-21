@@ -200,6 +200,38 @@ def test_two_producers_on_one_channel_are_refused_by_the_channel():
     assert "a.output, b.output" in users.message
 
 
+def test_an_adapter_under_a_refused_guard_is_one_piece():
+    # A selector whose ``when`` is refused counts once, at the highest refused guard of its
+    # chain: one piece keyed by the selector, none for its cases. A correction: the engine
+    # gave one piece more per case, against the reference model's reading 8.
+    clash = Network(
+        {
+            "shared": wire(
+                tensor=VECTOR,
+                port="out0_V",
+                producer=Interface("a", "output_contract"),
+                consumer=Interface("b", "output_contract"),
+                platform=FULL_DSP48E2,
+            ),
+            "a": source((1, 2, 3, 4), VECTOR),
+            "b": source((1, 2, 3, 4), VECTOR),
+        }
+    )
+    validity = inspection.validity(clash.member("shared"))
+    assert validity.status == "refused"
+    for selector in ("adapter", "output_adapter"):
+        (piece,) = [
+            piece
+            for piece in validity.pieces
+            if piece.owner == selector or piece.owner.startswith(f"{selector}.")
+        ]
+        assert piece.owner == selector
+        assert {(f.code, f.owner) for f in piece.result.findings} == {
+            ("channel-users", "sides"),
+            ("guard-refused", selector),
+        }
+
+
 def test_a_boundary_channel_needs_its_port_name():
     unnamed = Network(
         {

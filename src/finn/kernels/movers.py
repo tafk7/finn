@@ -6,7 +6,7 @@
 A boundary channel of a partition's network has a side without a port, its **free
 side**: the AXIS port the network presents (``Channel.free_side``). A shell with movers
 offers each such channel the movers it can place there (``MoverOffer``), and the channel's
-``mover`` Decision chooses one, by kind (``MOVERS``), as it places its ``source``; the
+``mover`` selector chooses one, by kind (``MOVERS``), as it places its ``source``; the
 interim channel rule sets it where the network builds the channel (the first valid mover,
 the one offered), and it is persisted. A mover binds no RTL in the partition's
 module: its pins stay its own, and the shell integrates the mover beside the IP from its
