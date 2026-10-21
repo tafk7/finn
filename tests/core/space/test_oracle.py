@@ -13,15 +13,12 @@ planted faults show that it would report a difference: each alters one thing, an
 from __future__ import annotations
 
 import enum
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import pytest
-from support.space_cores import chain as stages
-from support.space_oracle import IMPLEMENTATIONS, Answers, compare, forms
+from support.space_oracle import IMPLEMENTATIONS, Answers, compare, forms, toys
 from support.space_oracle.today import FAULTS, TODAY, Fault, Planted
-from support.space_pipeline import Pipeline
 
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
@@ -34,15 +31,9 @@ from finn.core.space import (
 
 from ._toys_support import House
 
-Toy = tuple[Callable[[], Space], Mapping[str, Sequence[object]]]
-
-TOYS: dict[str, Toy] = {
-    "house": (lambda: design_space(House(budget=100)), {"budget": (60, 100, 400)}),
-    "pipeline": (lambda: design_space(Pipeline(width=10)), {"width": (6, 10, 12)}),
-    "stages": (lambda: design_space(stages(6)()), {}),
-}
+TOYS = toys.TOYS
 """FINN's toys, opened, with the values a walk may give their root facts (the dump tool's
-``toys`` target opens the same three)."""
+``toys`` target opens the same)."""
 
 STEPS = 20
 
@@ -51,8 +42,7 @@ STEPS = 20
 @pytest.mark.parametrize("toy", sorted(TOYS))
 @pytest.mark.parametrize("name", sorted(IMPLEMENTATIONS))
 def test_every_implementation_walks_the_toys_as_today(name: str, toy: str, seed: int) -> None:
-    make, facts = TOYS[toy]
-    found = compare.walk(make, facts, seed, STEPS, TODAY, IMPLEMENTATIONS[name])
+    found = compare.walk(TOYS[toy].make, TOYS[toy].facts, seed, STEPS, TODAY, IMPLEMENTATIONS[name])
     assert found.lines() == []
     # It compared what it says: every design space reached, every change's report.
     assert found.tally["changes"] > 0
@@ -60,6 +50,58 @@ def test_every_implementation_walks_the_toys_as_today(name: str, toy: str, seed:
     assert found.tally["reports"] + found.tally["requests raising alike"] == asked
     assert found.tally["design spaces"] >= 1 + found.tally["reports"] // 2
     assert found.tally["answers"] > 0 and found.tally["viable values"] > 0
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_the_boundary_walks_open_and_close_its_guard(seed: int) -> None:
+    """The walks of the boundary set ``enabled`` both ways: ``outside.width`` is asked with
+    the scope it reads absent and present."""
+    boundary = TOYS["boundary"]
+    found = compare.walk(boundary.make, boundary.facts, seed, STEPS, TODAY, TODAY)
+    assert found.lines() == []
+    asked = " / ".join(found.requests)
+    assert "enabled=False" in asked and "enabled=True" in asked, found.requests
+
+
+BOUNDARY: list[tuple[compare.Request, forms.Form]] = [
+    (compare.Request({"enabled": False}), {"kind": "inapplicable", "findings": []}),
+    (compare.Request({"enabled": True}), {"kind": "value", "value": 3}),
+    (
+        compare.Request(clears=("enabled",)),
+        {
+            "kind": "unresolved",
+            "findings": [
+                {
+                    "kind": "blocker",
+                    "code": "decision-unassigned",
+                    "owner": "enabled",
+                    "message": "decision requires a commitment",
+                    "details": [],
+                    "causes": [],
+                }
+            ],
+        },
+    ),
+]
+"""Today's answer for ``outside.width`` after each change, in turn: inapplicable while the
+scope it reads (``guarded``) is absent, the source's value while it is present, waiting
+on ``enabled`` once cleared."""
+
+
+@pytest.mark.parametrize("name", sorted(IMPLEMENTATIONS))
+def test_a_formal_read_from_outside_an_absent_scope_answers_as_today(name: str) -> None:
+    """The boundary of S1 (``toys.Boundary``): ``outside.width`` reads ``guarded.leaf.width``
+    from outside ``guarded``. With ``enabled`` false, today's answer is inapplicable
+    (``core.space.test_collapse``; PROPOSAL § 4.2's "within its scope"), pinned here through
+    the oracle's forms, and every registered implementation answers as today's."""
+    configuration = TOYS["boundary"].make()
+    base, other = TODAY.open(configuration), IMPLEMENTATIONS[name].open(configuration)
+    for request, expected in BOUNDARY:
+        found, base_after, other_after = compare.change(base, other, request)
+        assert found.lines() == [], request
+        assert base_after is not None and other_after is not None, request
+        assert forms.answer(base_after.query("outside.width")) == expected, request
+        base, other = base_after, other_after
 
 
 def _house(**stored: object) -> Space:
@@ -120,8 +162,8 @@ def test_a_planted_standing_choice_is_reported_in_a_change() -> None:
 
 @pytest.mark.parametrize("fault", FAULTS)
 def test_a_walk_reports_each_planted_fault(fault: Fault) -> None:
-    make, facts = TOYS["house"]
-    found = compare.walk(make, facts, 0, STEPS, TODAY, Planted(TODAY, fault))
+    house = TOYS["house"]
+    found = compare.walk(house.make, house.facts, 0, STEPS, TODAY, Planted(TODAY, fault))
     assert found.disagreements
     kinds = {"value": "members", "validity": "validity", "possible": "viable"}
     expected = {kinds[fault]} if fault in kinds else {"viable", "report"}
@@ -211,10 +253,69 @@ def test_an_answer_is_its_kind_value_and_sorted_findings() -> None:
     second = Finding(FindingKind.BLOCKER, "a-code", "a", "waits on a")
     expected = {
         "kind": "unresolved",
-        "findings": [["a-code", "a", "waits on a"], ["b-code", "b", "waits on b"]],
+        "findings": [forms.finding(second), forms.finding(first)],
     }
     assert forms.answer(Unresolved((first, second))) == expected
     assert forms.answer(Unresolved((second, first))) == expected
+    assert forms.finding(second) == {
+        "kind": "blocker",
+        "code": "a-code",
+        "owner": "a",
+        "message": "waits on a",
+        "details": [],
+        "causes": [],
+    }
+
+
+def test_a_finding_is_rendered_whole() -> None:
+    """Its kind, its details and its causes (each a finding, recursively) are compared: a
+    blocker apart from a rejection of the same code, findings apart by their subject or
+    their causes."""
+    cause = Finding(FindingKind.REJECTION, "inner", "x", "x refused", (("value", 3),))
+    found = Finding(
+        FindingKind.BLOCKER,
+        "flow-loop",
+        "a",
+        "a loop",
+        (("choices", ("a.p", "b.q")), ("node", "a")),
+        (cause,),
+    )
+    assert forms.finding(found) == {
+        "kind": "blocker",
+        "code": "flow-loop",
+        "owner": "a",
+        "message": "a loop",
+        "details": [["choices", ["a.p", "b.q"]], ["node", "a"]],
+        "causes": [
+            {
+                "kind": "rejection",
+                "code": "inner",
+                "owner": "x",
+                "message": "x refused",
+                "details": [["value", 3]],
+                "causes": [],
+            }
+        ],
+    }
+    others = [
+        replace(found, kind=FindingKind.REJECTION),
+        replace(found, details=(("choices", ("a.p",)), ("node", "a"))),
+        replace(found, causes=(replace(cause, details=(("value", 4),)),)),
+    ]
+    paths = [
+        [
+            difference.path
+            for difference in forms.differences(
+                forms.answer(Unresolved((found,))), forms.answer(Unresolved((other,)))
+            )
+        ]
+        for other in others
+    ]
+    assert paths == [
+        ["findings/0/kind"],
+        ["findings/0/details/0/1"],
+        ["findings/0/causes/0/details/0/1"],
+    ]
 
 
 def test_differences_name_their_keys() -> None:

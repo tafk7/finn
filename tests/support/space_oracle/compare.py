@@ -28,10 +28,12 @@ from support.space_oracle import NO_FACTS, Answers, Changed, Implementation, for
 
 @dataclass
 class Compared:
-    """What a comparison found: its disagreements, by key, and what it compared."""
+    """What a comparison found: its disagreements, by key, what it compared, and the
+    requests a walk made (``requests``, each as ``Request`` prints it)."""
 
     disagreements: list[forms.Difference] = field(default_factory=list)
     tally: Counter[str] = field(default_factory=Counter)
+    requests: list[str] = field(default_factory=list)
 
     def extend(self, found: Sequence[forms.Difference], where: str = "") -> None:
         for difference in found:
@@ -210,6 +212,7 @@ def walk(
         if not commits and not clears and not given:
             continue
         request = Request(commits, tuple(clears), given)
+        found.requests.append(str(request))
         found.tally["steps giving facts"] += bool(given)
         found.tally["steps clearing"] += bool(clears)
         _, after_left, after_right = change(

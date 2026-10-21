@@ -3,9 +3,9 @@
 """The design spaces the oracle compares, by target name (``TARGETS``), each a list of
 stations: a design space, opened by today's API, and the change made on it.
 
-- ``toys``: FINN's own toy Spaces (the house, ``core.space._toys_support``; the pipeline,
-  ``support.space_pipeline``; a chain of stages, ``support.space_cores``), each opened
-  and changed once;
+- ``toys``: FINN's own toy Spaces (``toys.TOYS``: the house, the pipeline, a chain of
+  stages, the boundary of a formal read from outside its scope), each opened and changed
+  once;
 - ``chain-8``, ``chain-64``: stage 7's chain of 8 or 64 kernels (``support.one_space``),
   configured with what conversion and the cut stored (``commit``), then the middle
   MatMul's ``compute.packed.pe`` set to 2;
@@ -28,7 +28,6 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core.space._toys_support import House
 from qonnx.core.modelwrapper import ModelWrapper
 
 from finn.core.space import Space, design_space, inspection
@@ -44,9 +43,8 @@ from finn.kernels.explore import (
 )
 from finn.transformation.kernels import ExploreKernelChoices
 from support.one_space import chain_space, one_space
-from support.space_cores import chain as stages
 from support.space_oracle import Implementation, forms
-from support.space_pipeline import Pipeline
+from support.space_oracle.toys import TOYS
 from support.tfc import LANES, cut, streamlined
 
 WIDEST = 8
@@ -70,22 +68,10 @@ class Station:
 
 
 def toys() -> list[Station]:
-    """FINN's own toy Spaces, each opened with nothing stored and changed once."""
-    chain = stages(6)
+    """FINN's own toy Spaces (``toys.TOYS``), each opened with nothing stored and changed
+    once."""
     return [
-        Station(
-            "house",
-            lambda: design_space(House(budget=100)),
-            {"kitchen.finish": 2},
-            facts={"budget": (60, 100, 400)},
-        ),
-        Station(
-            "pipeline",
-            lambda: design_space(Pipeline(width=10)),
-            {"u0.compute": "packed"},
-            facts={"width": (6, 10, 12)},
-        ),
-        Station("stages", lambda: design_space(chain()), {"s0.size": 2}),
+        Station(name, toy.make, dict(toy.change), facts=toy.facts) for name, toy in TOYS.items()
     ]
 
 

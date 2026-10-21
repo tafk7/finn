@@ -58,7 +58,7 @@ def _tree() -> dict[str, object]:
 
 
 def dump(target: str, out: Path, implementation: str, permuted: bool) -> int:
-    from support.space_oracle import load  # noqa: PLC0415 - after the numbering is set
+    from support.space_oracle import forms, load  # noqa: PLC0415 - after the numbering is set
     from support.space_oracle.targets import dumped, stations  # noqa: PLC0415
 
     chosen = load(implementation)
@@ -71,7 +71,8 @@ def dump(target: str, out: Path, implementation: str, permuted: bool) -> int:
     body: dict[str, Any] = {}
     for station in stations(target):
         body[station.label] = found = dumped(station, chosen)
-        print(f"{station.label}: {len(found['space']['members'])} members", flush=True)
+        members, raised = len(found["space"]["members"]), len(forms.raised_paths(found))
+        print(f"{station.label}: {members} members, {raised} raised", flush=True)
     with out.open("w") as file:
         file.write('{"header": ' + json.dumps(header, sort_keys=True) + ",\n")
         file.write(' "stations": ' + json.dumps(body, sort_keys=True, indent=1) + "}\n")

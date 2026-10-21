@@ -17,11 +17,16 @@ Plain ``repr`` of a ``frozenset`` changes with ``PYTHONHASHSEED``, so it cannot 
 file compared across processes; sorting the rendered elements can.
 
 An answer (``answer``) is its kind (value, unresolved, refused, inapplicable), its value,
-and its findings as ``(code, owner, message)``, sorted: the order of findings follows
-evaluation order, which is hidden. A design space (``space``) is every member's kind and
-answer, every scope's validity, every choice's state in the flow order, the stored
-choices, and the possible values of the choices asked. A change (``report``) is each
-outcome, the rules broken (sorted, each with its standing choices), and what it moved.
+and its findings, sorted: the order of findings follows evaluation order, which is hidden.
+A finding (``finding``) is rendered whole: its kind (a blocker apart from a rejection of
+the same code), code, owner, message, details (its structured subject) and causes, each
+cause a finding of its own, in the fixed order ``Finding`` keeps them.
+
+A design space (``space``) is every member's kind and answer, every scope's validity,
+every choice's state in the flow order, the stored choices, and the possible values of the
+choices asked. A change (``report``) is each outcome, the rules broken (sorted, each with
+its standing choices), and what it moved. ``raised_paths`` names every question in a form
+that raised in place of answering.
 
 ``differences`` walks two forms and names every place they differ by its path of keys
 (``members/kitchen.cost/answer``).
@@ -37,6 +42,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Any
 
+from finn.core.reporting.findings import Finding
 from finn.core.space import (
     Available,
     BrokenRule,
@@ -118,17 +124,51 @@ def _kind(result: object) -> str:
     raise TypeError(f"not an answer: {result!r}")
 
 
+def finding(found: Finding) -> Form:
+    """A finding whole: its kind, code, owner, message, details and causes (each a finding,
+    in the order the finding keeps them)."""
+    return {
+        "kind": found.kind.value,
+        "code": found.code,
+        "owner": found.owner,
+        "message": found.message,
+        "details": value(found.details),
+        "causes": [finding(cause) for cause in found.causes],
+    }
+
+
 def answer(result: QueryResult[Any]) -> Form:
-    """An answer: its kind, its value, and its findings (code, owner, message), sorted."""
+    """An answer: its kind, its value, and its findings (each whole), sorted."""
     if isinstance(result, Available):
         return {"kind": "value", "value": value(result.value)}
-    findings = [[found.code, found.owner, found.message] for found in result.findings]
-    return {"kind": _kind(result), "findings": _ordered(findings)}
+    return {
+        "kind": _kind(result),
+        "findings": _ordered([finding(found) for found in result.findings]),
+    }
 
 
 def raised(error: BaseException) -> Form:
     """A question that raised instead of answering."""
     return {"kind": "raised", "error": type(error).__name__, "message": str(error)}
+
+
+def raised_paths(form: Form, path: str = "") -> list[str]:
+    """The path of every ``raised`` form within ``form`` (a question that raised)."""
+    if isinstance(form, dict):
+        if form.get("kind") == "raised" and "error" in form:
+            return [path]
+        return [
+            found
+            for key, item in form.items()
+            for found in raised_paths(item, f"{path}/{key or ROOT}" if path else key or ROOT)
+        ]
+    if isinstance(form, list):
+        return [
+            found
+            for index, item in enumerate(form)
+            for found in raised_paths(item, f"{path}/{index}")
+        ]
+    return []
 
 
 def _asked(question: Any) -> Form:
@@ -311,7 +351,9 @@ __all__ = [
     "answer",
     "broken",
     "differences",
+    "finding",
     "raised",
+    "raised_paths",
     "report",
     "space",
     "state",

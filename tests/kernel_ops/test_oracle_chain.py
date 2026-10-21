@@ -44,6 +44,18 @@ def test_the_chains_dump_is_the_same_permuted(monkeypatch: pytest.MonkeyPatch) -
     assert [str(found) for found in forms.differences(default, permuted)[:10]] == []
 
 
+EXPECTED_RAISED: dict[str, str] = {}
+"""The questions on the chain whose answer today's engine raises in place of answering,
+by path, each with the reason it is expected: none."""
+
+
+def test_the_chains_dump_holds_no_raised_form(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every question the dump asks of the chain is answered: no member's answer, no
+    scope's validity is a raise (``forms.raised_paths``), but those named, with their reason."""
+    found = forms.raised_paths(dumped(_chain_8(monkeypatch, False), TODAY))
+    assert sorted(found) == sorted(EXPECTED_RAISED)
+
+
 def test_every_implementation_answers_the_chain_as_today(monkeypatch: pytest.MonkeyPatch) -> None:
     others = [found for found in IMPLEMENTATIONS.values() if found is not TODAY]
     if not others:
