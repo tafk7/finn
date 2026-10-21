@@ -55,6 +55,7 @@ from core.space.reference_harness import walks
 from core.space.reference_harness.engine import Point
 from core.space.reference_harness.forms import (
     AnswerForm,
+    DefinitionForm,
     Form,
     RuleForm,
     StateForm,
@@ -214,6 +215,19 @@ def test_a_view_read_in_is_counted_under_t4b_until_it_is_taken_as_removed() -> N
     assert first_line(walk(0, 3, without=("T4b",))) == (
         "seed 0, step 0: the engine disagrees (definition; T4b not pending)"
     )
+
+
+def test_an_engine_refusing_a_view_read_in_as_the_model_does_is_not_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # once T4b's engine answers view-read-in, seed 0's drawn description agrees: nothing counted
+    def refusing(*_: object, **__: object) -> DefinitionForm:
+        return DefinitionForm("view-read-in")
+
+    monkeypatch.setattr(walks, "definition", refusing)
+    tally = walk(0, 3)
+    assert tally.failure is None, tally.failure
+    assert (tally.by_milestone["T4b"], tally.by_question["definition"]) == (0, 0)
 
 
 def test_a_question_reaching_an_optional_fact_left_out_is_counted_under_t4c() -> None:

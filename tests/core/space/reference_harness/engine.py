@@ -779,10 +779,6 @@ class Point:
         engine = self.engine
         if isinstance(result, Available):
             value = result.value
-            choice = engine.index.choices.get(path)
-            if choice is not None and choice.cases is None:
-                stored = self.stored()
-                value = stored[path] if path in stored else result.value
             if path in engine.located:
                 value = pairs(engine.located[path], result.value)
             return AnswerForm("value", value)

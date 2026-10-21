@@ -680,7 +680,7 @@ def generate(
     A description the model refuses as ``view-read-in`` (SZ100 (3); drawn only when not
     ``strict``) is checked against the engine's ``definition`` (``implementation`` asked)
     before it is drawn again: each is kept in ``read_in``, with what the engine answered,
-    as T4b's disagreement, and each is counted under T4b. Today's engine never answers
+    and each the engine answers otherwise is counted under T4b. Today's engine never answers
     ``view-read-in``: it builds such a description, or, for a rule on a view of its own
     Space, refuses it as a dependency cycle, a definition error of another kind. The cycle
     case is T4b's too (agreed in review): under the ruling it is ``view-read-in``, and T4b
@@ -2018,14 +2018,17 @@ class _Walk:
         started = time.perf_counter()
         try:
             for text, form in self.generated.read_in:
-                # T4b (SZ100 (3)): the model refuses a view read in, today's engine does not
-                self.disagree(
-                    "definition",
-                    "the definition, drawn before this description:\n" + text,
-                    DefinitionForm("view-read-in"),
-                    form,
-                    "T4b",
-                )
+                # T4b (SZ100 (3)): the model refuses a view read in; an engine answering
+                # otherwise (today's: it builds it, or calls it a cycle) disagrees
+                expected = DefinitionForm("view-read-in")
+                if not agrees(expected, form):
+                    self.disagree(
+                        "definition",
+                        "the definition, drawn before this description:\n" + text,
+                        expected,
+                        form,
+                        "T4b",
+                    )
             configuration = model.Configuration(self.generated.description, self.generated.facts)
             point = self.on_engine(
                 lambda: self.engine.open(dict(self.generated.facts), self.implementation)

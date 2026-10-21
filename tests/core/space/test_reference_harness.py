@@ -18,9 +18,11 @@ import sys
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
-from support.space_oracle.today import FAULTS, TODAY, Fault, Planted
+from support.space_oracle import Answers
+from support.space_oracle.today import FAULTS, TODAY, Fault, Planted, PlantedAnswers
 
 from core.space import reference
 from core.space.reference import (
@@ -64,6 +66,7 @@ from core.space.reference_harness.compare import (
 from core.space.reference_harness.matrix import problems
 from core.space.reference_harness.walks import Tally, walk
 from finn.core.space import Available
+from finn.core.space import Space as EngineSpace
 
 
 def imported(path: Path) -> list[tuple[int, str, int]]:
@@ -475,14 +478,15 @@ def test_a_planted_fault_is_reported_by_its_question_in_a_hand_case(
     assert (caught.value.case, caught.value.question) == ("capped", question)
 
 
-def test_a_planted_value_on_a_stored_choice_is_not_seen() -> None:
-    # The blind spot the record names: a stored choice's answer takes its value from the
-    # stored choices (``Answers.stored``), not from ``query``, so a value moved there alone
-    # is read by no form. With ``a`` stored, ``a`` is the member the fault moves.
+def test_a_planted_value_on_a_stored_choice_is_seen() -> None:
+    # A stored choice's answer is read from ``query``, as every other member's is, so a value
+    # moved there alone is a disagreement (its state still reads ``stored``, which is right).
     planted = CAPPED.start({"n": 3}, {"a": 2}, implementation=Planted(TODAY, "value"))
     moved = planted.engine.answers.query("a")
     assert isinstance(moved, Available) and moved.value == ("planted-fault", 2)
-    planted.check_answer("a")
+    with pytest.raises(Disagreement) as caught:
+        planted.check_answer("a")
+    assert "planted-fault" in str(caught.value)
     planted.check_state("a")
 
 
@@ -497,7 +501,7 @@ PLANTED_WALKS: dict[Fault, dict[int, str]] = {
     "standing": {0: "facts change", 1: "facts change", 2: "possible", 3: "possible"},
     "possible": {0: "possible", 1: "possible", 2: "possible", 3: "possible"},
     "validity": {0: "validity", 1: "validity", 2: "validity", 3: "validity"},
-    "value": {2: "answer"},
+    "value": {0: "answer", 1: "answer", 2: "answer", 3: "answer"},
 }
 
 FIRST_LINE = re.compile(r"seed (\d+), step \d+: the engine disagrees \((.+); strict run\)")
@@ -526,12 +530,24 @@ def test_a_planted_fault_is_reported_by_question_in_walks_0_to_3(fault: Fault) -
     assert reported == PLANTED_WALKS[fault]
 
 
+class Renamed:
+    """Today's answers behind a wrapper that alters nothing (``PlantedAnswers`` with no
+    fault it knows): not today's implementation, and agreeing everywhere."""
+
+    name = "today, renamed"
+
+    def open(self, configuration: EngineSpace) -> Answers:
+        return PlantedAnswers(TODAY.open(configuration), cast("Fault", "none"))
+
+
 def test_the_check_against_a_cold_build_is_todays_alone() -> None:
     # ``support.space_walk.fresh`` rebuilds today's configuration from its internals: for
-    # another implementation the check is skipped, and tallied, at every configuration and
-    # change it would have run; the bind checks run for any implementation.
-    planted = planted_walk("value", 0)
-    assert planted.failure is None
+    # another implementation (here today's under another name, which agrees everywhere) the
+    # check is skipped, and tallied, at every configuration and change it would have run;
+    # the bind checks run for any implementation.
+    planted = walk(0, 30, strict=True, implementation=Renamed())
+    assert planted.failure is None, planted.failure
+    assert planted.implementation == "today, renamed"
     assert not planted.engine_checks["cold"] and not planted.engine_checks["cold change"]
     assert planted.skipped_checks["cold"] == planted.compared
     assert planted.skipped_checks["cold change"] == planted.steps - planted.model_only
