@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-from finn.core.space import derived
+from finn.core.space import view
 from finn.dataflow.plan import plan
 from finn.dataflow.traversal import BeatSequence, Traversal, vector_major
 from finn.kernels.adapters import Convert, RealizedStage, realize
@@ -30,7 +30,7 @@ from finn.kernels.input_generator import Generate, InputGeneratorKernel
 from finn.kernels.port import native_stream
 from finn.kernels.vpc import VpcKernel
 from support.adapted import columns_first
-from support.helpers import FULL_DSP48E2
+from support.helpers import FULL_DSP48E2, OtherPins
 from support.kernel_specs.base import TEST_SIDE, KernelSpec, Probe, SweepCases, placed
 from support.kernel_specs.thresholding import tensor
 
@@ -63,13 +63,11 @@ class StagedInputGenerator(InputGeneratorKernel):
         InputGeneratorKernel.leaving,
     )
 
-    @derived
-    def other_pins(self) -> tuple[Pin, ...]:
+    @view
+    def loop_end_pins(self) -> tuple[Pin, ...]:
         return (Signal("olst", Direction.OUT, len(self.dims)),)
 
-    @derived
-    def held(self) -> Held:
-        return Held((), ("olst",))
+    unused = OtherPins(loop_end_pins, Held((), ("olst",)))
 
 
 STAGED = (4, 6)

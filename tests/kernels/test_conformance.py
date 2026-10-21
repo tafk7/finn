@@ -70,12 +70,12 @@ from support.kernel_specs.memstream import memstream
 from support.kernel_specs.thresholding import CHANNELS, PIXELS, THRESHOLDS, tensor, thresholding
 from support.xsim import requires_xsim
 
-from finn.core.space import Rejected, derived
+from finn.core.space import Rejected, derived, view
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.traversal import offsets, pack, vector_major
 from finn.harness.orders import decode
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import LeafKernel
+from finn.kernels.base import KernelSpace
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.memstream import MemStreamKernel
@@ -345,14 +345,14 @@ class Misnamed(MemStreamKernel):
     )
 
 
-def without(kernel: type[LeafKernel], omitted: str) -> Any:
-    """A ``parameters`` member: ``kernel``'s, less ``omitted``."""
+def without(kernel: type[KernelSpace], omitted: str) -> Any:
+    """A ``parameters`` view: ``kernel``'s, less ``omitted``."""
     stated = cast(Any, vars(kernel)["parameters"]).function
 
-    def parameters(self: LeafKernel) -> dict[str, int | str]:
+    def parameters(self: KernelSpace) -> dict[str, int | str]:
         return {key: value for key, value in stated(self).items() if key != omitted}
 
-    return derived(parameters)
+    return view(parameters)
 
 
 class Unbound(MemStreamKernel):
@@ -375,14 +375,14 @@ class Unpipelined(ThresholdingAxiKernel):
     parameters = without(ThresholdingAxiKernel, "DEEP_PIPELINE")
 
 
-def misspelled(kernel: type[LeafKernel], name: str, misspelling: str) -> Any:
-    """A ``parameters`` member: ``kernel``'s, with ``name`` spelled ``misspelling``."""
+def misspelled(kernel: type[KernelSpace], name: str, misspelling: str) -> Any:
+    """A ``parameters`` view: ``kernel``'s, with ``name`` spelled ``misspelling``."""
     stated = cast(Any, vars(kernel)["parameters"]).function
 
-    def parameters(self: LeafKernel) -> dict[str, int | str]:
+    def parameters(self: KernelSpace) -> dict[str, int | str]:
         return {(misspelling if key == name else key): value for key, value in stated(self).items()}
 
-    return derived(parameters)
+    return view(parameters)
 
 
 class Misspelled(MemStreamKernel):

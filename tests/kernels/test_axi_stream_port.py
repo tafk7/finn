@@ -6,7 +6,7 @@
 ``AxiStreamPort`` presents its kernel's schedule through the indices it reads,
 or a given sequence (exactly one). An input placed with a schedule states its read of
 the tensor (``x_access``), and its kernel binds each index's extent from those reads
-(``LeafKernel.extents``): a kernel writes no extent getter, and its folding factors'
+(``KernelSpace.extents``): a kernel writes no extent getter, and its folding factors'
 domains read ``extent_of`` members. A producer's tensor is its kernel's statement,
 derived from those extents, and its element is that tensor's. An input without its
 tensor is idle: a port not used. A port's rule (``x_element_taken``) is its
@@ -34,6 +34,7 @@ from finn.core.space import (
     divisors_of,
     inspection,
     reject,
+    view,
 )
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.gemm import Form
@@ -41,10 +42,11 @@ from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contributions import Contribution
-from finn.kernels.base import LeafKernel, extent_of
+from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.base import KernelSpace, extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import PackedDotpKernel
+from finn.kernels.library import LibraryModule
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.port import INTEGER_POLICY, AxiStreamPort, lane_count
 from finn.kernels.utilization import RESOURCES_SEMANTICS
@@ -54,11 +56,10 @@ from finn.platform.capabilities import Resources
 b, s, c = Index("b"), Index("s"), Index("c")
 
 
-class Pool(LeafKernel):
+class Pool(KernelSpace):
     """Global sum pooling, model only: Y[b, c] = sum_s X[b, s, c], PE channels a beat."""
 
     id = "test.accpool"
-    rtl_module = "accpool_axi"
     x_tensor: Tensor = Param(required=False)
 
     channels = extent_of(c)
@@ -93,17 +94,19 @@ class Pool(LeafKernel):
         reduces=(s,),
     )
 
-    @derived
+    @view
     def parameters(self) -> dict[str, int | str]:
         return {"CHANNELS": self.channels, "PE": self.pe}
 
-    @derived
-    def sources(self) -> tuple[Contribution, ...]:
-        return ()
-
-    @derived(semantics=RESOURCES_SEMANTICS)
+    @view(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "a model only")
+
+    library = LibraryModule(
+        "accpool_axi",
+        parameters=parameters,
+        sources=(CopiedSource("finnlib", "rtl/accpool.sv", provides=("module:accpool_axi",)),),
+    )
 
 
 def tensor(shape: tuple[int, ...], dtype: str) -> Tensor:
@@ -252,11 +255,10 @@ def test_dotp_binds_from_its_inputs_through_the_dense_view() -> None:
     }
 
 
-class Holding(LeafKernel):
-    """A leaf of one input port, given the integer policy its hardware takes."""
+class Holding(KernelSpace):
+    """A kernel of one input port, given the integer policy its hardware takes."""
 
     id = "test.holding"
-    rtl_module = "holding"
     admits: Integer | None = Param(default=None, semantics=INTEGER_POLICY)
     x = AxiStreamPort(
         name="s_axis_input",
@@ -268,17 +270,19 @@ class Holding(LeafKernel):
         admits=admits,
     )
 
-    @derived
+    @view
     def parameters(self) -> dict[str, int | str]:
         return {}
 
-    @derived
-    def sources(self) -> tuple[Contribution, ...]:
-        return ()
-
-    @derived(semantics=RESOURCES_SEMANTICS)
+    @view(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "a model only")
+
+    library = LibraryModule(
+        "holding",
+        parameters=parameters,
+        sources=(CopiedSource("finnlib", "rtl/holding.sv", provides=("module:holding",)),),
+    )
 
 
 def test_a_refused_port_still_states_its_access_and_its_kernel_its_extents() -> None:
@@ -294,6 +298,5 @@ def test_a_refused_port_still_states_its_access_and_its_kernel_its_extents() -> 
     access = point.x_access
     assert (access.name, access.shape) == ("x", (1, 4, 8))
     assert point.extents == {b: 1, s: 4, c: 8}
-    # Its module is a product, refused with it; the raw derived module answers.
-    assert isinstance(point.query(Holding.codegen), Available)
+    # Its module is a product, refused with it.
     assert "dtype-maximum-bits" in {code for code, _ in coded_messages(point.query(Holding.module))}

@@ -3,8 +3,9 @@
 
 """A kernel's stream ports: each a declaration of its kernel, lowered into its members.
 
-A leaf declares one ``AxiStreamPort`` per AXI-Stream port of its module, in its class
-body (``x = AxiStreamPort(name=..., tensor=x_tensor, schedule=schedule, ...)``). It is a
+A kernel binding a module declares one ``AxiStreamPort`` per AXI-Stream port of its module,
+in its class body (``x = AxiStreamPort(name=..., tensor=x_tensor, schedule=schedule,
+...)``). It is a
 plain frozen value, not a Space: when the class is made, the kernel base lowers it
 (``finn.kernels.base.KernelDeclaration``) into ordinary members of the kernel, named after
 it (``x``):
@@ -43,7 +44,7 @@ used: idle, one lane of its ``dtype``.
 Its pins, the AXIS bus, the pins it holds idle, its transport, its beats, its pace and its
 contract are functions of its declaration and its kernel's values (its stream, or idle its
 element, its ``clocking``, its schedule), not members: ``pins``, ``held``, ``axis``,
-``transport``, ``beats``, ``pace``, ``contract``. The leaf's products call them (its
+``transport``, ``beats``, ``pace``, ``contract``. The kernel's products call them (its
 module's pins and holds, its cycles, ``x_contract``), and so does a kernel's rule that
 reads a port's width (``data_width``, ``axis``, from its stream). Their physical refusals
 (``port-markers``, ``port-signals``, ``port-lanes``, ``port-idle``) stay in them. It is an
@@ -93,7 +94,6 @@ from finn.kernels.base import (
     Kernel,
     KernelDeclaration,
     KernelSpace,
-    LeafKernel,
     PortContract,
     Product,
     declared_reads,
@@ -136,7 +136,7 @@ class LoopEnds:
 
 @dataclass(frozen=True, eq=False)
 class AxiStreamPort(KernelDeclaration):
-    """One AXI-Stream port of a leaf's module: what it presents of its tensor, its
+    """One AXI-Stream port of a kernel's module: what it presents of its tensor, its
     element, its pins. The module docstring says what it lowers to."""
 
     name: str
@@ -226,9 +226,9 @@ class AxiStreamPort(KernelDeclaration):
         return placement
 
     def lower(self, owner: type[Kernel], name: str) -> Mapping[str, object]:
-        if not issubclass(owner, (LeafKernel, KernelSpace)):
+        if not issubclass(owner, KernelSpace):
             raise DefinitionError.broken(
-                "port-not-leaf",
+                "port-owner",
                 "AxiStreamPort",
                 f"{owner.__qualname__}.{name}: a stream port is a module's; a kernel with "
                 "children presents its child's (served)",
@@ -298,7 +298,7 @@ class AxiStreamPort(KernelDeclaration):
 
         @declared_reads(f"{name}_stream", *self.paths(*AxiStreamPort.PACED))
         def contract_(self: Space) -> PortContract | Rejected:
-            kernel = cast("type[LeafKernel | KernelSpace]", type(self))
+            kernel = cast("type[KernelSpace]", type(self))
             found = contract(
                 port.read(self, *AxiStreamPort.PACED),
                 getattr(self, f"{name}_stream"),
@@ -362,7 +362,7 @@ class AxiStreamPort(KernelDeclaration):
         element: ScalarEncoding = getattr(kernel, f"{name}_element")
         return Stream(element, sequence)
 
-    # -- what a leaf's module reads of it ---------------------------------------------------
+    # -- what a kernel's module reads of it -------------------------------------------------
 
     def reads(self, name: str, product: Product) -> tuple[str, ...]:
         placement = self.placement()
@@ -383,9 +383,7 @@ class AxiStreamPort(KernelDeclaration):
         guards = (f"{name}_binds",) if binding is None else placed
         return (*guards, f"{name}_access")
 
-    def viewed(
-        self, kernel: LeafKernel | KernelSpace, name: str
-    ) -> tuple[AxiStreamPort, Presenting]:
+    def viewed(self, kernel: KernelSpace, name: str) -> tuple[AxiStreamPort, Presenting]:
         """What its views read on ``kernel``, declared as ``name``: its arguments, and its
         stream while placed, else its element alone (``<name>_element``)."""
         if self.placed(kernel, name):
@@ -394,17 +392,17 @@ class AxiStreamPort(KernelDeclaration):
         element: ScalarEncoding = getattr(kernel, f"{name}_element")
         return self.read(kernel, *AxiStreamPort.VIEWED, *AxiStreamPort.IDLE), element
 
-    def pins(self, kernel: LeafKernel | KernelSpace, name: str) -> tuple[Pin, ...] | Rejected:
+    def pins(self, kernel: KernelSpace, name: str) -> tuple[Pin, ...] | Rejected:
         port, presenting = self.viewed(kernel, name)
         return pins(port, presenting, type(kernel).clock_domain)
 
-    def held(self, kernel: LeafKernel | KernelSpace, name: str) -> Held | Rejected:
+    def held(self, kernel: KernelSpace, name: str) -> Held | Rejected:
         if self.placed(kernel, name):
             return Held()
         port, presenting = self.viewed(kernel, name)
         return held(port, presenting, type(kernel).clock_domain)
 
-    def access(self, kernel: LeafKernel | KernelSpace, name: str) -> Access | None:
+    def access(self, kernel: KernelSpace, name: str) -> Access | None:
         binding = self.binding()
         if binding is None:
             binding = getattr(kernel, f"{name}_binds")
@@ -415,7 +413,7 @@ class AxiStreamPort(KernelDeclaration):
         found: Access = getattr(kernel, f"{name}_access")
         return found
 
-    def beats(self, kernel: LeafKernel | KernelSpace, name: str) -> int | None:
+    def beats(self, kernel: KernelSpace, name: str) -> int | None:
         if not self.placed(kernel, name):
             return None
         return beats(getattr(kernel, f"{name}_stream"))

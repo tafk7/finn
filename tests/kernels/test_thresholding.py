@@ -272,10 +272,10 @@ def test_runtime_writable_thresholds_declare_the_writes_of_their_table() -> None
         for index, value in enumerate(row):
             expected.append((((channel << 2) | index) << 2, value & 0x1F))
     assert point.register_map.writes == tuple(expected)
-    assert point.control_bus.registers == point.register_map
+    assert point.config_control.registers == point.register_map
     shared = threshold(table=(((-2, 0, 3),),), pe=2, axilite=True)  # C = 1: one row, lane 0
     assert shared.register_map.writes == ((0, 0x1E), (4, 0), (8, 3))
-    assert threshold(pe=1).control_bus.bus is None  # held, not presented: nothing to write
+    assert threshold(pe=1).config_control.bus is None  # held, not presented: nothing to write
 
 
 def test_a_threshold_wider_than_a_word_is_written_in_words_low_first() -> None:

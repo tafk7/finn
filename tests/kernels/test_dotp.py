@@ -33,7 +33,7 @@ from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Clock, Data
 from finn.kernels.artifacts.abi import Derived as DerivedClock
 from finn.kernels.artifacts.build import emit_module
-from finn.kernels.base import LeafKernel
+from finn.kernels.base import KernelSpace
 from finn.kernels.dotp import REDUCERS, DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.port import AxiStreamPort, axis
 from finn.kernels.transport import AxisBeat
@@ -66,7 +66,7 @@ def kernel(space_type=PackedDotpKernel, **updates):
 
 
 def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_the_module():
-    assert DotpAxiKernel.__bases__ == (LeafKernel,)
+    assert DotpAxiKernel.__bases__ == (KernelSpace,)
     assert PackedDotpKernel.__bases__ == Int8Dsp58DotpKernel.__bases__ == (DotpAxiKernel,)
     point = kernel()
     assert [
@@ -74,9 +74,15 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
     ] == [
         "buffering",
         "cycles",
+        # What its module and its resources read, and nothing in its space.
+        "dsp_simd",
+        "held_bits",
         "module",
         "netlist",
+        "parameters",
+        "resource_use",
         "resources",
+        "segment_length",
         # The contract each port states, which the channel on it takes.
         "w_contract",
         "x_contract",
@@ -242,13 +248,13 @@ def test_a_folding_factor_must_divide_its_extent(factor):
         kernel(**{**extents, factor: 4})
 
 
-def test_constraints_gate_acceptance_without_revalidating_raw_codegen():
+def test_constraints_gate_acceptance_and_the_module_does_not_revalidate_them():
     point = kernel(Int8Dsp58DotpKernel, result_dtype=DataType["INT59"], compute_pumping=True)
-    physical = point.inspect(DotpAxiKernel.module)
-    assert isinstance(physical.output_result, Available)
-    assert point.query(DotpAxiKernel.codegen) == physical.output_result
-    assert dict(physical.output_result.value.parameters)["PUMPED_COMPUTE"] == 1
-    assert codes(physical.accepted_result) == {"dotp-accumulator-width"}
+    physical = point.inspect(DotpAxiKernel.netlist)
+    # Refused with its Space, by the rule's one finding: the module states none of its own.
+    refused = physical.accepted_result
+    assert isinstance(refused, Rejected)
+    assert [finding.code for finding in refused.findings] == ["dotp-accumulator-width"]
 
 
 def validity_of(point):

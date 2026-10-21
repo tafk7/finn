@@ -61,6 +61,7 @@ from finn.core.space import (
     divisors_of,
     reject,
     required,
+    view,
 )
 from finn.dataflow.datatypes import (
     DatatypeError,
@@ -73,8 +74,9 @@ from finn.dataflow.schedule import Affine, Index, Schedule
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import CLOCK2X, Clocking, Endpoint
-from finn.kernels.artifacts.contributions import Contribution, CopiedSource
-from finn.kernels.base import LeafKernel, extent_of
+from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.base import KernelSpace, extent_of
+from finn.kernels.library import LibraryModule
 from finn.kernels.port import INTEGER_POLICY, AxiStreamPort, axis
 from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit
 from finn.kernels.values.domains import Integer, admit_element, integer_bounds, range_dtype
@@ -139,7 +141,7 @@ _DOTP_LUT = Fit(55.4, (1.032, 0.999))
 _DOTP_FF = Fit(80.9, (1.026, 1.625))
 
 
-class DotpAxiKernel(LeafKernel):
+class DotpAxiKernel(KernelSpace):
     """The ``dotp_axi`` space shared by its core kernels, which state what is theirs.
 
     The ``platform``'s ``period_ns`` is the clock period the module must meet. It sets
@@ -151,11 +153,14 @@ class DotpAxiKernel(LeafKernel):
     shell's answer (``clock-unavailable``), not a capability of the platform.
     The DSP block is the ``platform``'s (``dsp``): a platform that states none is
     refused (``dotp-dsp``).
+
+    It binds no module itself: each core binds ``dotp_axi`` with its own sources
+    (``dotp_axi``), reading the parameters stated here. Its ``required()`` members make it
+    a base of kernels, not placed.
     """
 
     id = "finnlib.dotp_axi"
     version = 1
-    rtl_module = "dotp_axi"
     # FinnLib's CORE parameter: the name of the compute core module.
     core: ClassVar[str] = ""
 
@@ -434,7 +439,7 @@ class DotpAxiKernel(LeafKernel):
             return reject("dotp-stream-width", "packed stream widths must fit native unsigned int")
         return True
 
-    @derived
+    @view
     def segment_length(self) -> int | Rejected:
         """The longest DSP58 chain segment that meets the target period, at most the chain."""
         pumping, target = self.compute_pumping, self.platform.period_ns
@@ -452,12 +457,12 @@ class DotpAxiKernel(LeafKernel):
         # Unpumped, the RTL ignores its 2x clock input: it is held low.
         return replace(type(self).clock_domain, doubled=CLOCK2X, doubling=self.compute_pumping)
 
-    @derived
+    @view
     def dsp_simd(self) -> int:
         """The SIMD the core is built with (``core_simd``: DSP_SIMD)."""
         return core_simd(self.simd, self.compute_pumping)
 
-    @derived
+    @view
     def parameters(self) -> dict[str, int | str]:
         x, w, y = self.x_element, self.w_element, self.y_element
         return {
@@ -534,9 +539,19 @@ _ADD_MULTI = (
 REDUCERS = ("tree", "compressor")
 
 
-def _dotp_axi(core: str) -> CopiedSource:
-    return CopiedSource(
-        "finnlib", "rtl/linalg/dotp_axi.sv", provides=("module:dotp_axi",), requires=(core,)
+def dotp_axi(core: str, *sources: CopiedSource) -> LibraryModule:
+    """``dotp_axi`` on the core module ``core`` (``module:dotp``), which ``sources``
+    provide, providers first: a core kernel's library module, its parameters
+    ``DotpAxiKernel``'s."""
+    return LibraryModule(
+        "dotp_axi",
+        parameters=DotpAxiKernel.parameters,
+        sources=(
+            *sources,
+            CopiedSource(
+                "finnlib", "rtl/linalg/dotp_axi.sv", provides=("module:dotp_axi",), requires=(core,)
+            ),
+        ),
     )
 
 
@@ -620,7 +635,7 @@ class PackedDotpKernel(DotpAxiKernel):
         least, greatest = self.result_range
         return range_dtype(least, greatest)
 
-    @derived(semantics=RESOURCES_SEMANTICS)
+    @view(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:
         """``packed_dotp_resources`` at the core's SIMD; the tree reducer's only."""
         if self.reducer != "tree":
@@ -636,18 +651,17 @@ class PackedDotpKernel(DotpAxiKernel):
             dsp=self.dsp,
         )
 
-    @derived
-    def sources(self) -> tuple[Contribution, ...]:
-        return (
-            *_ADD_MULTI,
-            CopiedSource(
-                "finnlib",
-                "rtl/linalg/dotp.sv",
-                provides=("module:dotp",),
-                requires=("package:add_multi_pkg", "module:add_multi"),
-            ),
-            _dotp_axi("module:dotp"),
-        )
+    # Named ``module`` once the transitional ``module`` view (``MODULE``) goes.
+    library = dotp_axi(
+        "module:dotp",
+        *_ADD_MULTI,
+        CopiedSource(
+            "finnlib",
+            "rtl/linalg/dotp.sv",
+            provides=("module:dotp",),
+            requires=("package:add_multi_pkg", "module:add_multi"),
+        ),
+    )
 
 
 class Int8Dsp58DotpKernel(DotpAxiKernel):
@@ -722,22 +736,22 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
         one reads it."""
         return "compressor"
 
-    @derived(semantics=RESOURCES_SEMANTICS)
+    @view(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources:
         return int8_dsp58_dotp_resources(pe=self.pe, simd=self.dsp_simd)
 
-    @derived
-    def sources(self) -> tuple[Contribution, ...]:
-        return (
-            CopiedSource(
-                "finnlib", "rtl/linalg/dotp_8sx9_dsp58.sv", provides=("module:dotp_8sx9_dsp58",)
-            ),
-            _dotp_axi("module:dotp_8sx9_dsp58"),
-        )
+    # Named ``module`` once the transitional ``module`` view (``MODULE``) goes.
+    library = dotp_axi(
+        "module:dotp_8sx9_dsp58",
+        CopiedSource(
+            "finnlib", "rtl/linalg/dotp_8sx9_dsp58.sv", provides=("module:dotp_8sx9_dsp58",)
+        ),
+    )
 
 
 __all__ = [
     "DotpAxiKernel",
+    "dotp_axi",
     "Int8Dsp58DotpKernel",
     "PackedDotpKernel",
     "int8_dsp58_dotp_resources",

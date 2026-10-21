@@ -41,6 +41,7 @@ from finn.core.space import (
     derived,
     design_space,
     reject,
+    view,
 )
 from finn.core.space._reads import ModelReads, existence_guards, infer
 from finn.core.space._structure import expand
@@ -49,9 +50,10 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.contributions import Contribution
-from finn.kernels.base import Kernel, LeafKernel, declarations
+from finn.kernels.artifacts.contributions import CopiedSource
+from finn.kernels.base import Kernel, KernelSpace, declarations
 from finn.kernels.channels import Channel
+from finn.kernels.library import LibraryModule
 from finn.kernels.port import STREAM, AxiStreamPort, Served
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.platform.capabilities import Resources
@@ -181,28 +183,29 @@ TENSOR = Tensor((4,), INT4)
 SEQUENCE = BeatSequence(vector_major((4,), 1))
 
 
-class Given(LeafKernel):
-    """A model-only leaf presenting a given sequence of a given tensor."""
+class Given(KernelSpace):
+    """A model-only kernel presenting a given sequence of a given tensor."""
 
     id = "test.reads.given"
-    rtl_module = "given"
     tensor: Tensor = Param()
     sequence: BeatSequence = Param()
     x = AxiStreamPort(name="s_axis", endpoint=Endpoint.TARGET, tensor=tensor, sequence=sequence)
     if TYPE_CHECKING:  # the member its port lowers to, which a sibling reads
         x_stream: ClassVar[Stream]
 
-    @derived
+    @view
     def parameters(self) -> dict[str, int | str]:
         return {}
 
-    @derived
-    def sources(self) -> tuple[Contribution, ...]:
-        return ()
-
-    @derived(semantics=RESOURCES_SEMANTICS)
+    @view(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "a model only")
+
+    library = LibraryModule(
+        "given",
+        parameters=parameters,
+        sources=(CopiedSource("finnlib", "rtl/given.sv", provides=("module:given",)),),
+    )
 
 
 def _with_read(reads: ModelReads, method: NodeId, read: NodeId) -> ModelReads:

@@ -48,11 +48,11 @@ disabled outputs may be unspecified. Bound by a network (or placed in a kernel w
 children), it reads an input tensor and (with several sets) a tensor of set indices,
 facts it is given, and writes its output tensor; it states the contract of each of its
 ports (``input_contract``, ``output_contract``, ``set_contract``), which the channels on
-them take; its AXI-Lite bus is presented, at the port its placement names (``control``), when
-thresholds are runtime-writable (``controlled``), and otherwise held idle by its
-module, as is the set selector of a single set. Presented, the bus carries the writes that
-put the kernel's table into the memories (``register_map``), at the addresses
-thresholding_axi decodes. Multi-set AXI-Lite access is refused: the
+them take; its AXI-Lite bus (``config``, a ``ControlBus``) is presented, at the port its
+placement names (``control``), when thresholds are runtime-writable (``use_axilite``), and
+otherwise held idle by its module, as is the set selector of a single set. Presented, the
+bus carries the writes that put the kernel's table into the memories (``register_map``),
+at the addresses thresholding_axi decodes. Multi-set AXI-Lite access is refused: the
 pinned wrapper's configuration address width omits set bits. Static multi-set
 selection is supported. Floating-point threshold comparison is outside this
 profile.
@@ -90,16 +90,12 @@ from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import CLOCK, RESET, Bus, Endpoint, Member, Pin, StandardProtocol
-from finn.kernels.artifacts.contributions import (
-    Contribution,
-    CopiedSource,
-    GeneratedData,
-    hex_image,
-)
-from finn.kernels.artifacts.module import Held, RegisterMap
-from finn.kernels.base import LeafKernel, extent_of
-from finn.kernels.control import CONTROL, Control, held_bus
+from finn.kernels.artifacts.abi import CLOCK, RESET, Bus, Endpoint, Member, StandardProtocol
+from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
+from finn.kernels.artifacts.module import RegisterMap
+from finn.kernels.base import KernelSpace, extent_of
+from finn.kernels.control import ControlBus
+from finn.kernels.library import LibraryModule
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
@@ -192,13 +188,12 @@ _THRESHOLD_LUT = Fit(81.7, (0.271,))
 _THRESHOLD_FF = Fit(31.3, (0.948,))
 
 
-class ThresholdingAxiKernel(LeafKernel):
+class ThresholdingAxiKernel(KernelSpace):
     """Integer ``thresholding_axi``: the input's channels counted against a table of
     thresholds, plus a bias; see the module docstring."""
 
     id = "finnlib.thresholding_axi.integer"
     version = 1
-    rtl_module = "thresholding_axi"
 
     threshold_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     thresholds: IntegerTensor = Param(semantics=INTEGER_TENSOR)
@@ -447,7 +442,7 @@ class ThresholdingAxiKernel(LeafKernel):
             )
         return self.bound_schedule(self.indices, {c: self.pe})
 
-    @derived(semantics=RESOURCES_SEMANTICS)
+    @view(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:
         flat, count = integers(self.thresholds), self.shape[2]
         first = flat[:count]
@@ -521,7 +516,7 @@ class ThresholdingAxiKernel(LeafKernel):
         input_element: ClassVar[ScalarEncoding]
         input_stream: ClassVar[Stream]
 
-    @derived
+    @view
     def thresholds_file(self) -> GeneratedData:
         """The table as ``THRESHOLDS_FILE``, ``$readmemh`` words of WT bits, named by its
         contents: a parameter literal over 10**6 bits stops Vivado.
@@ -550,7 +545,7 @@ class ThresholdingAxiKernel(LeafKernel):
                     words.append(flat[start + position] & mask if inside else 0)
         return hex_image("thresholds", words, bits)
 
-    @derived
+    @view
     def parameters(self) -> dict[str, int | str]:
         sets, rows, count = self.shape
         a, bits = self.input_dtype, self.threshold_dtype.bitwidth()
@@ -573,38 +568,7 @@ class ThresholdingAxiKernel(LeafKernel):
             "DEEP_PIPELINE": int(self.deep_pipeline),
         }
 
-    @derived
-    def sources(self) -> tuple[Contribution, ...]:
-        return (
-            CopiedSource("finnlib", "rtl/infra/axilite.sv", provides=("module:axilite",)),
-            CopiedSource(
-                "finnlib", "rtl/nonlin/thresholding.sv", provides=("module:thresholding",)
-            ),
-            CopiedSource(
-                "finnlib",
-                "rtl/nonlin/thresholding_axi.sv",
-                provides=("module:thresholding_axi",),
-                requires=("module:axilite", "module:thresholding"),
-            ),
-            self.thresholds_file,
-        )
-
-    @derived
-    def other_pins(self) -> tuple[Pin, ...]:
-        return (self.config_bus,)
-
-    @derived
-    def held(self) -> Held:
-        """AXI-Lite, without runtime writes (with them, a control bus presents it:
-        ``control_for_writes``)."""
-        return Held() if self.use_axilite else held_bus(self.config_bus)
-
-    @derived
-    def controlled(self) -> tuple[Bus, ...]:
-        """AXI-Lite, with runtime writes."""
-        return (self.config_bus,) if self.use_axilite else ()
-
-    @derived
+    @view
     def register_map(self) -> RegisterMap:
         """The AXI-Lite writes of its table: each threshold of a row at the wrapper's word
         address (the row's channel fold, its lane, the threshold), its bits in 32-bit words
@@ -632,13 +596,27 @@ class ThresholdingAxiKernel(LeafKernel):
                     )
         return RegisterMap(tuple(writes))
 
-    @view
-    def control_bus(self) -> Control:
-        if not self.controlled:
-            return Control(None)
-        return Control(self.config_bus, self.control, self.register_map)
+    # AXI-Lite: presented with runtime writes (``control_for_writes``), held without.
+    config = ControlBus(config_bus, presented=use_axilite, port=control, registers=register_map)
 
-    exports = {**LeafKernel.exports, CONTROL: control_bus}
+    # Named ``module`` once the transitional ``module`` view (``MODULE``) goes.
+    library = LibraryModule(
+        "thresholding_axi",
+        parameters=parameters,
+        sources=(
+            CopiedSource("finnlib", "rtl/infra/axilite.sv", provides=("module:axilite",)),
+            CopiedSource(
+                "finnlib", "rtl/nonlin/thresholding.sv", provides=("module:thresholding",)
+            ),
+            CopiedSource(
+                "finnlib",
+                "rtl/nonlin/thresholding_axi.sv",
+                provides=("module:thresholding_axi",),
+                requires=("module:axilite", "module:thresholding"),
+            ),
+        ),
+        data=thresholds_file,
+    )
 
 
 __all__ = ["ThresholdingAxiKernel", "stage_style", "thresholding_resources"]

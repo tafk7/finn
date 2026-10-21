@@ -10,11 +10,14 @@ class's views read its declarations by the names their lowering fixes, so none r
 dynamically. A kernel binds at most one library module (``LibraryModule``), whose
 sources must provide it: constant sources when the class is made, a member's when the
 module is built. A kernel with a module states its ports and its resources and places
-no kernel; one whose module names a member still ``required()`` is a base of kernels.
+no kernel; one whose module names a member still ``required()`` is a base of kernels. A
+declaration's argument is a member of its kernel (a declaration of the engine, or one
+``required()``), or a constant, of whatever type.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, cast
 
 import pytest
@@ -29,7 +32,9 @@ from finn.core.space import (
     Rejected,
     Unresolved,
     View,
+    default_semantics,
     design_space,
+    divisors_of,
     required,
     view,
 )
@@ -46,8 +51,10 @@ from finn.kernels.base import (
     NATIVE_CLOCKING,
     NETLIST,
     RESOURCES,
+    ComposedKernel,
+    KernelDeclaration,
     KernelSpace,
-    LeafKernel,
+    is_member,
 )
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.fifo import FifoKernel, fifo_resources
@@ -294,6 +301,29 @@ def test_a_module_naming_a_required_member_makes_a_base_of_kernels() -> None:
 def test_a_library_module_is_a_kernel_space_s() -> None:
     with refused("library-module-owner", error=DefinitionError):
 
-        class OnLeaf(LeafKernel):
-            id = "test.kernel_space.leaf"
+        class OnComposed(ComposedKernel):
+            id = "test.kernel_space.composed"
             library = LibraryModule("probe", parameters={}, sources=(PROBE,))
+
+
+# -- a declaration's arguments ----------------------------------------------------------------
+
+
+@dataclass(frozen=True, eq=False)
+class Given(KernelDeclaration):
+    """A declaration of one argument, read as its constant or its member."""
+
+    given: Any
+
+
+def test_a_constant_of_an_engine_type_is_a_constant_not_a_member() -> None:
+    for constant in (default_semantics(int), divisors_of(4), 3, "x"):
+        assert not is_member(constant)
+        declaration = Given(constant)
+        assert declaration.references() == {}
+        point = design_space(Stage(input_tensor=TENSOR, arriving=ARRIVING))
+        assert declaration.value(point, "given") is constant
+    assert is_member(Stage.parameters) and Given(Stage.parameters).references() == {
+        "given": "parameters"
+    }
+    assert is_member(Based.sources)  # required(): a member a subclass states

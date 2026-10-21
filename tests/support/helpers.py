@@ -58,8 +58,9 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
-from finn.kernels.artifacts.module import Composed, Leaf, ProducerIdentity
-from finn.kernels.base import CYCLES, LeafKernel
+from finn.kernels.artifacts.abi import Pin
+from finn.kernels.artifacts.module import Composed, Held, Leaf, ProducerIdentity
+from finn.kernels.base import CYCLES, Kernel, KernelDeclaration, KernelSpace, ModuleOrder, Product
 from finn.kernels.configure import chosen, commit, describe
 from finn.kernels.defaults import defaulted, ranked
 from finn.kernels.eltwise import EltwiseKernel
@@ -542,8 +543,8 @@ def eltwise(
     return point if pe is None else commit(point, {"pe": pe})
 
 
-def port_axis(point: LeafKernel, name: str) -> AxisBeat:
-    """Port ``name``'s AXIS beat on the leaf configuration ``point``
+def port_axis(point: KernelSpace, name: str) -> AxisBeat:
+    """Port ``name``'s AXIS beat on the kernel's configuration ``point``
     (``finn.kernels.port.axis``)."""
     port: AxiStreamPort = getattr(type(point), name)
     found = axis(*port.viewed(point, name))
@@ -551,13 +552,41 @@ def port_axis(point: LeafKernel, name: str) -> AxisBeat:
     return found
 
 
-def port_transport(point: LeafKernel, name: str) -> ReadyValidTransport:
-    """Port ``name``'s transport on the leaf configuration ``point``, on its clock domain
+def port_transport(point: KernelSpace, name: str) -> ReadyValidTransport:
+    """Port ``name``'s transport on the kernel's configuration ``point``, on its clock domain
     (``finn.kernels.port.transport``)."""
     port: AxiStreamPort = getattr(type(point), name)
     found = transport(*port.viewed(point, name), type(point).clock_domain)
     assert isinstance(found, ReadyValidTransport), found
     return found
+
+
+@dataclass(frozen=True, eq=False)
+class OtherPins(KernelDeclaration):
+    """A test kernel's module pins that are no port's and no control bus's (``signals``,
+    a constant or the kernel's member), and what of them it holds (``holding``): its pins
+    before every port's, its hold after theirs, as a control bus's
+    (``ModuleOrder.ENCLOSING``)."""
+
+    signals: Any
+    holding: Any = Held()
+
+    module_order = ModuleOrder.ENCLOSING
+
+    def lower(self, owner: type[Kernel], name: str) -> Mapping[str, object]:
+        self.references()
+        return {}
+
+    def reads(self, name: str, product: Product) -> tuple[str, ...]:
+        return {"pins": self.paths("signals"), "held": self.paths("holding")}.get(product, ())
+
+    def pins(self, kernel: KernelSpace, name: str) -> tuple[Pin, ...]:
+        found: tuple[Pin, ...] = self.value(kernel, "signals")
+        return found
+
+    def held(self, kernel: KernelSpace, name: str) -> Held:
+        found: Held = self.value(kernel, "holding")
+        return found
 
 
 def codes(result: object) -> set[str]:

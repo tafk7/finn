@@ -52,6 +52,7 @@ from finn.core.space import (
     constraint,
     derived,
     reject,
+    view,
 )
 from finn.dataflow.datatypes import (
     QONNXDataType,
@@ -66,16 +67,11 @@ from finn.dataflow.traversal import (
     pack,
     vector_major,
 )
-from finn.kernels.artifacts.abi import Bus, Clocking, Endpoint, Member, Pin, StandardProtocol
-from finn.kernels.artifacts.contributions import (
-    Contribution,
-    CopiedSource,
-    GeneratedData,
-    hex_image,
-)
-from finn.kernels.artifacts.module import Held
-from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, PortContract
-from finn.kernels.control import held_bus
+from finn.kernels.artifacts.abi import Bus, Clocking, Endpoint, Member, StandardProtocol
+from finn.kernels.artifacts.contributions import CopiedSource, GeneratedData, hex_image
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, PortContract
+from finn.kernels.control import ControlBus
+from finn.kernels.library import LibraryModule
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
@@ -123,12 +119,11 @@ _MEMSTREAM_LUT = Fit(4.2, (1.026,))
 _MEMSTREAM_FF = Fit(4.4, (2.028,))
 
 
-class MemStreamKernel(LeafKernel):
+class MemStreamKernel(KernelSpace):
     """A stored operand streamed in its consumer's order; see the module docstring."""
 
     id = "finnlib.memstream_axi"
     version = 1
-    rtl_module = "memstream_axi"
     clock_domain = NATIVE_CLOCKING
 
     dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
@@ -217,7 +212,7 @@ class MemStreamKernel(LeafKernel):
             return reject("memstream-set-channel", "the set channel carries a vector of indices")
         return True
 
-    @derived(semantics=INTEGER_VECTOR)
+    @view(semantics=INTEGER_VECTOR)
     def image(self) -> IntegerVector | Rejected:
         """Packed words, set after set, each set in the consumer's ``form``."""
         encoding, sets, form = self.element, self.sets, self.form
@@ -236,7 +231,7 @@ class MemStreamKernel(LeafKernel):
             for word in pack(form, flat[start : start + size], encoding.bits)
         )
 
-    @derived
+    @view
     def init_file(self) -> GeneratedData:
         """``$readmemh`` contents: one word per line; a pumped memory stores each word
         as its low half, then its high half."""
@@ -298,7 +293,7 @@ class MemStreamKernel(LeafKernel):
             return BeatSequence(self.form.repeated(self.set_tensor.size))
         return BeatSequence(self.form, Repetition.CYCLIC)
 
-    @derived(semantics=RESOURCES_SEMANTICS)
+    @view(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:
         if self.ram_style == "auto":
             return auto_unstated("the memstream's table")
@@ -334,7 +329,7 @@ class MemStreamKernel(LeafKernel):
         pumped = self.pumped_memory
         return replace(type(self).clock_domain, doubled="clk2x", doubling=pumped)
 
-    @derived
+    @view
     def parameters(self) -> dict[str, int | str]:
         return {
             "DEPTH": self.form.beats,
@@ -345,9 +340,14 @@ class MemStreamKernel(LeafKernel):
             "WIDTH": self.word_bits,
         }
 
-    @derived
-    def sources(self) -> tuple[Contribution, ...]:
-        return (
+    # AXI-Lite, always held: the contents are fixed at build time.
+    config = ControlBus(config_bus)
+
+    # Named ``module`` once the transitional ``module`` view (``MODULE``) goes.
+    library = LibraryModule(
+        "memstream_axi",
+        parameters=parameters,
+        sources=(
             CopiedSource("finnlib", "rtl/infra/axilite.sv", provides=("module:axilite",)),
             CopiedSource("finnlib", "rtl/infra/memstream.sv", provides=("module:memstream",)),
             CopiedSource(
@@ -356,17 +356,9 @@ class MemStreamKernel(LeafKernel):
                 provides=("module:memstream_axi",),
                 requires=("module:axilite", "module:memstream"),
             ),
-            self.init_file,
-        )
-
-    @derived
-    def other_pins(self) -> tuple[Pin, ...]:
-        return (self.config_bus,)
-
-    @derived
-    def held(self) -> Held:
-        """AXI-Lite, always: the contents are fixed at build time."""
-        return held_bus(self.config_bus)
+        ),
+        data=init_file,
+    )
 
 
 __all__ = ["MemStreamKernel", "memstream_resources"]

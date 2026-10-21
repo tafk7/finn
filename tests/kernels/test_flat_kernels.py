@@ -16,6 +16,7 @@ from qonnx.core.datatype import DataType
 from support.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
+    codes,
     controlled,
     in_order,
     nested,
@@ -243,9 +244,6 @@ def test_unsupported_cases_are_refused_without_constructing_invalid_interfaces(f
 @pytest.mark.parametrize(
     ("factory", "code"),
     [
-        # No sets axis: refused on its facts already; committed, use_axilite makes its
-        # AXI-Lite bus read the table's shape, a rule newly false through the shape.
-        (lambda: threshold(thresholds=((-2, 0, 3),), pe=None), "threshold-shape"),
         # Two configuration sets: runtime-writable thresholds address one.
         (
             lambda: threshold(use_axilite=True, thresholds=(((0, 1),), ((0, 1),))),
@@ -256,6 +254,18 @@ def test_unsupported_cases_are_refused_without_constructing_invalid_interfaces(f
 def test_committing_a_choice_that_breaks_a_rule_is_refused_naming_it(factory, code):
     with pytest.raises(ValueError, match=code):
         factory()
+
+
+def test_a_table_of_no_shape_is_refused_on_its_facts_and_its_bus_breaks_no_rule() -> None:
+    # No sets axis: refused on its facts. Its AXI-Lite bus reads the table's shape, but
+    # held or presented by its declaration, it is no rule's: committing use_axilite
+    # breaks none.
+    point = threshold(thresholds=((-2, 0, 3),), pe=None)
+    validity = inspection.validity(point)
+    assert validity.status == "refused"
+    assert {code for piece in validity.pieces for code in codes(piece.result)} == {
+        "threshold-shape"
+    }
 
 
 @pytest.mark.parametrize(

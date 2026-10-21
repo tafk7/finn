@@ -12,16 +12,18 @@ declares it in its class body, after the members it names::
 stating the module's parameters (a view: nothing in a rule reads them). ``sources`` is the
 tuple of sources that provide the module, constant (copied sources), or the kernel's
 member where they depend on its point (an HLS kernel's one source, its build request).
-``data`` is the kernel's member stating the data its module reads (a memory's image), or
-nothing. Each member it names is resolved to its name once, when the class is made
-(``KernelDeclaration.references``), and read by that name: never a dynamic read.
+``data`` is the kernel's member stating the data its module reads (a memory's image, a
+``GeneratedData``, or a tuple of them), or nothing. Each member it names is resolved to
+its name once, when the class is made (``KernelDeclaration.references``), and read by that
+name: never a dynamic read.
 
 It lowers to no member of the kernel. What it gives is its product, the module
 (``LibraryModule.build``, a ``Leaf``), which the kernel's ``netlist`` places at the empty
 label: its name (an HLS top's, for an HLS kernel), its parameters, its pins (the
-kernel's clocking, then each declaration's pins in the order they are declared), its
-sources and data, and what it holds (the doubled clock while unused, then what each
-declaration holds idle).
+kernel's clocking, then each declaration's pins), its sources and data, and what it holds
+(the doubled clock while unused, then what each declaration holds idle), each
+declaration's where its ``module_order`` puts it (``finn.kernels.base.ModuleOrder``: a
+control bus's pins before the ports' and its hold after theirs).
 
 Its sources must provide the module, ``module:<rtl_module>`` (an HLS request its top, of
 that stem): a constant tuple is checked when the class is made, a member's in ``build``,
@@ -48,6 +50,7 @@ from finn.kernels.base import (
     Kernel,
     KernelDeclaration,
     KernelSpace,
+    ModuleOrder,
     Product,
     _each,
     _module_name,
@@ -125,8 +128,11 @@ class LibraryModule(KernelDeclaration):
         space_type = type(kernel)
         clocking = kernel.clocking
         parameters = tuple(sorted(self.value(kernel, "parameters").items()))
+        items = tuple(space_type._declarations.items())
+        enclosing = tuple(item for item in items if item[1].module_order is ModuleOrder.ENCLOSING)
+        declared = tuple(item for item in items if item[1].module_order is ModuleOrder.DECLARED)
         found = _each(
-            declaration.pins(kernel, each) for each, declaration in space_type._declarations.items()
+            declaration.pins(kernel, each) for each, declaration in (*enclosing, *declared)
         )
         if isinstance(found, Rejected):
             return found
@@ -136,9 +142,10 @@ class LibraryModule(KernelDeclaration):
             why = self.unprovided(space_type.__qualname__, sources)
             if why is not None:
                 return reject("library-module-unprovided", why)
-        contributions = (*sources, *self.value(kernel, "data"))
+        data = self.value(kernel, "data")
+        contributions = (*sources, *((data,) if isinstance(data, GeneratedData) else data))
         held = _each(
-            declaration.held(kernel, each) for each, declaration in space_type._declarations.items()
+            declaration.held(kernel, each) for each, declaration in (*declared, *enclosing)
         )
         if isinstance(held, Rejected):
             return held

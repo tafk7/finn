@@ -44,6 +44,7 @@ from finn.core.space import (
     derived,
     divisors_of,
     reject,
+    view,
 )
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import ZERO
@@ -53,7 +54,8 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, HlsSource
 from finn.kernels.artifacts.hls import axis_type
-from finn.kernels.base import LeafKernel, extent_of
+from finn.kernels.base import KernelSpace, extent_of
+from finn.kernels.library import LibraryModule
 from finn.kernels.port import AxiStreamPort, axis
 from finn.kernels.transport import AxisSpelling
 from finn.kernels.utilization import RESOURCES_SEMANTICS
@@ -154,14 +156,16 @@ void {name}(hls::stream<InBeat> &s_axis, hls::stream<OutBeat> &m_axis) {{
 """
 
 
-class PoolKernel(LeafKernel):
+#: The stem of its HLS top: the module is ``finn_pool_<key16>``.
+STEM = "finn_pool"
+
+
+class PoolKernel(KernelSpace):
     """Max pooling of each ``window`` at ``stride`` (rows, columns) of an HWC tensor;
     see the module docstring."""
 
     id = "finnlib.pooling_stream"
     version = 1
-    # The stem of its HLS top: the module is ``finn_pool_<key16>``.
-    rtl_module = "finn_pool"
 
     window: tuple[int, int] = Param()
     stride: tuple[int, int] = Param()
@@ -232,7 +236,7 @@ class PoolKernel(LeafKernel):
         spelling=AxisSpelling.UPPER,
     )
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @view(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def element_dtype(self) -> QONNXDataType:
         """The input's element: a window's maximum is one of its values."""
         return self.input_element.dtype
@@ -266,17 +270,19 @@ class PoolKernel(LeafKernel):
         """An ordinary integer: ``std::max`` over ``ap_int`` or ``ap_uint`` lanes."""
         return ELEMENTS.check(self.input_tensor.element.dtype)
 
-    @derived(semantics=RESOURCES_SEMANTICS)
+    @view(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "the pooling module's resources are not characterised")
 
-    @derived
+    @view
     def parameters(self) -> dict[str, int | str]:
         """None: the HLS top is written from the point's values."""
         return {}
 
-    @derived
+    @view
     def sources(self) -> tuple[Contribution, ...] | Rejected:
+        """Its HLS request, written from the point's values: checked to provide the
+        module when it is built."""
         element, pe = self.element_dtype, self.pe
         input_axis = axis(PoolKernel.input, self.input_stream)
         if isinstance(input_axis, Rejected):
@@ -287,7 +293,7 @@ class PoolKernel(LeafKernel):
         input_bits, output_bits = input_axis.carrier_bits, output_axis.carrier_bits
         return (
             HlsSource.request(
-                type(self).rtl_module,
+                STEM,
                 lambda name: pool_top(name, element, pe, input_bits, output_bits),
                 HEADERS,
                 self.platform.period_ns,
@@ -295,5 +301,8 @@ class PoolKernel(LeafKernel):
             ),
         )
 
+    # Named ``module`` once the transitional ``module`` view (``MODULE``) goes.
+    library = LibraryModule(STEM, parameters=parameters, sources=sources)
 
-__all__ = ["DIRECTIVES", "HEADERS", "PoolKernel", "element_type"]
+
+__all__ = ["DIRECTIVES", "HEADERS", "PoolKernel", "STEM", "element_type"]

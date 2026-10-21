@@ -27,7 +27,7 @@ from finn.core.space import (
     inspection,
     reject,
 )
-from finn.kernels.base import ComposedKernel, Kernel, KernelSpace, LeafKernel
+from finn.kernels.base import ComposedKernel, Kernel, KernelSpace
 from finn.kernels.defaults import FIRST_VALID, Fixed, defaulted, policies
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.utilization import BLOCK_FIRST_BITS, memory_styles
@@ -216,7 +216,7 @@ def _kernels() -> list[type[Kernel]]:
             pending.append(each)
             if each.__module__.startswith("finn.kernels.") and each not in found:
                 found.append(each)
-    return [each for each in found if each not in (KernelSpace, LeafKernel, ComposedKernel)]
+    return [each for each in found if each not in (KernelSpace, ComposedKernel)]
 
 
 @pytest.mark.parametrize("kernel", _kernels(), ids=lambda kernel: kernel.__qualname__)
