@@ -47,16 +47,22 @@ reads its inputs: all known, its body answers (a :class:`~.description.Refuse` i
 refusal at its origin); an input refused, it is refused through it; an input waiting,
 it waits; an input inapplicable, it is inapplicable. A view also refuses, through,
 when its Space's validity is false. *Views are read out* (SZ100 (3)): no constraint,
-derived value, ``when`` guard, domain (its membership, its computed list, its ``order``)
-or ``Members`` reads a view, and a description that does is no definition
+derived value, ``when`` guard or domain (its membership, its computed list, its
+``order``) reads a view, and a description that does is no definition
 (``view-read-in``); a view reads anything readable, other views included, its own
 Space's and its children's. A ``Members`` (SZ100 (6)) reads its entries,
 derived values in scopes below it: its value is the (entry, value) pairs of the
-entries that answer a value, sorted by entry. An entry answering inapplicable (its
-scope absent, or present with an inapplicable value) is skipped. Otherwise, in this
-order: any entry refused, by its value or by its presence, refuses the whole through
-it, even while another waits; else any entry unresolved makes it wait. Its reads made
-are the entries that answered a value (reading 4).
+entries that answer a value, sorted by entry. That the model's ``Members`` ranges over
+derived values is a restriction of the model, not of the semantics: views compose by
+reading views, and aggregating views is a view reading views, so a ``Members`` over
+views, read by views alone, would be view-side (read-out aggregation, as a Space
+aggregating its members' views for its own views does). The model does not express that
+view-side ``Members``, and refuses a ``Members`` naming a view as it refuses any other
+reader of a view (``view-read-in``); the semantics would not. An entry answering
+inapplicable (its scope absent, or present with an inapplicable value) is skipped.
+Otherwise, in this order: any entry refused, by its value or by its presence, refuses
+the whole through it, even while another waits; else any entry unresolved makes it
+wait. Its reads made are the entries that answered a value (reading 4).
 
 **Validity** of a scope is the strong three-valued AND
 (:func:`~.answers.kleene_and`) of the pieces at or below it: each constraint (absent

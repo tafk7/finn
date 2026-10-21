@@ -4,8 +4,8 @@
 stations: a design space, opened by today's API, and the change made on it.
 
 - ``toys``: FINN's own toy Spaces (``toys.TOYS``: the house, the pipeline, a chain of
-  stages, the boundary of a formal read from outside its scope), each opened and changed
-  once;
+  stages, the boundary of a formal read from outside its scope, and the three shapes of
+  an optional fact left out), each opened and changed once;
 - ``chain-8``, ``chain-64``: stage 7's chain of 8 or 64 kernels (``support.one_space``),
   configured with what conversion and the cut stored (``commit``), then the middle
   MatMul's ``compute.packed.pe`` set to 2;

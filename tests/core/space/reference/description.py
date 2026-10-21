@@ -22,9 +22,12 @@ A description is a tree of scopes. Each scope holds:
   readable: other views too, its own Space's and its children's) that returns a value
   or a :class:`Refuse` with its code. Nothing else reads a view.
 - **members** (:class:`Members`, SZ100 (6)): a value over named entries, derived values
-  in scopes strictly below the scope declaring it (never views: SZ100 (3)). Its value
-  is the sorted (entry, value) pairs of the entries that answer a value; an entry
-  answering inapplicable is skipped (the model's docstring, "Reads").
+  in scopes strictly below the scope declaring it. Its value is the sorted (entry,
+  value) pairs of the entries that answer a value; an entry answering inapplicable is
+  skipped (the model's docstring, "Reads"). Its entries are never views: a restriction
+  of the model, not of the semantics. A ``Members`` over views, read by views alone,
+  would be view-side, views composing by reading views (read-out aggregation, SZ100
+  (3)); the model does not express it.
 - **constraints**: a predicate over declared reads, owned by the scope declaring it,
   with the code it refuses with.
 - **children**: scopes always present with their parent, unless their ``when`` guard
@@ -46,13 +49,13 @@ reads nothing else.
 
 :meth:`Space.validate` rejects a malformed description (an unknown or unreadable
 read, a duplicate name, a malformed domain or guard), a **view read in** (SZ100 (3),
-``"view-read-in"``: a constraint, a derived value, a ``when`` guard, a domain's
-membership, computed list or ``order``, or a ``Members`` reading a view; checked before
-the rest), a domain whose membership reads anything but facts, or an input whose
-existence a choice decides other than through the choice's own guards
-(``"domain-reads-choice"``: a relation to another choice is a constraint) and a
-**cycle**. The rule for cycles: the definition's dependencies form a
-graph in which
+``"view-read-in"``: a constraint, a derived value, a ``when`` guard, or a domain's
+membership, computed list or ``order`` reading a view; and, since the model expresses no
+view-side ``Members``, a ``Members`` naming one; checked before the rest), a domain
+whose membership reads anything but facts, or an input whose existence a choice decides
+other than through the choice's own guards (``"domain-reads-choice"``: a relation to
+another choice is a constraint) and a **cycle**. The rule for cycles: the definition's
+dependencies form a graph in which
 
 - a value depends on its scope's presence; a choice's value also on its membership,
   which depends on the functions of the derived values it reads and on the ``when``
@@ -423,7 +426,9 @@ class Index:
                 yield path, scope.when.reads
 
     def _check_views_read_in(self) -> None:
-        """Views are read out (SZ100 (3)): only a view reads a view."""
+        """Views are read out (SZ100 (3)): only a view reads a view. A ``Members`` naming a
+        view is refused here too, a restriction of the model: a ``Members`` over views,
+        read by views alone, would be view-side, which the model does not express."""
 
         for node, reads in self._declared_reads():
             if node in self.views:
@@ -438,7 +443,8 @@ class Index:
 
     def _check_members(self) -> None:
         """A ``Members`` entry is a derived value in a scope strictly below the declaring
-        scope (SZ100 (6); a view is read in, SZ100 (3)), named once."""
+        scope (SZ100 (6); the model expresses no ``Members`` over views, refused before as
+        ``view-read-in``), named once."""
 
         for path, (members, scope) in sorted(self.members.items()):
             if len(set(members.entries)) != len(members.entries):
