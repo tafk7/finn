@@ -17,9 +17,9 @@ from pathlib import Path
 
 import pytest
 from support.space_oracle import IMPLEMENTATIONS, compare, forms
-from support.space_oracle.__main__ import PERMUTE, main
 from support.space_oracle.targets import Station, chain, dumped
 from support.space_oracle.today import TODAY
+from support.space_oracle.tool import PERMUTE, main
 
 from finn.core.space import inspection
 
