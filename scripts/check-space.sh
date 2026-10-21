@@ -22,10 +22,12 @@ gate_ruff src/finn/core/reporting tests/core/reporting src/finn/core/space tests
     tests/support/space_cores.py tests/support/space_pipeline.py tests/support/space_walk.py \
     scripts/_gate_precommit.py \
     tests/support/space_oracle/__init__.py tests/support/space_oracle/forms.py \
-    tests/support/space_oracle/today.py tests/support/space_oracle/compare.py
+    tests/support/space_oracle/today.py tests/support/space_oracle/compare.py \
+    tests/support/space_oracle/toys.py
 gate_mypy -p finn.core.reporting -p finn.core.space
 gate_mypy tests/core/reporting tests/core/space tests/support/layering.py \
     tests/support/refusals.py tests/support/value_classes.py tests/support/space_cores.py \
     tests/support/space_pipeline.py tests/support/space_walk.py \
     tests/support/space_oracle/__init__.py tests/support/space_oracle/forms.py \
-    tests/support/space_oracle/today.py tests/support/space_oracle/compare.py
+    tests/support/space_oracle/today.py tests/support/space_oracle/compare.py \
+    tests/support/space_oracle/toys.py
