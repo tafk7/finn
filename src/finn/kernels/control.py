@@ -31,7 +31,7 @@ presented. Its pins are the bus, and what it holds the bus's inputs while it is 
 presented (``held_bus``: inputs constant, outputs unconnected): a declared bus is held or
 presented by construction (``presents``: its inputs accounted for in its module), and
 nothing about a bus is wired by name. Its pins come before every port's in its kernel's
-module and its hold after theirs (``finn.kernels.base.ModuleOrder.ENCLOSING``). A kernel
+module and its hold after theirs (``finn.kernels.declaration.ModuleOrder.ENCLOSING``). A kernel
 declares one at most.
 
 ``<name>_presented`` is the kernel's own bus, presented: what a count of the control buses
@@ -57,6 +57,7 @@ from finn.core.space import (
 )
 from finn.kernels.artifacts.abi import Bus, Direction, Pin
 from finn.kernels.artifacts.module import BusExport, Held, RegisterMap
+from finn.kernels.declaration import KernelDeclaration, ModuleOrder, Product, declared_reads
 
 if TYPE_CHECKING:
     from finn.kernels.base import KernelSpace
@@ -107,15 +108,6 @@ def presented(controls: Iterable[tuple[str, Control]]) -> tuple[BusExport, ...] 
     return tuple(
         BusExport(node, bus, control.port, control.registers) for node, bus, control in found
     )
-
-
-# The declaration builds on the kernel base, which imports the values above.
-from finn.kernels.base import (  # noqa: E402
-    KernelDeclaration,
-    ModuleOrder,
-    Product,
-    declared_reads,
-)
 
 
 @dataclass(frozen=True, eq=False)

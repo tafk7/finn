@@ -76,8 +76,8 @@ from finn.kernels.base import (
     RESOURCES,
     KernelSpace,
     PortContract,
-    declared_reads,
 )
+from finn.kernels.declaration import declared_reads
 from finn.kernels.input_generator import Generate, InputGeneratorKernel, generated
 from finn.kernels.library import library_module
 from finn.kernels.transport import StreamContract
@@ -191,7 +191,6 @@ class StreamAdapter(KernelSpace):
     """
 
     id = "finn.channel.adapter"
-    version = 1
     modules: ClassVar[tuple[str, ...]] = ()
 
     tensor: Tensor = Param()

@@ -90,7 +90,7 @@ class Thresholding(KernelOp):
     """Integer MultiThreshold, Y = count(X >= T[c]) + bias, bound to ``ThresholdingAxiKernel``."""
 
     op_type = "Thresholding"
-    op_version = ThresholdingAxiKernel.version
+    op_version = 1
     kernel = ThresholdingAxiKernel
     ports = ("x", None)
     wiring = {

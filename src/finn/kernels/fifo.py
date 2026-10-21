@@ -216,7 +216,6 @@ class FifoKernel(KernelSpace):
     module docstring."""
 
     id = "finnlib.fifo"
-    version = 2
     clock_domain = NATIVE_CLOCKING
 
     # The tensor whose words it buffers, a fact, and what arrives of it.

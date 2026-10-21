@@ -42,7 +42,7 @@ def _request(value: int) -> HlsSource:
 
 def _module(requests: list[HlsSource]) -> Composed:
     leaves = tuple(
-        (f"u{index}", Leaf("test.hls", "1", request.function, (), Abi(PINS), (request,)))
+        (f"u{index}", Leaf("test.hls", request.function, (), Abi(PINS), (request,)))
         for index, request in enumerate(requests)
     )
     return Composed("test.hls.many", "1", "many", Abi(PINS), Fragment(leaves))

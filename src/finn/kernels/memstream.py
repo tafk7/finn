@@ -123,7 +123,6 @@ class MemStreamKernel(KernelSpace):
     """A stored operand streamed in its consumer's order; see the module docstring."""
 
     id = "finnlib.memstream_axi"
-    version = 1
     clock_domain = NATIVE_CLOCKING
 
     dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)

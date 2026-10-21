@@ -95,7 +95,6 @@ class TransposeKernel(KernelSpace):
     """
 
     id = "finnlib.inner_shuffle"
-    version = 1
     clock_domain = NATIVE_CLOCKING
 
     # The tensor its input port reads: a fact it is given.

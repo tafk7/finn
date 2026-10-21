@@ -267,7 +267,6 @@ def core(*, pumped: bool) -> Leaf:
     alignments = (ClockAlignment("clk", "clk2x"),) if pumped else ()
     return Leaf(
         "test.core",
-        "1",
         "core",
         (),
         Abi(pins, (), alignments),

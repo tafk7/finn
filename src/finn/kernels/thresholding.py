@@ -193,7 +193,6 @@ class ThresholdingAxiKernel(KernelSpace):
     thresholds, plus a bias; see the module docstring."""
 
     id = "finnlib.thresholding_axi.integer"
-    version = 1
 
     threshold_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     thresholds: IntegerTensor = Param(semantics=INTEGER_TENSOR)

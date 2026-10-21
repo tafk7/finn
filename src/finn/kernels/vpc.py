@@ -56,7 +56,6 @@ class VpcKernel(KernelSpace):
     count; see the module docstring."""
 
     id = "finnlib.vpc"
-    version = 1
     clock_domain = NATIVE_CLOCKING
 
     # The tensor whose elements it regroups, a fact, and the two sides of the conversion.

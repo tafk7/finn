@@ -22,7 +22,7 @@ It lowers to no member of the kernel. What it gives is its product, the module
 label: its name (an HLS top's, for an HLS kernel), its parameters, its pins (the
 kernel's clocking, then each declaration's pins), its sources and data, and what it holds
 (the doubled clock while unused, then what each declaration holds idle), each
-declaration's where its ``module_order`` puts it (``finn.kernels.base.ModuleOrder``: a
+declaration's where its ``module_order`` puts it (``finn.kernels.declaration.ModuleOrder``: a
 control bus's pins before the ports' and its hold after theirs). Each input of the module
 is a port's, a presented control bus's (``KernelDeclaration.presents``), or held: any
 other refuses the module (``kernel-pins``, naming the inputs).
@@ -39,9 +39,9 @@ channel's FIFO stage, an adapter's stages) as outside.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import KW_ONLY, dataclass
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar, cast
 
 from finn.core.space import DefinitionError, Rejected, reject
 from finn.kernels.artifacts.abi import Direction, Pin, Signal
@@ -52,16 +52,35 @@ from finn.kernels.artifacts.contributions import (
     HlsSource,
     request_stem,
 )
-from finn.kernels.artifacts.module import Abi, Held, Leaf
-from finn.kernels.base import (
-    KernelDeclaration,
-    KernelSpace,
-    ModuleOrder,
-    Product,
-    _each,
-    _module_name,
-    is_member,
-)
+from finn.kernels.artifacts.module import Abi, BuildError, Held, Leaf
+from finn.kernels.declaration import KernelDeclaration, ModuleOrder, Product, is_member
+
+if TYPE_CHECKING:
+    from finn.kernels.base import Kernel, KernelSpace
+
+_T = TypeVar("_T")
+
+
+def _each(results: Iterable[_T | Rejected]) -> list[_T] | Rejected:
+    """Each result, or, where any is refused, every refusal's findings together."""
+    found = list(results)
+    refused = [result for result in found if isinstance(result, Rejected)]
+    if refused:
+        return Rejected(
+            tuple(dict.fromkeys(item for result in refused for item in result.findings))
+        )
+    return cast("list[_T]", found)
+
+
+def _module_name(stem: str, contributions: tuple[Contribution, ...]) -> str:
+    """``stem``, or the top of the HLS request among ``contributions``, named from it."""
+    requests = [item for item in contributions if isinstance(item, HlsSource)]
+    if not requests:
+        return stem
+    function = requests[0].function
+    if request_stem(function) != stem:
+        raise BuildError(f"{function} is not the top of the HLS module {stem}")
+    return function
 
 
 def _inputs(pin: Pin) -> tuple[str, ...]:
@@ -171,7 +190,6 @@ class LibraryModule(KernelDeclaration):
             )
         return Leaf(
             space_type.id,
-            str(space_type.version),
             _module_name(self.rtl_module, contributions),
             parameters,
             Abi(
@@ -188,7 +206,7 @@ class LibraryModule(KernelDeclaration):
         )
 
 
-def library_module(point: KernelSpace) -> Leaf:
+def library_module(point: Kernel) -> Leaf:
     """The module at the empty label of ``point``'s accepted netlist: the library module a
     kernel binds."""
     found = dict(point.netlist.instances).get("")

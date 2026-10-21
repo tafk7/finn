@@ -160,7 +160,6 @@ class DotpAxiKernel(KernelSpace):
     """
 
     id = "finnlib.dotp_axi"
-    version = 1
     # FinnLib's CORE parameter: the name of the compute core module.
     core: ClassVar[str] = ""
 
@@ -577,7 +576,6 @@ class PackedDotpKernel(DotpAxiKernel):
     """
 
     id = "finnlib.dotp_axi.dotp"
-    version = 1
     core = "dotp"
 
     #: How add_multi reduces the SIMD products: a choice within this core, the adder tree
@@ -676,7 +674,6 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
     """
 
     id = "finnlib.dotp_axi.dotp_8sx9_dsp58"
-    version = 1
     core = "dotp_8sx9_dsp58"
 
     @staticmethod

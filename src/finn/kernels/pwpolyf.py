@@ -73,7 +73,6 @@ class PwPolyKernel(KernelSpace):
     docstring."""
 
     id = "finnlib.pwpolyf"
-    version = 1
     clock_domain = NATIVE_CLOCKING
 
     # What it computes: a supplied input, not an interchangeable implementation choice.

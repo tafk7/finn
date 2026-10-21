@@ -85,7 +85,6 @@ class EltwiseKernel(KernelSpace):
     """
 
     id = "finnlib.eltwise"
-    version = 1
     clock_domain = NATIVE_CLOCKING
 
     operation: str = Param()

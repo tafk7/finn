@@ -192,7 +192,6 @@ class InputGeneratorKernel(KernelSpace):
     the module docstring."""
 
     id = "finnlib.input_generator"
-    version = 1
     clock_domain = NATIVE_CLOCKING
 
     # The tensor whose words it reorders, a fact; what arrives of it, and the order and

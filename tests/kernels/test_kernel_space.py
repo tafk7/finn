@@ -10,9 +10,10 @@ class's views read its declarations by the names their lowering fixes, so none r
 dynamically. A kernel binds at most one library module (``LibraryModule``), whose
 sources must provide it: constant sources when the class is made, a member's when the
 module is built. A kernel with a module states its ports and its resources and places
-no kernel; one whose module names a member still ``required()`` is a base of kernels. A
-declaration's argument is a member of its kernel (a declaration of the engine, or one
-``required()``), or a constant, of whatever type.
+no kernel, and a kernel stating a stream port binds a module; one leaving a member
+``required()`` is a base of kernels, which these checks pass by. A declaration's
+argument is a member of its kernel (a declaration of the engine, or one ``required()``),
+or a constant, of whatever type.
 """
 
 from __future__ import annotations
@@ -51,14 +52,13 @@ from finn.kernels.base import (
     NATIVE_CLOCKING,
     NETLIST,
     RESOURCES,
-    KernelDeclaration,
     KernelSpace,
-    is_member,
 )
 from finn.kernels.channels import ChannelFifo
+from finn.kernels.declaration import KernelDeclaration, is_member
 from finn.kernels.fifo import FifoKernel, fifo_resources
 from finn.kernels.library import LibraryModule, library_module
-from finn.kernels.port import native_stream
+from finn.kernels.port import native_stream, served
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.platform.capabilities import Resources
 
@@ -257,6 +257,54 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
 
         class Unnamed(KernelSpace):
             pass
+
+
+def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
+    # A stream port's pins are a module's: on a kernel with children and no module of its
+    # own, it is refused, naming the class and the port.
+    with refused(
+        "port-unbound",
+        error=DefinitionError,
+        message=r"Unbound declares the stream ports \['input'\] and binds no library module",
+    ):
+
+        class Unbound(KernelSpace):
+            id = "test.kernel_space.unbound"
+            inner = Stage(input_tensor=TENSOR, arriving=ARRIVING)
+            input = native_stream("input", Endpoint.TARGET, TENSOR, ARRIVING)
+
+    # A kernel with children presents its children's ports.
+    class Serving(KernelSpace):
+        id = "test.kernel_space.serving"
+        inner = Stage(input_tensor=TENSOR, arriving=ARRIVING)
+        input = served(inner, "input")
+
+    serving: Any = design_space(Serving())  # its lowered members are untyped
+    assert serving.input_contract.label == "inner.input"
+
+    # A base of kernels, leaving a required() member unmet, states its ports for the
+    # kernels on it, which bind the module.
+    class Ported(KernelSpace):
+        id = "test.kernel_space.ported"
+        clock_domain = NATIVE_CLOCKING
+        input_tensor: Tensor = Param()
+        input = native_stream("input", Endpoint.TARGET, input_tensor, ARRIVING)
+        parameters = cast("dict[str, int | str]", required(dict))
+
+    class Bound(Ported):
+        id = "test.kernel_space.bound"
+
+        @view
+        def parameters(self) -> dict[str, int | str]:
+            return {}
+
+        @view(semantics=RESOURCES_SEMANTICS)
+        def resource_use(self) -> Resources:
+            return Resources()
+
+        module = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
+
+    assert library_module(design_space(Bound(input_tensor=TENSOR))).name == "probe"
 
 
 class Based(KernelSpace):

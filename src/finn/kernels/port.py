@@ -5,10 +5,10 @@
 
 A kernel binding a module declares one ``AxiStreamPort`` per AXI-Stream port of its module,
 in its class body (``x = AxiStreamPort(name=..., tensor=x_tensor, schedule=schedule,
-...)``). It is a
-plain frozen value, not a Space: when the class is made, the kernel base lowers it
-(``finn.kernels.base.KernelDeclaration``) into ordinary members of the kernel, named after
-it (``x``):
+...)``); a kernel declaring one binds a module (``port-unbound``). It is a plain frozen
+value, not a Space: when the class is made, the kernel base lowers it
+(``finn.kernels.declaration.KernelDeclaration``) into ordinary members of the kernel, named
+after it (``x``):
 
 - ``x_element``, a derived value: the element it carries, refused as ``port-element``
   (an idle port without a ``dtype``, a producer given one). It reads its tensor or its
@@ -89,15 +89,8 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd
 from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import (
-    PORT_CONTRACT,
-    KernelDeclaration,
-    KernelSpace,
-    PortContract,
-    Product,
-    declared_reads,
-    is_member,
-)
+from finn.kernels.base import PORT_CONTRACT, KernelSpace, PortContract
+from finn.kernels.declaration import KernelDeclaration, Product, declared_reads, is_member
 from finn.kernels.transport import (
     AxisBeat,
     AxisSpelling,
@@ -178,6 +171,7 @@ class AxiStreamPort(KernelDeclaration):
     )
 
     KIND: ClassVar[str] = "port"
+    module_port: ClassVar[bool] = True
 
     def label(self) -> str:
         return self.name

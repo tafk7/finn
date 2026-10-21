@@ -120,18 +120,17 @@ def test_quoted_includes_are_the_requests_and_angle_brackets_the_tools() -> None
 
 
 def _leaf(request: HlsSource) -> Leaf:
-    return Leaf("test.hls", "1", request.function, (), Abi(PINS), (request,))
+    return Leaf("test.hls", request.function, (), Abi(PINS), (request,))
 
 
 def test_an_hls_leaf_is_named_by_its_top_and_takes_no_parameters() -> None:
     request = _top()
     assert _leaf(request).name == request.function
     with pytest.raises(BuildError, match="is not its HLS request's top"):
-        Leaf("test.hls", "1", "core", (), Abi(PINS), (request,))
+        Leaf("test.hls", "core", (), Abi(PINS), (request,))
     with pytest.raises(BuildError, match="compiled into its top"):
         Leaf(
             "test.hls",
-            "1",
             request.function,
             (("N", 3),),
             Abi(PINS, (("N", "3"),)),
@@ -140,7 +139,6 @@ def test_an_hls_leaf_is_named_by_its_top_and_takes_no_parameters() -> None:
     with pytest.raises(BuildError, match="its module's only source"):
         Leaf(
             "test.hls",
-            "1",
             request.function,
             (),
             Abi(PINS),

@@ -237,7 +237,7 @@ class KernelOp(CustomOp):
     """Base class of the KernelOps (see the module docstring). A subclass sets, in its
     own body:
 
-    - ``op_type``, and ``op_version``, its kernel's version;
+    - ``op_type``, and ``op_version``, the version of its schema (its own, no kernel's);
     - ``kernel``, the kernel class;
     - ``facts``, the method that reads the kernel's arguments from the graph (each op
       names them where it builds them) and binds the node's kernel on them beside its

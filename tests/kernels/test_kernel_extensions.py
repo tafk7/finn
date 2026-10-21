@@ -52,20 +52,10 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
         declaration="Unnamed",
     ):
         type("Unnamed", (KernelSpace,), {})
-    # The version is a positive int (an op's opset version); artifacts carry str(version).
-    for wrong in ("1", 0, True):
-        with refused(
-            "kernel-version-invalid",
-            error=DefinitionError,
-            message="positive int version",
-            declaration="WrongVersion",
-        ):
-            type("WrongVersion", (KernelSpace,), {"id": "test.wrong", "version": wrong})
 
     class Empty(KernelSpace):
         id = "test.empty"
 
-    assert Empty.version == 1
     # The base's views; a kernel that binds no module and places none has no netlist.
     empty = design_space(Empty())
     assert views(empty) == [

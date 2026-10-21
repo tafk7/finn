@@ -201,7 +201,6 @@ class MatMulKernel(KernelSpace):
     """Operation facts, and the kernels and Decisions over kernels on its tensors."""
 
     id = "finn.matmul"
-    version = 1
 
     form: Form = Param(default=Form.DENSE)
     # A dense form read through a window: a lowered convolution (module docstring).

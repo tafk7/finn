@@ -165,7 +165,6 @@ class PoolKernel(KernelSpace):
     see the module docstring."""
 
     id = "finnlib.pooling_stream"
-    version = 1
 
     window: tuple[int, int] = Param()
     stride: tuple[int, int] = Param()

@@ -85,8 +85,8 @@ from finn.kernels.base import (
     RESOURCES,
     KernelSpace,
     PortContract,
-    declared_reads,
 )
+from finn.kernels.declaration import declared_reads
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
@@ -171,7 +171,6 @@ class ChannelFifo(KernelSpace):
     """
 
     id = "finn.channel.fifo"
-    version = 1
 
     tensor: Tensor = Param()
     arriving: BeatSequence = Param()
@@ -253,7 +252,6 @@ class Channel(KernelSpace):
     """
 
     id = "finn.channel"
-    version = 1
 
     tensor: Tensor = Param()
     # False admits no adapter: the two sides must connect directly.

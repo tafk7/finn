@@ -51,8 +51,9 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import KernelSpace, declarations
+from finn.kernels.base import KernelSpace
 from finn.kernels.channels import Channel
+from finn.kernels.declaration import declarations
 from finn.kernels.library import LibraryModule
 from finn.kernels.port import STREAM, AxiStreamPort, Served
 from finn.kernels.utilization import RESOURCES_SEMANTICS
