@@ -14,11 +14,11 @@ width conversion.
 
 FinnLib's ``N`` is the vector the RTL converts independently, padding its last
 beats when ``N`` is no multiple of a lane count (``vpc.sv``: ``1 + (N-1)/PI``
-input beats a vector). Both ends of a width conversion present whole beats of
+input beats a vector). Both sides of a width conversion present whole beats of
 the same elements, so the stream is whole least-common-multiple vectors and no
 beat is padded: ``N`` is their least common multiple, which the RTL normalizes to
-the same converter as any multiple of it (``N0``). Padded vectors would serve an
-end presenting padded beats, which no beat sequence (``finn.dataflow``) states.
+the same converter as any multiple of it (``N0``). Padded vectors would serve a
+side presenting padded beats, which no beat sequence (``finn.dataflow``) states.
 """
 
 from __future__ import annotations

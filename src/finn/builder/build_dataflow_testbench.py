@@ -26,10 +26,11 @@ fails on a mismatch. ``run.sh`` holds the same commands
 ``finn.core.rtlsim_bench.simulate`` runs (``finn.toolchain.xsim.script``), with the
 directory's own paths.
 
-The words are the partition's boundary values as each boundary channel's end presents
-them (``boundary_words``): the end's form (``finn.dataflow.traversal.Traversal``) gives
-each beat's elements, packed with lane zero lowest. The build's frame draws each of the
-partition's inputs from its range (``generated_frame``).
+The words are the partition's boundary values as each boundary channel's free side
+presents them (``boundary_words``): its stream's form
+(``finn.dataflow.traversal.Traversal``) gives each beat's elements, packed with lane zero
+lowest. The build's frame draws each of the partition's inputs from its range
+(``generated_frame``).
 """
 
 from __future__ import annotations
@@ -74,7 +75,8 @@ def boundary_words(
     label: str,
 ) -> tuple[dict[str, Words], dict[str, Words]]:
     """Each boundary port's words for the frame in ``context``, inputs then outputs, as
-    the port's channel end presents them (the end no kernel of the partition owns)."""
+    the port's channel presents them at its free side (the side no kernel of the partition
+    owns)."""
     inputs, outputs = boundary_facts(model, point, boundary, label)
     found: tuple[dict[str, Words], dict[str, Words]] = ({}, {})
     for side, facts in zip(found, (inputs, outputs), strict=True):

@@ -29,9 +29,9 @@ check too, ``Seam.check_fifos``), and records the design it verified on the body
 (packaging, the shell's integration, the testbench) compares it (``refuse_unverified``),
 and refuses a design never verified or changed since. Simulation and elaboration only
 bind. The cut makes a body's channel choices (``make_cut_choices``) on its network in its
-shell, which alone holds both of a boundary channel's ends, by the interim channel rule
-(``finn.kernels.network.interim_channel_defaults``: first valid, replaced by the ends
-pass), and writes them with ``persist``.
+shell, which alone holds both sides of a boundary channel, by the interim channel rule
+(``finn.kernels.network.interim_channel_defaults``: first valid, for now), and writes
+them with ``persist``.
 """
 
 from __future__ import annotations
@@ -474,9 +474,9 @@ def make_cut_choices(model: ModelWrapper) -> CutChoices:
        did not drop, set once by conversion's policies on its kernel
        (``finn.kernels.defaults.defaulted``): a body never converted for it (one made by
        hand), reported (``CutChoices.late``); the channels reading it are rebuilt;
-    2. **interim**, until the ends pass: each channel's open choices in play that are not
+    2. **interim**: each channel's open choices in play that are not
        required set to their first valid values (``interim_channel_defaults``), each
-       channel in rank order (a channel created here has both its ends only in the
+       channel in rank order (a channel created here has both its sides only in the
        network). A required choice (a FIFO's depth) stays open for a strategy.
 
     Returns what it dropped, set late and could not set (``CutChoices``)."""

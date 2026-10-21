@@ -300,7 +300,7 @@ def step_size_fifos(
     fifo_margin: int = 0,
     fifo_ram_style: str | None = None,
 ) -> ModelWrapper:
-    """Size each channel of the partition from the beat patterns at both its ends, at the
+    """Size each channel of the partition from the beat patterns at both its sides, at the
     current folding: a direct connection, or a FIFO of the least depth that keeps its
     producer within its idle time, plus ``fifo_margin`` words. A held channel is kept.
     ``fifo_ram_style`` commits a memory style with each FIFO's depth; with None the FIFO

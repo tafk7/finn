@@ -253,7 +253,7 @@ def _channel(
 def interim_channel_defaults(
     point: Space, kept: Collection[str] = ()
 ) -> Space | tuple[Finding, ...]:
-    """**Interim**, until the ends pass decides how a channel's choices are made: the
+    """**Interim**, until a channel's choices have a rule of their own: the
     channel ``point`` with each open choice in play that is not required (a FIFO's depth
     is, and stays open) set to its first valid value, in the flow order (each after what
     its presence, its list and its facts read), the choices ``kept`` names left open;

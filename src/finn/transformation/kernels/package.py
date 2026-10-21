@@ -150,7 +150,7 @@ def mover_facts(contract: MoverContract) -> dict[str, Any]:
 
 def free_side(point: Configured, tensor: str) -> Any:
     """The stream at the free side of the boundary channel carrying ``tensor`` in a
-    configured network (``configured_network``): the channel's end no kernel of the
+    configured network (``configured_network``): the channel's side no kernel of the
     partition owns (a ``StreamContract``), as the channel derives it
     (``Channel.free_side``)."""
     return point.channel(tensor).free_side
@@ -176,8 +176,8 @@ def boundary_facts(
     model: ModelWrapper, point: Configured, boundary: Sequence[tuple[str, str]], label: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Each boundary port's facts, inputs then outputs, in port order: the port, the ONNX
-    tensor and its shape; the stream at the channel's free side, the partition's own end
-    (the end no kernel of the partition owns): the channel's element and its range,
+    tensor and its shape; the stream at the channel's free side, the partition's own side
+    (the side no kernel of the partition owns): the channel's element and its range,
     lanes, beats and TDATA width; and the mover the shell places there (``mover_facts``), or
     ``None``."""
     found: tuple[list[dict[str, Any]], list[dict[str, Any]]] = ([], [])

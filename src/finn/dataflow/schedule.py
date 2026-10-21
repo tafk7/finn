@@ -39,8 +39,8 @@ the innermost beats.
 ``beat_times`` is the same projection told as times: the schedule beat at which
 each of a port's beats is presented, a reduced index's on its last step and a
 held one's on its first. A ``Pace`` is a port's schedule with its ``reduces`` and
-``holds``: its beat times and its kernel's beats a frame, which a channel's ends
-state with their contracts so that a FIFO between them can be sized.
+``holds``: its beat times and its kernel's beats a frame, which the ports on a
+channel state with their contracts so that a FIFO between them can be sized.
 
 ``bind_extents`` gives the indices their extents from the tensors the ports
 read (each an ``Access``), so a kernel states which index addresses which

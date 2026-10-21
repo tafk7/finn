@@ -17,11 +17,11 @@ needs: free lane wiring, a loop-nest reorder (``Reorder``: its frame, loop
 extents and strides; replay, and windows that overlap or skip within the frame,
 included), a width conversion, a lane regroup, or none at all.
 
-A ``BeatSequence`` is what one end of a channel presents of the tensor it
+A ``BeatSequence`` is what one side of a channel presents of the tensor it
 carries: its traversal per pass, whether the pass repeats (``Repetition``), and
 the marker rules it offers or requires. ``unreplayed`` is the boundary rule: the
 receiver of a channel realizes its own replay and window, while whole-pass
-repetition stays part of the interface; ``period`` strips the whole-pass repetition.
+repetition stays part of the stream; ``period`` strips the whole-pass repetition.
 
 Words and tensors: ``pack`` presents an integer operand as one raw word per beat,
 and ``unpack``, its inverse, reads the operand back from the words; both at the
@@ -501,7 +501,7 @@ class Repetition(Enum):
 
 @dataclass(frozen=True)
 class BeatSequence:
-    """One channel end's view of its tensor: traversal, pass repetition and marker rules.
+    """One channel side's view of its tensor: traversal, pass repetition and marker rules.
 
     For a producer the markers are guarantees; for a consumer, requirements.
     """
@@ -542,7 +542,7 @@ def unreplayed(form: Traversal) -> Traversal:
     inside a moving loop), and its window, where it reads a position twice or not at all.
 
     Outermost stride-0 loops repeat the whole pass and stay: that repetition is
-    part of an interface, while replay is realized by the receiver. A window (a
+    part of a stream, while replay is realized by the receiver. A window (a
     sliding window's overlap, or a stride that passes positions) is the receiver's
     too (its channel's reorder): without its replay, a ``form`` that does not
     present each position once (``each_once``) is the tensor's frame, each position

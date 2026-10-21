@@ -38,7 +38,7 @@ shell of the model's target (``in_shell``).
   over the current facts is dropped as stale, with why (``Partition.stale``); a stored set
   that breaks a rule refuses the bind, naming it (``network-invalid``, the rule's findings
   its causes); a channel whose
-  ends wait holds its choices until it is bound. Nothing is filled in. With every KernelOp
+  contracts wait holds its choices until it is bound. Nothing is filled in. With every KernelOp
   of the model selected, choices a tensor states that is no channel of it are stale too.
   Nothing is written: ``persist``, the one writer of choices, writes a network's choices
   back, each owner's whole;

@@ -3,7 +3,7 @@
 
 """A kernel's stream ports: each a declaration of its kernel, lowered into its members.
 
-A leaf declares one ``AxiStreamPort`` per stream interface of its module, in its class
+A leaf declares one ``AxiStreamPort`` per AXI-Stream port of its module, in its class
 body (``x = AxiStreamPort(name=..., tensor=x_tensor, schedule=schedule, ...)``). It is a
 plain frozen value, not a Space: when the class is made, the kernel base lowers it
 (``finn.kernels.base.KernelDeclaration``) into ordinary members of the kernel, named after
@@ -37,7 +37,7 @@ given ``sequence``. Exactly one of the two. Its tensor is the one it reads, a fa
 kernel gives it, or the one it writes: a producer's (an initiator's) is its kernel's
 statement of its output, derived from the kernel's facts, choices and input tensors, never
 given. Its element is its tensor's, unless its hardware fixes one (``dtype``: a set port's
-selector), which its channel holds the tensor to. Without a tensor it is an interface not
+selector), which its channel holds the tensor to. Without a tensor it is a port not
 used: idle, one lane of its ``dtype``.
 
 Its pins, the AXIS bus, the pins it holds idle, its transport, its beats, its pace and its
@@ -140,7 +140,7 @@ def _reference(value: object) -> bool:
 
 @dataclass(frozen=True, eq=False)
 class AxiStreamPort(KernelDeclaration):
-    """One AXI-Stream interface of a leaf's module: what it presents of its tensor, its
+    """One AXI-Stream port of a leaf's module: what it presents of its tensor, its
     element, its pins. The module docstring says what it lowers to."""
 
     name: str
