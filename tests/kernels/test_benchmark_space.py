@@ -73,7 +73,7 @@ def test_every_suite_runs_and_reports(tmp_path: Path) -> None:
     assert report["constant_expressions"]["terms"] == SIZES["batch"]
     # The runtime suite, each workload in its own process.
     assert [item["shape"] for item in report["self_workloads"]] == ["chain", "fan_in", "mixed"]
-    # The kernel suite: every configuration reached its module view, and none is retained.
+    # The kernel suite: every configuration reached its netlist view, and none is retained.
     kernels = report["kernel_workloads"]
     assert [item["kernel"] for item in kernels] == ["fifo", "dotp", "matmul"]
     assert all(item["trials"] == SIZES["kernel_trials"] for item in kernels)

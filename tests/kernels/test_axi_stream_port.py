@@ -46,7 +46,7 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import KernelSpace, extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import PackedDotpKernel
-from finn.kernels.library import LibraryModule
+from finn.kernels.library import LibraryModule, library_module
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.port import INTEGER_POLICY, AxiStreamPort, lane_count
 from finn.kernels.utilization import RESOURCES_SEMANTICS
@@ -102,7 +102,7 @@ class Pool(KernelSpace):
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "a model only")
 
-    library = LibraryModule(
+    module = LibraryModule(
         "accpool_axi",
         parameters=parameters,
         sources=(CopiedSource("finnlib", "rtl/accpool.sv", provides=("module:accpool_axi",)),),
@@ -154,7 +154,7 @@ def test_a_kernel_binds_its_extents_from_its_inputs_and_its_folding_factors_divi
     kernel = choose(pool(), {"kernel.pe": 4}).member("kernel")
     x, y = kernel.x_stream.sequence.form, kernel.y_stream.sequence.form
     assert (x.beats, x.lanes, y.beats, y.lanes) == (8, 4, 2, 4)
-    assert dict(kernel.module.parameters) == {"CHANNELS": 8, "PE": 4}
+    assert dict(library_module(kernel).parameters) == {"CHANNELS": 8, "PE": 4}
     assert kernel.cycles == 8  # the most beats a port carries: x's
 
 
@@ -278,7 +278,7 @@ class Holding(KernelSpace):
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "a model only")
 
-    library = LibraryModule(
+    module = LibraryModule(
         "holding",
         parameters=parameters,
         sources=(CopiedSource("finnlib", "rtl/holding.sv", provides=("module:holding",)),),
@@ -288,7 +288,7 @@ class Holding(KernelSpace):
 def test_a_refused_port_still_states_its_access_and_its_kernel_its_extents() -> None:
     taken = design_space(Holding())
     assert inspection.validity(taken).status == "valid"
-    assert isinstance(taken.query(Holding.module), Available)
+    assert isinstance(taken.query(Holding.netlist), Available)
 
     point = design_space(Holding(admits=Integer(max_bits=2)))
     validity = inspection.validity(point)
@@ -299,4 +299,6 @@ def test_a_refused_port_still_states_its_access_and_its_kernel_its_extents() -> 
     assert (access.name, access.shape) == ("x", (1, 4, 8))
     assert point.extents == {b: 1, s: 4, c: 8}
     # Its module is a product, refused with it.
-    assert "dtype-maximum-bits" in {code for code, _ in coded_messages(point.query(Holding.module))}
+    assert "dtype-maximum-bits" in {
+        code for code, _ in coded_messages(point.query(Holding.netlist))
+    }

@@ -651,8 +651,7 @@ class PackedDotpKernel(DotpAxiKernel):
             dsp=self.dsp,
         )
 
-    # Named ``module`` once the transitional ``module`` view (``MODULE``) goes.
-    library = dotp_axi(
+    module = dotp_axi(
         "module:dotp",
         *_ADD_MULTI,
         CopiedSource(
@@ -740,8 +739,7 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
     def resource_use(self) -> Resources:
         return int8_dsp58_dotp_resources(pe=self.pe, simd=self.dsp_simd)
 
-    # Named ``module`` once the transitional ``module`` view (``MODULE``) goes.
-    library = dotp_axi(
+    module = dotp_axi(
         "module:dotp_8sx9_dsp58",
         CopiedSource(
             "finnlib", "rtl/linalg/dotp_8sx9_dsp58.sv", provides=("module:dotp_8sx9_dsp58",)

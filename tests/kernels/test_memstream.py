@@ -28,6 +28,7 @@ from finn.dataflow.traversal import tile
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import ContributionError, GeneratedData
+from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import dotted
 
@@ -67,7 +68,7 @@ def test_the_image_is_the_consumers_order_in_a_content_named_init_file():
     init = point.init_file
     assert init.data == b"22c\n6be\ndd3\n941\n"
     assert init.path.startswith("memstream_") and init.path.endswith(".dat")
-    requirements = point.module
+    requirements = library_module(point)
     parameters = dict(requirements.parameters)
     assert parameters["INIT_FILE"] == f'"{init.path}"'
     assert (parameters["DEPTH"], parameters["WIDTH"], parameters["SETS"]) == (4, 12, 1)
@@ -85,12 +86,12 @@ def test_a_pumped_memory_stores_half_words_low_first():
     ).with_choices(ram_style="auto", pumped_memory=True)
     # 12-bit words as 6-bit halves: 0x22C -> 0x2C, 0x08.
     assert point.init_file.data.split(b"\n")[:4] == [b"2c", b"08", b"3e", b"1a"]
-    ports = {port.name: port for port in point.module.abi.pins}
-    assert "clk2x" in ports and point.module.abi.clock_alignments
+    ports = {port.name: port for port in library_module(point).abi.pins}
+    assert "clk2x" in ports and library_module(point).abi.clock_alignments
 
 
 def test_idle_interfaces_are_tied_off():
-    tieoffs = memory().module.held
+    tieoffs = library_module(memory()).held
     tied = dict(tieoffs.inputs)
     assert tied["awvalid"] == 0 and tied["s_axis_0_tvalid"] == 0 and tied["clk2x"] == 0
     assert "awready" in tieoffs.unused and "s_axis_0_tready" in tieoffs.unused

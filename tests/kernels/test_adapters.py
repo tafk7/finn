@@ -42,6 +42,7 @@ from finn.dataflow.traversal import BeatSequence, LevelEnd, Traversal, vector_ma
 from finn.kernels.adapters import Convert, realize
 from finn.kernels.channels import Channel, ChannelFifo
 from finn.kernels.configure import chosen
+from finn.kernels.library import library_module
 from finn.kernels.vpc import VpcKernel
 
 
@@ -86,7 +87,7 @@ def test_a_vpc_converts_whole_vectors_that_span_rows():
     vpc = VpcKernel(
         input_tensor=Tensor((2, 6, 4), ELEMENT), arriving=stage.source, leaving=stage.sink
     )
-    assert dict(design_space(vpc).module.parameters)["N"] == 12
+    assert dict(library_module(design_space(vpc)).parameters)["N"] == 12
 
 
 def test_another_beat_order_is_an_input_gen():

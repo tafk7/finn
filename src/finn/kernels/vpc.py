@@ -113,8 +113,7 @@ class VpcKernel(KernelSpace):
             "W": self.element_bits,
         }
 
-    # Named ``module`` once the transitional ``module`` view (``MODULE``) goes.
-    library = LibraryModule(
+    module = LibraryModule(
         "vpc",
         parameters=parameters,
         sources=(CopiedSource("finnlib", "rtl/shape/vpc.sv", provides=("module:vpc",)),),

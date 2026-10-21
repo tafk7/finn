@@ -9,10 +9,10 @@ class is made: ``tests/kernels/test_kernel_space.py``). Its control bus is a dec
 (``ControlBus``): held idle while it is not presented, presented (exported as ``CONTROL``)
 while it is, so a bus is accounted for by construction; its pins come before every
 port's, its hold after theirs. Every port runs on its kernel's clock domain
-(``clock_domain``). Its ``module`` is the ``Leaf``. A kernel with children
-(``ComposedKernel``) presents a child's port as its own (``served``: ``<name>_contract``,
-labelled below it), and merges its members' netlists into one ``Composed`` module. A
-kernel is a ``KernelSpace`` or a ``ComposedKernel``.
+(``clock_domain``). Its module is the ``Leaf`` at the empty label of its netlist
+(``library_module``). A kernel with children presents a child's port as its own
+(``served``: ``<name>_contract``, labelled below it), and its netlist merges its members'.
+Every kernel is a ``KernelSpace``.
 """
 
 from __future__ import annotations
@@ -46,10 +46,10 @@ from finn.kernels.artifacts.abi import (
 )
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Held, Leaf, RegisterMap
-from finn.kernels.base import NATIVE_CLOCKING, ComposedKernel, Kernel, KernelSpace
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
 from finn.kernels.configure import commit
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
-from finn.kernels.library import LibraryModule
+from finn.kernels.library import LibraryModule, library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.port import AxiStreamPort, served
@@ -93,7 +93,7 @@ class Probe(KernelSpace):
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "a model only")
 
-    library = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
+    module = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
 
 
 def probe(**facts: object) -> Probe:
@@ -113,14 +113,14 @@ def probe(**facts: object) -> Probe:
 
 
 def test_a_kernel_s_other_pins_go_before_its_ports_and_their_hold_after() -> None:
-    module = probe().module
+    module = library_module(probe())
     assert isinstance(module, Leaf) and module.held.inputs == (("mode", 1),)
     names = [pin.name for pin in module.abi.pins]
     assert names == ["ap_clk", "ap_clk2x", "ap_rst_n", "mode", "busy", "s_axis"]
 
 
 def test_a_port_runs_on_its_kernels_clock_domain() -> None:
-    bus = probe().module.abi.pins[-1]
+    bus = library_module(probe()).abi.pins[-1]
     assert (bus.associated_clock, bus.associated_reset) == ("ap_clk", "ap_rst_n")
 
     class Native(Probe):
@@ -128,9 +128,8 @@ def test_a_port_runs_on_its_kernels_clock_domain() -> None:
         clock_domain = NATIVE_CLOCKING
 
     point = design_space(Native(tensor=TENSOR))
-    module = point.query(KernelSpace.module)
-    assert isinstance(module, Available)
-    pins = module.value.abi.pins
+    assert isinstance(point.query(KernelSpace.netlist), Available)
+    pins = library_module(point).abi.pins
     assert [pin.name for pin in pins[:3]] == ["clk", "ap_clk2x", "rst"]
     bus = pins[-1]
     assert (bus.associated_clock, bus.associated_reset) == ("clk", "rst")
@@ -171,7 +170,7 @@ def test_a_control_bus_held_holds_its_inputs_after_every_port_s_hold() -> None:
     assert point.config_presented is False
     assert point.config_control == Control(None)
     assert point.query(Controlled.exports[CONTROL]) == Available(Control(None))
-    module = point.module
+    module = library_module(point)
     names = [pin.name for pin in module.abi.pins]
     # Its pins before every port's, after the probe's other pins (declared before it).
     assert names == ["ap_clk", "ap_clk2x", "ap_rst_n", "mode", "busy", "s_axilite", "s_axis"]
@@ -185,7 +184,7 @@ def test_a_control_bus_presented_is_exported_with_its_port_and_registers() -> No
     assert point.config_presented is True
     control = Control(BUS, "first_s_axilite", RegisterMap(((0, 7),)))
     assert point.query(Controlled.exports[CONTROL]) == Available(control)
-    assert point.module.held.inputs == (("mode", 1),)
+    assert library_module(point).held.inputs == (("mode", 1),)
 
 
 def test_a_memstream_s_bus_is_held_by_construction() -> None:
@@ -196,7 +195,9 @@ def test_a_memstream_s_bus_is_held_by_construction() -> None:
     )
     memory = commit(point, {"ram_style": "auto", "pumped_memory": False})
     assert memory.config_presented is False and memory.config_control == Control(None)
-    assert set(dict(held_bus(memory.config_bus).inputs)) <= set(dict(memory.module.held.inputs))
+    assert set(dict(held_bus(memory.config_bus).inputs)) <= set(
+        dict(library_module(memory).held.inputs)
+    )
 
 
 def test_a_kernel_presents_one_control_bus_at_most() -> None:
@@ -221,21 +222,13 @@ def test_a_control_bus_it_may_present_names_its_port_and_registers() -> None:
             config = ControlBus(config_bus, presented=writable)
 
 
-def test_a_control_bus_is_a_kernel_space_s() -> None:
-    with refused("control-bus-owner", error=DefinitionError):
-
-        class Composed(ComposedKernel):
-            id = "test.composed.controlled"
-            config = ControlBus(BUS)
-
-
 def test_a_kernel_s_cycles_are_the_most_beats_a_port_carries() -> None:
     assert probe().cycles == 4
     assert codes(probe().query(KernelSpace.resources)) == {"kernel-resources"}
 
 
 def test_a_kernel_with_children_presents_a_childs_port_as_its_own() -> None:
-    class Presenting(ComposedKernel):
+    class Presenting(KernelSpace):
         id = "test.presenting"
         kernel = Probe(tensor=TENSOR)
         x = served(kernel, "x")
@@ -247,14 +240,7 @@ def test_a_kernel_with_children_presents_a_childs_port_as_its_own() -> None:
 
     with refused("served-child-unknown", error=DefinitionError, message="serves y of no child"):
 
-        class Unserved(ComposedKernel):
+        class Unserved(KernelSpace):
             id = "test.unserved"
             kernel = Probe(tensor=TENSOR)
             y = served(kernel, "y")
-
-
-def test_a_kernel_is_a_kernel_space_or_a_kernel_with_children() -> None:
-    with refused("kernel-kind-invalid", error=DefinitionError, message="a kernel is a KernelSpace"):
-
-        class Neither(Kernel):
-            id = "test.neither"

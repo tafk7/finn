@@ -35,6 +35,7 @@ from finn.kernels.adapters import ADAPTERS, Stage
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Leaf
 from finn.kernels.configure import commit
+from finn.kernels.library import library_module
 from finn.toolchain.launcher import host_toolchain
 
 ELEMENT = ScalarEncoding(DataType["INT8"])
@@ -123,7 +124,7 @@ def test_the_reviews_flat_probe_is_the_adapters_module() -> None:
         generator_node(bits=8, frame=16, dims=(2, 2, 3, 3), strides=(4, 1, 4, 1))
     ).with_choices(ram_style="auto")
     stage = adapter(*three_by_three(4, 4, 1, 1))
-    module = flat.module
+    module = library_module(flat)
     assert isinstance(module, Leaf)
     assert dict(module.parameters) == dict(stage.module.parameters)
 

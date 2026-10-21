@@ -24,6 +24,7 @@ from finn.core.rtlsim_pacing import FREE, STALLED, Pace, Pacing
 from finn.harness.toolchain import finnlib_root, print_identity
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
+from finn.kernels.library import library_module
 from finn.platform.capabilities import DspBlock
 from kernels.sweeps.dotp_support import (
     Case,
@@ -171,7 +172,7 @@ def run(
         reduction=c.width,
         platform=full_platform(c.target, period_ns=c.period),
     )
-    module = point.module
+    module = library_module(point)
     case = Case(
         c.label,
         c.target,

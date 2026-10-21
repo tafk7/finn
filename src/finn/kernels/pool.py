@@ -301,8 +301,7 @@ class PoolKernel(KernelSpace):
             ),
         )
 
-    # Named ``module`` once the transitional ``module`` view (``MODULE``) goes.
-    library = LibraryModule(STEM, parameters=parameters, sources=sources)
+    module = LibraryModule(STEM, parameters=parameters, sources=sources)
 
 
 __all__ = ["DIRECTIVES", "HEADERS", "PoolKernel", "STEM", "element_type"]

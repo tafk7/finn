@@ -306,8 +306,7 @@ class FifoKernel(KernelSpace):
             "RAM_STYLE": f'"{self.rtl_ram_style}"',
         }
 
-    # Named ``module`` once the transitional ``module`` view (``MODULE``) goes.
-    library = LibraryModule(
+    module = LibraryModule(
         "fifo",
         parameters=parameters,
         sources=(CopiedSource("finnlib", "rtl/infra/fifo.sv", provides=("module:fifo",)),),

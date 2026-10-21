@@ -28,7 +28,7 @@ from finn.dataflow.datatypes import (
     QONNXDataType,
     resolve_qonnx_datatype_name,
 )
-from finn.kernels.base import ComposedKernel, Kernel
+from finn.kernels.base import KernelSpace
 from finn.kernels.configure import chosen, commit
 from finn.kernels.values.domains import Integer
 from finn.kernels.values.semantics import INTEGER_VECTOR, QONNX_DATATYPE_VALUE_SEMANTICS
@@ -51,7 +51,7 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
         message="nonempty string id",
         declaration="Unnamed",
     ):
-        type("Unnamed", (Kernel,), {})
+        type("Unnamed", (KernelSpace,), {})
     # The version is a positive int (an op's opset version); artifacts carry str(version).
     for wrong in ("1", 0, True):
         with refused(
@@ -60,15 +60,22 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
             message="positive int version",
             declaration="WrongVersion",
         ):
-            type("WrongVersion", (Kernel,), {"id": "test.wrong", "version": wrong})
+            type("WrongVersion", (KernelSpace,), {"id": "test.wrong", "version": wrong})
 
-    class Empty(ComposedKernel):
+    class Empty(KernelSpace):
         id = "test.empty"
 
     assert Empty.version == 1
-    # The protocol's views; a kernel with children that places none has no netlist.
+    # The base's views; a kernel that binds no module and places none has no netlist.
     empty = design_space(Empty())
-    assert views(empty) == ["buffering", "cycles", "netlist", "resources"]
+    assert views(empty) == [
+        "buffering",
+        "cycles",
+        "held_bits",
+        "netlist",
+        "resource_use",
+        "resources",
+    ]
     rejection = empty.query(Empty.netlist)
     assert isinstance(rejection, Rejected)
     assert {finding.code for finding in rejection.findings} == {"kernel-module"}
@@ -103,7 +110,7 @@ def test_candidate_dtype_adapter_preserves_canonical_names_and_snapshots(name: s
 
 
 def test_a_dtype_choice_replays_the_exact_datatype() -> None:
-    class DtypeKernel(ComposedKernel):
+    class DtypeKernel(KernelSpace):
         id = "test.dtype"
         dtype: QONNXDataType = Decision(
             values=(resolve_qonnx_datatype_name("TERNARY"), resolve_qonnx_datatype_name("INT2")),
@@ -131,7 +138,7 @@ def test_the_integer_vector_adapter_preserves_exact_integers() -> None:
 
 
 def test_explicit_dtype_semantics_support_typed_protocol_results_of_immutable_values() -> None:
-    class Typed(ComposedKernel):
+    class Typed(KernelSpace):
         id = "test.typed"
         dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
 
@@ -154,7 +161,7 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     # The declarations are built in plain Python and ``composite`` names them as a
     # Space class on the kernel base. ``dtype`` is a formal each placing node binds
     # by name; each node call is an independent scope.
-    class InterfaceKernel(ComposedKernel):
+    class InterfaceKernel(KernelSpace):
         id = "test.interface"
 
     def bits(*, dtype: QONNXDataType, lanes: int) -> int:
@@ -186,7 +193,7 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     )
     assert issubclass(word, InterfaceKernel) and word.id == InterfaceKernel.id
 
-    class Pair(ComposedKernel):
+    class Pair(KernelSpace):
         id = "test.interface_pair"
         activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
         weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)

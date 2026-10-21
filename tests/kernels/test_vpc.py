@@ -25,6 +25,7 @@ from finn.harness.points import rejected
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Leaf
+from finn.kernels.library import library_module
 from finn.kernels.vpc import VpcKernel
 
 CONVERSIONS = vpc()["factors"]
@@ -62,7 +63,7 @@ def test_any_positive_geometry_converts_through_whole_common_vectors(
     padded; its ports carry whole beats."""
     kernel = _vpc(element_bits, lanes_in, lanes_out)
     assert not rejected(kernel)
-    module = kernel.module
+    module = library_module(kernel)
     assert isinstance(module, Leaf)
     assert dict(module.parameters) == {
         "N": lcm(lanes_in, lanes_out),
@@ -97,5 +98,5 @@ def test_it_presents_the_same_elements_in_the_same_order_at_another_lane_count(
         return [position for beat in form.positions() for position in beat]
 
     assert elements(arriving) == elements(leaving)
-    parameters = dict(kernel.module.parameters)
+    parameters = dict(library_module(kernel).parameters)
     assert (parameters["PI"], parameters["PO"]) == (lanes_in, lanes_out)

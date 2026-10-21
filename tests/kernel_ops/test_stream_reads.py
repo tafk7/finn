@@ -51,7 +51,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
-from finn.kernels.base import Kernel, KernelSpace, declarations
+from finn.kernels.base import KernelSpace, declarations
 from finn.kernels.channels import Channel
 from finn.kernels.library import LibraryModule
 from finn.kernels.port import STREAM, AxiStreamPort, Served
@@ -64,9 +64,9 @@ LOWERED = ("element", "stream", "access")
 
 def lowered(space_type: type[Space]) -> Iterator[str]:
     """The members ``space_type``'s ports lower to that the condition reads, by name."""
-    if not issubclass(space_type, Kernel):
+    if not issubclass(space_type, KernelSpace):
         return
-    for name, declaration in declarations(space_type, Kernel).items():
+    for name, declaration in declarations(space_type, KernelSpace).items():
         if isinstance(declaration, AxiStreamPort):
             yield from (f"{name}_{what}" for what in LOWERED)
         elif isinstance(declaration, Served):
@@ -79,7 +79,7 @@ def kernels(table: LinkedModel) -> list[str]:
     return sorted(
         name
         for name, scope in root.named_children.items()
-        if issubclass(table.scopes[scope].space_type, Kernel)
+        if issubclass(table.scopes[scope].space_type, KernelSpace)
         and not issubclass(table.scopes[scope].space_type, Channel)
     )
 
@@ -201,7 +201,7 @@ class Given(KernelSpace):
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "a model only")
 
-    library = LibraryModule(
+    module = LibraryModule(
         "given",
         parameters=parameters,
         sources=(CopiedSource("finnlib", "rtl/given.sv", provides=("module:given",)),),

@@ -60,7 +60,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
 from finn.kernels.artifacts.abi import Pin
 from finn.kernels.artifacts.module import Composed, Held, Leaf, ProducerIdentity
-from finn.kernels.base import CYCLES, Kernel, KernelDeclaration, KernelSpace, ModuleOrder, Product
+from finn.kernels.base import CYCLES, KernelDeclaration, KernelSpace, ModuleOrder, Product
 from finn.kernels.configure import chosen, commit, describe
 from finn.kernels.defaults import defaulted, ranked
 from finn.kernels.eltwise import EltwiseKernel
@@ -573,7 +573,7 @@ class OtherPins(KernelDeclaration):
 
     module_order = ModuleOrder.ENCLOSING
 
-    def lower(self, owner: type[Kernel], name: str) -> Mapping[str, object]:
+    def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
         self.references()
         return {}
 

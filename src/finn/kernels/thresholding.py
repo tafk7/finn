@@ -599,8 +599,7 @@ class ThresholdingAxiKernel(KernelSpace):
     # AXI-Lite: presented with runtime writes (``control_for_writes``), held without.
     config = ControlBus(config_bus, presented=use_axilite, port=control, registers=register_map)
 
-    # Named ``module`` once the transitional ``module`` view (``MODULE``) goes.
-    library = LibraryModule(
+    module = LibraryModule(
         "thresholding_axi",
         parameters=parameters,
         sources=(

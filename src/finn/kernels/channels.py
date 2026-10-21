@@ -38,10 +38,13 @@ consumer reads it; with several sets, the source's set port is the channel's por
 (``set``, served by its source: ``set_contract``), which the index tensor's channel
 consumes.
 
-As a kernel with children, its members are its source, its adapters' stages, its FIFO
-(``ChannelFifo``) and its mover, in the order the stream runs through them. It exports
-their netlists with its hops (``NETLIST``), its boundary's AXIS bus (``BOUNDARY``), and
-their cycles, buffering and resources. It is no module of its own.
+As a kernel with children (a ``KernelSpace`` binding no module), its members are its
+source, its adapters' stages, its FIFO (``ChannelFifo``) and its mover, in the order the
+stream runs through them. Its answers are the base's views over theirs, but for two it
+states itself, calling the base's: its netlist adds its hops (``NETLIST``), and a channel
+of wires takes no cycles of its own (0). It exports its boundary's AXIS bus
+(``BOUNDARY``) and its mover's contract (``MOVER``: ``placed_mover``, from the mover's own
+derived ``contract``). It is no module of its own.
 """
 
 from __future__ import annotations
@@ -71,18 +74,21 @@ from finn.dataflow.traversal import BeatSequence, Traversal, period, unreplayed
 from finn.kernels.adapters import ADAPTERS, OUTPUT_ADAPTERS, Stage, StreamAdapter
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import CLOCK, RESET, Bus, Endpoint
-from finn.kernels.artifacts.module import Fragment, Leaf, Link, LinkEnd, Marker, merge
+from finn.kernels.artifacts.module import Fragment, Link, LinkEnd, Marker
 from finn.kernels.base import (
     BOUNDARY,
     BUFFERING,
     CYCLES,
     NETLIST,
+    NETLIST_SEMANTICS,
     PORT_CONTRACT,
     RESOURCES,
-    ComposedKernel,
+    KernelSpace,
     PortContract,
+    declared_reads,
 )
 from finn.kernels.fifo import FifoKernel
+from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import MOVER, MOVERS, IodmaMover, MoverContract, MoverOffer
 from finn.kernels.port import served
@@ -153,14 +159,15 @@ class _Direct(Space):
         return ()
 
 
-class ChannelFifo(ComposedKernel):
+class ChannelFifo(KernelSpace):
     """An identity stage: what arrives at it, presented on both sides of a native FIFO.
 
-    Its netlist, buffering and resources are its FIFO's, by the base. It states no
+    Its netlist, buffering and resources are its FIFO's, by the base. It exports no
     cycles: a FIFO presents what arrives, whose beats are counted where they are made
     (the channel's producer, its source, its output adapter), so its channel's cycles
     are its other members'. It presents no port: its channel wires it hop by hop
-    (``stages``).
+    (``stages``: its FIFO's module, read from the FIFO's netlist, and its ports'
+    contracts).
     """
 
     id = "finn.channel.fifo"
@@ -200,13 +207,12 @@ class ChannelFifo(ComposedKernel):
         return True
 
     @view
+    @declared_reads("buffer.netlist", "buffer.input_contract", "buffer.output_contract")
     def stages(self) -> tuple[Stage, ...]:
         buffer = self.buffer
-        module = buffer.module
-        assert isinstance(module, Leaf)
         return (
             Stage(
-                module,
+                library_module(buffer),
                 buffer.input_contract.contract,
                 buffer.output_contract.contract,
                 "fifo.buffer",
@@ -214,9 +220,9 @@ class ChannelFifo(ComposedKernel):
         )
 
     exports = {
-        NETLIST: ComposedKernel.netlist,
-        BUFFERING: ComposedKernel.buffering,
-        RESOURCES: ComposedKernel.resources,
+        NETLIST: KernelSpace.netlist,
+        BUFFERING: KernelSpace.buffering,
+        RESOURCES: KernelSpace.resources,
     }
 
 
@@ -232,7 +238,7 @@ class ChannelSides:
     sink: StreamContract
 
 
-class Channel(ComposedKernel):
+class Channel(KernelSpace):
     """One tensor between the ports whose contracts it takes: one producer, one consumer.
 
     ``producer`` and ``consumer`` are the contracts of the ports on it, facts its network
@@ -391,10 +397,11 @@ class Channel(ComposedKernel):
 
     @derived
     def placed_mover(self) -> tuple[MoverContract, ...]:
-        """Its mover's contract, or none without a mover."""
+        """Its mover's contract (the mover's own derived value), or none without a
+        mover."""
         if not self.offered:
             return ()
-        contract: MoverContract = self.mover_contract
+        contract: MoverContract = self.mover.contract
         return (contract,)
 
     @derived
@@ -572,27 +579,23 @@ class Channel(ComposedKernel):
             return reject("channel-link", str(error))
         return tuple(links)
 
-    @derived
-    def fragment(self) -> Fragment | Rejected:
+    # -- its answers: the base's, with its hops, and none of a channel of wires' cycles ----
+
+    @view(semantics=NETLIST_SEMANTICS)
+    @declared_reads("netlists", "controls", "hops")
+    def netlist(self) -> Fragment | Rejected:
         """Its members' netlists under their nodes, in the order the stream runs through
         them (its source, its output adapter's stages, its FIFO, its input adapter's
         stages), and its hops; a channel of wires places none."""
-        try:
-            return merge(
-                *(item.value.under(str(item.node)) for item in self.netlists),
-                Fragment(links=self.hops),
-            )
-        except ArtifactError as error:
-            return reject("kernel-netlist", str(error))
+        return KernelSpace._netlist(self, self.hops)
 
-    # -- what a design space exploration ranks by ------------------------------------------
-
-    @derived
-    def frame_cycles(self) -> int:
+    @view
+    @declared_reads("member_cycles")
+    def cycles(self) -> int | Rejected:
         """The clock cycles a frame takes through its own members: the slowest's (its
         source's, its adapters' stages', its mover's), one beat a cycle at best; a FIFO
         states none, and a channel of wires takes none of its own."""
-        return max((item.value for item in self.member_cycles), default=0)
+        return KernelSpace._cycles(self, default=0)
 
     @view
     def boundary_bus(self) -> tuple[Bus, ...]:
@@ -604,11 +607,11 @@ class Channel(ComposedKernel):
     mover_export = View(placed_mover)
 
     exports = {
-        NETLIST: ComposedKernel.netlist,
+        NETLIST: netlist,
         BOUNDARY: boundary_bus,
-        CYCLES: ComposedKernel.cycles,
-        BUFFERING: ComposedKernel.buffering,
-        RESOURCES: ComposedKernel.resources,
+        CYCLES: cycles,
+        BUFFERING: KernelSpace.buffering,
+        RESOURCES: KernelSpace.resources,
         MOVER: mover_export,
     }
 

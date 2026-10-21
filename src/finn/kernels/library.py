@@ -23,12 +23,18 @@ label: its name (an HLS top's, for an HLS kernel), its parameters, its pins (the
 kernel's clocking, then each declaration's pins), its sources and data, and what it holds
 (the doubled clock while unused, then what each declaration holds idle), each
 declaration's where its ``module_order`` puts it (``finn.kernels.base.ModuleOrder``: a
-control bus's pins before the ports' and its hold after theirs).
+control bus's pins before the ports' and its hold after theirs). Each input of the module
+is a port's, a presented control bus's (``KernelDeclaration.presents``), or held: any
+other refuses the module (``kernel-pins``, naming the inputs).
 
 Its sources must provide the module, ``module:<rtl_module>`` (an HLS request its top, of
 that stem): a constant tuple is checked when the class is made, a member's in ``build``,
 each refused as ``library-module-unprovided``, naming the module and what the sources
-provide. ``library_module`` reads a kernel's module back from its accepted netlist.
+provide.
+
+``library_module`` reads a kernel's module back from its accepted netlist, the module at
+its empty label: every reader of a kernel's module takes it, inside a kernel's view (a
+channel's FIFO stage, an adapter's stages) as outside.
 """
 
 from __future__ import annotations
@@ -38,6 +44,7 @@ from dataclasses import KW_ONLY, dataclass
 from typing import Any, ClassVar
 
 from finn.core.space import DefinitionError, Rejected, reject
+from finn.kernels.artifacts.abi import Direction, Pin, Signal
 from finn.kernels.artifacts.contributions import (
     Contribution,
     CopiedSource,
@@ -47,7 +54,6 @@ from finn.kernels.artifacts.contributions import (
 )
 from finn.kernels.artifacts.module import Abi, Held, Leaf
 from finn.kernels.base import (
-    Kernel,
     KernelDeclaration,
     KernelSpace,
     ModuleOrder,
@@ -56,6 +62,13 @@ from finn.kernels.base import (
     _module_name,
     is_member,
 )
+
+
+def _inputs(pin: Pin) -> tuple[str, ...]:
+    """The input pins of ``pin``: a loose signal's, or each of a bus's members'."""
+    if isinstance(pin, Signal):
+        return (pin.name,) if pin.direction is Direction.IN else ()
+    return tuple(name for name, direction in pin.member_directions() if direction is Direction.IN)
 
 
 def _provided(sources: tuple[Contribution, ...]) -> tuple[str, ...]:
@@ -99,15 +112,8 @@ class LibraryModule(KernelDeclaration):
             f"{self.rtl_module} ({wanted})"
         )
 
-    def lower(self, owner: type[Kernel], name: str) -> Mapping[str, object]:
+    def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
         label = f"{owner.__qualname__}.{name}"
-        if not issubclass(owner, KernelSpace):
-            raise DefinitionError.broken(
-                "library-module-owner",
-                "LibraryModule",
-                f"{label}: a library module is a KernelSpace's",
-                declaration=label,
-            )
         self.references()  # each member it names, named
         if not is_member(self.sources):
             why = self.unprovided(owner.__qualname__, tuple(self.sources))
@@ -131,9 +137,8 @@ class LibraryModule(KernelDeclaration):
         items = tuple(space_type._declarations.items())
         enclosing = tuple(item for item in items if item[1].module_order is ModuleOrder.ENCLOSING)
         declared = tuple(item for item in items if item[1].module_order is ModuleOrder.DECLARED)
-        found = _each(
-            declaration.pins(kernel, each) for each, declaration in (*enclosing, *declared)
-        )
+        ordered = (*enclosing, *declared)
+        found = _each(declaration.pins(kernel, each) for each, declaration in ordered)
         if isinstance(found, Rejected):
             return found
         pins = tuple(pin for part in found for pin in part)
@@ -150,6 +155,20 @@ class LibraryModule(KernelDeclaration):
         if isinstance(held, Rejected):
             return held
         parts = (Held(clocking.held()), *held)
+        holding = {pin for part in parts for pin, _ in part.inputs}
+        loose = [
+            pin
+            for (each, declaration), part in zip(ordered, found, strict=True)
+            if not declaration.presents(kernel, each)
+            for item in part
+            for pin in _inputs(item)
+            if pin not in holding
+        ]
+        if loose:
+            return reject(
+                "kernel-pins",
+                f"{space_type.__qualname__}: the inputs {loose} are neither held nor presented",
+            )
         return Leaf(
             space_type.id,
             str(space_type.version),

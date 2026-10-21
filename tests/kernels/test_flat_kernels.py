@@ -41,6 +41,7 @@ from finn.kernels.artifacts.rtl import TOLERATED_DIAGNOSTICS
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
+from finn.kernels.library import library_module
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import integer_shape
 from finn.toolchain.launcher import host_toolchain
@@ -198,7 +199,7 @@ def native_ports(requirements, tmp_path):
 )
 def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
     point = factory()
-    requirements = point.module
+    requirements = library_module(point)
     observed = native_ports(requirements, tmp_path)
     declared = {}
     for port in requirements.abi.pins:
@@ -237,7 +238,7 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
 )
 def test_unsupported_cases_are_refused_without_constructing_invalid_interfaces(factory):
     point = factory()
-    assessment = point.inspect(type(point).module)
+    assessment = point.inspect(type(point).netlist)
     assert isinstance(assessment.accepted_result, Rejected)
 
 
@@ -286,7 +287,7 @@ def test_a_folding_factor_outside_its_domain_is_refused_where_it_is_committed(fa
 def test_typed_integer_vectors_and_tables_reject_mutable_or_mistyped_payloads():
     invalid_scale = eltwise(b_scale=float("nan"))
     assert isinstance(invalid_scale.query(EltwiseKernel.native_scale), Rejected)
-    assert isinstance(invalid_scale.inspect(EltwiseKernel.module).accepted_result, Rejected)
+    assert isinstance(invalid_scale.inspect(EltwiseKernel.netlist).accepted_result, Rejected)
     # A table is an integer tensor: a nonempty rectangular nest of int tuples.
     for bad in ((([-2, 0, 3],),), (), (((0,), (0, 1)),)):
         with pytest.raises(DefinitionError):
@@ -307,19 +308,19 @@ def test_typed_integer_vectors_and_tables_reject_mutable_or_mistyped_payloads():
 )
 def test_elementwise_output_encoding_follows_operation_and_operand_types(operation, a, b, result):
     point = eltwise(operation=operation, lhs=DataType[a], rhs=DataType[b])
-    _ = point.module
+    _ = library_module(point)
     assert point.result_dtype == DataType[result]
 
 
 def test_rounding_of_scale_is_explicit_and_precedes_native_support_checks():
     point = eltwise(b_scale=1.0 + 2**-30)
     assert point.native_scale == 1.0
-    assert dict(point.module.parameters)["B_SCALE"] == "1.0"
+    assert dict(library_module(point).parameters)["B_SCALE"] == "1.0"
 
 
 def test_threshold_initialization_is_owned_and_changes_the_module():
-    a = threshold().module
-    b = threshold(thresholds=(((-2, 0, 2), (-1, 1, 4)),)).module
+    a = library_module(threshold())
+    b = library_module(threshold(thresholds=(((-2, 0, 2), (-1, 1, 4)),)))
     assert a.data[0].data == b"1e\n00\n03\n00\n1f\n01\n04\n00\n"
     assert dict(a.parameters)["THRESHOLDS_FILE"] != dict(b.parameters)["THRESHOLDS_FILE"]
     assert a != b
@@ -338,7 +339,7 @@ def test_required_root_bindings_and_explicit_optional_inputs_preserve_partial_qu
         with refused("formal-unsupplied", error=DefinitionError):
             point_for(kernel, {})
 
-    assert all(not isinstance(port, Bus) for port in fifo().module.abi.pins)
+    assert all(not isinstance(port, Bus) for port in library_module(fifo()).abi.pins)
 
 
 def run(requirements, body, tmp_path):
@@ -441,7 +442,7 @@ def flow_case(case):
 @pytest.mark.parametrize("case", ("fifo", "generator", "threshold", "integer", "float"))
 def test_generated_rtl_preserves_values_sequences_and_backpressure(case, tmp_path):
     point, a_width, b_width, o_width, a, b, expected, extra, connections = flow_case(case)
-    requirements = point.module
+    requirements = library_module(point)
 
     def array(values, width):
         return "'{" + ",".join(f"{width}'h{item:x}" for item in values) + "}"

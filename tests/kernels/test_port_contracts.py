@@ -48,6 +48,7 @@ from finn.dataflow.traversal import (
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
+from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, wire
 
@@ -303,7 +304,7 @@ def test_eltwise_broadcasts_a_channel_vector_once_per_pixel():
         stream.plan.steps == ()
         for stream in (point.member("lhs"), point.member("rhs"), point.member("out"))
     )
-    assert dict(point.member("add").module.parameters)["PE"] == 2
+    assert dict(library_module(point.member("add")).parameters)["PE"] == 2
 
 
 def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():

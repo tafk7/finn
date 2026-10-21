@@ -165,8 +165,7 @@ class PwPolyKernel(KernelSpace):
     def parameters(self) -> dict[str, int | str]:
         return {"PE": self.pe, "FUNC": f'"{self.function}"'}
 
-    # Named ``module`` once the transitional ``module`` view (``MODULE``) goes.
-    library = LibraryModule("pwpolyf", parameters=parameters, sources=SOURCES)
+    module = LibraryModule("pwpolyf", parameters=parameters, sources=SOURCES)
 
 
 __all__ = ["FLOAT32", "FUNCTIONS", "SOURCES", "PwPolyKernel"]

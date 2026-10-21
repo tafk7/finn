@@ -22,7 +22,7 @@ from typing import Any, cast
 
 import pytest
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP48E2, codes, fifo_node
+from support.helpers import FULL_DSP48E2, OtherPins, codes, fifo_node
 from support.refusals import refused
 
 from finn.core.space import (
@@ -42,16 +42,15 @@ from finn.core.space._reads import infer, summary
 from finn.core.space._structure import expand
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
-from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.artifacts.abi import Direction, Endpoint, Signal
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
-from finn.kernels.artifacts.module import Fragment
+from finn.kernels.artifacts.module import Fragment, Held
 from finn.kernels.base import (
     BUFFERING,
     CYCLES,
     NATIVE_CLOCKING,
     NETLIST,
     RESOURCES,
-    ComposedKernel,
     KernelDeclaration,
     KernelSpace,
     is_member,
@@ -74,7 +73,7 @@ PROBE = CopiedSource("finnlib", "rtl/probe.sv", provides=("module:probe",))
 def test_a_fifo_answers_its_netlist_cycles_buffering_and_resources() -> None:
     point = design_space(fifo_node(word_bits=13, depth=8)).with_choices(ram_style="auto")
     module = library_module(point)
-    assert module.name == "fifo" and module == point.module
+    assert module.name == "fifo"
     assert point.netlist == Fragment((("", module),))
     # Six words of its tensor, a word a beat; its depth of words; its own resources.
     assert point.cycles == 6
@@ -100,7 +99,7 @@ def test_a_fifo_s_answers_wait_on_its_choices_and_refuse_with_it() -> None:
 
 
 def test_a_fifo_s_own_statements_and_answers_are_views_read_by_fixed_names() -> None:
-    for member in ("parameters", "held_bits", "resource_use", "netlist", "cycles", "module"):
+    for member in ("parameters", "held_bits", "resource_use", "netlist", "cycles"):
         assert isinstance(getattr(FifoKernel, member), View)
     # Its netlist reads its library module's members and its ports' by name.
     reads = cast(Any, FifoKernel.netlist).function.__reads__
@@ -135,7 +134,7 @@ class Stage(KernelSpace):
     def held_bits(self) -> int:
         return 5
 
-    library = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
+    module = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
 
 
 class Pair(KernelSpace):
@@ -185,7 +184,7 @@ def test_constant_sources_must_provide_the_module_when_the_class_is_made() -> No
 
         class Unprovided(Stage):
             id = "test.kernel_space.unprovided"
-            library = LibraryModule(
+            module = LibraryModule(
                 "probe",
                 parameters=Stage.parameters,
                 sources=(CopiedSource("finnlib", "rtl/other.sv", provides=("module:other",)),),
@@ -201,7 +200,7 @@ class Referenced(Stage):
     def sources(self) -> tuple[Contribution, ...]:
         return (CopiedSource("finnlib", "rtl/other.sv", provides=("module:other",)),)
 
-    library = LibraryModule("probe", parameters=Stage.parameters, sources=sources)
+    module = LibraryModule("probe", parameters=Stage.parameters, sources=sources)
 
 
 def test_a_member_s_sources_must_provide_the_module_when_it_is_built() -> None:
@@ -232,7 +231,7 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
         body = {
             "id": f"test.{name}",
             "parameters": stated,
-            "library": LibraryModule("probe", parameters=stated, sources=(PROBE,)),
+            "module": LibraryModule("probe", parameters=stated, sources=(PROBE,)),
             **members,
         }
         return type(name, (KernelSpace,), body)
@@ -271,7 +270,7 @@ class Based(KernelSpace):
     def parameters(self) -> dict[str, int | str]:
         return {}
 
-    library = LibraryModule("probe", parameters=parameters, sources=sources)
+    module = LibraryModule("probe", parameters=parameters, sources=sources)
 
 
 class Sourced(Based):
@@ -298,12 +297,32 @@ def test_a_module_naming_a_required_member_makes_a_base_of_kernels() -> None:
     assert library_module(point).sources == (PROBE,)
 
 
-def test_a_library_module_is_a_kernel_space_s() -> None:
-    with refused("library-module-owner", error=DefinitionError):
+# -- the module's inputs: each a port's, a presented control bus's, or held -----------------
 
-        class OnComposed(ComposedKernel):
-            id = "test.kernel_space.composed"
-            library = LibraryModule("probe", parameters={}, sources=(PROBE,))
+LOOSE = Signal("mode", Direction.IN, 1)
+
+
+class Loose(Stage):
+    """A stage with a pin that is no port's and no control bus's, held where ``holding``."""
+
+    id = "test.kernel_space.loose"
+    holding: bool = Param(default=False)
+
+    @view
+    def held_pins(self) -> Held:
+        return Held(((LOOSE.name, 0),)) if self.holding else Held()
+
+    other = OtherPins((LOOSE, Signal("busy", Direction.OUT, 1)), held_pins)
+
+
+def test_an_input_neither_held_nor_presented_refuses_the_module() -> None:
+    loose = design_space(Loose(input_tensor=TENSOR, arriving=ARRIVING))
+    found = loose.query(Loose.netlist)
+    assert codes(found) == {"kernel-pins"}
+    assert isinstance(found, Rejected)
+    assert found.findings[0].message == "Loose: the inputs ['mode'] are neither held nor presented"
+    held = design_space(Loose(input_tensor=TENSOR, arriving=ARRIVING, holding=True))
+    assert library_module(held).held.inputs == (("mode", 0),)
 
 
 # -- a declaration's arguments ----------------------------------------------------------------

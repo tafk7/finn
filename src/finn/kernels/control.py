@@ -7,10 +7,11 @@ A kernel with a control interface (an AXI-Lite configuration bus, say) has a for
 naming the port its bus is presented at, given where it is placed (``control: str =
 Param(required=False)``), and exports, under ``CONTROL``, the bus it presents there
 with that port and the writes that put its configuration into the bus's registers
-(``RegisterMap``): a ``Control``. A kernel with children (``Members(CONTROL)``) and a
-network (``finn.kernels.network``) each collect their members' controls
-(``presented``: each a ``BusExport`` from its member's node) and present each in their
-netlist (``finn.kernels.base.merged``), prefixing its port with the member's node
+(``RegisterMap``): a ``Control``. A kernel's netlist view (its ``Members(CONTROL)``,
+``finn.kernels.base.KernelSpace``) and a network (``finn.kernels.network``) each collect
+their members' controls (``presented``: each a ``BusExport`` from its member's node) and
+present each in their netlist (``finn.kernels.base.merged``), prefixing its port with the
+member's node
 (``first_s_axilite``); the top module renames the bus to that port
 (``finn.kernels.artifacts.top.top_bus``), associated with its clock and reset. One kernel is
 presented at one port.
@@ -28,9 +29,10 @@ the bus is presented at; ``registers`` its ``RegisterMap``. It lowers to
 ``Control``, which the kernel exports as ``CONTROL``: ``Control(None)`` while it is not
 presented. Its pins are the bus, and what it holds the bus's inputs while it is not
 presented (``held_bus``: inputs constant, outputs unconnected): a declared bus is held or
-presented by construction, and nothing about a bus is wired by name. Its pins come before
-every port's in its kernel's module and its hold after theirs
-(``finn.kernels.base.ModuleOrder.ENCLOSING``). A kernel declares one at most.
+presented by construction (``presents``: its inputs accounted for in its module), and
+nothing about a bus is wired by name. Its pins come before every port's in its kernel's
+module and its hold after theirs (``finn.kernels.base.ModuleOrder.ENCLOSING``). A kernel
+declares one at most.
 
 ``<name>_presented`` is the kernel's own bus, presented: what a count of the control buses
 sums, one a kernel. A boundary's AXI-Lite initiator is no kernel's bus and is not among
@@ -57,7 +59,7 @@ from finn.kernels.artifacts.abi import Bus, Direction, Pin
 from finn.kernels.artifacts.module import BusExport, Held, RegisterMap
 
 if TYPE_CHECKING:
-    from finn.kernels.base import Kernel, KernelSpace
+    from finn.kernels.base import KernelSpace
 
 
 @dataclass(frozen=True)
@@ -131,17 +133,8 @@ class ControlBus(KernelDeclaration):
     KIND: ClassVar[str] = "control-bus"
     module_order: ClassVar[ModuleOrder] = ModuleOrder.ENCLOSING
 
-    def lower(self, owner: type[Kernel], name: str) -> Mapping[str, object]:
-        from finn.kernels.base import KernelSpace  # noqa: PLC0415 (it imports this module)
-
+    def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
         label = f"{owner.__qualname__}.{name}"
-        if not issubclass(owner, KernelSpace):
-            raise DefinitionError.broken(
-                "control-bus-owner",
-                "ControlBus",
-                f"{label}: a control bus is a KernelSpace's",
-                declaration=label,
-            )
         self.references()  # each member it names, named
         if self.presented is not False and (self.port is None or self.registers is None):
             raise DefinitionError.broken(
@@ -190,6 +183,9 @@ class ControlBus(KernelDeclaration):
             return Held()
         bus: Bus = self.value(kernel, "bus")
         return held_bus(bus)
+
+    def presents(self, kernel: KernelSpace, name: str) -> bool:
+        return bool(getattr(kernel, f"{name}_presented"))
 
 
 __all__ = [

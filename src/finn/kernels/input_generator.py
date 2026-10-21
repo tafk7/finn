@@ -309,8 +309,7 @@ class InputGeneratorKernel(KernelSpace):
             "RAM_STYLE": f'"{self.ram_style}"',
         }
 
-    # Named ``module`` once the transitional ``module`` view (``MODULE``) goes.
-    library = LibraryModule("input_gen", parameters=parameters, sources=(SOURCE,))
+    module = LibraryModule("input_gen", parameters=parameters, sources=(SOURCE,))
 
 
 # -- the buffer, as the RTL derives it -------------------------------------------------------

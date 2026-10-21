@@ -343,8 +343,7 @@ class MemStreamKernel(KernelSpace):
     # AXI-Lite, always held: the contents are fixed at build time.
     config = ControlBus(config_bus)
 
-    # Named ``module`` once the transitional ``module`` view (``MODULE``) goes.
-    library = LibraryModule(
+    module = LibraryModule(
         "memstream_axi",
         parameters=parameters,
         sources=(

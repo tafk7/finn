@@ -11,7 +11,7 @@ from finn.kernels.thresholding import ThresholdingAxiKernel
 
 
 def test_an_encoding_a_kernel_does_not_take_is_refused():
-    assert isinstance(eltwise(lhs="FLOAT16", rhs="FLOAT16").query(EltwiseKernel.module), Rejected)
+    assert isinstance(eltwise(lhs="FLOAT16", rhs="FLOAT16").query(EltwiseKernel.netlist), Rejected)
     # Refused by its validity while PE is still open.
     assert inspection.validity(threshold_base(input_dtype="FLOAT32")).status == "refused"
 
@@ -21,6 +21,6 @@ def test_threshold_type_refusal_precedes_unrelated_configuration_choices():
     validity = inspection.validity(base)
     assert validity.status == "refused"
     assert "types_supported" in {piece.owner for piece in validity.pieces}
-    assessment = base.inspect(ThresholdingAxiKernel.module)
+    assessment = base.inspect(ThresholdingAxiKernel.netlist)
     assert isinstance(assessment.validity, Rejected)
     assert isinstance(assessment.accepted_result, Rejected)

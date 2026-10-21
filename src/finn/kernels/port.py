@@ -91,7 +91,6 @@ from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import (
     PORT_CONTRACT,
-    Kernel,
     KernelDeclaration,
     KernelSpace,
     PortContract,
@@ -225,15 +224,7 @@ class AxiStreamPort(KernelDeclaration):
             return found
         return placement
 
-    def lower(self, owner: type[Kernel], name: str) -> Mapping[str, object]:
-        if not issubclass(owner, KernelSpace):
-            raise DefinitionError.broken(
-                "port-owner",
-                "AxiStreamPort",
-                f"{owner.__qualname__}.{name}: a stream port is a module's; a kernel with "
-                "children presents its child's (served)",
-                declaration=f"{owner.__qualname__}.{name}",
-            )
+    def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
         port = self
         members: dict[str, object] = {}
         placement = self.placement()
@@ -401,6 +392,9 @@ class AxiStreamPort(KernelDeclaration):
             return Held()
         port, presenting = self.viewed(kernel, name)
         return held(port, presenting, type(kernel).clock_domain)
+
+    def presents(self, kernel: KernelSpace, name: str) -> bool:
+        return True  # a port's pins: placed, or held while idle
 
     def access(self, kernel: KernelSpace, name: str) -> Access | None:
         binding = self.binding()
@@ -631,7 +625,7 @@ class Served(KernelDeclaration):
     child: Any
     port: str
 
-    def lower(self, owner: type[Kernel], name: str) -> Mapping[str, object]:
+    def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
         child = next(
             (
                 attribute

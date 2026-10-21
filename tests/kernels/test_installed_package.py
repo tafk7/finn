@@ -45,6 +45,7 @@ class RejectGraphDependencies(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, RejectGraphDependencies())
 
 from finn.kernels.dotp import PackedDotpKernel
+from finn.kernels.library import library_module
 from finn.kernels.port import axis
 from finn.kernels.matmul import MatMulKernel
 from finn.platform.capabilities import DspBlock, Fabric, Platform
@@ -73,7 +74,7 @@ assert tile.shape == (3, 4)
 assert tile.field(Tiles.shape).get() == (3, 4)
 assert tile.inspect(Tiles.shape).accepted_result == Available((3, 4))
 assert tile.field(Tiles.cycles).get() == 4
-from finn.kernels.artifacts import build, module as built
+from finn.kernels.artifacts import build, module as artifact_module
 from qonnx.core.datatype import DataType
 
 assert (installed / "finn/kernels/py.typed").is_file()
@@ -118,8 +119,8 @@ dotp = placed_dotp.with_choices(
     {("compute", "pe"): 2, ("compute", "simd"): 2, ("compute", "compute_pumping"): False,
      ("compute", "reducer"): "tree"},
 ).member("compute")
-answer = dotp.module
-assert isinstance(answer, built.Leaf), answer
+answer = library_module(dotp)
+assert isinstance(answer, artifact_module.Leaf), answer
 assert dict(answer.parameters)["ACCU_WIDTH"] == 8
 assert dotp.x_element.dtype.name == "INT3"
 assert axis(*PackedDotpKernel.x.viewed(dotp, "x")).payload_bits == 6
@@ -145,7 +146,7 @@ def materialize(module, expected):
     assert set(emitted.sources) | set(emitted.data) == expected, emitted
     actual = {str(path.relative_to(directory)) for path in directory.rglob("*") if path.is_file()}
     assert actual == expected
-    leaves = (module,) if isinstance(module, built.Leaf) else (
+    leaves = (module,) if isinstance(module, artifact_module.Leaf) else (
         leaf for _, leaf in module.fragment.instances
     )
     for leaf in leaves:

@@ -147,7 +147,7 @@ def test_eltwise_ports_carry_their_operands_unpadded_on_native_pins():
     # An operand the arithmetic does not take refuses the kernel, naming the operand.
     refused = eltwise(lhs="FLOAT16", rhs="FLOAT16")
     assert port_transport(refused, "lhs").data_width == 32  # the pins do not wait for admission
-    answer = refused.query(EltwiseKernel.module)
+    answer = refused.query(EltwiseKernel.netlist)
     assert isinstance(answer, Rejected)
     assert "operands_supported" in {finding.owner for finding in answer.findings}
-    assert isinstance(eltwise().query(EltwiseKernel.module), Available)
+    assert isinstance(eltwise().query(EltwiseKernel.netlist), Available)

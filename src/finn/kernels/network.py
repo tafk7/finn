@@ -64,8 +64,9 @@ member's netlist under its node (its name, unless the network is given another,
 (its instance order, which the text follows), with every boundary channel's AXIS bus
 (``finn.kernels.artifacts.top.compose``), made of its ``netlist`` (the merged fragment and
 the boundary buses), which a shell counts without building the top
-(``finn.platform.shells.bus_counts``). A kernel with children merges its own netlist with
-the same function (``finn.kernels.base.merged``).
+(``finn.platform.shells.bus_counts``). A kernel's ``netlist`` view merges its members'
+with the same function (``finn.kernels.base.merged``); its library module, read back by
+``finn.kernels.library.library_module``, is one leaf of the network's.
 """
 
 from __future__ import annotations

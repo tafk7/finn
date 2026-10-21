@@ -247,8 +247,7 @@ class EltwiseKernel(KernelSpace):
             "FORCE_BEHAVIORAL": 0,
         }
 
-    # Named ``module`` once the transitional ``module`` view (``MODULE``) goes.
-    library = LibraryModule(
+    module = LibraryModule(
         "eltwise",
         parameters=parameters,
         sources=tuple(

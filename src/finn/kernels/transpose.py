@@ -197,8 +197,7 @@ class TransposeKernel(KernelSpace):
             "SIMD": self.simd,
         }
 
-    # Named ``module`` once the transitional ``module`` view (``MODULE``) goes.
-    library = LibraryModule(
+    module = LibraryModule(
         "inner_shuffle",
         parameters=parameters,
         sources=(
