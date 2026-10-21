@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The acceptance matrix: every disagreement between the engine and the reference model
-expected at this commit, by the milestone that removes it. It holds none: the engine agrees
-with the model on every question.
+expected at this commit, by the milestone that removes it. The model holds the human's
+rulings on the core types (DECISIONS SZ100) before the engine does: T4b reads views out
+(SZ100 (3)).
 
 Each row names the change that removes it, in one sentence, and its **witness**: the one
 test that shows it, marked with :func:`expected` (a strict expected failure raising
@@ -35,7 +36,7 @@ import pytest
 from .compare import Disagreement
 
 #: in order: the line as it is, then each later milestone with rows to remove
-MILESTONES: tuple[str, ...] = ("base",)
+MILESTONES: tuple[str, ...] = ("base", "T4b")
 
 
 @dataclass(frozen=True)
@@ -52,7 +53,16 @@ class Row:
     note: str = ""
 
 
-ROWS: tuple[Row, ...] = ()
+ROWS: tuple[Row, ...] = (
+    Row(
+        "view-read-in",
+        "T4b",
+        "The engine refuses a definition whose constraint, derived value, guard or domain reads "
+        "a view, as a definition error (view-read-in)",
+        "test_reference_cases::test_a_rule_reading_a_view_is_no_definition",
+        "today it builds the Space and answers",
+    ),
+)
 
 BY_ID = {row.id: row for row in ROWS}
 

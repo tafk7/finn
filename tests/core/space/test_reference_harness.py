@@ -93,8 +93,11 @@ def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() ->
     assert not problems(CASE_MODULES)
 
 
-def test_the_engine_core_and_facts_instance_milestones_are_accepted_their_rows_removed() -> None:
-    assert MILESTONES == ("base",) and ROWS == ()
+def test_the_pending_milestones_are_the_rulings_the_engine_has_not_reached() -> None:
+    # The engine core's and the facts-instance milestones are accepted, their rows removed;
+    # the model holds SZ100's rulings before the engine (T4b: views read out).
+    assert MILESTONES == ("base", "T4b")
+    assert [(row.id, row.milestone) for row in ROWS] == [("view-read-in", "T4b")]
 
 
 # A later milestone with rows, put in the matrix where a test needs one.

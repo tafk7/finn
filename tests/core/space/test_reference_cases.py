@@ -25,12 +25,13 @@ from core.space.reference import (
     Scope,
     Selector,
     Space,
+    View,
     When,
     computed,
     listed,
     membership,
 )
-from core.space.reference_harness import Case, Pair, Spelling
+from core.space.reference_harness import Case, Pair, Spelling, check_definition, expected
 
 
 def divisors(extent: int) -> tuple[int, ...]:
@@ -826,3 +827,40 @@ def test_a_choice_read_beside_members_stands_though_it_decides_an_entrys_existen
     raised = FITTED.start({}, {**stored, "g.c": 2, "s.kitchen.p": 1})
     raised.check_change(Change(commit={"x": 3}))
     raised.check_possible("x")
+
+
+# -- 7. views are read out (SZ100 (3)) ------------------------------------------------------------
+#
+# A stage presents its storage as a view; the parent's rule reads it. Only a view reads a
+# view, so the model refuses the definition (``view-read-in``); today's engine builds it
+# and answers, until T4b.
+
+
+def storage_stage(name: str) -> Scope:
+    return Scope(
+        name,
+        choices=(Choice("depth", listed(1, 2, 4)),),
+        views=(View("storage", (f"{name}.depth",), lambda read: 8 * read[f"{name}.depth"]),),
+    )
+
+
+READ_IN = Space(
+    (),
+    Scope(
+        "",
+        children=(storage_stage("first"), storage_stage("second")),
+        constraints=(
+            Constraint(
+                "fits",
+                ("first.storage", "second.storage"),
+                lambda read: read["first.storage"] + read["second.storage"] <= 40,
+                "too-deep",
+            ),
+        ),
+    ),
+)
+
+
+@expected("view-read-in")
+def test_a_rule_reading_a_view_is_no_definition() -> None:
+    check_definition("a rule reading its children's views", READ_IN)

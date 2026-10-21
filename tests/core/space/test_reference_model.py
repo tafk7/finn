@@ -625,38 +625,28 @@ def staged() -> Space:
             ),
         ),
     )
-    return Space(
-        (),
-        Scope(
-            "",
-            children=(stage,),
-            constraints=(
-                Constraint("fits", ("stage.half",), lambda r: r["stage.half"] >= 1, "none"),
-            ),
-        ),
-    )
+    return Space((), Scope("", children=(stage,)))
 
 
-def test_reading_1_a_view_refusing_on_its_own_values_is_an_origin() -> None:
+def test_reading_1_a_view_refused_with_its_space_is_refused_through_and_never_an_origin() -> None:
+    """SZ100 (3): no piece reads a view. ``half`` refusing an odd depth refuses the view
+    with its own reason, and no change: nothing rules on it. Refused with its Space, the
+    view is refused through (FN2 for views): the child's rule is the origin."""
+
     base = Configuration(staged(), {}, {"stage.depth": 2})
     assert base.solve().validity().verdict is T
-    odd = rejected(change(base, Change(commit={"stage.depth": 3})))
-    assert odd.refusals == (
-        RuleRefusal(
-            "stage.half", "view", (Reason(ReasonKind.VIEW_BODY, "stage.half", "stage", "odd"),), ()
-        ),
+    odd = accepted(change(base, Change(commit={"stage.depth": 3})))
+    assert odd.validity.verdict is T
+    assert odd.configuration.solve().view("stage.half") == Refused(
+        (Reason(ReasonKind.VIEW_BODY, "stage.half", "stage", "odd"),)
     )
-    # refused through its Space, the view is no origin: the child's rule is
     deep = rejected(change(base, Change(commit={"stage.depth": 4})))
     assert deep.refusals == (rule("stage.small", "too-deep", "stage"),)
     after = solve_at(staged(), {"stage.depth": 4})
     assert after.view("stage.half") == Refused(
         (Reason(ReasonKind.SPACE_REFUSED, "stage.half", "stage"),)
     )
-    assert false_kinds(after) == {
-        (PieceKind.CONSTRAINT, "fits"),
-        (PieceKind.CONSTRAINT, "stage.small"),
-    }
+    assert false_kinds(after) == {(PieceKind.CONSTRAINT, "stage.small")}
 
 
 def facts_refused() -> Space:
@@ -1448,102 +1438,43 @@ def test_a_broken_configuration_accepts_its_pair_kept_and_refuses_a_new_one() ->
     assert accepted(change(broken, Change(commit={"y": 1}))).validity.verdict is T
 
 
-def viewed_child() -> Space:
-    """The child ``c`` caps ``x``; its view ``v`` answers ``y``; the root's ``high``
-    asks ``v`` to be at least 2."""
+def child_stating() -> Space:
+    """The child ``c`` caps ``x``; its derived value ``u`` states ``y``; the root's
+    ``high`` asks ``u`` to be at least 2."""
 
     child = Scope(
         "c",
         choices=(Choice("x", listed(1, 2, 3)), Choice("y", listed(1, 2, 3))),
         constraints=(Constraint("small", ("c.x",), lambda r: r["c.x"] <= 1, "big"),),
-        views=(View("v", ("c.y",), lambda r: r["c.y"]),),
+        derived=(Derived("u", ("c.y",), lambda r: r["c.y"]),),
     )
     return Space(
         (),
         Scope(
             "",
             children=(child,),
-            constraints=(Constraint("high", ("c.v",), lambda r: r["c.v"] >= 2, "low"),),
+            constraints=(Constraint("high", ("c.u",), lambda r: r["c.u"] >= 2, "low"),),
         ),
     )
 
 
-def test_a_clear_revealing_a_rule_masked_by_its_views_space_is_accepted() -> None:
-    """§ 16.16, masking: with ``c`` refused, ``v`` refuses with it and ``high`` is false
-    through ``v`` with no origin of its own. Clearing ``x`` leaves ``c`` open, so ``v``
-    answers 1 and ``high`` is false at its own origin: a new pair, but a change made only
-    of clears is never refused, and the configuration reads refused at ``high``."""
-
-    broken = Configuration(viewed_child(), {}, {"c.x": 3, "c.y": 1})
-    assert false_kinds(broken.solve()) == {
-        (PieceKind.CONSTRAINT, "high"),
-        (PieceKind.CONSTRAINT, "c.small"),
-    }
-    cleared = accepted(change(broken, Change(clear=("c.x",))))
-    assert cleared.validity.false == (
-        Piece(PieceKind.CONSTRAINT, "", "high", F, reasons=(constraint_reason("high", "low"),)),
-    )
-    assert cleared.configuration.solve().view("c.v") == Known(1)
-    # a change that also sets is judged by its pairs: committing ``y`` = 2 beside the clear
-    # leaves ``high`` true
-    assert accepted(change(broken, Change(clear=("c.x",), commit={"c.y": 2}))).validity.verdict is U
-
-
 def test_a_clear_beside_a_repeated_value_is_clear_only_and_accepted() -> None:
     """§ 16.18: "sets" means a new value. Committing ``y`` = 1, the value stored, beside
-    the clear that reveals ``high`` sets nothing: the change is clear-only, accepted, and
-    the configuration reads refused at ``high``. Committing a new value that keeps
-    ``high`` false is a change that sets, and is refused."""
+    the clear of ``x`` sets nothing: the change is clear-only, accepted, and the
+    configuration reads refused at ``high`` as before. Committing a new value that makes
+    ``high`` false is a change that sets, and is refused. (The masking this case showed,
+    § 16.16's note, went with SZ100 (3): ``high`` reads a derived value.)"""
 
-    broken = Configuration(viewed_child(), {}, {"c.x": 3, "c.y": 1})
+    broken = Configuration(child_stating(), {}, {"c.x": 3, "c.y": 1})
     repeated = accepted(change(broken, Change(clear=("c.x",), commit={"c.y": 1})))
     assert repeated.configuration.stored == {"c.y": 1}
     assert repeated.validity.false == (
         Piece(PieceKind.CONSTRAINT, "", "high", F, reasons=(constraint_reason("high", "low"),)),
     )
-    other = Configuration(viewed_child(), {}, {"c.x": 3, "c.y": 2})
+    other = Configuration(child_stating(), {}, {"c.x": 3, "c.y": 2})
     assert rejected(change(other, Change(clear=("c.x",), commit={"c.y": 1}))).refusals == (
         rule("high", "low"),
     )
-
-
-def viewed_child_over_a_fact() -> Space:
-    """As :func:`viewed_child`, the child's rule over the fact ``f``."""
-
-    child = Scope(
-        "c",
-        choices=(Choice("y", listed(1, 2, 3)),),
-        constraints=(Constraint("small", ("f",), lambda r: r["f"] <= 1, "big"),),
-        views=(View("v", ("c.y",), lambda r: r["c.y"]),),
-    )
-    return Space(
-        ("f",),
-        Scope(
-            "",
-            children=(child,),
-            constraints=(Constraint("high", ("c.v",), lambda r: r["c.v"] >= 2, "low"),),
-        ),
-    )
-
-
-def test_an_unset_revealing_a_rule_masked_by_its_views_space_is_accepted() -> None:
-    """``f = 3`` refuses ``c``, masking ``high``; ``y = 1`` is set beside it (no new
-    pair). Unsetting ``f`` reopens ``c`` and reveals ``high`` false at its own origin;
-    setting ``f`` to 1 reveals it too. Both are changes of facts: accepted, reading refused
-    at ``high``, which the report lists with ``c.y`` standing (§ 16.24)."""
-
-    masked = accepted(
-        change(Configuration(viewed_child_over_a_fact(), {"f": 3}), Change(commit={"c.y": 1}))
-    )
-    assert false_kinds(masked.configuration.solve()) == {
-        (PieceKind.CONSTRAINT, "high"),
-        (PieceKind.CONSTRAINT, "c.small"),
-    }
-    high = Piece(PieceKind.CONSTRAINT, "", "high", F, reasons=(constraint_reason("high", "low"),))
-    for edit in (Change(unset=("f",)), Change(facts={"f": 1})):
-        revealed = accepted(change(masked.configuration, edit))
-        assert revealed.validity.false == (high,)
-        assert revealed.broken == (rule("high", "low", standing=("c.y",)),)
 
 
 # --- SZ100 (6): Members, and standing as what the origin's evaluation read ----------------
@@ -1708,10 +1639,12 @@ def test_a_members_entry_is_a_derived_value_below_it() -> None:
         )
 
     assert entries("k.e").validate().kind("m") == "members"
-    for names, path in ((("k.v",), ("m", "k.v")), (("d",), ("m", "d"))):
-        with pytest.raises(DefinitionError) as raised:
-            entries(*names).validate()
-        assert (raised.value.kind, raised.value.path) == ("malformed", path)
+    with pytest.raises(DefinitionError) as raised:
+        entries("d").validate()
+    assert (raised.value.kind, raised.value.path) == ("malformed", ("m", "d"))
+    with pytest.raises(DefinitionError) as raised:
+        entries("k.v").validate()  # SZ100 (3)
+    assert (raised.value.kind, raised.value.path) == ("view-read-in", ("m", "k.v"))
     with pytest.raises(DefinitionError) as raised:
         entries("k.x").validate()
     assert (raised.value.kind, raised.value.path) == ("unknown-read", ("m", "k.x"))
@@ -1921,24 +1854,38 @@ def test_a_derived_value_may_refuse_and_its_readers_receive_a_refused_input() ->
 
 
 def stage(name: str) -> Scope:
+    """A stage states its storage as a derived value, and presents it as a view."""
+
     return Scope(
         name,
         choices=(Choice("depth", listed(1, 2, 4)),),
-        views=(View("storage", (f"{name}.depth",), lambda r: 8 * next(iter(r.values()))),),
+        derived=(Derived("bits", (f"{name}.depth",), lambda r: 8 * next(iter(r.values()))),),
+        views=(View("storage", (f"{name}.bits",), lambda r: next(iter(r.values()))),),
     )
 
 
-def test_a_parent_reading_its_childrens_views_is_not_a_cycle() -> None:
+def test_a_parent_rules_on_its_childrens_derived_values_and_composes_their_views() -> None:
+    """SZ100 (3): the parent's rule reads what its children state (derived values); its
+    view ``total`` composes their views. The child is valid on its own, and its view
+    answers while the parent is refused; the parent's view refuses with its Space."""
+
     space = Space(
         (),
         Scope(
             "",
             children=(stage("first"), stage("second")),
+            views=(
+                View(
+                    "total",
+                    ("first.storage", "second.storage"),
+                    lambda r: r["first.storage"] + r["second.storage"],
+                ),
+            ),
             constraints=(
                 Constraint(
                     "fits",
-                    ("first.storage", "second.storage"),
-                    lambda r: r["first.storage"] + r["second.storage"] <= 40,
+                    ("first.bits", "second.bits"),
+                    lambda r: r["first.bits"] + r["second.bits"] <= 40,
                     "too-deep",
                 ),
             ),
@@ -1956,6 +1903,8 @@ def test_a_parent_reading_its_childrens_views_is_not_a_cycle() -> None:
     # the child is valid on its own; its view answers while the parent is refused
     assert refused.validity("first").verdict is T
     assert refused.view("first.storage") == Known(32)
+    assert refused.view("total") == Refused((Reason(ReasonKind.SPACE_REFUSED, "total", ""),))
+    assert solve_at(space, {"first.depth": 1, "second.depth": 2}).view("total") == Known(24)
 
 
 # --- definitions: reads, domains, cycles -------------------------------------------------
@@ -2002,7 +1951,6 @@ def test_a_domain_whose_membership_reaches_a_choice_is_a_definition_error() -> N
         ("y", "d", "x"): domain_reading(
             "d", derived=(Derived("d", ("n", "x"), lambda r: r["n"] + r["x"]),)
         ),
-        ("y", "v"): domain_reading("v", views=(View("v", ("n",), lambda r: r["n"]),)),
         # § 16.17: an input whose existence a choice decides beyond the choice's own guards
         ("y", "s.a.d", "s"): domain_reading(
             "s.a.d",
@@ -2030,58 +1978,109 @@ def test_a_domain_whose_membership_reaches_a_choice_is_a_definition_error() -> N
     ranked().validate()
 
 
-def test_a_constraint_reading_a_view_of_its_own_space_is_a_cycle() -> None:
-    space = Space(
+def test_reading_a_view_in_is_no_definition() -> None:
+    """SZ100 (3): only a view reads a view. A constraint, a derived value, a ``when``
+    guard, a domain's membership, computed list or ``order``, and a ``Members``, reading a
+    view of their own Space, of a Space above or of a child, are ``view-read-in``,
+    checked before cycles (a constraint on a view of its own Space was one)."""
+
+    view = View("total", ("depth",), lambda r: 8 * r["depth"])
+    inner_view = View("w", ("depth",), lambda r: r["depth"])
+
+    def described(**root: Any) -> Space:
+        inner = root.pop("inner", Scope("inner", views=(inner_view,)))
+        return Space(
+            ("n",),
+            Scope(
+                "",
+                choices=(Choice("depth", listed(1, 2)), *root.pop("choices", ())),
+                views=root.pop("views", (view,)),
+                children=(inner,),
+                **root,
+            ),
+        )
+
+    true = Constraint("fits", ("total",), lambda r: True, "c")
+    cases = [
+        (("fits", "total"), described(constraints=(true,))),
+        (
+            ("inner.fits", "total"),
+            described(inner=Scope("inner", views=(inner_view,), constraints=(true,))),
+        ),
+        (
+            ("fits", "inner.w"),
+            described(constraints=(Constraint("fits", ("inner.w",), lambda r: True, "c"),)),
+        ),
+        (("d", "inner.w"), described(derived=(Derived("d", ("inner.w",), lambda r: 1),))),
+        (
+            ("inner", "total"),
+            described(
+                inner=Scope("inner", views=(inner_view,), when=When(("total",), lambda r: True))
+            ),
+        ),
+        (
+            ("y", "total"),
+            described(choices=(Choice("y", membership(lambda v, r: True, ("total",))),)),
+        ),
+        (
+            ("y", "inner.w"),
+            described(choices=(Choice("y", computed(lambda r: (1,), ("inner.w",))),)),
+        ),
+        (
+            ("y", "total"),
+            described(
+                choices=(Choice("y", listed(1, 2, order=lambda v, r: v, order_reads=("total",))),)
+            ),
+        ),
+        (("m", "inner.w"), described(members=(Members("m", ("inner.w",)),))),
+    ]
+    for path, space in cases:
+        with pytest.raises(DefinitionError) as raised:
+            space.validate()
+        assert (raised.value.kind, raised.value.path) == ("view-read-in", path)
+    # a view reads views: its own Space's and its children's
+    described(views=(view, View("both", ("total", "inner.w"), lambda r: 0))).validate()
+
+
+def test_a_cycle_is_still_a_definition_error() -> None:
+    """Views read out close no cycle; derived values in a ring, a guard reading a value
+    of the scope it guards, and views reading each other in a ring still do."""
+
+    ring = Space(
         (),
         Scope(
             "",
-            choices=(Choice("depth", listed(1, 2, 4)),),
-            views=(View("storage", ("depth",), lambda r: 8 * r["depth"]),),
-            constraints=(
-                Constraint("fits", ("storage",), lambda r: r["storage"] <= 16, "too-deep"),
+            derived=(
+                Derived("a", ("b",), lambda r: r["b"]),
+                Derived("b", ("a",), lambda r: r["a"]),
             ),
         ),
     )
-    with pytest.raises(DefinitionError) as raised:
-        space.validate()
-    assert raised.value.kind == "cycle"
-    assert {"constraint:fits", "value:storage", "validity:"} <= set(raised.value.path)
-
-
-def test_a_constraint_reading_a_view_of_the_space_above_is_a_cycle() -> None:
-    inner = Scope(
-        "inner",
-        constraints=(Constraint("fits", ("total",), lambda r: r["total"] <= 16, "too-big"),),
-    )
-    space = Space(
+    guard = Space(
         (),
         Scope(
             "",
-            choices=(Choice("depth", listed(1, 2)),),
-            views=(View("total", ("depth",), lambda r: 8 * r["depth"]),),
-            children=(inner,),
+            children=(
+                Scope(
+                    "g",
+                    when=When(("g.c",), lambda r: r["g.c"] > 1),
+                    choices=(Choice("c", listed(1, 2)),),
+                ),
+            ),
         ),
     )
-    with pytest.raises(DefinitionError) as raised:
-        space.validate()
-    assert raised.value.kind == "cycle"
-    assert "constraint:inner.fits" in raised.value.path
-
-
-def test_a_guard_reading_a_view_of_the_space_above_is_a_cycle() -> None:
-    space = Space(
+    views = Space(
         (),
         Scope(
             "",
-            choices=(Choice("depth", listed(1, 2)),),
-            views=(View("total", ("depth",), lambda r: 8 * r["depth"]),),
-            children=(Scope("extra", when=When(("total",), lambda r: r["total"] > 8)),),
+            views=(View("v", ("w",), lambda r: r["w"]), View("w", ("v",), lambda r: r["v"])),
         ),
     )
-    with pytest.raises(DefinitionError) as raised:
-        space.validate()
-    assert raised.value.kind == "cycle"
-    assert {"guard:extra", "value:total", "validity:"} <= set(raised.value.path)
+    for space, met in ((ring, "value:a"), (guard, "presence:g"), (views, "value:v")):
+        with pytest.raises(DefinitionError) as raised:
+            space.validate()
+        assert raised.value.kind == "cycle"
+        assert met in raised.value.path
 
 
 # --- nested selectors: an outer kernel, an inner kernel, cores --------------------------

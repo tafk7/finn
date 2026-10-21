@@ -211,9 +211,12 @@ def _input(path: str) -> str:
 
 
 class _Unchecked(model.Index):
-    """The description's index without the model's definition checks (cycles, a domain
-    reading a choice): a description the model refuses is still built in the engine, to see
-    what the engine answers."""
+    """The description's index without the model's definition checks (a view read in,
+    cycles, a domain reading a choice): a description the model refuses is still built in
+    the engine, to see what the engine answers."""
+
+    def _check_views_read_in(self) -> None:
+        return None
 
     def _check_domains(self) -> None:
         return None
@@ -673,7 +676,8 @@ def definition(
     """Whether the engine takes ``description`` as a definition: a dependency cycle reported
     when building the Space, or when asked (its validity, every rule and every view of the
     configuration with ``facts``), is ``"cycle"``; a domain whose membership reads a choice,
-    refused at compile, is ``"domain-reads-choice"``; otherwise ``None``."""
+    refused at compile, is ``"domain-reads-choice"``; otherwise ``None``. (Today's engine has
+    no ``"view-read-in"``: it builds a Space reading a view in, T4b's row.)"""
     try:
         engine = build(description, spelling, unchecked=True)
         point = engine.open(dict(facts or {}))

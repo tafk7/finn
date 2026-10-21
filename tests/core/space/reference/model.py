@@ -40,7 +40,11 @@ unknown) or absent (unset, its scope absent or not in play).
 reads its inputs: all known, its body answers (a :class:`~.description.Refuse` is a
 refusal at its origin); an input refused, it is refused through it; an input waiting,
 it waits; an input inapplicable, it is inapplicable. A view also refuses, through,
-when its Space's validity is false. A ``Members`` (SZ100 (6)) reads its entries,
+when its Space's validity is false. *Views are read out* (SZ100 (3)): no constraint,
+derived value, ``when`` guard, domain (its membership, its computed list, its ``order``)
+or ``Members`` reads a view, and a description that does is no definition
+(``view-read-in``); a view reads anything readable, other views included, its own
+Space's and its children's. A ``Members`` (SZ100 (6)) reads its entries,
 derived values in scopes below it: its value is the (entry, value) pairs of the
 entries that answer a value, sorted by entry. An entry answering inapplicable (its
 scope absent, or present with an inapplicable value) is skipped. Otherwise, in this
@@ -68,10 +72,10 @@ space, and is never refused for its facts (§ 16.24).
    refuses the change (:class:`~.answers.AssignmentRefusal`). A value whose membership
    waits on a missing fact is accepted, and waits.
 2. *Counted pairs.* An origin is a constraint false on its own values; a derived value
-   or a view refusing on its own values; a present choice whose listed domain lists no
-   value. A configuration's counted pairs are each false piece of the root's validity
-   with each origin it is false through: the piece itself, or the origins its refused
-   inputs lead back to.
+   refusing on its own values; a present choice whose listed domain lists no value (a
+   view refusing on its own values feeds no piece: SZ100 (3)). A configuration's counted
+   pairs are each false piece of the root's validity with each origin it is false
+   through: the piece itself, or the origins its refused inputs lead back to.
 3. *Refusal.* A change of choices that sets a choice to a new value is refused when the
    successor holds a counted pair the predecessor does not: a piece false through an
    origin it was not false through before (a piece absent, unknown or true before counts
@@ -79,7 +83,8 @@ space, and is never refused for its facts (§ 16.24).
    (:class:`~.answers.RuleRefusal`), naming the stored choices standing in its way. A
    rule false only through a refused input is never itself a refusal. So no accepted
    change of choices that sets adds a pair. A change of choices that sets nothing new
-   (its commits repeat stored values) and clears is never refused (reading 3).
+   (its commits repeat stored values) and clears is never refused, and adds no pair
+   (reading 3).
 4. *New facts* (§ 16.24, § 16.25). A change of facts is the bind of the stored choices
    under the new facts (:func:`bind`), then its choices as a change of choices on that
    design space, published together or not at all. The bind type-checks every stored
@@ -108,18 +113,17 @@ Readings chosen where the semantics leave room
 The note is ``records/space-semantics-defaults-2026-10-18/NOTE.md`` in the design
 corpus; § 16 holds the readings its author gave for this model.
 
-1. *A view's body refusing on its own values is an origin* (§ 16.1), as a derived
-   value's is. A view refused because its Space is refused is refused through, never an
-   origin: its Space's false pieces are counted on their own.
+1. *A view refused because its Space is refused is refused through, never an origin*
+   (FN2 for views): its Space's false pieces are counted on their own. A view's body
+   refusing on its own values refuses the view with its own reason (§ 16.1); no piece
+   reads a view (SZ100 (3)), so neither is ever in a pair.
 2. *Only an origin feeding a false piece counts* (§ 16.2, kept by § 16.15). A piece's
    origins are found from it, following refused inputs back through derived values,
-   views, ``Members`` (to their refused entries; a ``Members`` is never an origin), and
+   ``Members`` (to their refused entries; a ``Members`` is never an origin), and
    choices and values refused through a guard (to the guard's refused reads);
    a listed domain's list refused through its membership's input, back over the facts.
-   A refusing derived value or view nothing rules on reads refused where it is asked,
-   is in no pair, and refuses no change. A piece false only through a view refused with
-   its Space has no origin of its own: its Space's false pieces are counted on their
-   own (reading 1).
+   A refusing derived value nothing rules on reads refused where it is asked, is in no
+   pair, and refuses no change; nor is a view, which no piece reads (SZ100 (3)).
 3. *A change is refused by a new pair* (§ 16.15, which replaces § 16.2-16.3's reach and
    supersedes § 16.13's first consequence and § 16.14). Pieces are told apart by kind,
    owner and subject; a pair is new when the predecessor lacks it, whatever moved.
@@ -134,15 +138,15 @@ corpus; § 16 holds the readings its author gave for this model.
    change of facts may enlarge it, § 16.24), so a change from nothing committing the
    stored set of a design space reached by such changes is accepted (FN3), and no
    accepted addition leaves a Space newly refused (§ 16.14's exception cannot arise).
-   *Clears are never refused* (§ 16.16; § 5.6 stands): a change of choices made only of
-   them is accepted whatever pairs it adds; an unset is a change of facts, never refused
-   either. "Sets" means a new value (§ 16.18): committing the value already stored sets
-   nothing, so a change whose commits all repeat stored values is clear-only too (as a
-   same-value update returns the receiver). It can add a pair in a single shape,
-   **masking**: a piece false only through a view refused with its Space, whose Space
-   the change reopens, so that the view answers and the piece is false at an origin of
-   its own. The design space reads refused, naming it; its change from nothing may be
-   refused (a named limit of FN3's invariant, until products leave the Space).
+   *Clears are never refused* (§ 16.16; § 5.6 stands): clearing stays the remedy a
+   refusal names; an unset is a change of facts, never refused either. "Sets" means a
+   new value (§ 16.18): committing the value already stored sets nothing, so a change
+   whose commits all repeat stored values is clear-only too (as a same-value update
+   returns the receiver). Consequence (SZ100 (3)): a clear-only change adds no pair. A
+   clear only moves answers towards unresolved, and the one shape that could add a pair,
+   masking (a piece false only through a view refused with its Space, revealed when the
+   change reopens that Space: § 16.14, § 16.16's note), has no subject, since no piece
+   reads a view. So no accepted change of choices adds a pair, clears included.
 4. *What stands in the way* (§ 16.4; SZ100 (6): standing is what the origin's
    evaluation read): the stored choices the origin's evaluation read for their value,
    in the design space judged, followed through the reads made by the bodies of the
@@ -199,8 +203,9 @@ corpus; § 16 holds the readings its author gave for this model.
    still refused, by 3, as a newly present false piece, nothing standing. A domain
    already empty before the change adds no pair.
 10. *A domain's order* (§ 16.10) ranks the membership list over ``order_reads``, which
-    may read choices: :meth:`Solution.ordered` is the ranking, known, or waiting while a
-    read waits. Possible values are answered in membership's list order.
+    may read choices, never a view (SZ100 (3)): :meth:`Solution.ordered` is the
+    ranking, known, or waiting while a read waits. Possible values are answered in
+    membership's list order.
 11. *An unknown guard answers unknown* for every piece under it (constraints, empty
     listed domains, guards), not Kleene's implication (the canon's text in § 11: "a scope
     whose guard waits counts each of its pieces as unknown").
@@ -882,14 +887,15 @@ class _Evaluation:
                 self._read_origins(read, found)
             return
         kind = self.index.kind(path)
-        assert kind in ("derived", "view", "members"), (path, kind)
+        assert kind in ("derived", "members"), (path, kind)  # no piece reads a view
         inputs = self.inputs(self.index.reads_of(path))
         if inputs.refused or kind == "members":
             for read in inputs.refused:
                 self._read_origins(read, found)
             return
-        body = (ReasonKind.DERIVED_BODY, ReasonKind.VIEW_BODY)
-        own = tuple(r for r in answer.reasons if r.kind in body and r.subject == path)
+        own = tuple(
+            r for r in answer.reasons if r.kind is ReasonKind.DERIVED_BODY and r.subject == path
+        )
         if own:
             found[path] = (kind, own)
 

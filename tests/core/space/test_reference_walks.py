@@ -68,7 +68,6 @@ from core.space.reference_harness.walks import (
     counted_pairs,
     differences,
     generate,
-    masking_problems,
     model_forms,
     order_problems,
     pending,
@@ -130,15 +129,15 @@ def test_a_walk_is_the_same_for_the_same_seed() -> None:
     )
 
 
-def test_descriptions_hold_two_to_six_choices_and_skip_cycles() -> None:
+def test_descriptions_hold_two_to_six_choices_and_skip_views_read_in() -> None:
     rng = random.Random(7)
     skipped = 0
     for _ in range(40):
         generated, engine = generate(rng)
-        skipped += generated.skipped["cycle"]
+        skipped += generated.skipped["view-read-in"]
         assert 2 <= sum(info.cases is None for info in engine.index.choices.values()) <= 6
         assert generated.text.startswith("facts ")
-    assert skipped  # a rule reading a view of its own Space is drawn now and then, and skipped
+    assert skipped  # a rule reading a view is drawn now and then, and skipped (SZ100 (3))
 
 
 # -- the engine comparison: counted while a milestone is pending, strict without -------------------
@@ -204,8 +203,8 @@ def test_the_summary_names_the_mode_and_the_checks(monkeypatch: pytest.MonkeyPat
     text = table(tallies)
     checks = ", ".join(f"{name} {count}" for name, count in sorted(tallies[0].checks.items()))
     assert (
-        f"invariant checks: {checks}; binds reading refused, reporting rules a clear revealed "
-        "(§ 16.16) 0, or new facts broke (§ 16.24) 0" in text
+        f"invariant checks: {checks}; binds reading refused, reporting rules new facts broke "
+        "(§ 16.24) 0" in text
     )
     assert "engine disagreements (counted (pending: lane 9)) by question:" in text
     assert "excused" not in text
@@ -276,7 +275,7 @@ def test_a_configuration_binds_again_with_nothing_broken() -> None:
     assert bind_problems(walked, broke) == (
         [
             "1 bind: reports [('linked', 'constraint')]; what a walk publishes binds again "
-            "with nothing broken (FN3), but for rules a clear revealed ([])"
+            "with nothing broken (FN3), but for rules new facts broke ([])"
         ],
         frozenset({"linked"}),
     )
@@ -305,7 +304,7 @@ def test_a_walk_never_reaches_a_configuration_whose_bind_is_refused() -> None:
     problems, _ = bind_problems(built, bound)
     assert problems == [
         "1 bind: reports [('d', 'derived')]; what a walk publishes binds again with nothing "
-        "broken (FN3), but for rules a clear revealed ([])"
+        "broken (FN3), but for rules new facts broke ([])"
     ]
 
 
@@ -370,10 +369,10 @@ def test_a_choice_the_step_sets_holds_its_value_and_kept_out_of_play_turns_dorma
     assert below(StateForm("absent"), StateForm("set", 2), (2,)) == "absent, set: set"
 
 
-def views_of_a_space_refused_by_an_addition() -> Space:
+def a_view_of_a_space_refused_by_an_addition() -> Space:
     """The probe of § 16.14: ``g``, in case ``a`` of the open ``s``, is guarded by ``d``,
-    which refuses the fact ``f`` when odd; the root's view ``v`` reads ``f``, and the root's
-    rule ``uses`` reads ``v``."""
+    which refuses the fact ``f`` when odd; the root's view ``v`` reads ``f``. (Its second
+    shape, a root rule reading a child's view, went with views read out: SZ100 (3).)"""
     g = Scope("g", when=When(("d",), lambda r: r["d"] > 0), choices=(Choice("n", listed(1, 2)),))
     return Space(
         ("f",),
@@ -382,38 +381,31 @@ def views_of_a_space_refused_by_an_addition() -> Space:
             selectors=(Selector("s", (Scope("a", children=(g,)), Scope("b"))),),
             derived=(Derived("d", ("f",), lambda r: Refuse("odd") if r["f"] % 2 else r["f"]),),
             views=(View("v", ("f",), lambda r: r["f"]),),
-            children=(
-                Scope(
-                    "k",
-                    views=(View("w", ("f",), lambda r: r["f"]),),
-                    selectors=(Selector("t", (Scope("x", children=(g,)), Scope("y"))),),
-                ),
-            ),
-            constraints=(Constraint("uses", ("k.w",), lambda r: r["k.w"] > 0, "unused"),),
         ),
     )
 
 
 def test_an_addition_that_would_leave_a_space_refused_is_refused() -> None:
-    # § 16.15 removes § 16.14's exception: selecting ``a`` (or ``k``'s ``x``) makes the guard's
-    # piece false through ``d``, over the facts alone: a new pair, refused with nothing
-    # standing. Were it accepted, the root's view ``v`` (or the rule ``uses``, through ``k``'s
-    # view ``w``) would move down the information order, and invariants 2 and 3 name it.
-    start = Configuration(views_of_a_space_refused_by_an_addition(), {"f": 3})
+    # § 16.15 removes § 16.14's exception: selecting ``a`` makes the guard's piece false
+    # through ``d``, over the facts alone: a new pair, refused with nothing standing. Were it
+    # accepted, the root's view ``v`` would move down the information order, and invariants 2
+    # and 3 name it.
+    start = Configuration(a_view_of_a_space_refused_by_an_addition(), {"f": 3})
     structure = Structure(start.index)
     asked = questions(start.index)
     before = model_forms(start.solve(), asked)
-    for selector, case, moved in (("s", "a", ("answer", "v")), ("k.t", "x", ("rule", "uses"))):
-        edit = Change(commit={selector: case})
-        result = change(start, edit)
-        assert isinstance(result, Rejected)
-        assert result.refusals == (RuleRefusal("d", "derived", ODD, ()),)
-        assert check_change(structure, start, edit, result).problems == []
-        published = Configuration(start.space, {"f": 3}, {selector: case})
-        fake = Accepted(published, (), (), (), published.solve().validity())
-        problems = check_change(structure, start, edit, fake).problems
-        assert len(problems) == 1 and problems[0].startswith("3 accepted: ")
-        assert moved in order_problems(before, model_forms(published.solve(), asked), edit.commit)
+    edit = Change(commit={"s": "a"})
+    result = change(start, edit)
+    assert isinstance(result, Rejected)
+    assert result.refusals == (RuleRefusal("d", "derived", ODD, ()),)
+    assert check_change(structure, start, edit, result).problems == []
+    published = Configuration(start.space, {"f": 3}, {"s": "a"})
+    fake = Accepted(published, (), (), (), published.solve().validity())
+    problems = check_change(structure, start, edit, fake).problems
+    assert len(problems) == 1 and problems[0].startswith("3 accepted: ")
+    assert ("answer", "v") in order_problems(
+        before, model_forms(published.solve(), asked), edit.commit
+    )
 
 
 # -- invariants 3 and 4: no pair added; refusals named exactly ------------------------------------
@@ -562,67 +554,29 @@ def test_the_counted_pairs_name_each_false_piece_with_the_origins_it_is_false_th
         assert check_change(structure, base, edit, result).problems == []
 
 
-# -- clears and unsets (§ 16.16): never refused, adding a pair only by masking ---------------------
+# -- clears (§ 16.16): never refused, and adding no pair (SZ100 (3)) -------------------------------
 
 
-def viewed_child() -> Space:
-    """The child ``c`` caps ``x``; its view ``v`` answers ``y``; the root's ``high`` asks
-    ``v`` to be at least 2: while ``c`` is refused, ``high`` is false through ``v`` alone."""
-    child = Scope(
-        "c",
-        choices=(Choice("x", listed(1, 2, 3)), Choice("y", listed(1, 2, 3))),
-        constraints=(Constraint("small", ("c.x",), lambda r: r["c.x"] <= 1, "big"),),
-        views=(View("v", ("c.y",), lambda r: r["c.y"]),),
-    )
-    return Space(
-        (),
-        Scope(
-            "",
-            children=(child,),
-            constraints=(Constraint("high", ("c.v",), lambda r: r["c.v"] >= 2, "low"),),
-        ),
-    )
-
-
-def test_a_clear_revealing_a_masked_rule_is_accepted_and_its_bind_reports_the_rule() -> None:
-    masked = Configuration(viewed_child(), {}, {"c.x": 3, "c.y": 1})
-    edit = Change(clear=("c.x",))
-    result = change(masked, edit)
-    assert isinstance(result, Accepted)
-    checked = check_change(Structure(masked.index), masked, edit, result)
-    assert (checked.problems, checked.revealed, checked.runs["3 clears"]) == ([], {"high"}, 1)
-    # refused, a clear-only change is a problem whatever it adds
-    fake = Rejected((RuleRefusal("high", "constraint", (), ()),), None)
-    assert check_change(Structure(masked.index), masked, edit, fake).problems == [
-        "3 clears: a change made only of clears and unsets is refused (§ 16.16)"
-    ]
-    # its bind reports the revealed rule: expected after the clear, and only then
-    revealed = result.configuration
-    bound = reference.bind(viewed_child(), {}, revealed.stored)
-    assert [item.origin for item in bound.broken] == ["high"]
-    assert bind_problems(revealed, bound, {"high"}) == ([], frozenset({"high"}))
-    assert bind_problems(revealed, bound)[0]
-
-
-def test_a_clear_only_step_adding_a_pair_any_other_way_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # No clear adds such a pair under the model's rules; the checker is shown it by hand. The
-    # sum read no view and no fact, so the pair it adds is no masking revealed, and the walk
-    # fails on the problem (as on every problem check_change returns).
+def test_a_clear_only_step_adding_a_pair_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No clear adds a pair under the model's rules: masking, the one shape that could, went
+    # with views read out. The checker is shown one by hand, and the walk fails on the
+    # problem (as on every problem check_change returns); a clear-only step refused fails too.
     before = Configuration(summed(), {}, {"b": 2, "c": 2})
     edit = Change(clear=("c",))
-    pair: Pair = (("constraint", "sum"), "sum")
-    assert masking_problems(
-        Structure(before.index), before.solve(), edit, {pair: "constraint"}
-    ) == [
-        "3 clears: the clear-only change adds (('constraint', 'sum'), 'sum'), not by revealing a "
-        "rule masked by a view's Space or an unset fact (§ 16.16)"
-    ]
-    monkeypatch.setattr(walks, "added_pairs", lambda *args: {pair: "constraint"})
     result = change(before, edit)
-    problems = check_change(Structure(before.index), before, edit, result).problems
-    assert len(problems) == 1 and problems[0].startswith("3 clears: the clear-only change adds")
+    assert isinstance(result, Accepted)
+    checked = check_change(Structure(before.index), before, edit, result)
+    assert (checked.problems, checked.runs["3 clears"]) == ([], 1)
+    fake = Rejected((RuleRefusal("sum", "constraint", (), ()),), None)
+    assert check_change(Structure(before.index), before, edit, fake).problems == [
+        "3 clears: a change made only of clears and unsets is refused (§ 16.16)"
+    ]
+    pair: Pair = (("constraint", "sum"), "sum")
+    monkeypatch.setattr(walks, "added_pairs", lambda *args: {pair: "constraint"})
+    assert check_change(Structure(before.index), before, edit, result).problems == [
+        "3 clears: the clear-only change adds (false piece, origin) pairs: "
+        "[(('constraint', 'sum'), 'sum')] (no masking: SZ100 (3))"
+    ]
 
 
 # -- facts steps (§ 16.24): never refused, checked against a bind of their result -----------------
@@ -733,8 +687,8 @@ def test_a_design_space_new_facts_left_reading_refused_binds_and_reports_the_rul
     assert bind_problems(walked, bound, broken={"k"}) == ([], frozenset({"k"}))
     assert bind_problems(walked, bound)[0] == [
         "1 bind: reports [('k', 'constraint')]; what a walk publishes binds again with nothing "
-        "broken (FN3), but for rules a clear revealed ([])"
+        "broken (FN3), but for rules new facts broke ([])"
     ]
     assert bind_problems(walked, bound, broken={"other"})[0][0].endswith(
-        "but for rules a clear revealed ([]) or new facts broke (['other'])"
+        "but for rules new facts broke (['other'])"
     )

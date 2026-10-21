@@ -12,13 +12,15 @@ A description is a tree of scopes. Each scope holds:
   whose reads are, through derived values, facts only. A domain may also carry an
   ``order``, a function of other declared reads (choices too) that ranks the listed
   values and checks nothing. A required choice has no safe value; no flow defaults it.
+  No domain reads a view (SZ100 (3)).
 - **selectors**: a choice whose cases are named child scopes; only the selected case
   is present. Its value is the case's name.
 - **derived** values: a function of declared reads, which returns a value or a
   :class:`Refuse` with its code (the derived value then reads refused, and every reader
   of it receives a refused input).
-- **views**: products; a body over declared reads that returns a value or a
-  :class:`Refuse` with its code.
+- **views**: products, read out (SZ100 (3)); a body over declared reads (anything
+  readable: other views too, its own Space's and its children's) that returns a value
+  or a :class:`Refuse` with its code. Nothing else reads a view.
 - **members** (:class:`Members`, SZ100 (6)): a value over named entries, derived values
   in scopes strictly below the scope declaring it (never views: SZ100 (3)). Its value
   is the sorted (entry, value) pairs of the entries that answer a value; an entry
@@ -42,10 +44,13 @@ Every function receives one mapping, from each declared read's path to its value
 reads nothing else.
 
 :meth:`Space.validate` rejects a malformed description (an unknown or unreadable
-read, a duplicate name, a malformed domain or guard), a domain whose membership reads
-anything but facts, or an input whose existence a choice decides other than through the
-choice's own guards (``"domain-reads-choice"``: a relation to another choice is a
-constraint) and a **cycle**. The rule for cycles: the definition's dependencies form a
+read, a duplicate name, a malformed domain or guard), a **view read in** (SZ100 (3),
+``"view-read-in"``: a constraint, a derived value, a ``when`` guard, a domain's
+membership, computed list or ``order``, or a ``Members`` reading a view; checked before
+the rest), a domain whose membership reads anything but facts, or an input whose
+existence a choice decides other than through the choice's own guards
+(``"domain-reads-choice"``: a relation to another choice is a constraint) and a
+**cycle**. The rule for cycles: the definition's dependencies form a
 graph in which
 
 - a value depends on its scope's presence; a choice's value also on its membership,
@@ -62,13 +67,12 @@ graph in which
 - a Space's validity depends on every constraint, listed domain's piece and guard's
   piece in its scope and below.
 
-Any cycle in that graph is an error naming its path. So a constraint reading a view
-of its own Space, or of any Space above it (whose validity counts that constraint),
-directly or through derived values and other views, is a cycle; reading a child's
-view is not. A guard reading a view of its own Space or of a Space above it is a cycle
-too (its piece counts in that validity). A domain's ``order`` is no node of the graph:
-nothing depends on it (validity and refusals never read it), so it cannot close a
-cycle, and it may read any readable path, a view of its own Space included.
+Any cycle in that graph is an error naming its path: derived values reading each other
+in a ring, a guard reading a value of the scope it guards, views reading each other in a
+ring. A view read in closes none any more: only views read views (SZ100 (3)), so a view,
+which depends on its Space's validity, is never below a piece of it. A domain's
+``order`` is no node of the graph: nothing depends on it (validity and refusals never
+read it), so it cannot close a cycle; it reads no view.
 """
 
 from __future__ import annotations
@@ -86,10 +90,10 @@ Order = Callable[[tuple[Any, ...], Reads], Sequence[Any]]
 
 class DefinitionError(Exception):
     """A malformed description. ``kind`` is one of ``"malformed"``, ``"duplicate"``,
-    ``"unknown-read"``, ``"unreadable"``, ``"domain-reads-choice"`` and ``"cycle"``;
-    ``path`` names the nodes involved (for a domain, the choice, the derived values
-    read through, and the read that is not a fact; for a cycle, the nodes around it,
-    the first repeated at the end)."""
+    ``"unknown-read"``, ``"unreadable"``, ``"view-read-in"`` (the reader, then the view),
+    ``"domain-reads-choice"`` and ``"cycle"``; ``path`` names the nodes involved (for a
+    domain, the choice, the derived values read through, and the read that is not a fact;
+    for a cycle, the nodes around it, the first repeated at the end)."""
 
     def __init__(self, kind: str, path: tuple[str, ...], detail: str = "") -> None:
         super().__init__(f"{kind}: {' -> '.join(path)}{': ' + detail if detail else ''}")
@@ -303,6 +307,7 @@ class Index:
             raise DefinitionError("malformed", ("",), "the root scope has no guard")
         self._add_scope(self.space.root, "", None, None, None, names)
         self._check_reads()
+        self._check_views_read_in()
         self._check_members()
         self._check_domains()
         self._check_cycles()
@@ -408,9 +413,23 @@ class Index:
             if scope.when is not None:
                 yield path, scope.when.reads
 
+    def _check_views_read_in(self) -> None:
+        """Views are read out (SZ100 (3)): only a view reads a view."""
+
+        for node, reads in self._declared_reads():
+            if node in self.views:
+                continue
+            for read in reads:
+                if read in self.views:
+                    raise DefinitionError(
+                        "view-read-in",
+                        (node, read),
+                        "views are read out: only a view reads a view",
+                    )
+
     def _check_members(self) -> None:
         """A ``Members`` entry is a derived value in a scope strictly below the declaring
-        scope (SZ100 (6); never a view, SZ100 (3)), named once."""
+        scope (SZ100 (6); a view is read in, SZ100 (3)), named once."""
 
         for path, (members, scope) in sorted(self.members.items()):
             if len(set(members.entries)) != len(members.entries):
