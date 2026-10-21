@@ -201,7 +201,9 @@ def test_the_summary_names_the_mode_and_the_checks(monkeypatch: pytest.MonkeyPat
     tallies = [walk(0, 3)]
     pend(monkeypatch)
     text = table(tallies)
-    checks = ", ".join(f"{name} {count}" for name, count in sorted(tallies[0].checks.items()))
+    checks = ", ".join(
+        f"{name} {count}" for name, count in sorted(tallies[0].checks.items()) if count
+    )
     assert (
         f"invariant checks: {checks}; binds reading refused, reporting rules new facts broke "
         "(§ 16.24) 0" in text
@@ -219,9 +221,9 @@ def test_a_broken_standing_list_in_the_model_fails_a_walk(monkeypatch: pytest.Mo
     standing: Callable[..., tuple[str, ...]] = reference.model._standing
     monkeypatch.setattr(reference.model, "_standing", lambda *args: standing(*args)[1:])
     pend(monkeypatch)
-    tally = walk(2, 3)
+    tally = walk(30, 4)
     assert tally.failed == "4 standing" and tally.failure is not None
-    assert tally.failure.startswith("seed 2, step 3: invariant 4 standing: clearing")
+    assert tally.failure.startswith("seed 30, step 4: invariant 4 standing: clearing")
 
 
 # -- invariant 1: history-independence and the bind ------------------------------------------------

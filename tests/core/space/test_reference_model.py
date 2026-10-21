@@ -825,46 +825,75 @@ def test_reading_5_clearing_a_selector_leaves_its_cases_choices_waiting() -> Non
 
 
 def capped() -> Space:
-    """``lanes`` divides the fact ``n``; a rule caps it at 2."""
+    """``lanes`` divides the optional fact ``n`` (SZ100 (5)), any of 1, 2 and 4 while
+    ``n`` is left out (``None``); a rule caps it at 2 once ``n`` is given."""
+
+    def lanes(r: Reads) -> tuple[int, ...]:
+        return (1, 2, 4) if r["n"] is None else divisors(r["n"])
 
     return Space(
         ("n",),
         Scope(
             "",
-            choices=(Choice("lanes", computed(lambda r: divisors(r["n"]), ("n",))),),
+            choices=(Choice("lanes", computed(lanes, ("n",))),),
             selectors=(Selector("mode", (Scope("a"), Scope("b"))),),
-            constraints=(Constraint("cap", ("lanes",), lambda r: r["lanes"] <= 2, "wide"),),
+            constraints=(
+                Constraint(
+                    "cap", ("lanes", "n"), lambda r: r["n"] is None or r["lanes"] <= 2, "wide"
+                ),
+            ),
         ),
+        optional=("n",),
     )
 
 
-def test_reading_6_a_value_waiting_on_a_missing_fact_is_checked_when_it_comes() -> None:
+def test_reading_6_an_optional_fact_left_out_is_none_and_new_facts_check_the_value() -> None:
+    """SZ100 (5): ``n`` left out reads ``None``, a known value, so ``lanes = 2`` is set at
+    once (no value waits on a fact any more). New facts outside its list drop it
+    (§ 16.24); unsetting ``n`` sets it to ``None``, a change of facts like any other."""
+
     base = Configuration(capped(), {}, {"mode": "b"})
-    waiting = accepted(change(base, Change(commit={"lanes": 2})))
-    solution = waiting.configuration.solve()
-    assert solution.state("lanes") == Waiting(2, ("n",))
-    assert solution.read("lanes") == Unresolved(("n",))
-    assert (waiting.validity.verdict, waiting.validity.waits) == (U, ("n",))
+    assert base.facts == {"n": None}
+    assert base.solve().read("n") == Known(None)
+    taken = accepted(change(base, Change(commit={"lanes": 2})))
+    solution = taken.configuration.solve()
+    assert solution.state("lanes") == Set(2)
+    assert solution.read("lanes") == Known(2)
+    assert taken.validity.verdict is T
     # the fact arrives with 2 outside the divisors of 9: dropped, the choice open (§ 16.24)
-    outside_it = accepted(change(waiting.configuration, Change(facts={"n": 9})))
+    outside_it = accepted(change(taken.configuration, Change(facts={"n": 9})))
     assert (outside_it.dropped, outside_it.broken) == ((dropped("lanes", 2),), ())
     assert outside_it.configuration.solve().state("lanes") == Open()
-    supplied = accepted(change(waiting.configuration, Change(facts={"n": 8})))
+    supplied = accepted(change(taken.configuration, Change(facts={"n": 8})))
     assert supplied.configuration.solve().state("lanes") == Set(2)
     assert supplied.in_play == ()
-    # unsetting the fact never refuses: the value waits again
+    # unsetting the fact never refuses: ``None`` again, the value kept in its list
     unset = accepted(change(supplied.configuration, Change(unset=("n",))))
-    assert unset.configuration.solve().state("lanes") == Waiting(2, ("n",))
+    assert unset.configuration.facts == {"n": None}
+    assert unset.configuration.solve().state("lanes") == Set(2)
+
+
+def test_a_required_fact_is_given_with_every_configuration() -> None:
+    """SZ100 (5): a configuration missing a required fact is no configuration, and a
+    required fact cannot be unset."""
+
+    with pytest.raises(ConfigurationError):
+        Configuration(counted(), {})
+    with pytest.raises(ConfigurationError):
+        change(Configuration(counted(), {"n": 2}), Change(unset=("n",)))
+    with pytest.raises(DefinitionError) as raised:
+        Space(("n",), Scope(""), optional=("m",)).validate()
+    assert (raised.value.kind, raised.value.path) == ("malformed", ("m",))
 
 
 def test_a_constraint_new_facts_make_false_is_reported_with_its_standing_choice() -> None:
-    """``lanes = 4`` waits on ``n``, ``cap`` unknown; the facts change supplying ``n``
-    makes it read as its value, and ``cap`` false at its own origin: a new pair. The change
-    is accepted, the design space reads refused, and the report names ``cap`` with
-    ``lanes`` standing (§ 16.24); clearing ``lanes`` is then accepted (§ 16.16)."""
+    """``lanes = 4`` with ``n`` left out: ``cap`` holds. The facts change giving ``n = 8``
+    makes ``cap`` false at its own origin: a new pair. The change is accepted, the design
+    space reads refused, and the report names ``cap`` with ``lanes`` standing (§ 16.24);
+    clearing ``lanes`` is then accepted (§ 16.16)."""
 
     waiting = Configuration(capped(), {}, {"lanes": 4})
-    assert waiting.solve().piece("cap").verdict is U
+    assert waiting.solve().piece("cap").verdict is T
     result = accepted(change(waiting, Change(facts={"n": 8})))
     assert (result.broken, result.dropped) == ((rule("cap", "wide", standing=("lanes",)),), ())
     assert result.configuration.stored == {"lanes": 4}
@@ -932,15 +961,11 @@ def test_reading_13_an_unset_choice_whose_input_does_not_apply_is_a_false_piece(
     )
 
 
-def test_reading_6_an_omitted_fact_leaves_the_input_waiting_and_own_guards_are_not_asked() -> None:
-    """§ 16.17: with ``on`` omitted the input's existence waits on it, and so does a value
-    set; ``extra.p`` reads ``extra.size`` under its own guard, which holds whenever it is
-    present: set while ``extra`` is absent, it is accepted and dormant."""
+def test_reading_6_a_choices_own_guards_are_not_asked() -> None:
+    """§ 16.17: ``extra.p`` reads ``extra.size`` under its own guard, which holds whenever
+    it is present: set while ``extra`` is absent, it is accepted and dormant. (The input's
+    existence waiting on an omitted ``on`` went with SZ100 (5).)"""
 
-    unknown = Configuration(guarded_input(), {"n": 4})
-    waiting = accepted(change(unknown, Change(commit={"lanes": 2})))
-    assert waiting.configuration.solve().state("lanes") == Waiting(2, ("on",))
-    assert waiting.validity.verdict is U
     off = Configuration(guarded_input(), {"on": False, "n": 4})
     dormant = accepted(change(off, Change(commit={"extra.p": 2})))
     assert dormant.configuration.solve().state("extra.p") == Dormant(2)
@@ -1068,7 +1093,8 @@ def test_reading_7_the_constructor_checks_types_and_a_broken_rule_is_legal() -> 
         Configuration(lanes_over_width(), {"w": 7}, {"lanes": 1})
     with pytest.raises(ConfigurationError):
         Configuration(two_numbers(), {"nowhere": 1})
-    assert Configuration(capped(), {}, {"lanes": 5}).solve().state("lanes") == Waiting(5, ("n",))
+    with pytest.raises(ConfigurationError):
+        Configuration(capped(), {}, {"lanes": 5})  # ``n`` left out: its list is 1, 2 and 4
     broken = Configuration(linked(), {}, {"a": 1, "b": 3})
     assert false_kinds(broken.solve()) == {(PieceKind.CONSTRAINT, "linked")}
     # a change adding no pair is accepted, the configuration still refused
@@ -1229,7 +1255,7 @@ def test_reading_9_a_switch_to_the_case_of_a_domain_the_facts_empty_is_refused()
     assert accepted(change(base, Change(commit={"mode": "off"}))).validity.verdict is T
 
 
-def test_an_empty_list_is_a_false_piece_and_a_waiting_list_an_unknown_one() -> None:
+def test_an_empty_list_is_a_false_piece() -> None:
     empty = solve(counted(), {"n": 0})
     assert empty.state("x") == Open()
     assert empty.validity().false == (
@@ -1238,9 +1264,6 @@ def test_an_empty_list_is_a_false_piece_and_a_waiting_list_an_unknown_one() -> N
         ),
     )
     assert empty.possible("x") == ()
-    unknown = solve(counted())
-    assert unknown.validity().unknown == (Piece(PieceKind.EMPTY_DOMAIN, "", "x", U, waits=("n",)),)
-    assert unknown.possible("x") is None
     assert solve(counted(), {"n": 2}).possible("x") == ((0, Possible()), (1, Possible()))
 
 
@@ -1757,6 +1780,7 @@ def guarded() -> Space:
     return Space(
         ("wide",),
         Scope("", selectors=(Selector("mode", (a, b, Scope("c"))),), children=(extra,)),
+        optional=("wide",),
     )
 
 
@@ -1774,9 +1798,9 @@ def test_a_rule_under_an_unknown_guard_reads_unknown_whatever_its_predicate() ->
     assert (always.verdict, always.waits) == (U, ("mode",))
     never = solution.piece("mode.b.never")
     assert (never.verdict, never.waits) == (U, ("mode",))
-    # a guard that reads a missing fact
+    # a guard over an optional fact left out reads None (SZ100 (5)): false here, not unknown
     refuses = solve(guarded()).piece("extra.refuses")
-    assert (refuses.verdict, refuses.waits) == (U, ("wide",))
+    assert (refuses.verdict, refuses.applies) == (T, False)
     assert solve(guarded(), {"wide": True}, mode="a").piece("extra.refuses").verdict is F
 
 
@@ -1808,7 +1832,7 @@ def test_a_view_refuses_when_its_space_is_refused() -> None:
 
 
 def test_a_view_answers_while_its_space_is_open() -> None:
-    solution = solve(viewed(), {"name": "u"})
+    solution = solve(viewed(), {"limit": 2, "name": "u"})
     assert solution.validity().verdict is U
     assert solution.view("title") == Known("unit u")
     assert solution.view("doubled") == Unresolved(("x",))
@@ -2165,5 +2189,3 @@ def test_validity_counts_a_rule_three_deep() -> None:
     assert refused.validity("kernel.inner").verdict is F
     valid = solve_at(nested(), {**stored, PE: 2}, {"plain_ok": True, "serial_ok": True, "width": 6})
     assert valid.validity().verdict is T
-    waiting = solve_at(nested(), stored, {"plain_ok": True, "serial_ok": True})
-    assert (waiting.validity().verdict, waiting.validity().waits) == (U, ("width",))

@@ -71,7 +71,9 @@ side (its answers over an addition, in the same order) is a disagreement like an
 where the model holds. Where the engine refuses a change the model accepts, the engine side
 takes the model's configuration by a bind, which is never refused.
 
-A fact unset is the model's alone: the engine cannot set an optional formal back to
+Facts are drawn required or optional (SZ100 (5)): every required fact is given from the
+start, an optional one now and then left out, reading ``None``. An optional fact unset (set
+to ``None``) is the model's alone: the engine cannot set an optional formal back to
 unsupplied, so such a step is checked against the model's invariants and never sent to the
 engine (``Point.change`` would raise ``NotTranslatable``).
 
@@ -173,6 +175,9 @@ class _Draw:
         self.rng = rng
         self.names = itertools.count()
         self.facts = tuple(f"f{index}" for index in range(rng.randint(1, 2)))
+        #: the optional facts (SZ100 (5)): left out, one reads None, and every function
+        #: over it handles None itself
+        self.optional = tuple(fact for fact in self.facts if rng.random() < 0.5)
         self.ints: list[str] = []  # value choices, by path
         self.selectors: dict[str, tuple[str, ...]] = {}
         self.over_facts: list[str] = []  # derived values over facts alone, for membership
@@ -182,7 +187,8 @@ class _Draw:
         self.guard_reads: tuple[str, ...] = ()  # what ``g``'s guard reads
         self.members = False  # whether the root holds ``m``
         self.entries: list[str] = []  # ``m``'s entries, by path
-        self.lines: list[str] = [f"facts {', '.join(self.facts)}"]
+        optional = f" (optional {', '.join(self.optional)})" if self.optional else ""
+        self.lines: list[str] = [f"facts {', '.join(self.facts)}{optional}"]
 
     def name(self, prefix: str) -> str:
         return f"{prefix}{next(self.names)}"
@@ -490,7 +496,8 @@ class _Draw:
             constraints.append(self.members_rule(indent))
         return model.Space(
             self.facts,
-            model.Scope(
+            optional=self.optional,
+            root=model.Scope(
                 "",
                 choices=tuple(choices),
                 selectors=selectors,
@@ -504,11 +511,17 @@ class _Draw:
 
 
 # The functions a description is built of: each a closure over its own reads, so a drawn
-# description is plain data the engine translates.
+# description is plain data the engine translates. Each handles an optional fact left out,
+# None, itself, as an author would (SZ100 (5)): a bound that is None bounds nothing, a
+# relation with a None side holds, a guard over None is false, and a sum counts None as 0.
+
+
+def _sum(r: model.Reads, reads: Sequence[str]) -> int:
+    return sum(0 if r[item] is None else r[item] for item in reads)
 
 
 def _at_most(fact: str) -> Callable[[Any, model.Reads], bool]:
-    return lambda v, r: bool(v <= r[fact])
+    return lambda v, r: r[fact] is None or bool(v <= r[fact])
 
 
 def _not_one(v: Any, r: model.Reads) -> bool:
@@ -516,7 +529,7 @@ def _not_one(v: Any, r: model.Reads) -> bool:
 
 
 def _between(fact: str) -> Callable[[Any, model.Reads], bool]:
-    return lambda v, r: bool(0 <= v <= r[fact])
+    return lambda v, r: bool(0 <= v) and (r[fact] is None or bool(v <= r[fact]))
 
 
 def _even(v: Any, r: model.Reads) -> bool:
@@ -524,15 +537,15 @@ def _even(v: Any, r: model.Reads) -> bool:
 
 
 def _up_to(read: str) -> Callable[[model.Reads], tuple[int, ...]]:
-    return lambda r: tuple(v for v in (1, 2, 3) if v <= r[read])
+    return lambda r: tuple(v for v in (1, 2, 3) if r[read] is None or v <= r[read])
 
 
 def _dividing(read: str) -> Callable[[model.Reads], tuple[int, ...]]:
-    return lambda r: tuple(v for v in (1, 2, 3) if r[read] % v == 0)
+    return lambda r: tuple(v for v in (1, 2, 3) if r[read] is None or r[read] % v == 0)
 
 
 def _above(read: str) -> Callable[[model.Reads], tuple[int, ...]]:
-    return lambda r: tuple(v for v in VALUES if v > r[read])
+    return lambda r: tuple(v for v in VALUES if r[read] is None or v > r[read])
 
 
 def _reversed_past(read: str) -> Order:
@@ -540,7 +553,7 @@ def _reversed_past(read: str) -> Order:
 
 
 def _sum_at_most(reads: tuple[str, ...], k: int) -> Callable[[model.Reads], bool]:
-    return lambda r: sum(r[item] for item in reads) <= k
+    return lambda r: _sum(r, reads) <= k
 
 
 def _relation(shape: int, a: str, b: str, k: int) -> Callable[[model.Reads], bool]:
@@ -552,11 +565,12 @@ def _relation(shape: int, a: str, b: str, k: int) -> Callable[[model.Reads], boo
         lambda r: bool(r[a] + r[b] <= k),
         lambda r: bool(r[a] + r[b] >= k),
     )
-    return relations[shape]
+    relation = relations[shape]
+    return lambda r: r[a] is None or r[b] is None or relation(r)
 
 
 def _case_small(selector: str, case: str, read: str, k: int) -> Callable[[model.Reads], bool]:
-    return lambda r: bool(r[selector] != case or r[read] <= k)
+    return lambda r: bool(r[selector] != case or r[read] is None or r[read] <= k)
 
 
 def _holds(call: Callable[[model.Reads], Any]) -> Callable[[model.Reads], bool]:
@@ -568,16 +582,16 @@ def _is_case(selector: str, case: str) -> Callable[[model.Reads], bool]:
 
 
 def _at_least(read: str, k: int) -> Callable[[model.Reads], bool]:
-    return lambda r: bool(r[read] >= k)
+    return lambda r: r[read] is not None and bool(r[read] >= k)
 
 
 def _total(reads: tuple[str, ...]) -> Callable[[model.Reads], int]:
-    return lambda r: sum(r[item] for item in reads)
+    return lambda r: _sum(r, reads)
 
 
 def _even_total(reads: tuple[str, ...]) -> Callable[[model.Reads], object]:
     def body(r: model.Reads) -> object:
-        total = sum(r[item] for item in reads)
+        total = _sum(r, reads)
         return model.Refuse("d-odd") if total % 2 else total
 
     return body
@@ -585,7 +599,7 @@ def _even_total(reads: tuple[str, ...]) -> Callable[[model.Reads], object]:
 
 def _capped(reads: tuple[str, ...], k: int, code: str) -> Callable[[model.Reads], object]:
     def body(r: model.Reads) -> object:
-        total = sum(r[item] for item in reads)
+        total = _sum(r, reads)
         return model.Refuse(code) if total > k else total
 
     return body
@@ -604,11 +618,11 @@ def _values(members: Any) -> list[Any]:
 
 
 def _members_sum(members: str, read: str, k: int) -> Callable[[model.Reads], bool]:
-    return lambda r: bool(sum(_values(r[members])) + r[read] <= k)
+    return lambda r: bool(sum(_values(r[members])) + _sum(r, (read,)) <= k)
 
 
 def _members_max(members: str, read: str, k: int) -> Callable[[model.Reads], bool]:
-    return lambda r: bool(max(_values(r[members]), default=0) <= r[read] + k)
+    return lambda r: bool(max(_values(r[members]), default=0) <= _sum(r, (read,)) + k)
 
 
 def _members_len(members: str, k: int) -> Callable[[model.Reads], bool]:
@@ -629,7 +643,12 @@ def generate(rng: random.Random) -> tuple[Generated, Engine]:
         description = draw.space()
         if not 2 <= len(draw.ints) <= 6:
             continue
-        facts = {fact: rng.choice(FACT_VALUES) for fact in draw.facts if rng.random() < 0.75}
+        # every required fact given; an optional one now and then left out (None)
+        facts = {
+            fact: rng.choice(FACT_VALUES)
+            for fact in draw.facts
+            if fact not in draw.optional or rng.random() < 0.75
+        }
         try:
             description.validate()
         except model.DefinitionError as error:
@@ -1123,10 +1142,12 @@ def added_pairs(
 def would_be(
     configuration: model.Configuration, edit: model.Change
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """The facts and stored choices ``edit`` would publish."""
+    """The facts and stored choices ``edit`` would publish: an optional fact unset is
+    ``None`` (SZ100 (5))."""
     stored = {k: v for k, v in configuration.stored.items() if k not in edit.clear}
     stored.update(edit.commit)
-    facts = {k: v for k, v in configuration.facts.items() if k not in edit.unset}
+    facts = dict(configuration.facts)
+    facts.update(dict.fromkeys(edit.unset))
     facts.update(edit.facts)
     return facts, stored
 
@@ -1755,7 +1776,8 @@ class _Walk:
                 return model.Change(commit={path: rng.choice(others)})
             return model.Change(commit={path: rng.choice(cases)})
         facts = sorted(index.facts)
-        if roll < 0.95 or not configuration.facts:
+        unsettable = sorted(f for f in index.optional if configuration.facts[f] is not None)
+        if roll < 0.95 or not unsettable:
             fact = rng.choice(facts)
             options = [value for value in FACT_VALUES if configuration.facts.get(fact) != value]
             new = {fact: rng.choice(options)}
@@ -1772,7 +1794,8 @@ class _Walk:
                         facts=new, commit=self.values(rng.sample(unstored, 1), state)
                     )
             return model.Change(facts=new)
-        return model.Change(unset=(rng.choice(sorted(configuration.facts)),))
+        # an optional fact unset: None (SZ100 (5))
+        return model.Change(unset=(rng.choice(unsettable),))
 
     def values(self, paths: Sequence[str], state: _State, other: bool = False) -> dict[str, object]:
         """A value for each of ``paths``: mostly a possible one or a listed one, now and then

@@ -95,9 +95,13 @@ def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() ->
 
 def test_the_pending_milestones_are_the_rulings_the_engine_has_not_reached() -> None:
     # The engine core's and the facts-instance milestones are accepted, their rows removed;
-    # the model holds SZ100's rulings before the engine (T4b: views read out).
-    assert MILESTONES == ("base", "T4b")
-    assert [(row.id, row.milestone) for row in ROWS] == [("view-read-in", "T4b")]
+    # the model holds SZ100's rulings before the engine (T4b: views read out; T4c: an
+    # optional fact left out is None).
+    assert MILESTONES == ("base", "T4b", "T4c")
+    assert [(row.id, row.milestone) for row in ROWS] == [
+        ("view-read-in", "T4b"),
+        ("optional-fact-none", "T4c"),
+    ]
 
 
 # A later milestone with rows, put in the matrix where a test needs one.
@@ -355,6 +359,7 @@ NESTED = Case(
                 ),
             ),
         ),
+        optional=("width",),
     ),
 )
 
@@ -369,7 +374,9 @@ def test_a_selector_is_read_as_its_selected_case() -> None:
     NESTED.start({"width": 4}, {"unit.compute": "stub"}).check_answer("unit.compute")
 
 
-def test_a_fact_cannot_be_set_back_to_unknown_in_the_engine() -> None:
+def test_an_optional_fact_cannot_be_left_out_again_in_the_engine() -> None:
+    # SZ100 (5): unset, an optional fact is None in the model; the engine cannot unsupply a
+    # param it was given.
     with pytest.raises(NotTranslatable):
         NESTED.start({"width": 4}).check_change(Change(unset=("width",)))
 

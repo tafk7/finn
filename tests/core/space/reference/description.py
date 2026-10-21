@@ -31,8 +31,9 @@ A description is a tree of scopes. Each scope holds:
   (a boolean of declared reads) says otherwise. A selector's case may carry a
   ``when`` guard too.
 
-Facts are named at the root (:class:`Space`), and given, or left unknown, with each
-configuration.
+Facts are named at the root (:class:`Space`), each required or optional (SZ100 (5)): a
+configuration gives every required fact, and an optional fact left out reads ``None``.
+A function over an optional fact handles ``None`` itself.
 
 Paths name nodes: a root member's path is its name; a child scope's path is its
 parent's path and its name; a selector's case scope is the selector's path and the
@@ -237,11 +238,13 @@ class Selector:
 
 @dataclass(frozen=True)
 class Space:
-    """A description: the facts a configuration gives, and the root scope (whose own
-    name is not part of any path)."""
+    """A description: the facts a configuration gives, the root scope (whose own name is
+    not part of any path), and which facts are optional (SZ100 (5): left out, one reads
+    ``None``); the others are required."""
 
     facts: tuple[str, ...]
     root: Scope
+    optional: tuple[str, ...] = ()
 
     def validate(self) -> Index:
         """The description's index, or :class:`DefinitionError`."""
@@ -294,6 +297,8 @@ class Index:
     constraints: dict[str, tuple[Constraint, str]] = field(default_factory=dict)
     members: dict[str, tuple[Members, str]] = field(default_factory=dict)
     facts: frozenset[str] = frozenset()
+    #: the optional facts (SZ100 (5)); the other facts are required
+    optional: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         names: set[str] = set()
@@ -303,6 +308,10 @@ class Index:
                 raise DefinitionError("duplicate", (fact,))
             names.add(fact)
         self.facts = frozenset(self.space.facts)
+        for fact in self.space.optional:
+            if fact not in self.facts:
+                raise DefinitionError("malformed", (fact,), "an optional fact is a fact")
+        self.optional = frozenset(self.space.optional)
         if self.space.root.when is not None:
             raise DefinitionError("malformed", ("",), "the root scope has no guard")
         self._add_scope(self.space.root, "", None, None, None, names)

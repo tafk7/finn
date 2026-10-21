@@ -98,8 +98,9 @@ class Known:
 
 @dataclass(frozen=True)
 class Unresolved:
-    """The value waits: ``waits`` lists the open choices, the missing facts and the
-    open selectors (or a guard's waiting reads) it waits on."""
+    """The value waits: ``waits`` lists the open choices and the open selectors (or a
+    guard's waiting reads) it waits on. Never a fact: facts are always known (SZ100
+    (5))."""
 
     waits: tuple[str, ...]
 
@@ -182,8 +183,8 @@ class Set:
 
 @dataclass(frozen=True)
 class Waiting:
-    """Stored, never read as a value: its presence is unknown, or its membership waits
-    on a missing fact. ``waits`` is what it waits on."""
+    """Stored, never read as a value: its presence is unknown. ``waits`` is what it waits
+    on."""
 
     value: Any
     waits: tuple[str, ...]

@@ -64,7 +64,8 @@ def test_a_view_refuses_when_its_space_is_refused() -> None:
 
 
 def test_a_view_answers_while_its_space_is_open() -> None:
-    VIEWED.start({"name": "unit"}).check_answer("title")
+    # ``x`` open: ``under`` waits on it
+    VIEWED.start({"limit": 2, "name": "unit"}).check_answer("title")
 
 
 def test_a_view_of_an_open_choice_waits_on_it() -> None:
@@ -228,10 +229,6 @@ def test_switching_the_outer_kernel_away_puts_the_inner_choices_dormant() -> Non
 
 def test_a_commit_three_deep_breaking_its_rule_is_refused_naming_it() -> None:
     NESTED.start({**OPEN, "width": 6}, INNER_PACKED).check_change(Change(commit={PE: 4}))
-
-
-def test_validity_waits_on_a_fact_a_rule_three_deep_reads() -> None:
-    NESTED.start({"plain_ok": True, "serial_ok": True}, {**INNER_PACKED, PE: 4}).check_validity()
 
 
 # An inner selector inside a case of an outer one: ``inner`` set to ``y`` while ``outer`` is

@@ -229,7 +229,8 @@ def change_form(
 ) -> ChangeForm:
     """``edit``'s ``result`` on ``configuration``. A dropped value's type check and a rule's
     reasons are read over the facts the change publishes, as membership reads them."""
-    facts = {k: v for k, v in configuration.facts.items() if k not in edit.unset}
+    facts = dict(configuration.facts)
+    facts.update(dict.fromkeys(edit.unset))  # an optional fact unset is None (SZ100 (5))
     facts.update(edit.facts)
     index = configuration.index
     if isinstance(result, reference.Accepted):

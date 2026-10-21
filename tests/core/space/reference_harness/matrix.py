@@ -4,7 +4,7 @@
 """The acceptance matrix: every disagreement between the engine and the reference model
 expected at this commit, by the milestone that removes it. The model holds the human's
 rulings on the core types (DECISIONS SZ100) before the engine does: T4b reads views out
-(SZ100 (3)).
+(SZ100 (3)), T4c reads an optional fact left out as None (SZ100 (5)).
 
 Each row names the change that removes it, in one sentence, and its **witness**: the one
 test that shows it, marked with :func:`expected` (a strict expected failure raising
@@ -36,7 +36,7 @@ import pytest
 from .compare import Disagreement
 
 #: in order: the line as it is, then each later milestone with rows to remove
-MILESTONES: tuple[str, ...] = ("base", "T4b")
+MILESTONES: tuple[str, ...] = ("base", "T4b", "T4c")
 
 
 @dataclass(frozen=True)
@@ -61,6 +61,14 @@ ROWS: tuple[Row, ...] = (
         "a view, as a definition error (view-read-in)",
         "test_reference_cases::test_a_rule_reading_a_view_is_no_definition",
         "today it builds the Space and answers",
+    ),
+    Row(
+        "optional-fact-none",
+        "T4c",
+        "The engine reads an optional fact left out as None, a known value, wherever it is "
+        "read: in membership, guards, bodies and lists. It never reads it as unresolved",
+        "test_reference_cases::test_an_optional_fact_left_out_reads_none",
+        "today an unsupplied optional param reads unresolved",
     ),
 )
 

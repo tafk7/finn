@@ -14,29 +14,35 @@ The rules it states
 
 **A configuration** is its facts and its stored choices, dormant ones included: the
 same two give the same answers, whatever the history. Nothing gives a choice a value:
-a choice is set, or open. A stored value outside its domain, or whose domain's
-membership reads a refused input, is no configuration (:class:`ConfigurationError`);
-a stored set breaking a rule is one, and reads refused.
+a choice is set, or open. A configuration missing a required fact, or storing a value
+outside its domain or whose domain's membership reads a refused input, is no
+configuration (:class:`ConfigurationError`); a stored set breaking a rule is one, and
+reads refused.
 
 **Domains.** Membership reads facts only, so it is a type check fixed once the facts
-are given: a value is a member, outside, waiting on a missing fact, refused through a
-refused input, or refused because an input does not apply (reading 6). A listed
+are given: a value is a member, outside, refused through a refused input, or refused
+because an input does not apply (reading 6). Facts are always known (SZ100 (5)), so
+membership never waits. A listed
 domain's membership list is its listed values that are members, in listed order; its
 ``order`` ranks that list and checks nothing.
 
 **Presence.** A scope is present; absent (another case selected, or its ``when``
 false); unknown (its selector open, or a ``when`` input waiting); or refused (its
-``when`` reads a refused input: a derived value or a view refusing). A scope under a
+``when`` reads a refused input: a derived value refusing). A scope under a
 refused guard is not in play: its stored choices are dormant, its open choices
 absent, its constraints add nothing, and every value in it reads refused through the
 guard.
 
 **A choice** is set (stored, in play, read as its value), waiting (stored, its
-presence unknown or its membership waiting on a missing fact; never read as a value),
+presence unknown; never read as a value),
 dormant (stored, its scope absent or not in play), open (unset, its scope present or
 unknown) or absent (unset, its scope absent or not in play).
 
-**Reads.** A fact is known, or unresolved when not given. A derived value or a view
+**Reads.** A fact is always known (SZ100 (5)). A description declares each fact
+required or optional (:class:`~.description.Space`, ``optional``): a required fact is
+given with every configuration, and an optional fact left out, or unset, reads
+``None``, a known value its readers handle. "Unresolved" belongs to open choices alone.
+A derived value or a view
 reads its inputs: all known, its body answers (a :class:`~.description.Refuse` is a
 refusal at its origin); an input refused, it is refused through it; an input waiting,
 it waits; an input inapplicable, it is inapplicable. A view also refuses, through,
@@ -57,7 +63,7 @@ are the entries that answered a value (reading 4).
 or not in play: true, not applying; an input refused: false through it; an input
 waiting: unknown; an input inapplicable: true, not applying; else its predicate on its
 own values, false at its origin); each listed domain that lists no value (false), or
-whose list cannot be made yet (reading 13); each guard refused through an input
+whose list cannot be made (reading 13); each guard refused through an input
 (false). A listed domain that lists a value is no piece, whatever its presence. A
 piece of a scope whose presence is unknown is unknown, whatever it would answer. No
 choice is otherwise a piece.
@@ -69,8 +75,7 @@ space, and is never refused for its facts (§ 16.24).
 
 1. *Assignment.* Each committed value is checked against its domain. A value outside
    its domain, or whose membership reads an input that refuses or does not apply,
-   refuses the change (:class:`~.answers.AssignmentRefusal`). A value whose membership
-   waits on a missing fact is accepted, and waits.
+   refuses the change (:class:`~.answers.AssignmentRefusal`).
 2. *Counted pairs.* An origin is a constraint false on its own values; a derived value
    refusing on its own values; a present choice whose listed domain lists no value (a
    view refusing on its own values feeds no piece: SZ100 (3)). A configuration's counted
@@ -90,15 +95,16 @@ space, and is never refused for its facts (§ 16.24).
    design space, published together or not at all. The bind type-checks every stored
    value the change does not name, dormant ones included, as if its choice existed
    (reading 6): outside its domain, or its domain's input refusing or not applying, the
-   value is dropped (:class:`~.answers.Dropped`); waiting on a missing fact, it is kept
-   and waits; inside, it is kept. Nothing of that refuses. A choice the change names is
-   kept where its old value is inside its new domain and left out silently where not;
-   its new value is then checked by 1, and the choices are judged by 3 against the
-   bind's pairs. The accepted report lists what was dropped and each rule the published
-   design space holds newly false against the receiver (``broken``), with its standing
-   choices read in the published design space, none left out for being named. A pair
-   the bind added and the choices removed is not in the published design space, so it
-   is not reported; nor is a pair already false before.
+   value is dropped (:class:`~.answers.Dropped`); inside, it is kept. Nothing of that
+   refuses. Unsetting an optional fact sets it to ``None``, a change of facts like any
+   other; a required fact cannot be unset (:class:`ConfigurationError`). A choice the
+   change names is kept where its old value is inside its new domain and left out
+   silently where not; its new value is then checked by 1, and the choices are judged by
+   3 against the bind's pairs. The accepted report lists what was dropped and each rule
+   the published design space holds newly false against the receiver (``broken``), with
+   its standing choices read in the published design space, none left out for being
+   named. A pair the bind added and the choices removed is not in the published design
+   space, so it is not reported; nor is a pair already false before.
 5. *Accepted*, the change reports the stored choices it puts dormant or brings into
    play and the open choices it brings into presence. A change that changes nothing
    returns the same configuration.
@@ -171,22 +177,22 @@ corpus; § 16 holds the readings its author gave for this model.
    the open choices not present before and present after. Clearing a selector leaves
    its cases' stored choices waiting. An unset choice not in play is
    :class:`~.answers.Absent`, a state the note's table lacks.
-6. *Membership that cannot be decided* (§ 16.6): a missing fact leaves a stored value
-   waiting (never read as a value), and the change of facts supplying it checks its
-   type, dropping the value where it falls outside (§ 16.24); a refusing input refuses
-   the assignment, and a change of facts making it refuse while a value is stored drops
-   the value, its domain piece false through the input. Membership is evaluated over
-   the facts alone: a derived value it reads is computed from its reads whatever its
-   own scope's presence. *An input that
-   does not apply is refused* (§ 16.17, ``INPUT_ABSENT``, the choice's reason naming the
-   input), not unresolved: only a change of facts could settle it. Its existence is
-   decided over the facts alone: the choice's own existence guards (its scope's and
-   those above it, a ``when`` over a choice alike) are taken as holding, wherever the
-   choice sits (§ 16.20), and are not asked; any other guard on
-   the input's scopes (or on those of the derived values it reads) is a ``when`` over
-   facts, a selector or a ``when`` reaching a choice being ``domain-reads-choice``. A
-   false one makes the input absent, a waiting one leaves membership waiting, a refused
-   one refuses it through that guard's input. An omitted fact stays a missing one.
+6. *Membership that cannot be decided* (§ 16.6): a refusing input refuses the
+   assignment, and a change of facts making it refuse while a value is stored drops the
+   value, its domain piece false through the input. (SZ100 (5): no membership waits on
+   a missing fact any more; an optional fact left out reads ``None``.) Membership is
+   evaluated over the facts alone: a derived value it reads is computed from its reads
+   whatever its own scope's presence. *An input that does not apply is refused* (§ 16.17,
+   ``INPUT_ABSENT``, the choice's reason naming the input), not unresolved: only a change
+   of facts could settle it. Its existence is decided over the facts alone: the choice's
+   own existence guards (its scope's and those above it, a ``when`` over a choice alike)
+   are taken as holding, wherever the choice sits (§ 16.20), and are not asked; any other
+   guard on the input's scopes (or on those of the derived values it reads) is a
+   ``when`` over facts, a selector or a ``when`` reaching a choice being
+   ``domain-reads-choice``. A false one makes the input absent, a refused one refuses it
+   through that guard's input. An optional fact left out is ``None`` there too: a guard
+   over it holds or not as its test says (a former ``supplied()`` is a ``when`` on ``f
+   is not None``, still absence: ``INPUT_ABSENT`` stays).
 7. *The constructor* (§ 16.7) refuses a stored value outside its domain or whose
    membership input refuses, dormant ones included: a :class:`Configuration` never holds
    one. A change of facts and :func:`bind` drop such a value instead (§ 16.24). A stored
@@ -214,7 +220,7 @@ corpus; § 16 holds the readings its author gave for this model.
     configuration whose rules could be read.
 13. *A listed domain is a piece only when it lists no value* (§ 4.6, § 16.12): false
     when its list is empty and its choice present (the origin), unknown when it is
-    empty under a guard that waits; unknown while the list waits on a missing fact, and
+    empty under a guard that waits (SZ100 (5): never while it waits on a fact), and
     false through the input when its membership reads a refused input (the list cannot
     be made; blamed at that input's origin). When an input does not apply (§ 16.17,
     reading 6) the list cannot be made either and the piece is false through it; the
@@ -222,8 +228,8 @@ corpus; § 16 holds the readings its author gave for this model.
     list with a value adds no piece, whatever its presence: an open selector whose case
     holds a listed choice and no rules leaves the configuration valid. A membership-only
     domain has no piece.
-14. *A stored choice waits on what it waits on*: an unknown presence's waits and its
-    membership's missing facts, never on itself. An open choice also waits on itself.
+14. *A stored choice waits on what it waits on*: an unknown presence's waits, never on
+    itself (SZ100 (5): never on a fact). An open choice also waits on itself.
 15. *A ``when`` reading an input that does not apply* leaves its scope unknown,
     waiting on that input (a guard over a value that does not exist neither holds nor
     refuses).
@@ -361,13 +367,17 @@ class FactsOnly:
 
     def _value(self, path: str) -> Answer:
         if path in self.index.facts:
-            return Known(self.facts[path]) if path in self.facts else Unresolved((path,))
+            # always known (SZ100 (5)): an optional fact left out is None
+            if path in self.facts:
+                return Known(self.facts[path])
+            if path in self.index.optional:
+                return Known(None)
+            raise ConfigurationError(f"the required fact {path} is not given")
         derived, scope = self.index.derived[path]
         inputs = self.inputs(derived.reads)
         if inputs.refused:
             return Refused((Reason(ReasonKind.INPUT_REFUSED, path, scope, related=inputs.refused),))
-        if inputs.values is None:
-            return Unresolved(tuple(sorted(inputs.waits)))
+        assert inputs.values is not None, path  # over facts, always known
         output = derived.compute(inputs.values)
         if isinstance(output, Refuse):
             return Refused((Reason(ReasonKind.DERIVED_BODY, path, scope, code=output.code),))
@@ -379,8 +389,8 @@ class FactsOnly:
     def applies(self, path: str, within: str) -> Answer:
         """Whether the membership read ``path`` exists for a choice of the scope ``within``
         (reading 6, § 16.17): ``Known(True)``; ``Known(False)`` when a guard over facts
-        beyond the choice's own existence guards is false; ``Unresolved`` while such a
-        guard waits on a missing fact; ``Refused`` when it reads a refused input. A fact
+        beyond the choice's own existence guards is false; ``Refused`` when it reads a
+        refused input. Never waiting: facts are always known (SZ100 (5)). A fact
         exists; a derived value exists when its scope does and every value it reads does.
         The choice's own guards (its scope's and those above it) hold whenever it is
         present, so they are not asked."""
@@ -407,9 +417,8 @@ class FactsOnly:
                         ReasonKind.INPUT_REFUSED, current, current, related=inputs.refused
                     )
                     answers.append(Refused((reason,)))
-                elif inputs.values is None:
-                    answers.append(Unresolved(tuple(sorted(inputs.waits))))
                 else:
+                    assert inputs.values is not None, current
                     answers.append(Known(bool(info.when.test(inputs.values))))
             current = info.parent
         if Known(False) in answers:
@@ -417,8 +426,7 @@ class FactsOnly:
         refused = [r for answer in answers if isinstance(answer, Refused) for r in answer.reasons]
         if refused:
             return Refused(sorted_reasons(refused))
-        waits = {w for answer in answers if isinstance(answer, Unresolved) for w in answer.waits}
-        return Unresolved(tuple(sorted(waits))) if waits else Known(True)
+        return Known(True)
 
     def _domain_inputs(self, choice: str) -> _Inputs | Refused:
         info = self.index.choices[choice]
@@ -437,16 +445,12 @@ class FactsOnly:
                 assert isinstance(answer, Refused)
                 reasons.extend(answer.reasons)
             return Refused(sorted_reasons(reasons))
-        waits = {
-            w for answer in applies.values() if isinstance(answer, Unresolved) for w in answer.waits
-        }
-        if waits:
-            return _Inputs(None, waits=frozenset(waits) | inputs.waits)
+        assert inputs.values is not None, choice
         return inputs
 
     def listing(self, choice: str) -> Answer | None:
-        """A listed domain's membership list (``Known`` of a tuple), waiting on missing
-        facts, or refused through an input; ``None`` for a membership-only domain."""
+        """A listed domain's membership list (``Known`` of a tuple), or refused through an
+        input; ``None`` for a membership-only domain."""
 
         domain = self.index.choices[choice].domain
         if not domain.listed:
@@ -454,8 +458,7 @@ class FactsOnly:
         inputs = self._domain_inputs(choice)
         if isinstance(inputs, Refused):
             return inputs
-        if inputs.values is None:
-            return Unresolved(tuple(sorted(inputs.waits)))
+        assert inputs.values is not None
         if domain.values is not None:
             values = _distinct(domain.values)
         else:
@@ -468,8 +471,8 @@ class FactsOnly:
         return Known(values)
 
     def membership(self, choice: str, value: Any) -> Answer:
-        """``Known(True)`` for a member, ``Known(False)`` outside, ``Unresolved`` on
-        missing facts, ``Refused`` through a refused input."""
+        """``Known(True)`` for a member, ``Known(False)`` outside, ``Refused`` through a
+        refused input."""
 
         domain = self.index.choices[choice].domain
         if domain.listed:
@@ -481,9 +484,7 @@ class FactsOnly:
         inputs = self._domain_inputs(choice)
         if isinstance(inputs, Refused):
             return inputs
-        if inputs.values is None:
-            return Unresolved(tuple(sorted(inputs.waits)))
-        assert domain.member is not None
+        assert domain.member is not None and inputs.values is not None
         return Known(bool(domain.member(value, inputs.values)))
 
     def origins(self, path: str, found: dict[str, tuple[str, tuple[Reason, ...]]]) -> None:
@@ -630,14 +631,10 @@ class _Evaluation:
         if kind == "choice":
             if path not in self.stored:
                 return Unresolved(tuple(sorted(presence.waits | {path})))
-            waits = set(presence.waits)
+            if presence.waits:
+                return Unresolved(tuple(sorted(presence.waits)))
             member = self.facts.membership(path, self.stored[path])
-            if isinstance(member, Unresolved):
-                waits.update(member.waits)
-            else:
-                assert member == Known(True), (path, member)
-            if waits:
-                return Unresolved(tuple(sorted(waits)))
+            assert member == Known(True), (path, member)
             return Known(self.stored[path])
         if presence.state is Presence.UNKNOWN:
             return Unresolved(tuple(sorted(presence.waits)))
@@ -757,12 +754,8 @@ class _Evaluation:
         if presence.state in _OUT:
             return Piece(kind, scope, choice, Verdict.TRUE, applies=False)
         if presence.state is Presence.UNKNOWN:
-            waits = set(presence.waits)
-            if isinstance(listing, Unresolved):
-                waits.update(listing.waits)
-            return Piece(kind, scope, choice, Verdict.UNKNOWN, waits=tuple(sorted(waits)))
-        if isinstance(listing, Unresolved):
-            return Piece(kind, scope, choice, Verdict.UNKNOWN, waits=listing.waits)
+            waits = tuple(sorted(presence.waits))
+            return Piece(kind, scope, choice, Verdict.UNKNOWN, waits=waits)
         if isinstance(listing, Refused):
             return Piece(kind, scope, choice, Verdict.FALSE, reasons=listing.reasons)
         reason = Reason(ReasonKind.EMPTY_DOMAIN, choice, scope)
@@ -905,8 +898,10 @@ class _Evaluation:
 
 @dataclass(frozen=True)
 class Configuration:
-    """A description, its facts (a missing fact is unknown) and its commitments
-    (choice path to stored value), dormant ones included."""
+    """A description, its facts and its commitments (choice path to stored value),
+    dormant ones included. Every required fact is given (else
+    :class:`ConfigurationError`); an optional fact left out is ``None`` (SZ100 (5)), and
+    ``facts`` holds it so."""
 
     space: Space
     facts: Mapping[str, Any] = field(default_factory=dict)
@@ -923,7 +918,12 @@ class Configuration:
         for path in self.stored:
             if path not in index.choices:
                 raise ConfigurationError(f"unknown choice {path}")
-        object.__setattr__(self, "facts", dict(self.facts))
+        missing = sorted(index.facts - index.optional - set(self.facts))
+        if missing:
+            raise ConfigurationError(f"the required facts {missing} are not given")
+        facts = {name: None for name in sorted(index.optional)}
+        facts.update(self.facts)
+        object.__setattr__(self, "facts", facts)
         object.__setattr__(self, "stored", dict(self.stored))
         checker = FactsOnly(index, self.facts)
         for path in sorted(self.stored):
@@ -1051,8 +1051,8 @@ def _instantiate(
 ) -> tuple[Configuration, tuple[Dropped, ...]]:
     """The design space of ``facts`` keeping each of ``stored`` that is of its type under
     them (§ 16.24): a value outside its domain, or whose domain's input refuses or does not
-    apply, is left out, and reported unless ``named``; one waiting on a missing fact is
-    kept. Membership reads facts only, so what is left out does not depend on order."""
+    apply, is left out, and reported unless ``named``. Membership reads facts only, so what
+    is left out does not depend on order."""
 
     checker = FactsOnly(index, facts)
     kept: dict[str, Any] = {}
@@ -1087,8 +1087,8 @@ def _new_facts_report(
 def bind(space: Space, facts: Mapping[str, Any], stored: Mapping[str, Any]) -> Accepted:
     """The design space of ``facts`` with exactly the ``stored`` choices (§ 16.24, SZ90):
     each is checked against its domain under ``facts``, and dropped where it falls outside
-    (or its domain's input refuses or does not apply), kept where it is inside or waits on
-    a missing fact. Never refused for rules. Its baseline is the design space of ``facts``
+    (or its domain's input refuses or does not apply), kept where it is inside. Never
+    refused for rules. Its baseline is the design space of ``facts``
     with nothing stored: ``broken`` lists every rule the kept choices break with those
     facts, and what moved is read against it."""
 
@@ -1155,7 +1155,9 @@ def change(configuration: Configuration, edit: Change) -> Accepted | Rejected:
             raise ConfigurationError(f"unknown fact {name}")
     facts = dict(configuration.facts)
     for name in edit.unset:
-        facts.pop(name, None)
+        if name not in index.optional:
+            raise ConfigurationError(f"the required fact {name} cannot be unset")
+        facts[name] = None  # SZ100 (5): an optional fact unset is None
     facts.update(edit.facts)
     choices = Change(commit=edit.commit, clear=edit.clear)
     if _same_mapping(facts, configuration.facts):
@@ -1237,8 +1239,7 @@ class Solution:
     def possible(self, choice: str) -> tuple[tuple[Any, Possible | Impossible], ...] | None:
         """Each member value of ``choice``'s listed domain, in membership's list order,
         with what setting it alone answers; ``None`` when the list cannot be made (a
-        membership-only domain, or a list waiting on a missing fact or refused through
-        an input)."""
+        membership-only domain, or a list refused through an input)."""
 
         self._choice(choice)
         listing = self.evaluation.facts.listing(choice)
@@ -1254,9 +1255,9 @@ class Solution:
         return tuple(out)
 
     def ordered(self, choice: str) -> Answer | None:
-        """The membership list ranked by the domain's order: known, waiting while the
-        list or an order read waits, refused through a refused input, inapplicable when
-        an order read does not apply; ``None`` for a membership-only domain."""
+        """The membership list ranked by the domain's order: known, waiting while an
+        order read waits, refused through a refused input, inapplicable when an order read
+        does not apply; ``None`` for a membership-only domain."""
 
         self._choice(choice)
         info = self.index.choices[choice]

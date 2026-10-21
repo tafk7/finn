@@ -47,7 +47,9 @@ keeps the description's path as its key: a choice ``compute.packed.pe`` is the e
 Decision ``compute.packed.pe``. A scope that reads something outside it takes it as a formal
 (``in-<path>``), bound by its parent; a selector's value is read through a derived member
 ``key-<name>`` (``selected``); a child's guard is a derived member ``when-<name>``. Facts
-are the root's optional formals: a missing fact is an unsupplied one. A ``Members`` is the
+are the root's formals (SZ100 (5)): a required fact is ``Param()``, an optional one
+``Param(required=False)``, left unsupplied where the model reads ``None`` (today's engine
+reads it unresolved: T4c's row). A ``Members`` is the
 engine's ``Members(KEY)``, a key of its own, each entry its child's value export of that key
 (``exports = {KEY: derived}``); each entry is in a child or a case placed by the
 ``Members``'s scope, one per child. Its value, the engine's ``Located`` entries, is read as
@@ -373,7 +375,7 @@ class _Builder:
             child = name.removeprefix("when-")
             return self.guard(scope, f"{scope}.{child}" if scope else child)
         if name in index.facts:
-            return Param(required=False)
+            return Param(required=False) if name in index.optional else Param()
         if name in index.choices and index.choices[name].cases is not None:
             # a selector's value, read as its selected key
             return self._selector_key(scope, name)
@@ -629,8 +631,13 @@ class Engine:
     located: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     def open(self, facts: Mapping[str, object]) -> Point:
-        """The configuration with ``facts`` and nothing committed."""
-        return Point(self, design_space(self.root(**cast(dict[str, Any], facts))))
+        """The configuration with ``facts`` and nothing committed: an optional fact the
+        model reads ``None`` left unsupplied."""
+        supplied = {name: value for name, value in facts.items() if not self._left_out(name, value)}
+        return Point(self, design_space(self.root(**cast(dict[str, Any], supplied))))
+
+    def _left_out(self, name: str, value: object) -> bool:
+        return value is None and name in self.index.optional
 
     def path(self, owner: str) -> str:
         """The model path an engine finding's owner names."""
@@ -811,8 +818,10 @@ class Point:
 
     def change(self, edit: model.Change) -> tuple[ChangeForm, Point | None]:
         """``edit`` applied: its comparable result, and the configuration it publishes."""
-        if edit.unset:
-            raise NotTranslatable("the engine cannot set a fact back to unknown")
+        if edit.unset or any(
+            self.engine._left_out(name, value) for name, value in edit.facts.items()
+        ):
+            raise NotTranslatable("the engine cannot set an optional fact back to unsupplied")
         decisions = self._decisions()
         commits = {decisions[path]: value for path, value in edit.commit.items()}
         clears: list[ChangeRequest] = [
