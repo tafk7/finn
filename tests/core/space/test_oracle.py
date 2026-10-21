@@ -13,12 +13,14 @@ planted faults show that it would report a difference: each alters one thing, an
 from __future__ import annotations
 
 import enum
+import random
 from dataclasses import dataclass, replace
 from typing import Any
 
 import pytest
 from support.space_oracle import IMPLEMENTATIONS, Answers, compare, forms, toys
-from support.space_oracle.today import FAULTS, TODAY, Fault, Planted
+from support.space_oracle.today import FAULTS, TODAY, Fault, Historied, Planted, TodayAnswers
+from support.space_walk import fresh
 
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
@@ -454,6 +456,89 @@ def test_a_walk_reports_each_planted_fault(fault: Fault) -> None:
     kinds = {"value": "members", "validity": "validity", "possible": "viable"}
     expected = {kinds[fault]} if fault in kinds else {"viable", "report"}
     assert set(found.by_kind) <= expected, found.by_kind
+
+
+# -- the cold build (``Implementation.make``) ------------------------------------------------
+
+
+def _reached(toy: toys.Toy, seed: int, steps: int = 5) -> list[Answers]:
+    """The design spaces a short seeded walk of today's reaches on ``toy``: the start, the
+    dump's change, then a listed value set or a stored choice cleared at each step."""
+    rng = random.Random(seed)
+    answers = TODAY.open(toy.make())
+    found = [answers]
+    changed = answers.change(toy.change, ()).after
+    if changed is not None:
+        answers = changed
+        found.append(answers)
+    for _ in range(steps):
+        key = rng.choice([key for key, _ in answers.states()])
+        stored = answers.stored()
+        if key in stored and rng.random() < 0.3:
+            after = answers.change({}, (key,)).after
+        else:
+            (listed,) = answers.viable([key])
+            values = [item.value for item in listed.values or ()]
+            if not values:
+                continue
+            after = answers.change({key: rng.choice(values)}, ()).after
+        if after is not None:
+            answers = after
+            found.append(answers)
+    return found
+
+
+@pytest.mark.parametrize("toy", sorted(TOYS))
+def test_todays_cold_build_is_the_recomputation_on_the_toys(toy: str) -> None:
+    """``TODAY.make`` of a design space's Space class, facts and stored choices answers as
+    ``support.space_walk.fresh`` of it (today's recomputation from its internals), at every
+    design space a short walk reaches (``compare.walk`` holds the walked one to it)."""
+    configuration = TOYS[toy].make()
+    space_class, facts = type(configuration), compare.facts_of(configuration)
+    reached = [answers for seed in (0, 1) for answers in _reached(TOYS[toy], seed)]
+    assert any(answers.stored() for answers in reached)
+    for answers in reached:
+        assert isinstance(answers, TodayAnswers)
+        made = forms.space(TODAY.make(space_class, facts, answers.stored()))
+        assert forms.differences(forms.space(TODAY.open(fresh(answers.point))), made) == []
+
+
+def test_a_cold_build_holds_exactly_the_facts_and_choices_given() -> None:
+    """``make`` checks no rule and drops nothing: the house's ``matched`` broken by the
+    kitchen's and the dining room's finishes, both kept; a value its type check refuses,
+    or a key that is no choice, is refused."""
+    made = TODAY.make(House, {"budget": 100}, {"kitchen.finish": 1, "dining.finish": 2})
+    assert made.stored() == {"kitchen.finish": 1, "dining.finish": 2}
+    assert forms.validity(made.validity())["status"] == "refused"
+    with pytest.raises(ValueError, match="kitchen.finish"):
+        TODAY.make(House, {"budget": 100}, {"kitchen.finish": 9})
+    with pytest.raises(KeyError, match="budget"):
+        TODAY.make(House, {"budget": 100}, {"budget": 1})
+
+
+@pytest.mark.parametrize("historied", ["base", "other", "both"])
+def test_a_walk_reports_history_by_the_cold_build(historied: str) -> None:
+    """``Historied``: what a change reaches answers one member otherwise than the same design
+    space made from nothing. Against today's, it is reported on its own side by the cold
+    build, beside the members it answers otherwise than today's; walked against itself,
+    the two sides agree everywhere, and the cold build alone reports it."""
+    house = TOYS["house"]
+    base = Historied(TODAY) if historied in ("base", "both") else TODAY
+    other = Historied(TODAY) if historied in ("other", "both") else TODAY
+    found = compare.walk(house.make, house.facts, 0, STEPS, base, other)
+    sides = {path.split("/cold/")[1].split("/")[0] for path in _paths(found) if "/cold/" in path}
+    assert found.by_kind["cold"] > 0
+    if historied == "both":
+        # one implementation: one side held to its cold build
+        assert set(found.by_kind) == {"cold"} and sides == {"base"}
+        assert found.tally["cold builds"] == found.tally["design spaces"]
+    else:
+        assert set(found.by_kind) == {"cold", "members"} and sides == {historied}
+        assert found.tally["cold builds"] == 2 * found.tally["design spaces"]
+
+
+def _paths(found: compare.Compared) -> list[str]:
+    return [difference.path for difference in found.disagreements]
 
 
 class _Reordered:

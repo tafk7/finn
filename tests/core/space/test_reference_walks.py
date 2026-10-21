@@ -111,8 +111,9 @@ def test_a_seeded_walk_keeps_the_four_invariants_and_the_engines_own_checks(
     assert tally.engine_checks["cold"] == tally.engine_checks["bind"] == tally.compared
     assert tally.engine_checks["bind held"] == tally.compared
     assert tally.engine_errors == 0
-    # today's engine, every permanent check run (the cold build is today's alone)
-    assert tally.implementation == "today" and not tally.skipped_checks
+    # today's engine, every permanent check run (the cold build through today's ``make``)
+    assert tally.implementation == "today"
+    assert tally.engine_checks["cold change"] == tally.steps - tally.model_only
 
 
 def test_the_full_run_meets_both_causes_and_counts_each_under_its_milestone() -> None:

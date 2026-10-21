@@ -15,14 +15,14 @@ import ast
 import functools
 import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
 import pytest
 from support.space_oracle import Answers
-from support.space_oracle.today import FAULTS, TODAY, Fault, Planted, PlantedAnswers
+from support.space_oracle.today import FAULTS, TODAY, Fault, Historied, Planted, PlantedAnswers
 
 from core.space import reference
 from core.space.reference import (
@@ -539,19 +539,44 @@ class Renamed:
     def open(self, configuration: EngineSpace) -> Answers:
         return PlantedAnswers(TODAY.open(configuration), cast("Fault", "none"))
 
+    def make(
+        self,
+        space_class: type[EngineSpace],
+        facts: Mapping[str, object],
+        stored: Mapping[str, object],
+    ) -> Answers:
+        return PlantedAnswers(TODAY.make(space_class, facts, stored), cast("Fault", "none"))
 
-def test_the_check_against_a_cold_build_is_todays_alone() -> None:
-    # ``support.space_walk.fresh`` rebuilds today's configuration from its internals: for
-    # another implementation (here today's under another name, which agrees everywhere) the
-    # check is skipped, and tallied, at every configuration and change it would have run;
-    # the bind checks run for any implementation.
-    planted = walk(0, 30, strict=True, implementation=Renamed())
-    assert planted.failure is None, planted.failure
-    assert planted.implementation == "today, renamed"
-    assert not planted.engine_checks["cold"] and not planted.engine_checks["cold change"]
-    assert planted.skipped_checks["cold"] == planted.compared
-    assert planted.skipped_checks["cold change"] == planted.steps - planted.model_only
-    assert planted.engine_checks["bind"] == planted.engine_checks["bind held"] == planted.compared
-    today = walk(0, 3, strict=True)
-    assert today.implementation == "today" and not today.skipped_checks
-    assert today.engine_checks["cold"] == today.compared
+
+def test_the_check_against_a_cold_build_runs_for_every_implementation() -> None:
+    # The cold build is the implementation's own (``Implementation.make``), so the check
+    # runs for any implementation (here today's under another name, which agrees
+    # everywhere), at every configuration and change, as the bind checks do.
+    renamed = walk(0, 30, strict=True, implementation=Renamed())
+    assert renamed.failure is None, renamed.failure
+    assert renamed.implementation == "today, renamed"
+    assert renamed.engine_checks["cold"] == renamed.compared
+    assert renamed.engine_checks["cold change"] == renamed.steps - renamed.model_only
+    assert renamed.engine_checks["bind"] == renamed.engine_checks["bind held"] == renamed.compared
+
+
+COLD_LINE = re.compile(
+    r"seed (\d+), step \d+: the walked engine configuration answers otherwise than one built "
+    r"from nothing \(model column: built from nothing; engine column: walked\)"
+)
+
+
+@pytest.mark.parametrize("seed", range(4))
+def test_history_is_reported_by_the_cold_build_in_walks_0_to_3(seed: int) -> None:
+    # ``Historied``: what a change reaches answers one member otherwise than the same design
+    # space made from nothing. Opened, it agrees with today's, so only the check against
+    # the implementation's own cold build (``make``) can report it.
+    tally = walk(seed, 30, strict=True, implementation=Historied(TODAY))
+    assert tally.implementation == "today, history planted"
+    assert tally.engine_errors == 0
+    assert tally.failed == "engine", tally.failure
+    assert tally.failure is not None
+    lines = tally.failure.splitlines()
+    found = COLD_LINE.fullmatch(lines[0])
+    assert found is not None and int(found[1]) == seed, lines[0]
+    assert lines[1].startswith("cold build: the "), tally.failure

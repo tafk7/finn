@@ -61,19 +61,19 @@ change"``, apart from a change of choices), and invariant 1's bind of each confi
 own choices (``finn.core.space.bind`` against the model's ``bind``, its report compared),
 from nothing stored and from the walked design space (``"bind held"``).
 Its own **permanent checks** are strict always: the walked engine configuration answers
-every question, and every change, as one built from nothing (``support.space_walk.fresh``),
-and its bind publishes the walked configuration's stored choices. An engine error always
-fails.
+every question, and every change, as one built from nothing (``Engine.make``, the
+implementation's ``make``: the model configuration's facts, as the walk gives them to
+``Engine.open``, and the walked configuration's ``stored()``), and its bind publishes the
+walked configuration's stored choices. An engine error always fails.
 
 **The implementation compared** (``walk(..., implementation=)``, the CLI's
 ``--implementation module:attribute``; today's engine, ``support.space_oracle.today.TODAY``,
 by default) is asked every question through the class-based oracle's interface
 (``support.space_oracle.Answers``; ``engine.Point``). The summary and every failure name it.
-The bind checks hold for any implementation. The check against one built from nothing holds
-for **today's implementation alone**: ``fresh`` rebuilds today's configuration from its
-internals (its world, its stored choices by node), which no other implementation has. For
-another one (a prototype, T1's evaluator, a planted fault) it is skipped and tallied
-(``Tally.skipped_checks``: ``"cold"``, ``"cold change"``).
+Every permanent check holds for every implementation: the binds through ``Answers.bind``,
+and the check against one built from nothing through ``Implementation.make`` (history
+independence, which T1 claims by construction and its cache could break), so none is
+skipped.
 
 **Two runs, and attribution by cause** (DESIGN § 6). The model holds rulings the engine has
 not reached (SZ100 (3), (5)), each a pending milestone of the matrix with one row.
@@ -117,8 +117,7 @@ from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 from support.space_oracle import Implementation
-from support.space_oracle.today import TODAY, TodayAnswers
-from support.space_walk import fresh
+from support.space_oracle.today import TODAY
 
 from core.space import reference as model
 from core.space.reference.description import Order
@@ -1600,10 +1599,8 @@ class Tally:
     checks: Counter[str] = field(default_factory=Counter)
     #: the engine's own permanent checks run, by name
     engine_checks: Counter[str] = field(default_factory=Counter)
-    #: the implementation compared (``Implementation.name``), and the engine's own checks
-    #: it skips, by name: the check against one built from nothing is today's alone
+    #: the implementation compared (``Implementation.name``)
     implementation: str = TODAY.name
-    skipped_checks: Counter[str] = field(default_factory=Counter)
     #: configurations compared with the engine; the engine took the model's by a bind
     #: (``finn.core.space.bind``, never refused), where it refused what the model accepted
     compared: int = 0
@@ -1778,24 +1775,19 @@ class _Walk:
 
     # -- the engine
 
-    def cold(self, point: Point, check: str) -> Point | None:
-        """``point`` built from nothing (``support.space_walk.fresh``), for the permanent
-        check named ``check``. Today's implementation alone: ``fresh`` rebuilds today's
-        configuration from its internals. For another, ``None``, the check skipped and
-        tallied (``Tally.skipped_checks``)."""
-        if not isinstance(point.answers, TodayAnswers):
-            self.tally.skipped_checks[check] += 1
-            return None
-        answers = point.answers
-        return Point(point.engine, TODAY.open(fresh(answers.point)), TODAY.name)
+    def cold(self, configuration: model.Configuration, point: Point) -> Point:
+        """``point``, the engine configuration walked to ``configuration``'s facts, built
+        from nothing by the implementation (``Engine.make``): ``configuration``'s facts, as
+        the walk gives them to ``Engine.open``, and ``point``'s stored choices."""
+        return self.engine.make(dict(configuration.facts), point.stored(), self.implementation)
 
-    def engine_state(self, point: Point) -> dict[Question, Form]:
-        """The engine's answers at ``point``, and its permanent check: as built from nothing
-        (today's implementation alone, :meth:`cold`)."""
+    def engine_state(
+        self, configuration: model.Configuration, point: Point
+    ) -> dict[Question, Form]:
+        """The engine's answers at ``point`` (walked to ``configuration``'s facts), and its
+        permanent check: as built from nothing (:meth:`cold`)."""
         forms = self.on_engine(lambda: engine_forms(point, self.engine_asked))
-        rebuilt_point = self.on_engine(lambda: self.cold(point, "cold"))
-        if rebuilt_point is None:
-            return forms
+        rebuilt_point = self.on_engine(lambda: self.cold(configuration, point))
         rebuilt = self.on_engine(lambda: engine_forms(rebuilt_point, self.engine_asked))
         self.tally.engine_checks["cold"] += 1
         for question in differences(forms, rebuilt):
@@ -1823,13 +1815,13 @@ class _Walk:
                 cause = self.cause(subject, configuration)
                 self.disagree(what, ask(question), forms[question], engine[question], cause)
 
-    def engine_change(self, point: Point, edit: model.Change) -> tuple[ChangeForm, Point | None]:
-        """``edit`` on the engine; its permanent check: as on a configuration built from
-        nothing (today's implementation alone, :meth:`cold`)."""
+    def engine_change(
+        self, configuration: model.Configuration, point: Point, edit: model.Change
+    ) -> tuple[ChangeForm, Point | None]:
+        """``edit`` on the engine at ``point`` (walked to ``configuration``'s facts); its
+        permanent check: as on a configuration built from nothing (:meth:`cold`)."""
         form, successor = self.on_engine(lambda: point.change(edit))
-        rebuilt = self.on_engine(lambda: self.cold(point, "cold change"))
-        if rebuilt is None:
-            return form, successor
+        rebuilt = self.on_engine(lambda: self.cold(configuration, point))
         cold, _ = self.on_engine(lambda: rebuilt.change(edit))
         self.tally.engine_checks["cold change"] += 1
         if not _equal(form, cold):
@@ -2008,7 +2000,7 @@ class _Walk:
         solution = configuration.solve()
         forms = model_forms(solution, self.asked)
         self.history_independence(configuration, forms)
-        engine = self.engine_state(point)
+        engine = self.engine_state(configuration, point)
         self.compare(configuration, forms, engine)
         self.engine_bind(configuration, point)
         return _State(configuration, solution, forms, point, engine)
@@ -2071,7 +2063,7 @@ class _Walk:
                     checked.problems[0].split(":")[0], "invariant " + "\n".join(checked.problems)
                 )
             return state
-        engine, successor = self.engine_change(state.point, edit)
+        engine, successor = self.engine_change(configuration, state.point, edit)
         self.history.append(
             f"{_edit(edit)}: model {verdict}, engine {'accepted' if engine.accepted else 'refused'}"
         )
@@ -2104,7 +2096,7 @@ class _Walk:
             # milestone is pending): it takes the model's configuration by a bind
             _, point = self.bind_engine(result.configuration)
             tally.rebound += 1
-        engine_forms_ = self.engine_state(point)
+        engine_forms_ = self.engine_state(result.configuration, point)
         self.compare(result.configuration, forms, engine_forms_)
         self.engine_bind(result.configuration, point)
         if addition and successor is not None:
@@ -2163,7 +2155,6 @@ def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
         for name in (
             "checks",
             "engine_checks",
-            "skipped_checks",
             "by_question",
             "by_milestone",
             "skipped",
@@ -2209,8 +2200,7 @@ def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
         f"descriptions skipped: {_counts(totals['skipped'])}",
         f"invariant checks: {_counts(totals['checks'])}; binds reading refused, reporting rules "
         f"new facts broke (§ 16.24) {summed('binds_broken')}",
-        f"engine's own checks: {_counts(totals['engine_checks'])}; skipped (today's alone) "
-        f"{_counts(totals['skipped_checks'])}; configurations compared "
+        f"engine's own checks: {_counts(totals['engine_checks'])}; configurations compared "
         f"{summed('compared')}, engine rebound to the model's by a bind {summed('rebound')}",
         f"engine disagreements ({mode}): by milestone {milestones or '-'}; by question "
         f"{_counts(totals['by_question'])}",

@@ -7,21 +7,36 @@ faults: today's, altered in one answer each.
 ``states``, ``validity`` and ``viable``, ``point.query``, ``try_with_choices``,
 ``try_with_facts`` and ``bind``; never a world, a state or a node id. A scope is reached
 by name from the root: a child by its attribute, a candidate of a Decision over nodes by
-``inspection.candidate`` (selected or not, whatever its selector holds).
+``inspection.candidate`` (selected or not, whatever its selector holds). The one exception
+is ``Today.make``, the design space built from nothing, which today's public API cannot
+build unchecked: it reads today's internals (``occurrence.state``, ``World.start``), as
+``support.space_walk.fresh`` does, inside that one method.
 
 ``Planted`` wraps an implementation and alters one thing (``FAULTS``): it drops one
 standing choice, refuses one possible value, swaps the root's validity status, or moves
 one member's value. A harness that compares nothing passes every one of them; the
-oracle's tests show each reported by key.
+oracle's tests show each reported by key. ``Historied`` plants history instead: what a
+change reaches answers one member otherwise than the same design space made from nothing,
+which only the cold build's check (``make``) reports.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import Any, Literal, cast
 
-from finn.core.space import Available, BrokenRule, QueryResult, Space, bind, inspection, reject
+from finn.core.space import (
+    Available,
+    BrokenRule,
+    QueryResult,
+    Rejected,
+    Space,
+    bind,
+    design_space,
+    inspection,
+    reject,
+)
 from finn.core.space.edits import ConfigurationResult
 from finn.core.space.ir import NodeKind
 from support.space_oracle import NO_FACTS, Answers, Changed, Implementation
@@ -155,6 +170,40 @@ class Today:
 
     def open(self, configuration: Space) -> Answers:
         return TodayAnswers(configuration)
+
+    def make(
+        self,
+        space_class: type[Space],
+        facts: Mapping[str, object],
+        stored: Mapping[str, object],
+    ) -> Answers:
+        """Built as ``support.space_walk.fresh`` builds its recomputation: from the design
+        space of ``space_class(**facts)``, a world of its own started with its facts and the
+        ``stored`` choices (recognized and frozen as a change's are), with no rule checked;
+        each stored value must pass its type check there. Today's public API has no such
+        build (a bind checks rules and may drop), so this one method reads today's
+        internals (``occurrence.state``, ``World.start``, the type check); nothing else in
+        this module does."""
+        from finn.core.space import occurrence  # noqa: PLC0415 - internals, this method alone
+        from finn.core.space._assign import check  # noqa: PLC0415
+        from finn.core.space._state import State  # noqa: PLC0415
+        from finn.core.space._world import World  # noqa: PLC0415
+
+        opened = design_space(space_class(**cast(dict[str, Any], facts)))
+        current = occurrence.state(opened)
+        linked = current.linked
+        unknown = sorted(key for key in stored if linked.keys.get(key) not in linked.decisions)
+        if unknown:
+            raise KeyError(f"not choices of {space_class.__qualname__}: {unknown}")
+        values = occurrence.prepare_values(
+            linked, {linked.keys[key]: value for key, value in stored.items()}, "choice"
+        )
+        world = World.start(current.evaluator, dict(current.facts), values)
+        for index in world.stored:
+            found = check(world, index)
+            if isinstance(found, Rejected):
+                raise ValueError(f"{linked.nodes[index].key}: its stored value fails {found}")
+        return TodayAnswers(occurrence.attach(State(current.model, world), 0))
 
 
 TODAY = Today()
@@ -298,12 +347,59 @@ class Planted:
     def open(self, configuration: Space) -> Answers:
         return PlantedAnswers(self.inner.open(configuration), self.fault)
 
+    def make(
+        self,
+        space_class: type[Space],
+        facts: Mapping[str, object],
+        stored: Mapping[str, object],
+    ) -> Answers:
+        return PlantedAnswers(self.inner.make(space_class, facts, stored), self.fault)
+
+
+class _Reached(PlantedAnswers):
+    """``inner``'s answers, altering nothing; a change's or a bind's successor answers
+    with the ``value`` fault planted."""
+
+    def __init__(self, inner: Answers) -> None:
+        super().__init__(inner, cast(Fault, "none"))
+
+    def _planted(self, changed: Changed) -> Changed:
+        after = None if changed.after is None else PlantedAnswers(changed.after, "value")
+        return Changed(changed.report, after)
+
+
+@dataclass(frozen=True)
+class Historied:
+    """``inner`` with history planted: a design space it opens or makes answers as
+    ``inner``'s, but one reached by a change (or a bind) answers one member otherwise (the
+    ``value`` fault), so a walked design space answers otherwise than its cold build
+    (``make``) does. Agreeing with ``inner`` everywhere but there, it shows that the cold
+    build's check is live."""
+
+    inner: Implementation
+
+    @property
+    def name(self) -> str:
+        return f"{self.inner.name}, history planted"
+
+    def open(self, configuration: Space) -> Answers:
+        return _Reached(self.inner.open(configuration))
+
+    def make(
+        self,
+        space_class: type[Space],
+        facts: Mapping[str, object],
+        stored: Mapping[str, object],
+    ) -> Answers:
+        return _Reached(self.inner.make(space_class, facts, stored))
+
 
 __all__ = [
     "FAULTS",
     "PLANTED",
     "TODAY",
     "Fault",
+    "Historied",
     "Planted",
     "PlantedAnswers",
     "Today",

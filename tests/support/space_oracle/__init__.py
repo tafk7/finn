@@ -11,6 +11,11 @@ result types (``QueryResult``, ``inspection.Validity``, the states' ``ChoiceStat
 ``inspection.Viable``, a change's ``ConfigurationResult``). No node id, handle or world
 crosses this interface.
 
+An ``Implementation`` also builds a design space from nothing (``make``): a Space class
+with exactly the given facts and stored choices, by key, unchecked. A design space reached
+by changes must answer as the one built from its facts and stored choices does (history
+independence), and the walks hold every implementation to it through ``make``.
+
 Today's engine (``today.TODAY``) answers through the public API alone. A prototype or
 T1's evaluator plugs in as ``module:attribute`` (``load``), with no line here.
 
@@ -104,6 +109,20 @@ class Implementation(Protocol):
 
     def open(self, configuration: Space) -> Answers:
         """The answers of the design space ``configuration`` (today's API built it)."""
+        ...
+
+    def make(
+        self,
+        space_class: type[Space],
+        facts: Mapping[str, object],
+        stored: Mapping[str, object],
+    ) -> Answers:
+        """The design space of ``space_class`` with exactly ``facts`` (by key, the root's
+        params; an optional one left out is absent) and the choices ``stored`` (by key,
+        dormant ones included), built from nothing and unchecked: no rule is checked, and
+        each stored value must pass its type check. A design space reached by changes
+        answers as the one made from its facts and its ``stored()`` (history
+        independence)."""
         ...
 
 

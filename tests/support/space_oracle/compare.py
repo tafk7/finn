@@ -12,7 +12,11 @@ was compared, and the disagreements by kind.
 The walk is the prototype's (``probes/core-types/compare.py``, ``walk``), by key: at each
 step a change (a listed value, a value outside the listed ones, a clear, a pair of choices,
 or new facts), made on both; every answer and the change's report compared at each design
-space reached.
+space reached. At each design space reached, each side is also held to its own cold build
+(``Implementation.make`` of the same Space class, facts and stored choices): what a side
+answers there must not depend on how it was reached. A difference there is named under
+``cold/base`` or ``cold/other`` (its kind ``cold``), so history in either implementation is
+caught, even where both agree.
 """
 
 from __future__ import annotations
@@ -29,11 +33,14 @@ from support.space_oracle import NO_FACTS, Answers, Changed, Implementation, for
 @dataclass
 class Compared:
     """What a comparison found: its disagreements, by key, what it compared, and the
-    requests a walk made (``requests``, each as ``Request`` prints it)."""
+    requests a walk made (``requests``, each as ``Request`` prints it). ``spaces``: the
+    forms of the last two design spaces ``everything`` compared (base's, other's), which a
+    walk holds to their cold builds."""
 
     disagreements: list[forms.Difference] = field(default_factory=list)
     tally: Counter[str] = field(default_factory=Counter)
     requests: list[str] = field(default_factory=list)
+    spaces: tuple[forms.Form, forms.Form] | None = field(default=None, repr=False)
 
     def extend(self, found: Sequence[forms.Difference], where: str = "") -> None:
         for difference in found:
@@ -72,6 +79,7 @@ def everything(
     ``viable_keys`` (every choice by default)."""
     found = Compared() if found is None else found
     left, right = forms.space(base, viable_keys), forms.space(other, viable_keys)
+    found.spaces = (left, right)
     found.extend(forms.differences(left, right), where)
     found.tally["design spaces"] += 1
     found.tally["answers"] += len(left["members"])
@@ -166,6 +174,51 @@ FACT_STEPS = 0.15
 """The share of a walk's steps that give new facts, where facts are given."""
 
 
+def facts_of(configuration: Space) -> dict[str, object]:
+    """The root facts ``configuration`` was opened with, by key (an optional one left out
+    is absent), read through today's public API (the common input)."""
+    from support.space_oracle.today import TODAY  # noqa: PLC0415 - registered after this
+
+    answers = TODAY.open(configuration)
+    found: dict[str, object] = {}
+    for key, kind in answers.members():
+        if kind == "param" and "." not in key:
+            answer = answers.query(key)
+            if isinstance(answer, Available):
+                found[key] = answer.value
+    return found
+
+
+def cold(
+    implementation: Implementation,
+    walked: Answers,
+    space_class: type[Space],
+    facts: Mapping[str, object],
+    viable_keys: Sequence[str] | None = forms.ALL,
+    found: Compared | None = None,
+    where: str = "cold",
+    walked_form: forms.Form | None = None,
+) -> Compared:
+    """``walked``, a design space ``implementation`` reached, against its cold build
+    (``implementation.make`` of ``space_class`` with ``facts`` and ``walked``'s stored
+    choices): everything (``forms.space``) the same. Its differences are named under
+    ``where`` (``cold`` by default; a walk's ``<where>/cold/base`` or ``/cold/other``).
+    ``walked_form``: ``walked``'s form, where it was made already."""
+    found = Compared() if found is None else found
+    found.tally["cold builds"] += 1
+    try:
+        made: Answers | BaseException = implementation.make(space_class, facts, walked.stored())
+    except Exception as error:  # noqa: BLE001 - a cold build that raises is a difference
+        made = error
+    if isinstance(made, BaseException):
+        found.extend([forms.Difference(where, {"raised": False}, forms.raised(made))])
+        return found
+    if walked_form is None:
+        walked_form = forms.space(walked, viable_keys)
+    found.extend(forms.differences(walked_form, forms.space(made, viable_keys)), where)
+    return found
+
+
 def walk(
     make: Callable[[], Space],
     facts: Mapping[str, Sequence[object]],
@@ -179,12 +232,30 @@ def walk(
     ``base`` and ``other`` alike, and followed while both accept: everything compared at
     the start and after each change, and each change's report; at the end, the choices
     stored bound on a fresh design space (``bind``), its report and successor compared.
-    ``facts``: values the walk may give each root fact, by key."""
+    At the start, after each change both accept and after the bind, each side is held to
+    its cold build (``cold``: ``Implementation.make`` of the Space class ``make`` opens,
+    with the facts reached and the side's stored choices); where ``other`` is ``base``
+    (equal), one side is, since the two walks are the same. ``facts``: values the walk may
+    give each root fact, by key."""
     rng = random.Random(seed)
     found = Compared()
     configuration = make()
+    space_class = type(configuration)
+    start = facts_of(configuration)
+    reached = dict(start)
     left, right = base.open(configuration), other.open(configuration)
     everything(left, right, viable_keys, found, "start")
+
+    def held(on_base: Answers, on_other: Answers, given: Mapping[str, object], where: str) -> None:
+        """Each side against its cold build, its walked form the one ``everything`` made."""
+        assert found.spaces is not None
+        left_form, right_form = found.spaces
+        cold(base, on_base, space_class, given, viable_keys, found, f"{where}/cold/base", left_form)
+        if other != base:  # the same implementation: its walks and cold builds are the same
+            where = f"{where}/cold/other"
+            cold(other, on_other, space_class, given, viable_keys, found, where, right_form)
+
+    held(left, right, reached, "start")
     for step in range(steps):
         keys = [key for key, _ in left.states()]
         if not keys:
@@ -215,17 +286,22 @@ def walk(
         found.requests.append(str(request))
         found.tally["steps giving facts"] += bool(given)
         found.tally["steps clearing"] += bool(clears)
-        _, after_left, after_right = change(
-            left, right, request, found, f"step {step} ({request})", viable_keys
-        )
+        where = f"step {step} ({request})"
+        _, after_left, after_right = change(left, right, request, found, where, viable_keys)
         if after_left is not None and after_right is not None:
             left, right = after_left, after_right
+            reached.update(given)
+            held(left, right, reached, where)
     # The choices the walk ended with, saved and bound again on a fresh design space.
     fresh = make()
     saved = dict(left.stored())
-    change(base.open(fresh), other.open(fresh), saved, found, "bind", viable_keys)
+    _, bound_left, bound_right = change(
+        base.open(fresh), other.open(fresh), saved, found, "bind", viable_keys
+    )
+    if bound_left is not None and bound_right is not None:
+        held(bound_left, bound_right, start, "bind")
     found.tally["walks"] += 1
     return found
 
 
-__all__ = ["FACT_STEPS", "Compared", "Request", "change", "everything", "walk"]
+__all__ = ["FACT_STEPS", "Compared", "Request", "change", "cold", "everything", "facts_of", "walk"]

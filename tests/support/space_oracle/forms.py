@@ -294,7 +294,8 @@ class Difference:
     @property
     def kind(self) -> str:
         """What differs: the path's first part that names a question (``members``,
-        ``validity``, ``states``, ``viable``, ``report``, ...)."""
+        ``validity``, ``states``, ``viable``, ``report``, ...), or ``cold`` for a
+        design space against its cold build (``compare.cold``)."""
         parts = [part for part in self.path.split("/") if part]
         for part in parts:
             if part in KINDS:
@@ -309,7 +310,9 @@ class Difference:
         return f"{self.path}: {text(self.base)} vs {text(self.other)}"
 
 
-KINDS = frozenset(("members", "validity", "flow", "states", "stored", "viable", "report", "raised"))
+KINDS = frozenset(
+    ("cold", "members", "validity", "flow", "states", "stored", "viable", "report", "raised")
+)
 ROOT = "(root)"
 """The root scope's name in a path (its key in a form is ``""``)."""
 MISSING = {"missing": True}

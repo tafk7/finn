@@ -14,7 +14,8 @@ legacy form, and no answer the adapter computes in its place.
   API: ``composite``, ``design_space``); every implementation reads the same classes.
   ``Engine.open`` opens the design space with an ``Implementation`` of the class-based
   oracle's interface (``support.space_oracle``; today's engine, ``today.TODAY``, by
-  default), and ``Point`` asks every question of what it opens, an ``Answers``, by key,
+  default), ``Engine.make`` has it build one from nothing (``Implementation.make``, the
+  walks' cold build), and ``Point`` asks every question of what it opens, an ``Answers``, by key,
   never of ``inspection`` or the configuration itself. So a prototype or T1's evaluator is
   compared with the model by naming it (``walks.walk(..., implementation=)``, the CLI's
   ``--implementation module:attribute``), and a planted fault (``today.Planted``) shows
@@ -653,6 +654,20 @@ class Engine:
         supplied = {name: value for name, value in facts.items() if not self._left_out(name, value)}
         configuration = design_space(self.root(**cast(dict[str, Any], supplied)))
         return Point(self, implementation.open(configuration), implementation.name)
+
+    def make(
+        self,
+        facts: Mapping[str, object],
+        stored: Mapping[str, object],
+        implementation: Implementation = TODAY,
+    ) -> Point:
+        """The configuration with ``facts`` (as ``open`` takes them) and exactly the
+        choices ``stored`` (by path, dormant ones included), built from nothing by
+        ``implementation`` (``Implementation.make``): no rule checked, nothing dropped. A
+        walked configuration answers as the one made from its facts and stored choices."""
+        supplied = {name: value for name, value in facts.items() if not self._left_out(name, value)}
+        made = implementation.make(self.root, supplied, dict(stored))
+        return Point(self, made, implementation.name)
 
     def _left_out(self, name: str, value: object) -> bool:
         return value is None and name in self.index.optional
