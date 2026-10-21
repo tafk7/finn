@@ -1,13 +1,24 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The engine side of the harness: a model description built as an engine Space, and the
-engine asked the model's questions, each answer put in the comparable form (``forms``).
+"""The engine side of the harness: a model description built as an engine Space, and an
+implementation of the engine's public questions asked the model's, each answer put in the
+comparable form (``forms``).
 
-This is the adapter to the engine core. Everything that depends on how the engine is
+This is the adapter to the engine. Everything that depends on how the engine is
 **authored** or **asked** is in this one module, so a change of the engine's API is a port of
-this file alone. The engine answers each question itself, in the model's terms: no legacy
-form, and no answer the adapter computes in the engine's place.
+this file alone. The implementation answers each question itself, in the model's terms: no
+legacy form, and no answer the adapter computes in its place.
+
+- **The implementation.** The description is authored once, as Space classes (today's
+  API: ``composite``, ``design_space``); every implementation reads the same classes.
+  ``Engine.open`` opens the design space with an ``Implementation`` of the class-based
+  oracle's interface (``support.space_oracle``; today's engine, ``today.TODAY``, by
+  default), and ``Point`` asks every question of what it opens, an ``Answers``, by key,
+  never of ``inspection`` or the configuration itself. So a prototype or T1's evaluator is
+  compared with the model by naming it (``walks.walk(..., implementation=)``, the CLI's
+  ``--implementation module:attribute``), and a planted fault (``today.Planted``) shows
+  that the comparison is live.
 
 - **Spelling.** A rule of the description is a constraint in the model, and in the engine
   every rule is a ``@constraint`` of the Space that owns it, which its Space's validity
@@ -20,9 +31,10 @@ form, and no answer the adapter computes in the engine's place.
   a ``domain(accepts=, candidates=)``: membership is the model's whole membership, the
   enumeration the listed values. A domain's ``order`` is not built: no compared answer
   reads it.
-- **Questions**, each the engine's own answer:
+- **Questions**, each the implementation's own answer (``Answers``; today's through
+  ``inspection`` and the point's public API):
 
-  - a choice's state is ``inspection.states``' (set, waiting with what it waits on,
+  - a choice's state is ``Answers.states``' (set, waiting with what it waits on,
     dormant, open with what its presence waits on, absent);
   - a change's report: refused, its type checks refused (``ChangeOutcome``, status
     ``"refused"``) as ``assignment`` refusals with their codes, and each ``BrokenRule`` as
@@ -32,13 +44,15 @@ form, and no answer the adapter computes in the engine's place.
     failed check's, as an assignment refusal's), and its ``BrokenRule``s as the rules the
     published design space holds newly false (as a refusal's rules: origin, codes,
     standing). Drops and rules compare as sets;
-  - a bind (``finn.core.space.bind``) of saved choices under a design space's facts, in
-    the same form as an accepted change, read against the facts with nothing stored
-    whatever the receiver stores: what it drops (its old value the saved one), the rules
-    the kept choices break, and what it moves;
-  - possible values are ``inspection.viable``'s: ``Possible`` with what it moves,
+  - a bind (``Answers.bind``; today's ``finn.core.space.bind``) of saved choices under a
+    design space's facts, in the same form as an accepted change, read against the facts
+    with nothing stored whatever the receiver stores: what it drops (its old value the
+    saved one), the rules the kept choices break, and what it moves;
+  - possible values are ``Answers.viable``'s: ``Possible`` with what it moves,
     ``Refused`` with its broken rules; ``None`` where the engine lists nothing;
-  - validity is ``inspection.validity`` (``"valid"``, ``"refused"``, ``"open"``);
+  - validity is ``Answers.validity`` (``"valid"``, ``"refused"``, ``"open"``);
+  - a choice's, a value's or a rule's answer is ``Answers.query``'s, a stored choice's
+    value ``Answers.stored``'s;
   - a definition is refused for a dependency cycle (when building or asked) and for a
     domain whose membership reads a choice (at compile).
 
@@ -64,6 +78,9 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+from support.space_oracle import Answers, Changed, Implementation
+from support.space_oracle.today import TODAY
+
 from core.space import reference as model
 from core.space.reference.model import same
 from finn.core.space import (
@@ -84,14 +101,12 @@ from finn.core.space import (
     derived,
     design_space,
     domain,
-    inspection,
-    occurrence,
+    inspection,  # its answer types alone: every question goes to an Answers
     reject,
     selected,
     view,
 )
-from finn.core.space import bind as space_bind
-from finn.core.space.edits import BrokenRule, ChangeOutcome, ChangeRequest, ConfigurationResult
+from finn.core.space.edits import BrokenRule, ChangeOutcome
 
 from .forms import (
     AnswerForm,
@@ -630,11 +645,14 @@ class Engine:
     #: per ``Members``: its entries by the child's local name (``Located.node``)
     located: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
-    def open(self, facts: Mapping[str, object]) -> Point:
-        """The configuration with ``facts`` and nothing committed: an optional fact the
-        model reads ``None`` left unsupplied."""
+    def open(self, facts: Mapping[str, object], implementation: Implementation = TODAY) -> Point:
+        """The configuration with ``facts`` and nothing committed, as ``implementation``
+        answers it (today's engine by default): an optional fact the model reads ``None``
+        left unsupplied. The design space is built by today's API, the common input every
+        implementation opens."""
         supplied = {name: value for name, value in facts.items() if not self._left_out(name, value)}
-        return Point(self, design_space(self.root(**cast(dict[str, Any], supplied))))
+        configuration = design_space(self.root(**cast(dict[str, Any], supplied)))
+        return Point(self, implementation.open(configuration), implementation.name)
 
     def _left_out(self, name: str, value: object) -> bool:
         return value is None and name in self.index.optional
@@ -679,15 +697,17 @@ def definition(
     description: model.Space,
     spelling: Spelling | None = None,
     facts: Mapping[str, object] | None = None,
+    implementation: Implementation = TODAY,
 ) -> DefinitionForm:
     """Whether the engine takes ``description`` as a definition: a dependency cycle reported
-    when building the Space, or when asked (its validity, every rule and every view of the
-    configuration with ``facts``), is ``"cycle"``; a domain whose membership reads a choice,
-    refused at compile, is ``"domain-reads-choice"``; otherwise ``None``. (Today's engine has
-    no ``"view-read-in"``: it builds a Space reading a view in, T4b's row.)"""
+    when building the Space, or when ``implementation`` is asked (its validity, every rule
+    and every view of the configuration with ``facts``), is ``"cycle"``; a domain whose
+    membership reads a choice, refused at compile, is ``"domain-reads-choice"``; otherwise
+    ``None``. (Today's engine has no ``"view-read-in"``: it builds a Space reading a view
+    in, T4b's row.)"""
     try:
         engine = build(description, spelling, unchecked=True)
-        point = engine.open(dict(facts or {}))
+        point = engine.open(dict(facts or {}), implementation)
         point.validity()
         for path in sorted(engine.index.constraints):
             point.rule(path)
@@ -709,42 +729,40 @@ def definition(
 
 @dataclass(frozen=True)
 class Point:
-    """One engine configuration, asked the model's questions."""
+    """One configuration, as an implementation answers it (``answers``), asked the model's
+    questions: every one through the ``Answers`` interface, by key (a description's path is
+    its engine key)."""
 
     engine: Engine
-    point: Space
-
-    # -- handles
-
-    def _decisions(self) -> dict[str, Any]:
-        return {item.key: item.reference for item in inspection.decisions(self.point)}
-
-    def _members(self) -> dict[str, Any]:
-        return {item.key: item.reference for item in inspection.members(self.point)}
+    answers: Answers
+    #: the implementation answering (``Implementation.name``)
+    implementation: str = TODAY.name
 
     def stored(self) -> dict[str, object]:
         """The committed choices, dormant ones included, by path."""
-        current = occurrence.state(self.point)
-        return {current.linked.nodes[index].key: value for index, value in current.stored.items()}
+        return dict(self.answers.stored())
 
     def _query(self, path: str) -> QueryResult[Any]:
         index = self.engine.index
         if path in index.choices and index.choices[path].cases is not None:
+            # a selector's value, read as its selected key
             scope = index.choices[path].scope
-            key = f"{scope}.key-{_name(path)}" if scope else f"key-{_name(path)}"
-            return self.point.query(self._members()[key])
-        if path in index.choices:
-            return self.point.query(self._decisions()[path])
-        return self.point.query(self._members()[path])
+            return self.answers.query(_join(scope, f"key-{_name(path)}"))
+        return self.answers.query(path)
 
     def _paths(self, keys: Iterable[str]) -> frozenset[str]:
         return frozenset(self.engine.path(key) for key in keys)
 
+    def _successor(self, changed: Changed) -> Point | None:
+        if changed.after is None:
+            return None
+        return Point(self.engine, changed.after, self.implementation)
+
     # -- the questions
 
     def state(self, path: str) -> StateForm:
-        """A choice's state (``inspection.states``)."""
-        found = dict(inspection.states(self.point))[path]
+        """A choice's state (``Answers.states``)."""
+        found = dict(self.answers.states())[path]
         if isinstance(found, inspection.Set):
             return StateForm("set", found.value)
         if isinstance(found, inspection.Waiting):
@@ -760,10 +778,11 @@ class Point:
         result = self._query(path)
         engine = self.engine
         if isinstance(result, Available):
-            stored = self.stored()
-            value = stored[path] if path in stored else result.value
-            if path in engine.index.choices and engine.index.choices[path].cases is not None:
-                value = result.value
+            value = result.value
+            choice = engine.index.choices.get(path)
+            if choice is not None and choice.cases is None:
+                stored = self.stored()
+                value = stored[path] if path in stored else result.value
             if path in engine.located:
                 value = pairs(engine.located[path], result.value)
             return AnswerForm("value", value)
@@ -775,15 +794,14 @@ class Point:
 
     def rule(self, path: str) -> RuleForm:
         """A rule's answer."""
-        result = self.point.query(self._members()[path])
-        return _rule(self.engine, result)
+        return _rule(self.engine, self.answers.query(path))
 
     def validity(self) -> ValidityForm:
-        """The engine's validity of the configuration (``inspection.validity``): refused
-        with its false pieces' codes, open with what its unknown pieces wait on (each
-        piece's own key aside), or valid."""
+        """The implementation's validity of the configuration (``Answers.validity``):
+        refused with its false pieces' codes, open with what its unknown pieces wait on
+        (each piece's own key aside), or valid."""
         engine = self.engine
-        answer = inspection.validity(self.point)
+        answer = self.answers.validity()
         if answer.status == "refused":
             false = frozenset().union(
                 *(engine.codes(piece.result.findings) for piece in answer.pieces)
@@ -800,10 +818,10 @@ class Point:
         return ValidityForm("valid")
 
     def possible(self, path: str) -> PossibleForm:
-        """A choice's possible values (``inspection.viable``): each listed value possible,
+        """A choice's possible values (``Answers.viable``): each listed value possible,
         with what it moves, or impossible, with each rule it breaks; ``None`` where the
         engine lists nothing."""
-        (found,) = inspection.viable(self.point, [self._decisions()[path]])
+        (found,) = self.answers.viable([path])
         if found.values is None:
             return PossibleForm(None)
         outcomes: list[tuple[object, OutcomeForm]] = []
@@ -822,51 +840,37 @@ class Point:
             self.engine._left_out(name, value) for name, value in edit.facts.items()
         ):
             raise NotTranslatable("the engine cannot set an optional fact back to unsupplied")
-        decisions = self._decisions()
-        commits = {decisions[path]: value for path, value in edit.commit.items()}
-        clears: list[ChangeRequest] = [
-            self.point.field(decisions[path]).clear() for path in edit.clear
-        ]
-        if edit.facts:
-            members = self._members()
-            facts = {members[name]: value for name, value in edit.facts.items()}
-            report = self.point.try_with_facts(facts, commits, *clears)
-        else:
-            report = self.point.try_with_choices(commits, *clears)
-        return self._form(report, self.stored())
+        before = self.stored()
+        changed = self.answers.change(dict(edit.commit), tuple(edit.clear), dict(edit.facts))
+        return self._form(changed, before)
 
     def bind(self, stored: Mapping[str, object]) -> tuple[ChangeForm, Point]:
-        """``stored`` bound under this design space's facts (``finn.core.space.bind``): the
-        design space of the facts with exactly those choices, never refused. Its report, and
-        the design space it publishes. Its report reads against the facts with nothing
-        stored, whatever this design space stores, as the model's ``bind`` does."""
-        decisions = self._decisions()
-        saved = {decisions[path]: value for path, value in stored.items()}
-        report = space_bind(self.point, saved)
-        form, point = self._form(report, stored)
+        """``stored`` bound under this design space's facts (``Answers.bind``): the design
+        space of the facts with exactly those choices, never refused. Its report, and the
+        design space it publishes. Its report reads against the facts with nothing stored,
+        whatever this design space stores, as the model's ``bind`` does."""
+        form, point = self._form(self.answers.bind(dict(stored)), stored)
         if point is None:
             raise AssertionError(f"the engine refused a bind: {form}")
         return form, point
 
     def bind_outcomes(self, stored: Mapping[str, object]) -> tuple[tuple[str, str, bool], ...]:
-        """Each outcome of ``stored``'s bind (``finn.core.space.bind``), in the saved order:
-        its choice's path, its status and whether it was requested. The model's bind has no
+        """Each outcome of ``stored``'s bind (``Answers.bind``), in the saved order: its
+        choice's path, its status and whether it was requested. The model's bind has no
         statuses; a hand case reads them against what it keeps and drops."""
-        decisions = self._decisions()
-        saved = {decisions[path]: value for path, value in stored.items()}
-        report = space_bind(self.point, saved)
+        report = self.answers.bind(dict(stored)).report
         return tuple(
             (self.engine.path(outcome.owner), outcome.status, outcome.requested)
             for outcome in report.outcomes
         )
 
     def _form(
-        self, report: ConfigurationResult[Space], before: Mapping[str, object]
+        self, changed: Changed, before: Mapping[str, object]
     ) -> tuple[ChangeForm, Point | None]:
-        """A change's or a bind's ``report`` in the comparable form, and what it publishes.
+        """A change's or a bind's report in the comparable form, and what it publishes.
         A dropped value's old value is read from ``before``: the receiver's stored choices,
         or a bind's saved ones."""
-        engine = self.engine
+        engine, report = self.engine, changed.report
         if not report.accepted:
             refusals = _assignments(engine, report.outcomes) | _broken(engine, report.broken)
             return ChangeForm(False, refusals=refusals), None
@@ -878,7 +882,14 @@ class Point:
             dropped=_dropped(engine, report.outcomes, before),
             broken=_broken(engine, report.broken),
         )
-        return form, Point(engine, report.instance)
+        successor = self._successor(changed)
+        if successor is None:
+            raise AssertionError(f"{self.implementation} accepted a change with no successor")
+        return form, successor
+
+
+def _join(scope: str, name: str) -> str:
+    return f"{scope}.{name}" if scope else name
 
 
 def pairs(entries: Mapping[str, str], located: object) -> tuple[tuple[str, object], ...]:

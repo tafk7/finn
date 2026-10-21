@@ -54,7 +54,6 @@ from core.space.reference_harness.compare import (
     validity_form,
 )
 from core.space.reference_harness.matrix import problems
-from finn.core.space import inspection
 
 
 def imported(path: Path) -> list[tuple[int, str, int]]:
@@ -365,8 +364,8 @@ NESTED = Case(
 
 
 def test_every_choice_keeps_its_path_as_its_key() -> None:
-    point = NESTED.start({"width": 4}).engine.point
-    keys = {item.key for item in inspection.decisions(point)}
+    answers = NESTED.start({"width": 4}).engine.answers
+    keys = {key for key, _ in answers.states()}
     assert keys == {"unit.compute", "unit.compute.packed.pe", "unit.compute.stub.rows"}
 
 

@@ -10,9 +10,11 @@ The full run (the default) draws both of the rulings' causes the engine has not 
 optional fact left out) and counted under that milestone while it is pending; an
 unattributed one fails its walk. ``--without MILESTONE`` takes its rows as removed, so its
 disagreements fail their walks (its engine walked as if it had removed them). ``--strict``
-draws neither cause, and every disagreement fails. It exits 1 when a walk failed. The walks
-are imported by their command alone, so the matrix prints whatever state the walks are
-in."""
+draws neither cause, and every disagreement fails. ``--implementation module:attribute``
+(or a registered name; ``today`` by default) names the implementation compared with the
+model, asked through ``support.space_oracle``'s interface; the summary names it. It exits 1
+when a walk failed. The walks are imported by their command alone, so the matrix prints
+whatever state the walks are in."""
 
 import argparse
 import sys
@@ -37,15 +39,25 @@ def main(argv: list[str]) -> int:
         help="draw neither cause (no view read in, every fact given, no unset); any "
         "disagreement fails",
     )
+    walks.add_argument(
+        "--implementation",
+        default="today",
+        help="the implementation compared with the model: a registered name, or "
+        "module:attribute (support.space_oracle.load)",
+    )
     arguments = parser.parse_args(argv)
     if arguments.command != "walks":
         print(markdown())
         return 0
+    from support.space_oracle import load  # noqa: PLC0415
+
     from .walks import seeds, table, walk  # noqa: PLC0415
 
+    implementation = load(arguments.implementation)
     without = [item.strip() for item in arguments.without.split(",") if item.strip()]
     tallies = [
-        walk(seed, arguments.steps, without, arguments.strict) for seed in seeds(arguments.seeds)
+        walk(seed, arguments.steps, without, arguments.strict, implementation)
+        for seed in seeds(arguments.seeds)
     ]
     print(table(tallies, without))
     failed = [tally for tally in tallies if tally.failure]
