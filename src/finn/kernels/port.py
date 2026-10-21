@@ -64,8 +64,8 @@ it (``compute.packed.x``).
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, fields, replace
-from typing import Any, ClassVar
+from dataclasses import dataclass
+from typing import Any, ClassVar, cast
 
 from finn.core.space import (
     DefinitionError,
@@ -92,10 +92,12 @@ from finn.kernels.base import (
     PORT_CONTRACT,
     Kernel,
     KernelDeclaration,
+    KernelSpace,
     LeafKernel,
     PortContract,
     Product,
     declared_reads,
+    is_member,
 )
 from finn.kernels.transport import (
     AxisBeat,
@@ -127,12 +129,6 @@ class LoopEnds:
 
     signal: str
     levels: tuple[LevelEnd, ...]
-
-
-def _reference(value: object) -> bool:
-    """Whether ``value`` is a declaration of the engine (a member of the kernel), not a
-    constant."""
-    return type(value).__module__.startswith("finn.core.space")
 
 
 # -- the declaration -------------------------------------------------------------------------
@@ -182,42 +178,10 @@ class AxiStreamPort(KernelDeclaration):
         "closes",
     )
 
-    # -- its arguments, read from its kernel ------------------------------------------------
+    KIND: ClassVar[str] = "port"
 
-    def references(self) -> dict[str, str]:
-        """Each argument given as a member of its kernel, by field: the member's name."""
-        found: dict[str, str] = {}
-        for item in fields(self):
-            value = getattr(self, item.name)
-            if _reference(value):
-                name = getattr(value, "name", None)
-                if not isinstance(name, str):
-                    raise DefinitionError.broken(
-                        "port-argument-unnamed",
-                        "AxiStreamPort",
-                        f"{self.name}: its {item.name} is no member of its kernel; name it in "
-                        "the class body and give the port that name",
-                        declaration=self.name,
-                    )
-                found[item.name] = name
-        return found
-
-    def paths(self, *names: str) -> tuple[str, ...]:
-        """The members of its kernel the arguments ``names`` read."""
-        references = self.references()
-        return tuple(references[name] for name in names if name in references)
-
-    def value(self, kernel: Space, name: str) -> Any:
-        """Argument ``name``: its constant, or its member read from ``kernel``."""
-        given = getattr(self, name)
-        if _reference(given):
-            return getattr(kernel, self.references()[name])
-        return given
-
-    def read(self, kernel: Space, *names: str) -> AxiStreamPort:
-        """The declaration with its arguments ``names`` read from ``kernel``: what a view
-        takes."""
-        return replace(self, **{name: self.value(kernel, name) for name in names})
+    def label(self) -> str:
+        return self.name
 
     # -- what it lowers to -------------------------------------------------------------------
 
@@ -229,7 +193,7 @@ class AxiStreamPort(KernelDeclaration):
             return False
         if isinstance(tensor, Param) and not tensor.required:
             return None
-        if _reference(tensor) and getattr(tensor, "when", None) is not None:
+        if is_member(tensor) and getattr(tensor, "when", None) is not None:
             raise DefinitionError.broken(
                 "port-tensor-guarded",
                 "AxiStreamPort",
@@ -245,9 +209,9 @@ class AxiStreamPort(KernelDeclaration):
         placed = self.placement()
         if placed is False:
             return False
-        if not _reference(self.endpoint) and self.endpoint is not Endpoint.TARGET:
+        if not is_member(self.endpoint) and self.endpoint is not Endpoint.TARGET:
             return False  # a producer's tensor is derived from its kernel's extents
-        if _reference(self.endpoint) or _reference(self.index):
+        if is_member(self.endpoint) or is_member(self.index):
             return None
         if not self.index:
             return False
@@ -262,11 +226,11 @@ class AxiStreamPort(KernelDeclaration):
         return placement
 
     def lower(self, owner: type[Kernel], name: str) -> Mapping[str, object]:
-        if not issubclass(owner, LeafKernel):
+        if not issubclass(owner, (LeafKernel, KernelSpace)):
             raise DefinitionError.broken(
                 "port-not-leaf",
                 "AxiStreamPort",
-                f"{owner.__qualname__}.{name}: a stream port is a leaf's; a kernel with "
+                f"{owner.__qualname__}.{name}: a stream port is a module's; a kernel with "
                 "children presents its child's (served)",
                 declaration=f"{owner.__qualname__}.{name}",
             )
@@ -333,11 +297,12 @@ class AxiStreamPort(KernelDeclaration):
             members[f"{name}_access"] = derived(when=binds)(access)
 
         @declared_reads(f"{name}_stream", *self.paths(*AxiStreamPort.PACED))
-        def contract_(self: LeafKernel) -> PortContract | Rejected:
+        def contract_(self: Space) -> PortContract | Rejected:
+            kernel = cast("type[LeafKernel | KernelSpace]", type(self))
             found = contract(
                 port.read(self, *AxiStreamPort.PACED),
                 getattr(self, f"{name}_stream"),
-                type(self).clock_domain,
+                kernel.clock_domain,
             )
             return found if isinstance(found, Rejected) else PortContract(name, found)
 
@@ -418,7 +383,9 @@ class AxiStreamPort(KernelDeclaration):
         guards = (f"{name}_binds",) if binding is None else placed
         return (*guards, f"{name}_access")
 
-    def viewed(self, kernel: LeafKernel, name: str) -> tuple[AxiStreamPort, Presenting]:
+    def viewed(
+        self, kernel: LeafKernel | KernelSpace, name: str
+    ) -> tuple[AxiStreamPort, Presenting]:
         """What its views read on ``kernel``, declared as ``name``: its arguments, and its
         stream while placed, else its element alone (``<name>_element``)."""
         if self.placed(kernel, name):
@@ -427,17 +394,17 @@ class AxiStreamPort(KernelDeclaration):
         element: ScalarEncoding = getattr(kernel, f"{name}_element")
         return self.read(kernel, *AxiStreamPort.VIEWED, *AxiStreamPort.IDLE), element
 
-    def pins(self, kernel: LeafKernel, name: str) -> tuple[Pin, ...] | Rejected:
+    def pins(self, kernel: LeafKernel | KernelSpace, name: str) -> tuple[Pin, ...] | Rejected:
         port, presenting = self.viewed(kernel, name)
         return pins(port, presenting, type(kernel).clock_domain)
 
-    def held(self, kernel: LeafKernel, name: str) -> Held | Rejected:
+    def held(self, kernel: LeafKernel | KernelSpace, name: str) -> Held | Rejected:
         if self.placed(kernel, name):
             return Held()
         port, presenting = self.viewed(kernel, name)
         return held(port, presenting, type(kernel).clock_domain)
 
-    def access(self, kernel: LeafKernel, name: str) -> Access | None:
+    def access(self, kernel: LeafKernel | KernelSpace, name: str) -> Access | None:
         binding = self.binding()
         if binding is None:
             binding = getattr(kernel, f"{name}_binds")
@@ -448,7 +415,7 @@ class AxiStreamPort(KernelDeclaration):
         found: Access = getattr(kernel, f"{name}_access")
         return found
 
-    def beats(self, kernel: LeafKernel, name: str) -> int | None:
+    def beats(self, kernel: LeafKernel | KernelSpace, name: str) -> int | None:
         if not self.placed(kernel, name):
             return None
         return beats(getattr(kernel, f"{name}_stream"))
@@ -484,7 +451,7 @@ def _given(port: AxiStreamPort, name: str) -> Any:
     """Argument ``name`` of ``port`` as a value: a view reads its declaration with its
     arguments read from its kernel (``AxiStreamPort.read``)."""
     value = getattr(port, name)
-    if _reference(value):
+    if is_member(value):
         raise TypeError(
             f"{port.name}: its {name} is a member of its kernel; read it first (AxiStreamPort.read)"
         )
