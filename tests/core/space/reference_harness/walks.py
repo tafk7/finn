@@ -362,10 +362,10 @@ class _Draw:
             others = [*self.facts, *self.roots()]
         other = rng.choice(others)
         if shape == 0:
-            k = rng.randint(2, 6)
+            k = rng.randint(1, 5)
             fn = _Fn(f"sum(m) + {other} <= {k}", ("m", other), _members_sum("m", other, k))
         elif shape == 1:
-            k = rng.randint(1, 4)
+            k = rng.randint(0, 3)
             fn = _Fn(
                 f"max(m, default 0) <= {other} + {k}", ("m", other), _members_max("m", other, k)
             )
