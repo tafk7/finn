@@ -58,6 +58,7 @@ from finn.kernels.explore import (
 )
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.network import Fact, Interface, Network, NetworkError, Wire, dotted, wire
+from finn.kernels.policies import Required
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.utilization import total
 from finn.platform.capabilities import RESOURCE_NAMES, Platform, Resources
@@ -252,7 +253,7 @@ def test_a_fifo_depth_is_known_by_membership_and_proposed_through_a_change() -> 
     fifo = explorer.set(base, keyed({"levels.transport": "fifo"}))
     assert isinstance(fifo, Accepted)
     depth = offered(explorer, fifo.network)["levels.transport.fifo.depth"]
-    assert depth.cases is None and depth.ordered and depth.required
+    assert depth.cases is None and depth.ordered and depth.policy == Required()
     small = explorer.set(fifo.network, {depth.key: 1})
     assert isinstance(small, Refused)
     assert "domain-membership" in [finding.code for finding in small.why[depth.key]]
@@ -521,8 +522,8 @@ def test_the_defaults_set_each_open_choice_by_its_policy_and_leave_required_ones
     assert values == chosen(explorer, with_defaults(chain.network()))
     fifo = explorer.set(base, keyed({"levels.transport": "fifo"}))
     assert isinstance(fifo, Accepted)
-    assert [(c.key, c.required) for c in explorer.choices(with_defaults(fifo.network))] == [
-        (("levels", "transport.fifo.depth"), True)
+    assert [(c.key, c.policy) for c in explorer.choices(with_defaults(fifo.network))] == [
+        (("levels", "transport.fifo.depth"), Required())
     ]
 
 

@@ -152,7 +152,7 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     assert structure.counts() == {
         "scopes addressed": 216,
         "scopes in play": 55,
-        "nodes resolved": 1483,
+        "nodes resolved": 1475,
         "const nodes resolved": 76,
     }
     in_play = set(structure._in_play)
@@ -202,7 +202,7 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     assert structure.counts() == {
         "scopes addressed": 216,
         "scopes in play": 66,
-        "nodes resolved": 1556,
+        "nodes resolved": 1548,
         "const nodes resolved": 76,
     }
     report = committed.try_with_choices({handles["mm2.compute.packed.pe"]: 2})
@@ -210,6 +210,6 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     assert structure.counts() == {
         "scopes addressed": 216,
         "scopes in play": 66,
-        "nodes resolved": 1556,
+        "nodes resolved": 1548,
         "const nodes resolved": 76,
     }

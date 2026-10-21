@@ -20,9 +20,10 @@ carries out (``channel-plan``). A channel runs, in order:
 The plan splits at the transport: its output side (width conversions) is the
 ``output_adapter`` selector, its input side (a reorder, replay included, and markers) the
 ``adapter`` selector, each over fixed chains (``finn.kernels.adapters``). The
-``transport`` selector is ``direct`` or ``fifo``; the FIFO owns its ``depth`` (required:
-an exploration sizes it) and its ``ram_style``, and carries data words only
-(``fifo-markers``). Its keys are the channel's, by its name (``("x", "transport")``).
+``transport`` selector is ``direct`` or ``fifo``; the FIFO owns its ``depth`` (the cut's
+policy requires it: an exploration sizes it, ``finn.kernels.cut``) and its ``ram_style``,
+and carries data words only (``fifo-markers``). Its keys are the channel's, by its name
+(``("x", "transport")``).
 
 A channel with a port on one side only is a boundary: its ``port`` names the module's
 AXIS port (``in0_V``), refused where absent (``channel-boundary``). The boundary presents
@@ -181,10 +182,10 @@ class ChannelFifo(KernelSpace):
     tensor: Tensor = Param()
     arriving: BeatSequence = Param()
     platform: Platform = Param()
-    # Required: no policy gives a depth; a FIFO is chosen by sizing it (SizeFifos).
+    # Known by membership only: the cut's policy is required (finn.kernels.cut), and a
+    # FIFO is chosen by sizing it (SizeFifos).
     depth: int = Decision(
         domain=domain(accepts=lambda *, candidate: 2 <= candidate < 2**32, ordered=True),
-        required=True,
     )
 
     @derived

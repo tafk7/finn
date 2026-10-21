@@ -46,12 +46,12 @@ a change, atomic over the members it reaches:
 3. each channel named with the same facts: one change on its point, as a kernel's. Each
    channel given other facts is rebuilt from them, a change of facts on the channel it
    was (a channel never bound before is bound, as above), with the change's choices.
-   Rebuilt, it takes the **interim channel rule** (``interim_channel_defaults``): the
-   stored choices the new facts refuse (outside their domain, or standing in the way of a
-   rule they make false) are derived again, first valid, each named with its old value,
-   its new one and why (``Trial.rederived``), and the open choices the new facts bring
-   into play take their first valid values; a choice the change names or clears is never
-   one of them;
+   Rebuilt, it takes **the cut's policies** (``finn.kernels.cut``, the interim channel
+   rule): the stored choices the new facts refuse (outside their domain, or standing in
+   the way of a rule they make false) are derived again by their policies, each named
+   with its old value, its new one and why (``Trial.rederived``), and the open choices the
+   new facts bring into play take theirs; a choice the change names or clears is never
+   one of them, and a ranking a policy could not read is named (``Trial.fallbacks``);
 4. every channel rebuilt from new facts checked: its validity (``inspection.validity``).
 
 Keys are pairs, ``(owner, key)``: a member by name and the decision key in its space
@@ -100,7 +100,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.configure import chosen, refusal
 from finn.kernels.control import CONTROL, Control
 from finn.kernels.control import presented as presented_buses
-from finn.kernels.defaults import defaulted
+from finn.kernels.cut import Cut, channel_defaulted
 from finn.kernels.members import (
     Configured,
     Facts,
@@ -118,6 +118,7 @@ from finn.kernels.members import (
 from finn.kernels.members import decision as decision_of
 from finn.kernels.members import key as member_key
 from finn.kernels.members import refusal as refusal_of
+from finn.kernels.policies import Owner, Unstated
 from finn.platform.capabilities import Resources
 
 T = TypeVar("T")
@@ -220,16 +221,19 @@ N = TypeVar("N")
 @dataclass
 class Trial(Generic[N]):
     """A change tried on a network: the network it reaches (the one tried, where it is
-    refused); the stored channel choices the interim channel rule derived again, each with
-    one finding (``choice-rederived``: its old value, its new one, and why the new facts
-    refuse the old, its causes); and why it is refused, by key: a value outside its domain
-    by the choice's key, a rule broken by the rule's key (a member's own refusal by
-    ``(name, "")``), each with the stored choices standing in its way (``standing``)."""
+    refused); the stored channel choices the cut's policies derived again, each with one
+    finding (``choice-rederived``: its old value, its new one, and why the new facts refuse
+    the old, its causes); why it is refused, by key: a value outside its domain by the
+    choice's key, a rule broken by the rule's key (a member's own refusal by ``(name,
+    "")``), each with the stored choices standing in its way (``standing``); and each
+    choice a rebuilt channel's policy set in listed order, its ranking not read
+    (``fallbacks``: ``choice-order-unknown``)."""
 
     network: N
     rederived: Mapping[Key, tuple[Finding, ...]]
     refused: Mapping[Key, tuple[Finding, ...]]
     standing: Mapping[Key, tuple[Key, ...]] = field(default_factory=dict)
+    fallbacks: Mapping[Key, tuple[Finding, ...]] = field(default_factory=dict)
 
     @property
     def accepted(self) -> bool:
@@ -251,29 +255,13 @@ def _channel(
     return configured(Facts(_CHANNEL, dict(facts)), stored, change, clear)
 
 
-def interim_channel_defaults(
-    point: Space, kept: Collection[str] = ()
-) -> Space | tuple[Finding, ...]:
-    """**Interim**, until a channel's choices have a rule of their own: the
-    channel ``point`` with each open choice in play that is not required (a FIFO's depth
-    is, and stays open) set to its first valid value, in the flow order (each after what
-    its presence, its list and its facts read), the choices ``kept`` names left open;
-    ``finn.kernels.defaults.defaulted``, a channel's choices being all first valid. Or why
-    a choice can take no value (``choice-no-valid-value``, owned by its key). A channel
-    refused on its own facts is returned as it is: its validity says why. Where the network
-    builds channels: at the cut, every channel (``finn.custom_op.kernels.shell``); in a
-    change, a channel rebuilt from new facts (``Network.trial``)."""
-    if isinstance(inspection.validity(point).result, Rejected):
-        return point
-    return defaulted(point, kept=kept)
-
-
 def _rederived(
     key: str, old: object, new: inspection.ChoiceState | None, why: tuple[Finding, ...]
 ) -> Finding:
-    """The finding of a stored channel choice the interim rule derived again
+    """The finding of a stored channel choice the cut's policies derived again
     (``choice-rederived``): its old value, its new one (none where it stays open, a
-    required one), why the new facts refuse the old (its causes)."""
+    required one), why the new facts refuse the old (its causes). Its text keeps the rule's
+    name, the interim channel rule."""
     value = new.value if isinstance(new, inspection.Set) else None
     details = tuple(
         (name, each)
@@ -291,9 +279,10 @@ def _rederived(
     )
 
 
-Rebuilt = tuple[Space, Mapping[str, Finding]] | Refusal
-"""A channel rebuilt from new facts (``_rebuilt``): its point and each choice derived again,
-by key; or why the change is refused."""
+Rebuilt = tuple[Space, Mapping[str, Finding], tuple[Finding, ...]] | Refusal
+"""A channel rebuilt from new facts (``_rebuilt``): its point, each choice derived again,
+by key, and each ranking its policies could not read (``choice-order-unknown``); or why the
+change is refused."""
 
 
 def _rebuilt(
@@ -343,8 +332,8 @@ def _observed_rebuilt(entry: Rebuilt) -> object:
     """What a network reads of a rebuilt channel, to compare in the verifying mode."""
     if isinstance(entry, Refusal):
         return (None, dict(entry.why), dict(entry.standing))
-    point, again = entry
-    return (observed(Configured(point)), dict(again))
+    point, again, fallbacks = entry
+    return (observed(Configured(point)), dict(again), fallbacks)
 
 
 def _rebuild(
@@ -360,12 +349,13 @@ def _rebuild(
     ``stored`` choices, as the network binds it (a fact that goes missing is no change of
     facts). The stored choices the new facts refuse, those outside their domain (the change
     drops them) and those standing in the way of a rule the new facts make false (cleared
-    after it, a change of clears alone), are taken out, and the interim channel rule gives
-    them and every choice the new facts bring into play their first valid values
-    (``interim_channel_defaults``). Returns the channel and each choice derived again
-    (``_rederived``), by key; or why the change is refused: a value of its own, a rule the
-    new facts and the change break with nothing stored in its way (or beside a value they
-    drop), or a choice no value can be set for."""
+    after it, a change of clears alone), are taken out, and the cut's policies give them
+    and every choice the new facts bring into play their values
+    (``finn.kernels.cut.channel_defaulted``). Returns the channel, each choice derived again
+    (``_rederived``), by key, and each ranking its policies could not read; or why the
+    change is refused: a value of its own, a rule the new facts and the change break with
+    nothing stored in its way (or beside a value they drop), or a choice no value can be set
+    for."""
     named = {*change, *cleared}
     refused: dict[str, tuple[Finding, ...]] = {}
     if was is not None and {fact for fact, _ in was[0]} == {fact for fact, _ in read}:
@@ -431,13 +421,14 @@ def _rebuild(
         if bound.point is None:
             return Refusal(bound.refused, bound.standing)
         point, refused, kept = bound.point, dict(bound.dropped), named
-    done = interim_channel_defaults(point, kept)
+    done = channel_defaulted(point, kept)
     if isinstance(done, tuple):
         return Refusal({finding.owner: (finding,) for finding in done})
-    states = dict(inspection.states(done))
-    return done, {
+    states = dict(inspection.states(done.point))
+    again = {
         key: _rederived(key, stored[key], states.get(key), why) for key, why in refused.items()
     }
+    return done.point, again, done.fallbacks
 
 
 def _keyed(
@@ -533,6 +524,7 @@ class Network:
         "_kernels",
         "_nodes",
         "_order",
+        "_owners",
         "_points",
         "_rank",
         "_ranked",
@@ -546,6 +538,7 @@ class Network:
     _rank: Mapping[str, int]
     _wires: Mapping[str, Wire]
     _nodes: Mapping[str, str]
+    _owners: Mapping[str, Owner]
     _points: Mapping[str, Space]
     _unbound: Mapping[str, Unbound]
     _facts: Mapping[str, FactsKey]
@@ -558,6 +551,7 @@ class Network:
         *,
         stored: Mapping[Key, object] | None = None,
         nodes: Mapping[str, str] | None = None,
+        owners: Mapping[str, Owner] | None = None,
     ) -> None:
         """A network of ``members`` by name, in the order its module places them: each a
         kernel's ``Facts`` (its class and arguments: configured through the member
@@ -569,7 +563,9 @@ class Network:
         outside its domain is dropped, with why (``dropped``); a rule they break refuses
         the network (``NetworkError``), naming it. ``nodes``: each member's node
         in the module, the prefix of its instances and of the ports it presents (its name
-        where none is given); two members of one node are refused."""
+        where none is given); two members of one node are refused. ``owners``: the owner
+        of each kernel's policies (``owner``), by name: its KernelOp class; a kernel none is
+        given for states none (``Unstated``)."""
         kernels: dict[str, Space | Facts] = {}
         wires: dict[str, Wire] = {}
         for name, member in members.items():
@@ -601,6 +597,9 @@ class Network:
         self._kernels = tuple(kernels)
         self._wires = MappingProxyType(wires)
         self._nodes = MappingProxyType(named)
+        self._owners = MappingProxyType(
+            {name: owner for name, owner in (owners or {}).items() if name in kernels}
+        )
         self._ranked = _ranked(self._kernels, wires)
         self._rank = MappingProxyType({name: index for index, name in enumerate(self._ranked)})
         points: dict[str, Space] = {}
@@ -702,6 +701,16 @@ class Network:
                 raise NetworkError(f"{name} is not bound: {self._unbound[name]}")
             raise NetworkError(f"{name} is no member of the network")
         return point
+
+    def owner(self, name: str) -> Owner:
+        """The owner of member ``name``'s policies (``finn.kernels.policies.policy``): a
+        channel's the cut (``finn.kernels.cut.Cut``), a kernel's its KernelOp class, or
+        ``Unstated`` where it was given none."""
+        if name in self._wires:
+            return Cut
+        if name not in self._points:
+            raise NetworkError(f"{name} is no member of the network")
+        return self._owners.get(name, Unstated)
 
     def facts(self, name: str) -> dict[str, object]:
         """The facts channel ``name`` is bound from, each read from its members; a
@@ -940,6 +949,7 @@ class Network:
         if refused:
             return Trial(self, {}, refused, standing)
         rederived: dict[Key, tuple[Finding, ...]] = {}
+        fallbacks: dict[Key, tuple[Finding, ...]] = {}
         rebuilt: list[str] = []
         for name in self.channels:
             named = name in by_member or name in clears
@@ -975,9 +985,10 @@ class Network:
             if isinstance(built, Refusal):
                 _keyed(name, built, refused, standing)
                 continue
-            points[name], again = built
+            points[name], again, fell = built
             facts[name] = read
             rederived |= {(name, key): (finding,) for key, finding in again.items()}
+            fallbacks |= {(name, finding.owner): (finding,) for finding in fell}
             unbound.pop(name, None)
             changed.append(name)
             rebuilt.append(name)
@@ -988,7 +999,7 @@ class Network:
             refused = network.checked(rebuilt)
             if refused:
                 return Trial(self, rederived, refused)
-        return Trial(network, rederived, {})
+        return Trial(network, rederived, {}, fallbacks=fallbacks)
 
     def checked(self, members: Iterable[str]) -> dict[Key, tuple[Finding, ...]]:
         """Why each of ``members`` is refused, by ``(name, "")``: its validity's false
@@ -1113,6 +1124,5 @@ __all__ = [
     "Unbound",
     "Wire",
     "dotted",
-    "interim_channel_defaults",
     "wire",
 ]

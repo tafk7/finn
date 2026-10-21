@@ -300,23 +300,19 @@ MEMORY_STYLES = ("distributed", "block", "ultra")
 """The explicit memory styles: LUTRAM, block RAM, UltraRAM."""
 
 BLOCK_FIRST_BITS = 8192
-"""The least bits a memory holds for which its kernel offers block RAM first: half a
-RAMB18's 16 384 data bits, and 128 LUTs or more in LUTRAM; below it, LUTRAM first. The
-kernel's preference, which a first valid policy takes and a budget may move; not a
-placement rule."""
+"""The least bits a memory holds for which its kernel prefers block RAM: half a RAMB18's
+16 384 data bits, and 128 LUTs or more in LUTRAM; below it, LUTRAM first. The kernel's
+preference (``memory_preference``), which a first valid policy may take and a budget may
+move; not a placement rule."""
 
 AUTO_UNSTATED = "placed by Vivado, not stated"
 """Why a memory in ``auto`` states no resources."""
 
 
-def memory_styles(size: object) -> Domain[str]:
-    """A memory's style: the explicit styles and ``auto``, always (its membership reads
-    nothing). Its order ranks them by its kernel's preference for the ``size`` in bits the
-    memory holds, which may read the kernel's choices: block RAM first from
-    ``BLOCK_FIRST_BITS``, LUTRAM first below; UltraRAM after both; then ``auto``, last:
-    Vivado's placement, which states nothing (``auto_unstated``), so no policy taking the
-    first valid style takes it while an explicit style is valid. Unordered: the ranking
-    is a preference, not a scale."""
+def memory_styles() -> Domain[str]:
+    """A memory's style: the explicit styles and ``auto``, always, in that order (its
+    membership reads nothing). Unordered: a kernel's preference among them is a ranking it
+    reads out (``memory_preference``), not a scale."""
     styles = (*MEMORY_STYLES, "auto")
 
     def accepts(*, candidate: str) -> bool:
@@ -325,18 +321,18 @@ def memory_styles(size: object) -> Domain[str]:
     def candidates() -> tuple[str, ...]:
         return styles
 
-    def order(values: tuple[str, ...], *, size: int) -> tuple[str, ...]:
-        first = "block" if size >= BLOCK_FIRST_BITS else "distributed"
-        preference = (first, *(style for style in styles if style != first))
-        return tuple(sorted(values, key=preference.index))
+    return domain(accepts=accepts, candidates=candidates, semantics=default_semantics(str))
 
-    return domain(
-        accepts=accepts,
-        candidates=candidates,
-        order=order,
-        semantics=default_semantics(str),
-        size=size,
-    )
+
+def memory_preference(size: int) -> tuple[str, ...]:
+    """A memory's styles (``memory_styles``) in its kernel's preference for the ``size`` in
+    bits it holds: block RAM first from ``BLOCK_FIRST_BITS``, LUTRAM first below; UltraRAM
+    after both; then ``auto``, last: Vivado's placement, which states nothing
+    (``auto_unstated``), so a first valid policy following it takes no ``auto`` while an
+    explicit style is valid. What a kernel's ranking view reads out (``ram_preference``)."""
+    styles = (*MEMORY_STYLES, "auto")
+    first = "block" if size >= BLOCK_FIRST_BITS else "distributed"
+    return (first, *(style for style in styles if style != first))
 
 
 def auto_unstated(memory: str) -> Rejected:
@@ -400,6 +396,7 @@ __all__ = [
     "lutram",
     "lutram_storage",
     "memory",
+    "memory_preference",
     "memory_styles",
     "over",
     "ratio",

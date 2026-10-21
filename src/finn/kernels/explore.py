@@ -15,11 +15,14 @@ cycles a frame, buffering and resources, and the bottleneck; ``resources`` what 
 network uses as far as it is stated. The engine decides validity; an explorer only
 proposes and prefers.
 
-Nothing fills a value in after conversion but a strategy: a choice is set by conversion's
-policies (a kernel's) or by the cut's interim channel rule (a channel's), and from then on
-only by what a strategy sets. The one exception is the interim channel rule where a change
-rebuilds a channel from new facts (``Network.trial``): the stored channel choices the new
-facts refuse are derived again, each named (``Accepted.rederived``). ``held`` maps the
+Nothing fills a value in after conversion but a strategy: a choice is set by its policy
+(``finn.kernels.policies``: a kernel's its KernelOp's, at conversion; a channel's the
+cut's, ``finn.kernels.cut``), and from then on only by what a strategy sets. The one
+exception is the cut's policies where a change rebuilds a channel from new facts
+(``Network.trial``, the interim channel rule): the stored channel choices the new facts
+refuse are derived again, each named (``Accepted.rederived``). The seam reads a choice's
+policy through one reader (``policy``: ``finn.kernels.policies.policy`` under its member's
+owner, ``Composition.owner``), never the engine. ``held`` maps the
 keys no strategy changes to their values: those a ``Hold`` strategy fixes, and those the
 build seeds from its partition's body (``HELD``, ``finn.transformation.kernels.choose``).
 A change that would replace a held choice, derive it again, or put it out of play
@@ -52,8 +55,8 @@ The strategies, each an objective and its constraints searched through the seam:
   both sides' beat patterns (``finn.kernels.fifo_sizing``), ``direct`` or a FIFO
   of the least depth that keeps each producer within its idle time, proposed in
   one batch, at the stored folding: it runs after the strategies that fold;
-- ``Defaults()`` (``defaults``): every choice not held back to the value conversion's
-  policies give a kernel's and the interim channel rule a channel's;
+- ``Defaults()`` (``defaults``): every choice not held back to the value its policy
+  gives, a kernel's its KernelOp's and a channel's the cut's;
 - ``DebugPlaceholder()`` (``placeholder``, for debugging): every open required choice
   at its first possible value, ``DEBUG: set by placeholder``; one known by membership
   only (a FIFO's depth) is refused, by name;
@@ -93,10 +96,20 @@ from finn.core.space import (
 from finn.kernels.base import BUFFERING, CYCLES, RESOURCES
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.configure import refusal
-from finn.kernels.defaults import Fixed, Policy, policies, ranked, unset
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import FRAMES, NotModelled, Sized, holds, size
 from finn.kernels.network import Key, Trial, dotted
+from finn.kernels.policies import (
+    FIRST_VALID,
+    Fixed,
+    Owner,
+    Policy,
+    Required,
+    policy_name,
+    ranked,
+    unset,
+)
+from finn.kernels.policies import policy as policy_of
 from finn.kernels.utilization import binding, over, ratio, total
 from finn.platform.capabilities import RESOURCE_NAMES, Platform, Resources
 
@@ -109,7 +122,7 @@ class Composition(Protocol):
     its channels among them, and per member its point, its exports, its Decisions, every
     choice's state, the possible values of those asked, what is open and stored, its
     validity, and a change (``trial``); its own statement of what it uses, where it makes
-    one (``own_resources``)."""
+    one (``own_resources``); and the owner of each member's policies (``owner``)."""
 
     @property
     def members(self) -> tuple[str, ...]: ...
@@ -118,6 +131,8 @@ class Composition(Protocol):
     def channels(self) -> tuple[str, ...]: ...
 
     def member(self, name: str) -> Any: ...
+
+    def owner(self, name: str) -> Owner: ...
 
     def query(self, name: str, key: ViewKey[T]) -> QueryResult[T]: ...
 
@@ -190,15 +205,17 @@ class Choice:
     """An open choice in play of a network, as the seam offers it, by key (its owner and
     the key there).
 
-    ``cases``: its possible values, in its domain's order (its ranking where the domain
-    states one): those setting it alone would be accepted (one or several; none when every
-    value is refused, ``refused`` then naming why for each); ``None`` for a choice known by
-    membership only, or whose list or order waits on a value not known, whose value an
-    explorer proposes. ``refused``: each listed value setting
+    ``cases``: its possible values, in listed order or in its policy's ranking where it
+    names one (``finn.kernels.policies.ranked``): those setting it alone would be accepted
+    (one or several; none when every value is refused, ``refused`` then naming why for
+    each); ``None`` for a choice known by membership only, or whose list waits on a value
+    not known, whose value an explorer proposes. ``refused``: each listed value setting
     it alone would refuse, with why (``Refused``: each rule and the stored choices
     standing in its way). ``ordered``: the domain states an order of its values
-    (``divisors_of``, an integer range). ``required``: no policy gives it a value
-    (``Decision(required=True)``), a strategy sets it.
+    (``divisors_of``, an integer range). ``policy``: its policy (``Seam.policy``): a
+    ``Required`` one no policy gives a value, a strategy sets it. ``fallback``: its
+    policy's ranking could not be read, so ``cases`` are in listed order
+    (``choice-order-unknown``).
     """
 
     key: Key
@@ -206,17 +223,20 @@ class Choice:
     cases: tuple[object, ...] | None
     ordered: bool
     refused: Mapping[object, Refused] = field(default_factory=dict)
-    required: bool = False
+    policy: Policy = FIRST_VALID
+    fallback: Finding | None = None
 
 
 @dataclass
 class Accepted(Generic[S]):
-    """A change the network accepts: the network it reaches, and the stored channel
-    choices the interim channel rule derived again as it rebuilt a channel from new facts,
-    each with why (``choice-rederived``: its old value, its new one)."""
+    """A change the network accepts: the network it reaches, the stored channel choices
+    the cut's policies derived again as it rebuilt a channel from new facts, each with why
+    (``choice-rederived``: its old value, its new one), and each choice they set in listed
+    order, its ranking not read (``fallbacks``: ``choice-order-unknown``)."""
 
     network: S
     rederived: Mapping[Key, tuple[Finding, ...]] = field(default_factory=dict)
+    fallbacks: Mapping[Key, tuple[Finding, ...]] = field(default_factory=dict)
 
 
 #: How a strategy step judged its FIFOs, as its report states it (``fifos_judged``): by
@@ -415,7 +435,8 @@ class Seam:
     through it; ``held`` maps each held key to its value; ``runs`` records each
     strategy's run, in order; ``checks`` each check of the FIFOs a caller made through it
     (``check_fifos``), in order, and ``dropped`` each FIFO's depth ``checked`` cleared,
-    with why."""
+    with why; ``fallbacks`` each choice whose policy's ranking could not be read, offered
+    or set in listed order (``choice-order-unknown``), by key."""
 
     def __init__(self, platform: Platform | None = None) -> None:
         self.platform = platform
@@ -424,7 +445,8 @@ class Seam:
         self.runs: list[Run] = []
         self.checks: list[FifoCheck] = []
         self.dropped: dict[Key, tuple[Finding, ...]] = {}
-        # Each stored channel choice the interim channel rule derived again in a change
+        self.fallbacks: dict[Key, Finding] = {}
+        # Each stored channel choice the cut's policies derived again in a change
         # this seam accepted, with why, and every key a change it accepted named: what a
         # run reports of what the network's rebuilds did on its way.
         self._rederived: dict[Key, tuple[Finding, ...]] = {}
@@ -447,10 +469,12 @@ class Seam:
         keys: Collection[Key] | None = None,
     ) -> tuple[Choice, ...]:
         """Each open choice in play (``Network.undecided``; only ``members``' where named,
-        only ``keys`` where named), ranked, with its possible values in its domain's order
-        (``finn.kernels.defaults.ranked``), every one offered: one possible value is a
-        choice as several are. One whose order is not known yet (it reads a value still
-        open) is offered with no values (``Choice.cases`` None), as one whose list waits."""
+        only ``keys`` where named), ranked, with its possible values in listed order, or in
+        its policy's ranking where it names one (``finn.kernels.policies.ranked``), every one
+        offered: one possible value is a choice as several are. One whose list waits on a
+        value not known is offered with no values (``Choice.cases`` None). One whose
+        ranking cannot be read is offered in listed order, the fallback named
+        (``Choice.fallback``, ``fallbacks``)."""
         names = None if members is None else set(members)
         wanted = [
             key
@@ -462,22 +486,26 @@ class Seam:
         found: list[Choice] = []
         for key in wanted:
             info = _info(network, key)
+            owner = network.owner(key[0])
+            found_policy = policy_of(owner, info)
             item = viable.get(key)
-            values = (
-                None
-                if item is None or item.values is None
-                else ranked(network.member(key[0]), info.reference, item.values)
-            )
-            if not isinstance(values, tuple):
-                found.append(Choice(key, info.space_type, None, info.ordered, {}, info.required))
+            if item is None or item.values is None:
+                found.append(Choice(key, info.space_type, None, info.ordered, {}, found_policy))
                 continue
+            values, fallback = ranked(
+                network.member(key[0]), owner, info, item.values, key=dotted(key)
+            )
+            if fallback is not None:
+                self.fallbacks[key] = fallback
             cases = tuple(each.value for each in values if isinstance(each, inspection.Possible))
             refused = {
                 each.value: _broken(key[0], each.broken)
                 for each in values
                 if isinstance(each, inspection.Refused)
             }
-            found.append(Choice(key, info.space_type, cases, info.ordered, refused, info.required))
+            found.append(
+                Choice(key, info.space_type, cases, info.ordered, refused, found_policy, fallback)
+            )
         return tuple(found)
 
     def set(self, network: S, changes: Mapping[Key, object]) -> Accepted[S] | Refused:
@@ -506,7 +534,8 @@ class Seam:
             return Refused(held)
         self._rederived.update(trial.rederived)
         self._named.update(changes)
-        return Accepted(trial.network, trial.rederived)
+        self.fallbacks.update({key: found[0] for key, found in trial.fallbacks.items()})
+        return Accepted(trial.network, trial.rederived, trial.fallbacks)
 
     def _screen(
         self, network: Composition, batch: Mapping[Key, object]
@@ -584,8 +613,8 @@ class Seam:
         value, all as one batch: one open (in play, or waiting on its presence), or one of
         a channel unbound there (its kernels' values in the batch bind it). Where the
         batch is refused, each is given back alone, ranked: a prior value refused there is
-        replaced by the choice's policy (``by_policy``: conversion's for a kernel's
-        choice, the interim channel rule's, first valid, for a channel's), or, where its
+        replaced by the choice's policy (``by_policy``: its KernelOp's for a kernel's
+        choice, the cut's for a channel's), or, where its
         policy sets nothing (a required choice) or no value can be set, it is left open,
         with why (``unset``). A choice not in play (its scope absent) is not given back.
         Then each open choice in play that is not required, never in ``prior``, and nested
@@ -627,7 +656,7 @@ class Seam:
         ``prior``, and one of a case's choices under a selector of ``prior`` (whose
         existence that reopened choice decides), set by its policy, ranked, until none is
         left that was not tried. A choice brought into play otherwise (a channel's, by its
-        rebuild: the interim channel rule's) is not one."""
+        rebuild, under the cut's policies) is not one."""
         selectors = [key for key in prior if _info(restored.network, key).selector]
         tried: set[Key] = set()
         while True:
@@ -637,7 +666,7 @@ class Seam:
                     for key in restored.network.undecided()
                     if key not in tried
                     and key not in prior
-                    and not _info(restored.network, key).required
+                    and not isinstance(self.policy(restored.network, key), Required)
                     and any(
                         owner == key[0] and key[1].startswith(f"{name}.")
                         for owner, name in selectors
@@ -651,12 +680,10 @@ class Seam:
             self._set_by_policy(restored, key, strategy)
 
     def policy(self, network: Composition, key: Key) -> Policy:
-        """Choice ``key``'s policy: a kernel's, its class's (``finn.kernels.defaults``:
-        fixed, first valid, or None where it is required); a channel's, the interim
-        channel rule's, first valid unless it is required."""
-        if key[0] in network.channels:
-            return None if _info(network, key).required else "first valid"
-        return policies(type(network.member(key[0])))[key[1]]
+        """Choice ``key``'s policy (``finn.kernels.policies.policy``), under its member's
+        owner (``Composition.owner``): a kernel's its KernelOp's, a channel's the cut's;
+        fixed, first valid, or required."""
+        return policy_of(network.owner(key[0]), _info(network, key))
 
     def _by_policy(self, network: S, key: Key, strategy: str) -> tuple[S, object] | Finding:
         """``network`` with choice ``key`` set by its policy (``policy``) and the value
@@ -664,7 +691,7 @@ class Seam:
         refusal its causes)."""
         policy = self.policy(network, key)
         by = f" by {strategy}" if strategy else ""
-        if policy is None:
+        if isinstance(policy, Required):
             return unset(
                 dotted(key),
                 "none",
@@ -675,7 +702,7 @@ class Seam:
         if isinstance(policy, Fixed):
             name, tried = "fixed", _try_cases(self, network, key, (policy.value,))
         else:
-            name = str(policy)
+            name = policy_name(policy)
             offered = self.choices(network, keys=(key,))
             if not offered or offered[0].cases is None:
                 return unset(dotted(key), name, f"its values are not listed{by}", ())
@@ -697,8 +724,8 @@ class Seam:
         it cleared, one clear), ``search(network, prior)`` from there (``prior``: the
         values of the keys reopened, before), and the prior values of those the search
         left open given back (``restore``; with ``restore`` false, none: the search sets
-        what it decides). Recorded in ``runs``, with what the interim channel rule did on
-        its way (``Run.rederived``, ``Run.interim``)."""
+        what it decides). Recorded in ``runs``, with what the cut's policies did on its way
+        (``Run.rederived``, ``Run.interim``)."""
         self._named = set()
         before = dict(network.chosen())
         opened, reopened = self.reopen(network, scope)
@@ -1020,14 +1047,14 @@ def _folding(seam: Seam, network: Composition) -> list[Key]:
 
 
 def _next_choice(
-    seam: Seam, network: Composition, wanted: Callable[[inspection.DecisionInfo[object]], bool]
+    seam: Seam, network: Composition, wanted: Callable[[Policy], bool]
 ) -> Choice | None:
-    """The first open choice in play, ranked, whose Decision is ``wanted`` and whose
-    values are listed (``Choice.cases`` not None), with its possible values; None where
-    there is none. Only that one's possible values are asked."""
+    """The first open choice in play, ranked, whose policy (``Seam.policy``) is ``wanted``
+    and whose values are listed (``Choice.cases`` not None), with its possible values; None
+    where there is none. Only that one's possible values are asked."""
     for key in network.undecided():
         info = _info(network, key)
-        if not info.listed or not wanted(info):
+        if not info.listed or not wanted(seam.policy(network, key)):
             continue
         (choice,) = seam.choices(network, keys=(key,))
         if choice.cases is not None:
@@ -1141,17 +1168,21 @@ def _first_case(seam: Seam, network: S, key: Key, cases: Sequence[object]) -> tu
 
 
 def _set_by_policy(
-    seam: Seam, network: S, strategy: str, wanted: Callable[[inspection.DecisionInfo[object]], bool]
+    seam: Seam, network: S, strategy: str, wanted: Callable[[Policy], bool]
 ) -> tuple[S, dict[Key, object], dict[Key, tuple[Finding, ...]]]:
-    """``network`` with every open choice in play whose Decision is ``wanted`` set by its
-    policy (``Seam.policy``), one at a time, ranked (each member's in its flow order, so
+    """``network`` with every open choice in play whose policy (``Seam.policy``) is
+    ``wanted`` set by it, one at a time, ranked (each member's in its flow order, so
     a choice comes after what its presence, its list and its facts read); the values set
     by key; and each that no value could be set for, left open, with why."""
     found: dict[Key, object] = {}
     left: dict[Key, tuple[Finding, ...]] = {}
     while True:
         key = next(
-            (key for key in network.undecided() if key not in left and wanted(_info(network, key))),
+            (
+                key
+                for key in network.undecided()
+                if key not in left and wanted(seam.policy(network, key))
+            ),
             None,
         )
         if key is None:
@@ -1165,9 +1196,9 @@ def _set_by_policy(
 
 class Defaults:
     """Every choice not held back to its default (``defaults``): reopened, then each
-    open choice in play that is not required set by its policy, ranked: a kernel's by
-    conversion's (``finn.kernels.defaults``: fixed or first valid), a channel's by the
-    interim channel rule (first valid). Written first, it starts an exploration over from
+    open choice in play that is not required set by its policy, ranked
+    (``finn.kernels.policies``: fixed or first valid): a kernel's its KernelOp's, a
+    channel's the cut's. Written first, it starts an exploration over from
     the values conversion and the cut give, the holds kept; a required choice (a FIFO's
     depth) is left open for a strategy. ``report`` names what it set (``set``) and what
     no value could be set for (``unset``)."""
@@ -1181,7 +1212,7 @@ class Defaults:
     def explore(self, seam: Seam, network: S) -> S:
         def search(opened: S, _: Mapping[Key, object]) -> S:
             reached, self.set, self.unset = _set_by_policy(
-                seam, opened, self.strategy, lambda info: not info.required
+                seam, opened, self.strategy, lambda found: not isinstance(found, Required)
             )
             return reached
 
@@ -1213,9 +1244,13 @@ class DebugPlaceholder:
 
     def _place(self, seam: Seam, network: S) -> S:
         while True:
-            choice = _next_choice(seam, network, lambda info: info.required)
+            choice = _next_choice(seam, network, lambda found: isinstance(found, Required))
             if choice is None:
-                required = [key for key in network.undecided() if _info(network, key).required]
+                required = [
+                    key
+                    for key in network.undecided()
+                    if isinstance(seam.policy(network, key), Required)
+                ]
                 if required:
                     raise ExploreError(
                         "placeholder-no-case",
@@ -2291,8 +2326,8 @@ class SizeFifos:
         return [transport for transport in found if transport is not None]
 
 
-#: The interim channel rule's style for a FIFO a strategy places: the first its domain
-#: lists, FinnLib's own selection by depth and width.
+#: The cut's policy's style for a FIFO a strategy places: the first its domain lists,
+#: FinnLib's own selection by depth and width.
 _FIFO_STYLE = "auto"
 
 

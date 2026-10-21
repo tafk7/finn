@@ -29,15 +29,14 @@ check too, ``Seam.check_fifos``), and records the design it verified on the body
 (packaging, the shell's integration, the testbench) compares it (``refuse_unverified``),
 and refuses a design never verified or changed since. Simulation and elaboration only
 bind. The cut makes a body's channel choices (``make_cut_choices``) on its network in its
-shell, which alone holds both sides of a boundary channel, by the interim channel rule
-(``finn.kernels.network.interim_channel_defaults``: first valid, for now), and writes
-them with ``persist``.
+shell, which alone holds both sides of a boundary channel, by the cut's policies
+(``finn.kernels.cut``: ``CHANNEL_POLICIES``), and writes them with ``persist``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
@@ -62,11 +61,12 @@ from finn.custom_op.kernels.network import (
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import CYCLES
 from finn.kernels.configure import chosen
-from finn.kernels.defaults import defaulted
+from finn.kernels.cut import channel_defaulted
 from finn.kernels.explore import FifoCheck, Seam
 from finn.kernels.members import Facts
 from finn.kernels.movers import MOVER, MoverContract
-from finn.kernels.network import Key, Wire, dotted, interim_channel_defaults
+from finn.kernels.network import Key, Wire, dotted
+from finn.kernels.policies import Defaulted, Required, defaulted, policy
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
 from finn.platform.shells import ShellRow, budgets, bus_counts, shell_row
@@ -285,7 +285,11 @@ def configured_network(
         )
     open_keys = bound.undecided()
     if open_keys:
-        required = {key for key, item in bound.decisions().items() if item.required}
+        required = {
+            key
+            for key, item in bound.decisions().items()
+            if isinstance(policy(bound.owner(key[0]), item), Required)
+        }
         listed = bound.viable(key for key in open_keys if key not in required)
         impossible = {
             key: _impossible(key, viable.values)
@@ -444,14 +448,17 @@ class CutChoices:
     stored choices the bind dropped as stale, each a value outside its domain, with the
     kernel's findings (``stale``: a kernel's stays open, for a strategy to set, and
     emission refuses it until one does; a channel's is derived again by the interim
-    channel rule); the kernel choices it set by conversion's policies, left open by a body
-    that never went through conversion (``late``: one ``choice-converted-late`` finding
-    each, naming the value); and the choices it could set no value for, left open
-    (``unset``: why, ``choice-no-valid-value`` or the change's refusal)."""
+    channel rule); the kernel choices it set by their KernelOps' policies, left open by a
+    body that never went through conversion (``late``: one ``choice-converted-late``
+    finding each, naming the value); the choices it could set no value for, left open
+    (``unset``: why, ``choice-no-valid-value`` or the change's refusal); and the choices a
+    first valid policy set in listed order, its ranking not read (``fallbacks``: one
+    ``choice-order-unknown`` finding each, naming the view and why)."""
 
     stale: Mapping[str, tuple[Finding, ...]]
     late: Mapping[str, tuple[Finding, ...]]
     unset: Mapping[str, tuple[Finding, ...]]
+    fallbacks: Mapping[str, tuple[Finding, ...]] = field(default_factory=dict)
 
 
 def _late(key: str, value: object) -> Finding:
@@ -471,23 +478,25 @@ def make_cut_choices(model: ModelWrapper) -> CutChoices:
     stored choices set as it binds (a value outside its domain dropped as stale):
 
     1. each kernel choice the body leaves open, in play and not required, that the bind
-       did not drop, set once by conversion's policies on its kernel
-       (``finn.kernels.defaults.defaulted``): a body never converted for it (one made by
+       did not drop, set once by its KernelOp's policies on its kernel
+       (``finn.kernels.policies.defaulted``): a body never converted for it (one made by
        hand), reported (``CutChoices.late``); the channels reading it are rebuilt;
-    2. **interim**: each channel's open choices in play that are not
-       required set to their first valid values (``interim_channel_defaults``), each
-       channel in rank order (a channel created here has both its sides only in the
-       network). A required choice (a FIFO's depth) stays open for a strategy.
+    2. each channel's open choices in play that are not required set by the cut's
+       policies (``finn.kernels.cut.channel_defaulted``), each channel in rank order (a
+       channel created here has both its sides only in the network). A required choice (a
+       FIFO's depth) stays open for a strategy.
 
-    Returns what it dropped, set late and could not set (``CutChoices``)."""
+    Returns what it dropped, set late, could not set, and set in listed order where a
+    ranking could not be read (``CutChoices``)."""
     bound = in_shell(model, model.graph.node)
     stale = dict(bound.stale)
     unset: dict[str, tuple[Finding, ...]] = {}
     late: dict[Key, object] = {}
+    fallbacks: dict[str, tuple[Finding, ...]] = {}
     for name in bound.kernels:
         point = bound.member(name)
         dropped = {key for owner, key in bound.dropped if owner == name}
-        done = defaulted(point, kept=dropped)
+        done = defaulted(point, bound.owner(name), kept=dropped)
         if isinstance(done, tuple):
             # A kernel refused on its facts is emission's to name; a choice no value can be
             # set for is reported.
@@ -497,8 +506,11 @@ def make_cut_choices(model: ModelWrapper) -> CutChoices:
                 if finding.code == "choice-no-valid-value"
             }
             continue
+        fallbacks |= _fallbacks(name, done)
         before = chosen(point)
-        late |= {(name, key): value for key, value in chosen(done).items() if key not in before}
+        late |= {
+            (name, key): value for key, value in chosen(done.point).items() if key not in before
+        }
     if late:
         trial = bound.trial(late, check=False)
         if trial.accepted:
@@ -510,17 +522,21 @@ def make_cut_choices(model: ModelWrapper) -> CutChoices:
         if bound.unbound(name) is not None:
             continue
         point = bound.member(name)
-        done = interim_channel_defaults(point)
+        done = channel_defaulted(point)
         if isinstance(done, tuple):
             unset |= {dotted((name, finding.owner)): (finding,) for finding in done}
             continue
+        fallbacks |= _fallbacks(name, done)
         before = chosen(point)
-        values = {(name, key): value for key, value in chosen(done).items() if key not in before}
+        values = {
+            (name, key): value for key, value in chosen(done.point).items() if key not in before
+        }
         if not values:
             continue
         trial = bound.trial(values, check=False)
         if trial.accepted:
             bound = trial.network
+            fallbacks |= {dotted(key): found for key, found in trial.fallbacks.items()}
         else:
             unset |= {dotted(key): found for key, found in trial.refused.items()}
     persist(model, bound)
@@ -528,7 +544,13 @@ def make_cut_choices(model: ModelWrapper) -> CutChoices:
         stale,
         {dotted(key): (_late(dotted(key), value),) for key, value in late.items()},
         unset,
+        fallbacks,
     )
+
+
+def _fallbacks(name: str, done: Defaulted[Space]) -> dict[str, tuple[Finding, ...]]:
+    """Each ranking member ``name``'s policies could not read, by its choice's dotted key."""
+    return {dotted((name, finding.owner)): (finding,) for finding in done.fallbacks}
 
 
 __all__ = [

@@ -137,6 +137,7 @@ from finn.kernels.explore import (
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.movers import MEMORY_LATENCY, MoverContract
 from finn.kernels.network import Key, dotted
+from finn.kernels.policies import Required
 from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
 from finn.platform.capabilities import Platform
 from finn.platform.catalog import part_report
@@ -526,6 +527,11 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         }
         if isinstance(strategy, Hold):
             entry["held"] = [dotted(key) for key in strategy.held]
+        if seam.fallbacks:
+            # A ranking a policy could not read: its choice offered in listed order.
+            entry["fallbacks"] = {
+                dotted(key): why((finding,)) for key, finding in seam.fallbacks.items()
+            }
     refused = seam.refusals(network)
     if refused:
         raise KernelOpError(
@@ -552,7 +558,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         # The folding is no longer the one the target throughput explored.
         model.delete(OBJECTIVE_FPS)
     left = [
-        dotted(key) + (" (required)" if getattr(network.decision(key), "required", False) else "")
+        dotted(key) + (" (required)" if isinstance(seam.policy(network, key), Required) else "")
         for key in network.undecided()
     ]
     cost = seam.cost(network)

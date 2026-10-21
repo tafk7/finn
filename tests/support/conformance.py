@@ -11,8 +11,8 @@ each sample it
    port, an input's given to the kernel as ``<port>_tensor`` and an output's the
    kernel's own (``<port>_tensor``, its statement), and takes the contract it states,
    ``<port>_contract``. It commits the sample's factors and the pinned ``choices``,
-   then the kernel's other open choices by their default policies and every channel's
-   by the interim channel rule, as the cut sets them (its transport, its adapter chain
+   then the kernel's other open choices by their policies (``Placed``) and every
+   channel's by the cut's policies, as the cut sets them (its transport, its adapter chain
    and the chain's memories).
    The module is named ``finn_<kernel>conformance``;
 2. checks each of the kernel's leaves in the module (the kernel, or
@@ -93,7 +93,7 @@ from dataclasses import dataclass
 from math import prod
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -129,10 +129,12 @@ from finn.kernels.artifacts.rtl import Declined, extract
 from finn.kernels.base import KernelSpace
 from finn.kernels.channels import Channel
 from finn.kernels.configure import chosen, describe
-from finn.kernels.defaults import defaulted
+from finn.kernels.cut import CHANNEL_POLICIES
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Key, Network, dotted, wire
+from finn.kernels.policies import FirstValid, Policy, defaulted
 from finn.kernels.transport import StreamContract
+from finn.kernels.transpose import TransposeKernel
 from finn.toolchain.launcher import host_toolchain
 from support.helpers import (
     FULL_DSP48E2,
@@ -266,25 +268,39 @@ def _possible(point: Any, key: Key) -> tuple[object, ...]:
     return tuple(found.cases)
 
 
+class Placed:
+    """What places a kernel alone in these tests, as the owner of its policies
+    (``finn.kernels.policies``): a memory's style first valid in its kernel's ranking, as
+    the cut states a channel stage's (``CHANNEL_POLICIES``), and a transpose's pages
+    likewise; every other choice first valid, as no KernelOp states otherwise."""
+
+    policies: ClassVar[Mapping[object, Policy]] = {
+        **CHANNEL_POLICIES,
+        TransposeKernel.ram_style: FirstValid(order=TransposeKernel.ram_preference),
+    }
+
+
 def _by_policy(point: Any, key: Key) -> Any:
-    """A design with the kernel's open choice ``key`` set by its default policy, as
-    conversion sets it (``finn.kernels.defaults.defaulted``), the kernel's other open
+    """A design with the kernel's open choice ``key`` set by its policy (``Placed``), as
+    conversion sets one (``finn.kernels.policies.defaulted``), the kernel's other open
     choices left open."""
     kernel = point.member(KERNEL)
     others = {below for below, _ in inspection.states(kernel)} - {key[1]}
-    done = defaulted(kernel, kept=others)
+    done = defaulted(kernel, Placed, kept=others)
     assert not isinstance(done, tuple), f"{dotted(key)}: " + "; ".join(map(str, done))
-    return _chosen(point, {dotted(key): chosen(done)[key[1]]})
+    return _chosen(point, {dotted(key): chosen(done.point)[key[1]]})
 
 
 def _defaulted(point: Any) -> Any:
     """A design with every open choice of its kernel in play that is not required set by
-    its default policy, as conversion sets it."""
+    its policy (``Placed``), as conversion sets one."""
     kernel = point.member(KERNEL)
-    done = defaulted(kernel)
+    done = defaulted(kernel, Placed)
     assert not isinstance(done, tuple), "; ".join(map(str, done))
     before = chosen(kernel)
-    values = {f"{KERNEL}.{key}": value for key, value in chosen(done).items() if key not in before}
+    values = {
+        f"{KERNEL}.{key}": value for key, value in chosen(done.point).items() if key not in before
+    }
     return _chosen(point, values)
 
 
@@ -549,10 +565,10 @@ def place(
     facts: Mapping[str, object] = EMPTY,
     values: Mapping[str, np.ndarray] | None = None,
 ) -> Any:
-    """The sample's design, every kernel choice it leaves open in play set by its default
-    policy (``_defaulted``), then every channel's by the interim channel rule, as the cut
-    sets them (``with_channel_defaults``: its adapter chain, the chain's memories); the
-    adapter sample's first input fed by a memory.
+    """The sample's design, every kernel choice it leaves open in play set by its policy
+    (``_defaulted``), then every channel's by the cut's policies, as the cut sets them
+    (``with_channel_defaults``: its adapter chain, the chain's memories); the adapter
+    sample's first input fed by a memory.
 
     The memory presents ``vector_major`` at the first lane count, of those
     dividing the innermost extent, that makes the channel convert widths.

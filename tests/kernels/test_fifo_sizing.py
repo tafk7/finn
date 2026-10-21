@@ -59,6 +59,7 @@ from finn.kernels.fifo_sizing import (
 )
 from finn.kernels.input_generator import NestBuffer, nest_buffer, nest_geometry
 from finn.kernels.network import Network, dotted
+from finn.kernels.policies import Required
 from finn.toolchain.launcher import host_toolchain
 
 MEMBERS = chain.MEMBERS
@@ -574,7 +575,8 @@ def test_a_fifo_too_small_for_its_stream_is_dropped_named_and_left_open(
     values = chosen(explorer, checked)
     assert "levels.transport.fifo.depth" not in values
     assert {k: v for k, v in chosen(explorer, network).items() if k != dotted(DEPTH)} == values
-    assert [choice.key for choice in explorer.choices(checked) if choice.required] == [DEPTH]
+    offered = explorer.choices(checked)
+    assert [choice.key for choice in offered if choice.policy == Required()] == [DEPTH]
     assert explorer.cost(checked).bottleneck == explorer.cost(network).bottleneck
     sized = SizeFifos().explore(explorer, checked)
     assert chosen(explorer, sized)["levels.transport"] == "direct"

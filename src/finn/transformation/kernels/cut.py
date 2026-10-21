@@ -10,14 +10,14 @@ returns the parent graph, which the build keeps as its model. The partition is n
 instance. The body carries the parent's target. Everything after the cut opens the body
 through the node (``finn.core.graph.partition.partition_body``).
 
-The cut is where each channel first has both its sides, so it makes the channel choices:
-**interim**, each takes its first valid value
-(``finn.kernels.network.interim_channel_defaults``). It binds the nodes' choices again in
-context: a stored value outside its domain there is dropped as stale, left open for a
-strategy and reported (``dropped``); a node choice left open by a body that never went
-through conversion is set by conversion's policies, reported (``late``); a choice no value
-can be set for is left open and reported (``unset``). A required choice (a FIFO's depth)
-stays open for a strategy.
+The cut is where each channel first has both its sides, so it makes the channel choices,
+each by the cut's policies (``finn.kernels.cut``: first valid, a memory's style in its
+kernel's ranking). It binds the nodes' choices again in context: a stored value outside its
+domain there is dropped as stale, left open for a strategy and reported (``dropped``); a
+node choice left open by a body that never went through conversion is set by its KernelOp's
+policies, reported (``late``); a choice no value can be set for is left open and reported
+(``unset``); a choice a first valid policy set in listed order, its ranking not read, is
+reported (``fallbacks``). A required choice (a FIFO's depth) stays open for a strategy.
 
 Channel choices may be stored only in a partition's body. A model with host nodes that
 stores some is refused (a build fixes them in a step after the cut, with ``Hold``); a
@@ -55,9 +55,10 @@ def _kernel_ops_together(node: NodeProto) -> str | int:
 class MakeCutChoices(Transformation):
     """What the cut does to the body it makes, for a body made by hand: the channels'
     choices made, the nodes' stored choices bound in context, and a node choice the body
-    leaves open set by conversion's policies (``shell.make_cut_choices``). ``dropped``
-    lists the stored choices dropped as stale, ``late`` the node choices set late and
-    ``unset`` the choices no value could be set for, by owner and key
+    leaves open set by its KernelOp's policies (``shell.make_cut_choices``). ``dropped``
+    lists the stored choices dropped as stale, ``late`` the node choices set late,
+    ``unset`` the choices no value could be set for and ``fallbacks`` those set in listed
+    order where a ranking could not be read, by owner and key
     (``MatMul_0.compute.packed.pe``), each with its findings."""
 
     def __init__(self) -> None:
@@ -65,10 +66,12 @@ class MakeCutChoices(Transformation):
         self.dropped: dict[str, tuple[Finding, ...]] = {}
         self.late: dict[str, tuple[Finding, ...]] = {}
         self.unset: dict[str, tuple[Finding, ...]] = {}
+        self.fallbacks: dict[str, tuple[Finding, ...]] = {}
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         made = make_cut_choices(model)
         self.dropped, self.late, self.unset = dict(made.stale), dict(made.late), dict(made.unset)
+        self.fallbacks = dict(made.fallbacks)
         return model, False
 
 
@@ -77,7 +80,7 @@ class CutKernelPartition(Transformation):
     ``directory`` with its channels' choices made (see the module docstring). Refuses a
     model that holds a partition already or no KernelOps, one with host nodes between
     KernelOps or storing channel choices, and one with a host node named ``PARTITION``.
-    ``dropped``, ``late`` and ``unset``: as ``MakeCutChoices``'."""
+    ``dropped``, ``late``, ``unset`` and ``fallbacks``: as ``MakeCutChoices``'."""
 
     def __init__(self, directory: Path) -> None:
         super().__init__()
@@ -85,6 +88,7 @@ class CutKernelPartition(Transformation):
         self.dropped: dict[str, tuple[Finding, ...]] = {}
         self.late: dict[str, tuple[Finding, ...]] = {}
         self.unset: dict[str, tuple[Finding, ...]] = {}
+        self.fallbacks: dict[str, tuple[Finding, ...]] = {}
 
     def apply(self, model: ModelWrapper) -> tuple[ModelWrapper, bool]:
         if model.get_nodes_by_op_type(PARTITION_OP):
@@ -138,6 +142,7 @@ class CutKernelPartition(Transformation):
         body = ModelWrapper(str(cut_file))
         made = make_cut_choices(body)
         self.dropped, self.late, self.unset = dict(made.stale), dict(made.late), dict(made.unset)
+        self.fallbacks = dict(made.fallbacks)
         body_file = self.directory / f"{PARTITION}.onnx"
         body.save(str(body_file))
         cut_file.unlink()

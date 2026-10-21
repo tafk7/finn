@@ -100,6 +100,7 @@ from finn.kernels.members import Configured, Facts, current, observed, uncached
 from finn.kernels.members import typed as key_part
 from finn.kernels.movers import MoverOffer
 from finn.kernels.network import Fact, Interface, Key, Network, NetworkError, Wire, dotted, wire
+from finn.kernels.policies import Owner
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
 
@@ -199,8 +200,11 @@ class Partition(Network):
         stored: Mapping[Key, object],
         stray: Mapping[str, tuple[Finding, ...]],
         whole: bool,
+        owners: Mapping[str, Owner] | None = None,
     ) -> None:
-        super().__init__(members, stored=stored, nodes={each: member(each) for each in members})
+        super().__init__(
+            members, stored=stored, nodes={each: member(each) for each in members}, owners=owners
+        )
         self.name, self.boundary, self.whole = name, boundary, whole
         self.movers = tuple(tensor for tensor, _ in boundary) if movers else ()
         self.stale = _described(self, stored) | dict(stray)
@@ -628,6 +632,7 @@ def _bound(
             stored=stored,
             stray=stray,
             whole=whole,
+            owners={node.name: type(op) for node, op in zip(nodes, ops)},
         )
     except NetworkError as error:
         message = f"{name}: {error}"
