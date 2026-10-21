@@ -23,7 +23,7 @@ from qonnx.core.datatype import DataType
 from support.conformance import (
     KERNEL,
     Sample,
-    _ends,
+    _contracts,
     _values,
     _words,
     design_cycles,
@@ -67,8 +67,8 @@ def kernel_leaf(point: Any) -> Leaf:
 def test_the_input_presents_each_window_whole_and_closes_it() -> None:
     case = pool()
     point, sample, _ = placed(case, 3)
-    ends = _ends(point, PoolKernel, sample, ["input_channel", "output_channel"])
-    window = ends["input_channel"]
+    contracts = _contracts(point, PoolKernel, sample, ["input_channel", "output_channel"])
+    window = contracts["input_channel"]
     # Two by three windows, two channel folds each, four positions a window, three lanes.
     assert (window.form.beats, window.form.lanes) == (2 * 3 * 2 * 4, 3)
     assert [marker.beats for _, marker in window.markers] == [4]
@@ -78,7 +78,7 @@ def test_the_input_presents_each_window_whole_and_closes_it() -> None:
         for row, column in ((0, 0), (0, 1), (1, 0), (1, 1))
         for channel in range(3)
     ]
-    output = ends["output_channel"]
+    output = contracts["output_channel"]
     assert (output.form.beats, output.form.lanes) == (2 * 3 * 2, 3)
     assert output.element == ScalarEncoding(DataType["INT4"])
     assert design_cycles(point) == Available(2 * 3 * 2 * 4)
@@ -88,8 +88,8 @@ def test_a_strided_window_counts_the_windows_that_fit_and_drops_the_rest() -> No
     case = pool(shape=(5, 7, 2), window=(2, 3), stride=(2, 2))
     assert case["outputs"]["output_channel"] == (2, 3, 2)
     point, sample, values = placed(case, 2)
-    ends = _ends(point, PoolKernel, sample, ["input_channel"])
-    assert ends["input_channel"].form.beats == 2 * 3 * 6
+    contracts = _contracts(point, PoolKernel, sample, ["input_channel"])
+    assert contracts["input_channel"].form.beats == 2 * 3 * 6
     reference = max_pool(values["input_channel"], (2, 3), (2, 2))
     assert reference.shape == (2, 3, 2)
 
@@ -107,9 +107,9 @@ def test_an_image_at_the_graphs_rank_is_read_as_it_is() -> None:
     point, sample, _ = placed(case, 3)
     kernel = design_member(point, KERNEL)
     assert kernel.output_tensor.shape == (1, *flat["outputs"]["output_channel"])
-    ranked = _ends(point, PoolKernel, sample, ["input_channel"])["input_channel"]
+    ranked = _contracts(point, PoolKernel, sample, ["input_channel"])["input_channel"]
     reference, _, _ = placed(flat, 3)
-    plain = _ends(reference, PoolKernel, sample, ["input_channel"])["input_channel"]
+    plain = _contracts(reference, PoolKernel, sample, ["input_channel"])["input_channel"]
     assert (ranked.form.beat_loops, ranked.form.lane_loops) == (
         plain.form.beat_loops,
         plain.form.lane_loops,
@@ -172,8 +172,8 @@ def _c_simulator() -> bool:
 def test_the_top_computes_the_case_in_c_simulation(tmp_path: Path) -> None:
     case = pool()
     point, sample, values = placed(case, 3)
-    ends = _ends(point, PoolKernel, sample, ["input_channel", "output_channel"])
-    window, output = ends["input_channel"], ends["output_channel"]
+    contracts = _contracts(point, PoolKernel, sample, ["input_channel", "output_channel"])
+    window, output = contracts["input_channel"], contracts["output_channel"]
     x = values["input_channel"]
     words = list(pack(window.form, x.ravel().tolist(), window.element.bits))
     ((_, marker),) = window.markers
@@ -200,8 +200,8 @@ def test_it_takes_a_beat_a_cycle_as_its_schedule_states(tmp_path: Path) -> None:
     its slowest member's cycles (``cycles``)."""
     case = pool()
     point, sample, values = placed(case, 3)
-    ends = _ends(point, PoolKernel, sample, ["input_channel", "output_channel"])
-    window = ends["input_channel"]
+    contracts = _contracts(point, PoolKernel, sample, ["input_channel", "output_channel"])
+    window = contracts["input_channel"]
     x = values["input_channel"]
     expected = case["reference"](input_channel=x)["output_channel"]
     beats = design_member(point, KERNEL).schedule.beat_count
@@ -216,7 +216,9 @@ def test_it_takes_a_beat_a_cycle_as_its_schedule_states(tmp_path: Path) -> None:
         inputs={"input_channel": _words(unreplayed(window.form), x, window.element)},
         outputs={
             "output_channel": _words(
-                ends["output_channel"].form, np.asarray(expected), ends["output_channel"].element
+                contracts["output_channel"].form,
+                np.asarray(expected),
+                contracts["output_channel"].element,
             )
         },
         frames=4,

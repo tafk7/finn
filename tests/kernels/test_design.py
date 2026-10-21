@@ -3,8 +3,8 @@
 
 """The Chain (``support.chain``): one flat netlist, its edges' adapters, its channels' tensors.
 
-Each MatMul passes its tensors to the kernels that read them, and presents their
-ends on the network's channels: each channel is one real edge, so each adapter sits
+Each MatMul passes its tensors to the kernels that read them, and presents its ports'
+contracts on the network's channels: each channel is one real edge, so each adapter sits
 on the edge that needs it (a replay before each MatMul's core, none inside a MatMul).
 The network's module is one netlist of every leaf; it computes
 ``thresholds(x @ W1) @ W2`` in XSim. An input tensor given to a MatMul must be the one

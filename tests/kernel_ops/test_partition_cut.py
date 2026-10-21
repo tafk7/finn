@@ -209,7 +209,7 @@ def test_the_export_names_each_mover_its_iodma_and_every_connection(tmp_path: Pa
         5.0,
     )
     assert (export.partition, export.vlnv) == ("partition", "xilinx_finn:finn:partition:1.0")
-    # Ends by direction in port order, each IODMA_hls configured from its facts: a
+    # Movers by direction in port order, each IODMA_hls configured from its facts: a
     # frame's beats, the stream's bytes a beat in the UINT8 container, the memory port
     # and the stream's width; the element is the mover's.
     assert [(mover.instance, mover.tensor, mover.port) for mover in export.movers] == [

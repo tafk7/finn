@@ -129,7 +129,7 @@ def test_a_lifted_initializers_source_choices_are_out_of_play_in_the_partition()
     value, so no source, and the source's choices, stated on the tensor w, now the
     weight edge's, are the partition's: it keeps them out of play (dormant)."""
     model = matmul_model()
-    configured(model, {"first": MATMUL})  # folded, so its channels' ends are known
+    configured(model, {"first": MATMUL})  # folded, so its channels' contracts are known
     configured(model, {"w": {"source.memstream.ram_style": "block"}})
     owned = network(model, model.graph.node)
     assert owned.member("w").source.ram_style == "block"  # the node owns w's channel
@@ -174,7 +174,7 @@ def test_a_lifted_initializers_source_choices_are_out_of_play_in_the_partition()
 def test_a_stale_output_is_refused_before_its_channel_reads_it() -> None:
     """The product is authoritative: an output annotation its producer no longer states
     is the graph's staleness, named with its tensor and producer, not the channel's
-    refusal of the producer's end."""
+    refusal of the producer's contract."""
     model = matmul_model()
     model.set_tensor_datatype("y", INT3)
     with refused(

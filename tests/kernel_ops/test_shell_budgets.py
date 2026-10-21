@@ -75,7 +75,7 @@ def thresholdings(count: int, row: ShellRow) -> Network:
     runtime-writable, at its baseline otherwise, every transport direct."""
     platform = ULTRA96.platform
     offered: dict[str, Any] = {"mover_offer": row.movers} if row.movers else {}
-    # Each channel takes the ends of the thresholdings on either side of it.
+    # Each channel takes the contracts of the thresholdings on either side of it.
     names = ["x", *(f"c{index}" for index in range(count - 1)), "y"]
     channels: dict[str, Any] = {}
     for index, name in enumerate(names):

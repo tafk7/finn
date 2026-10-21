@@ -222,7 +222,8 @@ def test_a_producer_s_lane_order_is_wires():
 def test_one_kernel_refusal_reaches_the_change_that_selects_it():
     # Unsigned weights are refused by dotp's weight port: no core is possible, each
     # refused by its port's rule, and the change selecting the packed core is refused,
-    # naming it (where it used to leave MatMul, and every end and channel on it, refused).
+    # naming it (where it used to leave MatMul, and every port contract and channel on it,
+    # refused).
     point = matmul_point(
         m=3,
         n=4,

@@ -78,7 +78,7 @@ def test_a_kernels_choices_are_set_and_persisted_on_its_node() -> None:
 
 
 def test_a_channels_choices_are_set_with_its_kernels_in_one_batch() -> None:
-    """The weight channel's ends wait on the MatMul's folding: both are one batch, as a
+    """The weight channel's contracts wait on the MatMul's folding: both are one batch, as a
     strategy's is, the channel's other choices set by the interim channel rule, and the
     choices persist on the node and on the tensor."""
     model = matmul_model()
@@ -244,8 +244,8 @@ def test_a_channels_value_of_another_type_is_refused() -> None:
     assert channel_choices(model, "w") == before
 
 
-def test_a_channel_whose_ends_wait_on_an_open_kernel_is_refused() -> None:
-    """The MatMul's core is open, so the weight channel's ends are and its choice cannot
+def test_a_channel_whose_contracts_wait_on_an_open_kernel_is_refused() -> None:
+    """The MatMul's core is open, so the weight channel's contracts are and its choice cannot
     be checked."""
     model = matmul_model()
     with refused("decision-unassigned", owner="compute"):

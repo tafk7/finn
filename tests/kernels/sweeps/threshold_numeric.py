@@ -134,8 +134,8 @@ def run(case: Case, evidence: Path) -> None:
     result_bits = point.member("activate").result_dtype.bitwidth()
     form = vector_major((PIXELS, CHANNELS), case.pe)
     for name in ("x", "y"):
-        ends = point.member(name).query(Channel.sides).value
-        assert form in (ends.sink.form, ends.source.form), (case.label, name, ends)
+        sides = point.member(name).query(Channel.sides).value
+        assert form in (sides.sink.form, sides.source.form), (case.label, name, sides)
     stimulus = list(pack(form, VALUES.ravel().tolist(), ELEMENT.bitwidth()))
     expected = list(pack(form, levels.ravel().tolist(), result_bits))
     top, sources, data = materialize(

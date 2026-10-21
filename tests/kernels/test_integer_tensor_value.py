@@ -163,7 +163,7 @@ def test_a_new_configuration_reads_only_the_stated_facts() -> None:
         weights=weights,
     )
     # The weight channel's tensor is stated over the value's range, in the encoding it
-    # needs (INT2); MatMul reads INT3. Its ends wait on MatMul's core and folding.
+    # needs (INT2); MatMul reads INT3. Its contracts wait on MatMul's core and folding.
     assert base.member("matmul").weight_tensor == Tensor((4, 4), ScalarEncoding(int3))
     point = choose(base, {"matmul.compute": "packed"})
     folded = choose(point, {"matmul.compute.packed.pe": 2, "matmul.compute.packed.simd": 2})

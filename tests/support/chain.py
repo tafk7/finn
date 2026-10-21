@@ -4,9 +4,9 @@
 """The Chain: a network of two MatMuls and a thresholding on their channels.
 
 It computes ``thresholds(x @ W1) @ W2``. Each MatMul reads its tensors and presents
-its ends on the network's channels; each channel takes its ends from its kernels
-(``Interface``), and the tensor of a MatMul's results is the MatMul's statement of them
-(``result_tensor``), read before it is placed. The weights are given to each MatMul
+its ports' contracts on the network's channels; each channel takes them from its
+kernels (``Interface``), and the tensor of a MatMul's results is the MatMul's statement
+of them (``result_tensor``), read before it is placed. The weights are given to each MatMul
 (``w_contents``): each weight channel carries what its MatMul states for it, its
 contents (``stored_weights``) and its tensor over their range (``carried_weights``). ``chain()``
 is the Chain configured as the kernel tests, the KernelOp partition tests and the
@@ -148,7 +148,7 @@ LAYERS = (("first", "w1"), ("second", "w2"))
 
 def configure_chain(chain: Network, **choices: object) -> Network:
     """``chain`` (the Chain) with ``choices`` and each MatMul's packed core configured,
-    then its channels, which bind as their ends become known and take their first valid
+    then its channels, which bind as their contracts become known and take their first valid
     choices (the interim channel rule): each weight's memory, each transport direct."""
     folding: dict[str, object] = dict(choices)
     weights: dict[str, object] = {}

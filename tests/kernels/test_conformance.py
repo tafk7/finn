@@ -55,7 +55,7 @@ from support.conformance import (
     MODES,
     NonConformance,
     Sample,
-    _ends,
+    _contracts,
     _stream,
     _values,
     conformance,
@@ -282,9 +282,9 @@ def rtl_decoded(case: dict[str, Any], sample: Sample) -> str:
     )
     names = ("input_channel", "output_channel")
     streams = {
-        name: _stream(placed, name, ends.form, ends)
+        name: _stream(placed, name, contract.form, contract)
         for name in names
-        for ends in [_ends(placed, space_type, sample, [name])[name]]
+        for contract in [_contracts(placed, space_type, sample, [name])[name]]
     }
     declared = streams["input_channel"].form
     walked = vector_major(declared.shape, sample.factors["pe"])

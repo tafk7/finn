@@ -9,7 +9,7 @@ the tensor (``x_access``), and its kernel binds each index's extent from those r
 (``LeafKernel.extents``): a kernel writes no extent getter, and its folding factors'
 domains read ``extent_of`` members. A producer's tensor is its kernel's statement,
 derived from those extents, and its element is that tensor's. An input without its
-tensor is idle: an interface not used. A port's rule (``x_element_taken``) is its
+tensor is idle: a port not used. A port's rule (``x_element_taken``) is its
 kernel's constraint, counted in its validity, while what the kernel reads to bind its
 extents are values: a refused port still answers them.
 """

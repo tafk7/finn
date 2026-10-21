@@ -6,9 +6,9 @@
 Facts are the root node's typed formals; a missing required one is refused at
 the node call. Choices use the stable decision keys ``inspection`` reports.
 
-A kernel reads tensors and presents its ends on channels, so a test places it in a
-network (``finn.kernels.network``): its kernels and channels by name, each its own
-space, each channel taking the ends its kernels present (``Interface``) and, for a
+A kernel reads tensors and presents its ports' contracts on channels, so a test places
+it in a network (``finn.kernels.network``): its kernels and channels by name, each its
+own space, each channel taking the contracts its kernels present (``Interface``) and, for a
 parameter channel, what its kernel states for it (``Fact``). A test names a choice as
 ``member.key`` (``matmul.compute.packed.pe``, ``w.transport``): ``keyed`` makes it the
 network's pair, ``choose`` commits a batch. ``placed_dotp`` places a dot-product core
@@ -764,8 +764,8 @@ def matmul_assembly(
     flow order (``finn.kernels.defaults.defaulted``: the realization before the core),
     as conversion would set it. PE, SIMD and pumping are the core's, and the
     packed core's ``reducer``. The kernel's choices are set first, then its channels',
-    whose ends are its: the network builds each channel as its ends become known and
-    gives its choices their first valid values (the interim channel rule), the
+    whose contracts are its: the network builds each channel as its contracts become
+    known and gives its choices their first valid values (the interim channel rule), the
     weight channel's memory and FIFO as given.
     """
     if not isinstance(weight_delivery, WeightDelivery):

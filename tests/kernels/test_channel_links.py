@@ -3,10 +3,10 @@
 
 """A channel's netlist: its stages below it, and each checked hop resolved into wires.
 
-An end belongs to the kernel whose port it is, beside the channel
+A link's end belongs to the kernel whose port it is, beside the channel
 (``^compute``); a stage sits at its label below the channel
-(``adapter.input_gen.input_gen``, ``transport.fifo.buffer``); a boundary end is
-the root's own pins (``None``).
+(``adapter.input_gen.input_gen``, ``transport.fifo.buffer``); a link's end on the
+boundary is the root's own pins (``None``).
 """
 
 from qonnx.core.datatype import DataType
@@ -120,7 +120,7 @@ def test_a_buffered_channel_places_its_fifo_below_its_transport() -> None:
 
 
 def test_a_boundary_no_port_names_is_refused() -> None:
-    """A weight channel with one end and no port is a boundary nothing may cross: only an
+    """A weight channel with one side and no port is a boundary nothing may cross: only an
     ONNX input or output of a partition is one."""
 
     refused = choose(placing(w_port=None), FOLDING).member("w").query(Channel.sides)
@@ -131,21 +131,24 @@ def test_a_boundary_no_port_names_is_refused() -> None:
 
 
 class Reader(Space):
-    """A consumer that presents its end itself, not through a kernel's port."""
+    """A consumer that presents its contract itself, not through a kernel's port."""
 
     @view(semantics=PORT_CONTRACT)
-    def end(self) -> PortContract:
+    def port_contract(self) -> PortContract:
         beat = AxisBeat("s_axis", INT3, 4, endpoint=Endpoint.TARGET)
         transport = beat.native(clock="ap_clk", reset="ap_rst_n")
         contract = StreamContract(transport, ScalarEncoding(INT3), vector_major((3, 4), 4))
         return PortContract("", contract)
 
 
-def test_an_end_that_is_no_kernels_port_has_no_netlist() -> None:
+def test_a_contract_that_is_no_kernels_port_has_no_netlist() -> None:
     bare = Network(
         {
             "edge": wire(
-                platform=FULL_DSP48E2, tensor=X, port="in0_V", consumer=Interface("reader", "end")
+                platform=FULL_DSP48E2,
+                tensor=X,
+                port="in0_V",
+                consumer=Interface("reader", "port_contract"),
             ),
             "reader": Reader(),
         }

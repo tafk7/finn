@@ -315,7 +315,7 @@ def test_the_core_is_one_possible_case_and_owns_its_folding_factors():
     base = matmul_point(**FACTS)
     # On DSP48E2 only the packed core is possible, before any folding factor (the INT8
     # core is a DSP58 mode, refused by its own rule): ``compute`` is open until set, as
-    # conversion's policy sets it, never forced. Its channels wait on its ends, which the
+    # conversion's policy sets it, never forced. Its channels wait on its contracts, which the
     # folding decides.
     ((_, compute),) = base.viable([("matmul", "compute")])
     assert compute.cases == ("packed",)

@@ -201,7 +201,7 @@ def test_one_network_carries_the_weights_of_whichever_realization_is_committed()
         committed = choose(point, {"matmul.realization": realization})
         assert committed.member("matmul").w_carried.shape == shape
         # The realization and the kernel's choices commit in one batch, the channels'
-        # once their ends are known.
+        # once their contracts are known.
         folded = choose(
             point,
             {

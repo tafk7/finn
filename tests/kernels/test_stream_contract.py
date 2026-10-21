@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Channel-end contracts, checked composition, and a reusable memory.
+"""Stream contracts, checked composition, and a reusable memory.
 
 The traversals' own tests (pack, unpack, classification, the tiled MVU's and Shuffle's
 stress cases) are in ``tests/dataflow/test_traversal.py``; the tiled MVU's weight chunks

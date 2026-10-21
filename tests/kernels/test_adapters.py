@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A channel plans what its ends need and its adapters carry the plan out.
+"""A channel plans what its sides need and its adapters carry the plan out.
 
 A cyclic producer presents a tensor in any order; thresholding consumes it
 PE channels a beat, channels innermost. The channel between them derives its

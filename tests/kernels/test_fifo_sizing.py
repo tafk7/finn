@@ -223,7 +223,7 @@ def chosen(explorer: Seam, network: Network) -> dict[str, object]:
     return {dotted(key): value for key, value in explorer.chosen(network).items()}
 
 
-def test_a_channel_s_ends_are_read_from_the_paces_its_ports_state() -> None:
+def test_a_channel_s_sides_are_read_from_the_paces_its_ports_state() -> None:
     _, point = _folded()
     # hidden: first (PE 1, SIMD 4) closes a reduction of one step each beat, a lane a
     # word; the output adapter's vpc pairs them into activate's two lanes, a word the
@@ -494,7 +494,7 @@ def _every(gap: int, span: int) -> Pattern:
 
 def test_the_check_is_sizing_s_own_test_at_the_words_a_transport_holds() -> None:
     """``keeps`` at the least depth holds, one word less does not. The period alone moves
-    the need with the ends unchanged: none at 48 cycles a frame, 5 words at 40, 9 at 32,
+    the need with the sides unchanged: none at 48 cycles a frame, 5 words at 40, 9 at 32,
     so a depth sized at 40 fails at 32; a slower consumer needs more than the 9, a faster
     one none."""
     supply, accept = _burst(32), _every(2, 32)
@@ -889,7 +889,7 @@ def _random_buffer(rng: random.Random, frame_words: int) -> NestBuffer:
     return NestBuffer(rng.randint(1, 3 * frame_words), tuple(reads), tuple(freed))
 
 
-def test_the_presentation_by_its_events_is_the_model_beat_by_beat_on_random_ends() -> None:
+def test_the_presentation_by_its_events_is_the_model_beat_by_beat_on_random_sides() -> None:
     """The same ``Flow`` (or deadlock), word for word, on random patterns and nest-like
     buffers, a stream frame of one to three of the buffer's frames (the Chain's
     ``levels``: three words through an input_gen frame of one)."""
@@ -913,11 +913,11 @@ def test_the_presentation_by_its_events_is_the_model_beat_by_beat_on_random_ends
         flow = simulate(supply, accept, period, depth, frames)
         assert flow == simulate_by_beat(supply, accept, period, depth, frames)
         outcomes.append((isinstance(accept, Buffered), flow is None))
-    # Buffered ends both flowing and deadlocked were compared.
+    # Buffered sides both flowing and deadlocked were compared.
     assert {(True, False), (True, True), (False, False)} <= set(outcomes)
 
 
-def _sizing_ends() -> list[tuple[Pattern, Pattern | Buffered, tuple[int, ...]]]:
+def _sizing_sides() -> list[tuple[Pattern, Pattern | Buffered, tuple[int, ...]]]:
     """The sizing tests' patterns and ``NESTS``, each nest read every beat and every third,
     with periods around their spans."""
     found: list[tuple[Pattern, Pattern | Buffered, tuple[int, ...]]] = [
@@ -944,12 +944,12 @@ def _sizing_ends() -> list[tuple[Pattern, Pattern | Buffered, tuple[int, ...]]]:
     return found
 
 
-def test_the_presentation_by_its_events_is_the_model_beat_by_beat_on_the_sizing_ends(
+def test_the_presentation_by_its_events_is_the_model_beat_by_beat_on_the_sizing_sides(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The same ``Flow`` at every depth to 13 words, and the same least depth, on the
     sizing tests' bursts and input_gen's nests."""
-    for supply, accept, periods in _sizing_ends():
+    for supply, accept, periods in _sizing_sides():
         for period in periods:
             for depth in range(14):
                 for frames in (4, 16):

@@ -35,8 +35,8 @@ def values(rows: int = ROWS, channels: int = CHANNELS) -> tuple[tuple[int, ...],
 
 def adapted(source: Traversal, pe: int, *, adaptable: bool = True) -> Network:
     """A cyclic producer presenting ``source``, thresholding ``pe`` channels a beat. The
-    network builds each channel once its ends are known and gives its choices their first
-    valid values (the interim channel rule): its adapters, their memories and its
+    network builds each channel once its ports' contracts are known and gives its choices
+    their first valid values (the interim channel rule): its adapters, their memories and its
     transport; a channel refused on its own facts is left as it is."""
     rows, channels = source.shape
 

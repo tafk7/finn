@@ -242,7 +242,7 @@ def test_the_weight_sources_choices_persist_on_the_weights_and_the_network_repla
     kernel's alone. The source's one case is stored as the interim channel rule sets it,
     and stating it again changes nothing."""
     model = matmul_model()
-    configured(model, {"first": FOLDING})  # its ends known, so its channels bind
+    configured(model, {"first": FOLDING})  # its contracts known, so its channels bind
     configured(model, {"w": {"source.memstream.ram_style": "block", "transport": "direct"}})
     assert attributes(model) == sorted(FOLDING)
     assert channel_choices(model, "w") == {

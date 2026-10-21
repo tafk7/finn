@@ -7,13 +7,13 @@
 each sample it
 
 1. places the kernel (``kernel``) in a network between boundary channels, one
-   per stream interface: a channel named ``<interface>_channel`` carries the
-   tensor of that interface, an input's given to the kernel as
-   ``<interface>_tensor`` and an output's the kernel's own (``<interface>_tensor``,
-   its statement), and takes the contract it states, ``<interface>_contract``. It commits
-   the sample's factors and the pinned ``choices``, then the kernel's other open
-   choices by their default policies and every channel's by the interim channel rule,
-   as the cut sets them (its transport, its adapter chain and the chain's memories).
+   per stream port: a channel named ``<port>_channel`` carries the tensor of that
+   port, an input's given to the kernel as ``<port>_tensor`` and an output's the
+   kernel's own (``<port>_tensor``, its statement), and takes the contract it states,
+   ``<port>_contract``. It commits the sample's factors and the pinned ``choices``,
+   then the kernel's other open choices by their default policies and every channel's
+   by the interim channel rule, as the cut sets them (its transport, its adapter chain
+   and the chain's memories).
    The module is named ``finn_<kernel>conformance``;
 2. checks each of the kernel's leaves in the module (the kernel, or
    the children of a kernel with children) against its materialized sources
@@ -56,7 +56,7 @@ places a width conversion and the adapter is part of the simulated path. A
 kernel without inputs has none, nor one whose first input is a float (a memory
 stores integers).
 
-A port is found where it is placed: the end on each channel below the kernel, a
+A port is found where it is placed: the side of each channel owned below the kernel, a
 member of a leaf kernel (``input``) or a child's (``compute.packed.x``).
 
 Factors: ``SAMPLED`` takes the smallest, an interior and the largest
@@ -71,7 +71,7 @@ given). A Decision below a child is named by its key below the kernel
 (``compute.packed.pe``). The adapter sample reuses the middle configuration.
 
 An output given as a shape takes its element from the kernel: the element of the
-tensor it states at that interface (``<interface>_tensor``), read before any output
+tensor it states at that port (``<port>_tensor``), read before any output
 is placed. An output given as a ``Tensor`` (a test that means to fix it) is the
 channel's tensor, which the channel holds the kernel's output to.
 
@@ -329,8 +329,8 @@ def _enumerated(base: Any, choices: Mapping[str, object]) -> list[tuple[str, dic
 # -- placement -----------------------------------------------------------------------------
 
 
-def _interface(name: str) -> str:
-    """The kernel's interface a channel of the root is named after: ``x_channel``'s ``x``."""
+def _port_name(name: str) -> str:
+    """The kernel's port a channel of the root is named after: ``x_channel``'s ``x``."""
     return name.removesuffix("_channel")
 
 
@@ -346,19 +346,19 @@ def _design(
     facts: Mapping[str, object],
     fed: tuple[str, Traversal, object] | None = None,
 ) -> Any:
-    """A network of the kernel on one channel per tensor, each taking the kernel's end at
-    its interface; ``fed``'s channel from a memory (``source``)."""
+    """A network of the kernel on one channel per tensor, each taking the contract of the
+    kernel's port on it; ``fed``'s channel from a memory (``source``)."""
     members: dict[str, Any] = {}
     tensors = {**inputs, **outputs}
     for name, tensor in tensors.items():
         side = "consumer" if name in inputs else "producer"
-        settings: dict[str, Any] = {side: Interface(KERNEL, f"{_interface(name)}_contract")}
+        settings: dict[str, Any] = {side: Interface(KERNEL, f"{_port_name(name)}_contract")}
         if fed is not None and fed[0] == name:
             settings["producer"] = Interface(SOURCE, "output_contract")
         else:
             settings["port"] = name
         members[name] = wire(tensor=tensor, platform=FULL_DSP48E2, **settings)
-    given = {f"{_interface(name)}_tensor": tensor for name, tensor in inputs.items()}
+    given = {f"{_port_name(name)}_tensor": tensor for name, tensor in inputs.items()}
     members[KERNEL] = space_type(**facts, **given)
     if fed is not None:
         name, form, contents = fed
@@ -411,11 +411,11 @@ def _chosen(design: Any, choices: Mapping[str, object]) -> Any:
 def _user(point: Any, name: str) -> str:
     """The path below the kernel of the port on channel ``name``: a member of a leaf
     kernel (``input``), or a child's below a kernel with children (``compute.packed.x``)."""
-    ends = design_member(point, name).sides
-    for owner in (ends.source_owner, ends.sink_owner):
+    sides = design_member(point, name).sides
+    for owner in (sides.source_owner, sides.sink_owner):
         if owner is not None and owner.startswith(f"{KERNEL}."):
             return str(owner[len(KERNEL) + 1 :])
-    raise AssertionError(f"no port of the kernel is on {name}: {ends}")
+    raise AssertionError(f"no port of the kernel is on {name}: {sides}")
 
 
 def _port(kernel: Any, path: str) -> Any:
@@ -443,7 +443,7 @@ def _stated(
     unplaced."""
     hint = f"give {name} a Tensor"
     probe = design_member(_design(space_type, inputs, {}, facts), KERNEL)
-    found = probe.query(getattr(type(probe), f"{_interface(name)}_tensor"))
+    found = probe.query(getattr(type(probe), f"{_port_name(name)}_tensor"))
     if not isinstance(found, Available):
         raise ValueError(f"{space_type.__name__} states no tensor at {name}; {hint}: {found}")
     assert isinstance(found.value, Tensor)
@@ -648,19 +648,19 @@ def _check_rtl(
     )
 
 
-def _ends(
+def _contracts(
     point: Any, space_type: type[Kernel], sample: Sample, names: Sequence[str]
 ) -> dict[str, StreamContract]:
     """The contract the kernel presents on each channel."""
     found: dict[str, StreamContract] = {}
     for name in names:
-        ends = _value(design_member(point, name).query(Channel.sides), space_type, sample)
+        sides = _value(design_member(point, name).query(Channel.sides), space_type, sample)
         owner = f"{KERNEL}.{_user(point, name)}"
-        if ends.sink_owner == owner:
-            found[name] = ends.sink
+        if sides.sink_owner == owner:
+            found[name] = sides.sink
         else:
-            assert ends.source_owner == owner, f"{name} is not {owner}'s: {ends}"
-            found[name] = ends.source
+            assert sides.source_owner == owner, f"{name} is not {owner}'s: {sides}"
+            found[name] = sides.source
     return found
 
 
@@ -678,9 +678,9 @@ def _check_model(
     where = _where(space_type, sample)
     kernel = design_member(point, KERNEL)
     fed = next(iter(inputs)) if sample.adapter else None
-    for name, end in _ends(point, space_type, sample, [*inputs, *outputs]).items():
+    for name, contract in _contracts(point, space_type, sample, [*inputs, *outputs]).items():
         path = _user(point, name)
-        form, port = end.form, _port(kernel, path)
+        form, port = contract.form, _port(kernel, path)
         assert _covers(form), f"{where}: {path} does not cover its {form.shape} tensor"
         if port.schedule is not None:
             schedule = port.schedule
@@ -690,8 +690,8 @@ def _check_model(
                 f"{schedule.beat_count} less {dropped} dropped"
             )
         if name != fed:
-            ends = _value(design_member(point, name).query(Channel.sides), space_type, sample)
-            boundary = ends.source if ends.source_owner is None else ends.sink
+            sides = _value(design_member(point, name).query(Channel.sides), space_type, sample)
+            boundary = sides.source if sides.source_owner is None else sides.sink
             presented = unreplayed(form) if name in inputs else form
             assert boundary.form == presented, (
                 f"{where}: {name}'s boundary presents {boundary.form}"
@@ -781,35 +781,37 @@ def _simulate(
     directory: Path,
     tolerance: float | None = None,
 ) -> list[tuple[Sample, str, str]]:
-    ends = _ends(point, space_type, sample, [*inputs, *outputs])
+    contracts = _contracts(point, space_type, sample, [*inputs, *outputs])
     expected = reference(**{name: array.copy() for name, array in values.items()})
-    produced = set(ends) - set(inputs)
+    produced = set(contracts) - set(inputs)
     assert set(expected) == produced, f"the reference returns {sorted(expected)}, not {produced}"
     driven: dict[str, tuple[list[int], int]] = {}
     for name, array in values.items():
         if not (sample.adapter and name == next(iter(inputs))):
-            driven[name] = _words(unreplayed(ends[name].form), array, ends[name].element)
+            driven[name] = _words(unreplayed(contracts[name].form), array, contracts[name].element)
     checked: dict[str, tuple[list[int], int]] = {}
     # The float outputs compared within the tolerance where their words differ.
     tolerated = (
-        set() if tolerance is None else {name for name in produced if _floating(ends[name].element)}
+        set()
+        if tolerance is None
+        else {name for name in produced if _floating(contracts[name].element)}
     )
     for name in produced:
-        end, array = ends[name], np.asarray(expected[name])
-        assert array.shape == end.form.shape, f"{name}: the reference gives {array.shape}"
-        if _floating(end.element):
-            checked[name] = _words(end.form, array, end.element)
+        contract, array = contracts[name], np.asarray(expected[name])
+        assert array.shape == contract.form.shape, f"{name}: the reference gives {array.shape}"
+        if _floating(contract.element):
+            checked[name] = _words(contract.form, array, contract.element)
             continue
         try:
-            low, high = ordinary_integer_bounds(end.element.dtype)
+            low, high = ordinary_integer_bounds(contract.element.dtype)
         except DatatypeError as error:
             raise AssertionError(f"{name}: the harness streams integers and FLOAT32") from error
-        assert low <= array.min() and array.max() <= high, f"{name} leaves {end.element}"
-        checked[name] = _words(end.form, array.astype(np.int64), end.element)
+        assert low <= array.min() and array.max() <= high, f"{name} leaves {contract.element}"
+        checked[name] = _words(contract.form, array.astype(np.int64), contract.element)
     module = _value(design_module(point, space_type), space_type, sample)
     # A cyclic source (the adapter sample's memory, or the kernel itself) never stops.
     repeating = sample.adapter or any(
-        ends[name].repetition is Repetition.CYCLIC for name in produced
+        contracts[name].repetition is Repetition.CYCLIC for name in produced
     )
     cycles = design_cycles(point)
     failures = []
@@ -836,7 +838,9 @@ def _simulate(
                 {}
                 if tolerance is None
                 else {
-                    name: _beyond(ends[name].form, error.received[name], expected[name], tolerance)
+                    name: _beyond(
+                        contracts[name].form, error.received[name], expected[name], tolerance
+                    )
                     for name in tolerated
                 }
             )
@@ -848,10 +852,13 @@ def _simulate(
                 )
                 continue
             decoded = decode(
-                {name: _stream(point, name, ends[name].form, ends[name]) for name in produced},
+                {
+                    name: _stream(point, name, contracts[name].form, contracts[name])
+                    for name in produced
+                },
                 error.received,
                 inputs={
-                    name: _stream(point, name, unreplayed(ends[name].form), ends[name])
+                    name: _stream(point, name, unreplayed(contracts[name].form), contracts[name])
                     for name in inputs
                 },
                 values=values,
@@ -864,12 +871,12 @@ def _simulate(
     return failures
 
 
-def _stream(point: Any, name: str, form: Traversal, end: StreamContract) -> Stream:
+def _stream(point: Any, name: str, form: Traversal, contract: StreamContract) -> Stream:
     """Channel ``name``'s stream as the kernel's port declares it, its tensor's axes named
     by the port's index expressions where it reads one per axis."""
     index = _port(design_member(point, KERNEL), _user(point, name)).index
     axes = tuple(map(repr, index)) if len(index) == len(form.shape) else ()
-    return Stream(form, end.element.bits, axes)
+    return Stream(form, contract.element.bits, axes)
 
 
 __all__ = [

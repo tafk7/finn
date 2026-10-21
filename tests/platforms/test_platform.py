@@ -48,7 +48,7 @@ def op(model: ModelWrapper) -> Any:
 
 def folded(model: ModelWrapper) -> InShell:
     """The MatMul folded as the Chain's first, its network bound in its shell: its
-    channels' ends known."""
+    channels' contracts known."""
     configured(model, {"first": MATMUL})
     return in_shell(model, model.graph.node)
 
@@ -65,7 +65,7 @@ def test_a_node_binds_the_models_platform_and_its_dsp_block() -> None:
 def test_a_memory_case_the_device_cannot_build_is_refused_by_name() -> None:
     ultra = {"w": {"source.memstream.ram_style": "ultra"}}
     ultra96 = matmul_model()  # TARGET: Ultra96, no UltraRAM
-    # Its weight channel's ends wait on the MatMul's core: nothing to check yet.
+    # Its weight channel's contracts wait on the MatMul's core: nothing to check yet.
     with refused("decision-unassigned", owner="compute"):
         configured(ultra96, ultra)
     configured(ultra96, {"first": MATMUL})

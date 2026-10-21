@@ -4,9 +4,9 @@
 """The network: kernels and channels by name, each its own space, and the wiring.
 
 On the Chain (``support.chain``): its members ranked kernels first, then each channel
-after the members it reads; a channel bound once its ends are known, and once per set
-of facts; a change reaching one kernel and the channels that read it; what the change
-names refused, by its value's domain or by the rule it would break; its module, one
+after the members it reads; a channel bound once its ports' contracts are known, and
+once per set of facts; a change reaching one kernel and the channels that read it; what
+the change names refused, by its value's domain or by the rule it would break; its module, one
 composed netlist, each member under its node, refused where its pins cannot be formed;
 its stored choices set as each member binds, as one change (a value outside its domain
 dropped, a rule they break refusing the network); the interim channel rule where a channel
@@ -59,7 +59,7 @@ def test_members_are_ranked_kernels_first_then_each_channel_after_what_it_reads(
     assert network.kernels == ("first", "activate", "second")
     # The module places them as declared: channels, then kernels.
     assert network.order == ("x", "w1", "hidden", "levels", "w2", "y", *network.kernels)
-    # A channel that reads another's interface (the set port of the weights' source)
+    # A channel that reads another's port (the set port of the weights' source)
     # follows it, whatever the order declared.
     weights = ((1, 0), (0, 1))
     sets = matmul_point(
@@ -76,12 +76,12 @@ def test_members_are_ranked_kernels_first_then_each_channel_after_what_it_reads(
     assert sets.members.index("w") < sets.members.index("set")
 
 
-def test_a_channel_waits_with_its_choices_until_its_ends_are_known() -> None:
+def test_a_channel_waits_with_its_choices_until_its_contracts_are_known() -> None:
     network = chain.network()
     held = network.unbound("x")
     assert held is not None and held.member == "first" and isinstance(held.result, Unresolved)
-    # Its cycles wait on what its end waits on: the kernel's core, open (its folding's
-    # presence waits on it).
+    # Its cycles wait on what its consumer's contract waits on: the kernel's core, open
+    # (its folding's presence waits on it).
     assert network.waits("x", network.query("x", CYCLES)) == (("first", "compute"),)
     with pytest.raises(NetworkError, match="x is not bound"):
         network.member("x")
@@ -170,9 +170,9 @@ def test_a_network_reads_only_its_own_members() -> None:
 
 def test_stored_choices_are_set_as_each_member_binds() -> None:
     """A network given its members' stored choices sets them as each member binds, as one
-    change: a kernel's on its point, a channel's once its ends are known (until then it
-    holds them). A value outside its domain is dropped, with why, and left open; nothing
-    is filled in."""
+    change: a kernel's on its point, a channel's once its ports' contracts are known
+    (until then it holds them). A value outside its domain is dropped, with why, and left
+    open; nothing is filled in."""
     stored = chain.chain().chosen()
     replayed = Network(chain.members(), stored=stored)
     assert replayed.chosen() == stored and not replayed.dropped
@@ -250,7 +250,7 @@ def test_reasons_name_each_key_once_with_the_choices_standing_in_its_way() -> No
 
 
 def test_a_channel_rebuilt_from_new_facts_rederives_only_what_they_refuse() -> None:
-    """Interim (the ends pass replaces it): a channel rebuilt from new facts keeps every
+    """Interim (to be replaced): a channel rebuilt from new facts keeps every
     stored choice the new facts accept; one they refuse is derived again, first valid, and
     named with its old value, its new one and why. A change of the channel's own choices
     alone takes nothing, and a choice a change left open stays open."""
@@ -285,7 +285,7 @@ def test_a_kernel_given_bound_is_used_as_it_is() -> None:
 
 def test_each_member_sits_under_its_node_in_the_module() -> None:
     """``nodes`` names each member's node in the module, the prefix of its instances and
-    of the ends it presents to its channels; two members of one node are refused."""
+    of the contracts it presents to its channels; two members of one node are refused."""
     stored = chain.chain().chosen()
     renamed = Network(chain.members(), stored=stored, nodes={"first": "mm_first"})
     module = built(renamed, chain.STEM)

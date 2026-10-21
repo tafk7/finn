@@ -195,7 +195,7 @@ def test_an_input_boundary_presents_a_windows_frame_once() -> None:
 
 def test_a_boundary_that_presents_each_position_once_keeps_its_order() -> None:
     """A permutation (a transpose, a window that tiles its image) is presented as it is,
-    as is a whole pass repeated (outermost replay), the interface's own."""
+    as is a whole pass repeated (outermost replay), the stream's own."""
     tiled = window(4, 4, 3, 3, k=2, stride=2)
     assert each_once(tiled) and unreplayed(tiled) == tiled
     assert tiled != vector_major((4, 4, 3), 3)

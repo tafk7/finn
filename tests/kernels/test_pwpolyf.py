@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The piecewise-polynomial activation kernel offline: its lanes folded by PE, its FLOAT32
-ends, its cycles, the module it binds and its refusals; its reference, its tolerances and
+ports, its cycles, the module it binds and its refusals; its reference, its tolerances and
 what its numeric sweep covers. Its cycles in XSim, measured against its statement.
 
 The conformance case (``support.kernel_specs.pwpolyf``) is simulated in XSim by
@@ -22,7 +22,7 @@ from qonnx.core.datatype import DataType
 from support.conformance import (
     KERNEL,
     Sample,
-    _ends,
+    _contracts,
     _possible,
     _values,
     _words,
@@ -76,8 +76,8 @@ def kernel_leaf(point: Any) -> Leaf:
 
 def test_each_row_is_presented_pe_elements_a_beat_in_float32() -> None:
     point, sample, _ = placed(pwpolyf_gelu(), 4)
-    ends = _ends(point, PwPolyKernel, sample, CHANNELS)
-    source, result = ends["input_channel"], ends["output_channel"]
+    contracts = _contracts(point, PwPolyKernel, sample, CHANNELS)
+    source, result = contracts["input_channel"], contracts["output_channel"]
     # Six rows of eight, two beats a row of four lanes.
     assert (source.form.beats, source.form.lanes) == (12, 4)
     assert (result.form.beats, result.form.lanes) == (12, 4)
@@ -250,8 +250,8 @@ def test_it_takes_a_beat_a_cycle_as_it_states(tmp_path: Path) -> None:
     kernel states (``cycles``). The output's words are taken first as they arrive (and
     checked within the tolerance), then measured."""
     point, sample, values = placed(pwpolyf_gelu(), 4)
-    ends = _ends(point, PwPolyKernel, sample, CHANNELS)
-    source, result = ends["input_channel"], ends["output_channel"]
+    contracts = _contracts(point, PwPolyKernel, sample, CHANNELS)
+    source, result = contracts["input_channel"], contracts["output_channel"]
     x = values["input_channel"]
     module = design_module(point, PwPolyKernel)
     cycles = design_cycles(point)

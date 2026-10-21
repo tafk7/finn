@@ -1,12 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Channels as ordinary Spaces: each takes the ends of the ports on it as facts.
+"""Channels as ordinary Spaces: each takes the contracts of the ports on it as facts.
 
-Every channel owns its refusals; a channel with one end is a boundary of the
-network and presents its ``port`` name, by the boundary rule; a channel's tensor
-is a fact, and a channel whose facts read each other is refused when its network
-is declared.
+Every channel owns its refusals; a channel with a port on one side only is a
+boundary of the network and presents its ``port`` name, by the boundary rule; a
+channel's tensor is a fact, and a channel whose facts read each other is refused when
+its network is declared.
 """
 
 import pytest
@@ -117,7 +117,7 @@ def test_explain_shows_per_channel_and_per_member_evidence():
     assert {"output_stream", "module", "codegen"} <= visited
 
 
-def test_a_channel_waits_for_its_own_endpoints_only():
+def test_a_channel_waits_for_its_own_sides_only():
     point = choose(
         unconfigured(),
         {"first_source.ram_style": "auto", "first_source.pumped_memory": False},
@@ -126,14 +126,14 @@ def test_a_channel_waits_for_its_own_endpoints_only():
     assert isinstance(point.member("first").query(Channel.netlist), Available)
     assert isinstance(point.member("second").query(Channel.netlist), Available)
     assert isinstance(module_of(point, "constants"), Unresolved)
-    # A channel takes its ends as facts, each labelled from the network.
+    # A channel takes its ports' contracts as facts, each labelled from the network.
     first = point.member("first")
-    end = first.producer
-    assert end.label == "first_source.output"
-    assert end.contract.transport.endpoint is Endpoint.INITIATOR  # the source produces
-    ends = first.sides
-    assert (ends.source_owner, ends.sink_owner) == ("first_source.output", None)
-    assert ends.sink.transport.name == "out0_V"
+    producer = first.producer
+    assert producer.label == "first_source.output"
+    assert producer.contract.transport.endpoint is Endpoint.INITIATOR  # the source produces
+    sides = first.sides
+    assert (sides.source_owner, sides.sink_owner) == ("first_source.output", None)
+    assert sides.sink.transport.name == "out0_V"
 
 
 def test_boundary_ports_are_axis_and_byte_aligned():
@@ -148,7 +148,7 @@ class Replaying(Space):
     """A consumer reading each two-beat group of its input three times, framed."""
 
     @view(semantics=PORT_CONTRACT)
-    def end(self) -> PortContract:
+    def port_contract(self) -> PortContract:
         beat = AxisBeat("s_axis", DataType["INT4"], 2, endpoint=Endpoint.TARGET, last=True)
         transport = beat.native(clock="ap_clk", reset="ap_rst_n")
         form = vector_major((2, 4), 2).replayed(3, inner_beats=2)
@@ -156,30 +156,30 @@ class Replaying(Space):
         return PortContract("port", contract)
 
 
-def test_a_boundary_presents_its_internal_end_without_the_replay_the_receiver_realizes():
+def test_a_boundary_presents_its_free_side_without_the_replay_the_receiver_realizes():
     receiver = Network(
         {
             "edge": wire(
                 tensor=Tensor((2, 4), INT4),
                 port="in0_V",
-                consumer=Interface("reader", "end"),
+                consumer=Interface("reader", "port_contract"),
                 platform=FULL_DSP48E2,
             ),
             "reader": Replaying(),
         }
     )
-    ends = receiver.member("edge").sides
-    assert ends.source_owner is None and ends.sink_owner == "reader.port"
+    sides = receiver.member("edge").sides
+    assert sides.source_owner is None and sides.sink_owner == "reader.port"
     # Each row once, no marker: the replay and the frame are the receiver's to realize.
-    assert ends.source.form == vector_major((2, 4), 2)
-    assert ends.source.transport.name == "in0_V" and not ends.source.rules
-    assert ends.sink.form == vector_major((2, 4), 2).replayed(3, inner_beats=2)
+    assert sides.source.form == vector_major((2, 4), 2)
+    assert sides.source.transport.name == "in0_V" and not sides.source.rules
+    assert sides.sink.form == vector_major((2, 4), 2).replayed(3, inner_beats=2)
 
 
 def test_two_producers_on_one_channel_are_refused_by_the_channel():
     clash = Network(
         {
-            # b's end given as the consumer is a producer's all the same.
+            # b's contract given as the consumer is a producer's all the same.
             "shared": wire(
                 tensor=VECTOR,
                 port="out0_V",

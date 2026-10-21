@@ -229,7 +229,7 @@ def test_tfc_in_the_zynq_shell_searches_to_the_least_budget_that_fits(tfc: Model
     resources = report["resources"]
     assert resources["used"]["lut"] == 10978 > resources["shell"]["partition"]["lut"] + 9000
     # The input mover bounds the shell: the fastest fold, relaxed to 53, reaches 62 at
-    # the end (SZ6), a departure stated and not corrected.
+    # the mover (SZ6), a departure stated and not corrected.
     tried = searched["tried"]
     assert (tried[0]["relaxed_to"], tried[0]["bottleneck"]) == (53, 62)
     assert "budget 1 relaxed to 53, reaching 62" in searched["departures"]
