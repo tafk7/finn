@@ -62,8 +62,10 @@ from .declarations import (
 )
 from .domains import Domain, finite
 from .errors import DefinitionError
+from ._signatures import resolve_source
 from .expressions import Expr
 from .ir import Argument, NodeKind
+from .results import reject
 from .semantics import BOOL, STRING, ValueSemantics
 
 if TYPE_CHECKING:
@@ -72,11 +74,34 @@ if TYPE_CHECKING:
 _OWNER = "space.allocate"
 
 
-def _matches(expected: str) -> Callable[..., object]:
-    def matches(*, selected: str) -> bool:
+def _names_case(expected: str, argument: str) -> Callable[..., object]:
+    """A case guard: the selector's value names ``expected``. A chosen selector's reads
+    the decision as ``selected``; a derived selector's reads its value as ``picked``."""
+
+    def selected(*, selected: str) -> bool:
         return selected == expected
 
-    return matches
+    def picked(*, picked: str) -> bool:
+        return picked == expected
+
+    return selected if argument == "selected" else picked
+
+
+def _picks(cases: tuple[str, ...]) -> Callable[..., object]:
+    """``Select(by=d)``'s value: ``d``'s, where it names a case; else refused at the
+    selector, ``select-no-case`` (a picker never answers "nothing": a ``None`` case does)."""
+
+    def pick(*, value: object) -> object:
+        if type(value) is str and value in cases:
+            return value
+        return reject("select-no-case", f"{value!r} names no case of {list(cases)}")
+
+    return pick
+
+
+def _known(*, picked: object) -> bool:
+    """A derived selector's guard: its value is known (it holds wherever it is read)."""
+    return True
 
 
 _BINDING_KINDS: Mapping[str, NodeKind] = {
@@ -356,7 +381,17 @@ class _Allocation:
         scope.named_children[name] = child
 
     def choice(self, scope: ScopeDraft, name: str, decision: NodeDecision) -> None:
-        """A Decision over nodes: its selector, and a guarded scope per candidate."""
+        """A selector: its value, and a guarded scope per case.
+
+        Chosen (a Decision over nodes, ``Select`` without ``by=``), its value is the
+        decision ``<key>`` and each case's scope is placed under ``<key>.<case>.$selected``,
+        the decision naming the case. Picked (``Select(by=d)``), it has no key: its value
+        ``<key>`` is a derived node reading ``d``, refused ``select-no-case`` where ``d``
+        names no case; a guard ``<key>.$known`` holds wherever that value is known (refused
+        where it refuses); and each case guard reads the value inside that guard, by an
+        argument named ``picked`` so it is never taken for a chosen selector's case guard
+        (``_reads.case_guards``). A refused picker is one piece, in the selector's name:
+        a piece is counted at the highest refused guard of its chain (``_world``)."""
         key = member_key(scope.name, name)
         guard = self.table.guarded(
             scope.index,
@@ -365,14 +400,35 @@ class _Allocation:
             key + ".$guard",
             owner=key,
         )
-        selector = self.table.reserve(
-            scope.index, key, "decision", STRING, guard=guard, origin=decision.origin
-        )
-        self.table.nodes[selector] = replace(
-            self.table.nodes[selector],
-            domain=cast(Domain[object], finite(decision.candidates, STRING)),
-            required_choice=decision.required,
-        )
+        cases_guard: int | None
+        if decision.by is None:
+            selector = self.table.reserve(
+                scope.index, key, "decision", STRING, guard=guard, origin=decision.origin
+            )
+            self.table.nodes[selector] = replace(
+                self.table.nodes[selector],
+                domain=cast(Domain[object], finite(decision.candidates, STRING)),
+                required_choice=decision.required,
+            )
+            cases_guard, argument = guard, "selected"
+        else:
+            selector = self.table.reserve(
+                scope.index, key, "derived", STRING, guard=guard, origin=decision.origin
+            )
+            self.table.nodes[selector] = replace(
+                self.table.nodes[selector], function=_picks(tuple(decision.candidates))
+            )
+            by = resolve_source(decision.by, scope.effective, f"{key} by=")
+            self.table.picks.append((selector, scope.index, by))
+            cases_guard = self.table.reserve(
+                scope.index, key + ".$known", "derived", BOOL, guard=guard, source_owner=key
+            )
+            self.table.nodes[cases_guard] = replace(
+                self.table.nodes[cases_guard],
+                function=_known,
+                arguments=(Argument("picked", selector),),
+            )
+            argument = "picked"
         scope.named_members[name] = selector
         choice = ChoiceDraft(len(self.table.choice_drafts), scope.index, key, guard, selector)
         self.table.choice_drafts.append(choice)
@@ -380,7 +436,7 @@ class _Allocation:
             scope.choices[alias] = choice.index
             scope.members[alias] = selector
         condition = scope.effective.guards.get(decision)
-        if isinstance(condition, Supplied):
+        if isinstance(condition, Supplied) and decision.by is None:
             # Guarded by the supply of a formal: whether it applies is decided where the
             # template is placed (it never does where the formal is unsupplied); its
             # candidates are compiled, and what exists only where it applies is marked.
@@ -398,13 +454,13 @@ class _Allocation:
                 case_key + ".$selected",
                 "derived",
                 BOOL,
-                guard=guard,
+                guard=cases_guard,
                 source_owner=case_key,
             )
             self.table.nodes[case_guard] = replace(
                 self.table.nodes[case_guard],
-                function=_matches(case),
-                arguments=(Argument("selected", selector),),
+                function=_names_case(case, argument),
+                arguments=(Argument(argument, selector),),
             )
             case_guard = cast(
                 int,

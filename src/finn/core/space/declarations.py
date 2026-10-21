@@ -744,6 +744,36 @@ class Decision(ValueDecl[T], Generic[T]):
         return self
 
 
+def Select(  # noqa: N802 - a declaration, spelled as one
+    *,
+    by: object = None,
+    when: object = None,
+    required: bool = False,
+    **members: object,
+) -> Any:
+    """A selector: ``heating = Select(boiler=Boiler(kw=24), heat_pump=HeatPump, kw=kw)``.
+
+    Each keyword whose value is a Space class, a call on one or ``None`` is a **case**
+    (``None`` places nothing); each other keyword is a **shared binding**, supplied to
+    every case that places something, which must declare it; a class object as a shared
+    binding is refused (``select-binding-class``). Picked by a choice, its stored value is
+    the case's name (``heating``'s key). Picked by a derived value, ``Select(by=chain,
+    ...)``, it has no key and is never a choice: the case is the one the value names, and
+    a value naming no case (``None`` included: a ``None`` case is named by its key)
+    refuses, ``select-no-case``. While the value waits its cases wait; while it refuses
+    they are not in play, refusing the Space once, in the selector's name. A case's path
+    is ``<selector>.<case>``; ``heating.kw`` reads a member every case declares, and
+    reading the selector gives the case's name.
+    """
+    if type(required) is not bool:
+        raise DefinitionError.broken(
+            "required-not-bool", _OWNER, f"Select{at(source_origin())}: required= is a bool"
+        )
+    from ._nodes import select_choice
+
+    return select_choice(members, by=by, when=guard(when), required=required)
+
+
 class Required:
     """A member every subclass must define: ``schedule = required(Schedule)``.
 

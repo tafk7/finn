@@ -1,0 +1,504 @@
+# Copyright (C) 2026, Advanced Micro Devices, Inc.
+# SPDX-License-Identifier: BSD-3-Clause
+"""``Select``: a selector, chosen or picked by a derived value (``by=``).
+
+A chosen ``Select`` is a Decision over nodes spelled apart: the same nodes, keys, guards and
+answers, shown by building one Space both ways and comparing every answer by key. A picked
+``Select(by=d)`` has no key and is never a choice: its value is a derived node reading
+``d`` (refused ``select-no-case`` where ``d`` names no case), its cases are guarded by that
+value being known and naming them, and a refused picker refuses its Space once, in the
+selector's name. The full rows and walks are the reference model's.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+import pytest
+from support.refusals import refused
+
+from core.space._collapse_support import answers
+from finn.core.space import (
+    Decision,
+    Inapplicable,
+    Param,
+    Rejected,
+    Select,
+    Space,
+    Unresolved,
+    ValueSemantics,
+    View,
+    bind,
+    constraint,
+    derived,
+    design_space,
+    inspection,
+    reject,
+    selected,
+)
+from finn.core.space.inspection import Dormant, Open, Set, Waiting
+
+# -- the cases ------------------------------------------------------------------------------
+
+
+class Boiler(Space):
+    kw: int = Param()
+    stages: int = Decision(values=(1, 2, 3))
+
+    @constraint
+    def fits(self) -> bool | Rejected:
+        if self.stages * self.kw > 48:
+            return reject("boiler-too-big", "more than 48 kW")
+        return True
+
+    @derived
+    def output(self) -> int:
+        return self.stages * self.kw
+
+
+class HeatPump(Space):
+    kw: int = Param()
+    cop: int = Decision(values=(2, 3, 4))
+
+    @derived
+    def output(self) -> int:
+        return self.cop * self.kw
+
+
+# -- 1. a chosen Select is a Decision over nodes --------------------------------------------
+
+
+class ByDecision(Space):
+    load: int = Decision(values=(8, 16, 24))
+    gate: int = Decision(values=(0, 1, 2))
+
+    @derived
+    def heated(self) -> bool | Rejected:
+        if self.gate == 2:
+            return reject("gate-refused", "gate 2 refuses")
+        return self.gate == 0
+
+    # ``when=`` is typed a bool, and ``heated`` may refuse
+    heating = Decision(
+        {"boiler": Boiler, "heat_pump": HeatPump},  # type: ignore[dict-item]
+        kw=load,
+        optional=True,
+        when=heated,
+    )
+    heat = View(heating.output)
+    kind = View(selected(heating))
+
+    @constraint
+    def enough(self) -> bool | Rejected:
+        found = self.heating
+        if found is not None and found.output < 24:
+            return reject("too-little", "less than 24 kW")
+        return True
+
+
+class BySelect(Space):
+    load: int = Decision(values=(8, 16, 24))
+    gate: int = Decision(values=(0, 1, 2))
+
+    @derived
+    def heated(self) -> bool | Rejected:
+        if self.gate == 2:
+            return reject("gate-refused", "gate 2 refuses")
+        return self.gate == 0
+
+    heating = Select(none=None, boiler=Boiler, heat_pump=HeatPump, kw=load, when=heated)
+    heat = View(heating.output)
+    kind = View(selected(heating))
+
+    @constraint
+    def enough(self) -> bool | Rejected:
+        found = self.heating
+        if found is not None and found.output < 24:
+            return reject("too-little", "less than 24 kW")
+        return True
+
+
+CHOSEN: tuple[Mapping[str, object], ...] = (
+    {},
+    {"load": 8},
+    {"load": 8, "gate": 0},
+    {"load": 8, "gate": 0, "heating": "boiler"},
+    {"load": 8, "gate": 0, "heating": "boiler", "heating.boiler.stages": 3},
+    {"load": 24, "gate": 0, "heating": "boiler", "heating.boiler.stages": 3},
+    {"load": 16, "gate": 0, "heating": "heat_pump", "heating.boiler.stages": 2},
+    {"load": 16, "gate": 0, "heating": "heat_pump", "heating.heat_pump.cop": 2},
+    {"load": 16, "gate": 1, "heating": "heat_pump", "heating.heat_pump.cop": 2},
+    {"load": 16, "gate": 2, "heating": "boiler", "heating.boiler.stages": 1},
+    {"load": 16, "heating": "none"},
+    {"heating": "boiler", "heating.boiler.stages": 2},
+)
+
+
+def _bound(space: type[Space], choices: Mapping[str, object]) -> Any:
+    base = design_space(space())
+    owned = {item.key: item.reference for item in inspection.decisions(base)}
+    return bind(base, {owned[key]: value for key, value in choices.items()}).instance
+
+
+def _pieces(point: Space) -> tuple[object, ...]:
+    found = inspection.validity(point)
+    return (
+        found.status,
+        tuple(
+            (piece.owner, tuple((f.code, f.owner) for f in piece.result.findings))
+            for piece in found.pieces
+        ),
+    )
+
+
+def _viable(point: Space) -> tuple[object, ...]:
+    references = [item.reference for item in inspection.decisions(point)]
+    return tuple(
+        (
+            item.key,
+            item.waits,
+            None
+            if item.values is None
+            else tuple(
+                (type(value).__name__, value.value, getattr(value, "dormant", None))
+                + (getattr(value, "in_play", None), getattr(value, "opened", None))
+                + (tuple((b.rule, b.standing) for b in getattr(value, "broken", ())),)
+                for value in item.values
+            ),
+        )
+        for item in inspection.viable(point, references)
+    )
+
+
+def _report(point: Space, change: Mapping[str, object]) -> tuple[object, ...]:
+    owned = {item.key: item.reference for item in inspection.decisions(point)}
+    report = point.try_with_choices({owned[key]: value for key, value in change.items()})
+    return (
+        report.accepted,
+        report.dormant,
+        report.in_play,
+        report.opened,
+        tuple((b.rule, b.standing) for b in report.broken),
+        tuple((o.owner, o.status) for o in report.outcomes),
+    )
+
+
+def test_a_chosen_select_has_the_decisions_nodes_keys_and_lists() -> None:
+    by_decision, by_select = design_space(ByDecision()), design_space(BySelect())
+    assert [(n.key, n.kind) for n in inspection.members(by_select)] == [
+        (n.key, n.kind) for n in inspection.members(by_decision)
+    ]
+    assert [(d.key, d.ordered, d.required) for d in inspection.decisions(by_select)] == [
+        (d.key, d.ordered, d.required) for d in inspection.decisions(by_decision)
+    ]
+    (chosen,) = (c for c in inspection.choices(by_select) if c.key == "heating")
+    assert [case.name for case in chosen.cases] == ["none", "boiler", "heat_pump"]
+    assert chosen.selector is not None
+
+
+@pytest.mark.parametrize(
+    "choices", CHOSEN, ids=lambda c: ",".join(f"{k}={v}" for k, v in c.items())
+)
+def test_a_chosen_select_answers_as_the_decision_over_nodes_by_key(
+    choices: Mapping[str, object],
+) -> None:
+    by_decision, by_select = _bound(ByDecision, choices), _bound(BySelect, choices)
+    assert answers(by_select) == answers(by_decision)
+    assert inspection.states(by_select) == inspection.states(by_decision)
+    assert _pieces(by_select) == _pieces(by_decision)
+    assert _viable(by_select) == _viable(by_decision)
+    for change in ({"heating": "heat_pump"}, {"gate": 2}, {"load": 24, "heating": "boiler"}):
+        assert _report(by_select, change) == _report(by_decision, change)
+
+
+def test_a_chosen_select_reads_its_cases_as_a_decision_over_nodes() -> None:
+    point = _bound(BySelect, {"load": 16, "gate": 0, "heating": "heat_pump"})
+    point = point.with_choices({BySelect.heating["heat_pump"].cop: 2})
+    assert point.kind == "heat_pump" and point.heat == 32
+    assert isinstance(point.heating, HeatPump)
+    assert isinstance(point.query(BySelect.heating["boiler"].stages), Inapplicable)
+
+
+# -- 2. the evaluator rule: a refused guard counts once, at the highest of its chain ------------
+
+
+class Guarded(Space):
+    gate: int = Decision(values=(0, 1))
+
+    @derived
+    def heated(self) -> bool | Rejected:
+        return reject("gate-refused", "gate 1 refuses") if self.gate == 1 else True
+
+    heating: Boiler | HeatPump = Select(boiler=Boiler, heat_pump=HeatPump, kw=8, when=heated)
+
+
+def test_a_chosen_selector_under_a_refused_when_is_one_piece() -> None:
+    # Reading 8 of the reference model: one guard piece "at the highest such guard (scopes
+    # under it add nothing)". Each case used to add a piece of its own under the refused
+    # ``when``: 3 pieces here with the selector open (heating, heating.boiler,
+    # heating.heat_pump), 2 with it set (heating and the case set); now 1.
+    for stored in ({}, {Guarded.heating: "boiler"}, {Guarded.heating: "heat_pump"}):
+        point = bind(design_space(Guarded()), {Guarded.gate: 1, **stored}).instance
+        assert _pieces(point) == (
+            "refused",
+            (("heating", (("gate-refused", "heated"), ("guard-refused", "heating"))),),
+        )
+    # a rule reading into the selector's cases counts on its own, as it reads
+    point = _bound(BySelect, {"load": 16, "gate": 2, "heating": "boiler"})
+    assert [piece.owner for piece in inspection.validity(point).pieces] == ["enough", "heating"]
+
+
+# -- 3. a Select picked by a derived value -------------------------------------------------
+
+
+class Fifo(Space):
+    width: int = Param()
+    depth: int = Decision(values=(2, 4, 8))
+
+    @constraint
+    def fits(self) -> bool | Rejected:
+        if self.depth > 2 * self.width:
+            return reject("too-deep", "deeper than twice the width")
+        return True
+
+    @derived
+    def stages(self) -> int:
+        return self.depth
+
+
+class Reg(Space):
+    width: int = Param()
+    stages: int = Decision(values=(1, 2))
+
+
+CASES = ("fifo", "reg", "direct", "zz")
+
+
+class Channel(Space):
+    """An adapter picked by ``chain``, of two choices: ``x + y`` names a case (mod 4,
+    ``zz`` naming none), and ``chain`` refuses where ``x`` is 3."""
+
+    w: int = Param()
+    x: int = Decision(values=(0, 1, 2, 3))
+    y: int = Decision(values=(1, 2))
+
+    @derived
+    def chain(self) -> str | Rejected:
+        if self.x == 3:
+            return reject("chain-refused", "x is 3")
+        return CASES[(self.x + self.y) % 4]
+
+    adapter: Fifo | Reg | None = Select(by=chain, fifo=Fifo, reg=Reg, direct=None, width=w)
+    adapter_stages = View(adapter.stages)  # type: ignore[union-attr]
+
+    @derived
+    def stages_read(self) -> int:
+        found = self.adapter
+        return -1 if found is None else found.stages
+
+
+def _channel(choices: Mapping[Any, object]) -> Any:
+    return bind(design_space(Channel(w=2)), choices).instance
+
+
+STORED = {Channel.adapter["fifo"].depth: 8, Channel.adapter["reg"].stages: 2}  # type: ignore[index]
+
+
+def test_a_picker_naming_a_case_places_it_and_leaves_the_others_dormant() -> None:
+    point = _channel({Channel.x: 0, Channel.y: 1, **STORED})  # 1: reg
+    assert point.adapter_stages == 2 and point.stages_read == 2
+    assert isinstance(point.adapter, Reg)
+    assert dict(inspection.states(point)) == {
+        "x": Set(0),
+        "y": Set(1),
+        "adapter.fifo.depth": Dormant(8),
+        "adapter.reg.stages": Set(2),
+    }
+    assert _pieces(point) == ("valid", ())
+    fifo = _channel({Channel.x: 0, Channel.y: 2, **STORED})  # 2: direct
+    assert fifo.adapter is None and fifo.stages_read == -1
+    assert isinstance(fifo.query(Channel.adapter_stages), Inapplicable)
+    assert dict(inspection.states(fifo))["adapter.reg.stages"] == Dormant(2)
+    # a present case's own rules count: fifo, 8 deep at width 2
+    deep = _channel({Channel.x: 2, Channel.y: 2, **STORED})
+    assert _pieces(deep) == (
+        "refused",
+        (("adapter.fifo.fits", (("too-deep", "adapter.fifo.fits"),)),),
+    )
+
+
+def test_a_waiting_picker_leaves_its_cases_waiting_and_only_their_rules_unknown() -> None:
+    point = _channel({Channel.y: 2, Channel.adapter["fifo"].depth: 4})  # type: ignore[index]
+    assert dict(inspection.states(point)) == {
+        "x": Open((), False),
+        "y": Set(2),
+        "adapter.fifo.depth": Waiting(4, ("x",)),
+        "adapter.reg.stages": Open(("x",), False),
+    }
+    assert _pieces(point) == (
+        "open",
+        (("adapter.fifo.fits", (("decision-unassigned", "x"),)),),
+    )
+    assert isinstance(point.query(Channel.adapter_stages), Unresolved)
+
+
+def test_a_refused_picker_is_one_piece_in_the_selectors_name() -> None:
+    point = _channel({Channel.x: 3, Channel.y: 1, **STORED})
+    assert _pieces(point) == (
+        "refused",
+        (("adapter", (("guard-refused", "adapter"), ("chain-refused", "chain"))),),
+    )
+    assert dict(inspection.states(point)) == {
+        "x": Set(3),
+        "y": Set(1),
+        "adapter.fifo.depth": Dormant(8),
+        "adapter.reg.stages": Dormant(2),
+    }
+    assert isinstance(point.query(Channel.adapter_stages), Rejected)
+
+
+def test_a_picker_naming_no_case_refuses_select_no_case_as_one_piece() -> None:
+    point = _channel({Channel.x: 1, Channel.y: 2, **STORED})  # 3: zz
+    assert _pieces(point) == (
+        "refused",
+        (("adapter", (("guard-refused", "adapter"), ("select-no-case", "adapter"))),),
+    )
+    assert dict(inspection.states(point))["adapter.fifo.depth"] == Dormant(8)
+    # the change that names no case is refused by the selector, the picker's other read
+    # standing
+    report = _channel({Channel.x: 2, Channel.y: 2}).try_with_choices(x=1)
+    assert not report.accepted
+    assert [(b.rule, b.standing) for b in report.broken] == [("adapter", ("y",))]
+    assert [f.code for f in report.broken[0].result.findings] == ["select-no-case"]
+
+
+def test_a_change_flipping_the_picker_moves_its_cases_choices() -> None:
+    reg = _channel({Channel.x: 0, Channel.y: 1, **STORED})  # 1: reg
+    to_fifo = reg.try_with_choices(x=1, y=2)  # 3: zz
+    assert not to_fifo.accepted
+    to_fifo = reg.try_with_choices(x=2, y=2)  # 0: fifo, 8 deep at width 2 refused
+    assert not to_fifo.accepted
+    assert [(b.rule, b.standing) for b in to_fifo.broken] == [
+        ("adapter.fifo.fits", ("adapter.fifo.depth",))
+    ]
+    to_fifo = reg.try_with_choices({Channel.x: 2, Channel.y: 2, Channel.adapter["fifo"].depth: 4})  # type: ignore[index]
+    assert to_fifo.accepted
+    assert (to_fifo.dormant, to_fifo.in_play, to_fifo.opened) == (
+        ("adapter.reg.stages",),
+        ("adapter.fifo.depth",),
+        (),
+    )
+    back = to_fifo.instance.try_with_choices(x=0, y=1)
+    assert back.accepted
+    assert (back.dormant, back.in_play) == (("adapter.fifo.depth",), ("adapter.reg.stages",))
+
+
+# a picker that may answer None states its semantics: ``str | None`` has none of its own
+MAYBE_CASE: ValueSemantics[str | None] = ValueSemantics(
+    type_token="maybe-case",
+    name="str | None",
+    recognizes=lambda value: value is None or type(value) is str,
+    equal=lambda left, right: left == right,
+    snapshot=lambda value: value,
+)
+
+
+def test_the_picker_never_answers_nothing() -> None:
+    # a None case is named by its key; a picker answering None names no case
+    class Picked(Space):
+        x: int = Decision(values=(0, 1))
+
+        @derived(semantics=MAYBE_CASE)
+        def chain(self) -> str | None:
+            return "fifo" if self.x == 0 else None
+
+        adapter: Fifo | None = Select(by=chain, fifo=Fifo, direct=None, width=2)
+
+    point = bind(design_space(Picked()), {Picked.x: 1}).instance
+    assert _pieces(point) == (
+        "refused",
+        (("adapter", (("guard-refused", "adapter"), ("select-no-case", "adapter"))),),
+    )
+
+
+def test_a_derived_selector_is_listed_only_as_a_choice_and_its_cases_flow_after_its_reads() -> None:
+    class Late(Space):
+        early: int = Decision(values=(0, 1))
+
+        @derived
+        def chain(self) -> str:
+            return ("fifo", "reg", "direct")[(self.late + self.later) % 3]
+
+        adapter: Fifo | Reg | None = Select(by=chain, fifo=Fifo, reg=Reg, direct=None, width=4)
+        late: int = Decision(values=(0, 1, 2))
+        later: int = Decision(values=(0, 1))
+
+    point = design_space(Late())
+    order = ["early", "late", "later", "adapter.fifo.depth", "adapter.reg.stages"]
+    assert [item.key for item in inspection.decisions(point)] == order
+    assert [key for key, _ in inspection.states(point)] == order
+    references = [item.reference for item in inspection.decisions(point)]
+    assert [item.key for item in inspection.viable(point, references)] == order
+    (choice,) = inspection.choices(point)
+    assert (choice.key, choice.selector, choice.guard) == ("adapter", None, None)
+    assert [(case.name, case.scope) for case in choice.cases] == [
+        ("fifo", "adapter.fifo"),
+        ("reg", "adapter.reg"),
+        ("direct", None),
+    ]
+    with pytest.raises(Exception):  # noqa: B017 - no key: never a choice
+        point.with_choices(adapter="fifo")
+    assert isinstance(point.with_choices(late=1, later=0).adapter, Reg)
+
+
+def test_a_none_case_places_nothing() -> None:
+    class Holder(Space):
+        x: int = Decision(values=(0, 1))
+
+        @derived
+        def chain(self) -> str:
+            return ("direct", "fifo")[self.x]
+
+        adapter: Fifo | None = Select(by=chain, direct=None, fifo=Fifo, width=2)
+        stages = View(adapter.stages)  # type: ignore[union-attr]
+        kind = View(selected(adapter))
+
+    point = bind(design_space(Holder()), {Holder.x: 0}).instance
+    assert point.adapter is None and point.kind == "direct"
+    assert isinstance(point.query(Holder.stages), Inapplicable)
+    assert _pieces(point) == ("valid", ())
+    fifo = point.with_choices({Holder.x: 1, Holder.adapter["fifo"].depth: 4})  # type: ignore[index]
+    assert fifo.kind == "fifo" and fifo.stages == 4
+
+
+# -- 4. what a Select refuses at definition -------------------------------------------------
+
+
+def test_a_class_object_as_a_shared_binding_is_refused() -> None:
+    with refused("select-binding-class"):
+        Select(fifo=Fifo, reg=Reg, width=int)
+
+
+def test_a_space_class_named_as_the_cases_formal_is_refused() -> None:
+    with refused("select-binding-class"):
+        Select(fifo=Fifo, reg=Reg, width=Boiler)
+
+
+def test_a_select_placing_nothing_is_refused() -> None:
+    with refused("select-no-node"):
+        Select(direct=None)
+    with refused("select-no-node"):
+        Select(width=2)
+
+
+def test_a_derived_selector_is_never_required_and_reads_a_value() -> None:
+    class Picker(Space):
+        @derived
+        def chain(self) -> str:
+            return "fifo"
+
+    with refused("select-by-required"):
+        Select(by=Picker.chain, required=True, fifo=Fifo, width=2)
+    with refused("select-by-not-value"):
+        Select(by="fifo", fifo=Fifo, width=2)

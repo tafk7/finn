@@ -98,6 +98,11 @@ class _Lowering:
                     guard_task.source_scope, guard_task.condition, owner=node.owner
                 ),
             )
+        for selector, source_scope, by in self.table.picks:
+            self.table.applying = requires.get(selector)
+            node = self.table.nodes[selector]
+            target = self.names.reference(source_scope, by, owner=node.owner)
+            self.table.nodes[selector] = replace(node, arguments=(Argument("value", target),))
         self.link_expressions()
         self.table.applying = None
 

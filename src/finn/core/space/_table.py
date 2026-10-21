@@ -219,6 +219,8 @@ class Table:
     requires: dict[int, int] = field(default_factory=dict)
     applying: int | None = None
     named: list[int] = field(default_factory=list)
+    # ``Select(by=...)``: each derived selector's node, its scope and what picks it.
+    picks: list[tuple[int, int, object]] = field(default_factory=list)
     stub_selects: dict[int, tuple[int, int, str]] = field(default_factory=dict)
     stub_reads: dict[int, list[Read]] = field(default_factory=dict)
 

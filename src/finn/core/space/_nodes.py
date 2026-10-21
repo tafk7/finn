@@ -111,6 +111,8 @@ class NodeDecision(Decision[str]):
     proxy: NodeChoice
     # Declared with candidate entries: a direct read needs a member every candidate has.
     strict: bool
+    # ``Select(by=...)``: the derived value that picks the case (no key, never a choice).
+    by: object = None
 
     def describe(self) -> str:
         where = f"{self.owner.__qualname__}.{self.name}" if self.owner is not None else None
@@ -719,6 +721,127 @@ def entry_choice(
     return choice
 
 
+def select_choice(
+    members: Mapping[str, object],
+    *,
+    by: object,
+    when: ValueRef[bool] | None,
+    required: bool,
+) -> NodeChoice:
+    """``Select(a=A, b=B(own=...), c=None, shared=...)``: a selector and its cases.
+
+    A keyword whose value is a Space class, a call on one or ``None`` is a case (``None``
+    places nothing); any other keyword is a shared binding, supplied to every case that
+    places something, which must declare it. ``by=`` picks the case by a derived value:
+    no key, never a choice. Lowered as a Decision over nodes (``_allocate``), a picked
+    one by its value.
+    """
+    origin = source_origin()
+    where = at(origin)
+    space = _space()
+    cases: dict[str, object] = {}
+    shared: dict[str, object] = {}
+    for key, value in members.items():
+        if (
+            value is None
+            or (isinstance(value, type) and issubclass(value, space))
+            or node_record(value) is not None
+        ):
+            cases[key] = value
+        elif isinstance(value, type):
+            raise DefinitionError.broken(
+                "select-binding-class",
+                _OWNER,
+                f"Select{where}: shared binding {key}={value.__qualname__} is a class object; "
+                "a Space class given as a keyword is a case, and no other class is a value. "
+                "To bind a class as a value, wrap it: declare it as a member of the holding "
+                f"class (a Const) and bind that member, {key}=<member>",
+            )
+        else:
+            shared[key] = value
+    if by is not None and not isinstance(by, ValueRef):
+        raise DefinitionError.broken(
+            "select-by-not-value",
+            _OWNER,
+            f"Select{where}: by= takes a value reference (a derived value, a formal)",
+        )
+    if by is not None and required:
+        raise DefinitionError.broken(
+            "select-by-required",
+            _OWNER,
+            f"Select{where}: a selector picked by a derived value is no choice; required= "
+            "does not apply",
+        )
+    space_types: dict[str, type[Space]] = {}
+    records: dict[str, NodeDecl] = {}
+    for key, entry in cases.items():
+        local_name(key, "case name")
+        if entry is None:
+            continue
+        if isinstance(entry, type):
+            error = unfinished(entry, f" (case {key!r} of a Select{where})")
+            if error is not None:
+                raise error
+            space_types[key] = entry
+            continue
+        record = cast(NodeDecl, node_record(entry))
+        space_types[key], records[key] = record.space_type, record
+    if not space_types:
+        raise DefinitionError.broken(
+            "select-no-node",
+            _OWNER,
+            f"Select{where}: a selector needs a case that places something (a Space class or "
+            "a call on one)",
+        )
+    _check_case_named_like_a_formal(space_types, cases, where)
+    _check_shared(space_types, records, shared, where)
+    values: dict[object, object] = {}
+    for key, entry in cases.items():
+        if entry is None:
+            values[key] = None
+            continue
+        space_type = space_types[key]
+        node = records[key].instance if key in records else space_type()
+        record = cast(NodeDecl, node_record(node))
+        found, _ = space_members(space_type)
+        for name, value in shared.items():
+            label = f"{space_type.__qualname__}.{name} (shared binding of case {key!r}{where})"
+            record.settings[name] = (
+                check_supplier(space_type, name, found[name], value, label),
+                origin,
+            )
+        values[key] = node
+    choice = node_choice(values, when=when)
+    decision = choice._space_decision()
+    decision.strict = True
+    decision.required = required
+    decision.by = by
+    return choice
+
+
+def _check_case_named_like_a_formal(
+    space_types: Mapping[str, type[Space]], cases: Mapping[str, object], where: str
+) -> None:
+    """A Space class given as a keyword is a case. Where every other case placing something
+    declares a formal of that name, it reads as a class meant as their shared binding:
+    refused, the ambiguity named."""
+    for key, entry in cases.items():
+        if not isinstance(entry, type):
+            continue
+        others = [space_type for case, space_type in space_types.items() if case != key]
+        if others and all(
+            isinstance(space_members(space_type)[0].get(key), Param) for space_type in others
+        ):
+            raise DefinitionError.broken(
+                "select-binding-class",
+                _OWNER,
+                f"Select{where}: {key}={entry.__qualname__} is a case (a Space class given as a "
+                f"keyword), and every other case declares a formal {key!r}. A formal takes a "
+                "value, never a Space class: rename the case, or wrap the value as a member "
+                f"of the holding class (a Const) and bind that member, {key}=<member>",
+            )
+
+
 def _check_shared(
     space_types: Mapping[str, type[Space]],
     records: Mapping[str, NodeDecl],
@@ -825,6 +948,7 @@ __all__ = [
     "check_supplier",
     "declare_node",
     "entry_choice",
+    "select_choice",
     "fallback",
     "space_formals",
     "space_members",

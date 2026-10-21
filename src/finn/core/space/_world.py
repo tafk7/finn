@@ -959,8 +959,8 @@ def _validity(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
       known (unknown). A stored value's type check is no piece.
 
     A constraint, a choice or a placed Space whose guard is refused through a refused
-    input is one guard piece (``guard-refused``, the input's refusal beside), once per
-    guard node.
+    input is one guard piece (``guard-refused``, the input's refusal beside), counted
+    once at the highest refused guard of its chain (``_guard_refused``).
 
     A placed Space's piece is read from its guard first (the guard its placing scope
     places it under, a node of this Space's scope or above): where the guard is false or
@@ -990,7 +990,7 @@ def _validity(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
         if piece.kind == "decision":
             found, reads = _choice_piece(world, piece, trace, reads, guards)
             if found is not None:
-                answers[piece.key] = found
+                answers[found[0]] = found[1]
             continue
         entry, reads = world.read(trace, index, reads)
         answer = cast(QueryResult[bool], entry.result)
@@ -1000,36 +1000,75 @@ def _validity(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
             else:
                 guard = placed  # read above, first
             if isinstance(guard.result, Rejected):
-                if piece.guard in guards:
-                    continue
-                guards.add(piece.guard)
-                owner = (
-                    world.evaluator.linked.scopes[piece.scope].name
-                    if piece.kind == "validity"
-                    else piece.owner
-                )
-                answer = _guard_piece(owner, guard.result)
+                if piece.kind == "validity":
+                    owner = linked.scopes[piece.scope].name
+                else:
+                    owner = piece.owner
+                counted, reads = _guard_refused(world, piece, owner, trace, reads, guards)
+                if counted is not None:
+                    answers[counted[0]] = counted[1]
+                continue
         answers[piece.key] = answer
     assessment = assess_constraints(answers)
     return Entry(cast(QueryResult[object], assessment.result), reads, tuple(trace), assessment)
 
 
+def _guard_refused(
+    world: World,
+    piece: Node,
+    owner: str,
+    trace: _Trace,
+    reads: ReadSet,
+    guards: set[NodeId],
+) -> tuple[tuple[str, QueryResult[bool]] | None, ReadSet]:
+    """The guard piece of ``piece``, whose guard is refused through an input: counted
+    once, at the highest refused guard of its chain (reading 8: "at the highest such
+    guard, scopes under it add nothing"), or ``None`` where that guard is counted
+    already. Counted at a guard above its own, it is that guard's owner's, keyed by it
+    where the owner is a node (a selector: its cases' pieces are its one piece)."""
+    nodes = world.evaluator.nodes
+    top = cast(NodeId, piece.guard)
+    entry, reads = world.read(trace, top, reads)
+    while (outer := nodes[top].guard) is not None:
+        above, reads = world.read(trace, outer, reads)
+        if not isinstance(above.result, Rejected):
+            break
+        top, entry = outer, above
+    if top in guards:
+        return None, reads
+    guards.add(top)
+    key = piece.key
+    if top != piece.guard:
+        owner = nodes[top].owner
+        if owner in world.evaluator.linked.keys:
+            key = owner
+    return (key, _guard_piece(owner, cast(Rejected, entry.result))), reads
+
+
 def _choice_piece(
     world: World, piece: Node, trace: _Trace, reads: ReadSet, guards: set[NodeId]
+) -> tuple[tuple[str, QueryResult[bool]] | None, ReadSet]:
+    """A choice's validity piece by key, or ``None`` where it is no piece: a guard
+    refused through an input (``_guard_refused``), else read from its listed values."""
+    if piece.guard is not None:
+        guard, reads = world.read(trace, piece.guard, reads)
+        if isinstance(guard.result, Rejected):
+            return _guard_refused(world, piece, piece.owner, trace, reads, guards)
+    answer, reads = _listed_piece(world, piece, trace, reads)
+    return (None if answer is None else (piece.key, answer)), reads
+
+
+def _listed_piece(
+    world: World, piece: Node, trace: _Trace, reads: ReadSet
 ) -> tuple[QueryResult[bool] | None, ReadSet]:
-    """A choice's validity piece, read from its guard and its listed values (never from
-    its stored value), or ``None`` where it is no piece. A domain that lists nothing
-    (membership only) is never a piece: its inputs are not read, so neither their wait
-    nor their refusal makes it one."""
+    """A choice's validity piece where its guard is not refused, read from its guard and
+    its listed values (never from its stored value), or ``None`` where it is no piece. A
+    domain that lists nothing (membership only) is never a piece: its inputs are not read,
+    so neither their wait nor their refusal makes it one."""
     waiting: Unresolved | None = None
     if piece.guard is not None:
         guard, reads = world.read(trace, piece.guard, reads)
         answer = guard.result
-        if isinstance(answer, Rejected):
-            if piece.guard in guards:
-                return None, reads
-            guards.add(piece.guard)
-            return _guard_piece(piece.owner, answer), reads
         if isinstance(answer, Unresolved):
             waiting = answer
         elif _guard_result(piece, answer) is not None:
