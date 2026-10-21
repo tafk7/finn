@@ -54,7 +54,7 @@ WEIGHT: dict[str, dict[str, object]] = {
         "w.source.memstream.ram_style": "block",
         "w.source.memstream.pumped_memory": False,
         "w.transport": "fifo",
-        "w.transport.fifo.buffer.depth": 8,
+        "w.transport.fifo.depth": 8,
         "w.transport.fifo.buffer.ram_style": "auto",
     },
 }

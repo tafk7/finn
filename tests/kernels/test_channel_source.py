@@ -486,7 +486,7 @@ def test_adapter_rejects_an_unknown_ram_style():
 # -- the weight channel's transport slot --------------------------------------------------
 
 FIFO = "w.transport.fifo.buffer"
-FIFO_DEPTH = "w.transport.fifo.buffer.depth"
+FIFO_DEPTH = "w.transport.fifo.depth"
 FIFO_RAM_STYLE = "w.transport.fifo.buffer.ram_style"
 
 
@@ -515,8 +515,8 @@ def test_fifo_depth_is_owned_by_the_channel_and_only_demanded_when_selected():
     point = configured(base())
     w = point.member("w")
     records = {item.key: item for item in inspection.decisions(w)}
-    assert records["transport.fifo.buffer.depth"].scope == "transport.fifo.buffer"
-    depth = handle(w, "transport.fifo.buffer.depth")
+    assert records["transport.fifo.depth"].scope == "transport.fifo"
+    depth = handle(w, "transport.fifo.depth")
     assert isinstance(w.field(depth).query(), Inapplicable)
     undecided = buffered(point)
     assert isinstance(module_of(undecided, "matmul"), Unresolved)
@@ -530,21 +530,21 @@ def test_fifo_depth_is_owned_by_the_channel_and_only_demanded_when_selected():
         )
     deep = buffered(point, depth=64)
     saved = deep.chosen()
-    assert ("w", "transport.fifo.buffer.depth") in saved
+    assert ("w", "transport.fifo.depth") in saved
     assert built(base().with_choices(saved), "matmul") == built(deep, "matmul")
     # In the channel's space, removing the FIFO keeps its depth and memory style,
     # dormant: out of play, and back with the FIFO.
     fifo = deep.member("w")
     direct = fifo.try_with_choices({handle(fifo, "transport"): "direct"})
     assert direct.accepted and set(direct.dormant) == {
-        "transport.fifo.buffer.depth",
+        "transport.fifo.depth",
         "transport.fifo.buffer.ram_style",
     }
     assert direct.instance.netlist == w.netlist
     # In the network the same: nothing is dropped, and the module is the direct one.
     trial = deep.trial(keyed({"w.transport": "direct"}))
     assert trial.accepted and not trial.rederived
-    assert ("w", "transport.fifo.buffer.depth") in trial.network.chosen()
+    assert ("w", "transport.fifo.depth") in trial.network.chosen()
     assert built(trial.network, "matmul") == built(point, "matmul")
 
 

@@ -306,17 +306,15 @@ def test_a_fifo_sized_before_is_sized_again_and_a_held_one_is_not(
     sized again; a held transport is not reopened."""
     explorer, point = _folded()
     placed = explorer.set(
-        point, keyed({"levels.transport": "fifo", "levels.transport.fifo.buffer.depth": 64})
+        point, keyed({"levels.transport": "fifo", "levels.transport.fifo.depth": 64})
     )
     assert isinstance(placed, Accepted)
     sized = SizeFifos().explore(explorer, placed.network)
     assert chosen(explorer, sized)["levels.transport"] == "direct"
-    assert ("levels", "transport.fifo.buffer.depth") in explorer.runs[-1].reopened
-    explorer.held.update(
-        keyed({"levels.transport": "fifo", "levels.transport.fifo.buffer.depth": 64})
-    )
+    assert ("levels", "transport.fifo.depth") in explorer.runs[-1].reopened
+    explorer.held.update(keyed({"levels.transport": "fifo", "levels.transport.fifo.depth": 64}))
     kept = SizeFifos().explore(explorer, placed.network)
-    assert chosen(explorer, kept)["levels.transport.fifo.buffer.depth"] == 64
+    assert chosen(explorer, kept)["levels.transport.fifo.depth"] == 64
     assert not any(key[0] == "levels" for key in explorer.runs[-1].reopened)
 
 
@@ -337,7 +335,7 @@ def test_a_fifo_is_proposed_with_its_depth_and_memory_in_the_same_batch(
     found = strategy.explore(explorer, point)
     values = chosen(explorer, found)
     assert values["hidden.transport"] == "fifo"
-    assert values["hidden.transport.fifo.buffer.depth"] == 8
+    assert values["hidden.transport.fifo.depth"] == 8
     # Its style, never stored, is committed with its depth: the interim channel rule's,
     # FinnLib's ``auto``. Nothing is given back or set by policy after.
     assert values["hidden.transport.fifo.buffer.ram_style"] == "auto"
@@ -349,7 +347,7 @@ def test_a_fifo_is_proposed_with_its_depth_and_memory_in_the_same_batch(
     # refuses itself.
     done = explore(explorer, found, [TargetCycles(12)])
     assert explorer.refusals(done) == {}
-    assert chosen(explorer, done)["hidden.transport.fifo.buffer.depth"] == 8
+    assert chosen(explorer, done)["hidden.transport.fifo.depth"] == 8
 
 
 def test_a_style_named_is_committed_with_the_depth(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -357,7 +355,7 @@ def test_a_style_named_is_committed_with_the_depth(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(explore_module, "size", _hidden_needs_eight)
     for style in ("auto", "distributed"):
         values = chosen(explorer, SizeFifos(ram_style=style).explore(explorer, point))
-        assert values["hidden.transport.fifo.buffer.depth"] == 8
+        assert values["hidden.transport.fifo.depth"] == 8
         assert values["hidden.transport.fifo.buffer.ram_style"] == style
 
 
@@ -386,7 +384,7 @@ def test_a_depth_is_sized_for_the_style_its_fifo_is_built_in(
             keyed(
                 {
                     "hidden.transport": "fifo",
-                    "hidden.transport.fifo.buffer.depth": 400,
+                    "hidden.transport.fifo.depth": 400,
                     "hidden.transport.fifo.buffer.ram_style": "distributed",
                 }
             ),
@@ -398,10 +396,10 @@ def test_a_depth_is_sized_for_the_style_its_fifo_is_built_in(
         values = chosen(explorer, sized)
         # hidden, stored distributed: DEPTH 300, 300 words.
         assert values["hidden.transport.fifo.buffer.ram_style"] == "distributed"
-        assert values["hidden.transport.fifo.buffer.depth"] == 300
+        assert values["hidden.transport.fifo.depth"] == 300
         # levels, no style before: auto, block RAM from DEPTH 258 (514 words).
         assert values["levels.transport.fifo.buffer.ram_style"] == "auto"
-        assert values["levels.transport.fifo.buffer.depth"] == 258
+        assert values["levels.transport.fifo.depth"] == 258
         found = explorer.check_fifos(sized)
         assert found.checked == ("hidden", "levels")
         assert found.stale == {} and found.findings == ()
@@ -426,7 +424,7 @@ def test_a_style_held_as_none_is_sized_as_auto_and_left_to_its_hold(
         keyed(
             {
                 "hidden.transport": "fifo",
-                "hidden.transport.fifo.buffer.depth": 8,
+                "hidden.transport.fifo.depth": 8,
                 "hidden.transport.fifo.buffer.ram_style": "distributed",
             }
         ),
@@ -518,7 +516,7 @@ def _with_fifo(depth: int = 8) -> tuple[Seam, Network]:
         keyed(
             {
                 "levels.transport": "fifo",
-                "levels.transport.fifo.buffer.depth": depth,
+                "levels.transport.fifo.depth": depth,
                 "levels.transport.fifo.buffer.ram_style": "auto",
             }
         ),
@@ -534,7 +532,7 @@ def _levels_short(channel: Channel, period: int, words: int) -> bool:
     return not str(channel.sides.source_owner).startswith("activate.")
 
 
-DEPTH = ("levels", "transport.fifo.buffer.depth")
+DEPTH = ("levels", "transport.fifo.depth")
 
 
 def test_a_fifo_that_holds_its_stream_is_kept_and_the_check_says_what_it_read() -> None:
@@ -563,7 +561,7 @@ def test_a_fifo_too_small_for_its_stream_is_dropped_named_and_left_open(
     assert (finding.kind, finding.code, finding.owner) == (
         FindingKind.REJECTION,
         "fifo-stale",
-        "levels.transport.fifo.buffer.depth",
+        "levels.transport.fifo.depth",
     )
     assert finding.message == (
         "depth 8 (8 words) no longer keeps its producer within its idle time at the "
@@ -574,7 +572,7 @@ def test_a_fifo_too_small_for_its_stream_is_dropped_named_and_left_open(
     # Left open, a required choice; the FIFO and the rest kept, the bottleneck readable,
     # so a later strategy folds and FIFO sizing sizes it again.
     values = chosen(explorer, checked)
-    assert "levels.transport.fifo.buffer.depth" not in values
+    assert "levels.transport.fifo.depth" not in values
     assert {k: v for k, v in chosen(explorer, network).items() if k != dotted(DEPTH)} == values
     assert [choice.key for choice in explorer.choices(checked) if choice.required] == [DEPTH]
     assert explorer.cost(checked).bottleneck == explorer.cost(network).bottleneck
@@ -584,7 +582,7 @@ def test_a_fifo_too_small_for_its_stream_is_dropped_named_and_left_open(
 
 def test_a_held_fifo_too_small_is_kept_and_named(monkeypatch: pytest.MonkeyPatch) -> None:
     explorer, network = _with_fifo()
-    explorer.held.update(keyed({"levels.transport.fifo.buffer.depth": 8}))
+    explorer.held.update(keyed({"levels.transport.fifo.depth": 8}))
     monkeypatch.setattr(explore_module, "holds", _levels_short)
     checked, found = explorer.checked(network)
     assert checked is network and found.stale == {}
@@ -592,7 +590,7 @@ def test_a_held_fifo_too_small_is_kept_and_named(monkeypatch: pytest.MonkeyPatch
     assert (finding.kind, finding.code, finding.owner) == (
         FindingKind.LIMITATION,
         "fifo-held-stale",
-        "levels.transport.fifo.buffer.depth",
+        "levels.transport.fifo.depth",
     )
     assert finding.message.startswith("held at 8 (8 words), which no longer keeps")
 

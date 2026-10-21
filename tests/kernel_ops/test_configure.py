@@ -95,9 +95,9 @@ def test_a_channels_choices_are_set_with_its_kernels_in_one_batch() -> None:
     }
     assert network(model, model.graph.node).member("w").source.ram_style == "block"
     # What a later call does not name stays.
-    configured(model, {"w": {"transport": "fifo", "transport.fifo.buffer.depth": 8}})
+    configured(model, {"w": {"transport": "fifo", "transport.fifo.depth": 8}})
     assert channel_choices(model, "w")["source.memstream.ram_style"] == "block"
-    assert channel_choices(model, "w")["transport.fifo.buffer.depth"] == 8
+    assert channel_choices(model, "w")["transport.fifo.depth"] == 8
     assert stored(model)["compute.packed.pe"] == 2
 
 
@@ -239,8 +239,8 @@ def test_a_channels_value_of_another_type_is_refused() -> None:
     model = matmul_model()
     configured(model, {"first": FOLDED})
     before = channel_choices(model, "w")
-    with refused("request-refused", owner="transport.fifo.buffer.depth"):
-        configured(model, {"w": {"transport": "fifo", "transport.fifo.buffer.depth": "8"}})
+    with refused("request-refused", owner="transport.fifo.depth"):
+        configured(model, {"w": {"transport": "fifo", "transport.fifo.depth": "8"}})
     assert channel_choices(model, "w") == before
 
 

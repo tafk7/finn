@@ -145,18 +145,16 @@ def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> N
     model = kernel_model().transform(explore)
     assert explore.explored is not None
     left = explore.explored.report["open"]
-    assert left and all(name.endswith("transport.fifo.buffer.depth (required)") for name in left)
+    assert left and all(name.endswith("transport.fifo.depth (required)") for name in left)
     with refused("choices-open", error=KernelOpError, node="the chain") as open_choices:
         configured_network(model, "the chain")
     assert isinstance(open_choices.error, KernelOpError)
-    assert all(key.endswith("transport.fifo.buffer.depth") for key in open_choices.error.keys)
+    assert all(key.endswith("transport.fifo.depth") for key in open_choices.error.keys)
     required = "(required: run step_size_fifos or step_placeholder_choices)"
     assert str(open_choices.error).count(required) == len(left)
     # The debug placeholder strategy takes the first case of a required choice, and
     # refuses one known by membership only, named.
-    with refused(
-        "placeholder-no-case", error=ExploreError, message=r"transport\.fifo\.buffer\.depth"
-    ):
+    with refused("placeholder-no-case", error=ExploreError, message=r"transport\.fifo\.depth"):
         model.transform(ExploreKernelChoices(DebugPlaceholder()))
 
 

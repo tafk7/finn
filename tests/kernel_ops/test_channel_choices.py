@@ -45,7 +45,7 @@ from finn.kernels.explore import Defaults, ExploreError, Hold, Ranked
 from finn.transformation.kernels import explore_kernel_choices, kernel_choices_config
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
 
-FIFO: dict[str, object] = {"transport": "fifo", "transport.fifo.buffer.depth": 8}
+FIFO: dict[str, object] = {"transport": "fifo", "transport.fifo.depth": 8}
 
 
 def entries(model: ModelWrapper, tensor: str) -> dict[str, str]:
@@ -75,10 +75,10 @@ def test_the_namespace_is_generated_from_the_channels_decisions() -> None:
     assert list(CHANNEL_KEYS) == [item.key for item in inspection.decisions(Channel)]
     assert len(CHANNEL_KEYS) == 13
     assert (CHANNEL.name, CHANNEL.version, CHANNEL.follow) == ("finn.channel", 1, True)
-    assert CHANNEL_KEYS["transport.fifo.buffer.depth"].encode(8) == "8"
+    assert CHANNEL_KEYS["transport.fifo.depth"].encode(8) == "8"
     assert CHANNEL_KEYS["source.memstream.pumped_memory"].encode(True) == "true"
     with pytest.raises(MetadataError, match="cannot store '8': expected an int"):
-        CHANNEL_KEYS["transport.fifo.buffer.depth"].encode("8")
+        CHANNEL_KEYS["transport.fifo.depth"].encode("8")
     with pytest.raises(MetadataError, match=r"one of \['direct', 'fifo'\]"):
         CHANNEL_KEYS["transport"].encode("dense")
 
@@ -95,7 +95,7 @@ def test_a_channels_choices_are_typed_entries_of_its_tensor() -> None:
         "finn.channel/adapter": "input_gen",
         "finn.channel/adapter.input_gen.input_gen.ram_style": "distributed",
         "finn.channel/transport": "fifo",
-        "finn.channel/transport.fifo.buffer.depth": "8",
+        "finn.channel/transport.fifo.depth": "8",
         "finn.channel/transport.fifo.buffer.ram_style": "auto",
     }
     assert channel_choices(model, "levels") == {
@@ -109,7 +109,7 @@ def test_a_channels_choices_are_typed_entries_of_its_tensor() -> None:
     # A node holds its kernel's choices only.
     attributes = {attribute.name for node in model.graph.node for attribute in node.attribute}
     assert not any(name.partition(".")[0] in ("x", "w", "y") for name in attributes)
-    assert network(model, model.graph.node).member("levels").transport.buffer.depth == 8
+    assert network(model, model.graph.node).member("levels").transport.depth == 8
 
 
 def test_the_writer_is_checked_by_replaying_the_network() -> None:
@@ -123,14 +123,14 @@ def test_the_writer_is_checked_by_replaying_the_network() -> None:
     rejections: list[tuple[str, str, dict[str, dict[str, object]]]] = [
         (
             "domain-membership",
-            "transport.fifo.buffer.depth",
-            {"levels": {**FIFO, "transport.fifo.buffer.depth": 1}},
+            "transport.fifo.depth",
+            {"levels": {**FIFO, "transport.fifo.depth": 1}},
         ),
         ("not-a-decision", "levels.memory", {"levels": {"memory": "auto"}}),
         (
             "request-refused",
-            "transport.fifo.buffer.depth",
-            {"levels": {"transport.fifo.buffer.depth": "8"}},
+            "transport.fifo.depth",
+            {"levels": {"transport.fifo.depth": "8"}},
         ),
         ("member-unknown", "configured", {"thresholds": EDGE}),
     ]
@@ -398,9 +398,9 @@ def test_a_channel_choice_out_of_play_is_saved_and_replayed_out_of_play() -> Non
     dormant, back in play with a FIFO."""
     model = kernel_model()
     model.clear(CHANNEL, tensor="levels")
-    configured(model, {"levels": {"transport.fifo.buffer.depth": 8}})
-    assert entries(model, "levels")["finn.channel/transport.fifo.buffer.depth"] == "8"
+    configured(model, {"levels": {"transport.fifo.depth": 8}})
+    assert entries(model, "levels")["finn.channel/transport.fifo.depth"] == "8"
     assert channel_choices(model, "levels")["transport"] == "direct"
     point = network(model, model.graph.node).member("levels")
     states = dict(inspection.states(point))
-    assert states["transport.fifo.buffer.depth"] == inspection.Dormant(8)
+    assert states["transport.fifo.depth"] == inspection.Dormant(8)

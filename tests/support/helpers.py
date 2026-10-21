@@ -823,7 +823,7 @@ def matmul_assembly(
         channel["w.source.memstream.ram_style"] = ram_style
         channel["w.source.memstream.pumped_memory"] = pumped_memory
     if buffered:
-        channel["w.transport.fifo.buffer.depth"] = weight_fifo_depth
+        channel["w.transport.fifo.depth"] = weight_fifo_depth
         channel["w.transport.fifo.buffer.ram_style"] = "auto"
     network = matmul_point(realization=realization, **facts)
     # What the caller leaves out of the realization and the core takes the kernel's

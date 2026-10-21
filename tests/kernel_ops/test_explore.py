@@ -307,7 +307,7 @@ def test_a_hold_is_committed_held_in_the_body_and_the_rest_explored() -> None:
     channels' too."""
     held: dict[str, dict[str, object]] = {
         "first": {"compute.packed.pe": 1},
-        "levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8},
+        "levels": {"transport": "fifo", "transport.fifo.depth": 8},
     }
     pinning = ExploreKernelChoices(Hold(held))
     model = kernel_model().transform(pinning)
@@ -316,13 +316,13 @@ def test_a_hold_is_committed_held_in_the_body_and_the_rest_explored() -> None:
     assert pinning.explored.report["strategy"]["held"] == [
         "first.compute.packed.pe",
         "levels.transport",
-        "levels.transport.fifo.buffer.depth",
+        "levels.transport.fifo.depth",
     ]
     explorer = ExploreKernelChoices(Ranked(Lanes(2)))
     model = model.transform(explorer)
     saved = choices(model)
     assert saved["first"]["compute.packed.pe"] == 1 and saved["first"]["compute.packed.simd"] == 2
-    assert saved["levels"]["transport.fifo.buffer.depth"] == 8
+    assert saved["levels"]["transport.fifo.depth"] == 8
     assert explorer.explored is not None
     assert explorer.explored.report["held"] == held and model.get(HELD) == keys_of(held)
     # A whole kernel_choices export holds another model to the same choices, in one batch:
@@ -415,7 +415,7 @@ def test_a_hold_holds_for_every_later_exploration_of_the_body() -> None:
     refused, naming the value it is held to."""
     pins: dict[str, dict[str, object]] = {
         "first": {"compute.packed.simd": 1},
-        "levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8},
+        "levels": {"transport": "fifo", "transport.fifo.depth": 8},
     }
     model = cut_model()
     explore_kernel_choices(model, Hold(pins))
@@ -427,7 +427,7 @@ def test_a_hold_holds_for_every_later_exploration_of_the_body() -> None:
     for strategy in (SizeFifos(), Defaults()):
         explore_kernel_choices(model, strategy)
         assert choices(model)["first"]["compute.packed.simd"] == 1
-        assert choices(model)["levels"]["transport.fifo.buffer.depth"] == 8
+        assert choices(model)["levels"]["transport.fifo.depth"] == 8
     assert choices(model)["second"]["compute.packed.simd"] == 1  # back at its first valid
     assert model.get(HELD) == keys_of(pins)
     with refused(
@@ -507,8 +507,8 @@ def _levels_short(channel: Any, period: int, words: int) -> bool:
     return not str(channel.sides.source_owner).startswith("activate.")
 
 
-LEVELS_FIFO = {"transport": "fifo", "transport.fifo.buffer.depth": 8}
-LEVELS_DEPTH = "levels.transport.fifo.buffer.depth"
+LEVELS_FIFO = {"transport": "fifo", "transport.fifo.depth": 8}
+LEVELS_DEPTH = "levels.transport.fifo.depth"
 
 
 class Checking:
@@ -540,7 +540,7 @@ def test_an_exploration_checks_its_fifos_only_where_its_strategy_does(
     configured(model, {"levels": LEVELS_FIFO})
     folded = explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 12)))
     assert folded.report["strategy"]["changed"]
-    assert choices(model)["levels"]["transport.fifo.buffer.depth"] == 8
+    assert choices(model)["levels"]["transport.fifo.depth"] == 8
     assert folded.report["dropped"] == {} and folded.findings == ()
     assert folded.report["fifos_judged"] == "not checked"
     assert "fifo_check" not in folded.report
@@ -548,7 +548,7 @@ def test_an_exploration_checks_its_fifos_only_where_its_strategy_does(
     monkeypatch.setattr(explore_module, "holds", _levels_short)
     kept = explore_kernel_choices(model).report
     assert kept["dropped"] == {} and kept["fifos_judged"] == "not checked"
-    assert choices(model)["levels"]["transport.fifo.buffer.depth"] == 8
+    assert choices(model)["levels"]["transport.fifo.depth"] == 8
     configured_network(model, "the chain")
     with pytest.raises(KernelOpError) as stale:
         verify_partition(model, "the chain")
@@ -565,7 +565,7 @@ def test_an_exploration_checks_its_fifos_only_where_its_strategy_does(
     assert dropped["fifo_check"]["stale"] == [LEVELS_DEPTH]
     assert f"{LEVELS_DEPTH} (required)" in dropped["open"]
     levels = choices(model)["levels"]
-    assert levels["transport"] == "fifo" and "transport.fifo.buffer.depth" not in levels
+    assert levels["transport"] == "fifo" and "transport.fifo.depth" not in levels
     with refused(
         "choices-open",
         error=KernelOpError,
@@ -575,8 +575,8 @@ def test_an_exploration_checks_its_fifos_only_where_its_strategy_does(
     ):
         configured_network(model, "the chain")
     # Held, it is kept and built as held.
-    pinned = explore_kernel_choices(model, Hold({"levels": {"transport.fifo.buffer.depth": 8}}))
-    assert choices(model)["levels"]["transport.fifo.buffer.depth"] == 8
+    pinned = explore_kernel_choices(model, Hold({"levels": {"transport.fifo.depth": 8}}))
+    assert choices(model)["levels"]["transport.fifo.depth"] == 8
     assert pinned.findings == () and pinned.report["fifos_judged"] == "not checked"
     _, check = verify_partition(model, "the chain")
     assert [(f.kind, f.code, f.owner) for f in check.findings] == [

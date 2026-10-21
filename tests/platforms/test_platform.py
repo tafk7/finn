@@ -115,7 +115,7 @@ def test_a_partitions_weight_stream_reads_the_platform() -> None:
     assert stream.platform == ZYNQ.platform
     assert isinstance(stream.source, MemStreamKernel)
     # Its transport FIFO reads it too: Ultra96 has no UltraRAM.
-    fifo = {"w.transport": "fifo", "w.transport.fifo.buffer.depth": 4096}
+    fifo = {"w.transport": "fifo", "w.transport.fifo.depth": 4096}
     # Committed, ultra leaves the buffer refused by its rule on the platform.
     assert "uram-absent" in refused_codes(
         bound, {**fifo, "w.transport.fifo.buffer.ram_style": "ultra"}

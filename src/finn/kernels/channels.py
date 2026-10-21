@@ -181,6 +181,11 @@ class ChannelFifo(KernelSpace):
     tensor: Tensor = Param()
     arriving: BeatSequence = Param()
     platform: Platform = Param()
+    # Required: no policy gives a depth; a FIFO is chosen by sizing it (SizeFifos).
+    depth: int = Decision(
+        domain=domain(accepts=lambda *, candidate: 2 <= candidate < 2**32, ordered=True),
+        required=True,
+    )
 
     @derived
     def carried(self) -> BeatSequence:
@@ -192,11 +197,7 @@ class ChannelFifo(KernelSpace):
     buffer = FifoKernel(
         input_tensor=tensor,
         arriving=carried,
-        # Required: no policy gives a depth; a FIFO is chosen by sizing it (SizeFifos).
-        depth=Decision(
-            domain=domain(accepts=lambda *, candidate: 2 <= candidate < 2**32, ordered=True),
-            required=True,
-        ),
+        depth=depth,
         platform=platform,
     )
 

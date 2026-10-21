@@ -120,15 +120,15 @@ def with_transports(network: Network) -> Network:
 
 def test_a_trial_refuses_what_the_change_names_and_keeps_what_it_puts_out_of_play() -> None:
     folded = with_transports(choose(chain.network(), FOLDING))
-    fifo = choose(folded, {"hidden.transport": "fifo", "hidden.transport.fifo.buffer.depth": 16})
+    fifo = choose(folded, {"hidden.transport": "fifo", "hidden.transport.fifo.depth": 16})
     # The FIFO's depth, under a case no longer selected, is kept, dormant: nothing drops.
     trial = fifo.trial(keyed({"hidden.transport": "direct"}))
     assert trial.accepted and not trial.rederived
     states = dict(trial.network.states(("hidden",)))
-    assert states[("hidden", "transport.fifo.buffer.depth")] == inspection.Dormant(16)
+    assert states[("hidden", "transport.fifo.depth")] == inspection.Dormant(16)
     assert fifo.with_choices(keyed({"hidden.transport": "direct"})).chosen(("hidden",)) == {
         ("hidden", "transport"): "direct",
-        ("hidden", "transport.fifo.buffer.depth"): 16,
+        ("hidden", "transport.fifo.depth"): 16,
     }
     # A value outside its domain refuses the change, by its key.
     refused = fifo.trial(keyed({"first.compute.packed.pe": 3}))
@@ -216,7 +216,7 @@ def boarded() -> dict[str, Space | Wire]:
 ULTRA_FIFO = {
     "board.uram": True,
     "hidden.transport": "fifo",
-    "hidden.transport.fifo.buffer.depth": 16,
+    "hidden.transport.fifo.depth": 16,
     "hidden.transport.fifo.buffer.ram_style": "ultra",
 }
 

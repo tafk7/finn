@@ -500,7 +500,7 @@ def test_a_fifo_a_users_folding_step_leaves_too_small_is_refused_at_verification
         }
         assert outcome["error"]["message"].startswith(
             "partition: FIFOs too small for their streams, refused at verification (run "
-            "step_size_fifos): levels: levels.transport.fifo.buffer.depth: fifo-stale: depth 5 "
+            "step_size_fifos): levels: levels.transport.fifo.depth: fifo-stale: depth 5 "
             "(5 words) no longer keeps its producer"
         )
 
@@ -512,7 +512,7 @@ def _holds_nothing(channel: Channel, period: int, words: int) -> bool:
 
 def step_hold_levels(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """A user's own step: the Chain's ``levels`` held at the FIFO depth it states."""
-    explore_partition(model, Hold({"levels": {"transport.fifo.buffer.depth": 8}}))
+    explore_partition(model, Hold({"levels": {"transport.fifo.depth": 8}}))
     return model
 
 
@@ -525,7 +525,7 @@ def test_the_verification_notes_what_its_check_finds_and_records_the_design(
     its report states the check (``fifos_judged``, ``fifo_check``), and the body it saves
     records the design it verified."""
     model = kernel_model()
-    configured(model, {"levels": {"transport": "fifo", "transport.fifo.buffer.depth": 8}})
+    configured(model, {"levels": {"transport": "fifo", "transport.fifo.depth": 8}})
     model_file = tmp_path / "chain.onnx"
     model.save(str(model_file))
     monkeypatch.setattr(explore_module, "holds", _holds_nothing)
@@ -546,7 +546,7 @@ def test_the_verification_notes_what_its_check_finds_and_records_the_design(
     assert check["findings"] == verifying["findings"]
     assert {finding["kind"] for finding in check["findings"]} == {"limitation"}
     found = {(finding["code"], finding["owner"]) for finding in check["findings"]}
-    assert ("fifo-held-stale", "levels.transport.fifo.buffer.depth") in found
+    assert ("fifo-held-stale", "levels.transport.fifo.depth") in found
     assert {code for code, _ in found} == {"fifo-held-stale", "direct-throttles"}
     body = ModelWrapper(str(output / "partition" / "partition.onnx"))
     assert body.get(OUTPUT_VERIFIED) == design_digest(body)

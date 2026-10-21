@@ -227,7 +227,7 @@ def test_every_kernel_states_its_policies_and_each_choice_but_a_fifo_s_depth_is_
     valid value is today's; the FIFO's depth, required, has none."""
     found = policies(kernel)
     assert {key for key, policy in found.items() if policy is None} <= {
-        "buffer.depth",
-        "transport.fifo.buffer.depth",
+        "depth",
+        "transport.fifo.depth",
     }
     assert all(policy in (FIRST_VALID, None) for policy in found.values())

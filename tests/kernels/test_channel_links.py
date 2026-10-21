@@ -107,7 +107,7 @@ def test_a_buffered_channel_places_its_fifo_below_its_transport() -> None:
     point = placed(
         **{
             "w.transport": "fifo",
-            "w.transport.fifo.buffer.depth": 4,
+            "w.transport.fifo.depth": 4,
             "w.transport.fifo.buffer.ram_style": "auto",
         }
     )

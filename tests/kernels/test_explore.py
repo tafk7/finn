@@ -206,7 +206,7 @@ def test_a_rule_a_value_breaks_names_the_stored_choices_standing_in_its_way() ->
 
 def test_a_batch_commits_a_selector_and_a_choice_nested_under_it_together() -> None:
     explorer, base = seam()
-    batch = keyed({"hidden.transport": "fifo", "hidden.transport.fifo.buffer.depth": 16})
+    batch = keyed({"hidden.transport": "fifo", "hidden.transport.fifo.depth": 16})
     outcome = explorer.set(base, batch)
     assert isinstance(outcome, Accepted) and not outcome.rederived
     assert {
@@ -214,12 +214,12 @@ def test_a_batch_commits_a_selector_and_a_choice_nested_under_it_together() -> N
     } == {
         "hidden.output_adapter": "vpc",
         "hidden.transport": "fifo",
-        "hidden.transport.fifo.buffer.depth": 16,
+        "hidden.transport.fifo.depth": 16,
     }
     # Alone, the nested choice is stored out of play: its case is not selected.
-    alone = explorer.set(base, keyed({"hidden.transport.fifo.buffer.depth": 16}))
+    alone = explorer.set(base, keyed({"hidden.transport.fifo.depth": 16}))
     assert isinstance(alone, Accepted)
-    assert state(alone.network, "hidden.transport.fifo.buffer.depth") == inspection.Dormant(16)
+    assert state(alone.network, "hidden.transport.fifo.depth") == inspection.Dormant(16)
 
 
 def test_a_change_that_puts_a_choice_out_of_play_keeps_it_dormant_and_a_held_one_refuses() -> None:
@@ -228,22 +228,22 @@ def test_a_change_that_puts_a_choice_out_of_play_keeps_it_dormant_and_a_held_one
     play refuses the change, naming it: a hold keeps its case in play."""
     explorer, base = seam()
     fifo = explorer.set(
-        base, keyed({"hidden.transport": "fifo", "hidden.transport.fifo.buffer.depth": 16})
+        base, keyed({"hidden.transport": "fifo", "hidden.transport.fifo.depth": 16})
     )
     assert isinstance(fifo, Accepted)
     direct = explorer.set(fifo.network, keyed({"hidden.transport": "direct"}))
     assert isinstance(direct, Accepted) and not direct.rederived
-    depth = "hidden.transport.fifo.buffer.depth"
+    depth = "hidden.transport.fifo.depth"
     assert chosen(explorer, direct.network)[depth] == 16
     assert state(direct.network, depth) == inspection.Dormant(16)
     assert explorer.choices(direct.network) == ()
     # The FIFO again: the depth back in play, as it was.
     again = explorer.set(direct.network, keyed({"hidden.transport": "fifo"}))
     assert isinstance(again, Accepted) and state(again.network, depth) == inspection.Set(16)
-    explorer.held[("hidden", "transport.fifo.buffer.depth")] = 16
+    explorer.held[("hidden", "transport.fifo.depth")] = 16
     refused_ = explorer.set(fifo.network, keyed({"hidden.transport": "direct"}))
     assert isinstance(refused_, Refused)
-    (found,) = refused_.why[("hidden", "transport.fifo.buffer.depth")]
+    (found,) = refused_.why[("hidden", "transport.fifo.depth")]
     assert found.code == "held" and "put out of play (dormant)" in found.message
 
 
@@ -251,7 +251,7 @@ def test_a_fifo_depth_is_known_by_membership_and_proposed_through_a_change() -> 
     explorer, base = seam()
     fifo = explorer.set(base, keyed({"levels.transport": "fifo"}))
     assert isinstance(fifo, Accepted)
-    depth = offered(explorer, fifo.network)["levels.transport.fifo.buffer.depth"]
+    depth = offered(explorer, fifo.network)["levels.transport.fifo.depth"]
     assert depth.cases is None and depth.ordered and depth.required
     small = explorer.set(fifo.network, {depth.key: 1})
     assert isinstance(small, Refused)
@@ -522,7 +522,7 @@ def test_the_defaults_set_each_open_choice_by_its_policy_and_leave_required_ones
     fifo = explorer.set(base, keyed({"levels.transport": "fifo"}))
     assert isinstance(fifo, Accepted)
     assert [(c.key, c.required) for c in explorer.choices(with_defaults(fifo.network))] == [
-        (("levels", "transport.fifo.buffer.depth"), True)
+        (("levels", "transport.fifo.depth"), True)
     ]
 
 
@@ -548,10 +548,10 @@ def test_reopen_clears_its_keys_in_one_change_and_a_channel_waits_on_its_kernel(
     assert explorer.reopen(network, [("first", "compute.packed.pe")]) == (network, ())
     # A selector's nested choice waits on its presence, stored.
     sized = explorer.set(
-        base, keyed({"hidden.transport": "fifo", "hidden.transport.fifo.buffer.depth": 16})
+        base, keyed({"hidden.transport": "fifo", "hidden.transport.fifo.depth": 16})
     )
     assert isinstance(sized, Accepted)
-    depth = "hidden.transport.fifo.buffer.depth"
+    depth = "hidden.transport.fifo.depth"
     waiting, reach = explorer.reopen(sized.network, [("hidden", "transport")])
     assert reach == (("hidden", "transport"),)
     assert state(waiting, depth) == inspection.Waiting(16, ("transport",))
@@ -701,11 +701,11 @@ def test_a_held_channel_choice_a_rebuild_would_derive_again_refuses_the_change()
         network,
         {
             "hidden.transport": "fifo",
-            "hidden.transport.fifo.buffer.depth": DEEP,
+            "hidden.transport.fifo.depth": DEEP,
             "hidden.transport.fifo.buffer.ram_style": "auto",
         },
     )
-    depth = ("hidden", "transport.fifo.buffer.depth")
+    depth = ("hidden", "transport.fifo.depth")
     unheld = explorer.set(deep, keyed({"board.uram": False}))
     assert isinstance(unheld, Accepted) and depth in unheld.rederived
     assert depth not in unheld.network.chosen()
@@ -713,7 +713,7 @@ def test_a_held_channel_choice_a_rebuild_would_derive_again_refuses_the_change()
     held_ = explorer.set(deep, keyed({"board.uram": False}))
     assert isinstance(held_, Refused) and list(held_.why) == [depth]
     (found,) = held_.why[depth]
-    assert (found.code, found.owner) == ("held", "hidden.transport.fifo.buffer.depth")
+    assert (found.code, found.owner) == ("held", "hidden.transport.fifo.depth")
     assert found.message.startswith(f"held to {DEEP}, derived again by the change: ")
     assert [cause.code for cause in found.causes] == ["choice-rederived"]
     # The FIFO's style, ``ultra``, the same way.
@@ -721,7 +721,7 @@ def test_a_held_channel_choice_a_rebuild_would_derive_again_refuses_the_change()
         network,
         {
             "hidden.transport": "fifo",
-            "hidden.transport.fifo.buffer.depth": 16,
+            "hidden.transport.fifo.depth": 16,
             "hidden.transport.fifo.buffer.ram_style": "ultra",
         },
     )

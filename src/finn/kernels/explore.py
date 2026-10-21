@@ -91,6 +91,7 @@ from finn.core.space import (
     inspection,
 )
 from finn.kernels.base import BUFFERING, CYCLES, RESOURCES
+from finn.kernels.channels import ChannelFifo
 from finn.kernels.configure import refusal
 from finn.kernels.defaults import Fixed, Policy, policies, ranked, unset
 from finn.kernels.fifo import FifoKernel
@@ -730,9 +731,16 @@ class Seam:
 
     def transports(self, network: Composition) -> Mapping[Key, str]:
         """Every transport the network declares, by key, with its FIFO case: a Decision
-        of a ``Channel`` member one of whose cases nests a ``FifoKernel``'s ``depth`` and
-        ``ram_style``, found by structure, whatever its state."""
+        of a ``Channel`` member one of whose cases places a ``ChannelFifo``, found by its
+        class, whatever its state."""
         return _declared_transports(self, network)
+
+    def fifos(self, network: Composition) -> Mapping[Key, Key]:
+        """Every FIFO the network's channels declare (a ``ChannelFifo``, found by its
+        class, open or not, in play or not), by its depth's key (the ``ChannelFifo``'s
+        own ``depth``), with its memory's (its ``buffer.ram_style``, the FIFO kernel's
+        own choice)."""
+        return _channel_fifos(self.declared(network))
 
     def check_fifos(self, network: Composition) -> FifoCheck:
         """Each stored transport of ``network`` checked against its stream at the network's
@@ -757,7 +765,7 @@ class Seam:
             return FifoCheck(None)
         period = bottleneck.cycles
         chosen = self.chosen(network)
-        declared = self.declared(network)
+        fifos = self.fifos(network)
         stale: dict[Key, tuple[Finding, ...]] = {}
         findings: list[Finding] = []
         checked: list[str] = []
@@ -773,17 +781,14 @@ class Seam:
                 depth = next(
                     (
                         key
-                        for key in chosen
-                        if key[0] == owner
-                        and key[1].startswith(prefix)
-                        and key[1].endswith(".depth")
-                        and declared.get(key) is FifoKernel
+                        for key in fifos
+                        if key[0] == owner and key[1].startswith(prefix) and key in chosen
                     ),
                     None,
                 )
                 # Its depth open (a required choice emission refuses), or its storage
                 # not stated (its style open, or refused): nothing to check.
-                words = None if depth is None else _fifo_words(network, depth)
+                words = None if depth is None else _fifo_words(network, fifos[depth])
             if words is None:
                 continue
             try:
@@ -961,10 +966,10 @@ def explore(seam: Seam, network: S, explorers: Iterable[Explorer]) -> S:
     return network
 
 
-def _fifo_words(network: Composition, depth: Key) -> int | None:
-    """The words the FIFO whose depth is ``depth`` accepts (its storage's capacity), or
-    None where it states none (its style open, or its storage refused)."""
-    owner, key = depth
+def _fifo_words(network: Composition, ram_style: Key) -> int | None:
+    """The words the FIFO whose memory is ``ram_style`` accepts (its storage's capacity),
+    or None where it states none (its style open, or its storage refused)."""
+    owner, key = ram_style
     found: Any = network.member(owner)
     for name in key.split(".")[:-1]:
         # A selector's case names no attribute: the selector's value is the case's Space.
@@ -2126,8 +2131,8 @@ class SizeFifos:
     style), and reads the period from the seam's cost, every member's cycles at the
     stored folding (it runs after the strategies that fold; a member whose cycles are
     not known refuses it), and the open transports from the network's choices: an open
-    choice on a ``Channel`` one of whose cases nests the Decisions a ``FifoKernel``
-    declares (its ``depth`` and ``ram_style``) and another nothing. For each it reads
+    choice on a ``Channel`` one of whose cases places a ``ChannelFifo`` (its ``depth``,
+    and its buffer's ``ram_style``) and another nothing. For each it reads
     the channel's sides (``finn.kernels.fifo_sizing.size``: the least depth keeping the
     producer within its idle time) and proposes, all in one batch, ``direct`` or
     the FIFO case with its depth (the least DEPTH whose storage holds the least words
@@ -2298,8 +2303,8 @@ def _transport(
     declared: Mapping[Key, type[Space] | None],
 ) -> _Transport | None:
     """``choice`` as a transport ``SizeFifos`` sizes: an open choice of a ``Channel``
-    member, on the channel itself, one of whose cases nests a ``FifoKernel``'s ``depth``
-    and ``ram_style`` and another nothing; otherwise None."""
+    member, on the channel itself, one of whose cases places one ``ChannelFifo`` (its
+    ``depth``, and its ``buffer.ram_style``) and another nothing; otherwise None."""
     if choice.cases is None:
         return None
     owner, selector = choice.key
@@ -2319,54 +2324,59 @@ def _transport(
         }
         for case in cases
     }
-    fifos = [
-        case
+    channel_fifos = _channel_fifos(declared)
+    placed = {
+        case: [(owner, key) for key in keys if (owner, key) in channel_fifos]
         for case, keys in nested.items()
-        if any(
-            space_type is not None and issubclass(space_type, FifoKernel)
-            for space_type in keys.values()
-        )
-    ]
+    }
+    fifos = [case for case, depths in placed.items() if depths]
     directs = [case for case, keys in nested.items() if not keys]
     if len(fifos) != 1 or len(directs) != 1 or directs[0] not in choice.cases:
         return None
-    fifo = {
-        key.rpartition(".")[2]: (owner, key)
-        for key, space_type in nested[fifos[0]].items()
-        if space_type is not None and issubclass(space_type, FifoKernel)
-    }
-    if set(fifo) != {"depth", "ram_style"}:
+    if len(placed[fifos[0]]) != 1:
         return None
+    (depth,) = placed[fifos[0]]
     refused = None
     if fifos[0] not in choice.cases:
         why = choice.refused.get(fifos[0])
         refused = "not possible" if why is None else _reasons(why)
-    return _Transport(
-        choice, owner, directs[0], fifos[0], fifo["depth"], fifo["ram_style"], refused
-    )
+    return _Transport(choice, owner, directs[0], fifos[0], depth, channel_fifos[depth], refused)
+
+
+def _channel_fifos(declared: Mapping[Key, type[Space] | None]) -> dict[Key, Key]:
+    """Every ``ChannelFifo`` among ``declared``, found by its class: by its depth's key
+    (the Decision the class declares, its own ``depth``), with its memory's (its
+    ``buffer.ram_style``, the FIFO kernel's own choice)."""
+    found: dict[Key, Key] = {}
+    for (owner, key), space_type in declared.items():
+        if space_type is None or not issubclass(space_type, ChannelFifo):
+            continue
+        scope, _, name = key.rpartition(".")
+        style = (owner, f"{scope}.buffer.ram_style")
+        held_by = declared.get(style)
+        if name == "depth" and held_by is not None and issubclass(held_by, FifoKernel):
+            found[(owner, key)] = style
+    return found
 
 
 def _declared_transports(seam: Seam, network: Composition) -> dict[Key, str]:
     """Every Decision of a ``Channel`` member (on the channel itself) one of whose cases,
-    and one only, nests a ``FifoKernel``'s ``depth`` and ``ram_style``, with that case:
-    the transports, by structure (``_transport`` checks an open one further)."""
+    and one only, places a ``ChannelFifo``, with that case: the transports, by the FIFO's
+    class (``_transport`` checks an open one further)."""
     declared = seam.declared(network)
-    nested: dict[Key, dict[str, set[str]]] = {}
-    for (owner, key), space_type in declared.items():
-        if space_type is None or not issubclass(space_type, FifoKernel):
-            continue
+    nested: dict[Key, set[str]] = {}
+    for owner, key in _channel_fifos(declared):
         parts = key.split(".")
         # Every prefix of the key a Decision too: the selector, its case below it.
         for end in range(len(parts) - 2, 0, -1):
             selector = (owner, ".".join(parts[:end]))
             if selector in declared:
-                nested.setdefault(selector, {}).setdefault(parts[end], set()).add(parts[-1])
+                nested.setdefault(selector, set()).add(parts[end])
     found: dict[Key, str] = {}
     for selector, cases in nested.items():
-        fifos = [case for case, names in cases.items() if {"depth", "ram_style"} <= names]
-        if len(fifos) != 1 or "." in selector[1] or selector[0] not in network.channels:
+        if len(cases) != 1 or "." in selector[1] or selector[0] not in network.channels:
             continue
-        found[selector] = fifos[0]
+        (found[selector],) = cases
     return found
 
 
