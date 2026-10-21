@@ -1,7 +1,7 @@
 # `finn.kernels`
 
 Physical kernels: each binds one FinnLib RTL module (or an HLS top FINN writes over a
-FinnLib HLS component), or places kernel children,
+FinnLib HLS component) or places kernel children, never both,
 in a design space in `finn.core.space`, with the order it presents on each port.
 The package never reads an ONNX graph; the KernelOps, which do, live in
 `finn.custom_op.kernels`. Experimental: its design and authoring guide are maintained

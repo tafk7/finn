@@ -4,10 +4,10 @@
 """The kernel base, ``KernelSpace``, and what every kernel shares.
 
 A kernel is a Space whose choices configure hardware. **``KernelSpace``** is the one base
-of kernels: a kernel binding a module of the library, a kernel placing kernels and
-channels (its members), or both. A kernel states its ``id`` (a nonempty string), its
-facts and choices, the constraints by which it refuses what it cannot build, and its
-declarations (below). It may state ``defaults`` for its choices (``finn.kernels.defaults``)
+of kernels: a kernel binds a module of the library or places kernels and channels (its
+members), never both (``module-places-kernels``). A kernel states its ``id`` (a nonempty
+string), its facts and choices, the constraints by which it refuses what it cannot build,
+and its declarations (below). It may state ``defaults`` for its choices (``finn.kernels.defaults``)
 and its ``clock_domain``, on which its ports and its module run (``clocking``).
 
 **Its four answers**, each a view written once in the base (``_netlist``, ``_cycles``,
@@ -327,8 +327,8 @@ def _made(member: object) -> bool:
 
 
 class KernelSpace(Space):
-    """A kernel: the design space of its hardware, binding a library module, placing
-    kernels, or both (the module docstring). ``id`` names it, a nonempty string;
+    """A kernel: the design space of its hardware, binding a library module or placing
+    kernels, never both (the module docstring). ``id`` names it, a nonempty string;
     ``defaults`` fixes the default of a choice it declares, by its key
     (``finn.kernels.defaults``): every other choice is first valid, but a required one,
     which has none.
