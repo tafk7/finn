@@ -83,7 +83,8 @@ not reached (SZ100 (3), (5)), each a pending milestone of the matrix with one ro
 - The **full** run (the default) draws both. Each disagreement is attributed by its cause,
   computed from the description and the model's configuration, never the engine's answers:
   T4b, a description the model refuses as ``view-read-in`` that the engine takes otherwise
-  (``engine.definition``; counted once, and the generator draws again); T4c, a question
+  (``engine.definition``; counted once, and the generator draws again: built, or refused
+  as a cycle, see :func:`generate`); T4c, a question
   whose subject reaches an optional fact left out (:meth:`Structure.reach`; validity,
   possible values, a change, a bind and refinement reach the whole description). One
   attributed to a pending milestone (:func:`pending`) is **counted, not failed**, tallied
@@ -679,7 +680,11 @@ def generate(
     A description the model refuses as ``view-read-in`` (SZ100 (3); drawn only when not
     ``strict``) is checked against the engine's ``definition`` (``implementation`` asked)
     before it is drawn again: each is kept in ``read_in``, with what the engine answered,
-    as T4b's disagreement."""
+    as T4b's disagreement, and each is counted under T4b. Today's engine never answers
+    ``view-read-in``: it builds such a description, or, for a rule on a view of its own
+    Space, refuses it as a dependency cycle, a definition error of another kind. The cycle
+    case is T4b's too (agreed in review): under the ruling it is ``view-read-in``, and T4b
+    is the change that makes the engine answer so."""
     skipped: Counter[str] = Counter()
     read_in: list[tuple[str, DefinitionForm]] = []
     while True:
