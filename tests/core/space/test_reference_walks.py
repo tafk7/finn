@@ -110,6 +110,8 @@ def test_a_seeded_walk_keeps_the_four_invariants_and_the_engines_own_checks(
     assert tally.engine_checks["cold"] == tally.engine_checks["bind"] == tally.compared
     assert tally.engine_checks["bind held"] == tally.compared
     assert tally.engine_errors == 0
+    # today's engine, every permanent check run (the cold build is today's alone)
+    assert tally.implementation == "today" and not tally.skipped_checks
 
 
 def test_the_full_run_meets_both_causes_and_counts_each_under_its_milestone() -> None:
@@ -249,6 +251,7 @@ def test_the_summary_names_the_runs_the_milestones_and_the_checks() -> None:
         "(§ 16.24) 0" in text
     )
     assert "walks 2 (full 1, strict 1)" in text
+    assert "implementation: today" in text.splitlines()
     assert (
         "engine disagreements (full: attributed by cause, counted while pending (T4b, T4c), "
         "else failing; strict: every one failing): by milestone T4b 0, T4c 1; by question rule 1"

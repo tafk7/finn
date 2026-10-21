@@ -4,16 +4,23 @@
 """The harness comparing the engine with its reference model, held to its own rules: the
 model imports the standard library only, every row of the acceptance matrix has exactly
 one witness and every expected failure a row, and the comparison reads blockers as a
-subset and everything else exactly. The walks' own checks are ``test_reference_walks``'s."""
+subset and everything else exactly; and the comparison is live: an implementation with a
+planted fault (``support.space_oracle.today.Planted``, DESIGN § 7) is reported by
+question, in the hand cases and in walks 0-3. The walks' own checks are
+``test_reference_walks``'s."""
 
 from __future__ import annotations
 
 import ast
+import functools
+import re
 import sys
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from support.space_oracle.today import FAULTS, TODAY, Fault, Planted
 
 from core.space import reference
 from core.space.reference import (
@@ -38,6 +45,7 @@ from core.space.reference_harness import (
     DroppedForm,
     NotTranslatable,
     OutcomeForm,
+    Pair,
     PossibleForm,
     RefusalForm,
     Row,
@@ -54,6 +62,8 @@ from core.space.reference_harness.compare import (
     validity_form,
 )
 from core.space.reference_harness.matrix import problems
+from core.space.reference_harness.walks import Tally, walk
+from finn.core.space import Available
 
 
 def imported(path: Path) -> list[tuple[int, str, int]]:
@@ -404,3 +414,128 @@ def test_a_members_entry_is_exported_by_a_child_its_scope_places() -> None:
     for entries in (("unit.inner.e",), ("unit.e", "unit.f")):
         with pytest.raises(NotTranslatable):
             Case("not written", described(*entries))
+
+
+# -- planted faults (DESIGN § 7) ---------------------------------------------------------------
+#
+# Today's engine with one answer altered (``today.FAULTS``): one standing choice dropped, one
+# possible value refused, the root's validity swapped, or one member's value moved (the first
+# member answering a value, by key). A harness comparing nothing would pass each.
+
+
+def capped() -> Space:
+    """``a`` and ``b`` sum to at most the fact ``n`` (``cap``); ``double``, ``n`` doubled, is
+    the first member by key answering a value while ``a`` is open."""
+    return Space(
+        ("n",),
+        Scope(
+            "",
+            choices=(Choice("a", listed(1, 2)), Choice("b", listed(1, 2))),
+            derived=(Derived("double", ("n",), lambda r: 2 * r["n"]),),
+            constraints=(
+                Constraint("cap", ("a", "b", "n"), lambda r: r["a"] + r["b"] <= r["n"], "over"),
+            ),
+        ),
+    )
+
+
+CAPPED = Case("capped", capped())
+
+#: each fault, the choices stored, and the hand case's question that reports it
+PLANTED_QUESTIONS: tuple[tuple[Fault, dict[str, object], Callable[[Pair], object], str], ...] = (
+    # ``b = 2`` breaks ``cap`` with ``a`` standing: in the list and in the refused change
+    ("standing", {"a": 2}, lambda pair: pair.check_possible("b"), "the possible values of b"),
+    (
+        "standing",
+        {"a": 2},
+        lambda pair: pair.check_change(Change(commit={"b": 2})),
+        "the change commit {'b': 2}",
+    ),
+    ("possible", {}, lambda pair: pair.check_possible("a"), "the possible values of a"),
+    ("validity", {}, lambda pair: pair.check_validity(), "validity"),
+    ("value", {}, lambda pair: pair.check_answer("double"), "the answer of double"),
+)
+
+
+def test_every_planted_fault_has_a_hand_case() -> None:
+    assert {fault for fault, *_ in PLANTED_QUESTIONS} == set(FAULTS)
+
+
+@pytest.mark.parametrize(
+    ("fault", "stored", "ask", "question"),
+    PLANTED_QUESTIONS,
+    ids=[f"{fault}-{question}" for fault, _, _, question in PLANTED_QUESTIONS],
+)
+def test_a_planted_fault_is_reported_by_its_question_in_a_hand_case(
+    fault: Fault, stored: dict[str, object], ask: Callable[[Pair], object], question: str
+) -> None:
+    ask(CAPPED.start({"n": 3}, stored))  # today's engine agrees
+    with pytest.raises(Disagreement) as caught:
+        ask(CAPPED.start({"n": 3}, stored, implementation=Planted(TODAY, fault)))
+    assert (caught.value.case, caught.value.question) == ("capped", question)
+
+
+def test_a_planted_value_on_a_stored_choice_is_not_seen() -> None:
+    # The blind spot the record names: a stored choice's answer takes its value from the
+    # stored choices (``Answers.stored``), not from ``query``, so a value moved there alone
+    # is read by no form. With ``a`` stored, ``a`` is the member the fault moves.
+    planted = CAPPED.start({"n": 3}, {"a": 2}, implementation=Planted(TODAY, "value"))
+    moved = planted.engine.answers.query("a")
+    assert isinstance(moved, Available) and moved.value == ("planted-fault", 2)
+    planted.check_answer("a")
+    planted.check_state("a")
+
+
+#: walks 0-3 (the gate's 30 steps, strict) with each fault planted: the question each seed's
+#: walk reports it by. The strict run fails on every disagreement; in the full run one
+#: reaching an optional fact left out is counted under T4c, which could hide a fault. The
+#: value fault moves the first member by key answering a value: the fact ``f0`` in every
+#: one of these descriptions until a choice or a derived value sorting before it answers
+#: one, and no walk asks a fact's answer, nor reads a stored choice's value from ``query``:
+#: only seed 2 reaches one (its derived ``d``, at step 21).
+PLANTED_WALKS: dict[Fault, dict[int, str]] = {
+    "standing": {0: "facts change", 1: "facts change", 2: "possible", 3: "possible"},
+    "possible": {0: "possible", 1: "possible", 2: "possible", 3: "possible"},
+    "validity": {0: "validity", 1: "validity", 2: "validity", 3: "validity"},
+    "value": {2: "answer"},
+}
+
+FIRST_LINE = re.compile(r"seed (\d+), step \d+: the engine disagrees \((.+); strict run\)")
+
+
+@functools.cache
+def planted_walk(fault: Fault, seed: int) -> Tally:
+    return walk(seed, 30, strict=True, implementation=Planted(TODAY, fault))
+
+
+@pytest.mark.parametrize("fault", FAULTS)
+def test_a_planted_fault_is_reported_by_question_in_walks_0_to_3(fault: Fault) -> None:
+    reported: dict[int, str] = {}
+    for seed in range(4):
+        tally = planted_walk(fault, seed)
+        assert tally.implementation == f"today, planted {fault}"
+        assert tally.engine_errors == 0
+        if tally.failure is None:
+            continue
+        assert tally.failed == "disagreement", tally.failure
+        lines = tally.failure.splitlines()
+        found = FIRST_LINE.fullmatch(lines[0])
+        assert found is not None and int(found[1]) == seed, lines[0]
+        assert f"implementation: today, planted {fault}" in lines, tally.failure
+        reported[seed] = found[2]
+    assert reported == PLANTED_WALKS[fault]
+
+
+def test_the_check_against_a_cold_build_is_todays_alone() -> None:
+    # ``support.space_walk.fresh`` rebuilds today's configuration from its internals: for
+    # another implementation the check is skipped, and tallied, at every configuration and
+    # change it would have run; the bind checks run for any implementation.
+    planted = planted_walk("value", 0)
+    assert planted.failure is None
+    assert not planted.engine_checks["cold"] and not planted.engine_checks["cold change"]
+    assert planted.skipped_checks["cold"] == planted.compared
+    assert planted.skipped_checks["cold change"] == planted.steps - planted.model_only
+    assert planted.engine_checks["bind"] == planted.engine_checks["bind held"] == planted.compared
+    today = walk(0, 3, strict=True)
+    assert today.implementation == "today" and not today.skipped_checks
+    assert today.engine_checks["cold"] == today.compared
