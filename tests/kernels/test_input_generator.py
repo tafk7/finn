@@ -51,8 +51,8 @@ def test_its_nest_is_the_reorder_between_its_sequences_closing_each_marker_requi
             input_tensor=stage_tensor(13), arriving=arriving, leaving=marked, platform=FULL_DSP48E2
         )
     ).with_choices(ram_style="auto")
-    assert point.output.presented.markers == (LevelEnd(18), LevelEnd(6), LevelEnd(2))
-    assert dict(point.output.contract.markers) == {
+    assert point.output_stream.sequence.markers == (LevelEnd(18), LevelEnd(6), LevelEnd(2))
+    assert dict(point.output_contract.contract.markers) == {
         "olst[0]": LevelEnd(18),
         "olst[1]": LevelEnd(6),
         "olst[2]": LevelEnd(2),

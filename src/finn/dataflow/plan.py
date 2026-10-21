@@ -22,7 +22,7 @@ marker the consumer requires is synthesized after the last one. What stays the
 same sequence (a lane permutation, carrier padding) is a property of the
 connection, realized as wires, and not a step; so is a marker closing every beat
 (``LevelEnd.constant``), which every sequence carries. An empty plan connects
-the ends directly.
+the channel's two sides directly.
 
 The plan splits at the channel's transport (direct wires or a FIFO): its
 ``output`` side, the width conversions before the first reorder or marker step,

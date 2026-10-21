@@ -49,7 +49,7 @@ The strategies, each an objective and its constraints searched through the seam:
   for each resource named (bisection on ``TargetCycles``' budget; the best point tried
   is kept);
 - ``SizeFifos()``: every transport not held sized at the bottleneck period from
-  both ends' beat patterns (``finn.kernels.fifo_sizing``), ``direct`` or a FIFO
+  both sides' beat patterns (``finn.kernels.fifo_sizing``), ``direct`` or a FIFO
   of the least depth that keeps each producer within its idle time, proposed in
   one batch, at the stored folding: it runs after the strategies that fold;
 - ``Defaults()`` (``defaults``): every choice not held back to the value conversion's
@@ -60,14 +60,14 @@ The strategies, each an objective and its constraints searched through the seam:
 - ``Ranked(policy)``: any rank-style policy as an explorer.
 
 A FIFO's depth is sized at one bottleneck period, and a fold anywhere in the network may
-change the period or its ends after it. Nothing records what it was sized against: a
-stored transport can be checked against its stream again (``check_fifos``: sizing's own
-model at the network's period), a tool a strategy calls or does not; ``checked`` clears,
-names and leaves open each FIFO's depth, not held, that no longer keeps its producer
-within its idle time, the step a strategy composes before sizing again. A held one is kept
-and named (a limitation), and so is a ``direct`` that throttles its producer. An
-exploration checks nothing of itself: the build checks once, before emission
-(``finn.custom_op.kernels.shell.verify_partition``).
+change the period or its sides' beat patterns after it. Nothing records what it was sized
+against: a stored transport can be checked against its stream again (``check_fifos``:
+sizing's own model at the network's period), a tool a strategy calls or does not;
+``checked`` clears, names and leaves open each FIFO's depth, not held, that no longer
+keeps its producer within its idle time, the step a strategy composes before sizing
+again. A held one is kept and named (a limitation), and so is a ``direct`` that
+throttles its producer. An exploration checks nothing of itself: the build checks once,
+before emission (``finn.custom_op.kernels.shell.verify_partition``).
 """
 
 from __future__ import annotations
@@ -737,12 +737,12 @@ class Seam:
     def check_fifos(self, network: Composition) -> FifoCheck:
         """Each stored transport of ``network`` checked against its stream at the network's
         bottleneck period (``Cost.bottleneck``, as ``SizeFifos`` reads it): one simulation
-        of its channel's ends with the words it holds (``finn.kernels.fifo_sizing.holds``:
+        of its channel's sides with the words it holds (``finn.kernels.fifo_sizing.holds``:
         a FIFO's storage capacity, ``direct`` none). Nothing is recorded: a depth is stale
         when sizing's own model says it no longer keeps its producer within its idle time,
         whatever changed. A FIFO whose depth is not held is then ``stale``; a held one
         (``held``) and a ``direct`` are limitations (``FifoCheck``). A transport whose
-        depth or style is open, or whose channel's ends the model does not read, is not
+        depth or style is open, or whose channel's sides the model does not read, is not
         checked; nor is any where a member's cycles are not known. A tool a strategy calls
         or does not (no exploration calls it of itself); each call is recorded
         (``checks``)."""
@@ -885,7 +885,7 @@ class Seam:
 
     def resources(self, network: Composition) -> Stated | tuple[Finding, ...]:
         """What the network uses of the device as far as it is stated (``Stated``): its
-        own statement where it makes one (a shell's: its partition's, its ends' and its
+        own statement where it makes one (a shell's: its partition's, its movers' and its
         static region's sum), else its members' sum, exact; or, where members state none,
         the sum of those that do, a lower bound, naming the others (``Stated.unstated``);
         or why it states nothing, its findings: the open choices it waits on."""
@@ -1803,13 +1803,13 @@ class MaxThroughput:
     budget's network is costed with its reopened choices given back (``Seam.restore``:
     what the fold does not decide at its prior value, or where that is refused by its
     policy), by the network's resources as far as they are stated (``Seam.resources``: a
-    shell's adds its ends' and its static region's). Of every network tried, it keeps the
+    shell's adds its movers' and its static region's). Of every network tried, it keeps the
     one that fits with the fewest cycles, ties to the least resources (the highest
     use-to-budget ratio first, then the next; then the first tried), and returns it,
     restored as it was costed. Fewer cycles, more
     resources is the assumption, as ``TargetCycles``' is; where a budget's network
     departs from it (a larger budget reaching fewer cycles or using more, or a budget
-    relaxed above itself: an end's converter), the report states it, and the
+    relaxed above itself: a mover's converter), the report states it, and the
     search goes on as bisection: a better network it reached on the way is still kept.
 
     A member that states no resources (a compressor reducer, a memory in ``auto``, a
@@ -2043,7 +2043,7 @@ class MaxThroughput:
     def _departures(self) -> list[str]:
         """Where the budgets tried depart from the search's assumption (fewer cycles,
         more resources): a budget relaxed above itself past the fastest bottleneck, or
-        relaxed and still not met (the refold changes an end's converter); and a
+        relaxed and still not met (the refold changes a mover's converter); and a
         larger budget that reached fewer cycles or used more of a budgeted resource."""
         found = [
             f"budget {tried.cycles} relaxed to {tried.relaxed_to}, reaching {tried.reached.cycles}"
@@ -2120,7 +2120,7 @@ class _Proposal:
 
 class SizeFifos:
     """The FIFO-sizing strategy: a depth for every open
-    transport, from both ends' beat patterns at the bottleneck period.
+    transport, from both sides' beat patterns at the bottleneck period.
 
     It reopens every transport not held (``scope``: a transport, its depth and its
     style), and reads the period from the seam's cost, every member's cycles at the
@@ -2128,7 +2128,7 @@ class SizeFifos:
     not known refuses it), and the open transports from the network's choices: an open
     choice on a ``Channel`` one of whose cases nests the Decisions a ``FifoKernel``
     declares (its ``depth`` and ``ram_style``) and another nothing. For each it reads
-    the channel's ends (``finn.kernels.fifo_sizing.size``: the least depth keeping the
+    the channel's sides (``finn.kernels.fifo_sizing.size``: the least depth keeping the
     producer within its idle time) and proposes, all in one batch, ``direct`` or
     the FIFO case with its depth (the least DEPTH whose storage holds the least words
     plus ``margin``, in the storage of the style the FIFO is built in), the style
@@ -2136,7 +2136,7 @@ class SizeFifos:
     held value (kept, not committed), else its earlier value, else the interim channel
     rule's, ``auto`` (FinnLib's own selection by depth and width) (``_style``). A channel
     the model does not read (a
-    boundary without an end, a memory source) is direct, with why. Where the seam refuses
+    boundary without a mover, a memory source) is direct, with why. Where the seam refuses
     a channel's FIFO, that channel falls back to direct, its refusal reported, and the
     batch is attempted again.
 

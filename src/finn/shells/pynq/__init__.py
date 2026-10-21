@@ -1,13 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The ``pynq`` shell's build: the Zynq block design around the partition, its ends'
+"""The ``pynq`` shell's build: the Zynq block design around the partition, its movers'
 IODMAs, and the PYNQ driver its host runtime runs.
 
 - ``runner``: the block design from the integration export, Vivado run on it, and what
   it made (``build_pynq``); the shell's options (``PynqOptions``); the bitfile's build
   as a transformation of the build's parent graph (``BuildPynqBitfile``).
-- ``iodma`` and ``ipgen``: each end's IODMA, an HLS IP packaged as its instance, a frozen
+- ``iodma`` and ``ipgen``: each mover's IODMA, an HLS IP packaged as its instance, a frozen
   extraction of the HWCustomOp flow's ``IODMA_hls`` and its IP generation.
 - ``driver``: the PYNQ driver and its description, and their transformation
   (``MakePynqDriver``).

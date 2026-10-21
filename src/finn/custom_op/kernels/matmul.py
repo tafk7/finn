@@ -78,9 +78,9 @@ class MatMul(KernelOp):
     kernel = MatMulKernel
     ports = ("x", "w")
     wiring = {
-        "x": Wiring("x_tensor", "x_end"),
-        "w": Wiring("w_tensor", "w_end", "w_contents", "carried_weights", "stored_weights"),
-        "y": Wiring("result_tensor", "y_end"),
+        "x": Wiring("x_tensor", "x_contract"),
+        "w": Wiring("w_tensor", "w_contract", "w_contents", "carried_weights", "stored_weights"),
+        "y": Wiring("result_tensor", "y_contract"),
     }
     parameters = ("w",)
     anchor = ("", "MatMul")

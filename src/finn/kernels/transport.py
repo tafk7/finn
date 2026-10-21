@@ -1,14 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Transport: native ready/valid pins, AXIS, and the contract of one channel end.
+"""Transport: native ready/valid pins, AXIS, and the contract of one side of a channel.
 
 **Ready/valid.** A transfer occurs on the associated rising clock edge with
 valid and ready, outside reset. Valid data and sidebands are held while
-stalled. ``ReadyValidStream`` describes the native pins; ``AxisBeat`` a
+stalled. ``ReadyValidTransport`` describes the native pins; ``AxisBeat`` a
 homogeneous AXIS beat, lane zero lowest, with only the complete beat padded to a
 byte boundary. Scalar encodings keep their QONNX widths. A kernel's
-``AxiStreamPort`` (``finn.kernels.port``) builds one from its lanes.
+``AxiStreamPort`` (``finn.kernels.port``) builds one from its lanes (``transport``).
 
 **Contracts.** A ``StreamContract`` joins three levels, each owned elsewhere
 and checked here together:
@@ -17,9 +17,9 @@ and checked here together:
 - physical: packing of the lanes into the transport word, lane zero lowest;
 - protocol: the ready/valid (or AXIS) pins, marker pins and clock/reset names.
 
-``compatibility`` compares a producing and a consuming end's sequences, markers
+``compatibility`` compares a producing and a consuming side's sequences, markers
 and pins; their elements are the channel's ``well_formed``
-(``finn.dataflow.ends.misfit``: the producer's values fit the tensor's element,
+(``finn.dataflow.streams.misfit``: the producer's values fit the tensor's element,
 and the tensor's fit the consumer's). A logical
 mismatch is the channel's to repair: its plan (``finn.dataflow.plan``) names the
 steps (reorder or replay, width conversion, markers) and its adapter carries
@@ -80,7 +80,7 @@ class StreamMarker:
 
 
 @dataclass(frozen=True)
-class ReadyValidStream:
+class ReadyValidTransport:
     """Unpadded native pins, optionally lowered to a byte-aligned AXI interface.
 
     LAST only identifies a frame boundary; the kernel supplies its cross-port
@@ -219,14 +219,14 @@ class AxisBeat:
         """Lower to the existing, purely physical ABI representation."""
         return self.native(clock=clock, reset=reset).axis_bus()
 
-    def native(self, *, clock: str | None = None, reset: str | None = None) -> ReadyValidStream:
+    def native(self, *, clock: str | None = None, reset: str | None = None) -> ReadyValidTransport:
         """The native transport underlying this typed, padded AXI profile."""
 
         def pin(member: str) -> str:
             spelled = member.upper() if self.spelling is AxisSpelling.UPPER else member
             return f"{self.name}_{spelled}"
 
-        return ReadyValidStream(
+        return ReadyValidTransport(
             self.name,
             self.data_width,
             self.endpoint,
@@ -239,7 +239,7 @@ class AxisBeat:
         )
 
 
-# -- the contract of one channel end -------------------------------------------------------
+# -- the contract of one side of a channel -------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -250,7 +250,7 @@ class Mismatch:
 
 @dataclass(frozen=True)
 class StreamContract:
-    """One channel end: its transport plus the logical sequence it carries.
+    """One side of a channel: its transport plus the logical sequence it carries.
 
     ``markers`` pairs a transport marker with the rule it follows, in key
     order: a one-bit marker by its signal (``olast``), or one bit of a wider
@@ -258,13 +258,13 @@ class StreamContract:
     guarantees; for a consumer, requirements. Transport markers without a rule
     can be neither required nor matched.
 
-    ``pace`` is when the end presents its beats (``finn.dataflow.schedule.Pace``):
-    a kernel's port states its schedule's; ``None`` for an end no schedule paces (a
+    ``pace`` is when the side presents its beats (``finn.dataflow.schedule.Pace``):
+    a kernel's port states its schedule's; ``None`` for a side no schedule paces (a
     given sequence, a memory, a boundary, a channel's stage). Sizing a FIFO reads
-    it; whether two ends connect does not.
+    it; whether two sides connect does not.
     """
 
-    transport: ReadyValidStream
+    transport: ReadyValidTransport
     element: ScalarEncoding
     form: Traversal
     repetition: Repetition = Repetition.ONCE
@@ -272,8 +272,8 @@ class StreamContract:
     pace: Pace | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.transport, ReadyValidStream):
-            raise TypeError("a stream contract has a ReadyValidStream transport")
+        if not isinstance(self.transport, ReadyValidTransport):
+            raise TypeError("a stream contract has a ReadyValidTransport transport")
         if not isinstance(self.element, ScalarEncoding) or not isinstance(self.form, Traversal):
             raise TypeError("a stream contract has a ScalarEncoding element and a Traversal")
         if not isinstance(self.repetition, Repetition):
@@ -312,7 +312,7 @@ class StreamContract:
 
     @property
     def sequence(self) -> BeatSequence:
-        """The logical sequence this end presents, without its transport."""
+        """The logical sequence this side presents, without its transport."""
         return BeatSequence(self.form, self.repetition, tuple(self.rules.values()))
 
 
@@ -335,10 +335,10 @@ def compatibility(
     needs, or a mismatch no chain repairs, ``channel-form``; a marker it must make,
     ``channel-marker``. The pins are checked here.
 
-    Elements are not compared: a channel's ``well_formed`` holds each end against
+    Elements are not compared: a channel's ``well_formed`` holds each side against
     its tensor's element, and every stage between carries that element.
 
-    ``*_is_top`` marks an end on the composed module's own boundary, whose
+    ``*_is_top`` marks a side on the composed module's own boundary, whose
     endpoint direction is seen from outside (a top input is a source inside).
     """
     found: list[Mismatch] = []
@@ -433,7 +433,7 @@ __all__ = [
     "AxisBeat",
     "MarkerKind",
     "Mismatch",
-    "ReadyValidStream",
+    "ReadyValidTransport",
     "STREAM_CONTRACT",
     "StreamContract",
     "StreamMarker",

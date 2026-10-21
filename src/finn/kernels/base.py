@@ -7,39 +7,48 @@ A kernel is a Space whose choices configure hardware. Each base declares what a 
 its kind states, with the engine's ``required()``: a class that leaves one unmet is a base
 of kernels (dotp's cores share one), not placed. The rest is checked when a class is made.
 
+A **declaration of a kernel** (``KernelDeclaration``) is a plain frozen value in its class
+body, not a Space: a stream port (``finn.kernels.port``), or a port a kernel with children
+presents for one of them (``finn.kernels.port.served``). When the class is made, the kernel
+base lowers each into ordinary members of the kernel, named ``<name>_<what>``: derived
+values, constraints and views (``lower``), each reading the kernel's members by the names
+its declaration gives, never dynamically. What a leaf's module reads of a declaration (its
+pins, what it holds idle, its read of a tensor, the beats it carries a frame) it states
+with the member paths each reads (``reads``), and the leaf's products that span them read
+those by name, their reads declared per class when the class is made.
+
 A **leaf** (``LeafKernel``) binds one FinnLib module. It states its ``rtl_module`` and
 ``sources`` (an HLS kernel's one source is its build request), its ``parameters``, its
 ``resource_use`` (a refusal where it has no model of it, never nothing), the constraints
-by which it refuses what it cannot build, and its ports (``finn.kernels.port``), each
-stream port taking the tensor it reads as a fact (absent: an idle port). It may state its
-``clocking``, and ``other_pins``, ``held`` and ``controlled`` for pins that are no port's.
-The base derives its module (``codegen``, a ``Leaf``), checks its pins (the constraints
-``pins_accounted``, ``clocked``), and takes its cycles as the most beats any of its ports
-carries a frame.
+by which it refuses what it cannot build, and its ports, each stream port taking the
+tensor it reads as a fact (absent: an idle port). It may state its ``clocking``, which
+every port runs on, and ``other_pins``, ``held`` and ``controlled`` for pins that are no
+port's. The base derives its module (``codegen``, a ``Leaf``: clocking, other pins, then
+each port's pins in declaration order), checks its pins (the constraint
+``pins_accounted``), binds its indices' extents from its ports' reads of their tensors
+(``extents``), and takes its cycles as the most beats any of its ports carries a frame.
 
-A **kernel with children** (``ComposedKernel``) places kernels and channels, and names
-for each interface it presents (``interfaces``) the child that serves it. It merges its
+A **kernel with children** (``ComposedKernel``) places kernels and channels, and declares
+each port it presents as served by a child (``finn.kernels.port.served``). It merges its
 members' netlists and control buses, and is no module of its own: a network
 (``finn.kernels.network``) composes one. A channel is one (``finn.kernels.channels``).
 
-Every constraint of a kernel, of its ports and of its present children counts toward its
-validity (``inspection.validity``), and each of its views is a product: it refuses while
-the kernel is refused, and answers while the kernel is undecided. A kernel states one
-contract per stream interface: a view ``<name>_end`` of a ``PortEnd`` (on a leaf
-``interface("x")``; on a kernel with children the serving child's, labelled below it:
-MatMul's ``compute.packed.x``). Every kernel exports its netlist (``NETLIST``), a leaf
-its module (``MODULE``), and what an exploration ranks by: ``CYCLES``, ``BUFFERING`` and
-``RESOURCES``, views like the rest, so a refused kernel's cost refuses too. A port
-exports the values its kernel reads to bind its extents (``ACCESS``) and check its clock
-(``CLOCKED``): values, so a port's refusal stands in its kernel's validity and never in
-the kernel's extents or domains.
+Every constraint of a kernel and of its present children counts toward its validity
+(``inspection.validity``), and each of its views is a product: it refuses while the kernel
+is refused, and answers while the kernel is undecided. A kernel states one contract per
+stream port: a view ``<name>_contract`` of a ``PortContract`` (a leaf's port's, labelled
+``x``; on a kernel with children the serving child's, labelled below it: MatMul's
+``compute.packed.x``). Every kernel exports its netlist (``NETLIST``), a leaf its module
+(``MODULE``), and what an exploration ranks by: ``CYCLES``, ``BUFFERING`` and
+``RESOURCES``, views like the rest, so a refused kernel's cost refuses too.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, replace
-from typing import Any, ClassVar, cast
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any, ClassVar, Literal, TypeVar, cast
 
 from finn.core.space import (
     DefinitionError,
@@ -54,7 +63,6 @@ from finn.core.space import (
     derived,
     reject,
     required,
-    view,
 )
 from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, bind_extents
 from finn.kernels.artifacts import ArtifactError
@@ -106,35 +114,15 @@ relative to itself; whatever holds it (a network, a kernel with children) merges
 under its node."""
 
 BOUNDARY = ViewKey("boundary", default_semantics(tuple))
-"""A channel's AXIS bus on its network's boundary: one, or none when both of its ends are
-kernels."""
-
-PINS = ViewKey("pins", default_semantics(tuple))
-"""A port's pins (signals, or one bus), collected by its kernel into the module's pins."""
-
-CLOCKED = ViewKey("clocked", default_semantics(str))
-"""The clock pin a port runs on, collected by its kernel (``clocked``): a value export,
-read whatever the port's validity."""
-
-ACCESS = ViewKey("access", default_semantics(Access))
-"""A placed scheduled input's read of its tensor, collected by its kernel to bind the
-extents of its indices (``finn.dataflow.schedule.bind_extents``): a value export, read
-whatever the port's validity, so a port's refusal never refuses its kernel's extents."""
-
-HELD_SEMANTICS = default_semantics(Held)
-HELD = ViewKey("held", HELD_SEMANTICS)
-"""What an idle port holds, collected by its kernel's leaf."""
-
-BEATS = ViewKey("beats", default_semantics(int))
-"""The beats a placed stream port carries a frame, collected by its leaf: the leaf's cycles
-are the most of them (``LeafKernel.frame_cycles``)."""
+"""A channel's AXIS bus on its network's boundary: one, or none when both of its sides are
+kernels' ports."""
 
 CYCLES = ViewKey("cycles", default_semantics(int))
 """The clock cycles a frame takes through a kernel or a channel: a leaf's the most beats
 any of its ports carries; a kernel with children's its slowest member's."""
 
 BUFFERING = ViewKey("buffering", default_semantics(int))
-"""The bits a channel's stages hold between its ends: a stage's its own (an
+"""The bits a channel's stages hold between its sides: a stage's its own (an
 ``input_gen``'s buffer, a FIFO's depth); a kernel with children's, a channel's among
 them, the sum over its members."""
 
@@ -145,24 +133,24 @@ its members."""
 
 
 @dataclass(frozen=True)
-class PortEnd:
-    """The end a port presents on a channel: its ``contract`` and its ``label``, the port's
-    path relative to the member that states the end (``x`` for a leaf's port,
+class PortContract:
+    """The contract a port presents to a channel: its ``contract`` and its ``label``, the
+    port's path relative to the member that states it (``x`` for a leaf's port,
     ``compute.packed.x`` for MatMul's, ``source.memstream.set`` for a channel's source's
-    set port; empty for an end the member presents itself, which is no port's).
+    set port; empty for a contract the member presents itself, which is no port's).
     ``under`` labels it from the network (or kernel with children) that holds the
     member."""
 
     label: str
     contract: StreamContract
 
-    def under(self, member: str) -> PortEnd:
-        """The end as seen from where ``member`` is held."""
-        return PortEnd(f"{member}.{self.label}" if self.label else member, self.contract)
+    def under(self, member: str) -> PortContract:
+        """The contract as seen from where ``member`` is held."""
+        return PortContract(f"{member}.{self.label}" if self.label else member, self.contract)
 
 
-PORT_END = default_semantics(PortEnd)
-"""A ``PortEnd``'s value semantics: a frozen value, compared by value."""
+PORT_CONTRACT = default_semantics(PortContract)
+"""A ``PortContract``'s value semantics: a frozen value, compared by value."""
 
 
 NATIVE_CLOCKING = Clocking(clock="clk", reset="rst", active_low=False)
@@ -201,6 +189,95 @@ def merged(
         return reject("kernel-netlist", str(error))
 
 
+Product = Literal["pins", "held", "access", "beats"]
+"""What a leaf's module reads of a declaration: its pins (``KernelDeclaration.pins``), what it
+holds idle (``held``), its read of a tensor (``access``) and the beats it carries a frame
+(``beats``)."""
+
+_F = TypeVar("_F", bound=Callable[..., object])
+
+
+def declared_reads(*paths: str) -> Callable[[_F], _F]:
+    """Declare what a method reads by names its source computes (``__reads__``: dotted
+    paths from ``self``), which stand in for its source in the reads the engine infers; the
+    engine holds the method to them when it runs."""
+
+    def declare(function: _F) -> _F:
+        function.__reads__ = paths  # type: ignore[attr-defined]
+        return function
+
+    return declare
+
+
+class KernelDeclaration:
+    """A declaration of a kernel: a plain frozen value in its class body, lowered into
+    ordinary members of the kernel when the class is made (``lower``). The module
+    docstring says what one states.
+
+    A kind of declaration states its lowering beside its declaration, and what a leaf's
+    module reads of it: by default nothing. Each product is a function of the kernel's
+    configuration by the names its lowering fixes, and ``reads`` names the member paths
+    each reads, which the leaf declares as its products' reads."""
+
+    def lower(self, owner: type[Kernel], name: str) -> Mapping[str, object]:
+        """The members it adds to ``owner``, where it is declared as ``name``, by name."""
+        raise NotImplementedError
+
+    def reads(self, name: str, product: Product) -> tuple[str, ...]:
+        """The member paths ``product`` reads of it, declared as ``name``."""
+        return ()
+
+    def pins(self, kernel: LeafKernel, name: str) -> tuple[Pin, ...] | Rejected:
+        """Its pins of the module, in order."""
+        return ()
+
+    def held(self, kernel: LeafKernel, name: str) -> Held | Rejected:
+        """The pins of the module it holds."""
+        return Held()
+
+    def access(self, kernel: LeafKernel, name: str) -> Access | None:
+        """Its read of a tensor, from which the leaf binds its indices' extents; None for
+        none."""
+        return None
+
+    def beats(self, kernel: LeafKernel, name: str) -> int | None:
+        """The beats it carries a frame; None for none."""
+        return None
+
+
+def declarations(cls: type[Kernel], below: type[Kernel]) -> dict[str, KernelDeclaration]:
+    """The declarations of ``cls`` and its bases down to, not including, ``below``, by name,
+    in the order they are declared (a base's first)."""
+    found: dict[str, KernelDeclaration] = {}
+    for base in reversed(cls.__mro__[: cls.__mro__.index(below)]):
+        for name, value in vars(base).items():
+            if isinstance(value, KernelDeclaration):
+                found[name] = value
+            elif name in found:
+                del found[name]  # a member of the same name in a subclass replaces it
+    return found
+
+
+def _lower(cls: type[Kernel]) -> None:
+    """Each declaration of ``cls``'s own body, lowered into its members."""
+    for name, value in list(vars(cls).items()):
+        if not isinstance(value, KernelDeclaration):
+            continue
+        for member, declaration in value.lower(cls, name).items():
+            if member in vars(cls):
+                raise DefinitionError.broken(
+                    "declaration-member-taken",
+                    "Kernel",
+                    f"{cls.__qualname__}.{name} lowers to {member}, which the class "
+                    "declares itself",
+                    declaration=f"{cls.__qualname__}.{name}",
+                )
+            setattr(cls, member, declaration)
+            set_name = getattr(declaration, "__set_name__", None)
+            if set_name is not None:
+                set_name(cls, member)
+
+
 class Kernel(Space):
     """A named Space class configuring hardware: a ``LeafKernel`` or a ``ComposedKernel``
     (the module docstring). ``defaults`` fixes the default of a choice it declares, by its
@@ -213,6 +290,7 @@ class Kernel(Space):
 
     def __init_subclass__(cls, *, protocol: bool = False, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
+        _lower(cls)
         if "defaults" in vars(cls):
             stated_defaults(cls, cls.defaults)
         if protocol:
@@ -258,6 +336,74 @@ _LEAF_REQUIRED = ("rtl_module", "parameters", "sources", "resource_use")
 """What a leaf states by ``required()``; a class that states them all is checked for the
 rest of the protocol when it is made."""
 
+_CODEGEN_READS = ("clocking", "parameters", "sources", "other_pins", "holds")
+"""What a leaf's module reads of it beyond its declarations' pins."""
+
+_T = TypeVar("_T")
+
+
+def _each(results: Iterable[_T | Rejected]) -> list[_T] | Rejected:
+    """Each result, or, where any is refused, every refusal's findings together."""
+    found = list(results)
+    refused = [result for result in found if isinstance(result, Rejected)]
+    if refused:
+        return Rejected(
+            tuple(dict.fromkeys(item for result in refused for item in result.findings))
+        )
+    return cast("list[_T]", found)
+
+
+def _spanning(cls: type[LeafKernel]) -> None:
+    """The leaf's products that span its declarations, made for ``cls`` when it is made: its
+    module (``codegen``), what it holds (``holds``), its cycles (``frame_cycles``) and its
+    reads of its tensors (``_accesses``, which its extents bind from). Each reads each
+    declaration by the names its lowering fixes, its reads declared from ``cls``'s
+    declarations (``KernelDeclaration.reads``). A product a class states itself is kept."""
+    found = declarations(cls, LeafKernel)
+    cls._declarations = MappingProxyType(found)
+
+    def paths(product: Product, *own: str) -> tuple[str, ...]:
+        each = (path for name, item in found.items() for path in item.reads(name, product))
+        return tuple(dict.fromkeys((*own, *each)))
+
+    @declared_reads(*paths("pins", *_CODEGEN_READS))
+    def codegen(self: LeafKernel) -> Leaf | Rejected:
+        return LeafKernel._codegen(self)
+
+    @declared_reads(*paths("held", "clocking", "held"))
+    def holds(self: LeafKernel) -> Held | Rejected:
+        return LeafKernel._holds(self)
+
+    @declared_reads(*paths("beats"))
+    def frame_cycles(self: LeafKernel) -> int | Rejected:
+        return LeafKernel._frame_cycles(self)
+
+    @declared_reads(*paths("access"))
+    def _accesses(self: LeafKernel) -> list[Access]:
+        return [
+            access
+            for name, item in found.items()
+            if (access := item.access(self, name)) is not None
+        ]
+
+    for function in (codegen, holds, frame_cycles):
+        name = function.__name__
+        if any(
+            name in vars(base) and not _made(vars(base)[name])
+            for base in cls.__mro__[: cls.__mro__.index(LeafKernel)]
+        ):
+            continue  # stated by the class, or a base of it below the leaf's
+        member = derived(function)
+        cast(Any, function)._spanning = True
+        setattr(cls, name, member)
+        cast(Any, member).__set_name__(cls, name)
+    cls._accesses = _accesses  # type: ignore[method-assign]
+
+
+def _made(member: object) -> bool:
+    """Whether ``member`` is a product ``_spanning`` made."""
+    return bool(getattr(getattr(member, "function", None), "_spanning", False))
+
 
 class LeafKernel(Kernel, protocol=True):
     """A kernel binding one module: see the module docstring for what it states."""
@@ -270,16 +416,17 @@ class LeafKernel(Kernel, protocol=True):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
-        from finn.kernels.port import Port  # noqa: PLC0415 (port.py builds on this module)
+        from finn.kernels.port import AxiStreamPort  # noqa: PLC0415 (port.py builds on this module)
 
+        _spanning(cls)
         if not all(_declared(cls, name, LeafKernel) for name in _LEAF_REQUIRED):
             return  # a base of leaves (dotp's cores'), which cannot be placed
         members = _members(cls, LeafKernel)
-        if not any(isinstance(value, Port) for value in members.values()):
+        if not any(isinstance(value, AxiStreamPort) for value in members.values()):
             raise DefinitionError.broken(
                 "leaf-ports-unplaced",
                 "LeafKernel",
-                f"{cls.__qualname__} places no port: a leaf states its ports",
+                f"{cls.__qualname__} declares no port: a leaf states its ports",
                 declaration=cls.__qualname__,
             )
         children = sorted(name for name, value in members.items() if isinstance(value, Kernel))
@@ -294,9 +441,16 @@ class LeafKernel(Kernel, protocol=True):
 
     # -- what a leaf may state ------------------------------------------------------------
 
+    # The clock and reset (and its polarity) its ports and its module run on: a class
+    # constant, since no kernel computes their names. A leaf on FinnLib's native pins states
+    # ``NATIVE_CLOCKING``.
+    clock_domain: ClassVar[Clocking] = Clocking()
+
     @derived
     def clocking(self) -> Clocking:
-        return Clocking()
+        """Its module's clocking: its ``clock_domain``; a leaf with a doubled clock builds
+        on it (``replace(type(self).clock_domain, doubled=..., doubling=...)``)."""
+        return type(self).clock_domain
 
     @derived
     def other_pins(self) -> tuple[Pin, ...]:
@@ -314,20 +468,21 @@ class LeafKernel(Kernel, protocol=True):
         placement names)."""
         return ()
 
-    # -- its ports ------------------------------------------------------------------------
+    # -- its declarations' parts of its module (each class's own: ``_spanning``) ----------
 
-    port_pins = Members(PINS)
-    port_holds = Members(HELD)
-    port_clocks = Members(CLOCKED)
-    port_accesses = Members(ACCESS)
-    port_beats = Members(BEATS)
+    # Its declarations (``declarations``), by name, in the order they are declared.
+    _declarations: ClassVar[Mapping[str, KernelDeclaration]] = {}
+
+    @declared_reads()
+    def _accesses(self) -> list[Access]:
+        """Each declaration's read of a tensor, in declaration order."""
+        return []
 
     # -- extents and the schedule --------------------------------------------------------
 
     def _bound(self, extents: Mapping[Index, int] | None = None) -> dict[Index, int] | Rejected:
-        accesses = [replace(item.value, name=item.node or "") for item in self.port_accesses]
         try:
-            return bind_extents(accesses, extents)
+            return bind_extents(self._accesses(), extents)
         except Refused as error:
             return reject("kernel-extents", str(error))
 
@@ -371,23 +526,39 @@ class LeafKernel(Kernel, protocol=True):
 
     # -- its module, and its pins accounted for -------------------------------------------
 
-    @derived
-    def holds(self) -> Held:
-        """What the module holds: the doubled clock while unused, idle ports, its own."""
-        parts = (Held(self.clocking.held()), *(item.value for item in self.port_holds), self.held)
+    def _holds(self) -> Held | Rejected:
+        """``holds``: the doubled clock while unused, what each declaration holds (an idle
+        port's pins), its own."""
+        clocking = self.clocking
+        found = _each(
+            declaration.held(self, name) for name, declaration in type(self)._declarations.items()
+        )
+        if isinstance(found, Rejected):
+            return found
+        parts = (Held(clocking.held()), *found, self.held)
         return Held(
             tuple(pin for part in parts for pin in part.inputs),
             tuple(pin for part in parts for pin in part.unused),
         )
 
     @derived
-    def codegen(self) -> Leaf:
-        """The module: clocking, its other pins, then every port's pins; its parameters,
-        sources and data; and what it holds."""
+    @declared_reads("clocking", "held")
+    def holds(self) -> Held | Rejected:
+        """What the module holds: the doubled clock while unused, idle ports, its own."""
+        return LeafKernel._holds(self)
+
+    def _codegen(self) -> Leaf | Rejected:
+        """``codegen``: the module, from its clocking, its parameters, each declaration's
+        pins, its sources, its other pins and what it holds."""
         space_type = type(self)
         clocking = self.clocking
         parameters = tuple(sorted(self.parameters.items()))
-        pins = tuple(pin for item in self.port_pins for pin in item.value)
+        found = _each(
+            declaration.pins(self, name) for name, declaration in space_type._declarations.items()
+        )
+        if isinstance(found, Rejected):
+            return found
+        pins = tuple(pin for part in found for pin in part)
         contributions = self.sources
         return Leaf(
             space_type.id,
@@ -404,6 +575,13 @@ class LeafKernel(Kernel, protocol=True):
             self.holds,
         )
 
+    @derived
+    @declared_reads(*_CODEGEN_READS)
+    def codegen(self) -> Leaf | Rejected:
+        """The module: clocking, its other pins, then every port's pins; its parameters,
+        sources and data; and what it holds."""
+        return LeafKernel._codegen(self)
+
     @constraint
     def pins_accounted(self) -> bool | Rejected:
         """Every input among its other pins is held, or presented as a control bus."""
@@ -416,15 +594,6 @@ class LeafKernel(Kernel, protocol=True):
                 "kernel-pins",
                 f"{type(self).__qualname__}: the inputs {loose} are neither held nor presented",
             )
-        return True
-
-    @constraint
-    def clocked(self) -> bool | Rejected:
-        """Every port runs on the module's clock."""
-        clock = self.clocking.clock
-        other = [f"{item.node} on {item.value}" for item in self.port_clocks if item.value != clock]
-        if other:
-            return reject("kernel-clock", f"ports run off the clock {clock}: {', '.join(other)}")
         return True
 
     @derived(semantics=MODULE_SEMANTICS)
@@ -444,11 +613,13 @@ class LeafKernel(Kernel, protocol=True):
 
     # -- what a design space exploration ranks by ------------------------------------------
 
-    @derived
-    def frame_cycles(self) -> int | Rejected:
-        """The clock cycles a frame takes: the most beats any of its ports carries a frame,
-        one beat a cycle at best."""
-        found = [item.value for item in self.port_beats]
+    def _frame_cycles(self) -> int | Rejected:
+        """``frame_cycles``: the most beats any declaration carries a frame."""
+        found = [
+            beats
+            for name, declaration in type(self)._declarations.items()
+            if (beats := declaration.beats(self, name)) is not None
+        ]
         if not found:
             return reject(
                 "kernel-cycles", f"no port of {type(self).__qualname__} carries a stream's beats"
@@ -456,8 +627,15 @@ class LeafKernel(Kernel, protocol=True):
         return max(found)
 
     @derived
+    @declared_reads()
+    def frame_cycles(self) -> int | Rejected:
+        """The clock cycles a frame takes: the most beats any of its ports carries a frame,
+        one beat a cycle at best."""
+        return LeafKernel._frame_cycles(self)
+
+    @derived
     def held_bits(self) -> int:
-        """The bits it holds between a channel's ends: none, but for a stage that buffers
+        """The bits it holds between a channel's sides: none, but for a stage that buffers
         (a FIFO, an ``input_gen``), which states its own."""
         return 0
 
@@ -483,24 +661,6 @@ class LeafKernel(Kernel, protocol=True):
 
 class ComposedKernel(Kernel, protocol=True):
     """A kernel with children: see the module docstring for what it states."""
-
-    # The interfaces it presents, by name, each a view ``<name>_end``; a stage presents none.
-    interfaces: ClassVar[tuple[str, ...]] = required(tuple)
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-        names = cls.interfaces
-        if not isinstance(names, tuple):
-            return  # unmet: the class is a base of kernels with children, not placed
-        missing = [name for name in names if not hasattr(cls, f"{name}_end")]
-        if missing:
-            raise DefinitionError.broken(
-                "composed-end-absent",
-                "ComposedKernel",
-                f"{cls.__qualname__} presents the interfaces {missing} without their ends: "
-                "each is a view <name>_end naming the child that serves it",
-                declaration=cls.__qualname__,
-            )
 
     # -- its children: their netlists, merged ---------------------------------------------
 
@@ -566,17 +726,6 @@ class ComposedKernel(Kernel, protocol=True):
     }
 
 
-def interface(port: str) -> PortEnd:
-    """A view of a leaf: the end its port ``port`` presents (``Port.contract``), labelled
-    ``port``. Name it in the class body after the interface (``x_end = interface("x")``)."""
-
-    def end(self: LeafKernel) -> PortEnd:
-        contract: StreamContract = getattr(self, port).contract
-        return PortEnd(port, contract)
-
-    return cast(PortEnd, view(semantics=PORT_END)(end))
-
-
 def extent_of(index: Index) -> int:
     """A derived member of a leaf: ``index``'s extent, bound from its placed ports.
 
@@ -595,23 +744,21 @@ def extent_of(index: Index) -> int:
 
 
 __all__ = [
-    "ACCESS",
-    "BEATS",
     "BOUNDARY",
     "BUFFERING",
-    "CLOCKED",
     "CYCLES",
     "ComposedKernel",
-    "HELD",
     "Kernel",
+    "KernelDeclaration",
     "LeafKernel",
     "NATIVE_CLOCKING",
     "NETLIST",
-    "PINS",
-    "PORT_END",
-    "PortEnd",
+    "PORT_CONTRACT",
+    "PortContract",
+    "Product",
     "RESOURCES",
+    "declarations",
+    "declared_reads",
     "extent_of",
-    "interface",
     "merged",
 ]

@@ -5,10 +5,10 @@ from typing import assert_type
 
 from support.helpers import FULL_DSP48E2, in_order, stage_tensor
 
-from finn.core.space import BoundValue, ViewAssessment, design_space
+from finn.core.space import BoundValue, Rejected, ViewAssessment, design_space
 from finn.kernels.fifo import FifoKernel, FifoStorage
-from finn.kernels.port import AxiStreamPort
-from finn.kernels.transport import ReadyValidStream
+from finn.kernels.port import AxiStreamPort, transport
+from finn.kernels.transport import ReadyValidTransport
 
 
 def declare() -> None:
@@ -25,6 +25,7 @@ def declare() -> None:
 
 def check(fifo: FifoKernel) -> None:
     assert_type(fifo.storage, FifoStorage)
-    assert_type(fifo.input.transport, ReadyValidStream)
+    found = transport(*FifoKernel.input.viewed(fifo, "input"), FifoKernel.clock_domain)
+    assert_type(found, ReadyValidTransport | Rejected)
     assert_type(fifo.inspect(FifoKernel.storage), ViewAssessment[FifoStorage])
     assert_type(fifo.field(FifoKernel.storage), BoundValue[FifoStorage])

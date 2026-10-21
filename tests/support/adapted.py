@@ -35,8 +35,8 @@ def values(rows: int = ROWS, channels: int = CHANNELS) -> tuple[tuple[int, ...],
 
 def adapted(source: Traversal, pe: int, *, adaptable: bool = True) -> Network:
     """A cyclic producer presenting ``source``, thresholding ``pe`` channels a beat. The
-    network builds each channel once its ends are known and gives its choices their first
-    valid values (the interim channel rule): its adapters, their memories and its
+    network builds each channel once its ports' contracts are known and gives its choices
+    their first valid values (the interim channel rule): its adapters, their memories and its
     transport; a channel refused on its own facts is left as it is."""
     rows, channels = source.shape
 
@@ -48,14 +48,14 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True) -> Network:
             "x": wire(
                 tensor=x_tensor,
                 adaptable=adaptable,
-                producer=Interface("producer", "output_end"),
-                consumer=Interface("activate", "input_end"),
+                producer=Interface("producer", "output_contract"),
+                consumer=Interface("activate", "input_contract"),
                 platform=FULL_DSP48E2,
             ),
             "y": wire(
                 tensor=y_tensor,
                 port="out0_V",
-                producer=Interface("activate", "output_end"),
+                producer=Interface("activate", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
             "producer": MemStreamKernel(
@@ -113,13 +113,13 @@ def transposed(
             "a": wire(
                 tensor=tensor,
                 port="in0_V",
-                consumer=Interface("shuffle", "input_end"),
+                consumer=Interface("shuffle", "input_contract"),
                 platform=platform,
             ),
             "b": wire(
                 tensor=tensor,
                 port="out0_V",
-                producer=Interface("shuffle", "output_end"),
+                producer=Interface("shuffle", "output_contract"),
                 platform=platform,
             ),
             "shuffle": TransposeKernel(input_tensor=tensor, platform=platform),

@@ -4,7 +4,7 @@
 """A channel's choices, stored as metadata on the tensor the channel carries (the
 ``finn.channel`` namespace).
 
-A channel belongs to its tensor, not to the nodes at its ends, so its choices are
+A channel belongs to its tensor, not to the nodes on its sides, so its choices are
 stored there, and only in a partition's body.
 """
 

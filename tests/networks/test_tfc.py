@@ -44,12 +44,12 @@ from finn.transformation.kernels.package import ElaboratePartition, boundary_fac
 LOGITS = "MatMul_3_out0"
 FRAMES = 2
 """Images streamed through the partition in XSim, back to back."""
-# The partition's boundary, the ends' facts in the Zynq shell:
+# The partition's boundary, its free sides' and movers' facts in the Zynq shell:
 # 784 UINT8 pixels in 49 beats of 16 lanes, which an IODMA_hls reads from a 128-bit port
 # with no width converter; ten INT7 logits over [-61, 61] (the last MatMul's columns over its
 # activations' range, [-1, 1], K7) in one beat of 72 bits, which an IODMA_hls writes through
 # a converter to an 8-bit port, nine words.
-END = {"kind": "iodma_hls", "frames_per_call": 1, "control_buses": 1}
+MOVER = {"kind": "iodma_hls", "frames_per_call": 1, "control_buses": 1}
 FACTS = (
     [
         {
@@ -61,8 +61,8 @@ FACTS = (
             "lanes": 16,
             "beats": 49,
             "tdata": 128,
-            "end": {
-                **END,
+            "mover": {
+                **MOVER,
                 "direction": "in",
                 "memory_width": 128,
                 "words": 49,
@@ -81,8 +81,8 @@ FACTS = (
             "lanes": 10,
             "beats": 1,
             "tdata": 72,
-            "end": {
-                **END,
+            "mover": {
+                **MOVER,
                 "direction": "out",
                 "memory_width": 8,
                 "words": 9,

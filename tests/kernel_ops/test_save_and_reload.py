@@ -16,7 +16,7 @@ network is bound again from the graph (``network``):
   it (here);
 - **a rule a changed fact makes false** over stored choices: the bind is refused, naming
   the rule, until the choices are changed (here);
-- **its scope left unknown** (a core not stated): a channel whose ends wait holding its
+- **its scope left unknown** (a core not stated): a channel whose contracts wait holding its
   choices (here);
 - **a key the network does not have**: a node's attribute no choice declares refuses the
   bind, by name (here); a channel's choices on a tensor that is no channel are dropped and
@@ -195,9 +195,9 @@ def test_a_channel_choice_a_rule_a_changed_fact_makes_false_refuses_the_bind() -
 # -- a scope left unknown ------------------------------------------------------------------------
 
 
-def test_a_channel_whose_ends_wait_on_a_core_not_stated_holds_its_choices() -> None:
+def test_a_channel_whose_contracts_wait_on_a_core_not_stated_holds_its_choices() -> None:
     """The MatMul's ``compute`` not stated (written away, as a graph FINN did not write
-    holds it), on DSP58, where it has two possible values: its ends are unknown, so the
+    holds it), on DSP58, where it has two possible values: its contracts are unknown, so the
     weights' channel and the input's wait on it, unbound, each holding the choices stored
     on its tensor; none is stale. Saving writes them back on their tensors; bound again,
     the channels wait on ``compute`` holding the same choices."""

@@ -7,7 +7,7 @@ The first layer produces its results PE = 4 lanes a beat, each row once; the
 second reads them as activations, SIMD = 2 lanes a beat, each row once per
 output fold, framed by reduction. Neither kernel knows the other: each
 presents its own traversal of the hidden tensor, derived from its own schedule
-over its own folding factors, and the channel between them takes both ends.
+over its own folding factors, and the channel between them takes both contracts.
 The channel between them plans a width conversion, a replay and the frame, and
 its adapter places a ``vpc`` and an ``input_gen``. The network's module computes
 ``(x @ W1) @ W2`` in XSim, weights stored ``(k, n)``; a channel that admits no
@@ -78,7 +78,7 @@ def _period(layer: Any, pe: int, simd: int) -> Traversal:
         design_space(layer),
         {"pe": pe, "simd": simd, "compute_pumping": False, "reducer": "tree"},
     )
-    return period(folded.w.presented.form)
+    return period(folded.w_stream.sequence.form)
 
 
 def layered(*, adaptable: bool = True) -> Network:
@@ -99,32 +99,32 @@ def layered(*, adaptable: bool = True) -> Network:
                 platform=FULL_DSP48E2,
                 tensor=x_tensor,
                 port="in0_V",
-                consumer=Interface("first", "x_end"),
+                consumer=Interface("first", "x_contract"),
             ),
             "w1": wire(
                 tensor=w1_tensor,
-                producer=Interface("rom1", "output_end"),
-                consumer=Interface("first", "w_end"),
+                producer=Interface("rom1", "output_contract"),
+                consumer=Interface("first", "w_contract"),
                 platform=FULL_DSP48E2,
             ),
             "h": wire(
                 tensor=h_tensor,
                 adaptable=adaptable,
-                producer=Interface("first", "y_end"),
-                consumer=Interface("second", "x_end"),
+                producer=Interface("first", "y_contract"),
+                consumer=Interface("second", "x_contract"),
                 platform=FULL_DSP48E2,
             ),
             "w2": wire(
                 tensor=w2_tensor,
-                producer=Interface("rom2", "output_end"),
-                consumer=Interface("second", "w_end"),
+                producer=Interface("rom2", "output_contract"),
+                consumer=Interface("second", "w_contract"),
                 platform=FULL_DSP48E2,
             ),
             "y": wire(
                 platform=FULL_DSP48E2,
                 tensor=y_tensor,
                 port="out0_V",
-                producer=Interface("second", "y_end"),
+                producer=Interface("second", "y_contract"),
             ),
             "first": _layer(*layers["first"][:4]),
             "second": _layer(*layers["second"][:4]),
@@ -183,9 +183,9 @@ def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input
         "h.output_adapter.vpc.vpc",
         "h.adapter.input_gen.input_gen",
     } <= set(labels(built(point, STEM)))
-    # The ends belong to the layers' ports; the instances are the layers'.
-    ends = hidden.endpoints
-    assert (ends.source_owner, ends.sink_owner) == ("first.y", "second.x")
+    # The sides belong to the layers' ports; the instances are the layers'.
+    sides = hidden.sides
+    assert (sides.source_owner, sides.sink_owner) == ("first.y", "second.x")
     assert [(link.source.instance, link.sink.instance) for link in hidden.netlist.links] == [
         ("^first", "output_adapter.vpc.vpc"),
         ("output_adapter.vpc.vpc", "adapter.input_gen.input_gen"),
@@ -212,7 +212,7 @@ def test_the_network_s_cycles_are_its_slowest_member_s_and_its_buffering_their_s
     # The hidden stream's input_gen replays each row once per output fold: twelve beats.
     assert point.member("h").query(Channel.cycles).value == 12 == cycles["second"]
     assert cycles_of(point).value == max(cycles.values()) == 12
-    # Only channels hold bits between their ends.
+    # Only channels hold bits between their sides.
     held = sum(point.member(name).query(Channel.buffering).value for name in CHANNELS)
     assert sum(point.query(name, BUFFERING).value for name in KERNELS) == 0 and held > 0
 

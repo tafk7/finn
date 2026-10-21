@@ -67,8 +67,8 @@ def test_its_input_is_each_matrix_flat_and_its_output_each_column(simd: int) -> 
     flat = np.arange(BATCHES * ROWS * COLS).reshape(MATRICES)
     rows_in = flat.reshape(-1, simd).tolist()
     columns = flat.transpose(0, 2, 1).reshape(-1, simd).tolist()
-    assert _beats(kernel.input.presented.form) == rows_in
-    assert _beats(kernel.output.presented.form) == columns
+    assert _beats(kernel.input_stream.sequence.form) == rows_in
+    assert _beats(kernel.output_stream.sequence.form) == columns
     parameters = dict(kernel.module.parameters)
     assert parameters == {"BITS": 4, "I": ROWS, "J": COLS, "RAM_STYLE": '"auto"', "SIMD": simd}
     widths = {pin.name: pin.width for pin in kernel.module.abi.pins if isinstance(pin, Signal)}
@@ -83,7 +83,7 @@ def test_a_producer_of_rows_at_another_lane_count_is_only_a_width_conversion_awa
     in width only, wherever its beats end."""
     produced = BeatSequence(vector_major(MATRICES, 1))
     for simd in SIMDS:
-        assert plan(produced, _transpose(simd).input.presented).steps == (Step.WIDTH,)
+        assert plan(produced, _transpose(simd).input_stream.sequence).steps == (Step.WIDTH,)
 
 
 def test_its_output_is_its_inputs_matrices() -> None:

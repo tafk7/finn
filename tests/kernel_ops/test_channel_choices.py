@@ -113,7 +113,7 @@ def test_a_channels_choices_are_typed_entries_of_its_tensor() -> None:
 
 
 def test_the_writer_is_checked_by_replaying_the_network() -> None:
-    """Only the network holds both of a channel's ends: a choice it refuses, a key no
+    """Only the network holds both sides of a channel: a choice it refuses, a key no
     channel declares, a value of another type and a tensor that is no channel are
     refused, by the seam's code, and nothing is written; a choice is cleared on its tensor (the
     seam has no clearing). (A choice under an adapter not selected is no refusal: it is

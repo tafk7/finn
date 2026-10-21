@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Shell rows: what each shell gives a partition on each board (its ends, budgets,
+"""Shell rows: what each shell gives a partition on each board (its movers, budgets,
 clocks, integration, host runtime and static region) and what it costs.
 
 ``ip`` is the packaged IP for the user to integrate, on any part. ``pynq`` is the Zynq
@@ -18,7 +18,7 @@ from finn.core.reporting.findings import Finding, FindingKind
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.module import Fragment
 from finn.kernels.artifacts.top import doubled, top_buses
-from finn.kernels.ends import ENDS, IODMA_HLS, EndOffer, iodma_hls
+from finn.kernels.movers import IODMA_HLS, MOVERS, MoverOffer, iodma_hls
 from finn.kernels.utilization import SHELL_CHARACTERISED, Fit
 from finn.platform.boards import BOARDS
 from finn.platform.capabilities import Resources
@@ -53,7 +53,7 @@ class Scaled:
 
 @dataclass(frozen=True, kw_only=True)
 class StaticRegion:
-    """A shell's own logic beside the partition and its ends, each IP with its
+    """A shell's own logic beside the partition and its movers, each IP with its
     resources out of context. The memory interconnect takes one master per memory
     port, and the control interconnect gives one slave per AXI-Lite bus. The processor
     addresses the AXI-Lite buses from ``control_base``, in connection order, each
@@ -91,18 +91,18 @@ class ShellRow:
     """What a shell gives and takes for one board (``board``: ``None`` for the row of
     any board):
 
-    - ``ends``: the ends it offers each boundary channel's free side, each kind
-      ``ENDS`` knows, once;
-    - ``control_budget``: the AXI-Lite buses the partition and its ends may present
+    - ``movers``: the movers it offers each boundary channel's free side, each kind
+      ``MOVERS`` knows, once;
+    - ``control_budget``: the AXI-Lite buses the partition and its movers may present
       together (``None``: no bound);
     - ``memory_ports``: the AXI memory ports the partition itself may use, beside its
-      ends' (``None``: no bound);
+      movers' (``None``: no bound);
     - ``clk2x``: it supplies an aligned doubled clock;
     - ``integration``: how the shell is put together around the partition (``None``:
       by its user);
     - ``host_runtime``: what runs it on the host (``None``: the user's);
     - ``static_region``: its own logic (``None``: none of its own);
-    - ``characterised``: where its ends' and static region's statements were
+    - ``characterised``: where its movers' and static region's statements were
       characterised and the shell built and timed (``None``: it states neither);
     - ``caveat``: what that does not cover on its board, as a report states it
       (``None``: nothing: its board is one it was built and timed on, or it states
@@ -111,7 +111,7 @@ class ShellRow:
 
     shell: str
     board: str | None
-    ends: tuple[EndOffer, ...]
+    movers: tuple[MoverOffer, ...]
     control_budget: int | None
     memory_ports: int | None
     clk2x: bool
@@ -122,12 +122,12 @@ class ShellRow:
     caveat: str | None
 
     def __post_init__(self) -> None:
-        kinds = [offer.kind for offer in self.ends]
-        unknown = sorted(set(kinds) - set(ENDS))
+        kinds = [offer.kind for offer in self.movers]
+        unknown = sorted(set(kinds) - set(MOVERS))
         if unknown:
-            raise ValueError(f"no end of kind {', '.join(unknown)} (one of {sorted(ENDS)})")
+            raise ValueError(f"no mover of kind {', '.join(unknown)} (one of {sorted(MOVERS)})")
         if len(set(kinds)) != len(kinds):
-            raise ValueError(f"a shell offers each kind of end once, not {kinds}")
+            raise ValueError(f"a shell offers each kind of mover once, not {kinds}")
 
 
 def bus_counts(fragment: Fragment, boundary: Iterable[Bus]) -> tuple[int, int, bool]:
@@ -145,17 +145,17 @@ def bus_counts(fragment: Fragment, boundary: Iterable[Bus]) -> tuple[int, int, b
     return control, memory, doubled(fragment)
 
 
-def budgets(row: ShellRow, counts: tuple[int, int, bool], ends: int) -> tuple[Finding, ...]:
-    """Why ``row`` refuses a module of these ``counts`` (``bus_counts``) whose ends
-    present ``ends`` AXI-Lite buses: its budgets (``ShellRow``), each by code;
+def budgets(row: ShellRow, counts: tuple[int, int, bool], movers: int) -> tuple[Finding, ...]:
+    """Why ``row`` refuses a module of these ``counts`` (``bus_counts``) whose movers
+    present ``movers`` AXI-Lite buses: its budgets (``ShellRow``), each by code;
     none where it admits it."""
     control, memory, doubled = counts
     refused: tuple[str, str] | None = None
-    if row.control_budget is not None and control + ends > row.control_budget:
+    if row.control_budget is not None and control + movers > row.control_budget:
         refused = (
             "interface-budget-exceeded",
             f"the {row.shell!r} shell takes {row.control_budget} AXI-Lite buses; the "
-            f"partition presents {control} and its ends {ends}",
+            f"partition presents {control} and its movers {movers}",
         )
     elif row.memory_ports is not None and memory > row.memory_ports:
         refused = (
@@ -177,7 +177,7 @@ def budgets(row: ShellRow, counts: tuple[int, int, bool], ends: int) -> tuple[Fi
 IP_ROW = ShellRow(
     shell=IP,
     board=None,
-    ends=(),
+    movers=(),
     control_budget=None,
     memory_ports=None,
     clk2x=True,
@@ -191,7 +191,7 @@ IP_ROW = ShellRow(
 and the IP's integrator supplies the doubled clock."""
 
 PYNQ_MEMORY_PORT = 128
-"""The bits of the processing system's HP port the Zynq template connects each end to,
+"""The bits of the processing system's HP port the Zynq template connects each mover to,
 on every board it builds for."""
 
 PYNQ_CONTROL_BUDGET = 9
@@ -201,11 +201,11 @@ PYNQ_TIMED = ("Ultra96",)
 """The boards the ``pynq`` shell was built and timed on."""
 
 PYNQ_CHARACTERISED = (
-    f"ends ({IODMA_HLS}) and static region {SHELL_CHARACTERISED} (ends on xczu3eg, the "
+    f"movers ({IODMA_HLS}) and static region {SHELL_CHARACTERISED} (movers on xczu3eg, the "
     f"static region on xczu3eg and xczu7ev); the shell built and timed on "
     f"{', '.join(PYNQ_TIMED)} only"
 )
-"""Where the ``pynq`` rows' ends and static region were characterised, and the shell
+"""Where the ``pynq`` rows' movers and static region were characterised, and the shell
 built and timed."""
 
 
@@ -216,7 +216,7 @@ def pynq_caveat(board: str) -> str | None:
         return None
     return (
         f"the {PYNQ!r} shell was built and timed on {', '.join(PYNQ_TIMED)} only, and its "
-        f"ends and static region characterised {SHELL_CHARACTERISED}: on {board} "
+        f"movers and static region characterised {SHELL_CHARACTERISED}: on {board} "
         f"({BOARDS[board].part}) its cost is carried over, not measured"
     )
 
@@ -248,7 +248,7 @@ ROWS: dict[tuple[str, str | None], ShellRow] = {
         (PYNQ, board): ShellRow(
             shell=PYNQ,
             board=board,
-            ends=(iodma_hls(PYNQ_MEMORY_PORT),),
+            movers=(iodma_hls(PYNQ_MEMORY_PORT),),
             control_budget=PYNQ_CONTROL_BUDGET,
             memory_ports=0,
             clk2x=False,

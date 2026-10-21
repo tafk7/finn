@@ -311,7 +311,7 @@ def test_the_phases_run_their_steps_in_order_to_the_partition_tfc_makes_by_hand(
     # both.
     point, boundary = configured_network(built, "partition")
     inputs, outputs = boundary_facts(built, point, boundary, "partition")
-    assert [(port["tensor"], port["end"]["kind"]) for port in inputs + outputs] == [
+    assert [(port["tensor"], port["mover"]["kind"]) for port in inputs + outputs] == [
         ("Reshape_0_out0", "iodma_hls"),
         ("MatMul_3_out0", "iodma_hls"),
     ]
@@ -431,7 +431,7 @@ def step_fold_my_way(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrap
 
 def _is_levels(channel: Channel) -> bool:
     """The Chain's activations (activate's output)."""
-    return str(channel.endpoints.source_owner).startswith("activate.")
+    return str(channel.sides.source_owner).startswith("activate.")
 
 
 def _levels_need(period: int) -> int:
@@ -713,7 +713,7 @@ def test_an_output_is_listed_after_the_outputs_it_is_made_from(tmp_path: Path) -
         assert failed_checks(config(tmp_path, steps=steps)) == {}
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
+    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -739,7 +739,7 @@ def test_a_deployment_ships_only_the_bitfile_and_driver_its_build_made(tmp_path:
     code."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
+    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -832,7 +832,7 @@ def test_the_bitfiles_objective_is_the_target_its_partition_records(
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
+    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -878,7 +878,7 @@ def test_the_bitfiles_clock_findings_are_noted(
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
+    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -934,14 +934,14 @@ def test_a_step_that_moves_the_target_s_folding_leaves_the_bitfile_no_objective(
     """A step after the target throughput that changes a kernel's choice removes the body's
     objective, whatever its strategy, and one that changes none keeps it: the bitfile
     states no target its final folding was not explored for. On the Chain in the Zynq
-    shell the ends bound the period at 16 cycles a frame: the target's folding is already
+    shell the movers bound the period at 16 cycles a frame: the target's folding is already
     the fastest within it, so the maximum throughput changes nothing there, while the hold
     and the baselines move it."""
     monkeypatch.setattr(build_dataflow_steps, "BuildPynqBitfile", ObjectiveSeen)
     monkeypatch.setattr(ObjectiveSeen, "seen", [])
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
+    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     settings: dict[str, dict[str, Any]] = {
@@ -1077,7 +1077,7 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     ) == (6, 5, 73)
     assert report["open"] == []
     assert report["fifos"] == "not sized here (no size_fifos): each transport as it was"
-    # The Zynq shell's input end binds: 196 beats and a call's 4 cycles (SZ3 (a): a
+    # The Zynq shell's input mover binds: 196 beats and a call's 4 cycles (SZ3 (a): a
     # frame a call), within the budget of 200; the slowest of the other members, the
     # first layer's activations, weights, thresholds and MatMul, tie at 196.
     assert report["bottleneck"] == {"members": ["Reshape_0_out0"], "cycles": 200}
@@ -1088,7 +1088,7 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
         "MultiThreshold_0_out0",
         "MatMul_0_param0",
     ]
-    assert set(report["ends"]) == {"Reshape_0_out0", "MatMul_3_out0"}
+    assert set(report["movers"]) == {"Reshape_0_out0", "MatMul_3_out0"}
 
 
 @pytest.mark.slow
@@ -1115,20 +1115,20 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     assert sized == plain
     assert plain_report["open"] == report["open"] == []
     sizing = report["strategy"]
-    # At the period the input end sets.
+    # At the period the input mover sets.
     assert (sizing["strategy"], sizing["period"], sizing["fifo_bits"]) == ("size_fifos", 200, 0)
     # It reopens the 13 transports and changes none.
     assert [target["strategy"]["committed"], sizing["committed"]] == [11, 0]
     assert sizing["reopened"] == 13
     assert report["fifos"] == "sized by size_fifos: 13 channels, 0 FIFOs placed"
-    # The ends change no choice: TFC is built with the 57 values of the build before the
+    # The movers change no choice: TFC is built with the 57 values of the build before the
     # engine core, and the 27 forcing left unstored (``TFC_STORED``).
     assert sized == TFC_STORED
     assert sum(map(len, TFC_BUILT.values())) == 57 and sum(map(len, sized.values())) == 84
     rows = sizing["channels"]
     assert {row["transport"] for row in rows.values()} == {"direct"}
     whys = {name: row["why"] for name, row in rows.items()}
-    # Each boundary is read through its end.
+    # Each boundary is read through its mover.
     assert whys["Reshape_0_out0"] == whys["MatMul_3_out0"] == "direct absorbs it"
     assert {whys[f"MatMul_{index}_param0"] for index in range(4)} == {
         "a memory source: paced by its consumer"
@@ -1205,7 +1205,7 @@ Z0_SETTINGS = {"target_fps": 1_000_000}
 #: stubbed (``tfc_zynq_build``): SetFolding's folding, the label select on the host.
 ZYNQ_BUILD = capture("tfc_zynq_build")
 
-#: The oracle's partition names, by the build's instance names: its ends' instances,
+#: The oracle's partition names, by the build's instance names: its movers' instances,
 #: and ``partition`` for the partition between them.
 INSTANCES = {
     partition["name"]: (
@@ -1247,23 +1247,29 @@ def z0_tfc(z0_cut: Path) -> ModelWrapper:
 
 
 @pytest.mark.slow
-def test_the_export_of_tfc_on_pynq_names_both_ends_iodmas_and_every_connection(
+def test_the_export_of_tfc_on_pynq_names_both_movers_iodmas_and_every_connection(
     z0_tfc: ModelWrapper, z0_cut: Path
 ) -> None:
-    """Z0's TFC (Ultra96, 5 ns, Z0's chain) on pynq: the export configures each end's
+    """Z0's TFC (Ultra96, 5 ns, Z0's chain) on pynq: the export configures each mover's
     IODMA_hls as ZynqBuild inserted it, names the block design's connections as Z0's
     ip_config.tcl makes them (its partition then named StreamingDataflowPartition_1),
     and the partition is Z0's module, with Z0's choices."""
     parent, output = z0_tfc, z0_cut.parent / "output"
     export = integration(parent)
-    assert [(end.instance, end.tensor, end.port) for end in export.ends] == [
+    assert [(mover.instance, mover.tensor, mover.port) for mover in export.movers] == [
         ("idma0", "Reshape_0_out0", "s_axis_0"),
         ("odma0", "MatMul_3_out0", "m_axis_0"),
     ]
-    assert [end.iodma.attributes for end in export.ends] == [Z0_IODMAS["in"], Z0_IODMAS["out"]]
+    assert [mover.iodma.attributes for mover in export.movers] == [
+        Z0_IODMAS["in"],
+        Z0_IODMAS["out"],
+    ]
     # The bytes' element is the channel's: the pixels and the logits, INT7 over the last
     # MatMul's range, [-61, 61], read from the activations' [-1, 1].
-    assert [str(end.contract.element) for end in export.ends] == ["UINT8", "INT7 over [-61, 61]"]
+    assert [str(mover.contract.element) for mover in export.movers] == [
+        "UINT8",
+        "INT7 over [-61, 61]",
+    ]
     clocked = [
         Connection(kind, f"smartconnect_0/{source}", f"{instance}/{pin}")
         for instance in ("idma0", "partition", "odma0")
@@ -1393,29 +1399,29 @@ def test_the_runner_writes_z0s_block_design_for_tfc(z0_tfc: ModelWrapper) -> Non
 def test_the_runner_generates_z0s_iodmas_for_tfc(
     z0_tfc: ModelWrapper, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Each end's IODMA_hls, generated in its scratch model (``prepare_ip``, for real: code
+    """Each mover's IODMA_hls, generated in its scratch model (``prepare_ip``, for real: code
     generation runs no tool), is Z0's code, text for text, staged as an HLS request whose
     script names no path of the build and no part: it reads both."""
     monkeypatch.setenv("FINN_BUILD_DIR", str(tmp_path))
     export = integration(z0_tfc)
-    for end in export.ends:
-        model = prepare_ip(iodma_model(end), export.period_ns)
+    for mover in export.movers:
+        model = prepare_ip(iodma_model(mover), export.period_ns)
         (node,) = model.graph.node
         request = Path(str(getCustomOp(node).get_nodeattr("code_gen_dir_ipgen"))) / "request"
         assert sorted(path.name for path in request.iterdir()) == [
             "script.tcl",
             f"top_{node.name}.cpp",
         ]
-        assert (request / f"top_{node.name}.cpp").read_text() == Z0_IODMA_CODE[end.instance]
+        assert (request / f"top_{node.name}.cpp").read_text() == Z0_IODMA_CODE[mover.instance]
         script = (request / "script.tcl").read_text()
         assert str(tmp_path) not in script and export.part not in script
         assert 'set config_proj_part "$part"\n' in script
         assert 'set config_bnnlibdir "$hlslib"\n' in script
 
 
-#: TFC's bottleneck at Z0's choices on its partition's network, ends included: the input end's 196
-#: beats and its call's constant, 4 (cycles a frame; Z0's report, without the ends,
-#: read its slowest layer's 196).
+#: TFC's bottleneck at Z0's choices on its partition's network, movers included: the input
+#: mover's 196 beats and its call's constant, 4 (cycles a frame; Z0's report, without the
+#: movers, read its slowest layer's 196).
 TFC_BOTTLENECK = 200
 
 #: The generated driver's io_shape_dict for TFC at Z0's choices, as the build's
@@ -1443,7 +1449,7 @@ TFC_IO_SHAPES = {
 def tool_recorders(tmp_path: Path) -> dict[str, object]:
     """The runner's tool steps, each replaced by one that states what the tool would
     have made, in ``tmp_path``: prepare_ip and hls_synth_ip do nothing,
-    create_stitched_ip states an end's IP, PackagePartition the partition's."""
+    create_stitched_ip states a mover's IP, PackagePartition the partition's."""
 
     class Packaged(Transformation):
         def __init__(self, name: str, **kwargs: object) -> None:
@@ -1491,7 +1497,7 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     - The parent graph stays the build's model and states what a later step consumes,
       typed, and no flat key: the bitfile and its handoff, no report; the reports are
       collected beside them, the delivered clock's with the partition's network's
-      bottleneck, ends included.
+      bottleneck, movers included.
     - The driver's io_shape_dict is the build's before the runner, the logits
       INT7, and it sets PL0 to the delivered clock; report/driver.json states what it
       takes and returns.
@@ -1547,9 +1553,9 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     for model in (reread, body):
         assert list(model.model.metadata_props) == []
     integrated = json.loads((report / "integration.json").read_text())
-    assert [end["iodma"] for end in integrated["ends"]] == [Z0_IODMAS["in"], Z0_IODMAS["out"]]
+    assert [mover["iodma"] for mover in integrated["movers"]] == [Z0_IODMAS["in"], Z0_IODMAS["out"]]
     # The delivered clock against the one asked, the bottleneck the partition's network's,
-    # its ends included: the input end.
+    # its movers included: the input mover.
     clock = json.loads((report / "delivered_clock.json").read_text())
     bottleneck = shell_bottleneck(body)
     assert bottleneck is not None
@@ -1565,13 +1571,13 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
     members = stated["members"]
     rows = {
         "partition": members["partition"],
-        **{f"ends.{key}": row for key, row in members["ends"].items()},
+        **{f"movers.{key}": row for key, row in members["movers"].items()},
         **{f"static_region.{key}": row for key, row in members["static_region"].items()},
     }
     assert {key: row["instance"] for key, row in rows.items()} == {
         "partition": "partition",
-        "ends.Reshape_0_out0": "idma0",
-        "ends.MatMul_3_out0": "odma0",
+        "movers.Reshape_0_out0": "idma0",
+        "movers.MatMul_3_out0": "odma0",
         "static_region.zynq_ultra_ps_e": "zynq_ps",
         "static_region.proc_sys_reset": "rst_zynq_ps_",
         "static_region.smartconnect": "smartconnect_0",
@@ -1583,23 +1589,27 @@ def test_the_build_makes_tfc_on_pynq_to_its_driver_and_deployment(
 
     assert {key: row["model"] for key, row in rows.items()} == {
         "partition": counts(5270, 7077, 19, 100),
-        "ends.Reshape_0_out0": counts(1305, 2279, 4),
-        "ends.MatMul_3_out0": counts(1390, 2069),
+        "movers.Reshape_0_out0": counts(1305, 2279, 4),
+        "movers.MatMul_3_out0": counts(1390, 2069),
         "static_region.zynq_ultra_ps_e": counts(264, 0),
         "static_region.proc_sys_reset": counts(19, 40),
         "static_region.smartconnect": counts(5364, 8530),
         "static_region.axi_interconnect": counts(1402, 1535),
     }
     # FakeVivado's runs: idma0, the partition and the SmartConnect, each its own LUTs.
-    synthesized = {"partition": 200, "ends.Reshape_0_out0": 100, "static_region.smartconnect": 300}
+    synthesized = {
+        "partition": 200,
+        "movers.Reshape_0_out0": 100,
+        "static_region.smartconnect": 300,
+    }
     assert {key: row["out_of_context"] for key, row in rows.items()} == {
         key: counts(synthesized[key], 10, 5, 3) if key in synthesized else None for key in rows
     }
     # The placed hierarchy lists neither the processor nor its reset.
     assert {key: row["placed"] for key, row in rows.items()} == {
         "partition": counts(400, 800, 3, 4),
-        "ends.Reshape_0_out0": counts(100, 250, 2),
-        "ends.MatMul_3_out0": counts(90, 240),
+        "movers.Reshape_0_out0": counts(100, 250, 2),
+        "movers.MatMul_3_out0": counts(90, 240),
         "static_region.zynq_ultra_ps_e": None,
         "static_region.proc_sys_reset": None,
         "static_region.smartconnect": counts(300, 500),
@@ -1681,7 +1691,7 @@ def test_a_driver_without_its_bitfile_or_its_clock_is_refused(tmp_path: Path) ->
     so is a parent graph that states no bitfile."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
+    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)
@@ -1731,7 +1741,7 @@ def test_a_bitfile_built_from_another_design_or_ip_is_refused_by_name(
     bitfile, the partition and both designs or keys, before anything is written."""
     model = kernel_model()
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # its ends, as the cut makes them
+    model = model.transform(MakeCutChoices())  # its movers, as the cut makes them
     configure_partition(model)
     parent = model.transform(CutKernelPartition(tmp_path / "cut"))
     cfg = config(tmp_path)

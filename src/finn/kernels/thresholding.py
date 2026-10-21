@@ -46,9 +46,9 @@ constraint of the kernel, refusing the case by name (``uram-absent``, ``uram-ini
 All native pins remain present when AXI-Lite or set selection is disabled;
 disabled outputs may be unspecified. Bound by a network (or placed in a kernel with
 children), it reads an input tensor and (with several sets) a tensor of set indices,
-facts it is given, and writes its output tensor; it states the end of each of its ports
-(``input_end``, ``output_end``, ``set_end``), which the channels on them take; its
-AXI-Lite bus is presented, at the port its placement names (``control``), when
+facts it is given, and writes its output tensor; it states the contract of each of its
+ports (``input_contract``, ``output_contract``, ``set_contract``), which the channels on
+them take; its AXI-Lite bus is presented, at the port its placement names (``control``), when
 thresholds are runtime-writable (``controlled``), and otherwise held idle by its
 module, as is the set selector of a single set. Presented, the bus carries the writes that
 put the kernel's table into the memories (``register_map``), at the addresses
@@ -63,6 +63,7 @@ Biases below -N-1 are refused: the native unsigned width expression creates a
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING, ClassVar
 
 from qonnx.core.ranges import TensorRange
 
@@ -86,7 +87,8 @@ from finn.dataflow.datatypes import (
     resolve_qonnx_datatype_name,
 )
 from finn.dataflow.schedule import Index, Schedule
-from finn.dataflow.tensor import Tensor
+from finn.dataflow.streams import Stream
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import CLOCK, RESET, Bus, Endpoint, Member, Pin, StandardProtocol
 from finn.kernels.artifacts.contributions import (
@@ -96,7 +98,7 @@ from finn.kernels.artifacts.contributions import (
     hex_image,
 )
 from finn.kernels.artifacts.module import Held, RegisterMap
-from finn.kernels.base import LeafKernel, extent_of, interface
+from finn.kernels.base import LeafKernel, extent_of
 from finn.kernels.control import CONTROL, Control, held_bus
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import (
@@ -310,7 +312,7 @@ class ThresholdingAxiKernel(LeafKernel):
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def input_dtype(self) -> QONNXDataType:
         """The input's element type: its tensor's."""
-        return self.input.element.dtype
+        return self.input_element.dtype
 
     @constraint
     def types_supported(self) -> bool | Rejected:
@@ -474,7 +476,7 @@ class ThresholdingAxiKernel(LeafKernel):
         shape = self.set_tensor.shape
         if self.shape[0] < 2:
             return reject("threshold-set-channel", "a single threshold set takes no set channel")
-        if shape != (self.input.presented.form.beats,):
+        if shape != (self.input_stream.sequence.form.beats,):
             return reject("threshold-set-channel", "each input beat needs one set index")
         return BeatSequence(vector_major(shape, 1))
 
@@ -515,9 +517,9 @@ class ThresholdingAxiKernel(LeafKernel):
         sequence=set_sequence,
         dtype=selector_dtype,
     )
-    input_end = interface("input")
-    output_end = interface("output")
-    set_end = interface("set")
+    if TYPE_CHECKING:  # members its ports lower to, which it reads
+        input_element: ClassVar[ScalarEncoding]
+        input_stream: ClassVar[Stream]
 
     @derived
     def thresholds_file(self) -> GeneratedData:

@@ -2,23 +2,23 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """A partition's network in its shell (``InShell``, bound by ``in_shell``): the network of
-its KernelOps (``finn.custom_op.kernels.network``) with the ends the row of the model's
+its KernelOps (``finn.custom_op.kernels.network``) with the movers the row of the model's
 target's shell offers (``finn.platform.shells.shell_row``) on its boundary channels, and
 the shell as functions over it, over its netlist (``Partition.netlist``: the module's
 buses counted without building the module, ``finn.platform.shells.bus_counts``) and its
-channels' end contracts.
+channels' mover contracts.
 
 - **budgets** (``budget_refusal``, by the row's ``finn.platform.shells.budgets``):
-  the AXI-Lite buses the module presents and its ends present (each end's contract,
-  ``END``) within the row's ``control_budget``, and the AXI memory ports the module
+  the AXI-Lite buses the module presents and its movers present (each mover's contract,
+  ``MOVER``) within the row's ``control_budget``, and the AXI memory ports the module
   initiates within its ``memory_ports``, each refused as ``interface-budget-exceeded``;
   a module that takes an aligned doubled clock needs a row that supplies one
   (``clk2x``), refused as ``clock-unavailable``. The ``ip`` row bounds neither count.
   Of the configured netlist, so a network is within them once it is decided;
 - **resources** (``shell_resources``; ``InShell.own_resources``, which the seam reads):
-  the sum of its members' own statements (``Partition.own_resources``), each end's (its
+  the sum of its members' own statements (``Partition.own_resources``), each mover's (its
   contract's) and its row's static region's, at the memory ports and AXI-Lite buses it
-  connects (the module's and its ends'). The ends' and the static region's are out of context
+  connects (the module's and its movers'). The movers' and the static region's are out of context
   (``SHELL_CHARACTERISED``), which overstates the placed shell. The ``ip`` shell has
   neither, so its resources are its members'.
 
@@ -29,9 +29,9 @@ check too, ``Seam.check_fifos``), and records the design it verified on the body
 (packaging, the shell's integration, the testbench) compares it (``refuse_unverified``),
 and refuses a design never verified or changed since. Simulation and elaboration only
 bind. The cut makes a body's channel choices (``make_cut_choices``) on its network in its
-shell, which alone holds both of a boundary channel's ends, by the interim channel rule
-(``finn.kernels.network.interim_channel_defaults``: first valid, replaced by the ends
-pass), and writes them with ``persist``.
+shell, which alone holds both sides of a boundary channel, by the interim channel rule
+(``finn.kernels.network.interim_channel_defaults``: first valid, for now), and writes
+them with ``persist``.
 """
 
 from __future__ import annotations
@@ -63,9 +63,9 @@ from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import CYCLES
 from finn.kernels.configure import chosen
 from finn.kernels.defaults import defaulted
-from finn.kernels.ends import END, EndContract
 from finn.kernels.explore import FifoCheck, Seam
 from finn.kernels.members import Facts
+from finn.kernels.movers import MOVER, MoverContract
 from finn.kernels.network import Key, Wire, dotted, interim_channel_defaults
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -78,23 +78,23 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class ShellResources:
     """A shell's resources by member, each its own statement: ``partition``, the module
-    (its kernels and channels, the boundary channels' stages included); ``ends``, each
-    end by its boundary channel's node in the module (``member``); ``static_region``,
+    (its kernels and channels, the boundary channels' stages included); ``movers``, each
+    mover by its boundary channel's node in the module (``member``); ``static_region``,
     each of its row's static IPs by its Vivado IP. ``total`` is their sum."""
 
     partition: Resources
-    ends: tuple[tuple[str, Resources], ...]
+    movers: tuple[tuple[str, Resources], ...]
     static_region: tuple[tuple[str, Resources], ...]
 
     @property
     def total(self) -> Resources:
-        return total((self.partition, *(used for _, used in self.ends + self.static_region)))
+        return total((self.partition, *(used for _, used in self.movers + self.static_region)))
 
 
 class InShell(Partition):
-    """A partition's network in its shell (``in_shell``): its shell's ``row``, whose ends
+    """A partition's network in its shell (``in_shell``): its shell's ``row``, whose movers
     its boundary channels were offered. What it uses (``own_resources``, which the seam
-    reads) is the shell's: its members', its ends' and its static region's sum
+    reads) is the shell's: its members', its movers' and its static region's sum
     (``shell_resources``). Immutable, as a network: a change returns another, which keeps
     its row."""
 
@@ -109,7 +109,7 @@ class InShell(Partition):
         self.row = row
 
     def own_resources(self) -> QueryResult[Resources]:
-        """What the shell uses: its members', its ends' and its static region's sum
+        """What the shell uses: its members', its movers' and its static region's sum
         (``shell_resources``)."""
         found = _resources(self)
         return Available(found.value.total) if isinstance(found, Available) else _together([found])
@@ -117,7 +117,7 @@ class InShell(Partition):
 
 def in_shell(model: ModelWrapper, nodes: Iterable[NodeProto], *, name: str = PARTITION) -> InShell:
     """The network of ``nodes``, KernelOp nodes of ``model`` (``network``), in the shell of
-    the model's target: its row (``shell_row``) offers its ends on the boundary channels."""
+    the model's target: its row (``shell_row``) offers its movers on the boundary channels."""
     return _bound(model, list(nodes), name, {})
 
 
@@ -131,7 +131,7 @@ def _bound(
     in place of those the tensor states."""
     target = read_target(model)
     row = shell_row(target.shell, target.board)
-    return _network(model, nodes, name, stating, row.ends, partial(InShell, row=row))
+    return _network(model, nodes, name, stating, row.movers, partial(InShell, row=row))
 
 
 # -- the shell, as functions over the network ----------------------------------------------
@@ -147,12 +147,12 @@ def _buses(network: Partition) -> QueryResult[tuple[int, int, bool]]:
     return Available(bus_counts(*found.value))
 
 
-def _end_contracts(network: InShell) -> QueryResult[tuple[tuple[str, EndContract], ...]]:
-    """Each end its boundary channels place, by its channel: none on the ``ip`` shell."""
-    found: list[tuple[str, EndContract]] = []
+def _mover_contracts(network: InShell) -> QueryResult[tuple[tuple[str, MoverContract], ...]]:
+    """Each mover its boundary channels place, by its channel: none on the ``ip`` shell."""
+    found: list[tuple[str, MoverContract]] = []
     waiting: list[QueryResult[object]] = []
-    for name in network.ends:
-        placed = network.query(name, END)
+    for name in network.movers:
+        placed = network.query(name, MOVER)
         if isinstance(placed, Available):
             found.extend((name, contract) for contract in placed.value)
         elif not isinstance(placed, Inapplicable):
@@ -164,14 +164,14 @@ def _end_contracts(network: InShell) -> QueryResult[tuple[tuple[str, EndContract
 
 def budget_refusal(network: InShell) -> tuple[Finding, ...]:
     """Why the shell refuses ``network`` (its ``budgets``, of its netlist's ``bus_counts``
-    and its ends' AXI-Lite buses): its findings, none where it is within them or not
+    and its movers' AXI-Lite buses): its findings, none where it is within them or not
     decided far enough to say."""
     buses = _buses(network)
-    contracts = _end_contracts(network)
+    contracts = _mover_contracts(network)
     if not isinstance(buses, Available) or not isinstance(contracts, Available):
         return ()
-    ends = sum(contract.control_buses for _, contract in contracts.value)
-    return budgets(network.row, buses.value, ends)
+    movers = sum(contract.control_buses for _, contract in contracts.value)
+    return budgets(network.row, buses.value, movers)
 
 
 def _resources(network: InShell) -> QueryResult[ShellResources]:
@@ -182,14 +182,14 @@ def _resources(network: InShell) -> QueryResult[ShellResources]:
         if not isinstance(members, Available):
             return _together([members])
         partition = members.value
-        contracts = _end_contracts(network)
+        contracts = _mover_contracts(network)
         if not isinstance(contracts, Available):
             return _together([contracts])
-        ends = tuple((member(name), contract.resources) for name, contract in contracts.value)
+        movers = tuple((member(name), contract.resources) for name, contract in contracts.value)
         row = network.row
         region = row.static_region
         if region is None:
-            return Available(ShellResources(partition, ends, ()))
+            return Available(ShellResources(partition, movers, ()))
         buses = _buses(network)
         if not isinstance(buses, Available):
             return _together([buses])
@@ -199,14 +199,14 @@ def _resources(network: InShell) -> QueryResult[ShellResources]:
         if masters < 1 or slaves < 1:
             message = (
                 f"the {row.shell!r} shell's static region connects at least one memory port "
-                f"and one AXI-Lite bus; the partition and its ends connect {masters} and "
+                f"and one AXI-Lite bus; the partition and its movers connect {masters} and "
                 f"{slaves}"
             )
             return Rejected(
                 (Finding(FindingKind.REJECTION, "shell-resources", "resources", message),)
             )
         static = region.resources(masters=masters, slaves=slaves)
-        return Available(ShellResources(partition, ends, static))
+        return Available(ShellResources(partition, movers, static))
 
     found: QueryResult[ShellResources] = network._read("resources", read)
     return found
@@ -474,9 +474,9 @@ def make_cut_choices(model: ModelWrapper) -> CutChoices:
        did not drop, set once by conversion's policies on its kernel
        (``finn.kernels.defaults.defaulted``): a body never converted for it (one made by
        hand), reported (``CutChoices.late``); the channels reading it are rebuilt;
-    2. **interim**, until the ends pass: each channel's open choices in play that are not
+    2. **interim**: each channel's open choices in play that are not
        required set to their first valid values (``interim_channel_defaults``), each
-       channel in rank order (a channel created here has both its ends only in the
+       channel in rank order (a channel created here has both its sides only in the
        network). A required choice (a FIFO's depth) stays open for a strategy.
 
     Returns what it dropped, set late and could not set (``CutChoices``)."""

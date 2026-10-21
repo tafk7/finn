@@ -1,17 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""One port class, and extents bound from the tensors a kernel's input ports read.
+"""One port declaration, and extents bound from the tensors a kernel's input ports read.
 
 ``AxiStreamPort`` presents its kernel's schedule through the indices it reads,
-or a given sequence (exactly one). An input placed with a schedule exports its
-read of the tensor, and its kernel binds each index's extent from those reads
+or a given sequence (exactly one). An input placed with a schedule states its read of
+the tensor (``x_access``), and its kernel binds each index's extent from those reads
 (``LeafKernel.extents``): a kernel writes no extent getter, and its folding factors'
 domains read ``extent_of`` members. A producer's tensor is its kernel's statement,
 derived from those extents, and its element is that tensor's. An input without its
-tensor is idle: an interface not used. A port's constraint counts toward its holder's
-validity, while what the holder reads to bind its extents and check its clock are values:
-a refused port still answers them.
+tensor is idle: a port not used. A port's rule (``x_element_taken``) is its
+kernel's constraint, counted in its validity, while what the kernel reads to bind its
+extents are values: a refused port still answers them.
 """
 
 from __future__ import annotations
@@ -26,7 +26,6 @@ from finn.core.space import (
     Available,
     Decision,
     DefinitionError,
-    Members,
     Param,
     Rejected,
     Space,
@@ -43,11 +42,11 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution
-from finn.kernels.base import ACCESS, CLOCKED, PINS, LeafKernel, extent_of, interface
+from finn.kernels.base import LeafKernel, extent_of
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.network import Interface, Network, wire
-from finn.kernels.port import INTEGER_POLICY, AxiStreamPort
+from finn.kernels.port import INTEGER_POLICY, AxiStreamPort, lane_count
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.domains import Integer
 from finn.platform.capabilities import Resources
@@ -93,8 +92,6 @@ class Pool(LeafKernel):
         lanes=(c,),
         reduces=(s,),
     )
-    x_end = interface("x")
-    y_end = interface("y")
 
     @derived
     def parameters(self) -> dict[str, int | str]:
@@ -123,7 +120,7 @@ def placing(kernel: Space, x_tensor: Tensor = X, y_tensor: Tensor | None = Y) ->
         "x": wire(
             tensor=x_tensor,
             port="in0_V",
-            consumer=Interface("kernel", "x_end"),
+            consumer=Interface("kernel", "x_contract"),
             platform=FULL_DSP58,
         )
     }
@@ -131,7 +128,7 @@ def placing(kernel: Space, x_tensor: Tensor = X, y_tensor: Tensor | None = Y) ->
         members["y"] = wire(
             tensor=y_tensor,
             port="out0_V",
-            producer=Interface("kernel", "y_end"),
+            producer=Interface("kernel", "y_contract"),
             platform=FULL_DSP58,
         )
     return Network({**members, "kernel": kernel})
@@ -152,7 +149,7 @@ def test_a_kernel_binds_its_extents_from_its_inputs_and_its_folding_factors_divi
     assert kernel.extents == {b: 1, s: 4, c: 8}
     assert kernel.field(Pool.pe).candidates().value == (1, 2, 4, 8)
     kernel = choose(pool(), {"kernel.pe": 4}).member("kernel")
-    x, y = kernel.x.presented.form, kernel.y.presented.form
+    x, y = kernel.x_stream.sequence.form, kernel.y_stream.sequence.form
     assert (x.beats, x.lanes, y.beats, y.lanes) == (8, 4, 2, 4)
     assert dict(kernel.module.parameters) == {"CHANNELS": 8, "PE": 4}
     assert kernel.cycles == 8  # the most beats a port carries: x's
@@ -162,15 +159,17 @@ def test_a_producers_tensor_is_its_kernels_and_its_channel_refuses_another() -> 
     point = with_direct_transports(choose(pool(x_shape=(1, 4, 6)), {"kernel.pe": 2}))
     kernel = point.member("kernel")
     assert kernel.y_tensor == tensor((1, 6), "INT8")
-    assert kernel.y.element == ScalarEncoding(DataType["INT8"])
+    assert kernel.y_element == ScalarEncoding(DataType["INT8"])
     refused = point.member("y").query(Channel.netlist)
     assert "channel-tensor" in {code for code, _ in coded_messages(refused)}
 
 
 def test_an_input_without_its_tensor_is_idle_and_carries_one_lane() -> None:
     point = design_space(Pool())
-    assert point.x.idle
-    ((code, message),) = coded_messages(point.x.query(AxiStreamPort.lane_count))
+    assert not Pool.x.placed(point, "x")
+    ((code, message),) = coded_messages(point.query(Pool.x_element))
+    assert code == "port-element" and message == "s_axis_input: an idle port states its dtype"
+    ((code, message),) = coded_messages(lane_count(Pool.x, ScalarEncoding(DataType["INT4"])))
     assert code == "port-idle" and message.startswith("s_axis_input: an idle port carries one")
 
 
@@ -197,7 +196,7 @@ def test_a_port_presents_a_schedule_or_a_sequence_not_both() -> None:
         )
 
     point = choose(placing(Both(x_tensor=X)), {"kernel.pe": 8})
-    ((code, message),) = coded_messages(point.member("kernel").x.query(AxiStreamPort.presented))
+    ((code, message),) = coded_messages(point.member("kernel").query(Both.x_stream))
     assert code == "port-presentation"
     assert message.startswith("s_axis_input: exactly one of a schedule or a sequence")
 
@@ -217,7 +216,7 @@ def test_a_producers_element_is_its_tensors() -> None:
         )
 
     point = choose(placing(Stated(x_tensor=X)), {"kernel.pe": 4})
-    ((code, message),) = coded_messages(point.member("kernel").y.query(AxiStreamPort.element))
+    ((code, message),) = coded_messages(point.member("kernel").query(Stated.y_element))
     assert code == "port-element"
     assert message.startswith("m_axis_output: a producer's element is its tensor's")
 
@@ -253,10 +252,11 @@ def test_dotp_binds_from_its_inputs_through_the_dense_view() -> None:
     }
 
 
-class Holding(Space):
-    """A holder of one input port, reading what a leaf reads of its ports: their reads of
-    their tensors (``ACCESS``), their clocks (``CLOCKED``) and their pins (``PINS``)."""
+class Holding(LeafKernel):
+    """A leaf of one input port, given the integer policy its hardware takes."""
 
+    id = "test.holding"
+    rtl_module = "holding"
     admits: Integer | None = Param(default=None, semantics=INTEGER_POLICY)
     x = AxiStreamPort(
         name="s_axis_input",
@@ -267,23 +267,33 @@ class Holding(Space):
         lanes=(c,),
         admits=admits,
     )
-    accesses = Members(ACCESS)
-    clocks = Members(CLOCKED)
-    pins = Members(PINS)
+
+    @derived
+    def parameters(self) -> dict[str, int | str]:
+        return {}
+
+    @derived
+    def sources(self) -> tuple[Contribution, ...]:
+        return ()
+
+    @derived(semantics=RESOURCES_SEMANTICS)
+    def resource_use(self) -> Resources | Rejected:
+        return reject("kernel-resources", "a model only")
 
 
-def test_a_refused_port_still_exports_its_access_and_its_clock_as_values() -> None:
+def test_a_refused_port_still_states_its_access_and_its_kernel_its_extents() -> None:
     taken = design_space(Holding())
     assert inspection.validity(taken).status == "valid"
-    assert isinstance(taken.query(Holding.pins), Available)
+    assert isinstance(taken.query(Holding.module), Available)
 
     point = design_space(Holding(admits=Integer(max_bits=2)))
     validity = inspection.validity(point)
     assert validity.status == "refused"
-    assert [piece.owner for piece in validity.pieces] == ["x.element_taken"]
-    # The values its holder reads answer all the same: its extents and clock stand.
-    ((access,),) = [[item.value for item in point.accesses]]
-    assert (access.name, access.shape) == ("s_axis_input", (1, 4, 8))
-    assert [(item.node, item.value) for item in point.clocks] == [("x", "ap_clk")]
-    # Its pins are a product, refused with it.
-    assert "dtype-maximum-bits" in {code for code, _ in coded_messages(point.query(Holding.pins))}
+    assert [piece.owner for piece in validity.pieces] == ["x_element_taken"]
+    # The values its kernel reads answer all the same: its read of its tensor, its extents.
+    access = point.x_access
+    assert (access.name, access.shape) == ("x", (1, 4, 8))
+    assert point.extents == {b: 1, s: 4, c: 8}
+    # Its module is a product, refused with it; the raw derived module answers.
+    assert isinstance(point.query(Holding.codegen), Available)
+    assert "dtype-maximum-bits" in {code for code, _ in coded_messages(point.query(Holding.module))}

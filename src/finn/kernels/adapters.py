@@ -35,8 +35,8 @@ Each candidate is a kernel with children (``ComposedKernel``): it places its mod
 as kernel children (``InputGeneratorKernel``, ``VpcKernel``) named by stage, each given
 its tensor and the two sides of its step, the beat sequences its ports present, from
 which it derives its generics. Each becomes a ``Stage``: the child's module and its
-ports' contracts, which the channel checks like any other end, and which the channel
-wires hop by hop, so an adapter presents no interface of its own. Its netlist, cycles
+ports' contracts, which the channel checks like any other port's, and which the channel
+wires hop by hop, so an adapter presents no port of its own. Its netlist, cycles
 (the most beats any of its stages' ports carries), buffering (the buffers its
 ``input_gen`` stages hold, ``BUF_SIZE`` words each, read from the RTL:
 ``nest_geometry``) and resources are its stages' own, by the base.
@@ -51,9 +51,9 @@ after it), and ``TransposeKernel`` (``finn.kernels.transpose``) is
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import ClassVar, TypeVar
+from typing import ClassVar
 
 from finn.core.space import (
     Param,
@@ -68,7 +68,15 @@ from finn.dataflow.plan import Hop, Plan, Step, Unrealizable
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.module import Leaf
-from finn.kernels.base import BUFFERING, CYCLES, NETLIST, RESOURCES, ComposedKernel
+from finn.kernels.base import (
+    BUFFERING,
+    CYCLES,
+    NETLIST,
+    RESOURCES,
+    ComposedKernel,
+    PortContract,
+    declared_reads,
+)
 from finn.kernels.input_generator import Generate, InputGeneratorKernel, generated
 from finn.kernels.transport import StreamContract
 from finn.kernels.vpc import VpcKernel
@@ -169,20 +177,6 @@ def _side(name: str, side: str) -> BeatSequence:
     return derived(read)
 
 
-_F = TypeVar("_F", bound=Callable[..., object])
-
-
-def _reading(*paths: str) -> Callable[[_F], _F]:
-    """Declare what a method reads by names its source computes (``__reads__``: dotted
-    paths from ``self``), which stand in for its source in the reads the engine infers."""
-
-    def declare(function: _F) -> _F:
-        function.__reads__ = paths  # type: ignore[attr-defined]
-        return function
-
-    return declare
-
-
 class StreamAdapter(ComposedKernel):
     """A fixed chain of FinnLib modules carrying out a channel's plan, or refusing it.
 
@@ -191,12 +185,11 @@ class StreamAdapter(ComposedKernel):
     the two sides of its step of the realization, which its ports present. An
     ``input_gen`` child owns its memory's ``ram_style``, on the channel's ``platform``.
     Its netlist, cycles, buffering and resources are its stages', by the base. It
-    presents no interface: its channel wires its stages hop by hop (``stages``).
+    presents no port: its channel wires its stages hop by hop (``stages``).
     """
 
     id = "finn.channel.adapter"
     version = 1
-    interfaces = ()
     modules: ClassVar[tuple[str, ...]] = ()
 
     tensor: Tensor = Param()
@@ -238,7 +231,7 @@ class StreamAdapter(ComposedKernel):
     vpc_leaving = _side("vpc", "sink")
 
     @view
-    @_reading("realization")
+    @declared_reads("realization")
     def stages(self) -> tuple[Stage, ...]:
         """Each child's module and its ports' contracts, labelled below the adapter
         Decision: its candidate (the chain), then the stage. Each chain declares what its
@@ -253,10 +246,10 @@ class StreamAdapter(ComposedKernel):
         for index in range(len(kinds)):
             name = _stage_name(kinds, index)
             kernel = getattr(self, name)
+            given: PortContract = kernel.input_contract
+            presented: PortContract = kernel.output_contract
             found.append(
-                Stage(
-                    kernel.module, kernel.input.contract, kernel.output.contract, f"{chain}.{name}"
-                )
+                Stage(kernel.module, given.contract, presented.contract, f"{chain}.{name}")
             )
         return tuple(found)
 
@@ -305,9 +298,9 @@ def _chain(modules: tuple[str, ...]) -> type[StreamAdapter]:
     for name, kind in zip(names, modules):
         members[name] = _input_gen(name) if kind == "input_gen" else _vpc(name)
 
-    parts = ("module", "input.contract", "output.contract")
+    parts = ("module", "input_contract", "output_contract")
 
-    @_reading("realization", *(f"{name}.{part}" for name in names for part in parts))
+    @declared_reads("realization", *(f"{name}.{part}" for name in names for part in parts))
     def stages(self: StreamAdapter) -> tuple[Stage, ...]:
         return StreamAdapter._stages(self)
 

@@ -114,7 +114,7 @@ FOLDED_12 = {
 def test_a_choice_names_its_space_class_and_whether_its_cases_are_ordered() -> None:
     """Every open choice in play is offered, one possible value or several, each refused
     value with the rule it would break; one whose presence waits on another open choice
-    is not in play yet, and a channel's choices are offered once its ends are known."""
+    is not in play yet, and a channel's choices are offered once its contracts are known."""
     explorer, base = seam()
     fresh = offered(explorer, chain.network())
     # Each core is open: on a DSP48E2 platform one value is possible, and offered.
@@ -124,7 +124,7 @@ def test_a_choice_names_its_space_class_and_whether_its_cases_are_ordered() -> N
     ((rule, (finding,)),) = compute.refused["int8_dsp58"].why.items()
     assert (rule, finding.code) == (("first", "compute.int8_dsp58.core_supported"), "dotp-target")
     assert fresh["activate.ultra_stages"].space_type is ThresholdingAxiKernel
-    # The folding waits on its core's presence; the channels on their kernels' ends.
+    # The folding waits on its core's presence; the channels on their kernels' contracts.
     assert "first.compute.packed.pe" not in fresh and "levels.transport" not in fresh
     cored = choose(chain.network(), {"first.compute": "packed"})
     first = offered(explorer, cored)
@@ -280,7 +280,7 @@ def test_cost_names_what_a_member_waits_on_then_its_cycles_and_the_bottleneck_ti
     cost = explorer.cost(network)
     # Nothing chosen: a MatMul's cycles wait on its core, open.
     assert cost.waiting["first"] == (("first", "compute"),)
-    # A channel whose end waits on its kernel's core waits on it too.
+    # A channel whose contract waits on its kernel's core waits on it too.
     assert cost.waiting["x"] == (("first", "compute"),)
     assert cost.cycles["activate"] == 6  # its PE is the Chain's
     assert cost.bottleneck is None
@@ -308,7 +308,7 @@ def test_target_cycles_folds_the_least_parallelism_that_meets_the_budget() -> No
     # 3 rows x 4 x 4 at 12 cycles: PE x SIMD = 4, the earlier axis least.
     assert folding(explorer, folded) == FOLDED_12
     # Every other reopened choice back at its prior value, none open; each channel,
-    # rebuilt at its new ends, keeps what they accept.
+    # rebuilt at its new contracts, keeps what they accept.
     assert explorer.choices(folded) == ()
     assert chosen(explorer, folded) == {**chosen(explorer, network), **FOLDED_12}
     (run,) = explorer.runs
@@ -398,18 +398,18 @@ def dsp58_matmul() -> tuple[Seam, Network]:
                 platform=FULL_DSP58,
                 tensor=x_tensor,
                 port="s_axis_0",
-                consumer=Interface("first", "x_end"),
+                consumer=Interface("first", "x_contract"),
             ),
             "w": wire(
                 tensor=Fact("first", "carried_weights"),
                 contents=Fact("first", "stored_weights"),
-                consumer=Interface("first", "w_end"),
+                consumer=Interface("first", "w_contract"),
                 platform=FULL_DSP58,
             ),
             "y": wire(
                 tensor=y_tensor,
                 port="m_axis_0",
-                producer=Interface("first", "y_end"),
+                producer=Interface("first", "y_contract"),
                 platform=FULL_DSP58,
             ),
             "first": first(),
@@ -527,7 +527,7 @@ def test_the_defaults_set_each_open_choice_by_its_policy_and_leave_required_ones
 
 
 def test_reopen_clears_its_keys_in_one_change_and_a_channel_waits_on_its_kernel() -> None:
-    """Clearing a MatMul's folding leaves its channels' ends open: they wait, their
+    """Clearing a MatMul's folding leaves its channels' contracts open: they wait, their
     stored choices with them, and come back when the folding does. A clear never breaks
     a rule: a choice under a selector cleared waits on it, stored, and comes back in play
     with it. Nothing else is touched."""
@@ -921,7 +921,7 @@ def test_a_core_no_value_of_which_is_possible_refuses_the_cost_strategies_naming
         weights_dtype=DataType["UINT3"],
         platform=PART,
     )
-    with pytest.raises(NetworkError, match="compute.packed.w.element_taken: dtype-family"):
+    with pytest.raises(NetworkError, match="compute.packed.w_element_taken: dtype-family"):
         choose(unsigned, {"matmul.compute": "packed"})
     with refused(
         "cycles-unknown",
@@ -933,10 +933,10 @@ def test_a_core_no_value_of_which_is_possible_refuses_the_cost_strategies_naming
         "choice-no-valid-value",
         error=ExploreError,
         owner="matmul.compute",
-        message="'packed': matmul.compute.packed.w.element_taken: .*dtype-family",
+        message="'packed': matmul.compute.packed.w_element_taken: .*dtype-family",
     ) as caught:
         MaxThroughput({"dsp": 0.5}).explore(Seam(PART), unsigned)
-    assert ("compute.packed.w.element_taken", "dtype-family") in {
+    assert ("compute.packed.w_element_taken", "dtype-family") in {
         (cause.owner, cause.code) for cause in caught.finding.causes
     }
 
@@ -976,7 +976,7 @@ def test_max_throughput_states_where_a_budget_departs_from_its_assumption(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Bisection assumes a larger budget folds to more cycles and fewer resources. A budget
-    whose fold reaches more cycles than itself (an end's converter, SZ6) departs from
+    whose fold reaches more cycles than itself (a mover's converter, SZ6) departs from
     that: here every budget from 13 to 23 folds as no budget does, to 48 cycles. The
     search is not corrected, and states each departure; but of every point it tried it
     keeps the one that fits with the fewest cycles: budget 27's, at 24 cycles, not the

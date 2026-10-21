@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 import struct
 from collections.abc import Callable
-from typing import cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from finn.core.space import (
     Decision,
@@ -35,10 +35,10 @@ from finn.core.space import (
 )
 from finn.dataflow.datatypes import QONNXDataType, resolve_qonnx_datatype_name
 from finn.dataflow.schedule import Index, Schedule
-from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Clocking, Endpoint
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, extent_of, interface
+from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, extent_of
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.domains import Integer, admit_element
@@ -85,6 +85,7 @@ class EltwiseKernel(LeafKernel):
     id = "finnlib.eltwise"
     version = 1
     rtl_module = "eltwise"
+    clock_domain = NATIVE_CLOCKING
 
     operation: str = Param()
     # The tensors its operand ports read: facts it is given.
@@ -98,12 +99,12 @@ class EltwiseKernel(LeafKernel):
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def lhs_dtype(self) -> QONNXDataType:
         """``lhs``'s element type: its tensor's."""
-        return self.lhs.element.dtype
+        return self.lhs_element.dtype
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def rhs_dtype(self) -> QONNXDataType:
         """``rhs``'s element type: its tensor's."""
-        return self.rhs.element.dtype
+        return self.rhs_element.dtype
 
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def result_dtype(self) -> QONNXDataType:
@@ -202,8 +203,6 @@ class EltwiseKernel(LeafKernel):
         index=indices,
         lanes=(c,),
         signals=("adat", "avld", "ardy"),
-        clock=NATIVE_CLOCKING.clock,
-        reset=NATIVE_CLOCKING.reset,
     )
     rhs = AxiStreamPort(
         name="rhs",
@@ -213,8 +212,6 @@ class EltwiseKernel(LeafKernel):
         index=rhs_indices,
         lanes=(c,),
         signals=("bdat", "bvld", "brdy"),
-        clock=NATIVE_CLOCKING.clock,
-        reset=NATIVE_CLOCKING.reset,
     )
     result = AxiStreamPort(
         name="result",
@@ -224,16 +221,10 @@ class EltwiseKernel(LeafKernel):
         index=indices,
         lanes=(c,),
         signals=("odat", "ovld", "ordy"),
-        clock=NATIVE_CLOCKING.clock,
-        reset=NATIVE_CLOCKING.reset,
     )
-    lhs_end = interface("lhs")
-    rhs_end = interface("rhs")
-    result_end = interface("result")
-
-    @derived
-    def clocking(self) -> Clocking:
-        return NATIVE_CLOCKING
+    if TYPE_CHECKING:  # members its ports lower to, which it reads
+        lhs_element: ClassVar[ScalarEncoding]
+        rhs_element: ClassVar[ScalarEncoding]
 
     @derived(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:

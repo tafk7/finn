@@ -36,9 +36,9 @@ the partition: its module, part, clock and name, and the toolchain Vivado runs i
 An HLS leaf's request is synthesized for the partition's part before the module is
 emitted (``finn.transformation.kernels.hls.built_hls``, cached).
 
-The partition's boundary, the ends' facts, is not stored on the model: it is read
+The partition's boundary, its free sides' and movers' facts, is not stored on the model: it is read
 from the configured network's boundary channels, each the stream at its free side and
-the end the shell places there (``boundary_facts``), wherever it is needed (the
+the mover the shell places there (``boundary_facts``), wherever it is needed (the
 interface description, the testbench).
 
 The part and the clock period are the model's build target (``read_target(model)``,
@@ -118,7 +118,7 @@ from finn.kernels.artifacts.ipxact import interface_names, package_tcl, vlnv
 from finn.kernels.artifacts.module import Abi, declared_registers, module_name
 from finn.kernels.artifacts.rtl import Declined, check_abi
 from finn.kernels.artifacts.sources import include_directories, is_header
-from finn.kernels.ends import EndContract
+from finn.kernels.movers import MoverContract
 from finn.platform.capabilities import Resources
 from finn.resources import finnlib_root, scratch
 from finn.toolchain import vivado, xsim
@@ -133,8 +133,8 @@ if TYPE_CHECKING:
     from qonnx.core.modelwrapper import ModelWrapper
 
 
-def end_facts(contract: EndContract) -> dict[str, Any]:
-    """An end's facts as a boundary port states them: its kind and direction, its memory
+def mover_facts(contract: MoverContract) -> dict[str, Any]:
+    """A mover's facts as a boundary port states them: its kind and direction, its memory
     side and rate; the stream side is its port's."""
     return {
         "kind": contract.kind,
@@ -150,7 +150,7 @@ def end_facts(contract: EndContract) -> dict[str, Any]:
 
 def free_side(point: Configured, tensor: str) -> Any:
     """The stream at the free side of the boundary channel carrying ``tensor`` in a
-    configured network (``configured_network``): the channel's end no kernel of the
+    configured network (``configured_network``): the channel's side no kernel of the
     partition owns (a ``StreamContract``), as the channel derives it
     (``Channel.free_side``)."""
     return point.channel(tensor).free_side
@@ -176,9 +176,9 @@ def boundary_facts(
     model: ModelWrapper, point: Configured, boundary: Sequence[tuple[str, str]], label: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Each boundary port's facts, inputs then outputs, in port order: the port, the ONNX
-    tensor and its shape; the stream at the channel's free side, the partition's own end
-    (the end no kernel of the partition owns): the channel's element and its range,
-    lanes, beats and TDATA width; and the end the shell places there (``end_facts``), or
+    tensor and its shape; the stream at the channel's free side, the partition's own side
+    (the side no kernel of the partition owns): the channel's element and its range,
+    lanes, beats and TDATA width; and the mover the shell places there (``mover_facts``), or
     ``None``."""
     found: tuple[list[dict[str, Any]], list[dict[str, Any]]] = ([], [])
     for tensor, port in boundary:
@@ -194,7 +194,7 @@ def boundary_facts(
             "lanes": int(side.form.lanes),
             "beats": int(side.form.beats),
             "tdata": int(side.transport.data_width),
-            "end": end_facts(channel.end_contract) if channel.ended else None,
+            "mover": mover_facts(channel.mover_contract) if channel.offered else None,
         }
         found[0 if port.startswith("s_axis_") else 1].append(facts)
     return found

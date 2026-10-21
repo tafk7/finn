@@ -4,8 +4,8 @@
 """The shell's budgets (``finn.platform.shells.budgets``): what the module presents,
 within what its shell's row takes.
 
-The Zynq shell (``pynq``) takes nine AXI-Lite buses, the partition's and its ends'
-together (each ``IODMA_hls`` end presents one), gives a partition no memory port of its
+The Zynq shell (``pynq``) takes nine AXI-Lite buses, the partition's and its movers'
+together (each ``IODMA_hls`` mover presents one), gives a partition no memory port of its
 own and supplies no doubled clock; the ``ip`` shell bounds neither count and supplies
 the clock. Each refusal is named: ``interface-budget-exceeded``, ``clock-unavailable``.
 
@@ -74,16 +74,16 @@ def thresholdings(count: int, row: ShellRow) -> Network:
     presenting its bus (``t<i>_s_axilite``), configured: every thresholding
     runtime-writable, at its baseline otherwise, every transport direct."""
     platform = ULTRA96.platform
-    offered: dict[str, Any] = {"end_offer": row.ends} if row.ends else {}
-    # Each channel takes the ends of the thresholdings on either side of it.
+    offered: dict[str, Any] = {"mover_offer": row.movers} if row.movers else {}
+    # Each channel takes the contracts of the thresholdings on either side of it.
     names = ["x", *(f"c{index}" for index in range(count - 1)), "y"]
     channels: dict[str, Any] = {}
     for index, name in enumerate(names):
         sides: dict[str, Any] = {}
         if index > 0:
-            sides["producer"] = Interface(f"t{index - 1}", "output_end")
+            sides["producer"] = Interface(f"t{index - 1}", "output_contract")
         if index < count:
-            sides["consumer"] = Interface(f"t{index}", "input_end")
+            sides["consumer"] = Interface(f"t{index}", "input_contract")
         boundary = {"port": "s_axis_0" if index == 0 else "m_axis_0", **offered}
         channels[name] = wire(
             tensor=TENSOR,
@@ -111,46 +111,46 @@ def thresholdings(count: int, row: ShellRow) -> Network:
     return with_adapter_memories(point)
 
 
-def ends_of(point: Network) -> tuple[Any, ...]:
-    """The ends the shell places on the network's boundary channels."""
-    return tuple(point.member("x").placed_end) + tuple(point.member("y").placed_end)
+def movers_of(point: Network) -> tuple[Any, ...]:
+    """The movers the shell places on the network's boundary channels."""
+    return tuple(point.member("x").placed_mover) + tuple(point.member("y").placed_mover)
 
 
 def over_budget(point: Network, row: ShellRow) -> tuple[Finding, ...]:
-    """``row``'s budgets of ``point``'s netlist and of its ends' AXI-Lite buses."""
-    ends = sum(end.control_buses for end in ends_of(point))
+    """``row``'s budgets of ``point``'s netlist and of its movers' AXI-Lite buses."""
+    movers = sum(mover.control_buses for mover in movers_of(point))
     netlist = point.netlist()
     assert isinstance(netlist, Available), netlist
-    return budgets(row, bus_counts(*netlist.value), ends)
+    return budgets(row, bus_counts(*netlist.value), movers)
 
 
-def test_eight_axi_lite_thresholdings_and_two_ends_exceed_the_zynq_shells_nine() -> None:
+def test_eight_axi_lite_thresholdings_and_two_movers_exceed_the_zynq_shells_nine() -> None:
     point = thresholdings(8, PYNQ_ROW)
-    assert [end.control_buses for end in ends_of(point)] == [1, 1]
+    assert [mover.control_buses for mover in movers_of(point)] == [1, 1]
     (found,) = over_budget(point, PYNQ_ROW)
     assert str(found) == (
         "budgets: interface-budget-exceeded: the 'pynq' shell takes 9 AXI-Lite buses; "
-        "the partition presents 8 and its ends 2"
+        "the partition presents 8 and its movers 2"
     )
 
 
-def test_seven_and_two_ends_fill_the_budget() -> None:
+def test_seven_and_two_movers_fill_the_budget() -> None:
     assert over_budget(thresholdings(7, PYNQ_ROW), PYNQ_ROW) == ()
 
 
 def test_the_ip_shell_takes_the_same_partition_presenting_every_bus() -> None:
     point = thresholdings(8, IP_ROW)
     assert over_budget(point, IP_ROW) == ()
-    assert tuple(point.member("x").placed_end) == ()
+    assert tuple(point.member("x").placed_mover) == ()
     ports = [pin.name for pin in built(point, "shell").abi.pins if getattr(pin, "protocol", None)]
     assert [port for port in ports if port.endswith("_s_axilite")] == [
         f"t{index}_s_axilite" for index in range(8)
     ]
 
 
-def test_a_partition_of_kernel_ops_counts_its_ends() -> None:
-    """The Chain in the Zynq shell: no AXI-Lite bus of its own and two ends, within nine;
-    on a row taking one bus, its ends alone exceed it. Retargeted by hand, its new ends
+def test_a_partition_of_kernel_ops_counts_its_movers() -> None:
+    """The Chain in the Zynq shell: no AXI-Lite bus of its own and two movers, within nine;
+    on a row taking one bus, its movers alone exceed it. Retargeted by hand, its new movers
     are set as the cut sets them (``MakeCutChoices``)."""
     model = kernel_model()
     write_target(model, ULTRA96)
@@ -197,7 +197,7 @@ def test_a_doubled_clock_the_row_does_not_supply_is_refused() -> None:
     assert isinstance(netlist, Available)
     assert bus_counts(*netlist.value) == bus_counts_of_abi(point.module.abi) == (0, 0, True)
     write_target(model, ULTRA96)
-    model = model.transform(MakeCutChoices())  # the ends the pynq row offers
+    model = model.transform(MakeCutChoices())  # the movers the pynq row offers
     assert not in_shell(model, model.graph.node, name="chain").row.clk2x
     with refused(
         "clock-unavailable",

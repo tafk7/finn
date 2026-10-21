@@ -5,12 +5,12 @@
 shell.
 
 ``shell_resources_report`` lists each member of the partition's shell (the partition,
-each end by its boundary channel, each IP of the static region) and their total, in up
+each mover by its boundary channel, each IP of the static region) and their total, in up
 to three columns:
 
 - ``model``: the partition's network's own figures
   (``finn.custom_op.kernels.shell.shell_resources``): the partition's kernels from their
-  RTL's fitted models, each end and each static IP from its out-of-context
+  RTL's fitted models, each mover and each static IP from its out-of-context
   characterisation;
 - ``out_of_context``: Vivado's synthesis of each IP alone. On a shell with an
   integration, these are the integration's per-IP runs (``<run>_utilization_synth.rpt``,
@@ -25,7 +25,7 @@ A column the build did not produce is ``null`` for every member, and ``absent`` 
 why. A member a column has no row for (the placed design has none for the processor and
 its reset) is ``null`` there. ``caveat`` is the shell row's note for the board
 (``finn.platform.shells.ShellRow.caveat``), or ``null``: on a board the shell was not built and
-timed on, the ``model`` figures of the ends and static region are carried over from
+timed on, the ``model`` figures of the movers and static region are carried over from
 where they were characterised.
 
 ``unattributed`` is each column's total minus the sum of its members: what the report
@@ -103,7 +103,7 @@ def _instance_of(name: str, instances: Mapping[str, str]) -> str | None:
 
 def _member_instances(parent: ModelWrapper) -> dict[str, str]:
     """Each member of the shell's block design by its report key (``partition``,
-    ``ends.<channel>``, ``static_region.<ip>``), with its instance name, or the prefix of
+    ``movers.<channel>``, ``static_region.<ip>``), with its instance name, or the prefix of
     a name Vivado chooses (the reset's, after its clock). A shell without an integration
     has the partition alone, by its node's name."""
     node, body, _ = partition_body(parent)
@@ -113,7 +113,7 @@ def _member_instances(parent: ModelWrapper) -> dict[str, str]:
         return {"partition": node.name}
     export = integration(parent)
     instances = {"partition": export.partition}
-    instances.update({f"ends.{member(end.tensor)}": end.instance for end in export.ends})
+    instances.update({f"movers.{member(mover.tensor)}": mover.instance for mover in export.movers})
     static = row.static_region
     if static is not None:
         instances.update(
@@ -126,11 +126,13 @@ def _member_instances(parent: ModelWrapper) -> dict[str, str]:
 
 
 def _members(split: Mapping[str, Any]) -> dict[str, Any]:
-    """The report's members, ``partition``, ``ends`` by channel and ``static_region`` by
+    """The report's members, ``partition``, ``movers`` by channel and ``static_region`` by
     IP, each with its columns (``model``, ``out_of_context``, ``placed``)."""
     return {
         "partition": split["partition"],
-        "ends": {key[len("ends.") :]: row for key, row in split.items() if key.startswith("ends.")},
+        "movers": {
+            key[len("movers.") :]: row for key, row in split.items() if key.startswith("movers.")
+        },
         "static_region": {
             key[len("static_region.") :]: row
             for key, row in split.items()
@@ -180,7 +182,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
     # The model column: the partition's network's figures, by member.
     if isinstance(modelled, ShellResources):
         stated: dict[str, Resources | None] = {"partition": modelled.partition}
-        stated.update({f"ends.{key}": value for key, value in modelled.ends})
+        stated.update({f"movers.{key}": value for key, value in modelled.movers})
         stated.update({f"static_region.{key}": value for key, value in modelled.static_region})
         for key in instances:
             columns[key]["model"] = stated.get(key)
@@ -260,7 +262,7 @@ def shell_resources_report(parent: ModelWrapper, reports: Mapping[str, Path]) ->
         "caveat": shell_row(target.shell, target.board).caveat,
         "columns": {
             "model": "the network's statements (RESOURCES): the partition's kernels from "
-            f"their RTL's fits; each end and each static IP {SHELL_CHARACTERISED}, which "
+            f"their RTL's fits; each mover and each static IP {SHELL_CHARACTERISED}, which "
             "overstate the placed shell",
             "out_of_context": "Vivado's synthesis of each IP alone",
             "placed": "the routed design's hierarchical utilization",

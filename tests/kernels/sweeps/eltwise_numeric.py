@@ -115,8 +115,8 @@ def placed(case: Case) -> Any:
     tensors = {**operands, "result": design_space(alone).result_tensor}
     members: dict[str, Any] = {}
     for name, tensor in tensors.items():
-        end = Interface("arithmetic", f"{name}_end")
-        side: dict[str, Any] = {"producer" if name == "result" else "consumer": end}
+        contract = Interface("arithmetic", f"{name}_contract")
+        side: dict[str, Any] = {"producer" if name == "result" else "consumer": contract}
         members[name] = wire(tensor=tensor, port=PORTS[name], platform=FULL_DSP58, **side)
     members["arithmetic"] = EltwiseKernel(
         **facts,
@@ -174,9 +174,9 @@ def run(case: Case, evidence: Path) -> None:
     # Each boundary presents what the kernel's port reads: rhs replayed, once per lhs row.
     forms: dict[str, Traversal] = {}
     for name in PORTS:
-        ends = point.member(name).query(Channel.endpoints).value
-        assert ends.source.form == ends.sink.form, (case.label, name, ends)
-        forms[name] = ends.source.form
+        sides = point.member(name).query(Channel.sides).value
+        assert sides.source.form == sides.sink.form, (case.label, name, sides)
+        forms[name] = sides.source.form
     assert forms["result"].lanes == case.pe, (case.label, forms["result"])
     rng = np.random.default_rng(zlib.crc32(case.label.encode()))
     values = {name: operand(case, name, rng) for name in ("lhs", "rhs")}

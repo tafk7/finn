@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 from qonnx.core.datatype import DataType
-from support.helpers import full_platform, placed_dotp
+from support.helpers import full_platform, placed_dotp, port_axis
 
 from finn.core.rtlsim_pacing import FREE, STALLED, Pace, Pacing
 from finn.harness.toolchain import finnlib_root, print_identity
@@ -206,7 +206,7 @@ def run(
         "in1": _weight_beats(case, weights, w_type.bitwidth()),
     }
     # Exercise ignored high input padding, rather than supplying only zero fill.
-    for name, stream in (("in0", point.x.axis), ("in1", point.w.axis)):
+    for name, stream in (("in0", port_axis(point, "x")), ("in1", port_axis(point, "w"))):
         padding = ((1 << stream.carrier_bits) - 1) ^ ((1 << stream.payload_bits) - 1)
         stimulus[name] = [beat | (padding if j % 2 else 0) for j, beat in enumerate(stimulus[name])]
     roots = {"finnlib": finnlib_root()}

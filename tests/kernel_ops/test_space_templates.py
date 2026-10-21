@@ -13,34 +13,24 @@ from __future__ import annotations
 
 import pkgutil
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-import numpy as np
 import pytest
 from core.space._domains_support import domain_differences
 from core.space._templates_support import assert_expands, defined, links, reached
 from core.space._whole_support import differences
-from onnx import TensorProto, helper
-from qonnx.core.datatype import DataType
-from qonnx.core.modelwrapper import ModelWrapper
-from qonnx.util.basic import qonnx_make_model
 from support.chain import MEMBERS, chain
+from support.one_space import chain_space
 
 import finn.custom_op
 import finn.kernels
-from finn.core.space import Space, composite, design_space, inspection
+from finn.core.space import Space, design_space, inspection
 from finn.core.space._structure import EAGER, expand
 from finn.core.space._template import link_template
 from finn.core.space.occurrence import state
 from finn.core.space.results import Available, Unresolved
-from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import in_shell, make_cut_choices
-from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.network import Fact, Interface
-from finn.platform.resolve import resolve_target
-from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 
 SUPPORT = Path(__file__).resolve().parents[1] / "support"
 
@@ -69,7 +59,7 @@ def test_the_kernels_resolve_as_they_expand() -> None:
 
 def test_the_kernels_domains_compose_as_the_line_checked_them() -> None:
     modules = [f"support.{path.stem}" for path in sorted(SUPPORT.glob("*.py"))]
-    classes = [*_kernels(), *(cls for cls in defined(modules) if links(cls)), _chain(4)[0]]
+    classes = [*_kernels(), *(cls for cls in defined(modules) if links(cls)), chain_space(4)[0]]
     differences = [found for found in map(domain_differences, classes) if found is not None]
     assert not differences, "\n".join(differences)
 
@@ -80,88 +70,13 @@ def test_the_chains_members_resolve_as_they_expand() -> None:
     assert assert_expands(classes) == 3  # the MatMul, the thresholding, the channel
 
 
-def _mlp(layers: int) -> ModelWrapper:
-    """Stage 7's synthetic chain: ``layers`` of a MatMul (16 by 16, INT3 weights) and a
-    MultiThreshold to UINT2, on 4 rows of UINT2."""
-    width = 16
-    nodes: list[Any] = []
-    current = "x"
-    for layer in range(layers):
-        levels = "y" if layer == layers - 1 else f"a{layer}"
-        nodes.append(
-            helper.make_node("MatMul", [current, f"w{layer}"], [f"h{layer}"], name=f"mm{layer}")
-        )
-        nodes.append(
-            helper.make_node(
-                "MultiThreshold",
-                [f"h{layer}", f"t{layer}"],
-                [levels],
-                name=f"mt{layer}",
-                domain="qonnx.custom_op.general",
-                out_dtype="UINT2",
-                out_bias=0.0,
-            )
-        )
-        current = levels
-    graph = helper.make_graph(
-        nodes,
-        "mlp",
-        [helper.make_tensor_value_info("x", TensorProto.FLOAT, [4, width])],
-        [helper.make_tensor_value_info("y", TensorProto.FLOAT, None)],
-    )
-    model = ModelWrapper(
-        qonnx_make_model(
-            graph,
-            opset_imports=[
-                helper.make_opsetid("", 13),
-                helper.make_opsetid("qonnx.custom_op.general", 1),
-            ],
-        )
-    )
-    model.set_tensor_datatype("x", DataType["UINT2"])
-    for layer in range(layers):
-        weights = [[(3 * n + 2 * k + layer) % 7 - 3 for n in range(width)] for k in range(width)]
-        model.set_initializer(f"w{layer}", np.array(weights, dtype=np.float32))
-        model.set_tensor_datatype(f"w{layer}", DataType["INT3"])
-        steps = [[-9 + c % 5, 1 - c % 3, 8 + c % 4] for c in range(width)]
-        model.set_initializer(f"t{layer}", np.array(steps, dtype=np.float32))
-        model.set_tensor_datatype(f"t{layer}", DataType["INT8"])
-    return model
-
-
-def _chain(layers: int) -> tuple[type[Space], dict[str, object]]:
-    """Stage 7's chain of ``2 * layers`` kernels as one Space (its kernels' declarations and
-    the channels from the shell's wiring), and the values conversion and the cut store, by
-    key."""
-    target = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)
-    model = _mlp(layers).transform(ToKernelOps(target)).transform(InferKernelTensors())
-    nodes = list(model.graph.node)
-    make_cut_choices(model)
-    net = in_shell(model, nodes)
-    members: dict[str, Any] = {}
-    for node in nodes:
-        facts = kernel_op(model, node).facts()
-        members[node.name] = facts.space_type(**cast("dict[str, Any]", dict(facts.arguments)))
-    for name in net.channels:
-        given: dict[str, Any] = {}
-        for fact, value in net.wiring(name).facts.items():
-            if isinstance(value, Interface):
-                value = getattr(members[value.member], value.view)
-            elif isinstance(value, Fact):
-                value = getattr(members[value.member], value.name)
-            given[fact] = value
-        members[name] = Channel(**given)
-    stored = {f"{member}.{key}": value for (member, key), value in net.chosen().items()}
-    return composite(f"templates_chain_{2 * layers}", members), stored
-
-
 def test_stage_7s_chain_of_eight_kernels_resolves_as_it_expands() -> None:
-    whole, _ = _chain(4)
+    whole, _ = chain_space(4)
     assert_expands([whole])
     templates = reached(link_template(whole))
-    # Seventeen classes, and the composite.
-    assert len(templates) == 18
-    assert len(expand(whole).scopes) == 468
+    # Sixteen classes, and the composite (a port is a declaration of its kernel, no class).
+    assert len(templates) == 17
+    assert len(expand(whole).scopes) == 216
 
 
 def _answers_as_the_line(classes: list[type[Space]]) -> int:
@@ -188,7 +103,7 @@ def test_the_kernels_and_the_test_support_answer_as_the_line() -> None:
 
 
 def test_stage_7s_chain_of_eight_kernels_answers_as_the_line() -> None:
-    whole, _ = _chain(4)
+    whole, _ = chain_space(4)
     assert _answers_as_the_line([whole]) == 189
 
 
@@ -196,14 +111,14 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv(EAGER, raising=False)  # the eager test mode makes everything at once
-    whole, stored = _chain(4)
+    whole, stored = chain_space(4)
     point = design_space(whole())
     structure = inspection.model(point).structure
     assert structure is not None
     assert isinstance(point.mm0.query(MatMulKernel.cycles), Unresolved)  # type: ignore[attr-defined]
     read = structure.counts()
     table = expand(whole)
-    assert read["scopes addressed"] < len(table.scopes) // 10
+    assert read["scopes addressed"] < len(table.scopes) // 8
     assert read["scopes in play"] < read["scopes addressed"]
     assert read["nodes resolved"] < len(table.nodes) // 100
 
@@ -216,27 +131,29 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     order) makes every scope's record and resolves no node; the change resolves what it
     and its checks read. An absent scope's validity is read from its guard and its
     choices' presence from their guards, so no scope absent at the baseline has a node
-    resolved for either. The scopes with a node resolved are the 91 present at the
+    resolved for either. The scopes with a node resolved are the 51 present at the
     baseline (the line's present scopes) and 4 more, of unknown presence in the design
-    space before the change: the first MatMul's ``compute.int8_dsp58`` case and its three
-    tensors. The list of what the change moved (``_assign._moved``) reads, of each choice
+    space before the change: each MatMul's ``compute.int8_dsp58`` case. The first's is read:
+    the list of what the change moved (``_assign._moved``) reads, of each choice
     whose presence may read a choice the change sets, its presence after, and before only
     where that decides a list: ``x.adapter`` is stored and present after, so whether it
     comes into play reads its presence before, where its guard reads the first MatMul's
-    views, whose validity there reads that case's (its selector still open). Then
-    ``viable`` of the middle MatMul's choices and one change of its ``compute.packed.pe``:
-    what trials resolve more."""
+    views, whose validity there reads that case's (its selector still open). The other
+    three's port contracts are made, not read: each MatMul's served contract
+    (``x_contract``) takes its core's through the selector (an argument of each case's), and
+    a channel reads it. Then ``viable`` of the middle MatMul's choices and one change of its
+    ``compute.packed.pe``: what trials resolve more."""
     monkeypatch.delenv(EAGER, raising=False)
-    whole, stored = _chain(4)
+    whole, stored = chain_space(4)
     point = design_space(whole())
     structure = inspection.model(point).structure
     assert structure is not None
     committed = commit(point, stored)
     assert structure.counts() == {
-        "scopes addressed": 468,
-        "scopes in play": 95,
-        "nodes resolved": 2452,
-        "const nodes resolved": 468,
+        "scopes addressed": 216,
+        "scopes in play": 55,
+        "nodes resolved": 1568,
+        "const nodes resolved": 76,
     }
     in_play = set(structure._in_play)
     world, before = state(committed).world, state(point).world
@@ -253,7 +170,7 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
         return True
 
     present_scopes = {record.index for record in structure.records if present(record.index)}
-    assert len(present_scopes) == 91
+    assert len(present_scopes) == 51
     read_for_the_report = {
         record.index
         for record in structure.records
@@ -261,13 +178,20 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     }
     assert {structure.records[index].name for index in read_for_the_report} == {
         "mm0.compute.int8_dsp58",
-        "mm0.compute.int8_dsp58.x",
-        "mm0.compute.int8_dsp58.w",
-        "mm0.compute.int8_dsp58.y",
     }
     assert not read_for_the_report & present_scopes
     assert read_for_the_report <= in_play
-    assert in_play - read_for_the_report == present_scopes
+    made = in_play - read_for_the_report - present_scopes
+    assert {structure.records[index].name for index in made} == {
+        f"mm{layer}.compute.int8_dsp58" for layer in (1, 2, 3)
+    }
+    assert {
+        node.key.rsplit(".", 1)[-1] for node in structure._raw.values() if node.scope in made
+    } == {
+        "x_contract",
+        "w_contract",
+        "y_contract",
+    }
     for index in read_for_the_report:
         guard = structure.guard_of(structure.records[index])
         assert guard is not None and isinstance(before.result(guard), Unresolved)
@@ -276,16 +200,16 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     assert len(middle) == 9
     inspection.viable(committed, [handles[key] for key in middle])
     assert structure.counts() == {
-        "scopes addressed": 468,
-        "scopes in play": 114,
-        "nodes resolved": 2582,
-        "const nodes resolved": 478,
+        "scopes addressed": 216,
+        "scopes in play": 66,
+        "nodes resolved": 1647,
+        "const nodes resolved": 76,
     }
     report = committed.try_with_choices({handles["mm2.compute.packed.pe"]: 2})
     assert report.accepted
     assert structure.counts() == {
-        "scopes addressed": 468,
-        "scopes in play": 114,
-        "nodes resolved": 2582,
-        "const nodes resolved": 478,
+        "scopes addressed": 216,
+        "scopes in play": 66,
+        "nodes resolved": 1647,
+        "const nodes resolved": 76,
     }

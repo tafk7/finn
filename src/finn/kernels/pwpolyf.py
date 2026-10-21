@@ -40,9 +40,9 @@ from finn.core.space import (
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Clocking, Endpoint
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, extent_of, interface
+from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, extent_of
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.domains import admit_element
@@ -73,6 +73,7 @@ class PwPolyKernel(LeafKernel):
     id = "finnlib.pwpolyf"
     version = 1
     rtl_module = "pwpolyf"
+    clock_domain = NATIVE_CLOCKING
 
     # What it computes: a supplied input, not an interchangeable implementation choice.
     function: str = Param()
@@ -114,8 +115,6 @@ class PwPolyKernel(LeafKernel):
         index=indices,
         lanes=(c,),
         signals=("xdat", "xvld", "xrdy"),
-        clock=NATIVE_CLOCKING.clock,
-        reset=NATIVE_CLOCKING.reset,
     )
     output = AxiStreamPort(
         name="y",
@@ -125,11 +124,7 @@ class PwPolyKernel(LeafKernel):
         index=indices,
         lanes=(c,),
         signals=("ydat", "yvld", "yrdy"),
-        clock=NATIVE_CLOCKING.clock,
-        reset=NATIVE_CLOCKING.reset,
     )
-    input_end = interface("input")
-    output_end = interface("output")
 
     @constraint
     def function_supported(self) -> bool | Rejected:
@@ -160,10 +155,6 @@ class PwPolyKernel(LeafKernel):
         if self.platform.dsp is not DspBlock.DSP58:
             return reject("pwpolyf-target", "the polynomial's DSPFP32 chain requires DSP58")
         return True
-
-    @derived
-    def clocking(self) -> Clocking:
-        return NATIVE_CLOCKING
 
     @derived(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:

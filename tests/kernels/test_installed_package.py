@@ -45,6 +45,7 @@ class RejectGraphDependencies(importlib.abc.MetaPathFinder):
 sys.meta_path.insert(0, RejectGraphDependencies())
 
 from finn.kernels.dotp import PackedDotpKernel
+from finn.kernels.port import axis
 from finn.kernels.matmul import MatMulKernel
 from finn.platform.capabilities import DspBlock, Fabric, Platform
 from finn.dataflow.datatypes import ordinary_integer_bounds
@@ -95,9 +96,15 @@ W2 = Tensor((2, 2), ScalarEncoding(DataType["INT3"]))
 Y2 = Tensor((1, 2), ScalarEncoding(DataType["INT8"]))
 
 placed_dotp = Network({
-    "x": wire(tensor=X2, port="in0_V", consumer=Interface("compute", "x_end"), platform=PLATFORM),
-    "w": wire(tensor=W2, port="in1_V", consumer=Interface("compute", "w_end"), platform=PLATFORM),
-    "y": wire(tensor=Y2, port="out0_V", producer=Interface("compute", "y_end"), platform=PLATFORM),
+    "x": wire(
+        tensor=X2, port="in0_V", consumer=Interface("compute", "x_contract"), platform=PLATFORM
+    ),
+    "w": wire(
+        tensor=W2, port="in1_V", consumer=Interface("compute", "w_contract"), platform=PLATFORM
+    ),
+    "y": wire(
+        tensor=Y2, port="out0_V", producer=Interface("compute", "y_contract"), platform=PLATFORM
+    ),
     "compute": PackedDotpKernel(
         result_range=ordinary_integer_bounds(DataType["INT8"]),
         x_tensor=X2,
@@ -114,8 +121,8 @@ dotp = placed_dotp.with_choices(
 answer = dotp.module
 assert isinstance(answer, built.Leaf), answer
 assert dict(answer.parameters)["ACCU_WIDTH"] == 8
-assert dotp.x.element.dtype.name == "INT3"
-assert dotp.x.axis.payload_bits == 6
+assert dotp.x_element.dtype.name == "INT3"
+assert axis(*PackedDotpKernel.x.viewed(dotp, "x")).payload_bits == 6
 
 dotp_sources = {
     "rtl/arith/add_multi_pkg.sv", "rtl/arith/compressor_pkg.sv",
@@ -185,17 +192,23 @@ for memory in ("none", "memstream"):
     # states for it.
     root = Network({
         "x": wire(
-            tensor=x_tensor, port="in0_V", consumer=Interface("matmul", "x_end"), platform=PLATFORM
+            tensor=x_tensor,
+            port="in0_V",
+            consumer=Interface("matmul", "x_contract"),
+            platform=PLATFORM,
         ),
         "w": wire(
             tensor=Fact("matmul", "carried_weights"),
             contents=Fact("matmul", "stored_weights"),
             port="in1_V",
-            consumer=Interface("matmul", "w_end"),
+            consumer=Interface("matmul", "w_contract"),
             platform=PLATFORM,
         ),
         "y": wire(
-            tensor=y_tensor, port="out0_V", producer=Interface("matmul", "y_end"), platform=PLATFORM
+            tensor=y_tensor,
+            port="out0_V",
+            producer=Interface("matmul", "y_contract"),
+            platform=PLATFORM,
         ),
         "matmul": MatMulKernel(**facts, x_tensor=x_tensor, **weights),
     })
@@ -209,9 +222,9 @@ for memory in ("none", "memstream"):
     root = root.with_choices(choices)
     matmul = root.member("matmul")
     beats = (
-        root.member("x").ends.source.sequence.form.beats,
-        matmul.compute.w.presented.form.beats,
-        matmul.compute.y.presented.form.beats,
+        root.member("x").streams.source.sequence.form.beats,
+        matmul.compute.w_stream.sequence.form.beats,
+        matmul.compute.y_stream.sequence.form.beats,
     )
     assert beats == (6, 12, 6), beats
     composed = root.module(TEST, "finn_placed").value

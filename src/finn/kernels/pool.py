@@ -34,6 +34,8 @@ reaches it: ``tests/support/kernel_specs/pool.py``.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, ClassVar
+
 from finn.core.space import (
     Decision,
     Param,
@@ -46,12 +48,13 @@ from finn.core.space import (
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import ZERO
 from finn.dataflow.schedule import Affine, Index, Schedule
-from finn.dataflow.tensor import Tensor
+from finn.dataflow.streams import Stream
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource, HlsSource
 from finn.kernels.artifacts.hls import axis_type
-from finn.kernels.base import LeafKernel, extent_of, interface
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.base import LeafKernel, extent_of
+from finn.kernels.port import AxiStreamPort, axis
 from finn.kernels.transport import AxisSpelling
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.domains import Integer
@@ -232,7 +235,7 @@ class PoolKernel(LeafKernel):
     @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     def element_dtype(self) -> QONNXDataType:
         """The input's element: a window's maximum is one of its values."""
-        return self.input.element.dtype
+        return self.input_element.dtype
 
     @derived
     def output_tensor(self) -> Tensor | Rejected:
@@ -240,7 +243,7 @@ class PoolKernel(LeafKernel):
         shape = self.spanned(self.output_index)
         if isinstance(shape, Rejected):
             return shape
-        return Tensor(shape, self.input.element)
+        return Tensor(shape, self.input_element)
 
     output = AxiStreamPort(
         name="m_axis",
@@ -253,8 +256,10 @@ class PoolKernel(LeafKernel):
         reduces=(kh, kw),
         spelling=AxisSpelling.UPPER,
     )
-    input_end = interface("input")
-    output_end = interface("output")
+    if TYPE_CHECKING:  # members its ports lower to, which it reads
+        input_element: ClassVar[ScalarEncoding]
+        input_stream: ClassVar[Stream]
+        output_stream: ClassVar[Stream]
 
     @constraint
     def element_supported(self) -> bool | Rejected:
@@ -271,9 +276,15 @@ class PoolKernel(LeafKernel):
         return {}
 
     @derived
-    def sources(self) -> tuple[Contribution, ...]:
+    def sources(self) -> tuple[Contribution, ...] | Rejected:
         element, pe = self.element_dtype, self.pe
-        input_bits, output_bits = self.input.axis.carrier_bits, self.output.axis.carrier_bits
+        input_axis = axis(PoolKernel.input, self.input_stream)
+        if isinstance(input_axis, Rejected):
+            return input_axis
+        output_axis = axis(PoolKernel.output, self.output_stream)
+        if isinstance(output_axis, Rejected):
+            return output_axis
+        input_bits, output_bits = input_axis.carrier_bits, output_axis.carrier_bits
         return (
             HlsSource.request(
                 type(self).rtl_module,

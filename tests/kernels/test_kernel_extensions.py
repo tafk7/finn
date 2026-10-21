@@ -64,7 +64,6 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
 
     class Empty(ComposedKernel):
         id = "test.empty"
-        interfaces = ()
 
     assert Empty.version == 1
     # The protocol's views; a kernel with children that places none has no netlist.
@@ -106,7 +105,6 @@ def test_candidate_dtype_adapter_preserves_canonical_names_and_snapshots(name: s
 def test_a_dtype_choice_replays_the_exact_datatype() -> None:
     class DtypeKernel(ComposedKernel):
         id = "test.dtype"
-        interfaces = ()
         dtype: QONNXDataType = Decision(
             values=(resolve_qonnx_datatype_name("TERNARY"), resolve_qonnx_datatype_name("INT2")),
             semantics=QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -135,7 +133,6 @@ def test_the_integer_vector_adapter_preserves_exact_integers() -> None:
 def test_explicit_dtype_semantics_support_typed_protocol_results_of_immutable_values() -> None:
     class Typed(ComposedKernel):
         id = "test.typed"
-        interfaces = ()
         dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
 
         @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
@@ -159,7 +156,6 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     # by name; each node call is an independent scope.
     class InterfaceKernel(ComposedKernel):
         id = "test.interface"
-        interfaces = ()
 
     def bits(*, dtype: QONNXDataType, lanes: int) -> int:
         return dtype.bitwidth() * lanes
@@ -192,7 +188,6 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
 
     class Pair(ComposedKernel):
         id = "test.interface_pair"
-        interfaces = ()
         activation_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
         weights_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
         activation = word(dtype=activation_dtype, lanes=2)  # type: ignore[call-arg]

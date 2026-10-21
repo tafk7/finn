@@ -4,9 +4,9 @@
 """The Chain: a network of two MatMuls and a thresholding on their channels.
 
 It computes ``thresholds(x @ W1) @ W2``. Each MatMul reads its tensors and presents
-its ends on the network's channels; each channel takes its ends from its kernels
-(``Interface``), and the tensor of a MatMul's results is the MatMul's statement of them
-(``result_tensor``), read before it is placed. The weights are given to each MatMul
+its ports' contracts on the network's channels; each channel takes them from its
+kernels (``Interface``), and the tensor of a MatMul's results is the MatMul's statement
+of them (``result_tensor``), read before it is placed. The weights are given to each MatMul
 (``w_contents``): each weight channel carries what its MatMul states for it, its
 contents (``stored_weights``) and its tensor over their range (``carried_weights``). ``chain()``
 is the Chain configured as the kernel tests, the KernelOp partition tests and the
@@ -94,36 +94,36 @@ def members(hidden: Tensor = HIDDEN_TENSOR) -> dict[str, Space | Wire]:
                 platform=platform,
                 tensor=X_TENSOR,
                 port="s_axis_0",
-                consumer=Interface("first", "x_end"),
+                consumer=Interface("first", "x_contract"),
             ),
             "w1": wire(
                 tensor=Fact("first", "carried_weights"),
                 contents=Fact("first", "stored_weights"),
-                consumer=Interface("first", "w_end"),
+                consumer=Interface("first", "w_contract"),
                 platform=platform,
             ),
             "hidden": wire(
                 tensor=hidden,
-                producer=Interface("first", "y_end"),
-                consumer=Interface("activate", "input_end"),
+                producer=Interface("first", "y_contract"),
+                consumer=Interface("activate", "input_contract"),
                 platform=platform,
             ),
             "levels": wire(
                 tensor=LEVELS,
-                producer=Interface("activate", "output_end"),
-                consumer=Interface("second", "x_end"),
+                producer=Interface("activate", "output_contract"),
+                consumer=Interface("second", "x_contract"),
                 platform=platform,
             ),
             "w2": wire(
                 tensor=Fact("second", "carried_weights"),
                 contents=Fact("second", "stored_weights"),
-                consumer=Interface("second", "w_end"),
+                consumer=Interface("second", "w_contract"),
                 platform=platform,
             ),
             "y": wire(
                 tensor=Y_TENSOR,
                 port="m_axis_0",
-                producer=Interface("second", "y_end"),
+                producer=Interface("second", "y_contract"),
                 platform=platform,
             ),
             "first": matmul(W1, X_TENSOR),
@@ -148,7 +148,7 @@ LAYERS = (("first", "w1"), ("second", "w2"))
 
 def configure_chain(chain: Network, **choices: object) -> Network:
     """``chain`` (the Chain) with ``choices`` and each MatMul's packed core configured,
-    then its channels, which bind as their ends become known and take their first valid
+    then its channels, which bind as their contracts become known and take their first valid
     choices (the interim channel rule): each weight's memory, each transport direct."""
     folding: dict[str, object] = dict(choices)
     weights: dict[str, object] = {}

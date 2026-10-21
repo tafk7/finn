@@ -322,17 +322,17 @@ def kernel_model(**options: Any) -> ModelWrapper:
 
 
 #: The second MatMul's folding under which the Chain's streamed w2 presents each pass
-#: row-major at its free side, the order an IODMA end moves (``IodmaEnd.row_major``): a
+#: row-major at its free side, the order an IODMA mover moves (``IodmaMover.row_major``): a
 #: row of PE lanes a beat. At the Chain's own (2 x 2) it is tiled, and the pynq shell
-#: refuses it (``end-order``).
+#: refuses it (``mover-order``).
 ROW_MAJOR_W2 = {"compute.packed.pe": 4, "compute.packed.simd": 1}
 
 
 def streamed_w2_model() -> ModelWrapper:
-    """The Chain with x and w2 streamed as IODMA ends move them, each one pass a frame
-    (``IodmaEnd.single_pass``): one row of x, so w2 presents its pass once (at the
+    """The Chain with x and w2 streamed as IODMA movers move them, each one pass a frame
+    (``IodmaMover.single_pass``): one row of x, so w2 presents its pass once (at the
     Chain's three rows it presents it three times, which the pynq shell refuses,
-    ``end-repetition``), and the first MatMul folded at PE 4, all of its outputs, so
+    ``mover-repetition``), and the first MatMul folded at PE 4, all of its outputs, so
     that x is read once (at PE 2 it is read twice: over one row, the replay of each
     row is a repetition of the whole pass); the second folded ``ROW_MAJOR_W2``."""
     model = kernel_model(second_weights=False, rows=1)
@@ -358,7 +358,7 @@ def choose_memories(model: ModelWrapper) -> InShell:
 
 def configure_partition(model: ModelWrapper) -> InShell:
     """The partition's network in its shell, the choices it leaves open set as the cut sets
-    them (``make_cut_choices``: the ends a shell it was retargeted to offers, by the interim
+    them (``make_cut_choices``: the movers a shell it was retargeted to offers, by the interim
     channel rule), its open adapter memories chosen (``choose_memories``), and the
     partition verified as the build verifies it before emission
     (``support.packaging.verified``), so that it packages."""

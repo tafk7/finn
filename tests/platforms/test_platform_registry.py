@@ -17,8 +17,8 @@ from finn.core.reporting.findings import FindingKind
 from finn.core.space import design_space, inspection
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import tile
-from finn.kernels.ends import iodma_hls
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.movers import iodma_hls
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform.architectures import rule
 from finn.platform.boards import BOARDS
@@ -82,8 +82,8 @@ def test_every_boards_row_agrees_with_its_part_and_dsp(board: str) -> None:
     assert target.part == BOARDS[board].part == part_name
     assert target.platform.dsp is DspBlock(dsp)
     assert target.platform.resources == part(part_name).device.resources  # the table's totals
-    (end,) = shell_row("pynq", board).ends
-    assert end == iodma_hls(width)
+    (mover,) = shell_row("pynq", board).movers
+    assert mover == iodma_hls(width)
 
 
 @pytest.mark.parametrize("board", sorted(BOARDS))
@@ -279,13 +279,13 @@ def test_the_ip_shell_is_the_default_with_a_doubled_clock_and_no_bound() -> None
     row = shell_row("ip", None)
     assert row.clk2x
     assert row == shell_row("ip", "Ultra96") == ROWS["ip", None]
-    assert (row.ends, row.control_budget, row.memory_ports) == ((), None, None)
+    assert (row.movers, row.control_budget, row.memory_ports) == ((), None, None)
     assert (row.integration, row.host_runtime, row.static_region) == (None, None, None)
 
 
-def test_the_pynq_row_states_its_ends_budgets_integration_and_static_region() -> None:
+def test_the_pynq_row_states_its_movers_budgets_integration_and_static_region() -> None:
     row = shell_row("pynq", "Ultra96")
-    assert row.ends == (iodma_hls(128),) and row.ends[0].frames_per_call == 1
+    assert row.movers == (iodma_hls(128),) and row.movers[0].frames_per_call == 1
     assert (row.control_budget, row.memory_ports, row.clk2x) == (9, 0, False)
     assert (row.integration, row.host_runtime) == ("vivado-block-design", "zynq-iodma")
     assert row.static_region == ZYNQ_STATIC_REGION

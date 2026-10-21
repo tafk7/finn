@@ -6,9 +6,9 @@
 Facts are the root node's typed formals; a missing required one is refused at
 the node call. Choices use the stable decision keys ``inspection`` reports.
 
-A kernel reads tensors and presents its ends on channels, so a test places it in a
-network (``finn.kernels.network``): its kernels and channels by name, each its own
-space, each channel taking the ends its kernels present (``Interface``) and, for a
+A kernel reads tensors and presents its ports' contracts on channels, so a test places
+it in a network (``finn.kernels.network``): its kernels and channels by name, each its
+own space, each channel taking the contracts its kernels present (``Interface``) and, for a
 parameter channel, what its kernel states for it (``Fact``). A test names a choice as
 ``member.key`` (``matmul.compute.packed.pe``, ``w.transport``): ``keyed`` makes it the
 network's pair, ``choose`` commits a batch. ``placed_dotp`` places a dot-product core
@@ -22,7 +22,7 @@ realization, a depthwise MatMul's left open until committed. Known weights are a
 given to MatMul (``w_contents``); the weight channel carries what MatMul states for it
 (``carried_weights``, ``stored_weights``: block-diagonal for a dense realization, over
 their range), with ``set``'s tensor its ``index_tensor`` (one index per row) and ``set``
-taking its ``set_end``, so the channel's ``source`` stores them. The edge choices are
+taking its ``set_contract``, so the channel's ``source`` stores them. The edge choices are
 the channels' (``x.adapter``, ``w.transport``, ``w.source.memstream.ram_style``), the
 MatMul's its own (``matmul.compute.packed.pe``). ``matmul_assembly`` configures one
 from concrete facts and choices. A network's module is named ``finn_<stem>``
@@ -59,7 +59,7 @@ from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
 from finn.kernels.artifacts.module import Composed, Leaf, ProducerIdentity
-from finn.kernels.base import CYCLES
+from finn.kernels.base import CYCLES, LeafKernel
 from finn.kernels.configure import chosen, commit, describe
 from finn.kernels.defaults import defaulted, ranked
 from finn.kernels.eltwise import EltwiseKernel
@@ -78,7 +78,9 @@ from finn.kernels.network import (
     interim_channel_defaults,
     wire,
 )
+from finn.kernels.port import AxiStreamPort, axis, transport
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.transport import AxisBeat, ReadyValidTransport
 from finn.kernels.values.domains import range_dtype, set_index_dtype
 from finn.kernels.values.semantics import (
     IntegerTensor,
@@ -260,19 +262,19 @@ def placed_dotp(
             "x": wire(
                 tensor=x_tensor,
                 port="in0_V",
-                consumer=Interface("compute", "x_end"),
+                consumer=Interface("compute", "x_contract"),
                 platform=platform,
             ),
             "w": wire(
                 tensor=w_tensor,
                 port="in1_V",
-                consumer=Interface("compute", "w_end"),
+                consumer=Interface("compute", "w_contract"),
                 platform=platform,
             ),
             "y": wire(
                 tensor=y_tensor,
                 port="out0_V",
-                producer=Interface("compute", "y_end"),
+                producer=Interface("compute", "y_contract"),
                 platform=platform,
             ),
             "compute": space_type(
@@ -373,7 +375,7 @@ def matmul_network(
         "x": wire(
             tensor=tensors["x_tensor"],
             port="in0_V",
-            consumer=Interface("matmul", "x_end"),
+            consumer=Interface("matmul", "x_contract"),
             platform=platform,
         )
     }
@@ -381,7 +383,7 @@ def matmul_network(
         members["set"] = wire(
             tensor=set_tensor,
             port="in2_V",
-            consumer=Interface("w", "set_end"),
+            consumer=Interface("w", "set_contract"),
             platform=platform,
         )
     weight: dict[str, object] = dict(
@@ -389,7 +391,7 @@ def matmul_network(
         contents=Fact("matmul", "stored_weights"),
         sets=weight_sets,
         port="in1_V",
-        consumer=Interface("matmul", "w_end"),
+        consumer=Interface("matmul", "w_contract"),
         platform=platform,
     )
     if several:
@@ -398,7 +400,7 @@ def matmul_network(
     members["y"] = wire(
         tensor=tensors["y_tensor"],
         port="out0_V",
-        producer=Interface("matmul", "y_end"),
+        producer=Interface("matmul", "y_contract"),
         platform=platform,
     )
     members["matmul"] = space_type(
@@ -538,6 +540,24 @@ def eltwise(
         )
     )
     return point if pe is None else commit(point, {"pe": pe})
+
+
+def port_axis(point: LeafKernel, name: str) -> AxisBeat:
+    """Port ``name``'s AXIS beat on the leaf configuration ``point``
+    (``finn.kernels.port.axis``)."""
+    port: AxiStreamPort = getattr(type(point), name)
+    found = axis(*port.viewed(point, name))
+    assert isinstance(found, AxisBeat), found
+    return found
+
+
+def port_transport(point: LeafKernel, name: str) -> ReadyValidTransport:
+    """Port ``name``'s transport on the leaf configuration ``point``, on its clock domain
+    (``finn.kernels.port.transport``)."""
+    port: AxiStreamPort = getattr(type(point), name)
+    found = transport(*port.viewed(point, name), type(point).clock_domain)
+    assert isinstance(found, ReadyValidTransport), found
+    return found
 
 
 def codes(result: object) -> set[str]:
@@ -744,8 +764,8 @@ def matmul_assembly(
     flow order (``finn.kernels.defaults.defaulted``: the realization before the core),
     as conversion would set it. PE, SIMD and pumping are the core's, and the
     packed core's ``reducer``. The kernel's choices are set first, then its channels',
-    whose ends are its: the network builds each channel as its ends become known and
-    gives its choices their first valid values (the interim channel rule), the
+    whose contracts are its: the network builds each channel as its contracts become
+    known and gives its choices their first valid values (the interim channel rule), the
     weight channel's memory and FIFO as given.
     """
     if not isinstance(weight_delivery, WeightDelivery):
@@ -810,9 +830,9 @@ def matmul_assembly(
     matmul = network.member("matmul")
     w = network.member("w")
     return MatMulAssembly(
-        network.member("x").ends.source.sequence.form.beats,
-        matmul.compute.w.presented.form.beats,
-        matmul.compute.y.presented.form.beats,
+        network.member("x").streams.source.sequence.form.beats,
+        matmul.compute.w_stream.sequence.form.beats,
+        matmul.compute.y_stream.sequence.form.beats,
         matmul.result_type,
         weight_delivery,
         module.value,

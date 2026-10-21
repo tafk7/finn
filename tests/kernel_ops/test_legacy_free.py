@@ -6,7 +6,7 @@
 Importing the build entry (``finn.builder.build_dataflow``) and the build's steps
 (and the KernelOps, ``finn.kernels``, ``finn.platform``, the cut and the pynq shell's
 build), and resolving the build's own nodes through qonnx's registry (the
-partition node, an end's IODMA), loads no module of the HWCustomOp flow's packages,
+partition node, a mover's IODMA), loads no module of the HWCustomOp flow's packages,
 which are deleted. The modules a process loads are counted in a fresh interpreter: this
 one has loaded others.
 """

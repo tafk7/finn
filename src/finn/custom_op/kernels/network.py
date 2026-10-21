@@ -3,11 +3,11 @@
 
 """The network of KernelOp nodes a graph binds, and its choices written back.
 
-``network(model, nodes, ends=...)`` binds a ``finn.kernels.network.Network`` straight
+``network(model, nodes, movers=...)`` binds a ``finn.kernels.network.Network`` straight
 from the graph, for any selection of KernelOp nodes (a partition's body, a slice of it, one
 node), and changes no graph: it reads the graph once, its tensors from one index
-(``finn.core.graph.facts.reading``). The ends offered on its boundary (``ends``, each an
-``finn.kernels.ends.EndOffer``; none by default) are a fact its caller gives: a shell's
+(``finn.core.graph.facts.reading``). The movers offered on its boundary (``movers``, each an
+``finn.kernels.movers.MoverOffer``; none by default) are a fact its caller gives: a shell's
 row offers them, and ``finn.custom_op.kernels.shell`` binds a partition's network in the
 shell of the model's target (``in_shell``).
 
@@ -18,10 +18,10 @@ shell of the model's target (``in_shell``).
   Each is a ``Wire`` of the facts a ``Channel`` takes: its tensor (the graph's,
   ``edge_tensor``, at the graph's rank; a parameter channel's, the tensor and contents
   its kernel states for it, ``Fact(node, wiring.carried)``, ``Fact(node,
-  wiring.stored)``), its ends (``Interface(node, wiring.end)``, from the op's
+  wiring.stored)``), its ports' contracts (``Interface(node, wiring.contract)``, from the op's
   ``wiring``), and the target's platform. Only the selection's ONNX inputs and outputs
   are boundaries, named by the shell's convention ``s_axis_<i>`` and ``m_axis_<j>``, each
-  offered the ends given (``ends``; ``Channel.end``, which the cut sets, first valid, by
+  offered the movers given (``movers``; ``Channel.mover``, which the cut sets, first valid, by
   the interim channel rule, and persists as any choice). A channel has one consumer, so a
   tensor read more than once is refused by name before anything is bound
   (``tensor-fan-out``): read by two of the nodes (an edge, or a parameter both own), or
@@ -38,7 +38,7 @@ shell of the model's target (``in_shell``).
   over the current facts is dropped as stale, with why (``Partition.stale``); a stored set
   that breaks a rule refuses the bind, naming it (``network-invalid``, the rule's findings
   its causes); a channel whose
-  ends wait holds its choices until it is bound. Nothing is filled in. With every KernelOp
+  contracts wait holds its choices until it is bound. Nothing is filled in. With every KernelOp
   of the model selected, choices a tensor states that is no channel of it are stale too.
   Nothing is written: ``persist``, the one writer of choices, writes a network's choices
   back, each owner's whole;
@@ -50,19 +50,19 @@ shell of the model's target (``in_shell``).
 - **its module** is the partition's IP, the cut's (``PARTITION``): its members'
   netlists, named as the graph's nodes and tensors, with the boundary's pins, named
   after the partition (its stem ``finn_<name>``) and identified as the partition's IP
-  (``PRODUCER``), since an end is integrated beside the IP, not in it.
+  (``PRODUCER``), since a mover is integrated beside the IP, not in it.
 
 **Kept per build:** a network bound is kept in the build's member cache
 (``finn.kernels.members``), keyed by the model's ``design_digest`` (all but
 ``finn.outputs``, which a bind does not read), the orders the digest makes canonical and a
 bind reads (each node's attributes, the metadata's and the annotations' keys), the target
-the model states (a body opened inside its parent inherits it), the end offers given, what
+the model states (a body opened inside its parent inherits it), the mover offers given, what
 the network is made as (``Partition``, or a shell's ``InShell`` with its row), the nodes
 selected (by position), the name and the channel choices given. A refusal is never kept.
 In the verifying mode a hit is bound again with no cache open and compared.
 
 A partition's resources (``Partition.own_resources``) are its members'. The shell's
-budgets and resources over a network (its members', its ends' and its static region's),
+budgets and resources over a network (its members', its movers' and its static region's),
 and the cut's choices (``make_cut_choices``: the channels' by the interim channel rule) on
 the network in its shell, are ``finn.custom_op.kernels.shell``'s.
 """
@@ -96,9 +96,9 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.module import Composed, Fragment, ProducerIdentity
 from finn.kernels.base import RESOURCES
 from finn.kernels.channels import Channel
-from finn.kernels.ends import EndOffer
 from finn.kernels.members import Configured, Facts, current, observed, uncached
 from finn.kernels.members import typed as key_part
+from finn.kernels.movers import MoverOffer
 from finn.kernels.network import Fact, Interface, Key, Network, NetworkError, Wire, dotted, wire
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -173,18 +173,18 @@ def stale_text(key: str, found: Iterable[Finding]) -> str:
 class Partition(Network):
     """A network bound from a graph's nodes (see the module docstring): its ``name`` (its
     module's), its ``boundary`` (each boundary tensor and its port, inputs then outputs),
-    the boundary channels offered ends (``ends``), the stored choices dropped as stale
+    the boundary channels offered movers (``movers``), the stored choices dropped as stale
     where it was bound, by key, with the kernel's findings (``stale``: each a value outside
     its domain, keeping its code, its owner and its details, which add the value stored,
     ``value``, and the values the choice could take, ``candidates``; ``stale_text`` makes a
     line of them), and whether it holds every KernelOp of its model (``whole``).
     Immutable, as a network: a change returns another, which keeps these."""
 
-    __slots__ = ("_memo", "boundary", "ends", "name", "stale", "whole")
+    __slots__ = ("_memo", "boundary", "movers", "name", "stale", "whole")
 
     name: str
     boundary: tuple[tuple[str, str], ...]
-    ends: tuple[str, ...]
+    movers: tuple[str, ...]
     stale: Mapping[str, tuple[Finding, ...]]
     whole: bool
     _memo: dict[str, object]
@@ -194,7 +194,7 @@ class Partition(Network):
         members: Mapping[str, Space | Facts | Wire],
         *,
         name: str,
-        ends: tuple[EndOffer, ...],
+        movers: tuple[MoverOffer, ...],
         boundary: tuple[tuple[str, str], ...],
         stored: Mapping[Key, object],
         stray: Mapping[str, tuple[Finding, ...]],
@@ -202,7 +202,7 @@ class Partition(Network):
     ) -> None:
         super().__init__(members, stored=stored, nodes={each: member(each) for each in members})
         self.name, self.boundary, self.whole = name, boundary, whole
-        self.ends = tuple(tensor for tensor, _ in boundary) if ends else ()
+        self.movers = tuple(tensor for tensor, _ in boundary) if movers else ()
         self.stale = _described(self, stored) | dict(stray)
         self._memo = {}
 
@@ -233,7 +233,7 @@ class Partition(Network):
 
     def own_resources(self) -> QueryResult[Resources]:
         """What its members use, their own statements' sum; or what they wait on, or why
-        one is refused. A shell adds its ends' and its static region's
+        one is refused. A shell adds its movers' and its static region's
         (``finn.custom_op.kernels.shell``)."""
 
         def read() -> QueryResult[Resources]:
@@ -425,14 +425,14 @@ def network(
     nodes: Iterable[NodeProto],
     *,
     name: str = PARTITION,
-    ends: tuple[EndOffer, ...] = (),
+    movers: tuple[MoverOffer, ...] = (),
 ) -> Partition:
     """The network of ``nodes``, KernelOp nodes of ``model``, its module the partition
-    ``name``'s IP, on the platform of the model's target: ``ends`` offered on the boundary
+    ``name``'s IP, on the platform of the model's target: ``movers`` offered on the boundary
     channels (none by default; a shell's row offers them, ``in_shell``); see the module
     docstring. A tensor read more than once is refused (``tensor-fan-out``), and so is a
     stale output (``tensor-stale``)."""
-    return _network(model, list(nodes), name, {}, ends, Partition)
+    return _network(model, list(nodes), name, {}, movers, Partition)
 
 
 P = TypeVar("P", bound=Partition)
@@ -443,26 +443,26 @@ def _network(
     nodes: list[NodeProto],
     name: str,
     stating: Mapping[str, Mapping[str, object]],
-    ends: tuple[EndOffer, ...],
+    movers: tuple[MoverOffer, ...],
     kind: Callable[..., P],
 ) -> P:
     """``network``, made by ``kind`` (``Partition``, or a shell's network over it), each
     tensor of ``stating`` replayed with the channel choices it gives in place of those the
     tensor states: kept in the build's member cache (the module docstring)."""
     cache = current()
-    found = None if cache is None else _key(model, nodes, name, stating, ends, kind)
+    found = None if cache is None else _key(model, nodes, name, stating, movers, kind)
     if cache is None or found is None:
-        return _read(model, nodes, name, stating, ends, kind)
+        return _read(model, nodes, name, stating, movers, kind)
 
     def again() -> P:
         with uncached():
-            return _read(model, nodes, name, stating, ends, kind)
+            return _read(model, nodes, name, stating, movers, kind)
 
     return cast(
         P,
         cache.get(
             found,
-            lambda: _read(model, nodes, name, stating, ends, kind),
+            lambda: _read(model, nodes, name, stating, movers, kind),
             again,
             _observed,
             "network",
@@ -483,7 +483,7 @@ def _key(
     nodes: list[NodeProto],
     name: str,
     stating: Mapping[str, Mapping[str, object]],
-    ends: tuple[EndOffer, ...],
+    movers: tuple[MoverOffer, ...],
     kind: Callable[..., Partition],
 ) -> Hashable | None:
     """The network's key in the build's cache (the module docstring), or None where a
@@ -512,7 +512,7 @@ def _key(
         design_digest(model),
         orders,
         key_part(stated),
-        key_part(ends),
+        key_part(movers),
         _made_as(kind),
         selected,
         name,
@@ -527,7 +527,7 @@ def _key(
 
 def _observed(bound: Partition) -> object:
     """What is read of a network bound, to compare in the verifying mode: its class, its
-    ends and shell (a shell's row, its resources), its members, their order, wiring and
+    movers and shell (a shell's row, its resources), its members, their order, wiring and
     nodes, each member's point as the member cache compares one, what the bind dropped and
     why each unbound channel waits."""
     points = {
@@ -537,7 +537,7 @@ def _observed(bound: Partition) -> object:
     }
     return (
         type(bound),
-        (bound.name, bound.boundary, bound.ends, dict(bound.stale), bound.whole),
+        (bound.name, bound.boundary, bound.movers, dict(bound.stale), bound.whole),
         (getattr(bound, "row", None), bound.own_resources()),
         (bound.order, bound.members, {each: bound.node(each) for each in bound.members}),
         {each: bound.wiring(each) for each in bound.channels},
@@ -553,12 +553,12 @@ def _read(
     nodes: list[NodeProto],
     name: str,
     stating: Mapping[str, Mapping[str, object]],
-    ends: tuple[EndOffer, ...],
+    movers: tuple[MoverOffer, ...],
     kind: Callable[..., P],
 ) -> P:
     """The network bound, the graph's tensors read from one index."""
     with reading(model):
-        return _bound(model, nodes, name, stating, ends, kind)
+        return _bound(model, nodes, name, stating, movers, kind)
 
 
 def _bound(
@@ -566,7 +566,7 @@ def _bound(
     nodes: list[NodeProto],
     name: str,
     stating: Mapping[str, Mapping[str, object]],
-    ends: tuple[EndOffer, ...],
+    movers: tuple[MoverOffer, ...],
     kind: Callable[..., P],
 ) -> P:
     ops = [kernel_op(model, node) for node in nodes]
@@ -592,7 +592,7 @@ def _bound(
         sides += [("producer", port, tensor) for port, tensor in zip(op.outputs, node.output)]
         for side, port, tensor in sides:
             wiring = op.wiring[port]
-            settings[tensor][side] = Interface(node.name, wiring.end)
+            settings[tensor][side] = Interface(node.name, wiring.contract)
             readers.setdefault(tensor, op.label)
             if port in held:
                 settings[tensor]["tensor"] = Fact(node.name, str(wiring.carried))
@@ -605,8 +605,8 @@ def _bound(
         boundary_port = ports.get(tensor)
         if boundary_port is not None:
             facts_of["port"] = boundary_port
-            if ends:
-                facts_of["end_offer"] = ends
+            if movers:
+                facts_of["mover_offer"] = movers
         wires[tensor] = wire(platform=platform, **facts_of)
 
     def on(side: str) -> dict[str, Wire]:
@@ -623,7 +623,7 @@ def _bound(
         bound = kind(
             members,
             name=name,
-            ends=ends,
+            movers=movers,
             boundary=tuple(ports.items()),
             stored=stored,
             stray=stray,

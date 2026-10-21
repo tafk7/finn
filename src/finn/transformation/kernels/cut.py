@@ -10,8 +10,8 @@ returns the parent graph, which the build keeps as its model. The partition is n
 instance. The body carries the parent's target. Everything after the cut opens the body
 through the node (``finn.core.graph.partition.partition_body``).
 
-The cut is where each channel first has both its ends, so it makes the channel choices:
-**interim**, until the ends pass, each takes its first valid value
+The cut is where each channel first has both its sides, so it makes the channel choices:
+**interim**, each takes its first valid value
 (``finn.kernels.network.interim_channel_defaults``). It binds the nodes' choices again in
 context: a stored value outside its domain there is dropped as stale, left open for a
 strategy and reported (``dropped``); a node choice left open by a body that never went

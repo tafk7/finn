@@ -136,7 +136,7 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     # buffer of BUF_SIZE 8 words for the nest {2, 2} {0, 1}.
     levels = report["members"]["levels"]
     assert (levels["cycles"], levels["buffering"]) == (12, 8 * 2 * 2)
-    # Every member states its resources; on the ip shell, which has no ends and no
+    # Every member states its resources; on the ip shell, which has no movers and no
     # static region, the total is their sum, the partition's, against the part's
     # totals.
     resources = report["resources"]
@@ -151,8 +151,8 @@ def test_exploring_saves_the_point_s_choices_and_reports_its_cost() -> None:
     platform = read_target(model).platform.resources
     assert platform is not None and resources["platform"] == asdict(platform)
     assert resources["share"]["dsp"] == round(4 / platform.dsp, 4)
-    assert resources["shell"] == {"partition": resources["used"], "ends": {}, "static_region": {}}
-    assert "each end and its static region" in resources["counted"]
+    assert resources["shell"] == {"partition": resources["used"], "movers": {}, "static_region": {}}
+    assert "each mover and its static region" in resources["counted"]
     ranked = report["strategy"]
     assert ranked["strategy"] == "ranked" and ranked["attempts"] > 0
     # Nothing is left open.
@@ -504,7 +504,7 @@ def _levels_short(channel: Any, period: int, words: int) -> bool:
     """A double of the seam's check (the Chain needs no FIFO at any folding): ``levels``
     (activate's output) needs more words than its transport holds; every other channel's
     holds."""
-    return not str(channel.endpoints.source_owner).startswith("activate.")
+    return not str(channel.sides.source_owner).startswith("activate.")
 
 
 LEVELS_FIFO = {"transport": "fifo", "transport.fifo.buffer.depth": 8}

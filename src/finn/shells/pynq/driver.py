@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The pynq shell's PYNQ driver, from the partition's integration export
-(``finn.transformation.kernels.integration``): its I/O the export's ends (each end's
+(``finn.transformation.kernels.integration``): its I/O the export's movers (each mover's
 tensor and shape, the channel's element, and its beats and lanes); it sets PL0 to the
 clock it is given, the one the bitfile delivers, and runs the bitfile it is given
 (``write_driver``). ``driver_description`` states what it takes and returns.
@@ -216,21 +216,23 @@ def pynq_driver_text(platform: str, shapes: dict[str, Any], fclk_mhz: float, bit
 
 
 def driver_shapes(export: Integration) -> dict[str, Any]:
-    """The driver's I/O from the export's ends: each input end's (``i``) and output
-    end's (``o``) element as its ``DataType``, its tensor's shape (``normal``), its
+    """The driver's I/O from the export's movers: each input mover's (``i``) and output
+    mover's (``o``) element as its ``DataType``, its tensor's shape (``normal``), its
     frame as the stream carries it, ``(1, beats, lanes)`` (``folded``), and that packed
     into bytes (``packed``), and its instance."""
     shapes: dict[str, Any] = {}
     for side, direction, dma in (("i", "in", "idma_names"), ("o", "out", "odma_names")):
-        ends = [end for end in export.ends if end.contract.direction == direction]
-        folded = [(1, end.contract.beats, end.contract.lanes) for end in ends]
-        shapes[f"{side}dt"] = [f"DataType['{end.contract.element.dtype.name}']" for end in ends]
-        shapes[f"{side}shape_normal"] = [tuple(end.shape) for end in ends]
+        movers = [mover for mover in export.movers if mover.contract.direction == direction]
+        folded = [(1, mover.contract.beats, mover.contract.lanes) for mover in movers]
+        shapes[f"{side}dt"] = [
+            f"DataType['{mover.contract.element.dtype.name}']" for mover in movers
+        ]
+        shapes[f"{side}shape_normal"] = [tuple(mover.shape) for mover in movers]
         shapes[f"{side}shape_folded"] = folded
         shapes[f"{side}shape_packed"] = [
-            packed_shape(end.contract.element.dtype, each) for end, each in zip(ends, folded)
+            packed_shape(mover.contract.element.dtype, each) for mover, each in zip(movers, folded)
         ]
-        shapes[dma] = [end.instance for end in ends]
+        shapes[dma] = [mover.instance for mover in movers]
     return shapes
 
 
@@ -259,19 +261,19 @@ def driver_description(
     """What the driver of ``export`` takes and returns (SS9): the bitfile it runs, by
     its path in the build's output directory and in the deployment package, both of
     which hold bitfile/ beside driver/; the partition's inputs and outputs, each by its
-    tensor's name, element and shape, and the end that moves it; the clock it sets; and
+    tensor's name, element and shape, and the mover that moves it; the clock it sets; and
     the host's nodes of the parent graph that run ``before`` and ``after`` it."""
 
     def tensors(direction: str) -> list[dict[str, Any]]:
         return [
             {
-                "name": end.tensor,
-                "element": end.contract.element.dtype.name,
-                "shape": list(end.shape),
-                "dma": end.instance,
+                "name": mover.tensor,
+                "element": mover.contract.element.dtype.name,
+                "shape": list(mover.shape),
+                "dma": mover.instance,
             }
-            for end in export.ends
-            if end.contract.direction == direction
+            for mover in export.movers
+            if mover.contract.direction == direction
         ]
 
     return {
@@ -330,7 +332,7 @@ class MakePynqDriver(Transformation):
     """The PYNQ driver the build's parent graph's shell's host runtime runs
     (``write_driver``), into driver/ under the output ``directory``, written afresh:
     nothing an earlier build left there stays. Its shell is the target the partition's
-    body states (``pynq_row``); its I/O the partition's integration export's ends, from
+    body states (``pynq_row``); its I/O the partition's integration export's movers, from
     the choices the partition saves; PL0 set to the clock the bitfile delivers
     (``delivered_mhz``, report/delivered_clock.json under ``directory``); the bitfile the
     parent graph states (finn.outputs) its default, relative to driver/. A bitfile built

@@ -300,7 +300,7 @@ def step_size_fifos(
     fifo_margin: int = 0,
     fifo_ram_style: str | None = None,
 ) -> ModelWrapper:
-    """Size each channel of the partition from the beat patterns at both its ends, at the
+    """Size each channel of the partition from the beat patterns at both its sides, at the
     current folding: a direct connection, or a FIFO of the least depth that keeps its
     producer within its idle time, plus ``fifo_margin`` words. A held channel is kept.
     ``fifo_ram_style`` commits a memory style with each FIFO's depth; with None the FIFO
@@ -458,7 +458,7 @@ def step_build_bitfile(
     delivered clock is noted as a warning, against the throughput step_target_throughput
     folded to, where the partition's body records one.
 
-    ``hw_debug``: insert integrated logic analyzers on the ends' streams."""
+    ``hw_debug``: insert integrated logic analyzers on the movers' streams."""
     _refuse_shell(cfg, "step_build_bitfile")
     _refuse_drift(model, cfg, "bitfile")
     _, body, _ = partition_body(model)

@@ -97,7 +97,7 @@ def test_an_integer_matmul_and_multithreshold_convert() -> None:
 
 #: Each core's ports' rules on float operands: the element their hardware takes.
 FLOAT_PORTS = [
-    (f"compute.{core}.{port}.element_taken", "dtype-family")
+    (f"compute.{core}.{port}_element_taken", "dtype-family")
     for core in ("int8_dsp58", "packed")
     for port in ("w", "x")
 ]

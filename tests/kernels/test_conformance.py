@@ -55,7 +55,7 @@ from support.conformance import (
     MODES,
     NonConformance,
     Sample,
-    _ends,
+    _contracts,
     _stream,
     _values,
     conformance,
@@ -254,7 +254,7 @@ def test_the_stimulus_tells_the_wrong_order_apart(wrong: str) -> None:
             values=values,
         )
         x = values["input_channel"]
-        declared = design_member(placed, "input_channel").endpoints.sink.form
+        declared = design_member(placed, "input_channel").sides.sink.form
         walked = vector_major(declared.shape, sample.factors["pe"])
         arrive = [p for beat in declared.positions() for p in beat]
         applied = [p[1] for beat in walked.positions() for p in beat]
@@ -282,9 +282,9 @@ def rtl_decoded(case: dict[str, Any], sample: Sample) -> str:
     )
     names = ("input_channel", "output_channel")
     streams = {
-        name: _stream(placed, name, ends.form, ends)
+        name: _stream(placed, name, contract.form, contract)
         for name in names
-        for ends in [_ends(placed, space_type, sample, [name])[name]]
+        for contract in [_contracts(placed, space_type, sample, [name])[name]]
     }
     declared = streams["input_channel"].form
     walked = vector_major(declared.shape, sample.factors["pe"])
@@ -342,8 +342,6 @@ class Misnamed(MemStreamKernel):
         endpoint=Endpoint.INITIATOR,
         tensor=MemStreamKernel.output_tensor,
         sequence=MemStreamKernel.output_sequence,
-        clock="clk",
-        reset="rst",
     )
 
 

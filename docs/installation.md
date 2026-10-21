@@ -611,7 +611,7 @@ that bitfile, and `step_deployment_package` packages both for the board, in
 at its turn on another, such as `ip`. An output made from another is listed after it:
 the driver after the bitfile, the deployment after both; a step whose input is missing
 is refused at its turn, naming the step to list before it. `step_resources_report`
-writes `report/resources.json`: each member of the shell (the partition, each end,
+writes `report/resources.json`: each member of the shell (the partition, each mover,
 each IP of the static region) and their total, as the model states them, as Vivado
 synthesized each IP out of context (`pynq`'s per-IP runs with the bitfile; `ip`'s
 packaged partition with `ooc_synth`), and as placed (`pynq` with the bitfile); with
@@ -656,7 +656,7 @@ refused. The preparation steps declare `override_inpsize`
 (`step_cleanup`), `max_multithreshold_bit_width` (`step_qonnx_to_finn`, default 8),
 and `preprocessing`, `input_datatype` and `topk` (`step_add_pre_post_processing`);
 the strategy steps theirs (below); `step_package_partition` `ooc_synth`;
-`step_build_bitfile` `hw_debug` (integrated logic analyzers on the ends' streams); its
+`step_build_bitfile` `hw_debug` (integrated logic analyzers on the movers' streams); its
 clock report's objective
 is the `target_fps` the partition's body records where `step_target_throughput` folded
 it (`finn.choices/objective_fps`), and none where a later step that may change the folding
@@ -693,7 +693,7 @@ value in the body. A change that breaks a kernel's rule is refused, naming the r
 core on a DSP58 part, and states the bottleneck reached and whether `target_fps` is
 met; with `relax_target_fps`, a throughput the folding cannot reach is relaxed to the
 fastest it reaches. `step_max_throughput` keeps, of every point it tried, the fastest
-whose resources (the shell's: its partition, ends and static region) stay within
+whose resources (the shell's: its partition, movers and static region) stay within
 `max_throughput_within`; where a member states no resources (a memory pinned `auto`:
 placed by Vivado, not stated), it budgets what is stated, a lower bound, and warns,
 naming it. A hold is recorded in the partition's body (`finn.choices/held`, the held
