@@ -345,6 +345,48 @@ def test_a_module_naming_a_required_member_makes_a_base_of_kernels() -> None:
     assert library_module(point).sources == (PROBE,)
 
 
+class Deep(KernelSpace):
+    """A stand-in base of kernels: every kernel on it states its ``depth``."""
+
+    id = "test.kernel_space.deep"
+    clock_domain = NATIVE_CLOCKING
+    depth = required(int)
+
+
+class Forgetful(Deep):
+    """A kernel on ``Deep`` with its module, port and resources, that forgets ``depth``."""
+
+    id = "test.kernel_space.forgetful"
+    input_tensor: Tensor = Param()
+    input = native_stream("input", Endpoint.TARGET, input_tensor, ARRIVING)
+
+    @view
+    def parameters(self) -> dict[str, int | str]:
+        return {}
+
+    @view(semantics=RESOURCES_SEMANTICS)
+    def resource_use(self) -> Resources:
+        return Resources()
+
+    module = LibraryModule("probe", parameters=parameters, sources=(PROBE,))
+
+
+def test_a_kernel_forgetting_a_required_member_is_refused_where_placed() -> None:
+    # Leaving a required() member unmet makes a base of kernels, which the module checks
+    # pass by; placing it, as the top or as a child, is refused, naming the member.
+    with refused(
+        "required-unmet",
+        error=DefinitionError,
+        message=r"Forgetful.* leaves required members unmet: Deep\.depth",
+    ):
+        design_space(Forgetful(input_tensor=TENSOR))
+    with refused("required-unmet", error=DefinitionError, message=r"Deep\.depth"):
+
+        class Holder(KernelSpace):
+            id = "test.kernel_space.holder"
+            inner = Forgetful(input_tensor=TENSOR)
+
+
 # -- the module's inputs: each a port's, a presented control bus's, or held -----------------
 
 LOOSE = Signal("mode", Direction.IN, 1)
