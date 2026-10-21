@@ -52,6 +52,7 @@ from core.space.reference import (
     listed,
 )
 from core.space.reference_harness import walks
+from core.space.reference_harness.compare import answer_form
 from core.space.reference_harness.engine import Point
 from core.space.reference_harness.forms import (
     AnswerForm,
@@ -232,13 +233,36 @@ def test_an_engine_refusing_a_view_read_in_as_the_model_does_is_not_counted(
 
 
 def test_a_question_reaching_an_optional_fact_left_out_is_counted_under_t4c() -> None:
-    # seed 7 leaves its optional f1 out: the engine reads it unresolved, the model None
+    # seed 7 leaves its optional f1 out: the engine reads it unresolved, the model None, so
+    # f1's own answer (its subject the fact itself) and a rule reading it disagree, each
+    # counted under T4c
     tally = walk(7, 3)
     assert tally.failure is None, tally.failure
-    assert tally.by_milestone == {"T4c": 1}
-    assert first_line(walk(7, 3, without=("T4c",))) == (
-        "seed 7, step 0: the engine disagrees (rule; T4c not pending)"
-    )
+    assert tally.by_milestone == {"T4c": 2}
+    assert tally.by_question == {"answer": 1, "rule": 1}
+    removed = walk(7, 3, without=("T4c",))
+    assert first_line(removed) == "seed 7, step 0: the engine disagrees (answer; T4c not pending)"
+    assert removed.failure is not None and "walk: the answer of f1" in removed.failure
+
+
+def test_each_facts_answer_is_asked_at_each_configuration() -> None:
+    # A fact's answer is always known (SZ100 (5)): the model answers its value, or None for
+    # an optional one left out (seed 7's f1), and the engine is asked it through ``query``
+    generated, engine = generate(random.Random(7))
+    index = generated.description.validate()
+    assert index.optional and set(index.optional) - set(generated.facts)
+    asked = questions(index)
+    assert {("answer", fact) for fact in index.facts} <= set(asked)
+    configuration = Configuration(generated.description, generated.facts)
+    solution, point = configuration.solve(), engine.open(dict(generated.facts))
+    for fact in sorted(index.facts):
+        expected = generated.facts.get(fact)
+        assert answer_form(solution, fact) == AnswerForm("value", expected)
+        found = point.answer(fact)
+        if fact in generated.facts:
+            assert found == AnswerForm("value", expected)
+        else:  # left out: today's engine reads it unresolved (T4c's row)
+            assert found.kind == "unresolved", found
 
 
 def test_with_no_milestone_pending_every_disagreement_fails_its_walk(
@@ -247,7 +271,7 @@ def test_with_no_milestone_pending_every_disagreement_fails_its_walk(
     monkeypatch.setattr(walks, "ROWS", ())
     assert pending() == ()
     assert first_line(walk(7, 3)) == (
-        "seed 7, step 0: the engine disagrees (rule; T4c not pending)"
+        "seed 7, step 0: the engine disagrees (answer; T4c not pending)"
     )
     with pytest.raises(ValueError, match="no such milestone"):
         pending(("lane 10",))
@@ -269,7 +293,8 @@ def test_the_summary_names_the_runs_the_milestones_and_the_checks() -> None:
     assert "implementation: today" in text.splitlines()
     assert (
         "engine disagreements (full: attributed by cause, counted while pending (T4b, T4c), "
-        "else failing; strict: every one failing): by milestone T4b 0, T4c 1; by question rule 1"
+        "else failing; strict: every one failing): by milestone T4b 0, T4c 2; by question "
+        "answer 1, rule 1"
     ) in text
     assert text.splitlines()[2].startswith("| 7 | full | 3 |")
     assert text.splitlines()[3].startswith("| 7 | strict | 3 |")

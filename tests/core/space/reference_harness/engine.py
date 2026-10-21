@@ -52,8 +52,8 @@ legacy form, and no answer the adapter computes in its place.
   - possible values are ``Answers.viable``'s: ``Possible`` with what it moves,
     ``Refused`` with its broken rules; ``None`` where the engine lists nothing;
   - validity is ``Answers.validity`` (``"valid"``, ``"refused"``, ``"open"``);
-  - a choice's, a value's or a rule's answer is ``Answers.query``'s, a stored choice's
-    value ``Answers.stored``'s;
+  - a fact's, a choice's (stored or not), a value's or a rule's answer is
+    ``Answers.query``'s;
   - a definition is refused for a dependency cycle (when building or asked) and for a
     domain whose membership reads a choice (at compile).
 

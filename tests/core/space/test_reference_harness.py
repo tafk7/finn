@@ -494,9 +494,8 @@ def test_a_planted_value_on_a_stored_choice_is_seen() -> None:
 #: walk reports it by. The strict run fails on every disagreement; in the full run one
 #: reaching an optional fact left out is counted under T4c, which could hide a fault. The
 #: value fault moves the first member by key answering a value: the fact ``f0`` in every
-#: one of these descriptions until a choice or a derived value sorting before it answers
-#: one, and no walk asks a fact's answer, nor reads a stored choice's value from ``query``:
-#: only seed 2 reaches one (its derived ``d``, at step 21).
+#: one of these descriptions at the start, and each fact's answer is asked, so each walk
+#: reports it there, at step 0 (``VALUE_LINE``).
 PLANTED_WALKS: dict[Fault, dict[int, str]] = {
     "standing": {0: "facts change", 1: "facts change", 2: "possible", 3: "possible"},
     "possible": {0: "possible", 1: "possible", 2: "possible", 3: "possible"},
@@ -505,6 +504,7 @@ PLANTED_WALKS: dict[Fault, dict[int, str]] = {
 }
 
 FIRST_LINE = re.compile(r"seed (\d+), step \d+: the engine disagrees \((.+); strict run\)")
+VALUE_LINE = re.compile(r"seed \d+, step 0: the engine disagrees \(answer; strict run\)")
 
 
 @functools.cache
@@ -526,6 +526,8 @@ def test_a_planted_fault_is_reported_by_question_in_walks_0_to_3(fault: Fault) -
         found = FIRST_LINE.fullmatch(lines[0])
         assert found is not None and int(found[1]) == seed, lines[0]
         assert f"implementation: today, planted {fault}" in lines, tally.failure
+        if fault == "value":
+            assert VALUE_LINE.fullmatch(lines[0]) and lines[1] == "walk: the answer of f0"
         reported[seed] = found[2]
     assert reported == PLANTED_WALKS[fault]
 

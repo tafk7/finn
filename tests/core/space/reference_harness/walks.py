@@ -85,8 +85,9 @@ not reached (SZ100 (3), (5)), each a pending milestone of the matrix with one ro
   T4b, a description the model refuses as ``view-read-in`` that the engine takes otherwise
   (``engine.definition``; counted once, and the generator draws again: built, or refused
   as a cycle, see :func:`generate`); T4c, a question
-  whose subject reaches an optional fact left out (:meth:`Structure.reach`; validity,
-  possible values, a change, a bind and refinement reach the whole description). One
+  whose subject reaches an optional fact left out (:meth:`Structure.reach`; a fact's own
+  answer, ``None`` in the model and unresolved in today's engine, reaches the fact itself;
+  validity, possible values, a change, a bind and refinement reach the whole description). One
   attributed to a pending milestone (:func:`pending`) is **counted, not failed**, tallied
   by question and by milestone; one with no cause fails the walk, and so does one whose
   milestone is not pending (``--without``: its rows taken as removed). Refinement on the engine
@@ -729,10 +730,16 @@ ENGINE_QUESTIONS = ("state", "answer", "rule", "validity", "possible")
 
 
 def questions(index: model.Index) -> list[Question]:
+    """What both sides are asked at each configuration: each choice's state; each fact's,
+    choice's, derived value's, view's and ``Members``'s answer (a fact's is always known,
+    SZ100 (5): its value, or ``None`` for an optional one left out); each rule; validity;
+    each listed choice's possible values, and the model's ranking of them."""
     found: list[Question] = [("state", path) for path in sorted(index.choices)]
     found += [
         ("answer", path)
-        for path in sorted({*index.choices, *index.derived, *index.views, *index.members})
+        for path in sorted(
+            {*index.facts, *index.choices, *index.derived, *index.views, *index.members}
+        )
     ]
     found += [("rule", path) for path in sorted(index.constraints)]
     found.append(("validity", ""))
