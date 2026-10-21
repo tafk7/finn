@@ -6,15 +6,17 @@
 A leaf (``LeafKernel``) binds one FinnLib module. It states its module, parameters,
 sources and resources (``required()``: a class that leaves one unmet is not placed),
 and its ports, which are checked when the class is made; it places no kernel. Every
-input among its other pins is held or presented as a control bus (``pins_accounted``),
-and every port runs on its clock (``clocked``): constraints, counted in its validity,
-refused when the kernel is created, not when it is composed. Its ``module`` is the
-``Leaf``. A kernel with children (``ComposedKernel``) states the interfaces it
-presents, each a view ``<name>_end``, and merges its members' netlists into one
-``Composed`` module. A kernel is one of the two.
+input among its other pins is held or presented as a control bus (``pins_accounted``):
+a constraint, counted in its validity, refused when the kernel is created, not when it
+is composed. Every port runs on its kernel's clock domain (``clock_domain``). Its
+``module`` is the ``Leaf``. A kernel with children (``ComposedKernel``) presents a
+child's port as its own (``served``: ``<name>_contract``, labelled below it), and
+merges its members' netlists into one ``Composed`` module. A kernel is one of the two.
 """
 
 from __future__ import annotations
+
+from dataclasses import replace
 
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2, codes
@@ -28,25 +30,17 @@ from finn.core.space import (
     derived,
     design_space,
     reject,
-    view,
 )
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Pin, Signal
 from finn.kernels.artifacts.contributions import Contribution
 from finn.kernels.artifacts.module import Held, Leaf
-from finn.kernels.base import (
-    PORT_END,
-    ComposedKernel,
-    Kernel,
-    LeafKernel,
-    PortEnd,
-    interface,
-)
+from finn.kernels.base import NATIVE_CLOCKING, ComposedKernel, Kernel, LeafKernel
 from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, wire
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.port import AxiStreamPort, served
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.platform.capabilities import Resources
 
@@ -55,27 +49,24 @@ TENSOR = Tensor((4,), ScalarEncoding(INT4))
 
 
 class Probe(LeafKernel):
-    """A model-only leaf: one input port, a mode pin, and a clocking of its choice."""
+    """A model-only leaf: one input port, a mode pin, and a doubled clock."""
 
     id = "test.probe"
     rtl_module = "probe"
 
     tensor: Tensor = Param(required=False)
     hold_mode: bool = Param(default=True)
-    port_clock: str = Param(default="ap_clk")
 
     x = AxiStreamPort(
         name="s_axis",
         endpoint=Endpoint.TARGET,
         tensor=tensor,
         sequence=BeatSequence(vector_major((4,), 1)),
-        clock=port_clock,
     )
-    x_end = interface("x")
 
     @derived
     def clocking(self) -> Clocking:
-        return Clocking(doubled="ap_clk2x", doubling=True)
+        return replace(type(self).clock_domain, doubled="ap_clk2x", doubling=True)
 
     @derived
     def other_pins(self) -> tuple[Pin, ...]:
@@ -104,7 +95,7 @@ def probe(**facts: object) -> Probe:
             "edge": wire(
                 tensor=TENSOR,
                 port="in0_V",
-                consumer=Interface("kernel", "x_end"),
+                consumer=Interface("kernel", "x_contract"),
                 platform=FULL_DSP48E2,
             ),
             "kernel": Probe(tensor=TENSOR, **facts),  # type: ignore[arg-type]
@@ -121,8 +112,21 @@ def test_a_leaf_holds_or_presents_every_input_that_is_no_ports() -> None:
     assert codes(probe(hold_mode=False).query(LeafKernel.module)) == {"kernel-pins"}
 
 
-def test_a_port_runs_on_its_kernels_clock() -> None:
-    assert codes(probe(port_clock="ap_clk2x").query(LeafKernel.module)) == {"kernel-clock"}
+def test_a_port_runs_on_its_kernels_clock_domain() -> None:
+    bus = probe().module.abi.pins[-1]
+    assert (bus.associated_clock, bus.associated_reset) == ("ap_clk", "ap_rst_n")
+
+    class Native(Probe):
+        id = "test.probe.native"
+        clock_domain = NATIVE_CLOCKING
+
+    point = design_space(Native(tensor=TENSOR))
+    module = point.query(LeafKernel.codegen)
+    assert isinstance(module, Available)
+    pins = module.value.abi.pins
+    assert [pin.name for pin in pins[:3]] == ["clk", "ap_clk2x", "rst"]
+    bus = pins[-1]
+    assert (bus.associated_clock, bus.associated_reset) == ("clk", "rst")
 
 
 def test_a_held_bus_is_accounted_for() -> None:
@@ -188,7 +192,7 @@ def port() -> AxiStreamPort:
 
 def test_a_leaf_states_its_ports_and_places_no_kernel() -> None:
     stated("Complete", x=port())
-    with refused("leaf-ports-unplaced", error=DefinitionError, message="Portless places no port"):
+    with refused("leaf-ports-unplaced", error=DefinitionError, message="Portless declares no port"):
         stated("Portless")
     with refused(
         "leaf-places-kernels",
@@ -198,22 +202,23 @@ def test_a_leaf_states_its_ports_and_places_no_kernel() -> None:
         stated("Nesting", x=port(), inner=Probe(tensor=TENSOR))
 
 
-def test_a_kernel_with_children_names_the_end_of_each_interface() -> None:
-    with refused(
-        "composed-end-absent",
-        error=DefinitionError,
-        message=r"the interfaces \['y'\] without their ends",
-    ):
+def test_a_kernel_with_children_presents_a_childs_port_as_its_own() -> None:
+    class Presenting(ComposedKernel):
+        id = "test.presenting"
+        kernel = Probe(tensor=TENSOR)
+        x = served(kernel, "x")
 
-        class Unended(ComposedKernel):
-            id = "test.unended"
-            interfaces = ("x", "y")
+    point = design_space(Presenting())
+    assert point.x_contract.label == "kernel.x"
+    assert point.x_contract.contract == point.kernel.x_contract.contract
+    assert point.x_stream == point.kernel.x_stream
+
+    with refused("served-child-unknown", error=DefinitionError, message="serves y of no child"):
+
+        class Unserved(ComposedKernel):
+            id = "test.unserved"
             kernel = Probe(tensor=TENSOR)
-
-            @view(semantics=PORT_END)
-            def x_end(self) -> PortEnd:
-                served: PortEnd = self.kernel.x_end
-                return served.under("kernel")
+            y = served(kernel, "y")
 
 
 def test_a_kernel_is_a_leaf_or_a_kernel_with_children() -> None:

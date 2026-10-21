@@ -10,7 +10,7 @@ each sample it
    per stream interface: a channel named ``<interface>_channel`` carries the
    tensor of that interface, an input's given to the kernel as
    ``<interface>_tensor`` and an output's the kernel's own (``<interface>_tensor``,
-   its statement), and takes the end it presents, ``<interface>_end``. It commits
+   its statement), and takes the contract it states, ``<interface>_contract``. It commits
    the sample's factors and the pinned ``choices``, then the kernel's other open
    choices by their default policies and every channel's by the interim channel rule,
    as the cut sets them (its transport, its adapter chain and the chain's memories).
@@ -352,9 +352,9 @@ def _design(
     tensors = {**inputs, **outputs}
     for name, tensor in tensors.items():
         side = "consumer" if name in inputs else "producer"
-        settings: dict[str, Any] = {side: Interface(KERNEL, f"{_interface(name)}_end")}
+        settings: dict[str, Any] = {side: Interface(KERNEL, f"{_interface(name)}_contract")}
         if fed is not None and fed[0] == name:
-            settings["producer"] = Interface(SOURCE, "output_end")
+            settings["producer"] = Interface(SOURCE, "output_contract")
         else:
             settings["port"] = name
         members[name] = wire(tensor=tensor, platform=FULL_DSP48E2, **settings)
@@ -411,17 +411,18 @@ def _chosen(design: Any, choices: Mapping[str, object]) -> Any:
 def _user(point: Any, name: str) -> str:
     """The path below the kernel of the port on channel ``name``: a member of a leaf
     kernel (``input``), or a child's below a kernel with children (``compute.packed.x``)."""
-    ends = design_member(point, name).endpoints
+    ends = design_member(point, name).sides
     for owner in (ends.source_owner, ends.sink_owner):
         if owner is not None and owner.startswith(f"{KERNEL}."):
             return str(owner[len(KERNEL) + 1 :])
     raise AssertionError(f"no port of the kernel is on {name}: {ends}")
 
 
-def _node(kernel: Any, path: str) -> Any:
-    """The node at ``path`` below ``kernel``; a Decision over nodes is followed into the case
-    the path names next (``compute.packed``)."""
-    node, parts = kernel, path.split(".")
+def _port(kernel: Any, path: str) -> Any:
+    """The port at ``path`` below ``kernel``, its arguments read from the leaf that declares
+    it (``AxiStreamPort.read``): a Decision over nodes is followed into the case the path
+    names next (``compute.packed``)."""
+    node, (*parts, name) = kernel, path.split(".")
     while parts:
         part, *parts = parts
         if parts:
@@ -432,7 +433,7 @@ def _node(kernel: Any, path: str) -> Any:
             except RequestError:
                 pass
         node = getattr(node, part)
-    return node
+    return getattr(type(node), name).read(node, "schedule", "reduces", "holds", "index")
 
 
 def _stated(
@@ -561,7 +562,7 @@ def place(
     name = next(iter(inputs))
     tensor = inputs[name]
     lanes = _value(
-        design_member(plain, name).query(Channel.endpoints), space_type, sample
+        design_member(plain, name).query(Channel.sides), space_type, sample
     ).sink.form.lanes
     assert values is not None, "the adapter sample streams the first input's values"
     contents = _nested(values[name].tolist())
@@ -653,7 +654,7 @@ def _ends(
     """The contract the kernel presents on each channel."""
     found: dict[str, StreamContract] = {}
     for name in names:
-        ends = _value(design_member(point, name).query(Channel.endpoints), space_type, sample)
+        ends = _value(design_member(point, name).query(Channel.sides), space_type, sample)
         owner = f"{KERNEL}.{_user(point, name)}"
         if ends.sink_owner == owner:
             found[name] = ends.sink
@@ -679,7 +680,7 @@ def _check_model(
     fed = next(iter(inputs)) if sample.adapter else None
     for name, end in _ends(point, space_type, sample, [*inputs, *outputs]).items():
         path = _user(point, name)
-        form, port = end.form, _node(kernel, path)
+        form, port = end.form, _port(kernel, path)
         assert _covers(form), f"{where}: {path} does not cover its {form.shape} tensor"
         if port.schedule is not None:
             schedule = port.schedule
@@ -689,7 +690,7 @@ def _check_model(
                 f"{schedule.beat_count} less {dropped} dropped"
             )
         if name != fed:
-            ends = _value(design_member(point, name).query(Channel.endpoints), space_type, sample)
+            ends = _value(design_member(point, name).query(Channel.sides), space_type, sample)
             boundary = ends.source if ends.source_owner is None else ends.sink
             presented = unreplayed(form) if name in inputs else form
             assert boundary.form == presented, (
@@ -866,7 +867,7 @@ def _simulate(
 def _stream(point: Any, name: str, form: Traversal, end: StreamContract) -> Stream:
     """Channel ``name``'s stream as the kernel's port declares it, its tensor's axes named
     by the port's index expressions where it reads one per axis."""
-    index = getattr(_node(design_member(point, KERNEL), _user(point, name)), "index", ())
+    index = _port(design_member(point, KERNEL), _user(point, name)).index
     axes = tuple(map(repr, index)) if len(index) == len(form.shape) else ()
     return Stream(form, end.element.bits, axes)
 

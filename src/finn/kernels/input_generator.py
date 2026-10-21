@@ -50,6 +50,7 @@ from dataclasses import dataclass
 from functools import cache
 from math import prod
 from pathlib import Path
+from typing import TYPE_CHECKING, ClassVar
 
 from finn import resources
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
@@ -62,13 +63,14 @@ from finn.core.space import (
     reject,
 )
 from finn.dataflow.plan import Unrealizable
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import Adaptation, BeatSequence, LevelEnd, classify
-from finn.kernels.artifacts.abi import Clocking, Endpoint
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
-from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, interface
-from finn.kernels.port import LoopEnds, native_stream
+from finn.kernels.base import NATIVE_CLOCKING, LeafKernel
+from finn.kernels.port import LoopEnds, data_width, native_stream
 from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
     Fit,
@@ -190,6 +192,7 @@ class InputGeneratorKernel(LeafKernel):
     id = "finnlib.input_generator"
     version = 1
     rtl_module = "input_gen"
+    clock_domain = NATIVE_CLOCKING
 
     # The tensor whose words it reorders, a fact; what arrives of it, and the order and
     # markers it presents (``leaving``: the markers it must close).
@@ -225,14 +228,13 @@ class InputGeneratorKernel(LeafKernel):
 
     input = native_stream("input", Endpoint.TARGET, input_tensor, arriving)
     output = native_stream("output", Endpoint.INITIATOR, output_tensor, presenting, loop_ends)
-    input_end = interface("input")
-    output_end = interface("output")
+    if TYPE_CHECKING:  # members its ports lower to, which it reads
+        input_stream: ClassVar[Stream]
 
     @derived
-    def word_bits(self) -> int:
+    def word_bits(self) -> int | Rejected:
         """DATA_WIDTH: its input port's word."""
-        width: int = self.input.transport.data_width
-        return width
+        return data_width(InputGeneratorKernel.input, self.input_stream)
 
     @derived
     def frame_words(self) -> int:
@@ -282,10 +284,6 @@ class InputGeneratorKernel(LeafKernel):
         """What it holds: its buffer, ``BUF_SIZE`` input words, not one frame."""
         words: int = self.buffer_words
         return words * self.word_bits
-
-    @derived
-    def clocking(self) -> Clocking:
-        return NATIVE_CLOCKING
 
     @derived(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:

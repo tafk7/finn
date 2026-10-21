@@ -47,7 +47,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.base import RESOURCES
 from finn.kernels.explore import Explorer, SizeFifos, TargetThroughput
-from finn.kernels.fifo_sizing import NotModelled, Pattern, ends
+from finn.kernels.fifo_sizing import NotModelled, Pattern, sides
 from finn.kernels.movers import (
     DIVISIBLE,
     IODMA_HLS,
@@ -336,13 +336,13 @@ def test_a_row_offering_an_unknown_or_repeated_kind_is_refused() -> None:
 def test_sizing_reads_a_free_side_its_mover_paces() -> None:
     bound = cut_network()
     x = bound.member("x").mover_contract
-    supply, _ = ends(bound.member("x"))
+    supply, _ = sides(bound.member("x"))
     assert supply == Pattern(x.times, x.cycles)
     y = bound.member("y").mover_contract
-    _, accept = ends(bound.member("y"))
+    _, accept = sides(bound.member("y"))
     assert accept == Pattern(y.times, y.cycles)
     with pytest.raises(NotModelled, match="a boundary: not modelled"):
-        ends(chain_network(TARGET).member("x"))
+        sides(chain_network(TARGET).member("x"))
 
 
 # -- on TFC_W2A2 ---------------------------------------------------------------------------

@@ -3,7 +3,15 @@
 
 
 import pytest
-from support.helpers import FULL_DSP48E2, eltwise, fifo_node, in_order, nested, stage_tensor
+from support.helpers import (
+    FULL_DSP48E2,
+    eltwise,
+    fifo_node,
+    in_order,
+    nested,
+    port_transport,
+    stage_tensor,
+)
 from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import simulate
@@ -13,13 +21,13 @@ from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Direction, Endpoint
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.input_generator import InputGeneratorKernel
-from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamMarker
+from finn.kernels.transport import MarkerKind, ReadyValidTransport, StreamMarker
 from finn.toolchain.launcher import host_toolchain
 
 
 def test_native_streams_are_inspectable_without_storage_choices():
     base = design_space(fifo_node(word_bits=13, depth=8))
-    source, sink = base.input.transport, base.output.transport
+    source, sink = port_transport(base, "input"), port_transport(base, "output")
     assert source.data_width == sink.data_width == 13
     assert [pin.direction for pin in source.pins()] == [Direction.IN, Direction.IN, Direction.OUT]
     assert [pin.direction for pin in sink.pins()] == [Direction.OUT, Direction.OUT, Direction.IN]
@@ -37,14 +45,14 @@ def test_loop_markers_remain_native_even_when_one_bit():
         node = InputGeneratorKernel(
             input_tensor=tensor, arriving=once, leaving=leaving, platform=FULL_DSP48E2
         )
-        output = design_space(node).output.transport
+        output = port_transport(design_space(node), "output")
         assert output.markers == (StreamMarker("olst", MarkerKind.LOOP_END, loops),)
         with pytest.raises(ValueError, match="single LAST"):
             output.axis_bus()
 
 
 def test_axi_lowering_preserves_explicit_physical_mapping():
-    stream = ReadyValidStream(
+    stream = ReadyValidTransport(
         "s_axis",
         16,
         Endpoint.TARGET,
@@ -133,12 +141,12 @@ endmodule
 
 def test_eltwise_ports_carry_their_operands_unpadded_on_native_pins():
     mixed = eltwise(lhs="INT5", rhs="FLOAT32", pe=3)
-    lhs, rhs, result = mixed.lhs.transport, mixed.rhs.transport, mixed.result.transport
+    lhs, rhs, result = (port_transport(mixed, name) for name in ("lhs", "rhs", "result"))
     assert (lhs.data, lhs.valid, lhs.ready) == ("adat", "avld", "ardy")
     assert (lhs.data_width, rhs.data_width, result.data_width) == (15, 96, 96)
     # An operand the arithmetic does not take refuses the kernel, naming the operand.
     refused = eltwise(lhs="FLOAT16", rhs="FLOAT16")
-    assert refused.lhs.transport.data_width == 32  # the pins do not wait for admission
+    assert port_transport(refused, "lhs").data_width == 32  # the pins do not wait for admission
     answer = refused.query(EltwiseKernel.module)
     assert isinstance(answer, Rejected)
     assert "operands_supported" in {finding.owner for finding in answer.findings}

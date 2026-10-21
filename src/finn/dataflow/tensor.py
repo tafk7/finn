@@ -4,8 +4,8 @@
 """The fact a channel carries: a tensor of one element.
 
 A ``Tensor`` is a row-major shape of positive extents and the element
-``ScalarEncoding`` every position holds. Both ends of a channel read it; each
-end presents its own traversal of it (``finn.dataflow.traversal``). Its
+``ScalarEncoding`` every position holds. Both sides of a channel read it; each
+port presents its own traversal of it (``finn.dataflow.traversal``). Its
 identity is the channel that carries it, so it holds no name.
 
 An element is a datatype and the range of its values (qonnx's ``TensorRange``,
@@ -14,8 +14,8 @@ they are on the graph: a tensor's range is part of its datatype annotation, for 
 numeric datatype (exact dyadic endpoints, possibly unbounded, and whether it may hold
 NaN). A producer that knows its values (a value owner, or a kernel stating its output)
 states a tighter range; one element ``fits`` another when its values are values of the
-other, which is what a channel checks between each end and its tensor
-(``finn.dataflow.ends.misfit``).
+other, which is what a channel checks between each stream and its tensor
+(``finn.dataflow.streams.misfit``).
 """
 
 from __future__ import annotations

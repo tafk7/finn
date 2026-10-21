@@ -20,9 +20,9 @@ values it streams, so it states their ``value_range`` in its output's tensor
 
 It is a channel's ``source`` candidate (``finn.kernels.channels``): placed by the
 channel it drives, its output presents its given sequence, and its set port reads
-the channel's ``index_tensor``. Placed by a parent, it states its ends
-(``output_end``, ``set_end``), which the channels on them take. Its cycles are the
-beats its output carries a frame, as every leaf's: one pass with one set, one pass
+the channel's ``index_tensor``. Placed by a parent, it states its ports' contracts
+(``output_contract``, ``set_contract``), which the channels on them take. Its cycles are
+the beats its output carries a frame, as every leaf's: one pass with one set, one pass
 an index with several.
 
 ``ram_style`` and ``pumped_memory`` are its choices. A pumped memory runs at
@@ -41,6 +41,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from math import ceil, prod
+from typing import TYPE_CHECKING, ClassVar
 
 from qonnx.core.ranges import TensorRange
 
@@ -73,7 +74,7 @@ from finn.kernels.artifacts.contributions import (
     hex_image,
 )
 from finn.kernels.artifacts.module import Held
-from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, interface
+from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, PortContract
 from finn.kernels.control import held_bus
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import (
@@ -128,6 +129,7 @@ class MemStreamKernel(LeafKernel):
     id = "finnlib.memstream_axi"
     version = 1
     rtl_module = "memstream_axi"
+    clock_domain = NATIVE_CLOCKING
 
     dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
     form: Traversal = Param()
@@ -316,25 +318,21 @@ class MemStreamKernel(LeafKernel):
         sequence=set_sequence,
         dtype=set_dtype,
         signals=("s_axis_0_tdata", "s_axis_0_tvalid", "s_axis_0_tready"),
-        clock=NATIVE_CLOCKING.clock,
-        reset=NATIVE_CLOCKING.reset,
     )
     output = AxiStreamPort(
         name="m_axis_0",
         endpoint=Endpoint.INITIATOR,
         tensor=output_tensor,
         sequence=output_sequence,
-        clock=NATIVE_CLOCKING.clock,
-        reset=NATIVE_CLOCKING.reset,
     )
-    set_end = interface("set")
-    output_end = interface("output")
+    if TYPE_CHECKING:  # members its ports lower to, which its channel reads
+        output_contract: ClassVar[PortContract]
 
     @derived
     def clocking(self) -> Clocking:
         """``clk2x`` runs a pumped memory, and is held low otherwise."""
         pumped = self.pumped_memory
-        return replace(NATIVE_CLOCKING, doubled="clk2x", doubling=pumped)
+        return replace(type(self).clock_domain, doubled="clk2x", doubling=pumped)
 
     @derived
     def parameters(self) -> dict[str, int | str]:

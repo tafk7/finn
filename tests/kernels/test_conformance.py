@@ -254,7 +254,7 @@ def test_the_stimulus_tells_the_wrong_order_apart(wrong: str) -> None:
             values=values,
         )
         x = values["input_channel"]
-        declared = design_member(placed, "input_channel").endpoints.sink.form
+        declared = design_member(placed, "input_channel").sides.sink.form
         walked = vector_major(declared.shape, sample.factors["pe"])
         arrive = [p for beat in declared.positions() for p in beat]
         applied = [p[1] for beat in walked.positions() for p in beat]
@@ -342,8 +342,6 @@ class Misnamed(MemStreamKernel):
         endpoint=Endpoint.INITIATOR,
         tensor=MemStreamKernel.output_tensor,
         sequence=MemStreamKernel.output_sequence,
-        clock="clk",
-        reset="rst",
     )
 
 

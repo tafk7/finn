@@ -24,13 +24,15 @@ end presenting padded beats, which no beat sequence (``finn.dataflow``) states.
 from __future__ import annotations
 
 from math import lcm
+from typing import TYPE_CHECKING, ClassVar
 
 from finn.core.space import Param, derived
-from finn.dataflow.tensor import Tensor
+from finn.dataflow.streams import Stream
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.abi import Clocking, Endpoint
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, interface
+from finn.kernels.base import NATIVE_CLOCKING, LeafKernel
 from finn.kernels.port import native_stream
 from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit
 from finn.platform.capabilities import Resources
@@ -55,6 +57,7 @@ class VpcKernel(LeafKernel):
     id = "finnlib.vpc"
     version = 1
     rtl_module = "vpc"
+    clock_domain = NATIVE_CLOCKING
 
     # The tensor whose elements it regroups, a fact, and the two sides of the conversion.
     input_tensor: Tensor = Param(required=False)
@@ -69,33 +72,31 @@ class VpcKernel(LeafKernel):
 
     input = native_stream("input", Endpoint.TARGET, input_tensor, arriving)
     output = native_stream("output", Endpoint.INITIATOR, output_tensor, leaving)
-    input_end = interface("input")
-    output_end = interface("output")
+    if TYPE_CHECKING:  # members its ports lower to, which it reads
+        input_element: ClassVar[ScalarEncoding]
+        input_stream: ClassVar[Stream]
+        output_stream: ClassVar[Stream]
 
     @derived
     def element_bits(self) -> int:
         """W: the bits of its tensor's element."""
-        bits: int = self.input.element.bits
+        bits: int = self.input_element.bits
         return bits
 
     @derived
     def lanes_in(self) -> int:
         """PI: the elements a beat its input presents."""
-        lanes: int = self.input.lane_count
+        lanes: int = self.input_stream.sequence.form.lanes
         return lanes
 
     @derived
     def lanes_out(self) -> int:
         """PO: the elements a beat its output presents."""
-        lanes: int = self.output.lane_count
+        lanes: int = self.output_stream.sequence.form.lanes
         return lanes
 
     # Its lanes and element come from its ports, positive by construction: the RTL
     # refuses nothing they present, so it states no constraint of its own.
-
-    @derived
-    def clocking(self) -> Clocking:
-        return NATIVE_CLOCKING
 
     @derived(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources:

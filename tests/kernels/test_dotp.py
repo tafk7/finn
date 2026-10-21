@@ -35,8 +35,16 @@ from finn.kernels.artifacts.abi import Derived as DerivedClock
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.base import LeafKernel
 from finn.kernels.dotp import REDUCERS, DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
-from finn.kernels.port import AxiStreamPort
+from finn.kernels.port import AxiStreamPort, axis
+from finn.kernels.transport import AxisBeat
 from finn.platform.capabilities import DspBlock
+
+
+def _axis(point, name: str) -> AxisBeat:
+    """Port ``name``'s AXIS beat on ``point``."""
+    found = axis(*getattr(DotpAxiKernel, name).viewed(point, name))
+    assert isinstance(found, AxisBeat), found
+    return found
 
 
 def parameters(**updates):
@@ -69,10 +77,10 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         "module",
         "netlist",
         "resources",
-        # The end each port presents, which the channel on it takes.
-        "w_end",
-        "x_end",
-        "y_end",
+        # The contract each port states, which the channel on it takes.
+        "w_contract",
+        "x_contract",
+        "y_contract",
     ]
     for port in (point.x, point.w, point.y):
         assert isinstance(port, AxiStreamPort)
@@ -118,8 +126,9 @@ def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
     assert ports["ap_rst_n"].role.synchronous_to == (
         ("ap_clk", "ap_clk2x") if pumping else ("ap_clk",)
     )
-    for port, width in ((point.x, 16), (point.w, 24), (point.y, 24)):
-        assert port.pins == (ports[port.name],)
+    for name, width in (("x", 16), ("w", 24), ("y", 24)):
+        port = getattr(DotpAxiKernel, name)
+        assert port.pins(point, name) == (ports[port.name],)
         tdata = next(signal for signal in ports[port.name].signals if signal.logical == "tdata")
         assert tdata.width == width
     assert point.module.held.inputs == (() if pumping else (("ap_clk2x", 0),))
@@ -128,20 +137,25 @@ def test_assessed_view_preserves_geometry_and_clocks(target, pumping):
 def test_physical_framing_follows_the_schedule_and_only_activation_has_last():
     point = kernel(pe=3, simd=5)
     _ = point.module
-    assert point.x.axis.elements_per_beat == 5
-    assert point.w.axis.elements_per_beat == 15
-    assert point.y.axis.elements_per_beat == 3
-    assert point.x.axis.last and not point.w.axis.last and not point.y.axis.last
+    x, w, y = (_axis(point, name) for name in ("x", "w", "y"))
+    assert x.elements_per_beat == 5
+    assert w.elements_per_beat == 15
+    assert y.elements_per_beat == 3
+    assert x.last and not w.last and not y.last
 
 
 def test_the_schedule_splits_n_by_pe_and_k_by_simd():
     point = kernel(pe=2, simd=2, outputs=4, reduction=6, rows=3)
     assert (point.rows, point.outputs, point.reduction) == (3, 4, 6)
-    x, w, y = (port.presented.form for port in (point.x, point.w, point.y))
+    x, w, y = (
+        point.x_stream.sequence.form,
+        point.w_stream.sequence.form,
+        point.y_stream.sequence.form,
+    )
     assert (x.beats, x.lanes) == (3 * 2 * 3, 2)  # each row replayed per output fold
     assert (w.beats, w.lanes) == (3 * 2 * 3, 4)
     assert (y.beats, y.lanes) == (3 * 2, 2)
-    assert [rule.beats for rule in point.x.presented.markers] == [3]
+    assert [rule.beats for rule in point.x_stream.sequence.markers] == [3]
 
 
 @pytest.mark.parametrize(
@@ -341,7 +355,7 @@ def test_the_core_refuses_before_its_folding_factors_are_chosen():
     open_factors = kernel(pe=None, simd=None, compute_pumping=None, outputs=2, reduction=4)
     assert isinstance(open_factors.inspect(type(open_factors).core_supported).result, Available)
     assert isinstance(open_factors.inspect(DotpAxiKernel.module).accepted_result, Unresolved)
-    assert open_factors.x.element.bits == 3
+    assert open_factors.x_element.bits == 3
 
 
 @pytest.mark.parametrize(
@@ -384,7 +398,7 @@ def test_the_platform_is_a_required_fact():
 @pytest.mark.parametrize("bits", (5, 9, 12, 58))
 def test_the_results_stream_selects_accumulator_capacity(bits):
     point = kernel(result_dtype=DataType[f"INT{bits}"])
-    assert point.y.element.dtype == DataType[f"INT{bits}"]
+    assert point.y_element.dtype == DataType[f"INT{bits}"]
     assert dict(point.module.parameters)["ACCU_WIDTH"] == bits
 
 
@@ -450,7 +464,7 @@ def test_each_core_accumulates_in_the_ranges_own_encoding(space_type, result_ran
         space_type, **facts, result_dtype=DataType[accumulator], result_range=result_range
     )
     assert point.accumulator == DataType[accumulator]
-    assert point.y.element == ScalarEncoding(DataType[accumulator], TensorRange(*result_range))
+    assert point.y_element == ScalarEncoding(DataType[accumulator], TensorRange(*result_range))
     assert dict(point.module.parameters)["ACCU_WIDTH"] == DataType[accumulator].bitwidth()
 
 
@@ -519,7 +533,7 @@ def test_a_subbyte_result_is_padded_to_a_byte():
         result_dtype=DataType["INT4"],
     )
     _ = point.module
-    result = point.y.axis
+    result = _axis(point, "y")
     assert result.payload_bits == 4 and result.carrier_bits == 8
 
 
@@ -562,7 +576,7 @@ def test_depthwise_activations_carry_pe_channels_of_simd_and_only_int8_reads_the
     point = kernel(Int8Dsp58DotpKernel, form=Form.DEPTHWISE, pe=3, simd=2)
     rtl = dict(point.module.parameters)
     assert rtl["ACTIVATION_BROADCASTING"] == 0
-    lanes = [port.axis.elements_per_beat for port in (point.x, point.w, point.y)]
+    lanes = [_axis(point, name).elements_per_beat for name in ("x", "w", "y")]
     assert lanes == [6, 6, 3]
     refused = kernel(form=Form.DEPTHWISE).query(DotpAxiKernel.module)
     assert codes(refused) == {"dotp-form"}

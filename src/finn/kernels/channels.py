@@ -1,18 +1,19 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Channels: one tensor from one producer to one consumer, a kernel with children taking its ends.
+"""Channels: one tensor from one producer to one consumer, a kernel with children between
+two ports.
 
 A ``Channel`` is one producer-to-consumer edge, a member of a network
 (``finn.kernels.network``) or of a kernel with children, carrying one ``tensor`` given as
-a fact. Its two ends are facts too, ``producer`` and ``consumer``: each the ``PortEnd`` a
-member presents at an interface (a kernel's ``x_end``), labelled from the network
-(``Interface``: ``matmul.compute.packed.x``), or absent: the network's boundary. The
-channel's tensor is never derived from an end.
+a fact. The contracts of the ports on it are facts too, ``producer`` and ``consumer``: each
+the ``PortContract`` a member presents for one of its ports (a kernel's ``x_contract``),
+labelled from the network (``Interface``: ``matmul.compute.packed.x``), or absent: the
+network's boundary. The channel's tensor is never derived from a port.
 
-Each end must traverse the tensor (``channel-tensor``), and the plan between their beat
-sequences (``finn.dataflow.plan``) must be one a chain of FinnLib modules carries out
-(``channel-plan``). A channel runs, in order:
+Each side's stream must traverse the tensor (``channel-tensor``), and the plan between
+their beat sequences (``finn.dataflow.plan``) must be one a chain of FinnLib modules
+carries out (``channel-plan``). A channel runs, in order:
 
     source -> output adapter -> transport -> input adapter -> consumer
 
@@ -23,9 +24,9 @@ The plan splits at the transport: its output side (width conversions) is the
 an exploration sizes it) and its ``ram_style``, and carries data words only
 (``fifo-markers``). Its keys are the channel's, by its name (``("x", "transport")``).
 
-A channel with an end on one side only is a boundary: its ``port`` names the module's
+A channel with a port on one side only is a boundary: its ``port`` names the module's
 AXIS port (``in0_V``), refused where absent (``channel-boundary``). The boundary presents
-what its inner end presents, by one rule: an input without the replay or window its
+what its inner side presents, by one rule: an input without the replay or window its
 receiver realizes (``unreplayed``), an output as produced, neither with markers. Where a
 shell offers movers (``mover_offer``, ``finn.kernels.movers``), the ``mover`` Decision places one
 on that free side; it binds no RTL in the module and exports its contract (``MOVER``) for
@@ -33,8 +34,9 @@ the shell's budget check and resources.
 
 A channel whose tensor has a known value (``contents``) has a ``source`` (``SOURCES``: a
 memory) as its only producer (``channel-users``), storing one period in the order its
-consumer reads it; with several sets, the source's set port is the channel's interface
-(``set_end``), which the index tensor's channel consumes.
+consumer reads it; with several sets, the source's set port is the channel's port
+(``set``, served by its source: ``set_contract``), which the index tensor's channel
+consumes.
 
 As a kernel with children, its members are its source, its adapters' stages, its FIFO
 (``ChannelFifo``) and its mover, in the order the stream runs through them. It exports
@@ -62,8 +64,8 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.datatypes import QONNXDataType
-from finn.dataflow.ends import End, Ends, misfit
 from finn.dataflow.plan import Plan, Unrealizable, plan
+from finn.dataflow.streams import Stream, Streams, misfit
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Traversal, period, unreplayed
 from finn.kernels.adapters import ADAPTERS, OUTPUT_ADAPTERS, Stage, StreamAdapter
@@ -75,14 +77,15 @@ from finn.kernels.base import (
     BUFFERING,
     CYCLES,
     NETLIST,
-    PORT_END,
+    PORT_CONTRACT,
     RESOURCES,
     ComposedKernel,
-    PortEnd,
+    PortContract,
 )
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import MOVER, MOVERS, IodmaMover, MoverContract, MoverOffer
+from finn.kernels.port import served
 from finn.kernels.transport import (
     AxisBeat,
     Mismatch,
@@ -116,7 +119,7 @@ def boundary_contract(
     return StreamContract(transport, element, form, sequence.repetition, markers)
 
 
-def _end(instance: str | None, contract: StreamContract) -> LinkEnd:
+def _link_end(instance: str | None, contract: StreamContract) -> LinkEnd:
     transport = contract.transport
     return LinkEnd(instance, transport.data, transport.data_width, transport.valid, transport.ready)
 
@@ -133,8 +136,8 @@ def wired(
         pin, position = marker_bit(required)
         markers.append((signal, bit, pin, position))
     return Link(
-        _end(source, produced),
-        _end(sink, consumed),
+        _link_end(source, produced),
+        _link_end(sink, consumed),
         produced.element.bits,
         lane_permutation(produced, consumed),
         tuple(markers),
@@ -156,13 +159,12 @@ class ChannelFifo(ComposedKernel):
     Its netlist, buffering and resources are its FIFO's, by the base. It states no
     cycles: a FIFO presents what arrives, whose beats are counted where they are made
     (the channel's producer, its source, its output adapter), so its channel's cycles
-    are its other members'. It presents no interface: its channel wires it hop by hop
+    are its other members'. It presents no port: its channel wires it hop by hop
     (``stages``).
     """
 
     id = "finn.channel.fifo"
     version = 1
-    interfaces = ()
 
     tensor: Tensor = Param()
     arriving: BeatSequence = Param()
@@ -202,7 +204,14 @@ class ChannelFifo(ComposedKernel):
         buffer = self.buffer
         module = buffer.module
         assert isinstance(module, Leaf)
-        return (Stage(module, buffer.input.contract, buffer.output.contract, "fifo.buffer"),)
+        return (
+            Stage(
+                module,
+                buffer.input_contract.contract,
+                buffer.output_contract.contract,
+                "fifo.buffer",
+            ),
+        )
 
     exports = {
         NETLIST: ComposedKernel.netlist,
@@ -212,10 +221,10 @@ class ChannelFifo(ComposedKernel):
 
 
 @dataclass(frozen=True)
-class ChannelEnds:
-    """A channel's two ends: each end's owner (its port's label from the network,
-    ``matmul.compute.packed.x``; the channel's source label, ``source.<case>``, for a known
-    value; None on the boundary) and its contract."""
+class ChannelSides:
+    """A channel's producing and consuming sides: each side's owner (its port's label from
+    the network, ``matmul.compute.packed.x``; the channel's source label, ``source.<case>``,
+    for a known value; None on the boundary) and its contract."""
 
     source_owner: str | None
     source: StreamContract
@@ -224,28 +233,28 @@ class ChannelEnds:
 
 
 class Channel(ComposedKernel):
-    """One tensor between the ports whose ends it takes: one producer, one consumer.
+    """One tensor between the ports whose contracts it takes: one producer, one consumer.
 
-    ``producer`` and ``consumer`` are the ends of the ports on it, facts its network
-    gives (``Interface``). A side without an end is the boundary, presented as the AXIS
+    ``producer`` and ``consumer`` are the contracts of the ports on it, facts its network
+    gives (``Interface``). A side without a port is the boundary, presented as the AXIS
     port ``port``, where the ``mover`` the shell offers (``mover_offer``) sits. A channel
     with a known value has its ``source`` as its producer; with several sets, the
     source reads the set indices (``index_tensor``) from the channel whose consumer is
-    ``set_end``, the one interface it presents. ``platform`` is the target's: its
-    source, its adapters' stages and its FIFO read it. Its members are declared in the
-    order the stream runs through them, so its netlist places them in that order.
+    ``set_contract``, the one port it presents (``set``, its source's). ``platform`` is the
+    target's: its source, its adapters' stages and its FIFO read it. Its members are
+    declared in the order the stream runs through them, so its netlist places them in that
+    order.
     """
 
     id = "finn.channel"
     version = 1
-    interfaces = ("set",)
 
     tensor: Tensor = Param()
-    # False admits no adapter: the ends must connect directly.
+    # False admits no adapter: the two sides must connect directly.
     adaptable: bool = Param(default=True)
     port: str = Param(required=False)
-    producer: PortEnd = Param(required=False, semantics=PORT_END)
-    consumer: PortEnd = Param(required=False, semantics=PORT_END)
+    producer: PortContract = Param(required=False, semantics=PORT_CONTRACT)
+    consumer: PortContract = Param(required=False, semantics=PORT_CONTRACT)
     contents: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
     sets: int = Param(default=1)
     index_tensor: Tensor = Param(required=False)
@@ -259,9 +268,9 @@ class Channel(ComposedKernel):
     offered = supplied(mover_offer)
 
     @derived
-    def attached(self) -> tuple[PortEnd, ...]:
-        """The ends given, the producer's first."""
-        found: list[PortEnd] = []
+    def attached(self) -> tuple[PortContract, ...]:
+        """The port contracts given, the producer's first."""
+        found: list[PortContract] = []
         if self.present(Channel.producer):
             found.append(self.producer)
         if self.present(Channel.consumer):
@@ -270,11 +279,11 @@ class Channel(ComposedKernel):
 
     @derived
     def consumed(self) -> StreamContract | Rejected:
-        """The consuming end's contract: the order a source stores the value in."""
+        """The consuming port's contract: the order a source stores the value in."""
         consumers = [
-            end.contract
-            for end in self.attached
-            if end.contract.transport.endpoint is not Endpoint.INITIATOR
+            given.contract
+            for given in self.attached
+            if given.contract.transport.endpoint is not Endpoint.INITIATOR
         ]
         if len(consumers) != 1:
             return reject("channel-source", "a known value streams to exactly one consumer")
@@ -305,33 +314,26 @@ class Channel(ComposedKernel):
     def source_label(self) -> str:
         return f"source.{self.source_case}"
 
+    # With several sets, its source's set port, a port of the channel labelled below it
+    # (``source.memstream.set``): the index tensor's channel's consumer. A channel without
+    # a known value has no source, so no set port: nothing reads the indices.
+    set = served(source, "set")
+
     @derived
     def source_contract(self) -> StreamContract:
-        contract: StreamContract = self.source.output.contract
-        return contract
-
-    @view(semantics=PORT_END)
-    def set_end(self) -> PortEnd | Rejected:
-        """With several sets, its source's set port, an interface of the channel labelled
-        below it (``source.memstream.set``): the index tensor's channel's consumer. A
-        channel without a known value has no source: nothing reads the indices."""
-        if not self.valued:
-            return reject(
-                "channel-unused", "no source reads the set indices: the channel has no value"
-            )
-        end: PortEnd = self.source.set_end
-        return end.under(self.source_label)
+        offered: PortContract = self.source.output_contract
+        return offered.contract
 
     @derived
-    def endpoints(self) -> ChannelEnds | Rejected:
-        """The producing and consuming ends, without the stages between them: with a
+    def sides(self) -> ChannelSides | Rejected:
+        """The producing and consuming sides, without the stages between them: with a
         known value, the producer is the channel's source."""
         producers: list[tuple[str | None, StreamContract]] = []
         consumers: list[tuple[str | None, StreamContract]] = []
-        for end in self.attached:
-            contract = end.contract
+        for given in self.attached:
+            contract = given.contract
             producing = contract.transport.endpoint is Endpoint.INITIATOR
-            (producers if producing else consumers).append((end.label, contract))
+            (producers if producing else consumers).append((given.label, contract))
         if self.valued:
             if producers:
                 return reject(
@@ -341,13 +343,13 @@ class Channel(ComposedKernel):
                 )
             producers.append((self.source_label, self.source_contract))
         if len(producers) > 1 or len(consumers) > 1:
-            named = ", ".join(end.label for end in self.attached)
+            named = ", ".join(given.label for given in self.attached)
             return reject(
                 "channel-users",
-                f"a channel has at most one producer and one consumer; its ends are {named}",
+                f"a channel has at most one producer and one consumer; its ports are {named}",
             )
         if not producers and not consumers:
-            return reject("channel-unused", "no present port's end is on this channel")
+            return reject("channel-unused", "no present port is on this channel")
         if not (producers and consumers) and not self.present(Channel.port):
             return reject(
                 "channel-boundary",
@@ -355,7 +357,7 @@ class Channel(ComposedKernel):
                 "of a partition crosses its boundary",
             )
         try:
-            # A side without an end is the boundary. Seen from inside, the
+            # A side without a port is the boundary. Seen from inside, the
             # module's input is the AXIS target and its output the initiator.
             if not producers:
                 inside = consumers[0][1]
@@ -365,7 +367,7 @@ class Channel(ComposedKernel):
                 consumers.append((None, self._boundary(inside, Endpoint.INITIATOR)))
         except ValueError as error:
             return reject("channel-boundary", str(error))
-        return ChannelEnds(*producers[0], *consumers[0])
+        return ChannelSides(*producers[0], *consumers[0])
 
     def _boundary(self, inside: StreamContract, endpoint: Endpoint) -> StreamContract:
         form = unreplayed(inside.form) if endpoint is Endpoint.TARGET else inside.form
@@ -373,9 +375,9 @@ class Channel(ComposedKernel):
 
     @derived
     def free_side(self) -> StreamContract | Rejected:
-        """The side without a port's end, as the module presents it: where a shell's mover
+        """The side without a port, as the module presents it: where a shell's mover
         sits."""
-        found = self.endpoints
+        found = self.sides
         if found.source_owner is None:
             return found.source
         if found.sink_owner is None:
@@ -396,28 +398,30 @@ class Channel(ComposedKernel):
         return (contract,)
 
     @derived
-    def ends(self) -> Ends:
-        """The logical part of the two contracts: element and beat sequence."""
-        found = self.endpoints
-        return Ends(
-            End(found.source_owner, found.source.element, found.source.sequence),
-            End(found.sink_owner, found.sink.element, found.sink.sequence),
+    def streams(self) -> Streams:
+        """The logical part of the two sides' contracts: element and beat sequence."""
+        found = self.sides
+        return Streams(
+            Stream(found.source.element, found.source.sequence),
+            Stream(found.sink.element, found.sink.sequence),
         )
 
     @constraint
     def well_formed(self) -> bool | Rejected:
-        """Each end traverses this channel's tensor (``finn.dataflow.ends.misfit``)."""
-        why = misfit(self.tensor, self.ends)
+        """Each side's stream traverses this channel's tensor
+        (``finn.dataflow.streams.misfit``)."""
+        found = self.sides
+        why = misfit(self.tensor, self.streams, (found.source_owner, found.sink_owner))
         return True if why is None else reject("channel-tensor", why)
 
     @derived
     def plan(self) -> Plan | Rejected:
         """What must happen between the source's beat sequence and the sink's."""
-        ends = self.ends
+        streams = self.streams
         try:
-            return plan(ends.source.sequence, ends.sink.sequence)
+            return plan(streams.source.sequence, streams.sink.sequence)
         except Unrealizable as error:
-            return reject("channel-plan", f"no adapter can join the ends: {error}")
+            return reject("channel-plan", f"no adapter can join the streams: {error}")
 
     @derived
     def output_plan(self) -> Plan:
@@ -443,7 +447,7 @@ class Channel(ComposedKernel):
         if found and not self.adaptable:
             return reject(
                 "channel-plan",
-                f"the ends need {found.describe()}, and this channel admits no adapter",
+                f"the streams need {found.describe()}, and this channel admits no adapter",
             )
         return True
 
@@ -479,7 +483,7 @@ class Channel(ComposedKernel):
         """What arrives at the transport: the beat sequence after the output adapter."""
         adapted = self.output_adapted
         output = adapted[-1].output if adapted else None
-        return self.endpoints.source.sequence if output is None else output.sequence
+        return self.sides.source.sequence if output is None else output.sequence
 
     transport: _Direct | ChannelFifo = Decision(
         {
@@ -509,22 +513,22 @@ class Channel(ComposedKernel):
     def compatible(self) -> bool | Rejected:
         """Each hop, source through every stage to sink, connects directly.
 
-        An element mismatch is ``well_formed``'s (``channel-tensor``: each end
+        An element mismatch is ``well_formed``'s (``channel-tensor``: each side
         against the tensor); ``compatibility`` does not compare elements.
         """
-        ends = self.endpoints
+        sides = self.sides
         found: list[Mismatch] = []
-        current, current_top = ends.source, ends.source_owner is None
+        current, current_top = sides.source, sides.source_owner is None
         for stage in self.staged:
             found += compatibility(
                 current, stage.input, source_is_top=current_top, sink_is_top=False
             )
             current, current_top = stage.output, False
         found += compatibility(
-            current, ends.sink, source_is_top=current_top, sink_is_top=ends.sink_owner is None
+            current, sides.sink, source_is_top=current_top, sink_is_top=sides.sink_owner is None
         )
-        if ends.sink_owner is None and not current_top:
-            if current.transport.data_width > ends.sink.transport.data_width:
+        if sides.sink_owner is None and not current_top:
+            if current.transport.data_width > sides.sink.transport.data_width:
                 found.append(
                     Mismatch(
                         "channel-padding",
@@ -537,29 +541,31 @@ class Channel(ComposedKernel):
     def hops(self) -> tuple[Link, ...] | Rejected:
         """Each hop, source through every stage to sink, as wires.
 
-        An end belongs to its kernel beside the channel: its label is a
-        kernel's ``Port`` (``matmul.compute.packed.x``, at any depth below the
+        A side belongs to its kernel beside the channel: its label is a
+        kernel's port (``matmul.compute.packed.x``, at any depth below the
         network), its kernel the node above it (``^matmul.compute.packed``).
         A stage and the source sit below the channel at their labels; a
-        boundary end is the module's own pins (``None``).
+        boundary side is the module's own pins (``None``).
         """
-        ends = self.endpoints
+        sides = self.sides
         owners: list[str | None] = []
-        for side, node in enumerate((ends.source_owner, ends.sink_owner)):
+        for side, node in enumerate((sides.source_owner, sides.sink_owner)):
             if side == 0 and self.valued:
                 owners.append(node)  # the source, below the channel at its label
                 continue
             kernel = None if node is None else node.rpartition(".")[0]
             if kernel == "":
-                return reject("channel-port", f"{node} presents an end, but is no kernel's port")
+                return reject(
+                    "channel-port", f"{node} presents a contract, but is no kernel's port"
+                )
             owners.append(None if kernel is None else "^" + kernel)
         links: list[Link] = []
-        owner, current = owners[0], ends.source
+        owner, current = owners[0], sides.source
         try:
             for stage in self.staged:
                 links.append(wired(owner, current, stage.label, stage.input))
                 owner, current = stage.label, stage.output
-            links.append(wired(owner, current, owners[1], ends.sink))
+            links.append(wired(owner, current, owners[1], sides.sink))
         except ArtifactError as error:
             # A hop that does not connect (another element, say) is refused by the
             # channel's constraints; its wires do not exist.
@@ -590,9 +596,9 @@ class Channel(ComposedKernel):
 
     @view
     def boundary_bus(self) -> tuple[Bus, ...]:
-        """The AXIS bus the module presents for it, when one side has no end."""
-        ends = self.endpoints
-        sides = ((ends.source_owner, ends.source), (ends.sink_owner, ends.sink))
+        """The AXIS bus the module presents for it, when one side has no port."""
+        found = self.sides
+        sides = ((found.source_owner, found.source), (found.sink_owner, found.sink))
         return tuple(contract.transport.axis_bus() for owner, contract in sides if owner is None)
 
     mover_export = View(placed_mover)
@@ -616,8 +622,8 @@ def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:
 __all__ = [
     "SOURCES",
     "Channel",
-    "ChannelEnds",
     "ChannelFifo",
+    "ChannelSides",
     "boundary_contract",
     "wired",
 ]

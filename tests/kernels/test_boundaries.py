@@ -40,6 +40,7 @@ from finn.platform.capabilities import DspBlock, Fabric, Platform
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.base import Kernel
 from finn.kernels.configure import commit
+from finn.kernels.port import axis
 from finn.kernels.transport import AxisBeat
 from finn.kernels.network import Fact, Interface, Network, wire
 from finn.kernels.artifacts.module import ProducerIdentity
@@ -61,9 +62,15 @@ W2 = Tensor((2, 2), ScalarEncoding(DataType["INT3"]))
 Y2 = Tensor((1, 2), ScalarEncoding(DataType["INT8"]))
 
 placed = Network({
-    "x": wire(tensor=X2, port="in0_V", consumer=Interface("compute", "x_end"), platform=PLATFORM),
-    "w": wire(tensor=W2, port="in1_V", consumer=Interface("compute", "w_end"), platform=PLATFORM),
-    "y": wire(tensor=Y2, port="out0_V", producer=Interface("compute", "y_end"), platform=PLATFORM),
+    "x": wire(
+        tensor=X2, port="in0_V", consumer=Interface("compute", "x_contract"), platform=PLATFORM
+    ),
+    "w": wire(
+        tensor=W2, port="in1_V", consumer=Interface("compute", "w_contract"), platform=PLATFORM
+    ),
+    "y": wire(
+        tensor=Y2, port="out0_V", producer=Interface("compute", "y_contract"), platform=PLATFORM
+    ),
     "compute": PackedDotpKernel(
         result_range=ordinary_integer_bounds(DataType["INT8"]),
         x_tensor=X2,
@@ -81,8 +88,9 @@ point = placed.with_choices({
 }).member("compute")
 answer = point.module
 assert isinstance(answer, Leaf)
-assert isinstance(point.x.axis, AxisBeat)
-assert point.x.axis.payload_bits == 6
+x_axis = axis(*PackedDotpKernel.x.viewed(point, "x"))
+assert isinstance(x_axis, AxisBeat)
+assert x_axis.payload_bits == 6
 
 INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
 for memory in ("none", "memstream"):
@@ -102,17 +110,23 @@ for memory in ("none", "memstream"):
     # The weight channel carries what MatMul states for it.
     network = Network({
         "x": wire(
-            tensor=x_tensor, port="in0_V", consumer=Interface("matmul", "x_end"), platform=PLATFORM
+            tensor=x_tensor,
+            port="in0_V",
+            consumer=Interface("matmul", "x_contract"),
+            platform=PLATFORM,
         ),
         "w": wire(
             tensor=Fact("matmul", "carried_weights"),
             contents=Fact("matmul", "stored_weights"),
             port="in1_V",
-            consumer=Interface("matmul", "w_end"),
+            consumer=Interface("matmul", "w_contract"),
             platform=PLATFORM,
         ),
         "y": wire(
-            tensor=y_tensor, port="out0_V", producer=Interface("matmul", "y_end"), platform=PLATFORM
+            tensor=y_tensor,
+            port="out0_V",
+            producer=Interface("matmul", "y_contract"),
+            platform=PLATFORM,
         ),
         "matmul": MatMulKernel(**facts, x_tensor=x_tensor, **weights),
     })

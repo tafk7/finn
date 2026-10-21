@@ -13,7 +13,7 @@ numpy, the standard library and the findings its refusals carry
 
 - ``datatypes``: the QONNX scalar datatype value boundary.
 - ``tensor``: the fact a channel carries, a ``Tensor`` of one ``ScalarEncoding``.
-- ``traversal``: how one end presents a tensor (``Traversal``,
+- ``traversal``: how one port presents a tensor (``Traversal``,
   ``BeatSequence``), marker rules (``LevelEnd``), and ``classify``, which names
   the adaptation between two traversals of one tensor.
 - ``schedule``: named indices (``Index``, with affine arithmetic) and a
@@ -23,9 +23,10 @@ numpy, the standard library and the findings its refusals carry
 - ``gemm``: matrix multiplication's canonical indices ``m``, ``n``, ``k`` and
   its operand ``Form``s.
 - ``plan``: the canonical steps between two beat sequences of one tensor.
-- ``ends``: what a channel's two ends present (``End``, ``Ends``) and the rule
-  that they traverse its tensor (``misfit``); the channel itself, which finds
-  its ends among the kernels that reference it, is ``finn.kernels.channels``.
+- ``streams``: what a port presents of a tensor (``Stream``: its element and
+  beat sequence), a channel's two (``Streams``) and the rule that they traverse
+  its tensor (``misfit``); the channel itself, which finds its streams among the
+  kernels that reference it, is ``finn.kernels.channels``.
 
 This module deliberately re-exports nothing.  A value with two importable paths
 looks like a value with two owners.  Import from the module that owns it.

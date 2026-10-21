@@ -260,7 +260,6 @@ def validity_of(point):
             PACKED,
             "open",
             [
-                ("compute.packed.clocked", {"decision-unassigned"}),
                 ("compute.packed.pumping_has_lanes", {"decision-unassigned"}),
                 ("compute.packed.simd_fits", {"decision-unassigned"}),
                 ("compute.packed.stream_widths_supported", {"decision-unassigned"}),
@@ -283,7 +282,7 @@ def test_matmul_s_rules_and_its_cores_read_the_values_its_views_present(
     point = commit(point, choices) if choices else point
     assert validity_of(point) == (status, pieces)
     if status != "refused":
-        assert point.w_carried == point.carried_weights == point.compute.w.tensor
+        assert point.w_carried == point.carried_weights == point.compute.w_tensor
         assert point.activation_tensor == point.required_activations
         assert point.weight_tensor == point.required_weights
     if weights == "INT4" and status != "refused":
@@ -348,9 +347,9 @@ def test_the_core_is_one_possible_case_and_owns_its_folding_factors():
     matmul = point.member("matmul")
     assert matmul.result_type == DataType["INT8"]
     assert inspection.validity(matmul).status == "valid"
-    assert matmul.compute.y.element.dtype == matmul.result_type
+    assert matmul.compute.y_element.dtype == matmul.result_type
     _ = matmul.compute.module
-    assert matmul.compute.y.presented.form.beats == 4
+    assert matmul.compute.y_stream.sequence.form.beats == 4
     # The MatMul contributes its children's netlist; the network's module adds the
     # channels.
     assert [label for label, _ in matmul.netlist.instances] == ["compute.packed"]

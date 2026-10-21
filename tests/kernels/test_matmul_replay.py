@@ -37,7 +37,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.network import dotted
-from finn.kernels.transport import MarkerKind, ReadyValidStream, StreamContract, StreamMarker
+from finn.kernels.transport import MarkerKind, ReadyValidTransport, StreamContract, StreamMarker
 
 FACTS = dict(
     m=3,
@@ -156,7 +156,7 @@ def test_the_adapter_s_memory_is_a_choice_of_the_stream():
 
 
 def test_a_marker_rule_names_a_whole_one_bit_marker_or_one_bit_of_a_wider_one():
-    transport = ReadyValidStream(
+    transport = ReadyValidTransport(
         "output",
         6,
         Endpoint.INITIATOR,

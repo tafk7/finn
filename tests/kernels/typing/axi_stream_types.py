@@ -1,37 +1,40 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Typed ports and scalars retain concrete node, field and view types."""
+"""Typed ports: a port is its declaration, the members it lowers to are typed as their values
+where its kernel declares them, and its views are functions with typed results."""
 
 from typing import assert_type
 
-from finn.core.space import BoundValue, QueryResult, View, ViewAssessment
+from finn.core.space import QueryResult, Rejected
 from finn.dataflow.schedule import Schedule
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.abi import Pin
 from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.port import AxiStreamPort
-from finn.kernels.transport import AxisBeat, ReadyValidStream
+from finn.kernels.port import AxiStreamPort, Presenting, axis, pins, transport
+from finn.kernels.transport import AxisBeat, ReadyValidTransport
 
 
 def check(point: DotpAxiKernel, eltwise: EltwiseKernel) -> None:
-    # Class access: nodes typed as their Space classes, references typed as values.
+    # Class access: a port is its declaration; the members its kernel reads, as values.
     assert_type(DotpAxiKernel.x, AxiStreamPort)
-    assert_type(DotpAxiKernel.x.element, ScalarEncoding)
-    assert_type(DotpAxiKernel.x.axis, AxisBeat)
-    assert_type(DotpAxiKernel.x.presented, BeatSequence)
-    assert_type(AxiStreamPort.pins, View[tuple[Pin, ...]])
+    assert_type(DotpAxiKernel.x_element, ScalarEncoding)
+    assert_type(DotpAxiKernel.x_stream.sequence, BeatSequence)
     assert_type(point.query(DotpAxiKernel.pe), QueryResult[int])
     # Configuration reads.
     assert_type(point.x, AxiStreamPort)
-    assert_type(point.x.element, ScalarEncoding)
-    assert_type(point.x.axis, AxisBeat)
-    assert_type(point.x.pins, tuple[Pin, ...])
-    assert_type(point.x.inspect(AxiStreamPort.pins), ViewAssessment[tuple[Pin, ...]])
-    assert_type(point.x.query(AxiStreamPort.pins), QueryResult[tuple[Pin, ...]])
-    assert_type(point.x.field(AxiStreamPort.pins), BoundValue[tuple[Pin, ...]])
+    assert_type(point.x_element, ScalarEncoding)
+    assert_type(point.x_stream, Stream)
     assert_type(point.pe, int)
     assert_type(point.schedule, Schedule)
+    # Its views: functions of its declaration and its kernel's values.
+    viewed = DotpAxiKernel.x.viewed(point, "x")
+    assert_type(viewed, tuple[AxiStreamPort, Presenting])
+    assert_type(axis(*viewed), AxisBeat | Rejected)
+    assert_type(pins(*viewed, DotpAxiKernel.clock_domain), tuple[Pin, ...] | Rejected)
+    assert_type(DotpAxiKernel.x.pins(point, "x"), tuple[Pin, ...] | Rejected)
     assert_type(eltwise.lhs, AxiStreamPort)
-    assert_type(eltwise.lhs.transport, ReadyValidStream)
+    lhs = EltwiseKernel.lhs.viewed(eltwise, "lhs")
+    assert_type(transport(*lhs, EltwiseKernel.clock_domain), ReadyValidTransport | Rejected)

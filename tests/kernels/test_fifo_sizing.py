@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""FIFO sizing from both ends' beat patterns: input_gen's buffer as its RTL derives it,
+"""FIFO sizing from both sides' beat patterns: input_gen's buffer as its RTL derives it,
 the throttle, the least depth, the strategy proposing it through the seam, and the
 seam's check of a stored transport against its stream.
 
@@ -52,9 +52,9 @@ from finn.kernels.fifo_sizing import (
     Pattern,
     Sized,
     converted,
-    ends,
     keeps,
     least_depth,
+    sides,
     simulate,
 )
 from finn.kernels.input_generator import NestBuffer, nest_buffer, nest_geometry
@@ -207,7 +207,7 @@ def test_a_fifo_s_depth_is_the_least_whose_storage_holds_the_words() -> None:
     assert least_depth_holding(300, 8, "auto", False) == 258
 
 
-# -- a channel's ends, from the paces its ports state -----------------------------------------
+# -- a channel's sides, from the paces its ports state ----------------------------------------
 
 
 def _folded() -> tuple[Seam, Network]:
@@ -228,12 +228,12 @@ def test_a_channel_s_ends_are_read_from_the_paces_its_ports_state() -> None:
     # hidden: first (PE 1, SIMD 4) closes a reduction of one step each beat, a lane a
     # word; the output adapter's vpc pairs them into activate's two lanes, a word the
     # cycle after its second lane. activate reads every beat.
-    supply, accept = ends(point.member("hidden"))
+    supply, accept = sides(point.member("hidden"))
     assert supply == Pattern((2, 4, 6, 8, 10, 12), 12)
     assert accept == Pattern(tuple(range(6)), 6)
     # levels: activate's six beats, four lanes a word after its vpc, into second's
     # input_gen, which second reads every beat.
-    supply, accept = ends(point.member("levels"))
+    supply, accept = sides(point.member("levels"))
     assert supply == Pattern((2, 4, 6), 6)
     assert isinstance(accept, Buffered)
     assert accept.reads == Pattern(tuple(range(12)), 12)
@@ -242,9 +242,9 @@ def test_a_channel_s_ends_are_read_from_the_paces_its_ports_state() -> None:
 def test_a_boundary_and_a_memory_are_not_modelled() -> None:
     _, point = _folded()
     with pytest.raises(NotModelled, match="a boundary: not modelled"):
-        ends(point.member("x"))
+        sides(point.member("x"))
     with pytest.raises(NotModelled, match="a memory source: paced by its consumer"):
-        ends(point.member("w1"))
+        sides(point.member("w1"))
 
 
 # -- the strategy ---------------------------------------------------------------------------
@@ -323,7 +323,7 @@ def test_a_fifo_sized_before_is_sized_again_and_a_held_one_is_not(
 def _hidden_needs_eight(channel: Channel, period: int, **options: Any) -> Sized:
     """A double of the per-channel sizing: ``hidden`` (first's output) needs a FIFO of
     eight words, every other channel none."""
-    if channel.endpoints.source_owner == "first.compute.packed.y":
+    if channel.sides.source_owner == "first.compute.packed.y":
         return Sized(8, "least 8 words", 24, 8)
     return Sized(0, "direct absorbs it", 8, 0)
 
@@ -373,7 +373,7 @@ def test_a_depth_is_sized_for_the_style_its_fifo_is_built_in(
     # Every modelled channel (hidden, levels) needs 300 words; the check keeps a FIFO
     # that holds them, and reads no other channel.
     def holds(channel: Channel, period: int, words: int) -> bool:
-        ends(channel)
+        sides(channel)
         return words >= 300
 
     monkeypatch.setattr(fifo_sizing, "least_depth", lambda supply, accept, period: 300)
@@ -416,7 +416,7 @@ def test_a_style_held_as_none_is_sized_as_auto_and_left_to_its_hold(
     sized: dict[str, str] = {}
 
     def sizing(channel: Channel, period: int, **options: Any) -> Sized:
-        sized[channel.endpoints.source_owner or ""] = options["ram_style"]
+        sized[channel.sides.source_owner or ""] = options["ram_style"]
         return _hidden_needs_eight(channel, period)
 
     monkeypatch.setattr(explore_module, "size", sizing)
@@ -531,7 +531,7 @@ def _levels_short(channel: Channel, period: int, words: int) -> bool:
     """A double of the check (the Chain needs no FIFO at any folding): ``levels``
     (activate's output) needs more words than its transport holds; every other channel's
     holds."""
-    return not str(channel.endpoints.source_owner).startswith("activate.")
+    return not str(channel.sides.source_owner).startswith("activate.")
 
 
 DEPTH = ("levels", "transport.fifo.buffer.depth")

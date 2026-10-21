@@ -81,9 +81,9 @@ def thresholdings(count: int, row: ShellRow) -> Network:
     for index, name in enumerate(names):
         sides: dict[str, Any] = {}
         if index > 0:
-            sides["producer"] = Interface(f"t{index - 1}", "output_end")
+            sides["producer"] = Interface(f"t{index - 1}", "output_contract")
         if index < count:
-            sides["consumer"] = Interface(f"t{index}", "input_end")
+            sides["consumer"] = Interface(f"t{index}", "input_contract")
         boundary = {"port": "s_axis_0" if index == 0 else "m_axis_0", **offered}
         channels[name] = wire(
             tensor=TENSOR,

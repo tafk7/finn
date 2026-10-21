@@ -24,7 +24,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Leaf
-from finn.kernels.base import PORT_END, PortEnd
+from finn.kernels.base import PORT_CONTRACT, PortContract
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.network import Interface, Network, wire
@@ -45,16 +45,19 @@ def placing(*, w_port: str | None = "in1_V") -> Network:
             "x": wire(
                 tensor=X,
                 port="in0_V",
-                consumer=Interface("compute", "x_end"),
+                consumer=Interface("compute", "x_contract"),
                 platform=FULL_DSP48E2,
             ),
             "w": wire(
-                platform=FULL_DSP48E2, tensor=W, consumer=Interface("compute", "w_end"), **named
+                platform=FULL_DSP48E2,
+                tensor=W,
+                consumer=Interface("compute", "w_contract"),
+                **named,
             ),
             "y": wire(
                 tensor=Y,
                 port="out0_V",
-                producer=Interface("compute", "y_end"),
+                producer=Interface("compute", "y_contract"),
                 platform=FULL_DSP48E2,
             ),
             "compute": PackedDotpKernel(
@@ -120,24 +123,22 @@ def test_a_boundary_no_port_names_is_refused() -> None:
     """A weight channel with one end and no port is a boundary nothing may cross: only an
     ONNX input or output of a partition is one."""
 
-    refused = choose(placing(w_port=None), FOLDING).member("w").query(Channel.endpoints)
+    refused = choose(placing(w_port=None), FOLDING).member("w").query(Channel.sides)
     assert isinstance(refused, Rejected)
-    assert {(item.code, item.owner) for item in refused.findings} == {
-        ("channel-boundary", "endpoints")
-    }
+    assert {(item.code, item.owner) for item in refused.findings} == {("channel-boundary", "sides")}
     # The same network with the port named is accepted.
-    assert not isinstance(choose(placing(), FOLDING).member("w").endpoints, Rejected)
+    assert not isinstance(choose(placing(), FOLDING).member("w").sides, Rejected)
 
 
 class Reader(Space):
     """A consumer that presents its end itself, not through a kernel's port."""
 
-    @view(semantics=PORT_END)
-    def end(self) -> PortEnd:
+    @view(semantics=PORT_CONTRACT)
+    def end(self) -> PortContract:
         beat = AxisBeat("s_axis", INT3, 4, endpoint=Endpoint.TARGET)
         transport = beat.native(clock="ap_clk", reset="ap_rst_n")
         contract = StreamContract(transport, ScalarEncoding(INT3), vector_major((3, 4), 4))
-        return PortEnd("", contract)
+        return PortContract("", contract)
 
 
 def test_an_end_that_is_no_kernels_port_has_no_netlist() -> None:

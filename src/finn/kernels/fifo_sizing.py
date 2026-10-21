@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A channel's FIFO depth, analytically from both ends' beat patterns.
+"""A channel's FIFO depth, analytically from both sides' beat patterns.
 
 A channel runs ``source -> output adapter -> transport -> input adapter ->
 consumer`` (``finn.kernels.channels``); its ``transport`` is ``direct`` or a
@@ -29,10 +29,10 @@ lateness is how far its last word of the frame left after its unthrottled time. 
 producer may be late by its idle time a period (``P`` minus its span) without
 starting its next frame late; ``keeps`` says whether a FIFO of so many words keeps it
 within that, and ``least_depth`` is the least depth that does, by bisection. A kernel's
-pipeline latency is a constant shift of an end's times, and the acceptance follows the
+pipeline latency is a constant shift of a side's times, and the acceptance follows the
 supply's data, so they do not change the depth.
 
-``size`` reads a channel's ends from its contracts and gives its ``Sized``: a
+``size`` reads a channel's sides from their contracts and gives its ``Sized``: a
 depth (``0``: direct) and why. The least depth counts the words the FIFO must
 hold; the DEPTH proposed is the least whose native storage holds them
 (``least_depth_holding``: FinnLib's FIFO is a shift register of five words up to
@@ -40,7 +40,7 @@ hold; the DEPTH proposed is the least whose native storage holds them
 mover the shell places there (``Channel.mover``, ``finn.kernels.movers``): its beat
 times over a frame, and its cycles a frame as its span. A boundary without a
 mover (the ``ip`` shell: its integrator's pacing), a memory source (paced by its
-consumer) and an end no schedule paces are not modelled: direct, with that
+consumer) and a side no schedule paces are not modelled: direct, with that
 reason. So is an adapter
 chain other than one ``vpc`` before the transport and one ``input_gen`` after it.
 The strategy proposing the depths is ``finn.kernels.explore.SizeFifos``; an rtlsim
@@ -48,7 +48,7 @@ check is evidence outside it.
 
 ``holds`` checks a channel's transport, a FIFO of so many words or ``direct``, against
 its stream again (``keeps``, one simulation): a depth is sized at one bottleneck period,
-and a fold anywhere in the network may change the period, or the ends, after it. Nothing
+and a fold anywhere in the network may change the period, or the sides, after it. Nothing
 records what it was sized against; the seam checks it where a strategy asks
 (``Seam.check_fifos``) and the build once, before emission
 (``finn.custom_op.kernels.shell.verify_partition``).
@@ -72,7 +72,7 @@ from finn.kernels.transport import StreamContract
 
 @dataclass(frozen=True)
 class Pattern:
-    """One end's beat times over a frame (cycles from the frame's first beat) and its
+    """One side's beat times over a frame (cycles from the frame's first beat) and its
     kernel's span, the beats it takes a frame."""
 
     times: tuple[int, ...]
@@ -80,7 +80,7 @@ class Pattern:
 
     def __post_init__(self) -> None:
         if not self.times or any(b < a for a, b in zip(self.times, self.times[1:])):
-            raise ValueError("an end presents at least one beat, in time order")
+            raise ValueError("a side presents at least one beat, in time order")
         if self.beats <= self.times[-1] - self.times[0]:
             raise ValueError("a frame's beats lie within its kernel's span")
 
@@ -155,7 +155,7 @@ def simulate(
 ) -> Flow | None:
     """``frames`` frames from ``supply``, its frame ``k`` due from ``k * period``,
     through a FIFO of ``depth`` words (0: direct, a handshake) into ``accept``;
-    ``None`` when the ends deadlock.
+    ``None`` when the two sides deadlock.
 
     An input_gen presents its beats in order, each once the word it reads was taken plus
     two cycles (written, then read through its output register) and no sooner than the
@@ -256,8 +256,8 @@ def keeps(
     supply: Pattern, accept: Acceptance, period: int, words: int, frames: int = FRAMES
 ) -> bool:
     """A FIFO of ``words`` words (0: direct) keeps the producer, throttled only by a full
-    FIFO, within its idle time a period over ``frames`` frames (``within``); the ends
-    deadlocking do not."""
+    FIFO, within its idle time a period over ``frames`` frames (``within``); the two
+    sides deadlocking do not."""
     flow = simulate(supply, accept, period, words, frames)
     return flow is not None and within(flow.late, supply, period)
 
@@ -283,11 +283,11 @@ def least_depth(
     return depths[bisect_left(depths, True, key=meets)]
 
 
-# -- a channel's ends ----------------------------------------------------------------------
+# -- a channel's sides ---------------------------------------------------------------------
 
 
 class NotModelled(ValueError):
-    """A channel whose ends the model does not read, and why."""
+    """A channel whose sides the model does not read, and why."""
 
 
 def _pattern(contract: StreamContract, side: str) -> Pattern:
@@ -305,12 +305,12 @@ def _free(channel: Channel) -> Pattern:
     return Pattern(contract.times, contract.cycles)
 
 
-def ends(channel: Channel) -> tuple[Pattern, Acceptance]:
+def sides(channel: Channel) -> tuple[Pattern, Acceptance]:
     """A channel's supply at its transport and its input side's acceptance, from the
-    paces its ends state; ``NotModelled`` naming why the model does not read them."""
+    paces its sides state; ``NotModelled`` naming why the model does not read them."""
     if channel.valued:
         raise NotModelled("a memory source: paced by its consumer")
-    found = channel.endpoints
+    found = channel.sides
     producer = _free(channel) if found.source_owner is None else _pattern(found.source, "producer")
     consumer = _free(channel) if found.sink_owner is None else _pattern(found.sink, "consumer")
     times = producer.times
@@ -338,7 +338,7 @@ def ends(channel: Channel) -> tuple[Pattern, Acceptance]:
 class Sized:
     """One channel's proposal and why: ``depth`` 0 is ``direct``. ``least`` is the
     least number of words a FIFO must hold that the model found (``None`` where it
-    found none or did not read the ends); ``word_bits`` the bits of a word at the
+    found none or did not read the sides); ``word_bits`` the bits of a word at the
     transport."""
 
     depth: int
@@ -355,11 +355,11 @@ class Sized:
 def size(channel: Channel, period: int, *, margin: int = 0, ram_style: str = "auto") -> Sized:
     """``channel``'s FIFO at the bottleneck ``period``: the least DEPTH whose storage
     holds the least words plus ``margin`` (``least_depth_holding``: a FIFO of two words
-    or more), or direct where none is needed, none helps, or the ends are not
+    or more), or direct where none is needed, none helps, or the sides are not
     modelled."""
     word_bits = channel.arriving.form.lanes * channel.tensor.element.bits
     try:
-        supply, accept = ends(channel)
+        supply, accept = sides(channel)
     except NotModelled as error:
         return Sized(0, str(error), word_bits)
     least = least_depth(supply, accept, period)
@@ -374,9 +374,9 @@ def size(channel: Channel, period: int, *, margin: int = 0, ram_style: str = "au
 def holds(channel: Channel, period: int, words: int) -> bool:
     """Whether ``channel``'s transport, a FIFO of ``words`` words (its storage's capacity;
     0: direct), keeps its producer within its idle time at the bottleneck ``period``
-    (``keeps``, one simulation of its ends): the test ``size`` sizes it by, at the words it
-    holds. ``NotModelled`` where the model does not read its ends (``ends``)."""
-    supply, accept = ends(channel)
+    (``keeps``, one simulation of its sides): the test ``size`` sizes it by, at the words it
+    holds. ``NotModelled`` where the model does not read its sides (``sides``)."""
+    supply, accept = sides(channel)
     return keeps(supply, accept, period, words)
 
 
@@ -389,10 +389,10 @@ __all__ = [
     "Buffered",
     "Sized",
     "converted",
-    "ends",
     "holds",
     "keeps",
     "least_depth",
+    "sides",
     "simulate",
     "size",
 ]

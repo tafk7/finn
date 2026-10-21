@@ -504,7 +504,7 @@ def _levels_short(channel: Any, period: int, words: int) -> bool:
     """A double of the seam's check (the Chain needs no FIFO at any folding): ``levels``
     (activate's output) needs more words than its transport holds; every other channel's
     holds."""
-    return not str(channel.endpoints.source_owner).startswith("activate.")
+    return not str(channel.sides.source_owner).startswith("activate.")
 
 
 LEVELS_FIFO = {"transport": "fifo", "transport.fifo.buffer.depth": 8}

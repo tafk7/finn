@@ -9,9 +9,10 @@ space of its own, bound from plain facts: a kernel from its declaration
 from its ``Wire``, the facts of a ``Channel``. A wire's fact is a value, or
 read from a member:
 
-- an end (``Interface(member, view)``): the ``PortEnd`` a member presents at an
-  interface (a kernel's ``x_end``; a channel's ``set_end``, its source's set port),
-  labelled from the network (``PortEnd.under``: ``first.compute.packed.x``), given to
+- a port's contract (``Interface(member, view)``): the ``PortContract`` a member presents
+  for one of its ports (a kernel's ``x_contract``; a channel's ``set_contract``, its
+  source's set port), labelled from the network (``PortContract.under``:
+  ``first.compute.packed.x``), given to
   the channel's ``producer`` or ``consumer``; a side without one is a boundary;
 - a fact a member states (``Fact(member, name)``): a parameter channel's tensor and
   contents, as its kernel states them, values read whatever the kernel's validity
@@ -39,9 +40,9 @@ a change, atomic over the members it reaches:
 1. each kernel named: one change of the engine's on its point, refused where a value is
    outside its domain or a rule it reaches would be newly false, naming the rule and the
    stored choices standing in its way;
-2. each member that changed: every fact it gives a channel read again (its ends, and
-   for a parameter channel what it states: these may read a choice, MatMul's
-   ``realization``);
+2. each member that changed: every fact it gives a channel read again (its ports'
+   contracts, and for a parameter channel what it states: these may read a choice,
+   MatMul's ``realization``);
 3. each channel named with the same facts: one change on its point, as a kernel's. Each
    channel given other facts is rebuilt from them, a change of facts on the channel it
    was (a channel never bound before is bound, as above), with the change's choices.
@@ -93,7 +94,7 @@ from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.module import Composed, Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose
-from finn.kernels.base import BOUNDARY, NETLIST, PortEnd, merged
+from finn.kernels.base import BOUNDARY, NETLIST, PortContract, merged
 from finn.kernels.channels import Channel
 from finn.kernels.configure import chosen, refusal
 from finn.kernels.control import CONTROL, Control
@@ -147,8 +148,8 @@ class NetworkError(ValueError):
 
 @dataclass(frozen=True)
 class Interface:
-    """An end in the wiring: the ``PortEnd`` member ``member`` presents at its view
-    ``view`` (``x_end``, ``set_end``), labelled from the network."""
+    """A port's contract in the wiring: the ``PortContract`` member ``member`` presents at
+    its view ``view`` (``x_contract``, ``set_contract``), labelled from the network."""
 
     member: str
     view: str
@@ -194,7 +195,7 @@ class Wire:
 
 
 def wire(**facts: object) -> Wire:
-    """A channel's ``Wire``: ``wire(tensor=..., consumer=Interface("first", "x_end"),
+    """A channel's ``Wire``: ``wire(tensor=..., consumer=Interface("first", "x_contract"),
     platform=...)``."""
     return Wire(facts)
 
@@ -566,7 +567,7 @@ class Network:
         change (a channel's once its facts are known; until then it holds them): a value
         outside its domain is dropped, with why (``dropped``); a rule they break refuses
         the network (``NetworkError``), naming it. ``nodes``: each member's node
-        in the module, the prefix of its instances and of the ends it presents (its name
+        in the module, the prefix of its instances and of the ports it presents (its name
         where none is given); two members of one node are refused."""
         kernels: dict[str, Space | Facts] = {}
         wires: dict[str, Wire] = {}
@@ -677,7 +678,7 @@ class Network:
 
     def node(self, name: str) -> str:
         """Member ``name``'s node in the module: the prefix of its instances and of the
-        ends it presents."""
+        ports it presents."""
         return self._nodes[name]
 
     @property
@@ -876,8 +877,10 @@ class Network:
                 return Unbound(source, answer, stored)
             found = answer.value
             if isinstance(value, Interface):
-                if not isinstance(found, PortEnd):
-                    raise NetworkError(f"{name}: {source}.{stated} is no end: {found!r}")
+                if not isinstance(found, PortContract):
+                    raise NetworkError(
+                        f"{name}: {source}.{stated} is no port's contract: {found!r}"
+                    )
                 found = found.under(self._nodes[source])
             resolved[fact] = found
         return tuple(sorted(resolved.items(), key=lambda item: item[0]))

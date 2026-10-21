@@ -27,6 +27,7 @@ is stated by a model of Vivado's placement (``_hi_style``).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, ClassVar
 
 from finn.core.space import (
     Decision,
@@ -37,12 +38,13 @@ from finn.core.space import (
     derived,
     reject,
 )
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
-from finn.kernels.artifacts.abi import Clocking, Endpoint
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, interface
-from finn.kernels.port import native_stream
+from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, PortContract
+from finn.kernels.port import data_width, native_stream
 from finn.kernels.utilization import RESOURCES_SEMANTICS, lutram, memory, uram_constraint
 from finn.platform.capabilities import Fabric, Platform, Resources
 
@@ -214,6 +216,7 @@ class FifoKernel(LeafKernel):
     id = "finnlib.fifo"
     version = 2
     rtl_module = "fifo"
+    clock_domain = NATIVE_CLOCKING
 
     # The tensor whose words it buffers, a fact, and what arrives of it.
     input_tensor: Tensor = Param(required=False)
@@ -235,14 +238,15 @@ class FifoKernel(LeafKernel):
 
     input = native_stream("input", Endpoint.TARGET, input_tensor, arriving)
     output = native_stream("output", Endpoint.INITIATOR, output_tensor, leaving)
-    input_end = interface("input")
-    output_end = interface("output")
+    if TYPE_CHECKING:  # members its ports lower to, which it and its channel read
+        input_stream: ClassVar[Stream]
+        input_contract: ClassVar[PortContract]
+        output_contract: ClassVar[PortContract]
 
     @derived
-    def word_bits(self) -> int:
+    def word_bits(self) -> int | Rejected:
         """DATA_WIDTH: its input port's word."""
-        width: int = self.input.transport.data_width
-        return width
+        return data_width(FifoKernel.input, self.input_stream)
 
     @constraint
     def geometry_supported(self) -> bool | Rejected:
@@ -281,10 +285,6 @@ class FifoKernel(LeafKernel):
         with the geometry its storage is planned for, when that is refused."""
         _ = self.planned_storage
         return True
-
-    @derived
-    def clocking(self) -> Clocking:
-        return NATIVE_CLOCKING
 
     @derived(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources:

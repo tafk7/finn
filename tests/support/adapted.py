@@ -48,14 +48,14 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True) -> Network:
             "x": wire(
                 tensor=x_tensor,
                 adaptable=adaptable,
-                producer=Interface("producer", "output_end"),
-                consumer=Interface("activate", "input_end"),
+                producer=Interface("producer", "output_contract"),
+                consumer=Interface("activate", "input_contract"),
                 platform=FULL_DSP48E2,
             ),
             "y": wire(
                 tensor=y_tensor,
                 port="out0_V",
-                producer=Interface("activate", "output_end"),
+                producer=Interface("activate", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
             "producer": MemStreamKernel(
@@ -113,13 +113,13 @@ def transposed(
             "a": wire(
                 tensor=tensor,
                 port="in0_V",
-                consumer=Interface("shuffle", "input_end"),
+                consumer=Interface("shuffle", "input_contract"),
                 platform=platform,
             ),
             "b": wire(
                 tensor=tensor,
                 port="out0_V",
-                producer=Interface("shuffle", "output_end"),
+                producer=Interface("shuffle", "output_contract"),
                 platform=platform,
             ),
             "shuffle": TransposeKernel(input_tensor=tensor, platform=platform),

@@ -80,14 +80,14 @@ def test_depthwise_rows_pass_once_with_a_frame_per_window():
     x = configured.member("x")
     # Nothing is replayed: the channel only closes each window's frame.
     assert x.plan.steps == (Step.MARKERS,)
-    boundary = x.endpoints.source
+    boundary = x.sides.source
     # Rows, then channel folds, then window folds; lane s * PE + p is window
     # position s of channel p.
     channel_tile = Traversal.over(
         (2, 9, 4), ((0, 2, 1), (2, 2, 2), (1, 3, 3)), ((1, 3, 1), (2, 2, 1))
     )
     assert boundary.transport.name == "in0_V" and boundary.form == channel_tile
-    framed = x.endpoints.sink
+    framed = x.sides.sink
     assert framed.form == boundary.form
     assert [level.beats for level in framed.rules.values()] == [3]
     module = built(configured, "matmul")

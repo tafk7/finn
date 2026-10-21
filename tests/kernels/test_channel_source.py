@@ -117,19 +117,19 @@ def stored(platform: Platform) -> Network:
             "x": wire(
                 tensor=Tensor((3, 4), INT3),
                 port="in0_V",
-                consumer=Interface("matmul", "x_end"),
+                consumer=Interface("matmul", "x_contract"),
                 platform=platform,
             ),
             "w": wire(
                 tensor=Fact("matmul", "carried_weights"),
                 contents=Fact("matmul", "stored_weights"),
-                consumer=Interface("matmul", "w_end"),
+                consumer=Interface("matmul", "w_contract"),
                 platform=platform,
             ),
             "y": wire(
                 tensor=Tensor((3, 4), INT7),
                 port="out0_V",
-                producer=Interface("matmul", "y_end"),
+                producer=Interface("matmul", "y_contract"),
                 platform=platform,
             ),
             "matmul": MatMulKernel(
@@ -170,13 +170,13 @@ def test_known_weights_give_the_weight_channel_its_source():
     assert isinstance(w.source, MemStreamKernel)
     assert w.source.image == (0x22C, 0x6BE, 0xDD3, 0x941)
     # The weight channel's producer is its source, a leaf below the channel.
-    assert w.endpoints.source_owner == "source.memstream"
+    assert w.sides.source_owner == "source.memstream"
     assert instance_parameters(stored_, STORED_INSTANCE)["RAM_STYLE"] == '"block"'
     # Unknown weights: no value, no source; the channel is the boundary in1_V.
     unvalued = external.member("w")
     assert not unvalued.valued
     assert isinstance(unvalued.query(Channel.source), Inapplicable)
-    assert unvalued.endpoints.source_owner is None
+    assert unvalued.sides.source_owner is None
     # MatMul's netlist is its cores' alone.
     matmul = stored_.member("matmul")
     assert [item.node for item in matmul.netlists] == ["compute.packed"]
@@ -187,7 +187,7 @@ def test_an_unvalued_channel_never_demands_its_source():
     evidence = inspection.explain(w, Channel.netlist)
     visited = {node.declaration.key for node in evidence.nodes}
     # Whether the channel has a value is read (the weights' presence), never the value.
-    assert {"valued", "ends", "endpoints"} <= visited
+    assert {"valued", "streams", "sides"} <= visited
     # Nothing of the source runs: the channel's members are summed (its netlist), so its
     # source's guard is read, and is False; everything below it is inapplicable.
     reached = {
@@ -258,7 +258,7 @@ def test_the_result_range_follows_what_the_weight_channel_carries():
     assert external.result_range == (-48, 64)
     assert external.result_type == DataType["INT8"]
     core = configured(base(weights=WEIGHTS), style="block").member("matmul").compute
-    assert core.y.element == ScalarEncoding(DataType["INT7"], TensorRange(-30, 40))
+    assert core.y_element == ScalarEncoding(DataType["INT7"], TensorRange(-30, 40))
     assert core.parameters["ACCU_WIDTH"] == 7
 
 
@@ -277,7 +277,7 @@ def test_a_narrow_result_range_is_the_result_and_the_accumulator(weights, value_
     matmul = point.member("matmul")
     assert matmul.result_range == value_range
     assert matmul.result_type == DataType[result]
-    assert matmul.compute.y.element == ScalarEncoding(DataType[result], TensorRange(*value_range))
+    assert matmul.compute.y_element == ScalarEncoding(DataType[result], TensorRange(*value_range))
     assert matmul.compute.parameters["ACCU_WIDTH"] == DataType[result].bitwidth()
     assert isinstance(module_of(point, "matmul"), Available)
 
@@ -363,7 +363,7 @@ def test_a_source_no_value_of_which_can_be_set_refuses_the_change_that_brings_it
             tensor=Fact("matmul", "carried_weights"),
             contents=Fact("matmul", "stored_weights"),
             sets=2,
-            consumer=Interface("matmul", "w_end"),
+            consumer=Interface("matmul", "w_contract"),
             platform=FULL_DSP48E2,
         ),
         "matmul": MatMulKernel(
@@ -427,25 +427,25 @@ def test_a_channel_with_a_value_has_its_source_as_its_only_producer():
             "x": wire(
                 tensor=x_tensor,
                 port="in0_V",
-                consumer=Interface("matmul", "x_end"),
+                consumer=Interface("matmul", "x_contract"),
                 platform=FULL_DSP48E2,
             ),
             "w": wire(
                 tensor=w_tensor,
                 port="in1_V",
-                consumer=Interface("matmul", "w_end"),
+                consumer=Interface("matmul", "w_contract"),
                 platform=FULL_DSP48E2,
             ),
             "y": wire(
                 tensor=y_tensor,
                 contents=((0,) * 4,) * 3,
-                producer=Interface("matmul", "y_end"),
+                producer=Interface("matmul", "y_contract"),
                 platform=FULL_DSP48E2,
             ),
             "matmul": MatMulKernel(platform=FULL_DSP48E2, x_tensor=x_tensor, w_tensor=w_tensor),
         }
     )
-    answer = folded(produced).member("y").query(Channel.endpoints)
+    answer = folded(produced).member("y").query(Channel.sides)
     assert isinstance(answer, Rejected) and codes(answer) == {"channel-users"}
     assert "only producer" in answer.findings[0].message
 

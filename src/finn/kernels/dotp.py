@@ -19,8 +19,9 @@ carries PE * SIMD lanes, SIMD fastest; each result beat PE lanes; activation TLA
 each reduction.
 
 Its ports ``x`` and ``w`` read the tensors its parent gives (``x_tensor``, ``w_tensor``),
-and ``y`` writes its results, ``y_tensor``; each states its end (``x_end``, ``w_end``,
-``y_end``). The extents are bound from the input tensors: x reads ``(m, k)`` (``(m, k,
+and ``y`` writes its results, ``y_tensor``; each presents its stream (``x_stream``,
+``w_stream``, ``y_stream``) and states its contract (``x_contract``, ``w_contract``,
+``y_contract``). The extents are bound from the input tensors: x reads ``(m, k)`` (``(m, k,
 n)`` depthwise), w ``(k, n)``, and the results are ``(m, n)``. Dense activations at the
 graph's rank, ``(..., K)``, are read through the view ``(m, k)`` (``rows_viewed``), the
 results stated at that rank; ``reshape_activations`` reads ``(M, K, N)`` as ``(M, K *
@@ -44,8 +45,9 @@ it, every partial sum included.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from math import ceil, floor, prod
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from qonnx.core.ranges import TensorRange
 
@@ -68,11 +70,12 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.gemm import Form, Window, c, k, kh, kw, m, n, oh, ow
 from finn.dataflow.schedule import Affine, Index, Schedule
-from finn.dataflow.tensor import Tensor
+from finn.dataflow.streams import Stream
+from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import CLOCK2X, Clocking, Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
-from finn.kernels.base import LeafKernel, extent_of, interface
-from finn.kernels.port import INTEGER_POLICY, AxiStreamPort
+from finn.kernels.base import LeafKernel, extent_of
+from finn.kernels.port import INTEGER_POLICY, AxiStreamPort, axis
 from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit
 from finn.kernels.values.domains import Integer, admit_element, integer_bounds, range_dtype
 from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
@@ -390,9 +393,13 @@ class DotpAxiKernel(LeafKernel):
         reduces=reduced,
         reshaped=rows_viewed,
     )
-    x_end = interface("x")
-    w_end = interface("w")
-    y_end = interface("y")
+    if TYPE_CHECKING:  # members its ports lower to, which it reads
+        x_element: ClassVar[ScalarEncoding]
+        w_element: ClassVar[ScalarEncoding]
+        y_element: ClassVar[ScalarEncoding]
+        x_stream: ClassVar[Stream]
+        w_stream: ClassVar[Stream]
+        y_stream: ClassVar[Stream]
 
     @derived
     def dsp(self) -> DspBlock | Rejected:
@@ -406,7 +413,7 @@ class DotpAxiKernel(LeafKernel):
         """Whether the activations are an ordinary integer encoding: a core's bounds read
         them; another is the activation port's to refuse."""
         try:
-            ordinary_integer_bounds(self.x.element.dtype)
+            ordinary_integer_bounds(self.x_element.dtype)
         except DatatypeError:
             return False
         return True
@@ -414,8 +421,16 @@ class DotpAxiKernel(LeafKernel):
     @constraint
     def stream_widths_supported(self) -> bool | Rejected:
         # The native payload and byte-aligned carrier localparams are uint32.
-        ports = (self.x.axis, self.w.axis, self.y.axis)
-        if any(port.carrier_bits > 0xFFFFFFFF for port in ports):
+        x = axis(DotpAxiKernel.x, self.x_stream)
+        if isinstance(x, Rejected):
+            return x
+        w = axis(DotpAxiKernel.w, self.w_stream)
+        if isinstance(w, Rejected):
+            return w
+        y = axis(DotpAxiKernel.y, self.y_stream)
+        if isinstance(y, Rejected):
+            return y
+        if any(port.carrier_bits > 0xFFFFFFFF for port in (x, w, y)):
             return reject("dotp-stream-width", "packed stream widths must fit native unsigned int")
         return True
 
@@ -435,7 +450,7 @@ class DotpAxiKernel(LeafKernel):
     @derived
     def clocking(self) -> Clocking:
         # Unpumped, the RTL ignores its 2x clock input: it is held low.
-        return Clocking(doubled=CLOCK2X, doubling=self.compute_pumping)
+        return replace(type(self).clock_domain, doubled=CLOCK2X, doubling=self.compute_pumping)
 
     @derived
     def dsp_simd(self) -> int:
@@ -444,7 +459,7 @@ class DotpAxiKernel(LeafKernel):
 
     @derived
     def parameters(self) -> dict[str, int | str]:
-        x, w, y = self.x.element, self.w.element, self.y.element
+        x, w, y = self.x_element, self.w_element, self.y_element
         return {
             "PE": self.pe,
             "SIMD": self.simd,
@@ -557,7 +572,7 @@ class PackedDotpKernel(DotpAxiKernel):
     @derived
     def narrow_weights(self) -> bool:
         """No weight its tensor holds is its type's minimum."""
-        element = self.w.element
+        element = self.w_element
         try:
             least = ordinary_integer_bounds(element.dtype)[0]
         except DatatypeError:
@@ -571,7 +586,7 @@ class PackedDotpKernel(DotpAxiKernel):
         if self.form is not Form.DENSE:
             return reject("dotp-form", "the packed core broadcasts activations to every PE lane")
         a_bits, b_bits, _ = dsp_widths(self.dsp)
-        activation, weights = self.x.element, self.w.element
+        activation, weights = self.x_element, self.w_element
         if activation.bits + (not activation.signed) > b_bits:
             return reject(
                 "dotp-activation-width", "activation values must fit the signed DSP B input"
@@ -587,7 +602,7 @@ class PackedDotpKernel(DotpAxiKernel):
     def accumulator_width_supported(self) -> bool | Rejected:
         """Any width of a bit or more (FinnLib's ``ACCU_WIDTH >= 1``): the packed
         lanes resolve the sum modulo ``2**ACCU_WIDTH``."""
-        bits = self.y.element.bits
+        bits = self.y_element.bits
         if bits < 1:
             return reject(
                 "dotp-accumulator-width",
@@ -615,8 +630,8 @@ class PackedDotpKernel(DotpAxiKernel):
         return packed_dotp_resources(
             pe=self.pe,
             simd=self.dsp_simd,
-            weight_width=self.w.element.bits,
-            activation_width=self.x.element.bits,
+            weight_width=self.w_element.bits,
+            activation_width=self.x_element.bits,
             narrow_weights=self.narrow_weights,
             dsp=self.dsp,
         )
@@ -671,12 +686,12 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
     def core_supported(self) -> bool | Rejected:
         if not self.integer_activations():
             return True
-        refused = self.operand_refusal(self.dsp, self.x.element.dtype, self.w.element.dtype)
+        refused = self.operand_refusal(self.dsp, self.x_element.dtype, self.w_element.dtype)
         return True if refused is None else refused
 
     @constraint
     def accumulator_width_supported(self) -> bool | Rejected:
-        bits = self.y.element.bits
+        bits = self.y_element.bits
         if bits > 58:
             return reject(
                 "dotp-accumulator-width",

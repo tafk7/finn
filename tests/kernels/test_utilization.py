@@ -274,13 +274,13 @@ def pages(rows: int, cols: int) -> Any:
             "a": wire(
                 tensor=tensor,
                 port="in0_V",
-                consumer=Interface("shuffle", "input_end"),
+                consumer=Interface("shuffle", "input_contract"),
                 platform=FULL_DSP48E2,
             ),
             "b": wire(
                 tensor=tensor,
                 port="out0_V",
-                producer=Interface("shuffle", "output_end"),
+                producer=Interface("shuffle", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
             "shuffle": TransposeKernel(input_tensor=tensor, platform=FULL_DSP48E2),

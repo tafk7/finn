@@ -93,13 +93,13 @@ def placed(case: Case) -> Network:
             "x": wire(
                 tensor=x,
                 port="s_axis_0",
-                consumer=Interface("activate", "input_end"),
+                consumer=Interface("activate", "input_contract"),
                 platform=FULL_DSP48E2,
             ),
             "y": wire(
                 tensor=y,
                 port="m_axis_0",
-                producer=Interface("activate", "output_end"),
+                producer=Interface("activate", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
             "activate": ThresholdingAxiKernel(**facts),
@@ -134,7 +134,7 @@ def run(case: Case, evidence: Path) -> None:
     result_bits = point.member("activate").result_dtype.bitwidth()
     form = vector_major((PIXELS, CHANNELS), case.pe)
     for name in ("x", "y"):
-        ends = point.member(name).query(Channel.endpoints).value
+        ends = point.member(name).query(Channel.sides).value
         assert form in (ends.sink.form, ends.source.form), (case.label, name, ends)
     stimulus = list(pack(form, VALUES.ravel().tolist(), ELEMENT.bitwidth()))
     expected = list(pack(form, levels.ravel().tolist(), result_bits))

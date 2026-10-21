@@ -398,18 +398,18 @@ def dsp58_matmul() -> tuple[Seam, Network]:
                 platform=FULL_DSP58,
                 tensor=x_tensor,
                 port="s_axis_0",
-                consumer=Interface("first", "x_end"),
+                consumer=Interface("first", "x_contract"),
             ),
             "w": wire(
                 tensor=Fact("first", "carried_weights"),
                 contents=Fact("first", "stored_weights"),
-                consumer=Interface("first", "w_end"),
+                consumer=Interface("first", "w_contract"),
                 platform=FULL_DSP58,
             ),
             "y": wire(
                 tensor=y_tensor,
                 port="m_axis_0",
-                producer=Interface("first", "y_end"),
+                producer=Interface("first", "y_contract"),
                 platform=FULL_DSP58,
             ),
             "first": first(),
@@ -921,7 +921,7 @@ def test_a_core_no_value_of_which_is_possible_refuses_the_cost_strategies_naming
         weights_dtype=DataType["UINT3"],
         platform=PART,
     )
-    with pytest.raises(NetworkError, match="compute.packed.w.element_taken: dtype-family"):
+    with pytest.raises(NetworkError, match="compute.packed.w_element_taken: dtype-family"):
         choose(unsigned, {"matmul.compute": "packed"})
     with refused(
         "cycles-unknown",
@@ -933,10 +933,10 @@ def test_a_core_no_value_of_which_is_possible_refuses_the_cost_strategies_naming
         "choice-no-valid-value",
         error=ExploreError,
         owner="matmul.compute",
-        message="'packed': matmul.compute.packed.w.element_taken: .*dtype-family",
+        message="'packed': matmul.compute.packed.w_element_taken: .*dtype-family",
     ) as caught:
         MaxThroughput({"dsp": 0.5}).explore(Seam(PART), unsigned)
-    assert ("compute.packed.w.element_taken", "dtype-family") in {
+    assert ("compute.packed.w_element_taken", "dtype-family") in {
         (cause.owner, cause.code) for cause in caught.finding.causes
     }
 

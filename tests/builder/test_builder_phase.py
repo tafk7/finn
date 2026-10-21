@@ -431,7 +431,7 @@ def step_fold_my_way(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrap
 
 def _is_levels(channel: Channel) -> bool:
     """The Chain's activations (activate's output)."""
-    return str(channel.endpoints.source_owner).startswith("activate.")
+    return str(channel.sides.source_owner).startswith("activate.")
 
 
 def _levels_need(period: int) -> int:

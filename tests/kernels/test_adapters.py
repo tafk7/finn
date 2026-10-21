@@ -78,7 +78,7 @@ def test_a_vpc_converts_whole_vectors_that_span_rows():
     """Both sides of a width conversion carry the same elements in whole beats, so the
     stream is whole lcm vectors, wherever rows end: 4 lanes into a transpose taking 3
     of its (6, 4) matrices' flat order converts vectors of 12, three rows each."""
-    consumer = transposed(6, 4, 3).member("shuffle").input.presented
+    consumer = transposed(6, 4, 3).member("shuffle").input_stream.sequence
     steps = plan(BeatSequence(vector_major((2, 6, 4), 4)), consumer)
     assert steps.steps == (Step.WIDTH,)
     (stage,) = realize(steps)

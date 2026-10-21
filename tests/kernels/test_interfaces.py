@@ -59,25 +59,25 @@ def activated(*, writable: bool) -> Network:
             "activations": wire(
                 tensor=X,
                 port="in0_V",
-                consumer=Interface("compute", "x_end"),
+                consumer=Interface("compute", "x_contract"),
                 platform=FULL_DSP48E2,
             ),
             "weights": wire(
                 tensor=WEIGHT_TENSOR,
                 port="in1_V",
-                consumer=Interface("compute", "w_end"),
+                consumer=Interface("compute", "w_contract"),
                 platform=FULL_DSP48E2,
             ),
             "results": wire(
                 tensor=RESULT_TENSOR,
-                producer=Interface("compute", "y_end"),
-                consumer=Interface("activate", "input_end"),
+                producer=Interface("compute", "y_contract"),
+                consumer=Interface("activate", "input_contract"),
                 platform=FULL_DSP48E2,
             ),
             "levels": wire(
                 tensor=LEVEL_TENSOR,
                 port="out0_V",
-                producer=Interface("activate", "output_end"),
+                producer=Interface("activate", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
             "compute": PackedDotpKernel(
@@ -246,19 +246,19 @@ def test_several_threshold_sets_take_a_set_selector_stream():
                 "values": wire(
                     tensor=RESULT_TENSOR,
                     port="in0_V",
-                    consumer=Interface("activate", "input_end"),
+                    consumer=Interface("activate", "input_contract"),
                     platform=FULL_DSP48E2,
                 ),
                 "sets": wire(
                     tensor=sets,
                     port="in1_V",
-                    consumer=Interface("activate", "set_end"),
+                    consumer=Interface("activate", "set_contract"),
                     platform=FULL_DSP48E2,
                 ),
                 "levels": wire(
                     tensor=LEVEL_TENSOR,
                     port="out0_V",
-                    producer=Interface("activate", "output_end"),
+                    producer=Interface("activate", "output_contract"),
                     platform=FULL_DSP48E2,
                 ),
                 "activate": ThresholdingAxiKernel(
@@ -285,7 +285,7 @@ def test_several_threshold_sets_take_a_set_selector_stream():
 
     point = selected(selectors)
     assert isinstance(point.query("sets", NETLIST), Available)
-    assert point.member("sets").endpoints.sink.transport.name == "s_axis_set"
+    assert point.member("sets").sides.sink.transport.name == "s_axis_set"
     # One set index for every input beat: a shorter selector channel is refused.
     short = Tensor((HEIGHT,), ScalarEncoding(DataType["UINT1"]))
     refused = selected(short).query("sets", NETLIST)

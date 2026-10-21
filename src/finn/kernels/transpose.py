@@ -23,9 +23,9 @@ from finn.core.space import (
 )
 from finn.dataflow.schedule import Index, Schedule
 from finn.dataflow.tensor import Tensor
-from finn.kernels.artifacts.abi import Clocking, Endpoint
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
-from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, extent_of, interface
+from finn.kernels.base import NATIVE_CLOCKING, LeafKernel, extent_of
 from finn.kernels.fifo import fifo_resources
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import (
@@ -95,6 +95,7 @@ class TransposeKernel(LeafKernel):
     id = "finnlib.inner_shuffle"
     version = 1
     rtl_module = "inner_shuffle"
+    clock_domain = NATIVE_CLOCKING
 
     # The tensor its input port reads: a fact it is given.
     input_tensor: Tensor = Param(required=False)
@@ -161,8 +162,6 @@ class TransposeKernel(LeafKernel):
         lanes=(i,),
         reshaped=True,
         signals=("idat", "ivld", "irdy"),
-        clock=NATIVE_CLOCKING.clock,
-        reset=NATIVE_CLOCKING.reset,
     )
     output = AxiStreamPort(
         name="output",
@@ -172,15 +171,7 @@ class TransposeKernel(LeafKernel):
         index=indices,
         lanes=(i,),
         signals=("odat", "ovld", "ordy"),
-        clock=NATIVE_CLOCKING.clock,
-        reset=NATIVE_CLOCKING.reset,
     )
-    input_end = interface("input")
-    output_end = interface("output")
-
-    @derived
-    def clocking(self) -> Clocking:
-        return NATIVE_CLOCKING
 
     @derived(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:

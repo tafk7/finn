@@ -78,7 +78,7 @@ def _period(layer: Any, pe: int, simd: int) -> Traversal:
         design_space(layer),
         {"pe": pe, "simd": simd, "compute_pumping": False, "reducer": "tree"},
     )
-    return period(folded.w.presented.form)
+    return period(folded.w_stream.sequence.form)
 
 
 def layered(*, adaptable: bool = True) -> Network:
@@ -99,32 +99,32 @@ def layered(*, adaptable: bool = True) -> Network:
                 platform=FULL_DSP48E2,
                 tensor=x_tensor,
                 port="in0_V",
-                consumer=Interface("first", "x_end"),
+                consumer=Interface("first", "x_contract"),
             ),
             "w1": wire(
                 tensor=w1_tensor,
-                producer=Interface("rom1", "output_end"),
-                consumer=Interface("first", "w_end"),
+                producer=Interface("rom1", "output_contract"),
+                consumer=Interface("first", "w_contract"),
                 platform=FULL_DSP48E2,
             ),
             "h": wire(
                 tensor=h_tensor,
                 adaptable=adaptable,
-                producer=Interface("first", "y_end"),
-                consumer=Interface("second", "x_end"),
+                producer=Interface("first", "y_contract"),
+                consumer=Interface("second", "x_contract"),
                 platform=FULL_DSP48E2,
             ),
             "w2": wire(
                 tensor=w2_tensor,
-                producer=Interface("rom2", "output_end"),
-                consumer=Interface("second", "w_end"),
+                producer=Interface("rom2", "output_contract"),
+                consumer=Interface("second", "w_contract"),
                 platform=FULL_DSP48E2,
             ),
             "y": wire(
                 platform=FULL_DSP48E2,
                 tensor=y_tensor,
                 port="out0_V",
-                producer=Interface("second", "y_end"),
+                producer=Interface("second", "y_contract"),
             ),
             "first": _layer(*layers["first"][:4]),
             "second": _layer(*layers["second"][:4]),
@@ -184,7 +184,7 @@ def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input
         "h.adapter.input_gen.input_gen",
     } <= set(labels(built(point, STEM)))
     # The ends belong to the layers' ports; the instances are the layers'.
-    ends = hidden.endpoints
+    ends = hidden.sides
     assert (ends.source_owner, ends.sink_owner) == ("first.y", "second.x")
     assert [(link.source.instance, link.sink.instance) for link in hidden.netlist.links] == [
         ("^first", "output_adapter.vpc.vpc"),

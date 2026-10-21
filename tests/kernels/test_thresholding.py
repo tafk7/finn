@@ -179,7 +179,7 @@ class NarrowInput(ThresholdingAxiKernel):
 
 
 def test_a_refused_input_port_leaves_its_kernels_domains_and_refuses_its_products() -> None:
-    """The port's refusal (``element_taken``) stands in its kernel's validity: its
+    """The port's rule (``input_element_taken``) stands in its kernel's validity: its
     extents read the port's access as a value, so PE keeps its candidates, while the
     kernel's module and cycles refuse with it."""
 
@@ -200,12 +200,12 @@ def test_a_refused_input_port_leaves_its_kernels_domains_and_refuses_its_product
     assert point.field(ThresholdingAxiKernel.pe).candidates() == Available((1, 2))
     validity = inspection.validity(point)
     assert validity.status == "refused"
-    assert [piece.owner for piece in validity.pieces] == ["input.element_taken"]
+    assert [piece.owner for piece in validity.pieces] == ["input_element_taken"]
     # A commit is accepted all the same (a refusal elsewhere never refuses a commit).
     committed = point.try_with_choices(pe=1)
     assert committed.accepted
     assert [piece.owner for piece in inspection.validity(committed.instance).pieces] == [
-        "input.element_taken"
+        "input_element_taken"
     ]
     for product in (ThresholdingAxiKernel.module, ThresholdingAxiKernel.cycles):
         assert isinstance(committed.instance.query(product), Rejected)
@@ -223,13 +223,13 @@ def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:
             "x": wire(
                 tensor=x_tensor,
                 port="x",
-                consumer=Interface("activate", "input_end"),
+                consumer=Interface("activate", "input_contract"),
                 platform=FULL_DSP48E2,
             ),
             "y": wire(
                 tensor=y_tensor,
                 port="y",
-                producer=Interface("activate", "output_end"),
+                producer=Interface("activate", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
             "activate": ThresholdingAxiKernel(

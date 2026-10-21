@@ -165,7 +165,7 @@ def test_its_module_is_one_netlist_in_the_order_declared() -> None:
 
 def test_a_network_reads_only_its_own_members() -> None:
     with pytest.raises(NetworkError, match="no members"):
-        Network({"x": wire(tensor=chain.X_TENSOR, consumer=Interface("k", "x_end"))})
+        Network({"x": wire(tensor=chain.X_TENSOR, consumer=Interface("k", "x_contract"))})
 
 
 def test_stored_choices_are_set_as_each_member_binds() -> None:

@@ -78,15 +78,15 @@ of that statement: a network that finds the two differ refuses the graph as stal
 ``y``) meets the kernel as a ``Wiring``: an input's the kernel's Param its tensor is
 given as, an output's the kernel's derived value of the tensor it writes (``tensor``,
 ``x_tensor``, ``result_tensor``: an output's tensor is the kernel's statement, never
-given to it), and the kernel's interface its channel takes as an end (``end``,
-``x_end``, a view of a ``finn.kernels.base.PortEnd``). A parameter port,
+given to it), and the view of the contract its channel takes of the kernel's port
+(``contract``, ``x_contract``, a view of a ``finn.kernels.base.PortContract``). A parameter port,
 whose initializer the node may hold (MatMul's weights), also names the kernel's Param
 the initializer's values are given as (``contents``, ``w_contents``, in place of its
 tensor) and the kernel's derived values of what its channel carries, downstream of the
 kernel: the tensor (``carried``, ``carried_weights``) and the values its source stores
 (``stored``, ``stored_weights``). A network wires the kernel and its channels by it
 (``finn.kernels.network``): each channel's tensor (a parameter channel's from the
-kernel's values, ``Fact``) and its end from the kernel (``Interface``).
+kernel's values, ``Fact``) and its port's contract from the kernel (``Interface``).
 """
 
 from __future__ import annotations
@@ -137,11 +137,11 @@ def _decoded(attribute: AttributeProto, kind: str) -> int | str:
 class Wiring:
     """How one port of a KernelOp meets its kernel (the module docstring): the kernel's
     Param of an input's tensor, or its derived value of an output's, and the view of its
-    interface's end; for a parameter port, the kernel's Param of the held values and its
+    port's contract; for a parameter port, the kernel's Param of the held values and its
     derived values of the tensor and the values the port's channel carries."""
 
     tensor: str
-    end: str
+    contract: str
     contents: str | None = None
     carried: str | None = None
     stored: str | None = None

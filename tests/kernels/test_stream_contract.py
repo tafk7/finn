@@ -18,6 +18,7 @@ from support.helpers import (
     cycles_of,
     fifo_node,
     keyed,
+    port_transport,
     with_direct_transports,
 )
 from support.tiled_mvu import MH, MW, NF, PE_T, SF, SIMD_T, R, T
@@ -42,7 +43,7 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.transport import (
     MarkerKind,
-    ReadyValidStream,
+    ReadyValidTransport,
     StreamContract,
     StreamMarker,
     compatibility,
@@ -55,7 +56,7 @@ INT4 = ScalarEncoding(DataType["INT4"])
 
 
 def native(name, bits, endpoint, clock="clk", reset="rst", markers=()):
-    return ReadyValidStream(
+    return ReadyValidTransport(
         name, bits, endpoint, f"{name}_d", f"{name}_v", f"{name}_r", clock, reset, markers
     )
 
@@ -88,7 +89,7 @@ def test_tiled_mvu_weight_chunks_are_a_width_conversion_a_delivery_can_avoid():
         )
     )
     sink = contract(chunked.repeated(R // T), Endpoint.TARGET)
-    produced = source.output.contract
+    produced = source.output_contract.contract
     assert compatibility(produced, sink, source_is_top=False, sink_is_top=False) == ()
 
 
@@ -217,7 +218,7 @@ def delivery(form=None, values=(1, -2, 7, -8), **choices):
 
 def test_delivery_publishes_a_cyclic_contract_and_waits_only_for_its_own_choice():
     base = delivery()
-    output = base.output.contract
+    output = base.output_contract.contract
     assert output.repetition is Repetition.CYCLIC and output.form == vector_major((4,), 2)
     assert output.payload_bits == output.transport.data_width == 8
     assert base.image == (0xE1, 0x87)
@@ -274,20 +275,20 @@ def constant_network(form=None):
             "x": wire(
                 tensor=x_tensor,
                 port="in0_V",
-                consumer=Interface("add", "lhs_end"),
+                consumer=Interface("add", "lhs_contract"),
                 platform=FULL_DSP48E2,
             ),
             "c": wire(
                 tensor=c_tensor,
                 adaptable=False,
-                producer=Interface("rhs", "output_end"),
-                consumer=Interface("add", "rhs_end"),
+                producer=Interface("rhs", "output_contract"),
+                consumer=Interface("add", "rhs_contract"),
                 platform=FULL_DSP48E2,
             ),
             "y": wire(
                 tensor=y_tensor,
                 port="out0_V",
-                producer=Interface("add", "result_end"),
+                producer=Interface("add", "result_contract"),
                 platform=FULL_DSP48E2,
             ),
             "rhs": MemStreamKernel(
@@ -347,9 +348,12 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
     )
     fifo = design_space(fifo_node(word_bits=16, depth=2)).with_choices(ram_style="auto")
     # The hop connects directly, and its link crosses the lanes: no adapter.
-    sink = StreamContract(fifo.input.transport, INT4, wanted)
-    assert compatibility(source.output.contract, sink, source_is_top=False, sink_is_top=False) == ()
-    link = wired("source", source.output.contract, "fifo", sink)
+    sink = StreamContract(port_transport(fifo, "input"), INT4, wanted)
+    assert (
+        compatibility(source.output_contract.contract, sink, source_is_top=False, sink_is_top=False)
+        == ()
+    )
+    link = wired("source", source.output_contract.contract, "fifo", sink)
     assert (link.source.data, link.sink.data) == ("m_axis_0_tdata", "idat")
     assert (link.lanes, link.lane_bits) == ((0, 2, 1, 3), 4)
 

@@ -32,15 +32,16 @@ operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
 ``MatMulKernel`` is a kernel with children: the compute cores, which read the
 tensors it is given, ``x_tensor`` (the activations) and ``w_tensor`` (the weights),
 and N and the widest K (``widest_reduction``), stated from its facts alone for their
-folding factors' domains, and present its interfaces (``x``, ``w``, ``y``): ``x_end``,
-``w_end`` and ``y_end`` are the selected core's ports' ends, labelled ``compute.<core>.x``
-(``finn.kernels.base.PortEnd``). Each channel, its adapter, its FIFO and its source
+folding factors' domains, and present its ports (``x``, ``w``, ``y``) as the selected
+core's (``finn.kernels.port.served``): ``x_stream`` is the selected core's stream, and
+``x_contract`` its contract, labelled ``compute.<core>.x``
+(``finn.kernels.base.PortContract``). Each channel, its adapter, its FIFO and its source
 are its network's: the network (a test harness's, or the graph's, a KernelOp's alone or
 a partition's) declares each channel, gives it the tensor MatMul's port reads or
-writes, and gives it MatMul's ends. MatMul's own view of each tensor (``activation_tensor``,
-``weight_tensor``, and its results, ``y_tensor``) reads only its facts and
-``realization``, never a port; ``carried`` refuses a given input tensor that is not
-what MatMul requires of it (the activations' element count and last axis, the
+writes, and gives it MatMul's port contracts. MatMul's own view of each tensor
+(``activation_tensor``, ``weight_tensor``, and its results, ``y_tensor``) reads only its
+facts and ``realization``, never a port; ``carried`` refuses a given input tensor that is
+not what MatMul requires of it (the activations' element count and last axis, the
 weights' shape), or whose values do not fit what MatMul reads (``matmul-tensor``). A
 boundary channel there presents its ``port`` name (``in0_V``).
 
@@ -102,7 +103,6 @@ from finn.core.space import (
     reject,
     selected,
     supplied,
-    view,
 )
 from finn.dataflow.datatypes import (
     QONNXDataType,
@@ -112,8 +112,9 @@ from finn.dataflow.datatypes import (
 from finn.dataflow.gemm import Form, Window
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import require_positive
-from finn.kernels.base import PORT_END, ComposedKernel, PortEnd
+from finn.kernels.base import ComposedKernel
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
+from finn.kernels.port import served
 from finn.kernels.values.domains import (
     admit_element,
     integer_bounds,
@@ -200,7 +201,6 @@ class MatMulKernel(ComposedKernel):
 
     id = "finn.matmul"
     version = 1
-    interfaces = ("x", "w", "y")
 
     form: Form = Param(default=Form.DENSE)
     # A dense form read through a window: a lowered convolution (module docstring).
@@ -529,24 +529,10 @@ class MatMulKernel(ComposedKernel):
     )
     compute_case = selected(compute)
 
-    def _served(self, end: PortEnd) -> PortEnd:
-        """The selected core's ``end``, labelled below MatMul (``compute.packed.x``)."""
-        return end.under(f"compute.{self.compute_case}")
-
-    @view(semantics=PORT_END)
-    def x_end(self) -> PortEnd:
-        """The activations' interface: the selected core's ``x``."""
-        return self._served(self.compute.x_end)
-
-    @view(semantics=PORT_END)
-    def w_end(self) -> PortEnd:
-        """The weights' interface: the selected core's ``w``."""
-        return self._served(self.compute.w_end)
-
-    @view(semantics=PORT_END)
-    def y_end(self) -> PortEnd:
-        """The results' interface: the selected core's ``y``."""
-        return self._served(self.compute.y_end)
+    # Its ports: the selected core's activations, weights and results.
+    x = served(compute, "x")
+    w = served(compute, "w")
+    y = served(compute, "y")
 
     @constraint
     def realization_supported(self) -> bool | Rejected:

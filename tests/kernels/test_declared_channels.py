@@ -24,7 +24,7 @@ from finn.core.space import (
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import NETLIST, PORT_END, LeafKernel, PortEnd
+from finn.kernels.base import NETLIST, PORT_CONTRACT, LeafKernel, PortContract
 from finn.kernels.channels import Channel, boundary_contract
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
@@ -52,13 +52,13 @@ def unconfigured(first: Tensor = VECTOR, second: Tensor = VECTOR) -> Network:
             "first": wire(
                 tensor=first,
                 port="out0_V",
-                producer=Interface("first_source", "output_end"),
+                producer=Interface("first_source", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
             "second": wire(
                 tensor=second,
                 port="out1_V",
-                producer=Interface("second_source", "output_end"),
+                producer=Interface("second_source", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
             "first_source": source((1, 2, 3, 4), first),
@@ -110,11 +110,11 @@ def test_explain_shows_per_channel_and_per_member_evidence():
     point = constants()
     channel = inspection.explain(point.member("first"), Channel.netlist)
     visited = {node.declaration.key for node in channel.nodes}
-    assert {"netlist", "well_formed", "compatible", "ends"} <= visited
+    assert {"netlist", "well_formed", "compatible", "streams"} <= visited
     member = inspection.explain(point.member("first_source"), LeafKernel.netlist)
     visited = {node.declaration.key for node in member.nodes}
     # A leaf's netlist is its own module, its ``codegen``: no members' netlists.
-    assert {"output.presented", "module", "codegen"} <= visited
+    assert {"output_stream", "module", "codegen"} <= visited
 
 
 def test_a_channel_waits_for_its_own_endpoints_only():
@@ -131,7 +131,7 @@ def test_a_channel_waits_for_its_own_endpoints_only():
     end = first.producer
     assert end.label == "first_source.output"
     assert end.contract.transport.endpoint is Endpoint.INITIATOR  # the source produces
-    ends = first.endpoints
+    ends = first.sides
     assert (ends.source_owner, ends.sink_owner) == ("first_source.output", None)
     assert ends.sink.transport.name == "out0_V"
 
@@ -147,13 +147,13 @@ def test_boundary_ports_are_axis_and_byte_aligned():
 class Replaying(Space):
     """A consumer reading each two-beat group of its input three times, framed."""
 
-    @view(semantics=PORT_END)
-    def end(self) -> PortEnd:
+    @view(semantics=PORT_CONTRACT)
+    def end(self) -> PortContract:
         beat = AxisBeat("s_axis", DataType["INT4"], 2, endpoint=Endpoint.TARGET, last=True)
         transport = beat.native(clock="ap_clk", reset="ap_rst_n")
         form = vector_major((2, 4), 2).replayed(3, inner_beats=2)
         contract = StreamContract(transport, INT4, form, markers=(("s_axis_tlast", LevelEnd(2)),))
-        return PortEnd("port", contract)
+        return PortContract("port", contract)
 
 
 def test_a_boundary_presents_its_internal_end_without_the_replay_the_receiver_realizes():
@@ -168,7 +168,7 @@ def test_a_boundary_presents_its_internal_end_without_the_replay_the_receiver_re
             "reader": Replaying(),
         }
     )
-    ends = receiver.member("edge").endpoints
+    ends = receiver.member("edge").sides
     assert ends.source_owner is None and ends.sink_owner == "reader.port"
     # Each row once, no marker: the replay and the frame are the receiver's to realize.
     assert ends.source.form == vector_major((2, 4), 2)
@@ -183,8 +183,8 @@ def test_two_producers_on_one_channel_are_refused_by_the_channel():
             "shared": wire(
                 tensor=VECTOR,
                 port="out0_V",
-                producer=Interface("a", "output_end"),
-                consumer=Interface("b", "output_end"),
+                producer=Interface("a", "output_contract"),
+                consumer=Interface("b", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
             "a": source((1, 2, 3, 4), VECTOR),
@@ -203,7 +203,9 @@ def test_a_boundary_channel_needs_its_port_name():
     unnamed = Network(
         {
             "out": wire(
-                tensor=VECTOR, producer=Interface("source", "output_end"), platform=FULL_DSP48E2
+                tensor=VECTOR,
+                producer=Interface("source", "output_contract"),
+                platform=FULL_DSP48E2,
             ),
             "source": source((1, 2, 3, 4), VECTOR),
         }
@@ -213,7 +215,7 @@ def test_a_boundary_channel_needs_its_port_name():
     # The origin, and beside it each guard that reads it (guard-refused, by its scope).
     assert {f.code for f in refused.findings} == {"channel-boundary", "guard-refused"}
     origins = {(f.code, f.owner) for f in refused.findings if f.code != "guard-refused"}
-    assert origins == {("channel-boundary", "endpoints")}
+    assert origins == {("channel-boundary", "sides")}
 
 
 # -- the anchoring rule: a channel's facts read the members before it --------------------
@@ -226,11 +228,15 @@ def test_channels_whose_facts_read_each_other_are_refused_where_the_network_is_d
     with pytest.raises(NetworkError, match="read each other"):
         Network(
             {
-                "a": wire(tensor=VECTOR, consumer=Interface("b", "set_end"), platform=FULL_DSP48E2),
-                "b": wire(tensor=VECTOR, consumer=Interface("a", "set_end"), platform=FULL_DSP48E2),
+                "a": wire(
+                    tensor=VECTOR, consumer=Interface("b", "set_contract"), platform=FULL_DSP48E2
+                ),
+                "b": wire(
+                    tensor=VECTOR, consumer=Interface("a", "set_contract"), platform=FULL_DSP48E2
+                ),
             }
         )
     with pytest.raises(NetworkError, match="read each other"):
-        Network({"a": wire(tensor=Fact("a", "set_end"), platform=FULL_DSP48E2)})
+        Network({"a": wire(tensor=Fact("a", "set_contract"), platform=FULL_DSP48E2)})
     with pytest.raises(NetworkError, match="no members"):
         Network({"a": wire(tensor=Fact("nowhere", "tensor"), platform=FULL_DSP48E2)})

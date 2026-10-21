@@ -35,7 +35,7 @@ from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.core.ranges import TensorRange
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
-from support.helpers import Lanes
+from support.helpers import Lanes, port_axis
 from support.xsim import requires_xsim
 
 from finn.core.onnx_exec import execute_onnx
@@ -215,7 +215,7 @@ def test_a_thresholding_reads_an_unsigned_result() -> None:
     (thresholding,) = [kernel_op(model, n) for n in model.graph.node if n.op_type != "MatMul"]
     point: Any = thresholding.point()
     # The MatMul's result as inference wrote it: UINT6 over its exact range, [0, 48].
-    assert point.input.tensor.element == ScalarEncoding(DataType["UINT6"], TensorRange(0, 48))
+    assert point.input_tensor.element == ScalarEncoding(DataType["UINT6"], TensorRange(0, 48))
     assert thresholding.verify_node() == []
 
 
@@ -239,8 +239,8 @@ def test_narrowed_weights_shrink_the_memory_image() -> None:
     point: Any = op.point()
     assert point.w_carried.element.bits == 2
     weights = network(model, model.graph.node).member(op.onnx_node.input[1])
-    assert weights.source.output.axis.payload_bits == 2 * 2 * 2
-    assert point.compute.w.axis.payload_bits == 2 * 2 * 2
+    assert port_axis(weights.source, "output").payload_bits == 2 * 2 * 2
+    assert port_axis(point.compute, "w").payload_bits == 2 * 2 * 2
 
 
 def _frames(model: ModelWrapper, x: Any, y: Any) -> dict[str, Any]:

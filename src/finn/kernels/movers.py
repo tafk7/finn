@@ -3,7 +3,7 @@
 
 """The movers a shell offers on its boundary channels: where a partition's stream meets memory.
 
-A boundary channel of a partition's network has a side without an end, its **free
+A boundary channel of a partition's network has a side without a port, its **free
 side**: the AXIS port the network presents (``Channel.free_side``). A shell with movers
 offers each such channel the movers it can place there (``MoverOffer``), and the channel's
 ``mover`` Decision chooses one, by kind (``MOVERS``), as it places its ``source``; the
@@ -43,7 +43,7 @@ stream side, the free side's contract:
 - its beat times over a frame (``MoverContract.times``), one a cycle, or once the memory
   word that completes the beat arrived where the memory is the narrower; FIFO sizing
   reads them, and its cycles as its span, as a kernel's port's pace
-  (``finn.kernels.fifo_sizing.ends``);
+  (``finn.kernels.fifo_sizing.sides``);
 - it initiates one AXI memory port into the shell's memory interconnect
   (``MoverContract.memory_ports``), which the shell's static region scales by;
 - its resources (``iodma_hls_resources``), by its widths: its memory port
@@ -57,8 +57,8 @@ A boundary channel exports its mover's contract under ``MOVER`` (none without a 
 which the shell sums with its static region (``finn.custom_op.kernels.shell``).
 The mover exports its cycles a frame under ``CYCLES``, the channel's member that it is:
 the channel's are at least its mover's.
-A mover is not a channel's end (``finn.dataflow.ends``: the two beat sequences a channel's
-producer and consumer present, ``End``, ``Ends``).
+A mover is not a channel's stream (``finn.dataflow.streams``: the two beat sequences a
+channel's producer and consumer present, ``Stream``, ``Streams``).
 """
 
 from __future__ import annotations

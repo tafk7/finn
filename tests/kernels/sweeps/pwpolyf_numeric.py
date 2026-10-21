@@ -106,7 +106,7 @@ def placed(case: Case) -> Any:
     tensors = {"input": tensor, "output": design_space(alone).output_tensor}
     members: dict[str, Any] = {}
     for name, given in tensors.items():
-        end = Interface("activation", f"{name}_end")
+        end = Interface("activation", f"{name}_contract")
         side: dict[str, Any] = {"producer" if name == "output" else "consumer": end}
         members[name] = wire(tensor=given, port=PORTS[name], platform=FULL_DSP58, **side)
     members["activation"] = PwPolyKernel(**facts, input_tensor=tensor)
@@ -158,7 +158,7 @@ def run(case: Case, evidence: Path) -> None:
     point = placed(case)
     forms: dict[str, Traversal] = {}
     for name in PORTS:
-        ends = point.member(name).query(Channel.endpoints).value
+        ends = point.member(name).query(Channel.sides).value
         assert ends.source.form == ends.sink.form, (case.function, name, ends)
         forms[name] = ends.source.form
     assert forms["output"].lanes == case.pe, (case.function, forms["output"])

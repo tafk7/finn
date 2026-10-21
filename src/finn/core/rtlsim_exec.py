@@ -221,7 +221,7 @@ def links(body: ModelWrapper, point: Configured, tensors: Collection[str]) -> tu
             if tensor not in tensors or tensor not in consumed:
                 continue
             channel = point.channel(tensor)
-            produced = channel.endpoints.source
+            produced = channel.sides.source
             end = channel.hops[0].source.under(point.node(tensor))
             form, bits = produced.form, produced.element.bits
             low, _ = ordinary_integer_bounds(produced.element.dtype)

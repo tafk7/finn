@@ -18,7 +18,7 @@ shell of the model's target (``in_shell``).
   Each is a ``Wire`` of the facts a ``Channel`` takes: its tensor (the graph's,
   ``edge_tensor``, at the graph's rank; a parameter channel's, the tensor and contents
   its kernel states for it, ``Fact(node, wiring.carried)``, ``Fact(node,
-  wiring.stored)``), its ends (``Interface(node, wiring.end)``, from the op's
+  wiring.stored)``), its ports' contracts (``Interface(node, wiring.contract)``, from the op's
   ``wiring``), and the target's platform. Only the selection's ONNX inputs and outputs
   are boundaries, named by the shell's convention ``s_axis_<i>`` and ``m_axis_<j>``, each
   offered the movers given (``movers``; ``Channel.mover``, which the cut sets, first valid, by
@@ -592,7 +592,7 @@ def _bound(
         sides += [("producer", port, tensor) for port, tensor in zip(op.outputs, node.output)]
         for side, port, tensor in sides:
             wiring = op.wiring[port]
-            settings[tensor][side] = Interface(node.name, wiring.end)
+            settings[tensor][side] = Interface(node.name, wiring.contract)
             readers.setdefault(tensor, op.label)
             if port in held:
                 settings[tensor]["tensor"] = Fact(node.name, str(wiring.carried))
