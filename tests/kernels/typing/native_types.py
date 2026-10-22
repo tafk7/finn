@@ -19,7 +19,7 @@ def declare() -> None:
     )
     assert_type(node, FifoKernel)
     assert_type(node.input, AxiStreamPort)
-    assert_type(node.word_bits, int)
+    assert_type(node.input_data_width, int)
     assert_type(design_space(node), FifoKernel)
 
 

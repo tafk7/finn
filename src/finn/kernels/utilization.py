@@ -36,6 +36,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from math import ceil, inf
+from typing import Any
 
 from finn.core.space import (
     Constraint,
@@ -351,10 +352,13 @@ def _stores(cases: _UltraCases) -> Callable[[object], bool]:
     return lambda value: value in cases
 
 
-def uram_constraint(platform: Platform, choice: object, cases: _UltraCases) -> Constraint:
+def uram_constraint(
+    platform: Platform, choice: object, cases: _UltraCases, *, when: Any = None
+) -> Constraint:
     """A constraint of the Space owning ``choice``: where ``choice`` takes one of the
     ``cases`` that store in UltraRAM, ``platform`` (its ``Platform`` parameter) has
-    UltraRAM (``uram-absent``). Name it in the class body
+    UltraRAM (``uram-absent``); guarded by ``when``, the choice's own guard, where it has
+    one. Name it in the class body
     (``uram_present = uram_constraint(platform, ram_style, ("ultra",))``)."""
     stores = _stores(cases)
 
@@ -363,7 +367,7 @@ def uram_constraint(platform: Platform, choice: object, cases: _UltraCases) -> C
             return reject("uram-absent", "the platform has no UltraRAM")
         return True
 
-    return constraint(choice=choice, platform=platform)(uram_present)
+    return constraint(choice=choice, platform=platform, when=when)(uram_present)
 
 
 def uram_init_constraint(platform: Platform, choice: object, cases: _UltraCases) -> Constraint:

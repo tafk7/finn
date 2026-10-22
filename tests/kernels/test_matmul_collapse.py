@@ -51,8 +51,8 @@ KERNEL: dict[str, dict[str, object]] = {
 WEIGHT: dict[str, dict[str, object]] = {
     "none": {"w.transport": "direct"},
     "memstream-fifo": {
-        "w.source.memstream.ram_style": "block",
-        "w.source.memstream.pumped_memory": False,
+        "w.source.ram_style": "block",
+        "w.source.pumped_memory": False,
         "w.transport": "fifo",
         "w.transport.fifo.depth": 8,
         "w.transport.fifo.buffer.ram_style": "auto",

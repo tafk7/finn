@@ -68,17 +68,16 @@ def fifo(**changes):
 
 
 def generator(**changes):
-    facts = {**generator_facts(**changes), "platform": FULL_DSP48E2}
-    return point_for(InputGeneratorKernel, facts, ram_style="auto")
+    # Its memory style is given: on a channel, the channel's one adapter style.
+    facts = {**generator_facts(**changes), "platform": FULL_DSP48E2, "ram_style": "auto"}
+    return point_for(InputGeneratorKernel, facts)
 
 
-@pytest.mark.parametrize(
-    "space_type,facts",
-    ((FifoKernel, fifo_facts()), (InputGeneratorKernel, generator_facts())),
-)
+@pytest.mark.parametrize("space_type,facts", ((FifoKernel, fifo_facts()),))
 def test_an_ultra_memory_needs_the_platforms_ultraram(space_type, facts):
     # The style's domain holds it; the rule on the platform refuses committing it, at the
-    # rule, nothing standing.
+    # rule, nothing standing. (An input generator's style is its channel's, whose rule it
+    # is: ``test_adapters.py``.)
     without = design_space(space_type(**facts, platform=replace(FULL_DSP48E2, uram=False)))
     report = without.try_with_choices(ram_style="ultra")
     assert not report.accepted

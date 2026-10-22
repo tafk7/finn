@@ -167,8 +167,7 @@ for memory in ("none", "memstream"):
         ("x", "transport"): "direct",
         ("w", "transport"): "direct",
         ("y", "transport"): "direct",
-        ("x", "adapter"): "input_gen",
-        ("x", "adapter.input_gen.input_gen.ram_style"): "auto",
+        ("x", "adapter_ram_style"): "auto",
     }
     expected = dotp_sources | {"rtl/shape/input_gen.sv"}
     # Unknown weights: the datatypes' result, INT8. Stored ones: their columns', INT7.
@@ -182,8 +181,8 @@ for memory in ("none", "memstream"):
         }
         bits = 7
         choices |= {
-            ("w", "source.memstream.ram_style"): "auto",
-            ("w", "source.memstream.pumped_memory"): False,
+            ("w", "source.ram_style"): "auto",
+            ("w", "source.pumped_memory"): False,
         }
         expected |= {"rtl/infra/axilite.sv", "rtl/infra/memstream.sv", "rtl/infra/memstream_axi.sv"}
 

@@ -67,6 +67,7 @@ from finn.core.graph.partition import kernel_partition_body
 from finn.core.onnx_exec import running, window
 from finn.core.rtlsim_bench import Receive, SimulationFailed, Tap, Words, stream_out
 from finn.core.rtlsim_pacing import STALLED, Pacing
+from finn.core.space import Rejected
 from finn.custom_op.kernels.shell import Configured, configured_network
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.traversal import Traversal, pack, unpack
@@ -212,8 +213,8 @@ class Tapped:
 def links(body: ModelWrapper, point: Configured, tensors: Collection[str]) -> tuple[Tapped, ...]:
     """The links of ``body`` among ``tensors``, in the body's node order: each tensor a
     node of the body produces and another consumes, tapped at its producer's side of its
-    channel in ``point``, the body's configured network (``boundary``): its first hop's
-    source, before any adapter."""
+    channel in ``point``, the body's configured network (``boundary``): the source of the
+    hop from its producer's port (the network's, ``Network.hops``), before any adapter."""
     consumed = {tensor for inner in body.graph.node for tensor in inner.input}
     found: list[Tapped] = []
     for inner in body.graph.node:
@@ -222,8 +223,11 @@ def links(body: ModelWrapper, point: Configured, tensors: Collection[str]) -> tu
                 continue
             channel = point.channel(tensor)
             produced = channel.sides.source
-            end = channel.hops[0].source.under(point.node(tensor))
-            form, bits = produced.form, produced.element.bits
+            hops = point.network.hops(tensor)
+            if isinstance(hops, Rejected) or hops.producer is None:
+                raise ValueError(f"{tensor}: no hop from its producer's port: {hops}")
+            end = hops.producer.source.under(point.node(tensor))
+            form, bits = produced.sequence.form, produced.element.bits
             low, _ = ordinary_integer_bounds(produced.element.dtype)
             tap = Tap(end, form.beats, form.lanes * bits)
             found.append(Tapped(tensor, f"link_{len(found)}", tap, form, bits, low < 0))

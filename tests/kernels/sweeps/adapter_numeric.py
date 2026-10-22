@@ -3,7 +3,7 @@
 
 """Explicit XSI conformance for the channel adapters, each in a root's module.
 
-Every adapter kind a channel's plan takes (``vpc``, ``input_gen``, and chains of
+Every adapter kind the steps between a channel's streams take (``vpc``, ``input_gen``, and chains of
 both) runs between a cyclic producer presenting a tensor in some order and
 thresholding reading it PE channels a beat. The thresholds map each INT4 value
 v to the level v + 8, so every output word identifies the elements that

@@ -13,9 +13,11 @@ through in2_V.
 import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.ranges import TensorRange
+from support.adapted import CHANNELS, ROWS, adapted
 from support.helpers import (
     FULL_DSP48E2,
     WeightDelivery,
+    built,
     labels,
     matmul_assembly,
     pin_names,
@@ -24,10 +26,11 @@ from support.helpers import (
 
 from finn.core.space import Rejected, design_space
 from finn.dataflow.tensor import ScalarEncoding
-from finn.dataflow.traversal import tile
+from finn.dataflow.traversal import tile, vector_major
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import ContributionError, GeneratedData
+from finn.kernels.channels import OUTPUT_ADAPTER_LABEL, SOURCE_LABEL
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import dotted
@@ -146,4 +149,35 @@ def test_several_weight_sets_take_a_set_index_per_row():
     assert memory().cycles == memory().form.beats
     # The memory's choices are the weight channel's, keyed below it.
     keys = {dotted(key) for key in built.network.decisions()}
-    assert {"w.source.memstream.ram_style", "w.source.memstream.pumped_memory"} <= keys
+    assert {"w.source.ram_style", "w.source.pumped_memory"} <= keys
+
+
+def test_a_channel_s_placements_keep_the_labels_it_states_in_the_emitted_netlist():
+    """A channel's source and output adapter are placements at its nodes ``source`` and
+    ``output_adapter``, but its netlist places each at the label the channel states, which
+    every name emitted from it reads: the source's instance, the hop into its set port, and
+    the output adapter's stage."""
+    sets = (WEIGHTS, tuple(tuple(-value - 1 for value in row) for row in WEIGHTS))
+    assembly = matmul_assembly(**{**MATMUL, "weights": sets}, weight_sets=2)
+    w = assembly.network.member("w")
+    instance = f"w.{SOURCE_LABEL}"
+    links = assembly.module.fragment.links
+    # The source: its producer's owner, its instance, and the hop out of it.
+    assert w.source_label == SOURCE_LABEL == "source.memstream"
+    assert instance in labels(assembly.module)
+    assert [link.source.data for link in links if link.source.instance == instance] == [
+        "m_axis_0_tdata"
+    ]
+    # Its set port: labelled below it, and the index channel's hop ends at it.
+    assert w.set_contract.label == f"{SOURCE_LABEL}.set"
+    assert [link.sink.data for link in links if link.sink.instance == instance] == [
+        "s_axis_0_tdata"
+    ]
+    # The output adapter: its stage below the stated label, emitted there.
+    point = adapted(vector_major((ROWS, CHANNELS), 2), 4)
+    x = point.member("x")
+    (stage,) = x.stages
+    (streams,) = x.staged
+    assert stage.label == streams.label == f"{OUTPUT_ADAPTER_LABEL}.vpc"
+    assert stage.label == "output_adapter.vpc.vpc"
+    assert f"x.{stage.label}" in labels(built(point, "adapted"))

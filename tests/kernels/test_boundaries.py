@@ -142,13 +142,12 @@ for memory in ("none", "memstream"):
         ("x", "transport"): "direct",
         ("w", "transport"): "direct",
         ("y", "transport"): "direct",
-        ("x", "adapter"): "input_gen",
-        ("x", "adapter.input_gen.input_gen.ram_style"): "auto",
+        ("x", "adapter_ram_style"): "auto",
     }
     if memory == "memstream":
         choices |= {
-            ("w", "source.memstream.ram_style"): "auto",
-            ("w", "source.memstream.pumped_memory"): False,
+            ("w", "source.ram_style"): "auto",
+            ("w", "source.pumped_memory"): False,
         }
     network = network.with_choices(choices)
     assert network.member("matmul").result_type == result.dtype

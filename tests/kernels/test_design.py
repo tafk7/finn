@@ -45,7 +45,7 @@ from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.space import Available, Rejected, design_space
-from finn.dataflow.plan import Step
+from finn.dataflow.steps import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.channels import Channel
 from finn.kernels.matmul import MatMulKernel
@@ -56,8 +56,8 @@ def test_each_edge_carries_its_own_adapter_and_the_netlist_is_flat():
     point = chain()
     x, levels = point.member("x"), point.member("levels")
     # A replay before each MatMul's core, on the edge into it; none inside a MatMul.
-    assert x.plan.steps == levels.plan.steps == (Step.REORDER, Step.MARKERS)
-    assert point.member("hidden").plan.steps == ()
+    assert x.steps.kinds == levels.steps.kinds == (Step.REORDER, Step.MARKERS)
+    assert point.member("hidden").steps.kinds == ()
     module = built(point, STEM)
     # Each weight memory is its channel's source: a leaf below the channel, in the order
     # the network declares its members.

@@ -1,9 +1,10 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""What must happen between two beat sequences of one tensor: a channel's plan.
+"""What must happen between two beat sequences of one tensor: the steps between a
+channel's two streams.
 
-``plan(source, sink)`` compares what a producer presents with what a consumer
+``steps(source, sink)`` compares what a producer presents with what a consumer
 requires and returns the canonical chain of steps that turns one into the
 other, each step between two beat sequences:
 
@@ -21,19 +22,19 @@ then ``WIDTH``. Every sequence step invalidates the markers before it, so a
 marker the consumer requires is synthesized after the last one. What stays the
 same sequence (a lane permutation, carrier padding) is a property of the
 connection, realized as wires, and not a step; so is a marker closing every beat
-(``LevelEnd.constant``), which every sequence carries. An empty plan connects
-the channel's two sides directly.
+(``LevelEnd.constant``), which every sequence carries. With no steps, the
+channel's two sides connect directly.
 
-The plan splits at the channel's transport (direct wires or a FIFO): its
+The steps split at the channel's transport (direct wires or a FIFO): their
 ``output`` side, the width conversions before the first reorder or marker step,
-is carried out on the producer's side of the transport; its ``input`` side, the
+is carried out on the producer's side of the transport; their ``input`` side, the
 rest (a reorder, replay included, the markers, and a width conversion after a
 reorder), on the consumer's. Markers are made after the transport, which
 carries data words only.
 
-The plan says what must happen, not which hardware does it: a channel's two
+The steps say what must happen, not which hardware does it: a channel's two
 adapter Decisions, one a side, choose a realization, and each candidate refuses
-a plan it cannot carry out. ``Unrealizable`` names what no chain can repair:
+steps it cannot carry out. ``Unrealizable`` names what no chain can repair:
 positions the source does not present, an order no reorder reaches, or a single
 pass feeding a cyclic consumer (``Unrepeatable``, its own kind: no step repeats a
 pass).
@@ -64,7 +65,7 @@ class Step(Enum):
 
 @dataclass(frozen=True)
 class Hop:
-    """One step of a plan: ``source`` in, ``sink`` out."""
+    """One step between two beat sequences: ``source`` in, ``sink`` out."""
 
     step: Step
     source: BeatSequence
@@ -73,7 +74,7 @@ class Hop:
 
 
 @dataclass(frozen=True)
-class Plan:
+class Steps:
     """The steps between two beat sequences; empty when they connect directly."""
 
     hops: tuple[Hop, ...] = ()
@@ -82,26 +83,27 @@ class Plan:
         object.__setattr__(self, "hops", tuple(self.hops))
 
     @property
-    def steps(self) -> tuple[Step, ...]:
+    def kinds(self) -> tuple[Step, ...]:
+        """Each step's kind, in order."""
         return tuple(hop.step for hop in self.hops)
 
     def __bool__(self) -> bool:
         return bool(self.hops)
 
     def describe(self) -> str:
-        return " -> ".join(step.value for step in self.steps) or "direct"
+        return " -> ".join(step.value for step in self.kinds) or "direct"
 
     @property
-    def output(self) -> Plan:
+    def output(self) -> Steps:
         """The producer's side of the transport: the width conversions before the first
         reorder or marker step."""
-        return Plan(self.hops[: self._transport])
+        return Steps(self.hops[: self._transport])
 
     @property
-    def input(self) -> Plan:
+    def input(self) -> Steps:
         """The consumer's side of the transport: every step from the first reorder or
         marker step on."""
-        return Plan(self.hops[self._transport :])
+        return Steps(self.hops[self._transport :])
 
     @property
     def _transport(self) -> int:
@@ -138,10 +140,10 @@ def presented(source: BeatSequence, sink: BeatSequence) -> Traversal:
     return form if count == 1 else form.repeated(count)
 
 
-_Steps = list[tuple[Step, Traversal, Reorder | None]]
+_Chain = list[tuple[Step, Traversal, Reorder | None]]
 
 
-def _sequence(produced: Traversal, wanted: Traversal) -> _Steps:
+def _sequence(produced: Traversal, wanted: Traversal) -> _Chain:
     """Canonical sequence steps as (step, the form after it, its reorder)."""
     verdict = classify(produced, wanted)
     if verdict.adaptation in (Adaptation.IDENTITY, Adaptation.LANE_PERMUTATION):
@@ -177,16 +179,16 @@ def _sequence(produced: Traversal, wanted: Traversal) -> _Steps:
     between = classify(low, target)
     if between.adaptation is not Adaptation.REORDER:
         raise Unrealizable(verdict.detail)
-    steps: _Steps = []
+    chain: _Chain = []
     if low != produced:
-        steps.append((Step.WIDTH, low, None))
-    steps.append((Step.REORDER, target, between.reorder))
+        chain.append((Step.WIDTH, low, None))
+    chain.append((Step.REORDER, target, between.reorder))
     if target != wanted:
-        steps.append((Step.WIDTH, wanted, None))
-    return steps
+        chain.append((Step.WIDTH, wanted, None))
+    return chain
 
 
-def plan(source: BeatSequence, sink: BeatSequence) -> Plan:
+def steps(source: BeatSequence, sink: BeatSequence) -> Steps:
     """The canonical steps from ``source``'s beat sequence to ``sink``'s."""
     produced = presented(source, sink)
     hops: list[Hop] = []
@@ -201,7 +203,7 @@ def plan(source: BeatSequence, sink: BeatSequence) -> Plan:
     if missing:
         marked = BeatSequence(current.form, markers=(*current.markers, *missing))
         hops.append(Hop(Step.MARKERS, current, marked))
-    return Plan(tuple(hops))
+    return Steps(tuple(hops))
 
 
-__all__ = ["Hop", "Plan", "Step", "Unrealizable", "Unrepeatable", "plan", "presented"]
+__all__ = ["Hop", "Step", "Steps", "Unrealizable", "Unrepeatable", "presented", "steps"]

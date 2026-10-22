@@ -244,22 +244,22 @@ def test_a_kernel_op_error_carries_at_least_one_finding() -> None:
 def test_the_weight_sources_choices_persist_on_the_weights_and_the_network_replays_them() -> None:
     """The node owns its weight channel, whose choices are stated on the initializer's
     tensor, beside its value, never on the node; the network replays them, the node its
-    kernel's alone. The source's one case is stored as the interim channel rule sets it,
-    and stating it again changes nothing."""
+    kernel's alone. The source is placed where the weights are known: no choice, so
+    stating it is refused."""
     model = matmul_model()
     configured(model, {"first": FOLDING})  # its contracts known, so its channels bind
-    configured(model, {"w": {"source.memstream.ram_style": "block", "transport": "direct"}})
+    configured(model, {"w": {"source.ram_style": "block", "transport": "direct"}})
     assert attributes(model) == sorted(FOLDING)
     assert channel_choices(model, "w") == {
-        "source": "memstream",
-        "source.memstream.ram_style": "block",
-        "source.memstream.pumped_memory": False,
+        "source.ram_style": "block",
+        "source.pumped_memory": False,
         "transport": "direct",
     }
     weights = network(model, model.graph.node).member("w")
     assert weights.source.ram_style == "block" and isinstance(weights.source, MemStreamKernel)
-    configured(model, {"w": {"source": "memstream"}})
-    assert channel_choices(model, "w")["source"] == "memstream"
+    with refused("not-a-decision", owner="w.source"):
+        configured(model, {"w": {"source": "memstream"}})
+    assert "source" not in channel_choices(model, "w")
     assert network(model, model.graph.node).member("w").source.ram_style == "block"
 
 

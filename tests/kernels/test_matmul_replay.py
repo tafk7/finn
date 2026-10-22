@@ -1,14 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Replay is the activation channel's plan, and its adapter carries it out.
+"""Replay is a step between the activation channel's two streams, and its adapter carries
+it out.
 
 The module receives each activation row once at ``in0_V``; dotp reads it once
-per output fold, framed by reduction. The channel between them plans a reorder
+per output fold, framed by reduction. The channel between them derives a reorder
 (the replay) and the frame marker, and its ``input_gen`` adapter realizes both:
 per frame of one row's folds, the row once per output fold, with ``olst``
-closing each fold group. A per-channel row passes once, so its plan is the
-marker alone. A frame of one beat (SIMD = K) closes on every beat: that marker
+closing each fold group. A per-channel row passes once, so its one step is the
+marker. A frame of one beat (SIMD = K) closes on every beat: that marker
 is a constant, tied high, and no step. ``input_gen`` is the only replay
 hardware; FinnLib's ``replay_buffer`` is not wrapped.
 """
@@ -29,7 +30,7 @@ from support.helpers import (
 from support.netlist import Const, Drive, Pin
 
 from finn.dataflow.gemm import Form
-from finn.dataflow.plan import Step
+from finn.dataflow.steps import Step
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import LevelEnd, vector_major
 from finn.harness.toolchain import finnlib_root
@@ -63,12 +64,12 @@ def choices(core: str = "packed") -> dict[str, object]:
 CHOICES = choices()
 
 
-def test_the_activation_stream_plans_the_replay_and_its_frame():
+def test_the_activation_stream_steps_are_the_replay_and_its_frame():
     point = choose(matmul_point(**FACTS), CHOICES)
-    # The channel into the core is the network's: its plan and adapter are the edge's.
+    # The channel into the core is the network's: its steps and adapter are the edge's.
     stream = point.member("x")
-    assert stream.plan.steps == (Step.REORDER, Step.MARKERS)
-    (reorder, _) = stream.plan.hops
+    assert stream.steps.kinds == (Step.REORDER, Step.MARKERS)
+    (reorder, _) = stream.steps.hops
     assert reorder.reorder is not None
     assert (reorder.reorder.frame_beats, reorder.reorder.dims, reorder.reorder.coefs) == (
         2,
@@ -76,15 +77,16 @@ def test_the_activation_stream_plans_the_replay_and_its_frame():
         (0, 1),
     )
     keys = {dotted(key) for key in point.decisions()}
-    assert {"x.adapter", "x.adapter.input_gen.input_gen.ram_style"} <= keys
+    assert stream.input_chain == "input_gen" and "x.adapter_ram_style" in keys
+    assert "x.adapter" not in keys
     assert "replay" not in keys and not hasattr(MatMulKernel, "replayed")
-    # A depthwise row passes once: the plan is the frame marker alone.
+    # A depthwise row passes once: its one step is the frame marker.
     facts = {**FACTS, "platform": FULL_DSP58, "form": Form.DEPTHWISE}
     depthwise = choose(
         matmul_point(realization="native", **facts),
         choices("int8_dsp58"),
     )
-    assert depthwise.member("x").plan.steps == (Step.MARKERS,)
+    assert depthwise.member("x").steps.kinds == (Step.MARKERS,)
 
 
 def test_the_input_gen_replays_each_row_and_closes_each_fold_group():

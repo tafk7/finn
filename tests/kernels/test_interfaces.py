@@ -285,7 +285,8 @@ def test_several_threshold_sets_take_a_set_selector_stream():
 
     point = selected(selectors)
     assert isinstance(point.query("sets", NETLIST), Available)
-    assert point.member("sets").sides.sink.transport.name == "s_axis_set"
+    # Its consumer, the set selector port beside it, as the network reads it.
+    assert point.neighbours("sets").consumer.contract.transport.name == "s_axis_set"
     # One set index for every input beat: a shorter selector channel is refused.
     short = Tensor((HEIGHT,), ScalarEncoding(DataType["UINT1"]))
     refused = selected(short).query("sets", NETLIST)

@@ -23,7 +23,7 @@ given to MatMul (``w_contents``); the weight channel carries what MatMul states 
 (``carried_weights``, ``stored_weights``: block-diagonal for a dense realization, over
 their range), with ``set``'s tensor its ``index_tensor`` (one index per row) and ``set``
 taking its ``set_contract``, so the channel's ``source`` stores them. The edge choices are
-the channels' (``x.adapter``, ``w.transport``, ``w.source.memstream.ram_style``), the
+the channels' (``x.adapter_ram_style``, ``w.transport``, ``w.source.ram_style``), the
 MatMul's its own (``matmul.pe``). ``matmul_assembly`` configures one
 from concrete facts and choices. A network's module is named ``finn_<stem>``
 (``module_of``).
@@ -500,15 +500,18 @@ def generator_node(
     dims: IntegerVector = (3, 6),
     strides: IntegerVector = (0, 1),
     platform: Platform | None = None,
+    ram_style: str = "auto",
 ) -> InputGeneratorKernel:
     """An input generator alone, walking ``dims``/``strides`` over frames of ``frame``
-    words of ``bits`` bits (``nested``)."""
+    words of ``bits`` bits (``nested``), its memory in ``ram_style`` (given: on a channel,
+    the channel's one adapter style), Vivado's by default."""
     arriving, leaving = nested(frame, dims, strides)
     return InputGeneratorKernel(
         input_tensor=stage_tensor(bits, frame),
         arriving=arriving,
         leaving=leaving,
         platform=FULL_DSP48E2 if platform is None else platform,
+        ram_style=ram_style,
     )
 
 
@@ -520,8 +523,7 @@ def generator(
     strides: IntegerVector = (0, 1),
 ) -> InputGeneratorKernel:
     """An input generator's design space (``generator_node``), its memory Vivado's."""
-    node = generator_node(bits=bits, frame=frame, dims=dims, strides=strides)
-    return design_space(node).with_choices(ram_style="auto")
+    return design_space(generator_node(bits=bits, frame=frame, dims=dims, strides=strides))
 
 
 def eltwise(
@@ -614,8 +616,9 @@ def pin_names(module: Composed | Leaf) -> set[str]:
     return {port.name for port in module.abi.pins}
 
 
-ADAPTER_RAM_STYLES = "*.adapter.*.ram_style"
-"""The keys (``fnmatch``) of every adapter stage's memory choice, an ``input_gen``'s."""
+ADAPTER_RAM_STYLES = "*adapter_ram_style"
+"""The keys (``fnmatch``) of every channel's one memory choice for its input adapter's
+``input_gen`` stages."""
 
 P = TypeVar("P", bound=Space | Network)
 
@@ -659,10 +662,11 @@ def _first_valid(point: Space, key: str) -> object:
 
 
 def with_adapter_memories(subject: P, ram_style: str | None = None) -> P:
-    """Each open adapter input_gen's memory takes ``ram_style``, or where None its first
-    valid value (an explicit style, by the size the buffer holds: its kernel's ranking), as
-    the cut's first valid policy takes it, on a network or a point. A channel's adapter is set
-    first (a network sets it as it builds the channel, by the interim channel rule)."""
+    """Each open adapter memory (a channel's one style for its input adapter's input_gen
+    stages) takes ``ram_style``, or where None its first valid value (an explicit style, by
+    the most bits one of those buffers holds: its channel's ranking), as the cut's first
+    valid policy takes it, on a network or a point. A channel's input adapter is picked by
+    its steps."""
     styles = _undecided(subject, ADAPTER_RAM_STYLES)
     if not styles:
         return subject
@@ -830,8 +834,8 @@ def matmul_assembly(
     # The memory's style is ordered by the bits its table holds, which a depthwise
     # weight channel's realization sets: it is committed after the realization.
     if weight_delivery is WeightDelivery.MEMSTREAM:
-        channel["w.source.memstream.ram_style"] = ram_style
-        channel["w.source.memstream.pumped_memory"] = pumped_memory
+        channel["w.source.ram_style"] = ram_style
+        channel["w.source.pumped_memory"] = pumped_memory
     if buffered:
         channel["w.transport.fifo.depth"] = weight_fifo_depth
         channel["w.transport.fifo.buffer.ram_style"] = "auto"

@@ -25,7 +25,8 @@ from support.tiled_mvu import MH, MW, NF, PE_T, SF, SIMD_T, R, T
 from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import pack_lanes, stream_through
-from finn.core.space import Rejected, Unresolved, design_space
+from finn.core.space import Rejected, Unresolved, design_space, inspection
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
     Adaptation,
@@ -67,6 +68,11 @@ def contract(form, endpoint, *, element=INT3, repetition=Repetition.ONCE, width=
     return StreamContract(native("s", bits, endpoint), element, form, repetition, **kw)
 
 
+def streamed(given: StreamContract) -> Stream:
+    """The stream a contract states: its element and its beat sequence."""
+    return Stream(given.element, given.sequence)
+
+
 def mismatch_codes(mismatches):
     return {item.code for item in mismatches}
 
@@ -91,7 +97,7 @@ def test_tiled_mvu_weight_chunks_are_a_width_conversion_a_delivery_can_avoid():
     )
     sink = contract(chunked.repeated(R // T), Endpoint.TARGET)
     produced = source.output_contract.contract
-    assert compatibility(produced, sink, source_is_top=False, sink_is_top=False) == ()
+    assert compatibility(streamed(produced), streamed(sink)) == ()
 
 
 # -- compatibility -----------------------------------------------------------------------
@@ -102,25 +108,22 @@ def test_equal_contracts_connect_and_cyclic_sources_repeat_into_consumer_passes(
     source = contract(weights, Endpoint.INITIATOR, repetition=Repetition.CYCLIC)
     for sink_form in (weights, weights.repeated(5)):
         sink = contract(sink_form, Endpoint.TARGET)
-        assert compatibility(source, sink, source_is_top=False, sink_is_top=False) == ()
+        assert compatibility(streamed(source), streamed(sink)) == ()
 
 
 def test_mismatches_name_the_adapter_that_would_repair_them():
-    """The logical part is the channel's plan (``finn.dataflow.plan``): its steps name the
-    adapter, and what no chain repairs is refused as the plan says."""
+    """The logical part is the steps between the channel's two streams
+    (``finn.dataflow.steps``): they name the adapter, and what no chain repairs is
+    refused as they say."""
     wider = compatibility(
-        contract(vector_major((4,), 2), Endpoint.INITIATOR),
-        contract(vector_major((4,), 4), Endpoint.TARGET),
-        source_is_top=False,
-        sink_is_top=False,
+        streamed(contract(vector_major((4,), 2), Endpoint.INITIATOR)),
+        streamed(contract(vector_major((4,), 4), Endpoint.TARGET)),
     )
     assert mismatch_codes(wider) == {"channel-form"}
     assert next(iter(wider)).message == "needs a width_conversion adapter"
     found = compatibility(
-        contract(tile(4, 4, 1, 4), Endpoint.INITIATOR),
-        contract(tile(4, 4, 4, 1), Endpoint.TARGET),
-        source_is_top=False,
-        sink_is_top=False,
+        streamed(contract(tile(4, 4, 1, 4), Endpoint.INITIATOR)),
+        streamed(contract(tile(4, 4, 4, 1), Endpoint.TARGET)),
     )
     # Equal lanes and widths, different positions per beat: a lane regroup, which no
     # chain of adapters realizes.
@@ -129,16 +132,12 @@ def test_mismatches_name_the_adapter_that_would_repair_them():
     assert message.startswith("no chain of adapters repairs it") and "lane axis" in message
 
 
-def test_repetition_direction_and_marker_rules_are_checked():
+def test_repetition_and_marker_rules_are_checked():
     form = vector_major((4,), 2)
     ok = contract(form, Endpoint.INITIATOR)
     cyclic_sink = contract(form, Endpoint.TARGET, repetition=Repetition.CYCLIC)
     assert "channel-repetition" in mismatch_codes(
-        compatibility(ok, cyclic_sink, source_is_top=False, sink_is_top=False)
-    )
-    backwards = contract(form, Endpoint.INITIATOR)
-    assert "channel-direction" in mismatch_codes(
-        compatibility(ok, backwards, source_is_top=False, sink_is_top=False)
+        compatibility(streamed(ok), streamed(cyclic_sink))
     )
     last = (StreamMarker("s_m", MarkerKind.LAST),)
     produced = StreamContract(
@@ -150,22 +149,20 @@ def test_repetition_direction_and_marker_rules_are_checked():
     required = StreamContract(
         native("s", 6, Endpoint.TARGET, markers=last), INT3, form, markers=(("s_m", LevelEnd(2)),)
     )
-    assert "channel-marker" in mismatch_codes(
-        compatibility(produced, required, source_is_top=False, sink_is_top=False)
-    )
+    assert "channel-marker" in mismatch_codes(compatibility(streamed(produced), streamed(required)))
     # A marker closing every beat is a constant: met by any producer, from the producer's
     # own marker where it offers one, otherwise tied high.
     every = StreamContract(
         native("s", 6, Endpoint.TARGET, markers=last), INT3, form, markers=(("s_m", LevelEnd(1)),)
     )
     unmarked = contract(form, Endpoint.INITIATOR)
-    assert compatibility(unmarked, every, source_is_top=False, sink_is_top=False) == ()
+    assert compatibility(streamed(unmarked), streamed(every)) == ()
     assert marker_pairs(unmarked, every) == ((None, "s_m"),)
     assert marker_pairs(produced, every) == (("s_m", "s_m"),)
 
 
 def test_a_marker_after_an_adapter_is_one_the_adapter_must_make():
-    """A sequence step invalidates the markers before it (``finn.dataflow.plan``): a
+    """A sequence step invalidates the markers before it (``finn.dataflow.steps``): a
     consumer's marker past a width conversion is refused as one none survives."""
     last = (StreamMarker("s_m", MarkerKind.LAST),)
     produced = StreamContract(
@@ -180,12 +177,12 @@ def test_a_marker_after_an_adapter_is_one_the_adapter_must_make():
         vector_major((8,), 4),
         markers=(("s_m", LevelEnd(2)),),
     )
-    found = compatibility(produced, required, source_is_top=False, sink_is_top=False)
+    found = compatibility(streamed(produced), streamed(required))
     assert [(each.code, each.message) for each in found] == [
         ("channel-form", "needs a width_conversion adapter"),
         (
             "channel-marker",
-            "s_m requires a marker every 2 beats; none survives the width_conversion adapter",
+            "the sink requires a marker every 2 beats; none survives the width_conversion adapter",
         ),
     ]
 
@@ -264,8 +261,9 @@ def eltwise_with_constant(form=None):
     return with_direct_transports(constant_network(form))
 
 
-def constant_network(form=None):
-    """``eltwise_with_constant``'s network, its transports open."""
+def constant_network(form=None, *, adaptable=False):
+    """``eltwise_with_constant``'s network, its transports open, its constant's channel
+    admitting an adapter where ``adaptable``."""
     form = vector_major((CHANNELS,), PE) if form is None else form
     int4, int5 = DataType["INT4"], DataType["INT5"]
 
@@ -283,7 +281,7 @@ def constant_network(form=None):
             ),
             "c": wire(
                 tensor=c_tensor,
-                adaptable=False,
+                adaptable=adaptable,
                 producer=Interface("rhs", "output_contract"),
                 consumer=Interface("add", "rhs_contract"),
                 platform=FULL_DSP48E2,
@@ -326,13 +324,43 @@ def test_the_delivery_kernel_serves_a_second_consumer_through_the_same_contract(
     strided = constant_network(Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),)))
     refused = strided.member("c").query(Channel.netlist)
     assert isinstance(refused, Rejected)
-    (plan,) = [finding for finding in refused.findings if finding.code == "channel-plan"]
-    assert "another lane axis" in plan.message
+    (refusal,) = [finding for finding in refused.findings if finding.code == "channel-plan"]
+    assert "another lane axis" in refusal.message
     trial = strided.trial(keyed({"c.transport": "direct"}))
     assert not trial.accepted
     ((rule, (form,)),) = trial.refused.items()
     assert (rule, form.code) == (("c", "compatible"), "channel-form")
     assert "another lane axis" in form.message
+
+
+def test_steps_that_refuse_refuse_the_input_adapter_once():
+    # The same lane regroup on a channel that admits adapters: its steps refuse
+    # (channel-plan), so the picker of its input adapter refuses with them, one piece keyed
+    # by the selector, as the guard of the chosen selector it replaces did; and its
+    # adapter's memory and that memory's UltraRAM rule, which the picker guards, one
+    # guard piece each.
+    strided = constant_network(
+        Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),)), adaptable=True
+    )
+    validity = inspection.validity(strided.member("c"))
+    assert validity.status == "refused"
+    pieces = {
+        piece.owner: {(f.code, f.owner) for f in piece.result.findings} for piece in validity.pieces
+    }
+    steps = ("channel-plan", "steps")
+    assert pieces == {
+        "realizable": {steps},
+        "compatible": {steps},
+        **{
+            guarded: {steps, ("guard-refused", guarded)}
+            for guarded in (
+                "adapter",
+                "output_adapter",
+                "adapter_ram_style",
+                "adapter_uram_present",
+            )
+        },
+    }
 
 
 def test_a_pure_lane_permutation_is_realized_as_free_wiring():
@@ -352,10 +380,7 @@ def test_a_pure_lane_permutation_is_realized_as_free_wiring():
     fifo = design_space(fifo_node(word_bits=16, depth=2)).with_choices(ram_style="auto")
     # The hop connects directly, and its link crosses the lanes: no adapter.
     sink = StreamContract(port_transport(fifo, "input"), INT4, wanted)
-    assert (
-        compatibility(source.output_contract.contract, sink, source_is_top=False, sink_is_top=False)
-        == ()
-    )
+    assert compatibility(streamed(source.output_contract.contract), streamed(sink)) == ()
     link = wired("source", source.output_contract.contract, "fifo", sink)
     assert (link.source.data, link.sink.data) == ("m_axis_0_tdata", "idat")
     assert (link.lanes, link.lane_bits) == ((0, 2, 1, 3), 4)

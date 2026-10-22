@@ -175,8 +175,8 @@ def run(case: Case, evidence: Path) -> None:
     forms: dict[str, Traversal] = {}
     for name in PORTS:
         sides = point.member(name).query(Channel.sides).value
-        assert sides.source.form == sides.sink.form, (case.label, name, sides)
-        forms[name] = sides.source.form
+        assert sides.source.sequence.form == sides.sink.sequence.form, (case.label, name, sides)
+        forms[name] = sides.source.sequence.form
     assert forms["result"].lanes == case.pe, (case.label, forms["result"])
     rng = np.random.default_rng(zlib.crc32(case.label.encode()))
     values = {name: operand(case, name, rng) for name in ("lhs", "rhs")}

@@ -10,7 +10,7 @@ import pytest
 from support.helpers import FULL_DSP48E2, generator, nested, stage_tensor
 
 from finn.core.space import Rejected, design_space
-from finn.dataflow.plan import Unrealizable
+from finn.dataflow.steps import Unrealizable
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.input_generator import Generate, InputGeneratorKernel, generated
@@ -49,9 +49,13 @@ def test_its_nest_is_the_reorder_between_its_sequences_closing_each_marker_requi
     assert generated(arriving, marked) == Generate(6, (3, 3, 2), (0, 2, 1))
     point = design_space(
         InputGeneratorKernel(
-            input_tensor=stage_tensor(13), arriving=arriving, leaving=marked, platform=FULL_DSP48E2
+            input_tensor=stage_tensor(13),
+            arriving=arriving,
+            leaving=marked,
+            platform=FULL_DSP48E2,
+            ram_style="auto",
         )
-    ).with_choices(ram_style="auto")
+    )
     assert point.output_stream.sequence.markers == (LevelEnd(18), LevelEnd(6), LevelEnd(2))
     assert dict(point.output_contract.contract.markers) == {
         "olst[0]": LevelEnd(18),
@@ -70,7 +74,11 @@ def test_a_generator_with_nothing_to_do_is_refused() -> None:
         generated(same, same)
     point = design_space(
         InputGeneratorKernel(
-            input_tensor=stage_tensor(13), arriving=same, leaving=same, platform=FULL_DSP48E2
+            input_tensor=stage_tensor(13),
+            arriving=same,
+            leaving=same,
+            platform=FULL_DSP48E2,
+            ram_style="auto",
         )
     )
     refused = point.query(InputGeneratorKernel.nest)

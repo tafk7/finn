@@ -4,7 +4,7 @@
 """The width conversion (FinnLib ``vpc``): its generics, from the sequences it is given, and
 its stream contract.
 
-On a channel it is a stage of the channel's adapter (``test_adapters.py`` plans it);
+On a channel it is a stage of the channel's adapter (``test_adapters.py`` derives it);
 here it is the kernel alone, and placed on two channels by its spec's case
 (``support.kernel_specs.stages.vpc``: the realization of four conversions of a 4 x 6 tensor)."""
 

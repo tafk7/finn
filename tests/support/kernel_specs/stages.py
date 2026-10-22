@@ -20,7 +20,7 @@ from dataclasses import replace
 from typing import Any
 
 from finn.core.space import view
-from finn.dataflow.plan import plan
+from finn.dataflow.steps import steps
 from finn.dataflow.traversal import BeatSequence, Traversal, vector_major
 from finn.kernels.adapters import Convert, RealizedStage, realize
 from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
@@ -75,7 +75,7 @@ STAGED = (4, 6)
 
 def realized(source: Traversal, sink: Traversal) -> RealizedStage:
     """The one stage a channel's adapter realizes between ``source`` and ``sink``."""
-    (stage,) = realize(plan(BeatSequence(source), BeatSequence(sink)))
+    (stage,) = realize(steps(BeatSequence(source), BeatSequence(sink)))
     return stage
 
 
@@ -90,7 +90,7 @@ def fifo() -> dict[str, Any]:
     def storing(lanes: int, depth: int, ram_style: str) -> dict[str, object]:
         same = BeatSequence(vector_major(STAGED, lanes))
         return {
-            "word_bits": 4 * lanes,
+            "input_data_width": 4 * lanes,
             "depth": depth,
             "ram_style": ram_style,
             "arriving": same,
@@ -139,7 +139,7 @@ def input_gen() -> dict[str, Any]:
         module = stage.module
         assert isinstance(module, Generate)
         return {
-            "word_bits": 4 * source.lanes,
+            "input_data_width": 4 * source.lanes,
             "frame_words": module.frame,
             "dims": module.dims,
             "strides": module.coefs,
@@ -157,8 +157,8 @@ def input_gen() -> dict[str, Any]:
             generating(vector_major(STAGED, 2), columns_first(rows, cols, 2)),
             generating(vector_major(STAGED, 3), vector_major(STAGED, 3).replayed(2, inner_beats=2)),
         ),
-        choices={"ram_style": "auto"},
-        facts={"platform": FULL_DSP48E2},
+        # Its memory style is given (on a channel, the channel's one adapter style).
+        facts={"platform": FULL_DSP48E2, "ram_style": "auto"},
     )
 
 
@@ -201,14 +201,6 @@ INPUT_GEN = KernelSpec(
     reference=TEST_SIDE,
     cases={"input_gen": input_gen},
     space="input_gen",
-    probes=(
-        Probe(
-            "UltraRAM on a platform without it",
-            lambda: placed(input_gen(), platform=replace(FULL_DSP48E2, uram=False)),
-            frozenset({"uram-absent"}),
-            {"ram_style": "ultra"},
-        ),
-    ),
     sweeps=(ADAPTERS,),
     unit=("tests/kernels/test_input_generator.py", "tests/kernels/test_adapters.py"),
 )

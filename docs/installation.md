@@ -707,7 +707,7 @@ from finn.transformation.kernels import explore_partition
 
 def step_my_choices(model, cfg):
     explore_partition(model, Hold({"MatMul_0": {"simd": 8},
-                                   "MatMul_0_param0": {"source.memstream.ram_style": "block"}}))
+                                   "MatMul_0_param0": {"source.ram_style": "block"}}))
     return model
 ```
 

@@ -299,13 +299,14 @@ def test_policies_are_checked_where_they_are_stated(
 
 
 def test_the_cut_states_a_channel_s_policies() -> None:
-    """A FIFO's depth required, a memory's style first valid in its kernel's ranking, and
-    every other channel choice first valid, in listed order; checked against ``Channel``
-    when the module is imported."""
+    """A FIFO's depth required, a memory's style first valid in its ranking (a source's,
+    its kernel's; the input adapter's one style, the channel's), and every other channel
+    choice first valid, in listed order; checked against ``Channel`` when the module is
+    imported."""
     assert dict(CHANNEL_POLICIES) == {
         ChannelFifo.depth: Required(),
         MemStreamKernel.ram_style: FirstValid(order=MemStreamKernel.ram_preference),
-        InputGeneratorKernel.ram_style: FirstValid(order=InputGeneratorKernel.ram_preference),
+        Channel.adapter_ram_style: FirstValid(order=Channel.adapter_ram_preference),
     }
     found = {item.key: policy(Cut, item) for item in inspection.decisions(Channel)}
     assert {key for key, each in found.items() if each == Required()} == {"transport.fifo.depth"}
@@ -314,18 +315,19 @@ def test_the_cut_states_a_channel_s_policies() -> None:
         for key, each in found.items()
         if isinstance(each, FirstValid) and each.order is not None
     }
-    assert ranked_keys == {
-        "source.memstream.ram_style",
-        "adapter.input_gen.input_gen.ram_style",
-        "adapter.input_gen_vpc.input_gen.ram_style",
-        "adapter.input_gen_vpc_input_gen.input_gen.ram_style",
-        "adapter.input_gen_vpc_input_gen.input_gen_1.ram_style",
-    }
+    assert ranked_keys == {"source.ram_style", "adapter_ram_style"}
 
 
 def test_no_kernel_states_a_policy_but_a_ranking_it_reads_out() -> None:
-    """A kernel holds hardware knowledge only: the three memories' rankings are views (a
-    domain ranks nothing), and a kernel has no policies of its own."""
-    for kernel in (MemStreamKernel, InputGeneratorKernel, TransposeKernel):
+    """A kernel holds hardware knowledge only: the memories' rankings are views (a domain
+    ranks nothing; an input generator's style is given, and its channel ranks it), and a
+    kernel has no policies of its own."""
+    for kernel in (MemStreamKernel, TransposeKernel, Channel):
         assert not hasattr(kernel, "defaults") and not hasattr(kernel, "policies")
-        assert callable(cast(Any, kernel.ram_preference).function)
+    for ranking in (
+        MemStreamKernel.ram_preference,
+        TransposeKernel.ram_preference,
+        Channel.adapter_ram_preference,
+    ):
+        assert callable(cast(Any, ranking).function)
+    assert not hasattr(InputGeneratorKernel, "ram_preference")

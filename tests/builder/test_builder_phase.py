@@ -100,7 +100,7 @@ from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import FINDING, RECORDS, write_report
 from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.artifacts.module import module_name
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.explore import Hold, Ranked, TargetThroughput
 from finn.kernels.fifo_sizing import Sized
 from finn.platform.refusal import TargetRefused
@@ -441,7 +441,7 @@ def _levels_need(period: int) -> int:
     return 16 if period <= 6 else 5
 
 
-def _levels_sized(channel: Channel, period: int, **options: Any) -> Sized:
+def _levels_sized(channel: Channel, neighbours: Neighbours, period: int, **options: Any) -> Sized:
     """A double of the per-channel sizing, by ``_levels_need``."""
     if _is_levels(channel):
         need = _levels_need(period)
@@ -449,7 +449,7 @@ def _levels_sized(channel: Channel, period: int, **options: Any) -> Sized:
     return Sized(0, "direct absorbs it", 8, 0)
 
 
-def _levels_holds(channel: Channel, period: int, words: int) -> bool:
+def _levels_holds(channel: Channel, neighbours: Neighbours, period: int, words: int) -> bool:
     """A double of the seam's check, by ``_levels_need``."""
     return not _is_levels(channel) or words >= _levels_need(period)
 
@@ -505,7 +505,7 @@ def test_a_fifo_a_users_folding_step_leaves_too_small_is_refused_at_verification
         )
 
 
-def _holds_nothing(channel: Channel, period: int, words: int) -> bool:
+def _holds_nothing(channel: Channel, neighbours: Neighbours, period: int, words: int) -> bool:
     """A double of the seam's check under which no transport keeps its stream."""
     return False
 
@@ -1060,19 +1060,19 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
         f"MatMul_{index}.compute": "packed" for index in range(4)
     }
     assert (target["unfolded"], target["met"]) == ({}, True)
-    # Of TFC's 84 choices, every one saved: the target throughput changes the folding off
-    # conversion's (6 of 12), and the interim channel rule sets the output adapter the new
-    # folding brings into play on five channels; the rest keep the values stored at their
-    # creation (a node's at conversion, a channel's at the cut), each MatMul's pumping
-    # given back off, transports direct (no step_size_fifos). The report names who set
-    # each.
-    assert target["committed"] == 11
+    # Of TFC's 69 choices, every one saved: the target throughput changes the folding off
+    # conversion's (6 of 12); the output adapter the new folding brings into play on five
+    # channels is placed, no choice, so the interim channel rule sets none; the rest keep
+    # the values stored at their creation (a node's at conversion, a channel's at the cut),
+    # each MatMul's pumping given back off, transports direct (no step_size_fifos). The
+    # report names who set each.
+    assert target["committed"] == 6
     made_by = [entry["by"] for held in report["choices"].values() for entry in held.values()]
     assert (
         made_by.count("target_throughput"),
         made_by.count("interim channel rule"),
         made_by.count("saved"),
-    ) == (6, 5, 73)
+    ) == (6, 0, 63)
     assert report["open"] == []
     assert report["fifos"] == "not sized here (no size_fifos): each transport as it was"
     # The Zynq shell's input mover binds: 196 beats and a call's 4 cycles (SZ3 (a): a
@@ -1116,13 +1116,13 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     # At the period the input mover sets.
     assert (sizing["strategy"], sizing["period"], sizing["fifo_bits"]) == ("size_fifos", 200, 0)
     # It reopens the 13 transports and changes none.
-    assert [target["strategy"]["committed"], sizing["committed"]] == [11, 0]
+    assert [target["strategy"]["committed"], sizing["committed"]] == [6, 0]
     assert sizing["reopened"] == 13
     assert report["fifos"] == "sized by size_fifos: 13 channels, 0 FIFOs placed"
     # The movers change no choice: TFC is built with the 57 values of the build before the
-    # engine core, and the 27 forcing left unstored (``TFC_STORED``).
+    # engine core, and the 12 forcing left unstored (``TFC_STORED``).
     assert sized == TFC_STORED
-    assert sum(map(len, TFC_BUILT.values())) == 57 and sum(map(len, sized.values())) == 84
+    assert sum(map(len, TFC_BUILT.values())) == 57 and sum(map(len, sized.values())) == 69
     rows = sizing["channels"]
     assert {row["transport"] for row in rows.values()} == {"direct"}
     whys = {name: row["why"] for name, row in rows.items()}

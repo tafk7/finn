@@ -188,15 +188,10 @@ def test_the_export_of_the_choices_round_trips_through_configured() -> None:
         },
     )
     config = kernel_choices_config(model)
-    adapted = {
-        "adapter": "input_gen",
-        "adapter.input_gen.input_gen.ram_style": "distributed",
-        "transport": "direct",
-    }
+    adapted = {"adapter_ram_style": "distributed", "transport": "direct"}
     weights = {
-        "source": "memstream",
-        "source.memstream.pumped_memory": False,
-        "source.memstream.ram_style": "distributed",
+        "source.pumped_memory": False,
+        "source.ram_style": "distributed",
         "transport": "direct",
     }
     matmul = {
@@ -210,7 +205,7 @@ def test_the_export_of_the_choices_round_trips_through_configured() -> None:
         "x": adapted,
         "w1": weights,
         "first": {**matmul, "pe": 2},
-        "hidden": {"output_adapter": "vpc", "transport": "direct"},
+        "hidden": {"transport": "direct"},
         "activate": {
             "block_stages": 0,
             "deep_pipeline": 0,
