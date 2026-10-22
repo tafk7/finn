@@ -830,7 +830,8 @@ def _decision(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
     value: Available[object] = Available(ev.ds.stored[node.index])
     if node.domain is None:
         return Ans(value, tuple(trace))
-    check = ev.type_check(node, value, trace)
+    # its stored value checked as every membership is: read as if the choice existed
+    check = ev.membership(node.index).type_check(node, value, trace)
     if isinstance(check, Available) and check.value is True:
         return Ans(value, tuple(trace))
     return Ans(check, tuple(trace))

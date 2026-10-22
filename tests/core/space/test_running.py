@@ -10,11 +10,12 @@ model, through the class-based oracle (``support.space_oracle``), as the impleme
   reference model, every invariant and every permanent check holding.
 - **Hand cases**: a ``when`` read past its guard through a formal of its scope; a chosen
   selector under a refused ``when``, one piece; a refused ``when`` below a guard that waits,
-  unknown until all above it holds; an answer refused through its scope turning
-  inapplicable; a reader beside a formal's scope; a formal read from outside its scope;
-  models dropped and their ids reused, the node cache's tables with them; a line deeper
-  than the recursion limit allows without the depth guard; a membership reading that reads
-  a decision, for a guarded choice and for a choice with no guard.
+  unknown until all above it holds, and two nested ones, one piece; an answer refused
+  through its scope turning inapplicable; a reader beside a formal's scope; a formal read
+  from outside its scope; models dropped and their ids reused, the node cache's tables with
+  them; a line deeper than the recursion limit allows without the depth guard; a
+  membership reading that reads a decision, for a guarded choice and for a choice with no
+  guard.
 - **The node cache** (``_running.cache``): the toys walked with a cache dropping half its
   entries at random, with no disagreement; a cache wrong on purpose (a read left out of
   each key) caught; every value type a choice or a fact holds in the engine's tests, the
@@ -75,6 +76,7 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
+    Unresolved,
     ValueSemantics,
     _compose,
     bind,
@@ -406,6 +408,74 @@ def test_a_refused_when_below_a_guard_that_waits_is_unknown_until_all_above_it_h
     other = case.start({name: 2 for name in facts}, implementation=implementation)
     other.check_validity()
     assert other.engine.validity() == ValidityForm("valid")
+
+
+# Two refused ``when``s, one inside the other, in case ``a`` of the open selector ``s``:
+# ``outer``'s reads ``d``, ``inner``'s reads ``e``, both refused for an odd ``f``. They count
+# once, at the highest refused ``when`` of the chain: one piece, unknown, waiting on ``s``,
+# keyed by ``outer``. With ``s`` bound to ``a``, that piece is refused, still one.
+
+
+def _odd(read: Mapping[str, Any]) -> object:
+    return Refuse("e-odd") if read["f"] % 2 else read["f"]
+
+
+NESTED_IN_AN_OPEN_CASE = Case(
+    "two nested refused whens in a case of an open selector",
+    Description(
+        ("f",),
+        Scope(
+            "",
+            derived=(Derived("d", ("f",), even), Derived("e", ("f",), _odd)),
+            selectors=(
+                Selector(
+                    "s",
+                    (
+                        Scope(
+                            "a",
+                            choices=(Choice("p", listed(1, 2)),),
+                            children=(
+                                Scope(
+                                    "outer",
+                                    when=When(("d",), lambda read: read["d"] >= 1),
+                                    choices=(Choice("x", listed(1, 2)),),
+                                    children=(
+                                        Scope(
+                                            "inner",
+                                            when=When(("e",), lambda read: read["e"] >= 1),
+                                            choices=(Choice("q", listed(1, 2)),),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                        Scope("b", choices=(Choice("r", listed(1, 2)),)),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+@pytest.mark.parametrize("cached_", [False, True], ids=["running", "cached"])
+def test_two_nested_refused_whens_in_a_case_of_an_open_selector_are_one_unknown_piece(
+    cached_: bool,
+) -> None:
+    implementation = cached() if cached_ else RUNNING
+    pair = NESTED_IN_AN_OPEN_CASE.start({"f": 1}, implementation=implementation)
+    pair.check_validity()
+    assert pair.engine.validity() == ValidityForm("open", blockers=frozenset({"s"}))
+    found = pair.engine.answers.validity()
+    assert [(piece.owner, type(piece.result)) for piece in found.pieces] == [
+        ("s.a.outer", Unresolved)
+    ]
+    assert {finding.owner for finding in found.pieces[0].result.findings} == {"s"}
+    bound = pair.check_bind({"s": "a"})
+    bound.check_validity()
+    refused = bound.engine.answers.validity()
+    assert refused.status == "refused"
+    assert [piece.owner for piece in refused.pieces] == ["s.a.outer"]
 
 
 # -- an answer refused through its scope may turn inapplicable ------------------------------
