@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """The running type (``finn.core.space._running``) against today's engine and the reference
 model, through the class-based oracle (``support.space_oracle``), as the implementation
-``support.running_type:RUNNING``.
+``core.space._running_type:RUNNING``.
 
 - **The toys' walks**: each of FINN's toys walked from seeds 0 and 1, 20 steps, the running
   type against today's engine, with no disagreement.
@@ -22,8 +22,8 @@ model, through the class-based oracle (``support.space_oracle``), as the impleme
   toys and the reference harness, its ``==`` and hash checked against its value semantics,
   and only the types checked keyed.
 
-The implementations are loaded by name, as ``--implementation`` names them: they are a
-support module of no layer.
+The implementations are loaded by name, as ``--implementation`` names them
+(``core.space._running_type``, a private module of these tests).
 """
 
 from __future__ import annotations
@@ -45,12 +45,12 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from support import running_cases
-from support.running_cases import Rebinding
-from support.running_type import LeavesOneOut, Running
 from support.space_oracle import Implementation, compare, forms, load, toys
 from support.space_oracle.today import TODAY
 
+from core.space import _running_cases as running_cases
+from core.space._running_cases import Rebinding
+from core.space._running_type import LeavesOneOut, Running
 from core.space._toys_support import House
 from core.space.reference import (
     Change,
@@ -108,9 +108,9 @@ from finn.core.space.ir import Node
 from finn.core.space.occurrence import state
 from finn.core.space.semantics import default_semantics
 
-RUNNING: Implementation = load("support.running_type:RUNNING")
-RUNNING_DROPPING: Implementation = load("support.running_type:RUNNING_DROPPING")
-RUNNING_PLANTED: Implementation = load("support.running_type:RUNNING_PLANTED")
+RUNNING: Implementation = load("core.space._running_type:RUNNING")
+RUNNING_DROPPING: Implementation = load("core.space._running_type:RUNNING_DROPPING")
+RUNNING_PLANTED: Implementation = load("core.space._running_type:RUNNING_PLANTED")
 
 TOYS = toys.TOYS
 
@@ -155,34 +155,76 @@ def test_the_reference_walks_hold_strictly(seed: int) -> None:
 
 # -- the reference harness's hand cases under the running type ---------------------------------
 #
-# ``support.running_cases`` rebinds the harness's default implementation to the running type
-# and expects the ``T4a`` milestone's witnesses to pass. The gate's pytest takes no plugin, so
-# the hand cases run here, in a process of their own. ``test_reference_walks`` is left out:
-# it asks today's engine on purpose (its walks name it, and its hand cases state what today's
-# engine answers where it is attributed ``T4a``). It runs in the gate as it is.
+# ``core.space._running_cases`` rebinds the harness's default implementation to the running
+# type and expects the ``T4a`` milestone's witnesses to pass. The gate's pytest takes no
+# plugin, so the hand cases run here, in a process of their own.
 
 TESTS = Path(__file__).parent.parent.parent
 HAND_CASES = tuple(
-    f"core/space/{path.name}"
-    for path in sorted(Path(__file__).parent.glob("test_reference_*.py"))
-    if path.name != "test_reference_walks.py"
+    f"core/space/{name}.py"
+    for name in (
+        "test_reference_cases",
+        "test_reference_harness",
+        "test_reference_misuse",
+        "test_reference_model",
+        "test_reference_rules",
+        "test_reference_scopes",
+    )
 )
 """The modules of hand cases run under the running type, each named (from ``tests``)."""
+
+_HARNESS = "tests/core/space/test_reference_harness.py"
+TODAYS_SELF_TESTS = (
+    *(
+        f"{_HARNESS}::test_a_planted_fault_is_reported_by_its_question_in_a_hand_case[{case}]"
+        for case in (
+            "possible-the possible values of a",
+            "standing-the change commit {'b': 2}",
+            "standing-the possible values of b",
+            "validity-validity",
+            "value-the answer of double",
+        )
+    ),
+    *(
+        f"{_HARNESS}::test_a_planted_fault_is_reported_by_question_in_walks_0_to_3[{question}]"
+        for question in ("possible", "standing", "validity", "value")
+    ),
+    f"{_HARNESS}::test_a_planted_value_on_a_stored_choice_is_seen",
+    *(
+        f"{_HARNESS}::test_history_is_reported_by_the_cold_build_in_walks_0_to_3[{seed}]"
+        for seed in range(4)
+    ),
+    f"{_HARNESS}::test_the_check_against_a_cold_build_runs_for_every_implementation",
+)
+"""The harness's own tests that name today's engine (or a fault planted around it) on
+purpose, deselected by node id (from the worktree's root, as pytest matches
+``--deselect``)."""
 
 _COUNTS = re.compile(r"(\d+) (passed|failed|errors?|xfailed|xpassed|skipped|deselected)")
 
 
 def test_the_reference_hand_cases_pass_under_the_running_type_with_t4as_witnesses() -> None:
-    """Every hand case of the reference harness, run with ``support.running_cases``: none
-    fails or passes unexpectedly, none is skipped or deselected, and the expected failures
-    are exactly the witnesses of the rows the running type does not implement (the
-    milestones after ``T4a``), each ``T4a`` witness passing."""
+    """Every hand case of the reference harness's six modules of them, run with
+    ``core.space._running_cases``: none fails or passes unexpectedly or is skipped, today's
+    engine is never opened or made, exactly the harness's tests naming today's engine are
+    deselected, and the expected failures are exactly the witnesses of the rows the running
+    type does not implement (the milestones after ``T4a``), each ``T4a`` witness passing.
+
+    ``test_reference_walks`` is not run here: it pins today's engine by design (its walks'
+    own default, and its tests' "today"), and runs under today's in the gate as ever; the
+    running type's walks are this module's own."""
     later = MILESTONES[MILESTONES.index(running_cases.MILESTONE) + 1 :]
-    unimplemented = [row for row in ROWS if row.milestone in later]
-    witnesses = sorted(row.witness for row in ROWS if row.milestone == running_cases.MILESTONE)
+    stems = {PurePosixPath(module).stem for module in HAND_CASES}
+
+    def here(milestones: tuple[str, ...]) -> list[str]:
+        return sorted(
+            row.witness
+            for row in ROWS
+            if row.milestone in milestones and row.witness.partition("::")[0] in stems
+        )
+
+    unimplemented, witnesses = here(later), here((running_cases.MILESTONE,))
     assert unimplemented and witnesses
-    named = {PurePosixPath(module).stem for module in HAND_CASES}
-    assert {row.witness.partition("::")[0] for row in ROWS} <= named
     command = [
         sys.executable,
         "-m",
@@ -190,8 +232,9 @@ def test_the_reference_hand_cases_pass_under_the_running_type_with_t4as_witnesse
         "-p",
         "no:xdist",
         "-p",
-        "support.running_cases",
+        "core.space._running_cases",
         "-q",
+        *(f"--deselect={node}" for node in TODAYS_SELF_TESTS),
         *HAND_CASES,
     ]
     environment = {key: value for key, value in os.environ.items() if key != "PYTEST_ADDOPTS"}
@@ -211,10 +254,17 @@ def test_the_reference_hand_cases_pass_under_the_running_type_with_t4as_witnesse
     counts = {kind.rstrip("s"): int(number) for number, kind in _COUNTS.findall(summary)}
     assert ran.returncode == 0 and collected is not None, tail
     assert counts.get("failed", 0) == 0 and counts.get("error", 0) == 0, tail
-    assert counts.get("xpassed", 0) == 0, tail
+    assert counts.get("xpassed", 0) == 0 and counts.get("skipped", 0) == 0, tail
+    deselected = sorted(
+        line.removeprefix("deselected: ") for line in lines if line.startswith("deselected: ")
+    )
+    assert deselected == sorted(TODAYS_SELF_TESTS), tail
+    assert counts.get("deselected", 0) == len(TODAYS_SELF_TESTS), tail
     assert counts.get("xfailed", 0) == len(unimplemented), tail
-    assert counts.get("passed", 0) == int(collected.group(1)) - len(unimplemented), tail
-    assert "space implementation: running (support.running_type:RUNNING)" in ran.stdout, tail
+    expected = int(collected.group(1)) - len(unimplemented) - len(TODAYS_SELF_TESTS)
+    assert counts.get("passed", 0) == expected, tail
+    assert "today's engine opened or made: 0" in lines, tail
+    assert "space implementation: running (core.space._running_type:RUNNING)" in ran.stdout, tail
     flipped = f"{running_cases.MILESTONE} witnesses expected to pass: {', '.join(witnesses)}"
     assert flipped in lines, tail
 
@@ -227,7 +277,7 @@ def test_the_reference_hand_cases_pass_under_the_running_type_with_t4as_witnesse
         {"targets": (("core.space.reference_harness.engin", "Engine.open", "implementation"),)},
         {"targets": (("core.space.reference_harness.compare", "Case.start", "facts"),)},
         {"today": "support.space_oracle.today:YESTERDAY"},
-        {"today": "support.running_type:RUNNING"},
+        {"today": "core.space._running_type:RUNNING"},
         {"milestone": "T4z"},
     ],
     ids=[
@@ -247,29 +297,41 @@ def test_the_hand_case_plugin_refuses_anything_not_where_it_expects_it(
     a milestone the matrix does not hold, the plugin raises a usage error and rebinds
     nothing."""
     rebinding = Rebinding(**change)
-    with pytest.raises(pytest.UsageError, match="support.running_cases: "):
+    with pytest.raises(pytest.UsageError, match="core.space._running_cases: "):
         rebinding.apply()
     assert Engine.open.__defaults__ == (TODAY,) and not rebinding.saved
 
 
 def test_the_hand_case_plugin_rebinds_each_default_and_restores_it() -> None:
+    """While applied, each default is the running type, and each ``open`` and ``make`` of
+    today's engine is counted by the test it ran in; restored, both are as before."""
     rebinding = Rebinding()
     before = [
         running_cases._function(module, qualname).__defaults__
         for module, qualname, _ in running_cases.TARGETS
     ]
+    methods = (type(TODAY).open, type(TODAY).make)
     rebinding.apply()
     try:
         for module, qualname, parameter in running_cases.TARGETS:
             function = running_cases._function(module, qualname)
             position = running_cases._position(function, parameter)
             assert (function.__defaults__ or ())[position] is RUNNING
+        assert rebinding.count() == "today's engine opened or made: 0"
+        rebinding.running_test = "here"
+        TODAY.make(Ordered, {}, {"a": 2, "b": 1})
+        TODAY.open(design_space(Ordered()))
+        assert rebinding.opened == {"here": 2}
+        assert rebinding.count() == "today's engine opened or made: 2 (here: 2)"
     finally:
         rebinding.restore()
     assert before == [
         running_cases._function(module, qualname).__defaults__
         for module, qualname, _ in running_cases.TARGETS
     ]
+    assert (type(TODAY).open, type(TODAY).make) == methods
+    TODAY.make(Ordered, {}, {"a": 2, "b": 1})
+    assert rebinding.opened == {"here": 2}
 
 
 # -- a ``when`` read past its guard, through a formal of its scope ----------------------------

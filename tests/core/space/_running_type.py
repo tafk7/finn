@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """The running type (``finn.core.space._running``) as an ``Implementation`` of the
 class-based oracle's interface (``support.space_oracle``): ``RUNNING``, named
-``support.running_type:RUNNING`` wherever an implementation is named.
+``core.space._running_type:RUNNING`` wherever an implementation is named.
 
 It opens today's configuration as the design space value it is (its model, facts and
 stored choices, read once) and answers every question from that value through
@@ -28,7 +28,7 @@ One ``Session`` per implementation object, holding its node cache where it has o
 (``Running(cache=...)``): one cache is shared by every design space it opens or makes in a
 process, and its counters cover everything it answered (``RUNNING.session.counters``:
 evaluations, calls by kind, the most evaluations in flight, and the cache's lookups, hits
-and values hashed). The named implementations, each loadable as ``support.running_type:NAME``:
+and values hashed). The named implementations, each loadable as ``core.space._running_type:NAME``:
 
 - ``RUNNING``: no cache;
 - ``RUNNING_CACHED``: the cache on, unbounded;
@@ -48,6 +48,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
+from support.space_oracle import NO_FACTS, Answers, Changed
+
 from finn.core.space import QueryResult, RequestError, Space, inspection
 from finn.core.space._running import questions as Q
 from finn.core.space._running.cache import NodeCache
@@ -56,7 +58,6 @@ from finn.core.space._running.value import DesignSpace, FactsLayer
 from finn.core.space._structure import Structure
 from finn.core.space.edits import ConfigurationResult
 from finn.core.space.ir import NodeId, NodeKind
-from support.space_oracle import NO_FACTS, Answers, Changed
 
 
 class RunningAnswers:

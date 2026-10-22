@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """The reference harness's hand cases under the running type: a pytest plugin.
 
-    python -m pytest -p no:xdist -p support.running_cases -q core/space/test_reference_*.py
+    python -m pytest -p no:xdist -p core.space._running_cases -q core/space/test_reference_*.py
 
 (from ``tests``). The harness answers the engine's side by today's engine wherever a test
 names no implementation (``support.space_oracle.today.TODAY``, the default of each function
 in ``TARGETS``). For the session, this plugin rebinds each of those defaults to the running
-type, ``support.running_type:RUNNING`` (no cache), and names it in pytest's header and
+type, ``core.space._running_type:RUNNING`` (no cache), and names it in pytest's header and
 summary.
 
 **By milestone, not by name.** The running type implements the ``T4a`` milestone's rulings
@@ -22,6 +22,13 @@ collection, each ``T4a`` witness of a module collected must be collected, marked
 marks it. Anything else is a usage error: a rename never lets it test today's engine in
 silence.
 
+**It counts today's engine.** For the session, every ``open`` and ``make`` of today's
+implementation (its class's, whatever instance or wrapper calls it) is counted, by the test
+it ran in. At the session's end the summary names the count and each test that opened or
+made it, and the session fails unless the count is 0: a test that names today's engine
+itself, or a default this plugin does not rebind, is reported, never left to answer in
+silence. The summary also names each test deselected, one line each, by node id.
+
 It is a stand-in: once the reference harness takes the implementation as an option of its
 own, this plugin goes.
 """
@@ -29,8 +36,9 @@ own, this plugin goes.
 from __future__ import annotations
 
 import importlib
-from collections.abc import Sequence
+from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass, field
+from functools import wraps
 from types import FunctionType
 from typing import Any
 
@@ -47,7 +55,7 @@ TARGETS: tuple[tuple[str, str, str], ...] = (
 TODAY = "support.space_oracle.today:TODAY"
 """Today's engine, the default each target must hold."""
 
-RUNNING = "support.running_type:RUNNING"
+RUNNING = "core.space._running_type:RUNNING"
 """The implementation each default is rebound to."""
 
 MATRIX = "core.space.reference_harness.matrix"
@@ -59,14 +67,14 @@ def _module(name: str) -> Any:
     try:
         return importlib.import_module(name)
     except ImportError as error:
-        raise pytest.UsageError(f"support.running_cases: {name} not found ({error})") from error
+        raise pytest.UsageError(f"core.space._running_cases: {name} not found ({error})") from error
 
 
 def _load(spec: str) -> Any:
     module, _, name = spec.partition(":")
     found = getattr(_module(module), name, None)
     if found is None:
-        raise pytest.UsageError(f"support.running_cases: {spec} not found")
+        raise pytest.UsageError(f"core.space._running_cases: {spec} not found")
     return found
 
 
@@ -75,9 +83,9 @@ def _function(module: str, qualname: str) -> FunctionType:
     for part in qualname.split("."):
         found = getattr(found, part, None)
         if found is None:
-            raise pytest.UsageError(f"support.running_cases: {module}.{qualname} not found")
+            raise pytest.UsageError(f"core.space._running_cases: {module}.{qualname} not found")
     if not isinstance(found, FunctionType):
-        raise pytest.UsageError(f"support.running_cases: {module}.{qualname} is no function")
+        raise pytest.UsageError(f"core.space._running_cases: {module}.{qualname} is no function")
     return found
 
 
@@ -88,7 +96,7 @@ def _position(function: FunctionType, parameter: str) -> int:
     defaults = function.__defaults__ or ()
     if parameter not in names or names.index(parameter) < len(names) - len(defaults):
         raise pytest.UsageError(
-            f"support.running_cases: {function.__module__}.{function.__qualname__} "
+            f"core.space._running_cases: {function.__module__}.{function.__qualname__} "
             f"has no default for {parameter!r}"
         )
     return names.index(parameter) - (len(names) - len(defaults))
@@ -110,6 +118,12 @@ class Rebinding:
     witnesses: frozenset[str] = frozenset()
     #: the witnesses whose expected failure was removed
     flipped: set[str] = field(default_factory=set)
+    #: today's implementation's class, its ``open`` and ``make`` counted while applied
+    counted: type | None = None
+    #: each ``open`` or ``make`` of today's implementation, by the test it ran in
+    opened: dict[str, int] = field(default_factory=dict)
+    #: the test running, by node id (this default between tests)
+    running_test: str = "(outside any test)"
 
     def check(self) -> list[tuple[FunctionType, int]]:
         """Each target's function and the position of its default, each default today's
@@ -121,37 +135,65 @@ class Rebinding:
             position = _position(function, parameter)
             if (function.__defaults__ or ())[position] is not today:
                 raise pytest.UsageError(
-                    f"support.running_cases: {module}.{qualname}'s {parameter} is not "
+                    f"core.space._running_cases: {module}.{qualname}'s {parameter} is not "
                     f"{self.today} by default"
                 )
             found.append((function, position))
         matrix = _module(self.matrix)
         if self.milestone not in getattr(matrix, "MILESTONES", ()):
             raise pytest.UsageError(
-                f"support.running_cases: no milestone {self.milestone!r} in {self.matrix}"
+                f"core.space._running_cases: no milestone {self.milestone!r} in {self.matrix}"
             )
         rows = [row for row in getattr(matrix, "ROWS", ()) if row.milestone == self.milestone]
         if not rows or not all("::" in row.witness for row in rows):
             raise pytest.UsageError(
-                f"support.running_cases: no rows of {self.milestone!r} with witnesses in "
+                f"core.space._running_cases: no rows of {self.milestone!r} with witnesses in "
                 f"{self.matrix}"
             )
         self.witnesses = frozenset(row.witness for row in rows)
         return found
 
     def apply(self) -> None:
-        """Check, then rebind each default to the running type."""
+        """Check, then rebind each default to the running type, and count each ``open`` and
+        ``make`` of today's implementation from then on."""
         found = self.check()
         running = _load(self.running)
         for function, position in found:
             defaults = function.__defaults__ or ()
             self.saved.append((function, defaults))
             function.__defaults__ = (*defaults[:position], running, *defaults[position + 1 :])
+        self.counted = type(_load(self.today))
+        for name in ("open", "make"):
+            method = getattr(self.counted, name)
+            setattr(self.counted, name, self._counting(method))
+
+    def _counting(self, method: Callable[..., Any]) -> Callable[..., Any]:
+        @wraps(method)
+        def counting(*arguments: Any, **keywords: Any) -> Any:
+            test = self.running_test
+            self.opened[test] = self.opened.get(test, 0) + 1
+            return method(*arguments, **keywords)
+
+        counting.__wrapped_by__ = self  # type: ignore[attr-defined]
+        return counting
 
     def restore(self) -> None:
         while self.saved:
             function, defaults = self.saved.pop()
             function.__defaults__ = defaults
+        if self.counted is not None:
+            for name in ("open", "make"):
+                method = getattr(self.counted, name)
+                if getattr(method, "__wrapped_by__", None) is self:
+                    setattr(self.counted, name, method.__wrapped__)
+            self.counted = None
+
+    def count(self) -> str:
+        """The summary's line of today's engine: how often it was opened or made, and in
+        which tests."""
+        total = sum(self.opened.values())
+        where = "; ".join(f"{test}: {number}" for test, number in sorted(self.opened.items()))
+        return f"today's engine opened or made: {total}" + (f" ({where})" if where else "")
 
     def flip(self, items: Sequence[pytest.Item]) -> None:
         """Remove each milestone witness's strict expected failure, its own marker; a
@@ -167,7 +209,7 @@ class Rebinding:
             marks = [mark for mark in item.own_markers if mark.name == "xfail"]
             if len(marks) != 1 or marks[0].kwargs.get("strict") is not True:
                 raise pytest.UsageError(
-                    f"support.running_cases: {item.nodeid} is not marked as one strict "
+                    f"core.space._running_cases: {item.nodeid} is not marked as one strict "
                     "expected failure"
                 )
             item.own_markers.remove(marks[0])
@@ -179,14 +221,14 @@ class Rebinding:
         )
         if missing:
             raise pytest.UsageError(
-                f"support.running_cases: {self.milestone} witnesses not collected: {missing}"
+                f"core.space._running_cases: {self.milestone} witnesses not collected: {missing}"
             )
 
     def header(self) -> str:
         names = ", ".join(qualname for _, qualname, _ in self.targets)
         return (
             f"space implementation: {_load(self.running).name} ({self.running}), "
-            f"the default of {names} (support.running_cases)"
+            f"the default of {names} (core.space._running_cases)"
         )
 
 
@@ -213,11 +255,40 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     config.stash[_KEY].flip(items)
 
 
+_DESELECTED = pytest.StashKey[list[str]]()
+
+
+def pytest_deselected(items: Sequence[pytest.Item]) -> None:
+    if items:
+        config = items[0].config
+        config.stash.setdefault(_DESELECTED, []).extend(item.nodeid for item in items)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item: pytest.Item) -> Generator[None, None, None]:
+    rebinding = item.config.stash[_KEY]
+    rebinding.running_test = item.nodeid
+    try:
+        yield
+    finally:
+        rebinding.running_test = Rebinding.running_test
+
+
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    """The session fails where today's engine was opened or made."""
+    if session.config.stash[_KEY].opened:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
 def pytest_terminal_summary(terminalreporter: Any, config: pytest.Config) -> None:
     rebinding = config.stash[_KEY]
     terminalreporter.write_line(rebinding.header())
     flipped = ", ".join(sorted(rebinding.flipped)) or "none"
     terminalreporter.write_line(f"{rebinding.milestone} witnesses expected to pass: {flipped}")
+    deselected = config.stash[_DESELECTED] if _DESELECTED in config.stash else []
+    for node in sorted(deselected) or ["none"]:
+        terminalreporter.write_line(f"deselected: {node}")
+    terminalreporter.write_line(rebinding.count())
 
 
 __all__ = ["MILESTONE", "RUNNING", "TARGETS", "TODAY", "Rebinding"]
