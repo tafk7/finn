@@ -17,8 +17,8 @@ from math import prod
 
 import pytest
 
-from finn.dataflow.plan import Step, Unrealizable, plan
 from finn.dataflow.schedule import Index, Schedule
+from finn.dataflow.steps import Step, Unrealizable, steps
 from finn.dataflow.traversal import (
     Adaptation,
     BeatSequence,
@@ -72,7 +72,7 @@ def test_a_three_tap_window_is_a_reorder_of_its_input() -> None:
     assert verdict.adaptation is Adaptation.REORDER
     assert verdict.reorder == Reorder(6, (4, 3), (1, 1))
     assert reads_through(source, sink, verdict.reorder)
-    assert plan(BeatSequence(source), BeatSequence(sink)).steps == (Step.REORDER,)
+    assert steps(BeatSequence(source), BeatSequence(sink)).kinds == (Step.REORDER,)
 
 
 @pytest.mark.parametrize(
@@ -117,7 +117,7 @@ def test_a_window_replayed_per_output_fold_with_a_marker_per_window() -> None:
         {oh: 3, ow: 3, f: folds, kh: k, kw: k, c: 2}, factors={c: 2}, order=(oh, ow, f, kh, kw, c)
     )
     sink = schedule.present(image, (oh + kh, ow + kw, c), lanes=(c,))
-    found = plan(
+    found = steps(
         BeatSequence(vector_major(image, 2)), BeatSequence(sink, markers=(LevelEnd(k * k),))
     )
     assert found.describe() == "reorder -> markers"
@@ -127,8 +127,8 @@ def test_a_window_replayed_per_output_fold_with_a_marker_per_window() -> None:
 
 
 def test_a_window_over_another_lane_count_converts_width_first() -> None:
-    found = plan(BeatSequence(vector_major((4, 4, 2), 2)), BeatSequence(window(4, 4, 2, 1)))
-    assert found.steps == (Step.WIDTH, Step.REORDER)
+    found = steps(BeatSequence(vector_major((4, 4, 2), 2)), BeatSequence(window(4, 4, 2, 1)))
+    assert found.kinds == (Step.WIDTH, Step.REORDER)
 
 
 def test_a_window_over_columns_first_steps_the_transposed_frame() -> None:
@@ -175,7 +175,7 @@ def test_every_reorder_reads_through_its_frame(seed: int) -> None:
 def test_positions_the_source_never_presents_stay_unrealizable() -> None:
     top_rows = Traversal.over((4, 4, 1), ((0, 2, 1), (1, 4, 1)), ())
     with pytest.raises(Unrealizable, match="different positions"):
-        plan(BeatSequence(top_rows), BeatSequence(window(4, 4, 1, 1)))
+        steps(BeatSequence(top_rows), BeatSequence(window(4, 4, 1, 1)))
 
 
 # -- the boundary: the receiver realizes its window --------------------------------------
@@ -190,7 +190,9 @@ def test_an_input_boundary_presents_a_windows_frame_once() -> None:
         assert unreplayed(sink) == vector_major(sink.shape, sink.lanes)
     replayed = window(6, 6, 4, 2).replayed(4, inner_beats=18)
     assert unreplayed(replayed) == vector_major((6, 6, 4), 2)
-    assert plan(BeatSequence(unreplayed(replayed)), BeatSequence(replayed)).steps == (Step.REORDER,)
+    assert steps(BeatSequence(unreplayed(replayed)), BeatSequence(replayed)).kinds == (
+        Step.REORDER,
+    )
 
 
 def test_a_boundary_that_presents_each_position_once_keeps_its_order() -> None:

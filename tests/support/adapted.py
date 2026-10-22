@@ -3,7 +3,7 @@
 
 """Networks whose channels are adapted: a cyclic producer feeding a thresholding
 (``adapted``, its module ``finn_adapted``), and ``inner_shuffle`` between two boundary
-channels (``transposed``, ``finn_transposed``). ``test_adapters`` checks their plans and
+channels (``transposed``, ``finn_transposed``). ``test_adapters`` checks their steps and
 adapters; the adapter XSI sweep simulates them."""
 
 from __future__ import annotations
@@ -36,8 +36,9 @@ def values(rows: int = ROWS, channels: int = CHANNELS) -> tuple[tuple[int, ...],
 def adapted(source: Traversal, pe: int, *, adaptable: bool = True) -> Network:
     """A cyclic producer presenting ``source``, thresholding ``pe`` channels a beat. The
     network builds each channel once its ports' contracts are known and gives its choices
-    their first valid values (the interim channel rule): its adapters, their memories and its
-    transport; a channel refused on its own facts is left as it is."""
+    their first valid values (the interim channel rule): its input adapter's memory and its
+    transport (its adapters are picked by its steps); a channel refused on its own facts is
+    left as it is."""
     rows, channels = source.shape
 
     x_tensor = Tensor(source.shape, ELEMENT)

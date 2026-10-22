@@ -161,8 +161,8 @@ def configure_chain(chain: Network, **choices: object) -> Network:
             f"{layer}.compute.packed.reducer": "tree",
         }
         weights |= {
-            f"{stream}.source.memstream.ram_style": "distributed",
-            f"{stream}.source.memstream.pumped_memory": False,
+            f"{stream}.source.ram_style": "distributed",
+            f"{stream}.source.pumped_memory": False,
         }
     configured = with_direct_transports(choose(chain, folding))
     return with_adapter_memories(choose(configured, weights))

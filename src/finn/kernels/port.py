@@ -17,12 +17,15 @@ after it (``x``):
 - ``x_stream``, a derived value while the port is placed (given its tensor): its
   ``Stream`` (``finn.dataflow.streams``), its element (``x_element``) and the beat
   sequence it presents, refused as ``port-presentation`` or ``port-schedule``;
+- ``x_data_width``, a derived value while it is placed: the bits of its words
+  (``data_width``, from its stream), which a channel reads of the port producing into it;
 - ``x_access``, a derived value while it binds (placed, an input, reading indices): its
   read of the tensor, from which its kernel binds its indices' extents;
 - ``x_element_taken``, a constraint where it states the integer policy its hardware takes
   (``admits``): its element is one it takes;
-- ``x_contract``, a view while it is placed: the ``PortContract`` a channel takes,
-  labelled ``x``;
+- ``x_contract``, a view while it is placed: the ``PortContract`` it presents to a
+  channel, labelled ``x``, which the channel's network reads (the port's label, its pins,
+  its pace);
 - ``x_placed`` and ``x_binds``, the guards of these, where they are not known when the
   class is made.
 
@@ -45,8 +48,8 @@ Its pins, the AXIS bus, the pins it holds idle, its transport, its beats, its pa
 contract are functions of its declaration and its kernel's values (its stream, or idle its
 element, its ``clocking``, its schedule), not members: ``pins``, ``held``, ``axis``,
 ``transport``, ``beats``, ``pace``, ``contract``. The kernel's products call them (its
-module's pins and holds, its cycles, ``x_contract``), and so does a kernel's rule that
-reads a port's width (``data_width``, ``axis``, from its stream). Their physical refusals
+module's pins and holds, its cycles, ``x_contract``, ``x_data_width``); a kernel's rule
+that reads a placed port's word width reads ``x_data_width``. Their physical refusals
 (``port-markers``, ``port-signals``, ``port-lanes``, ``port-idle``) stay in them. It is an
 AXIS bus named ``name``, with a ``TLAST`` when what it presents carries a marker, its
 member pins spelled as its module spells them (``spelling``); or, given ``signals`` (data,
@@ -58,8 +61,8 @@ FinnLib's native pins (``idat``, ``ivld``, ``irdy`` for a target, ``odat``, ``ov
 presenting the sequence it is given.
 
 A kernel with children presents a child's port as its own: ``x = served(compute, "x")``
-lowers to ``x_stream``, the selected child's, and ``x_contract``, the child's labelled below
-it (``compute.packed.x``).
+lowers to ``x_stream`` and ``x_data_width``, the selected child's, and ``x_contract``, the
+child's labelled below it (``compute.packed.x``).
 """
 
 from __future__ import annotations
@@ -254,6 +257,14 @@ class AxiStreamPort(KernelDeclaration):
             return port.presented(self, name)
 
         members[f"{name}_stream"] = derived(semantics=STREAM, when=guard)(stream)
+
+        @declared_reads(f"{name}_stream", *self.paths(*AxiStreamPort.VIEWED))
+        def data_width_(self: Space) -> int | Rejected:
+            return data_width(
+                port.read(self, *AxiStreamPort.VIEWED), getattr(self, f"{name}_stream")
+            )
+
+        members[f"{name}_data_width"] = derived(when=guard)(data_width_)
         binding = self.binding()
         binds = guard
         if binding is None:
@@ -613,12 +624,14 @@ def contract(
 class Served(KernelDeclaration):
     """A port a kernel with children presents as its child's: ``child`` (a child of the
     kernel, or a selector over children, ``Select``) and that child's port ``port``. It
-    lowers to ``<name>_stream``, the selected child's stream, and ``<name>_contract``, the
-    child's contract labelled below the kernel (``compute.<case>.x``; ``child.x`` for a
-    child)."""
+    lowers to ``<name>_stream`` and ``<name>_data_width``, the selected child's stream and
+    word width, and ``<name>_contract``, the child's contract labelled below the kernel
+    (``compute.<case>.x``; ``child.x`` for a child; ``<labelled>.x`` where the kernel
+    states the label its child keeps: a channel's source, ``source.memstream.set``)."""
 
     child: Any
     port: str
+    labelled: str | None = None
 
     def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
         child = next(
@@ -639,18 +652,30 @@ class Served(KernelDeclaration):
                 declaration=f"{owner.__qualname__}.{name}",
             )
         given = getattr(self.child, f"{self.port}_stream")
+        widths = getattr(self.child, f"{self.port}_data_width")
         offered = getattr(self.child, f"{self.port}_contract")
         members: dict[str, object] = {}
 
         def stream(stream: Stream) -> Stream:
             return stream
 
+        def width(width: int) -> int:
+            return width
+
         members[f"{name}_stream"] = derived(semantics=STREAM, stream=given)(stream)
+        members[f"{name}_data_width"] = derived(width=widths)(width)
         try:
             case = selected(self.child)  # a selector over children: the case it selects
         except DefinitionError:
             case = None
-        if case is not None:
+        if self.labelled is not None:
+            label = self.labelled
+
+            def stated(contract: PortContract) -> PortContract:
+                return contract.under(label)
+
+            members[f"{name}_contract"] = view(semantics=PORT_CONTRACT, contract=offered)(stated)
+        elif case is not None:
 
             def chosen(case: str, contract: PortContract) -> PortContract:
                 return contract.under(f"{child}.{case}")
@@ -667,10 +692,11 @@ class Served(KernelDeclaration):
         return members
 
 
-def served(child: Any, port: str) -> Served:
-    """A port a kernel with children presents as ``child``'s ``port`` (``Served``). Declare
-    it in the class body after the child (``x = served(compute, "x")``)."""
-    return Served(child, port)
+def served(child: Any, port: str, *, label: str | None = None) -> Served:
+    """A port a kernel with children presents as ``child``'s ``port`` (``Served``), labelled
+    below the child's node, or below the ``label`` the kernel states its child keeps.
+    Declare it in the class body after the child (``x = served(compute, "x")``)."""
+    return Served(child, port, label)
 
 
 __all__ = [

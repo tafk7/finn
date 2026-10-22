@@ -18,7 +18,8 @@ declarations by the names their lowering fixes:
 - ``netlist``: its library module at the empty label (``finn.kernels.library``), its
   members' netlists under their nodes, and the control buses its members present
   (``merged``). A kernel with neither a module nor a member is refused (``kernel-module``).
-  A channel states its own, adding its hops (``finn.kernels.channels``).
+  A channel states its own, adding the hops between its own ends; its network adds its
+  hops to the ports beside it (``finn.kernels.channels``).
 - ``cycles``: the most beats any of its declarations carries a frame, or any of its
   members takes, one beat a cycle at best; refused where there is none (``kernel-cycles``).
   A channel of wires takes none of its own (0).
@@ -185,9 +186,9 @@ class PortContract:
     """The contract a port presents to a channel: its ``contract`` and its ``label``, the
     port's path relative to the member that states it (``x`` for a module's port,
     ``compute.packed.x`` for MatMul's, ``source.memstream.set`` for a channel's source's
-    set port; empty for a contract the member presents itself, which is no port's).
-    ``under`` labels it from the network (or kernel with children) that holds the
-    member."""
+    set port, below the label its channel states for it; empty for a contract the member
+    presents itself, which is no port's). ``under`` labels it from the network (or kernel
+    with children) that holds the member."""
 
     label: str
     contract: StreamContract
@@ -507,12 +508,17 @@ class KernelSpace(Space):
 
     # -- its answers, written once ---------------------------------------------------------
 
-    def _netlist(self, links: tuple[Link, ...] | None = None) -> Fragment | Rejected:
+    def _netlist(
+        self, links: tuple[Link, ...] | None = None, labels: Mapping[str, str] | None = None
+    ) -> Fragment | Rejected:
         """``netlist``: its library module at the empty label, its members' netlists under
         their nodes, and the control buses its members present with the writes their
         configuration takes (``merged``). A kernel with neither is refused; one that states
-        the ``links`` between them (a channel's hops) is not."""
+        the ``links`` between them (a channel's hops) is not. A kernel that states the
+        ``labels`` some members keep (by node: a channel's placements) places those there,
+        in place of their nodes."""
         space_type = type(self)
+        placed = labels or {}
         parts: list[tuple[str, Fragment]] = []
         if space_type._module is not None:
             name, module = space_type._module
@@ -520,13 +526,17 @@ class KernelSpace(Space):
             if isinstance(leaf, Rejected):
                 return leaf
             parts.append(("", Fragment((("", leaf),))))
-        parts.extend((str(item.node), item.value) for item in self.netlists)
+        parts.extend(
+            (placed.get(str(item.node), str(item.node)), item.value) for item in self.netlists
+        )
         if not parts and links is None:
             return reject(
                 "kernel-module",
                 f"{space_type.__qualname__} declares no module and places no kernel",
             )
-        buses = presented((str(item.node), item.value) for item in self.controls)
+        buses = presented(
+            (placed.get(str(item.node), str(item.node)), item.value) for item in self.controls
+        )
         if isinstance(buses, Rejected):
             return buses
         return merged(parts, buses, links or ())

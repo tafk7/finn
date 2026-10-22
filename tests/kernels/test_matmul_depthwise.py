@@ -31,7 +31,7 @@ from support.helpers import (
 
 from finn.core.space import Available, Unresolved, inspection
 from finn.dataflow.gemm import Form
-from finn.dataflow.plan import Step
+from finn.dataflow.steps import Step
 from finn.dataflow.traversal import Traversal
 from finn.kernels.matmul import MatMulKernel
 
@@ -80,17 +80,18 @@ def test_depthwise_rows_pass_once_with_a_frame_per_window():
     configured = point()
     x = configured.member("x")
     # Nothing is replayed: the channel only closes each window's frame.
-    assert x.plan.steps == (Step.MARKERS,)
-    boundary = x.sides.source
+    assert x.steps.kinds == (Step.MARKERS,)
+    boundary = x.boundary
     # Rows, then channel folds, then window folds; lane s * PE + p is window
     # position s of channel p.
     channel_tile = Traversal.over(
         (2, 9, 4), ((0, 2, 1), (2, 2, 2), (1, 3, 3)), ((1, 3, 1), (2, 2, 1))
     )
     assert boundary.transport.name == "in0_V" and boundary.form == channel_tile
-    framed = x.sides.sink
+    assert x.sides.source.sequence == boundary.sequence
+    framed = x.sides.sink.sequence
     assert framed.form == boundary.form
-    assert [level.beats for level in framed.rules.values()] == [3]
+    assert [level.beats for level in framed.markers] == [3]
     module = built(configured, "matmul")
     compute = parameters(module, "matmul.compute.int8_dsp58")
     # An input_gen passing three-beat frames in order, closing each.
@@ -115,7 +116,7 @@ def test_depthwise_rows_pass_once_with_a_frame_per_window():
 
 def test_a_dense_form_replays_each_row_per_output_fold():
     dense = point(form=Form.DENSE)
-    assert dense.member("x").plan.steps == (Step.REORDER, Step.MARKERS)
+    assert dense.member("x").steps.kinds == (Step.REORDER, Step.MARKERS)
     compute = parameters(built(dense, "matmul"), "matmul.compute.int8_dsp58")
     assert compute["ACTIVATION_BROADCASTING"] == 1
 
@@ -215,15 +216,15 @@ def test_one_network_carries_the_weights_of_whichever_realization_is_committed()
             },
         )
         # Whether the weight channel has a value is the weights' presence, a fact: its
-        # source's one case is set by the interim channel rule as the channel is built.
+        # source is placed as the channel is built, no choice.
         assert folded.member("w").valued and folded.member("w").tensor.shape == shape
-        assert folded.chosen()[("w", "source")] == "memstream"
+        assert ("w", "source") not in folded.chosen()
         configured = choose(
             folded,
             {
                 "w.transport": "direct",
-                "w.source.memstream.ram_style": "auto",
-                "w.source.memstream.pumped_memory": False,
+                "w.source.ram_style": "auto",
+                "w.source.pumped_memory": False,
             },
         )
         module = module_of(with_direct_transports(with_adapter_memories(configured)), "matmul")

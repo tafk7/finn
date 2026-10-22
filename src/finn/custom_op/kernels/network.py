@@ -21,8 +21,8 @@ shell of the model's target (``in_shell``).
   wiring.stored)``), its ports' contracts (``Interface(node, wiring.contract)``, from the op's
   ``wiring``), and the target's platform. Only the selection's ONNX inputs and outputs
   are boundaries, named by the shell's convention ``s_axis_<i>`` and ``m_axis_<j>``, each
-  offered the movers given (``movers``; ``Channel.mover``, which the cut sets, first valid, by
-  the interim channel rule, and persists as any choice). A channel has one consumer, so a
+  offered the movers given (``movers``; ``Channel.mover``, placed on its free side where
+  they are offered, no choice). A channel has one consumer, so a
   tensor read more than once is refused by name before anything is bound
   (``tensor-fan-out``): read by two of the nodes (an edge, or a parameter both own), or
   read by one and at an output boundary too (a graph output, or read outside the nodes).

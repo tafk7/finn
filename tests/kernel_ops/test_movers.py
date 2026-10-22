@@ -5,9 +5,8 @@
 
 A partition's network in its shell (``in_shell``) reads its target's shell row
 (``finn.platform.shells``), whose offer places an ``IODMA_hls`` mover on each free side that
-meets the host: the mover a choice of the channel's, set by the cut's interim channel rule (its
-one possible kind) and persisted; binding no RTL, so the module is the ``ip`` shell's; its
-cycles a frame
+meets the host: placed by the channel where the shell offers one, no choice, so nothing
+persists it; binding no RTL, so the module is the ``ip`` shell's; its cycles a frame
 the channel's, so an exploration's bottleneck can name it, and FIFO sizing reads
 both boundaries through it; its resources by its widths are the shell's, which
 the shell sums with its partition's and its static region's. On the Chain
@@ -203,8 +202,8 @@ def chain_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None
 
 def cut_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None) -> InShell:
     """The Chain's network in the shell of ``target``, its channels' choices made there as
-    the cut makes them (``MakeCutChoices``: the movers the shell offers set by the interim
-    channel rule)."""
+    the cut makes them (``MakeCutChoices``: the interim channel rule; the movers the shell
+    offers are placed, no choice)."""
     model = kernel_model() if model is None else model
     write_target(model, target)
     model = model.transform(MakeCutChoices())
@@ -237,15 +236,12 @@ def test_the_network_takes_the_movers_it_is_offered_and_states_its_members_resou
 
 
 def test_an_offer_places_a_mover_on_each_free_side() -> None:
-    """Each free side's mover is a choice of its channel's, open until the cut's interim
-    channel rule sets its one possible kind, and persisted."""
-    assert set(chain_network().undecided()) >= {("x", "mover"), ("y", "mover")}
+    """Each free side's mover is placed by its channel where the shell offers one: no
+    choice, open before the cut or stored after it."""
+    assert not [key for key in chain_network().undecided() if key[1].startswith("mover")]
     bound = cut_network()
     assert bound.movers == ("x", "y")
-    assert {key: value for key, value in bound.chosen().items() if key[1] == "mover"} == {
-        ("x", "mover"): IODMA_HLS,
-        ("y", "mover"): IODMA_HLS,
-    }
+    assert not [key for key in bound.chosen() if key[1].startswith("mover")]
     x, y = bound.member("x").mover_contract, bound.member("y").mover_contract
     # x: two INT3 lanes padded to a byte, 6 beats; 48 bits a frame share 16 with 128.
     assert (x.direction, x.port, x.tdata, x.beats, x.lanes) == ("in", "s_axis_0", 8, 6, 2)
@@ -287,12 +283,17 @@ def test_the_shell_s_resources_are_its_partition_s_its_movers_and_its_static_reg
 
 
 def test_a_network_waits_for_its_members_resources() -> None:
-    waiting = shell_resources(chain_network())
+    # Its movers are placed, no choice: before the cut nothing is open, and its resources
+    # answer.
+    bound = chain_network()
+    assert bound.undecided() == ()
+    assert isinstance(shell_resources(bound), ShellResources)
+    # A weight's memory style cleared: it waits on that open choice, owned by its member.
+    opened = bound.trial({}, clear=[("w1", "source.ram_style")], check=False).network
+    waiting = shell_resources(opened)
     assert isinstance(waiting, tuple)
-    # The one open choice it waits on before the cut: each free side's mover, owned by its
-    # member.
     assert {(finding.code, finding.owner) for finding in waiting} == {
-        ("decision-unassigned", "mover")
+        ("decision-unassigned", "source.ram_style")
     }
 
 
@@ -317,10 +318,8 @@ def test_a_network_with_movers_persists_and_replays_as_itself() -> None:
     model = model.transform(MakeCutChoices())
     bound = chain_network(ULTRA96, model=model)
     held = persist(model, bound)
-    assert {name: values["mover"] for name, values in held.items() if "mover" in values} == {
-        "x": IODMA_HLS,
-        "y": IODMA_HLS,
-    }
+    # Its movers are placed, not stored.
+    assert not [name for name, values in held.items() if "mover" in values]
     again = chain_network(ULTRA96, model=model)
     assert again.chosen() == bound.chosen() and not again.stale
 
@@ -336,13 +335,14 @@ def test_a_row_offering_an_unknown_or_repeated_kind_is_refused() -> None:
 def test_sizing_reads_a_free_side_its_mover_paces() -> None:
     bound = cut_network()
     x = bound.member("x").mover_contract
-    supply, _ = sides(bound.member("x"))
+    supply, _ = sides(bound.member("x"), bound.neighbours("x"))
     assert supply == Pattern(x.times, x.cycles)
     y = bound.member("y").mover_contract
-    _, accept = sides(bound.member("y"))
+    _, accept = sides(bound.member("y"), bound.neighbours("y"))
     assert accept == Pattern(y.times, y.cycles)
+    chain = chain_network(TARGET)
     with pytest.raises(NotModelled, match="a boundary: not modelled"):
-        sides(chain_network(TARGET).member("x"))
+        sides(chain.member("x"), chain.neighbours("x"))
 
 
 # -- on TFC_W2A2 ---------------------------------------------------------------------------
@@ -372,7 +372,7 @@ def pumping(name: str) -> dict[str, object]:
     if re.fullmatch(r"MatMul_\d+", name):
         return {"compute.packed.compute_pumping": False}
     if re.fullmatch(r"MatMul_\d+_param0", name):
-        return {"source.memstream.pumped_memory": False}
+        return {"source.pumped_memory": False}
     return {}
 
 
@@ -388,17 +388,15 @@ def test_tfc_with_ultra96_s_movers_at_1e6_fps_names_its_input_mover(tfc: ModelWr
     model, report = explored(tfc, 1e6, sizing=True)
     # The movers change no other choice: persisted alike, each MatMul's pumping off on both
     # (the doubled clock is the shell's, admitted by its root, and no kernel reads it off
-    # the platform); 84 values on 8 nodes and 13 tensors, each boundary's mover among them
-    # (the cut's, on the Zynq shell; kept, out of play, on ip).
+    # the platform); 69 values on 8 nodes and 13 tensors, no boundary's mover among them
+    # (placed on the Zynq shell, no choice; absent on ip), nor an input adapter (picked by
+    # its steps).
     assert kernel_choices_config(model) == kernel_choices_config(ip_model)
     values = built(model)
     assert built(ip_model) == values
     assert all(values[name].items() >= pumping(name).items() for name in values)
-    assert (len(values), sum(map(len, values.values()))) == (21, 84)
-    assert {name: held["mover"] for name, held in values.items() if "mover" in held} == {
-        "Reshape_0_out0": IODMA_HLS,
-        "MatMul_3_out0": IODMA_HLS,
-    }
+    assert (len(values), sum(map(len, values.values()))) == (21, 69)
+    assert not [name for name, held in values.items() if "mover" in held]
     # The input mover at max(196, 49) + 4 and the output mover at max(10, 5) + 4, the
     # partition at its 196; the budget of 200 is met, nothing relaxed.
     rows = report["movers"]

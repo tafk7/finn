@@ -7,8 +7,9 @@ composite class.
 ``one_space`` reads a model of KernelOps whose channel choices are stored (the cut's, or
 ``make_cut_choices``'): each node's kernel declared from its facts
 (``KernelOp.facts``), each channel from the shell's wiring (``in_shell``), its facts read
-from the kernels' declarations (a port's contract, ``Interface``; a value a kernel states,
-``Fact``), and the values conversion and the cut stored, by key. ``mlp`` is stage 7's
+from the kernels' declarations (``channel_facts``: a port's stream and word width,
+``Interface``; a value a kernel states, ``Fact``), and the values conversion and the cut
+stored, by key. ``mlp`` is stage 7's
 synthetic chain, and ``chain_space`` that chain as one Space.
 
 A test helper, imported as ``support.one_space``.
@@ -28,7 +29,7 @@ from finn.core.space import Space, composite
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import in_shell, make_cut_choices
 from finn.kernels.channels import Channel
-from finn.kernels.network import Fact, Interface
+from finn.kernels.network import Fact, Interface, Network
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 
@@ -82,6 +83,27 @@ def mlp(layers: int) -> ModelWrapper:
     return model
 
 
+def channel_facts(net: Network, channel: str, members: dict[str, Any]) -> dict[str, Any]:
+    """Channel ``channel``'s facts as ``net`` wires them, each bound to the member of
+    ``members`` (the declarations of one Space) it is read from, never a view: a port's
+    stream (``Interface``: ``x_stream``) and, on the producer's side, its word width
+    (``x_data_width``); a value a kernel states (``Fact``). A port's label is a constant:
+    its contract's own (``compute.packed.x``), as ``net``'s bound member presents it."""
+    given: dict[str, Any] = {}
+    for fact, value in net.wiring(channel).facts.items():
+        if isinstance(value, Interface):
+            member = members[value.member]
+            given[fact] = getattr(member, f"{value.port}_stream")
+            given[f"{fact}_label"] = getattr(net.member(value.member), value.view).label
+            if fact == "producer":
+                given["producer_width"] = getattr(member, f"{value.port}_data_width")
+        elif isinstance(value, Fact):
+            given[fact] = getattr(members[value.member], value.name)
+        else:
+            given[fact] = value
+    return given
+
+
 def one_space(model: ModelWrapper, name: str) -> tuple[type[Space], dict[str, object]]:
     """``model``'s KernelOps, their channel choices stored, as one Space named ``name``
     (its kernels' declarations and the channels from the shell's wiring), and the values
@@ -93,14 +115,7 @@ def one_space(model: ModelWrapper, name: str) -> tuple[type[Space], dict[str, ob
         facts = kernel_op(model, node).facts()
         members[node.name] = facts.space_type(**cast("dict[str, Any]", dict(facts.arguments)))
     for channel in net.channels:
-        given: dict[str, Any] = {}
-        for fact, value in net.wiring(channel).facts.items():
-            if isinstance(value, Interface):
-                value = getattr(members[value.member], value.view)
-            elif isinstance(value, Fact):
-                value = getattr(members[value.member], value.name)
-            given[fact] = value
-        members[channel] = Channel(**given)
+        members[channel] = Channel(**channel_facts(net, channel, members))
     stored = {f"{member}.{key}": value for (member, key), value in net.chosen().items()}
     return composite(name, members), stored
 
@@ -114,4 +129,4 @@ def chain_space(layers: int) -> tuple[type[Space], dict[str, object]]:
     return one_space(model, f"templates_chain_{2 * layers}")
 
 
-__all__ = ["chain_space", "mlp", "one_space"]
+__all__ = ["chain_space", "channel_facts", "mlp", "one_space"]

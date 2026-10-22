@@ -285,8 +285,8 @@ THRESHOLDING = {
     "ultra_stages": 0,
 }
 WEIGHT_CHANNEL: dict[str, object] = {
-    "source.memstream.ram_style": "distributed",
-    "source.memstream.pumped_memory": False,
+    "source.ram_style": "distributed",
+    "source.pumped_memory": False,
     "transport": "direct",
 }
 """A stored weight's channel, as ``support.chain`` configures it."""
@@ -358,10 +358,10 @@ def choose_memories(model: ModelWrapper) -> InShell:
 
 def configure_partition(model: ModelWrapper) -> InShell:
     """The partition's network in its shell, the choices it leaves open set as the cut sets
-    them (``make_cut_choices``: the movers a shell it was retargeted to offers, by the interim
-    channel rule), its open adapter memories chosen (``choose_memories``), and the
-    partition verified as the build verifies it before emission
-    (``support.packaging.verified``), so that it packages."""
+    them (``make_cut_choices``: the interim channel rule; the movers a shell it was retargeted
+    to offers are placed, no choice), its open adapter memories chosen
+    (``choose_memories``), and the partition verified as the build verifies it before
+    emission (``support.packaging.verified``), so that it packages."""
     made = make_cut_choices(model)
     assert not (made.stale or made.unset), made
     bound = choose_memories(model)

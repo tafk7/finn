@@ -19,7 +19,7 @@ from support.kernel_specs.thresholding import tensor
 from support.kernel_specs.transpose import MATRICES, transpose
 
 from finn.core.space import Rejected, Space, design_space, inspection
-from finn.dataflow.plan import Step, plan
+from finn.dataflow.steps import Step, steps
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.harness.points import rejected
 from finn.kernels.artifacts.abi import Signal
@@ -86,7 +86,7 @@ def test_a_producer_of_rows_at_another_lane_count_is_only_a_width_conversion_awa
     in width only, wherever its beats end."""
     produced = BeatSequence(vector_major(MATRICES, 1))
     for simd in SIMDS:
-        assert plan(produced, _transpose(simd).input_stream.sequence).steps == (Step.WIDTH,)
+        assert steps(produced, _transpose(simd).input_stream.sequence).kinds == (Step.WIDTH,)
 
 
 def test_its_output_is_its_inputs_matrices() -> None:

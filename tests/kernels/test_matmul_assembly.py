@@ -332,12 +332,9 @@ def test_the_core_is_one_possible_case_and_is_given_the_folding():
     point = choose(
         point, {"x.transport": "direct", "w.transport": "direct", "y.transport": "direct"}
     )
-    # The activation channel's adapter applies once its plan is known, which the
-    # folding decides; the channel is the network's.
-    point = choose(
-        point,
-        {"x.adapter": "input_gen", "x.adapter.input_gen.input_gen.ram_style": "auto"},
-    )
+    # The activation channel's adapter is picked once its steps are known, which the
+    # folding decides; its memory is the channel's, the network's.
+    point = choose(point, {"x.adapter_ram_style": "auto"})
     compute = point.member("matmul").compute
     assert isinstance(compute.inspect(DotpAxiKernel.netlist).accepted_result, Unresolved)
     assert isinstance(module_of(point, "matmul"), Unresolved)

@@ -22,7 +22,7 @@ numpy, the standard library and the findings its refusals carry
   ports read (``Access``).
 - ``gemm``: matrix multiplication's canonical indices ``m``, ``n``, ``k`` and
   its operand ``Form``s.
-- ``plan``: the canonical steps between two beat sequences of one tensor.
+- ``steps``: the canonical steps between two beat sequences of one tensor.
 - ``streams``: what a port presents of a tensor (``Stream``: its element and
   beat sequence), a channel's two (``Streams``) and the rule that they traverse
   its tensor (``misfit``); the channel itself, which finds its streams among the

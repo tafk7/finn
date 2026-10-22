@@ -6,10 +6,10 @@
 dotp takes its extents from the streams it sits on, and its folding factors are its own
 Decisions; every port presents what its schedule derives, so a wrong lane
 count or a transposed tile can no longer be written into dotp. A producer
-presenting another order is the channel's to judge: its plan names the steps
-and its adapter carries them out, a lane order is wires, and a channel
-admitting no adapter refuses the plan. A wrong lane count and a transposed
-tile become plans; a folding factor that does not divide its extent is refused
+presenting another order is the channel's to judge: it names the steps between
+its two streams and its adapter carries them out, a lane order is wires, and a
+channel admitting no adapter refuses the steps. A wrong lane count and a transposed
+tile become steps; a folding factor that does not divide its extent is refused
 where it is committed; a frame crossing rows, results that swap frames and
 depthwise operands under a dense core cannot be written, since dotp derives
 its own schedule and the form is its own.
@@ -36,7 +36,7 @@ from support.helpers import (
 from finn.core.space import Available, Rejected, inspection
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.gemm import Form
-from finn.dataflow.plan import Step
+from finn.dataflow.steps import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
     Adaptation,
@@ -159,7 +159,7 @@ def test_every_port_presents_what_the_schedule_derives():
     assert y.form == vector_major((ROWS, OUTPUTS), PE)
     assert [rule.beats for rule in x.markers] == [REDUCTION // SIMD]
     # Each port's contract is labelled after the port, from the root.
-    assert point.member("r").producer.label == "compute.y"
+    assert point.member("r").producer_label == "compute.y"
     # The cyclic weights and the results connect as derived.
     assert isinstance(point.member("w_s").query(Channel.netlist), Available)
     assert isinstance(point.member("r").query(Channel.netlist), Available)
@@ -182,7 +182,7 @@ def test_a_folding_factor_that_does_not_divide_its_extent_refuses_the_core_given
     assert {(f.code, f.owner) for f in found.result.findings} == {("kernel-schedule", "schedule")}
 
 
-def test_a_producer_presenting_another_order_is_a_plan_its_stream_adapts():
+def test_a_producer_presenting_another_order_is_steps_its_stream_adapts():
     # Probe: the weight tile walked column fold first; the same PE x SIMD lanes.
     columns_first = Traversal.over(
         (REDUCTION, OUTPUTS),
@@ -190,14 +190,14 @@ def test_a_producer_presenting_another_order_is_a_plan_its_stream_adapts():
         ((1, PE, 1), (0, SIMD, 1)),
     )
     point = placed(weights_form=columns_first)
-    assert point.member("w_s").plan.steps == (Step.REORDER,)
+    assert point.member("w_s").steps.kinds == (Step.REORDER,)
     assert isinstance(with_adapter_memories(point).member("w_s").query(Channel.netlist), Available)
     # Probe: the tile's own sequence, one weight a beat where dotp reads PE x SIMD.
     narrow = placed(weights_form=regrouped(weights_tile(), 1))
-    assert narrow.member("w_s").plan.steps == (Step.WIDTH,)
+    assert narrow.member("w_s").steps.kinds == (Step.WIDTH,)
     # Another order at other lanes, the stored weights row-major, one a beat.
     rows = placed(weights_form=vector_major((REDUCTION, OUTPUTS), 1))
-    assert rows.member("w_s").plan.steps == (Step.REORDER, Step.WIDTH)
+    assert rows.member("w_s").steps.kinds == (Step.REORDER, Step.WIDTH)
     # dotp's own port is untouched by the producer's order.
     compute = narrow.member("compute")
     assert isinstance(compute.query(type(compute).w_contract), Available)
@@ -305,9 +305,9 @@ def test_eltwise_broadcasts_a_channel_vector_once_per_pixel():
     # pass repeated, which a boundary presents as it is.
     repeated = vector_major((4,), 2).repeated(3)
     assert point.member("add").rhs_stream.sequence.form == repeated
-    assert point.member("rhs").sides.source.form == repeated
+    assert point.member("rhs").sides.source.sequence.form == repeated
     assert all(
-        stream.plan.steps == ()
+        stream.steps.kinds == ()
         for stream in (point.member("lhs"), point.member("rhs"), point.member("out"))
     )
     assert dict(library_module(point.member("add")).parameters)["PE"] == 2

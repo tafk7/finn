@@ -13,7 +13,7 @@ reaches the hardware as its image channel's reorder, and CNV's convolutions conv
   single layers compute what the op's ``execute_node`` computes, every output word:
   CNV's first layer at SIMD 3 and PE 16 among them.
 - Inside a partition: a Thresholding (NHWC, PE channels a beat) feeding a Conv
-  (SIMD channels a beat) is one edge whose plan is the window's reorder, after a width
+  (SIMD channels a beat) is one edge whose steps are the window's reorder, after a width
   conversion where PE and SIMD differ; in XSim the two compute what their
   ``execute_node`` do.
 - CNV_W2A2 (``support.cnv``, prepared once a run: ``conftest.py``'s
@@ -179,7 +179,7 @@ def test_a_window_inside_the_partition_is_its_edges_reorder(
 ) -> None:
     # Converted, not cut: its channels' choices created as the cut creates them.
     point, _ = configured_network(thresholded(pe, simd).transform(MakeCutChoices()), "inside")
-    assert tuple(hop.step.value for hop in point.channel("a").plan.hops) == steps
+    assert tuple(hop.step.value for hop in point.channel("a").steps.hops) == steps
     labels = [label for label, _ in point.module.fragment.instances if label.startswith("a.")]
     assert "a.adapter.input_gen.input_gen" in labels
 

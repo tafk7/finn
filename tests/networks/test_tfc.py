@@ -262,13 +262,11 @@ def test_tfc_w2a2_binds_the_ultra96_platform(tfc_streamlined: Path, tmp_path: Pa
         f"{tensor}.{key}"
         for tensor in body.tensors_stating(CHANNEL)
         for key in channel_choices(body, tensor)
-        if key.startswith("adapter.") and key.endswith(".ram_style")
+        if key == "adapter_ram_style"
     ]
     assert len(adapters) == 4
     # Committed, each style leaves its memory refused by its rule on the platform, so the
     # change is refused.
     for key in adapters:
         assert "uram-absent" in refused_codes(bound, {key: "ultra"})
-    assert "uram-absent" in refused_codes(
-        bound, {f"{weights[0]}.source.memstream.ram_style": "ultra"}
-    )
+    assert "uram-absent" in refused_codes(bound, {f"{weights[0]}.source.ram_style": "ultra"})

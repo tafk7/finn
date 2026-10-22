@@ -104,12 +104,13 @@ def test_the_search_keeps_the_least_budget_whose_point_fits_and_reports_it() -> 
     assert used == report["resources"]["shell"]["partition"]
     assert searched["binding"] == "lut" and searched["ratio"] == {"lut": round(321 / 352, 4)}
     assert searched["monotone"] and searched["departures"] == []
-    # It reopened the folding and gave the rest back: it changed the folding alone, and
-    # the interim channel rule set what the new folding brings into play on a channel.
+    # It reopened the folding and gave the rest back: it changed the folding alone; what
+    # the new folding brings into play on a channel (an output adapter) is placed, so the
+    # interim channel rule sets nothing.
     assert searched["reopened"] > searched["kept"] > 0
-    changed = set(searched["changed"]) - set(searched["interim"])
+    changed = set(searched["changed"])
     assert {key.rpartition(".")[2] for key in changed} <= {"pe", "simd", "compute_pumping"}
-    assert {key.rpartition(".")[2] for key in searched["interim"]} <= {"output_adapter"}
+    assert searched["interim"] == []
     assert sized["strategy"] == "size_fifos" and sized["fifo_bits"] == 0
 
 

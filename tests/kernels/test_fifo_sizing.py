@@ -31,7 +31,7 @@ from finn.core.rtlsim_bench import simulate as simulate_rtl
 from finn.harness.toolchain import finnlib_root
 from finn.kernels import input_generator
 from finn.kernels.artifacts.rtl import evaluate
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.explore import (
     Accepted,
     ExploreError,
@@ -229,12 +229,12 @@ def test_a_channel_s_sides_are_read_from_the_paces_its_ports_state() -> None:
     # hidden: first (PE 1, SIMD 4) closes a reduction of one step each beat, a lane a
     # word; the output adapter's vpc pairs them into activate's two lanes, a word the
     # cycle after its second lane. activate reads every beat.
-    supply, accept = sides(point.member("hidden"))
+    supply, accept = sides(point.member("hidden"), point.neighbours("hidden"))
     assert supply == Pattern((2, 4, 6, 8, 10, 12), 12)
     assert accept == Pattern(tuple(range(6)), 6)
     # levels: activate's six beats, four lanes a word after its vpc, into second's
     # input_gen, which second reads every beat.
-    supply, accept = sides(point.member("levels"))
+    supply, accept = sides(point.member("levels"), point.neighbours("levels"))
     assert supply == Pattern((2, 4, 6), 6)
     assert isinstance(accept, Buffered)
     assert accept.reads == Pattern(tuple(range(12)), 12)
@@ -243,9 +243,9 @@ def test_a_channel_s_sides_are_read_from_the_paces_its_ports_state() -> None:
 def test_a_boundary_and_a_memory_are_not_modelled() -> None:
     _, point = _folded()
     with pytest.raises(NotModelled, match="a boundary: not modelled"):
-        sides(point.member("x"))
+        sides(point.member("x"), point.neighbours("x"))
     with pytest.raises(NotModelled, match="a memory source: paced by its consumer"):
-        sides(point.member("w1"))
+        sides(point.member("w1"), point.neighbours("w1"))
 
 
 # -- the strategy ---------------------------------------------------------------------------
@@ -319,7 +319,9 @@ def test_a_fifo_sized_before_is_sized_again_and_a_held_one_is_not(
     assert not any(key[0] == "levels" for key in explorer.runs[-1].reopened)
 
 
-def _hidden_needs_eight(channel: Channel, period: int, **options: Any) -> Sized:
+def _hidden_needs_eight(
+    channel: Channel, neighbours: Neighbours, period: int, **options: Any
+) -> Sized:
     """A double of the per-channel sizing: ``hidden`` (first's output) needs a FIFO of
     eight words, every other channel none."""
     if channel.sides.source_owner == "first.compute.packed.y":
@@ -371,8 +373,8 @@ def test_a_depth_is_sized_for_the_style_its_fifo_is_built_in(
 
     # Every modelled channel (hidden, levels) needs 300 words; the check keeps a FIFO
     # that holds them, and reads no other channel.
-    def holds(channel: Channel, period: int, words: int) -> bool:
-        sides(channel)
+    def holds(channel: Channel, neighbours: Neighbours, period: int, words: int) -> bool:
+        sides(channel, neighbours)
         return words >= 300
 
     monkeypatch.setattr(fifo_sizing, "least_depth", lambda supply, accept, period: 300)
@@ -414,9 +416,9 @@ def test_a_style_held_as_none_is_sized_as_auto_and_left_to_its_hold(
     is. A ``Hold`` stating ``None`` is refused where it is set: no value of the style."""
     sized: dict[str, str] = {}
 
-    def sizing(channel: Channel, period: int, **options: Any) -> Sized:
+    def sizing(channel: Channel, neighbours: Neighbours, period: int, **options: Any) -> Sized:
         sized[channel.sides.source_owner or ""] = options["ram_style"]
-        return _hidden_needs_eight(channel, period)
+        return _hidden_needs_eight(channel, neighbours, period)
 
     monkeypatch.setattr(explore_module, "size", sizing)
     explorer, point = _folded()
@@ -526,7 +528,7 @@ def _with_fifo(depth: int = 8) -> tuple[Seam, Network]:
     return explorer, placed.network
 
 
-def _levels_short(channel: Channel, period: int, words: int) -> bool:
+def _levels_short(channel: Channel, neighbours: Neighbours, period: int, words: int) -> bool:
     """A double of the check (the Chain needs no FIFO at any folding): ``levels``
     (activate's output) needs more words than its transport holds; every other channel's
     holds."""

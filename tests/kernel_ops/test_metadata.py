@@ -331,7 +331,7 @@ def changed_choice(model: ModelWrapper) -> None:
 
 
 def changed_channel(model: ModelWrapper) -> None:
-    configured(model, {"x": {"adapter.input_gen.input_gen.ram_style": "block"}})
+    configured(model, {"x": {"adapter_ram_style": "block"}})
 
 
 def changed_weight(model: ModelWrapper) -> None:

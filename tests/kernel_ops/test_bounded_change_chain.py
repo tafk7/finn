@@ -6,7 +6,7 @@ Stage 7's synthetic chain (four MatMuls, each followed by a Thresholding, and th
 channels between them) joined as one Space, kernels first, its choices committed as
 conversion and the cut set them (each kernel's by its default policies, each channel's
 by the interim channel rule). The engine's walk (``support.space_walk``) applies seeded
-changes to it: a kernel's core, its folding, a channel's adapter or depth, a clear, a
+changes to it: a kernel's core, its folding, a channel's memory or depth, a clear, a
 pair of changes, and ones the kernels refuse; each successor is compared with a
 configuration of the same assignments built from nothing. Here a channel's facts read
 its kernel's ``compute``, as the engine's own examples do in
@@ -22,6 +22,7 @@ from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
+from support.one_space import channel_facts
 from support.space_walk import check, walk
 
 from finn.core.space import Space, composite, design_space
@@ -29,7 +30,6 @@ from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import in_shell, make_cut_choices
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
-from finn.kernels.network import Fact, Interface
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 
@@ -96,14 +96,7 @@ def whole_space(layers: int) -> Space:
         declared[node.name] = facts.space_type(**cast("dict[str, Any]", dict(facts.arguments)))
     channels: dict[str, object] = {}
     for name in net.channels:
-        given: dict[str, Any] = {}
-        for fact, value in net.wiring(name).facts.items():
-            if isinstance(value, Interface):
-                value = getattr(declared[value.member], value.view)
-            elif isinstance(value, Fact):
-                value = getattr(declared[value.member], value.name)
-            given[fact] = value
-        channels[name] = Channel(**given)
+        channels[name] = Channel(**channel_facts(net, name, declared))
     whole = composite(f"chain_{2 * layers}", {**declared, **channels})
     stored = {f"{owner}.{key}": value for (owner, key), value in net.chosen().items()}
     return commit(design_space(whole()), stored)
@@ -111,8 +104,7 @@ def whole_space(layers: int) -> Space:
 
 def test_eight_kernels_answer_as_a_recomputation() -> None:
     # Few steps: each recomputes the base and the successor from nothing, ~0.7 s on this
-    # chain. Seed 13 accepts, refuses, clears, pairs and puts stored choices dormant (a
-    # core's own: a core switch keeps the folding, MatMul's, in play).
-    report = walk(whole_space(4), seed=13, steps=20, everything=False)
+    # chain. Seed 1 accepts, refuses, clears, pairs and puts a stored choice dormant.
+    report = walk(whole_space(4), seed=1, steps=20, everything=False)
     check(report)
     assert report.tallies.dormant, report.tallies

@@ -86,7 +86,7 @@ def test_a_channel_waits_with_its_choices_until_its_contracts_are_known() -> Non
     with pytest.raises(NetworkError, match="x is not bound"):
         network.member("x")
     folded = choose(network, FOLDING)
-    assert folded.unbound("x") is None and folded.member("x").consumer.label == (
+    assert folded.unbound("x") is None and folded.member("x").consumer_label == (
         "first.compute.packed.x"
     )
 
@@ -106,12 +106,10 @@ def test_a_change_reaches_its_kernel_and_the_channels_that_read_it() -> None:
         changed.member(name) is not folded.member(name) for name in ("first", "x", "w1", "hidden")
     )
     # Its stored choices kept on the channels it rebuilt from their new facts, and the
-    # output adapter those facts bring into play at its first valid value (the interim
-    # channel rule): PE 1 against the thresholding's 2 lanes.
-    assert changed.chosen(("hidden",)) == {
-        **folded.chosen(("hidden",)),
-        ("hidden", "output_adapter"): "vpc",
-    }
+    # output adapter those facts bring into play placed, no choice: PE 1 against the
+    # thresholding's 2 lanes.
+    assert changed.chosen(("hidden",)) == folded.chosen(("hidden",))
+    assert changed.member("hidden").output_adapting
 
 
 def with_transports(network: Network) -> Network:
@@ -288,7 +286,7 @@ def test_each_member_sits_under_its_node_in_the_module() -> None:
     renamed = Network(chain.members(), stored=stored, nodes={"first": "mm_first"})
     module = built(renamed, chain.STEM)
     assert "mm_first.compute.packed" in labels(module)
-    assert renamed.member("x").consumer.label == "mm_first.compute.packed.x"
+    assert renamed.member("x").consumer_label == "mm_first.compute.packed.x"
     with pytest.raises(NetworkError, match="members share a node in the module: x: x, first"):
         Network(chain.members(), nodes={"first": "x"})
 

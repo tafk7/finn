@@ -74,9 +74,13 @@ def test_stage_7s_chain_of_eight_kernels_resolves_as_it_expands() -> None:
     whole, _ = chain_space(4)
     assert_expands([whole])
     templates = reached(link_template(whole))
-    # Sixteen classes, and the composite (a port is a declaration of its kernel, no class).
-    assert len(templates) == 17
-    assert len(expand(whole).scopes) == 216
+    # Fifteen classes, and the composite (a port is a declaration of its kernel, no class).
+    assert len(templates) == 16
+    # A channel's source and mover are placements: compiled where their guard's formal is
+    # not supplied too (their members inapplicable there), so each of the 9 channels
+    # without a value has its source's scope, and each of the 13 its mover's, where the
+    # one-case selectors compiled none; a direct transport places none.
+    assert len(expand(whole).scopes) == 225
 
 
 def _answers_as_the_line(classes: list[type[Space]]) -> int:
@@ -104,8 +108,11 @@ def test_the_kernels_and_the_test_support_answer_as_the_line() -> None:
 
 def test_stage_7s_chain_of_eight_kernels_answers_as_the_line() -> None:
     whole, _ = chain_space(4)
-    # The choices compared: each MatMul's folding is its own, not each core's.
-    assert _answers_as_the_line([whole]) == 181
+    # The choices compared: each MatMul's folding is its own, not each core's; each
+    # channel's source's two (absent without a value) and its one adapter memory, and no
+    # source, mover or output adapter selector, nor an input adapter's, which its steps
+    # pick.
+    assert _answers_as_the_line([whole]) == 130
 
 
 def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
@@ -132,18 +139,24 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     order) makes every scope's record and resolves no node; the change resolves what it
     and its checks read. An absent scope's validity is read from its guard and its
     choices' presence from their guards, so no scope absent at the baseline has a node
-    resolved for either. The scopes with a node resolved are the 51 present at the
+    resolved for either. The scopes with a node resolved are the 38 present at the
     baseline (the line's present scopes) and 4 more, of unknown presence in the design
     space before the change: each MatMul's ``compute.int8_dsp58`` case. The first's is read:
     the list of what the change moved (``_assign._moved``) reads, of each choice
     whose presence may read a choice the change sets, its presence after, and before only
-    where that decides a list: ``x.adapter`` is stored and present after, so whether it
-    comes into play reads its presence before, where its guard reads the first MatMul's
-    views, whose validity there reads that case's (its selector still open). The other
-    three's port contracts are made, not read: each MatMul's served contract
-    (``x_contract``) takes its core's through the selector (an argument of each case's), and
-    a channel reads it. Then ``viable`` of the middle MatMul's choices and one change of its
-    ``pe``: what trials resolve more."""
+    where that decides a list: ``x.adapter_ram_style`` is stored and present after, so
+    whether it comes into play reads its presence before, where its guard (the picker of
+    the channel's input adapter, ``input_chain``, reading its steps) reads the first
+    MatMul's views, whose validity there reads that case's (its selector still open). The
+    other
+    three's port streams are made, not read: each MatMul's served stream (``x_stream``)
+    takes its core's through the selector (an argument of each case's), and a channel
+    reads it. A channel's sides' labels are constants (20 of the constant nodes), and so is
+    its platform, an input of its adapter memory's UltraRAM rule, which every channel
+    states (5 more: the channels that place no memory, ``h0``-``h3`` and ``y``); it reads
+    no port's contract. Then ``viable`` of the middle MatMul's choices and one change
+    of its ``pe``: what trials resolve more (the channels beside it, ``w2`` and ``h2``, read
+    its ports' streams and reach none of their adapters' cases)."""
     monkeypatch.delenv(EAGER, raising=False)
     whole, stored = chain_space(4)
     point = design_space(whole())
@@ -151,10 +164,10 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     assert structure is not None
     committed = commit(point, stored)
     assert structure.counts() == {
-        "scopes addressed": 216,
-        "scopes in play": 55,
-        "nodes resolved": 1476,
-        "const nodes resolved": 76,
+        "scopes addressed": 225,
+        "scopes in play": 42,
+        "nodes resolved": 1383,
+        "const nodes resolved": 101,
     }
     in_play = set(structure._in_play)
     world, before = state(committed).world, state(point).world
@@ -171,7 +184,7 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
         return True
 
     present_scopes = {record.index for record in structure.records if present(record.index)}
-    assert len(present_scopes) == 51
+    assert len(present_scopes) == 38
     read_for_the_report = {
         record.index
         for record in structure.records
@@ -189,9 +202,9 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     assert {
         node.key.rsplit(".", 1)[-1] for node in structure._raw.values() if node.scope in made
     } == {
-        "x_contract",
-        "w_contract",
-        "y_contract",
+        "x_stream",
+        "w_stream",
+        "y_stream",
     }
     for index in read_for_the_report:
         guard = structure.guard_of(structure.records[index])
@@ -201,16 +214,16 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     assert len(middle) == 7
     inspection.viable(committed, [handles[key] for key in middle])
     assert structure.counts() == {
-        "scopes addressed": 216,
-        "scopes in play": 66,
-        "nodes resolved": 1554,
-        "const nodes resolved": 76,
+        "scopes addressed": 225,
+        "scopes in play": 46,
+        "nodes resolved": 1478,
+        "const nodes resolved": 101,
     }
     report = committed.try_with_choices({handles["mm2.pe"]: 2})
     assert report.accepted
     assert structure.counts() == {
-        "scopes addressed": 216,
-        "scopes in play": 66,
-        "nodes resolved": 1554,
-        "const nodes resolved": 76,
+        "scopes addressed": 225,
+        "scopes in play": 46,
+        "nodes resolved": 1478,
+        "const nodes resolved": 101,
     }

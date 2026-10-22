@@ -4,7 +4,7 @@
 """A sliding window is a channel's adapter: one ``input_gen`` reading the image's frame.
 
 A consumer presenting a window of its image (``oh + kh``) is fed by a channel
-whose plan is a reorder (``finn.dataflow.traversal``), so its adapter is the
+whose one step is a reorder (``finn.dataflow.traversal``), so its adapter is the
 ``input_gen`` candidate, with ``FM_SIZE`` the image, ``DIMS`` the window's loops
 and ``COEFS`` their steps through the image. The review's probe, a flat 3 x 3
 window over a 4 x 4 map, is that module. Under XSim the realized module carries
@@ -26,15 +26,14 @@ from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import simulate
 from finn.core.space import design_space
-from finn.dataflow.plan import Step, plan
 from finn.dataflow.schedule import Index, Schedule
+from finn.dataflow.steps import Step, steps
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Traversal, vector_major
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.adapters import ADAPTERS, Stage
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Leaf
-from finn.kernels.configure import commit
 from finn.kernels.library import library_module
 from finn.toolchain.launcher import host_toolchain
 
@@ -80,14 +79,17 @@ CASES: dict[str, Callable[[], tuple[Traversal, Traversal]]] = {
 
 def adapter(source: Traversal, sink: Traversal) -> Stage:
     """The channel's adapter for ``source`` to ``sink``: its one stage."""
-    found = plan(BeatSequence(source), BeatSequence(sink))
-    assert found.steps == (Step.REORDER,)
+    found = steps(BeatSequence(source), BeatSequence(sink))
+    assert found.kinds == (Step.REORDER,)
     candidate = design_space(
         ADAPTERS["input_gen"](
-            tensor=Tensor(source.shape, ELEMENT), plan=found, platform=FULL_DSP48E2
+            tensor=Tensor(source.shape, ELEMENT),
+            steps=found,
+            platform=FULL_DSP48E2,
+            ram_style="auto",
         )
     )
-    (stage,) = commit(candidate, {"input_gen.ram_style": "auto"}).stages
+    (stage,) = candidate.stages
     return stage
 
 
@@ -120,9 +122,7 @@ def test_a_three_by_three_window_steps_rows_pixels_and_channel_beats() -> None:
 
 def test_the_reviews_flat_probe_is_the_adapters_module() -> None:
     # A flat 3 x 3 window over a 4 x 4 map, as the kernel-system review built it by hand.
-    flat = design_space(
-        generator_node(bits=8, frame=16, dims=(2, 2, 3, 3), strides=(4, 1, 4, 1))
-    ).with_choices(ram_style="auto")
+    flat = design_space(generator_node(bits=8, frame=16, dims=(2, 2, 3, 3), strides=(4, 1, 4, 1)))
     stage = adapter(*three_by_three(4, 4, 1, 1))
     module = library_module(flat)
     assert isinstance(module, Leaf)

@@ -150,7 +150,7 @@ ON_VERSAL: dict[str, Mapping[str, object]] = {
         "first.pe": 2,
         "first.simd": 4,
         "first.compute.int8_dsp58.compute_pumping": False,
-        "x.adapter.input_gen.input_gen.ram_style": "ultra",
+        "x.adapter_ram_style": "ultra",
     },
     "thresholding": {"activate.pe": 2, "activate.ultra_stages": 0},
 }

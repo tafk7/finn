@@ -9,11 +9,18 @@ space of its own, bound from plain facts: a kernel from its declaration
 from its ``Wire``, the facts of a ``Channel``. A wire's fact is a value, or
 read from a member:
 
-- a port's contract (``Interface(member, view)``): the ``PortContract`` a member presents
-  for one of its ports (a kernel's ``x_contract``; a channel's ``set_contract``, its
-  source's set port), labelled from the network (``PortContract.under``:
-  ``first.compute.packed.x``), given to
-  the channel's ``producer`` or ``consumer``; a side without one is a boundary;
+- a port (``Interface(member, view)``, its contract's view: a kernel's ``x_contract``; a
+  channel's ``set_contract``, its source's set port), on the channel's ``producer`` or
+  ``consumer`` side: the channel takes the port's stream (``x_stream``), the label of the
+  ``PortContract`` the member presents for it, read outside the channel and labelled from
+  the network (``PortContract.under``: ``first.compute.packed.x``; ``producer_label``,
+  ``consumer_label``), and on the producer's side its word width (``x_data_width``,
+  ``producer_width``); a side without one is a boundary. A stream has no direction, so
+  a port wired to the side its contract's endpoint is not (a producer's on the
+  consumer's side) leaves the channel refused as it is bound (``channel-users``, owned
+  by the channel). The contracts stay the
+  network's: its hops to the channel (``hops``) and FIFO sizing's paces (``neighbours``)
+  read them;
 - a fact a member states (``Fact(member, name)``): a parameter channel's tensor and
   contents, as its kernel states them, values read whatever the kernel's validity
   (``MatMulKernel.carried_weights``, ``stored_weights``).
@@ -41,8 +48,8 @@ a change, atomic over the members it reaches:
    outside its domain or a rule it reaches would be newly false, naming the rule and the
    stored choices standing in its way;
 2. each member that changed: every fact it gives a channel read again (its ports'
-   contracts, and for a parameter channel what it states: these may read a choice,
-   MatMul's ``realization``);
+   streams, labels and widths, and for a parameter channel what it states: these may read
+   a choice, MatMul's ``realization``);
 3. each channel named with the same facts: one change on its point, as a kernel's. Each
    channel given other facts is rebuilt from them, a change of facts on the channel it
    was (a channel never bound before is bound, as above), with the change's choices.
@@ -61,7 +68,9 @@ declaration inside the member's space; the network names the member beside them.
 **The module.** A network is emitted as one ``Composed`` module (``module``): each
 member's netlist under its node (its name, unless the network is given another,
 ``nodes``: a graph's names with ``\\W`` as ``_``), in the order the network was declared
-(its instance order, which the text follows), with every boundary channel's AXIS bus
+(its instance order, which the text follows), a channel's with its hops to the ports beside
+it, which the network wires from the contracts it read (``hops``,
+``finn.kernels.channels.outer_hops``), with every boundary channel's AXIS bus
 (``finn.kernels.artifacts.top.compose``), made of its ``netlist`` (the merged fragment and
 the boundary buses), which a shell counts without building the top
 (``finn.platform.shells.bus_counts``). A kernel's ``netlist`` view merges its members'
@@ -92,11 +101,11 @@ from finn.core.space import (
     reject,
 )
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import Bus
+from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed, Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose
 from finn.kernels.base import BOUNDARY, NETLIST, PortContract, merged
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, Neighbours, OuterHops, outer_hops
 from finn.kernels.configure import chosen, refusal
 from finn.kernels.control import CONTROL, Control
 from finn.kernels.control import presented as presented_buses
@@ -150,11 +159,20 @@ class NetworkError(ValueError):
 
 @dataclass(frozen=True)
 class Interface:
-    """A port's contract in the wiring: the ``PortContract`` member ``member`` presents at
-    its view ``view`` (``x_contract``, ``set_contract``), labelled from the network."""
+    """A port in the wiring, by the view of its contract: the ``PortContract`` member
+    ``member`` presents at its view ``view`` (``x_contract``, ``set_contract``), labelled
+    from the network. A channel takes the port's stream (``x_stream``), that label, and on
+    its producer's side the port's word width (``x_data_width``)."""
 
     member: str
     view: str
+
+    @property
+    def port(self) -> str:
+        """The port the view is the contract of: ``x`` for ``x_contract``."""
+        if not self.view.endswith("_contract"):
+            raise NetworkError(f"{self.member}.{self.view} is no port's contract view")
+        return self.view.removesuffix("_contract")
 
 
 @dataclass(frozen=True)
@@ -242,6 +260,14 @@ class Trial(Generic[N]):
 
 #: ``Channel``, called with facts by name, each checked by the engine.
 _CHANNEL: Any = Channel
+
+
+def _handle(name: str, source: str, point: Space, stated: str) -> Any:
+    """Member ``source``'s member ``stated``, which channel ``name`` reads a fact from."""
+    handle = getattr(type(point), stated, None)
+    if handle is None:
+        raise NetworkError(f"{name}: {source} states no {stated!r}")
+    return handle
 
 
 def _channel(
@@ -334,6 +360,28 @@ def _observed_rebuilt(entry: Rebuilt) -> object:
         return (None, dict(entry.why), dict(entry.standing))
     point, again, fallbacks = entry
     return (observed(Configured(point)), dict(again), fallbacks)
+
+
+def _users(name: str, ports: Mapping[str, PortContract]) -> Rejected | None:
+    """Why channel ``name``'s ports (``ports``, the contracts its sides were read from, by
+    side) are not one producer and one consumer, or None: a port is wired to the side its
+    contract's endpoint is not (a producer's port, an AXIS initiator, on the consumer's side,
+    or a consumer's on the producer's). A stream has no direction, so the network, which
+    reads the contracts, refuses it as it binds the channel (``channel-users``, owned by
+    ``name``)."""
+    miswired = [
+        side
+        for side, port in ports.items()
+        if (port.contract.transport.endpoint is Endpoint.INITIATOR) != (side == "producer")
+    ]
+    if not miswired:
+        return None
+    named = ", ".join(ports[side].label for side in ("producer", "consumer") if side in ports)
+    return reject(
+        "channel-users",
+        f"a channel has at most one producer and one consumer; its ports are {named}",
+        owner=name,
+    )
 
 
 def _rebuild(
@@ -720,6 +768,28 @@ class Network:
             raise NetworkError(f"{name} is no bound channel of the network")
         return dict(found)
 
+    def neighbours(self, name: str) -> Neighbours:
+        """The ports beside channel ``name`` (each ``Interface``'s contract, as the network
+        reads it to bind the channel, labelled): the producing kernel's and the consuming
+        kernel's, by the side each is wired to; a ``NetworkError`` where it is not bound.
+        FIFO sizing reads their paces (``finn.kernels.fifo_sizing``), and the network its
+        hops to them (``hops``)."""
+        self.facts(name)
+        found: dict[str, PortContract] = {}
+        for side in ("producer", "consumer"):
+            value = self._wires[name].facts.get(side)
+            if isinstance(value, Interface):
+                port = self._contract(name, value, self._points[value.member])
+                if isinstance(port, PortContract):
+                    found[side] = port
+        return Neighbours(found.get("producer"), found.get("consumer"))
+
+    def hops(self, name: str) -> OuterHops | Rejected:
+        """Channel ``name``'s hops to the ports beside it (``outer_hops``, from
+        ``neighbours``), of a channel whose netlist is answered, its refusals owned by
+        ``name``; a ``NetworkError`` where it is not bound."""
+        return outer_hops(self.member(name), self.neighbours(name), owner=name)
+
     def unbound(self, name: str) -> Unbound | None:
         """Why channel ``name`` is not bound, or None where it is."""
         return self._unbound.get(name)
@@ -867,6 +937,7 @@ class Network:
         """Channel ``name``'s facts, each read from the members it names, or why not."""
         resolved: dict[str, object] = {}
         stored: Mapping[str, object] = {}
+        ports: dict[str, PortContract] = {}
         for fact, value in self._wires[name].facts.items():
             if not isinstance(value, (Interface, Fact)):
                 resolved[fact] = value
@@ -876,24 +947,65 @@ class Network:
             if held is not None:
                 return Unbound(held.member, held.result, stored)
             point = points[source]
-            stated = value.view if isinstance(value, Interface) else value.name
-            handle = getattr(type(point), stated, None)
-            if handle is None:
-                raise NetworkError(f"{name}: {source} states no {stated!r}")
-            answer = point.query(handle)
+            if isinstance(value, Interface):
+                contract = self._contract(name, value, point)
+                if isinstance(contract, Inapplicable):
+                    continue
+                if isinstance(contract, (Unresolved, Rejected)):
+                    return Unbound(source, contract, stored)
+                port = self._port(name, fact, value, point, contract)
+                if isinstance(port, Inapplicable):
+                    continue
+                if isinstance(port, (Unresolved, Rejected)):
+                    return Unbound(source, port, stored)
+                resolved |= port
+                ports[fact] = contract
+                continue
+            answer = point.query(_handle(name, source, point, value.name))
             if isinstance(answer, Inapplicable):
                 continue
             if isinstance(answer, (Unresolved, Rejected)):
                 return Unbound(source, answer, stored)
-            found = answer.value
-            if isinstance(value, Interface):
-                if not isinstance(found, PortContract):
-                    raise NetworkError(
-                        f"{name}: {source}.{stated} is no port's contract: {found!r}"
-                    )
-                found = found.under(self._nodes[source])
-            resolved[fact] = found
+            resolved[fact] = answer.value
+        users = _users(name, ports)
+        if users is not None:
+            return Unbound(name, users, stored)
         return tuple(sorted(resolved.items(), key=lambda item: item[0]))
+
+    def _contract(
+        self, name: str, value: Interface, point: Space
+    ) -> PortContract | Inapplicable | Unresolved | Rejected:
+        """The contract of the port ``value`` names on channel ``name``, read from its
+        member's ``point`` and labelled from the network; or its read's answer where it
+        has none (inapplicable: the port is not placed; waiting; refused)."""
+        answer = point.query(_handle(name, value.member, point, value.view))
+        if not isinstance(answer, Available):
+            return answer
+        found = answer.value
+        if not isinstance(found, PortContract):
+            raise NetworkError(
+                f"{name}: {value.member}.{value.view} is no port's contract: {found!r}"
+            )
+        return found.under(self._nodes[value.member])
+
+    def _port(
+        self, name: str, fact: str, value: Interface, point: Space, contract: PortContract
+    ) -> dict[str, object] | Inapplicable | Unresolved | Rejected:
+        """The facts the port ``value`` names gives channel ``name`` on its side ``fact``
+        (its ``contract``, read first, as the channel took it): its stream
+        (``x_stream``), its contract's label (``<fact>_label``) and on the producer's side
+        its word width (``x_data_width``, ``producer_width``), each read from its member's
+        ``point``; or the read's answer where one has no value."""
+        found: dict[str, object] = {f"{fact}_label": contract.label}
+        reads = {fact: f"{value.port}_stream"}
+        if fact == "producer":
+            reads["producer_width"] = f"{value.port}_data_width"
+        for given, member in reads.items():
+            answer = point.query(_handle(name, value.member, point, member))
+            if not isinstance(answer, Available):
+                return answer
+            found[given] = answer.value
+        return found
 
     def _stored(self, name: str) -> Mapping[str, object]:
         """What member ``name`` stores: a bound member's choices, by their stored values,
@@ -1037,16 +1149,24 @@ class Network:
 
     def netlist(self) -> QueryResult[tuple[Fragment, tuple[Bus, ...]]]:
         """What its top is made of: each member's netlist under its node, in the order
-        declared, merged with each control bus its kernels present (``CONTROL``, at the
-        port each was given), and each boundary channel's AXIS bus; or why not, every
-        member's refusal (or, where none refuses, what they wait on), each finding naming
-        its member (``located``), or the merge's own (``kernel-netlist``)."""
+        declared, a channel's with its hops to the ports beside it around its own links
+        (``hops``: the producer's first, the consumer's last), merged with each control bus
+        its kernels present (``CONTROL``, at the port each was given), and each boundary
+        channel's AXIS bus; or why not, every member's refusal (or, where none refuses,
+        what they wait on; a channel's hops' own, ``channel-port`` or ``channel-link``),
+        each finding naming its member (``located``), or the merge's own
+        (``kernel-netlist``)."""
         netlists: list[tuple[str, Fragment]] = []
         boundary: list[Bus] = []
         controls: list[tuple[str, Control]] = []
         failed: list[tuple[str, QueryResult[object]]] = []
         for name in self._order:
             netlist = self.query(name, NETLIST)
+            if name in self._wires and isinstance(netlist, Available):
+                hops = self.hops(name)
+                netlist = (
+                    hops if isinstance(hops, Rejected) else Available(hops.around(netlist.value))
+                )
             if isinstance(netlist, Available):
                 netlists.append((self._nodes[name], netlist.value))
             else:

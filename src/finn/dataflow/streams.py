@@ -11,7 +11,7 @@ presents it, or a network's boundary) is the channel's to say. A channel
 ``Streams`` holds its two, and ``misfit`` is the logical rule between them and the
 tensor: each traverses the tensor's shape, the producer's values fit the tensor's
 element, and the tensor's fit the consumer's. What joins the two sequences is
-``finn.dataflow.plan``. How a channel finds its streams (the kernels' ports, the
+``finn.dataflow.steps``. How a channel finds its streams (the kernels' ports, the
 network's boundary) is the channel's, not this layer's.
 """
 
