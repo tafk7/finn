@@ -55,13 +55,13 @@ is its primary, sticky; later ones are its cleanup failures, in the order met; a
 the run raises, its details attached (``_failure.cancellation_details``). A dependency
 cycle is a failure of the node read again.
 
-**The session** holds the counters, and may hold a node cache (``cache.NodeCache``):
-where it does, each answer carries the choices and facts its evaluation read
-(``Ans.reads``), the key a cache keeps it by. Every node's evaluation asks the cache
-first; a hit is taken as the answer, into the memo, its read set noted as read, exactly as
-the evaluation would have left them. A miss is evaluated, and its answer kept, with its
-read set, after. A membership reading asks under its guards taken as holding. A node
-abandoned by the depth guard, or failing, keeps nothing.
+**The session** holds the counters, and may hold a node cache (``cache.NodeCache``): where
+it does, each answer carries the choices and facts its evaluation read (``Ans.reads``), the
+key a cache keeps it by. Every node's evaluation asks the cache first; a hit is taken as the
+answer, into the memo, its read set noted as read, exactly as the evaluation would have left
+them. A miss is evaluated, and its answer offered to the cache, which keeps it unless its
+read set is wider than its width or a value has no key. A membership reading asks under its
+guards taken as holding. A node abandoned by the depth guard, or failing, keeps nothing.
 
 **The purity check.** The node cache, the domains' outcomes kept on the facts layer and
 the depth guard's restart all rest on purity. The check tests it (``Session.verifying``:
