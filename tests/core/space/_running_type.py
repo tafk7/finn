@@ -33,17 +33,23 @@ and the cache's lookups, hits and values hashed). The named implementations, eac
 as ``core.space._running_type:NAME``:
 
 - ``RUNNING``: no cache;
-- ``RUNNING_CACHED``: the cache on, unbounded;
+- ``RUNNING_CACHED``: the cache on, at its default width (``cache.WIDE``), unbounded;
+- ``RUNNING_NARROW``: no answer kept whose read set holds more than one read;
 - ``RUNNING_BOUNDED``: at most one read set kept per member;
 - ``RUNNING_DROPPING``: half the entries dropped at random, at lookup and at keep (seed 0);
-- ``RUNNING_VERIFIED``: the cache on, unbounded, with the purity check on: each hit
-  evaluated anyway and compared, and so is each node the depth guard abandoned;
+- ``RUNNING_VERIFIED``: the cache on, at its default width, unbounded, with the purity
+  check on: each hit evaluated anyway and compared, and so is each node the depth guard
+  abandoned;
 - ``RUNNING_PLANTED``: a cache wrong on purpose (``LeavesOneOut``): each answer is kept
   with the last read of its read set (by node) left out of its key, so a design space
   differing from the one evaluated in that read alone takes its answer. The walks and the
   toys must catch it;
 - ``RUNNING_PLANTED_WIDE``: the same fault, subtler (``LeavesOneOut(wider_than=4)``): a read
-  left out only where the read set holds more than 4 reads.
+  left out only where the read set holds more than 4 reads;
+- ``RUNNING_PLANTED_WIDTH``: a width bound applied to the key rather than to whether an
+  answer is kept (``KeysFirstReads(wide=4)``): an answer whose read set holds more than 4
+  reads is kept under its first 4 (by node), so a design space differing from the one
+  evaluated in a later read alone takes its answer.
 """
 
 from __future__ import annotations
@@ -236,8 +242,23 @@ class LeavesOneOut(NodeCache):
         super().keep(ev, index, found)
 
 
+class KeysFirstReads(NodeCache):
+    """A node cache wrong on purpose: its width bound applied to the key rather than to
+    whether an answer is kept. An answer whose read set holds more than ``wide`` reads is
+    kept under the first ``wide`` of them (by node), so its key misses the rest
+    (``RUNNING_PLANTED_WIDTH``)."""
+
+    __slots__ = ()
+
+    def keep(self, ev: Evaluation, index: NodeId, found: Ans) -> None:
+        if self.wide is not None and len(found.reads) > self.wide:
+            found = replace(found, reads=frozenset(sorted(found.reads)[: self.wide]))
+        super().keep(ev, index, found)
+
+
 RUNNING = Running()
 RUNNING_CACHED = Running(NodeCache(), "running, cached")
+RUNNING_NARROW = Running(NodeCache(wide=1), "running, cached, width 1")
 RUNNING_BOUNDED = Running(NodeCache(bound=1), "running, cached, bounded 1")
 RUNNING_DROPPING = Running(NodeCache(drop=0.5, seed=0), "running, cached, dropping 0.5")
 RUNNING_VERIFIED = Running(NodeCache(), "running, cached, verified", verify=True)
@@ -245,15 +266,21 @@ RUNNING_PLANTED = Running(LeavesOneOut(), "running, cached, planted: a read left
 RUNNING_PLANTED_WIDE = Running(
     LeavesOneOut(wider_than=4), "running, cached, planted: a read left out of sets over 4"
 )
+RUNNING_PLANTED_WIDTH = Running(
+    KeysFirstReads(wide=4), "running, cached, planted: a width bound applied to the key"
+)
 
 __all__ = [
     "RUNNING",
     "RUNNING_BOUNDED",
     "RUNNING_CACHED",
     "RUNNING_DROPPING",
+    "RUNNING_NARROW",
     "RUNNING_PLANTED",
     "RUNNING_PLANTED_WIDE",
+    "RUNNING_PLANTED_WIDTH",
     "RUNNING_VERIFIED",
+    "KeysFirstReads",
     "LeavesOneOut",
     "Running",
     "RunningAnswers",

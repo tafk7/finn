@@ -55,13 +55,13 @@ is its primary, sticky; later ones are its cleanup failures, in the order met; a
 the run raises, its details attached (``_failure.cancellation_details``). A dependency
 cycle is a failure of the node read again.
 
-**The session** holds the counters, and may hold a node cache (``cache.NodeCache``):
-where it does, each answer carries the choices and facts its evaluation read
-(``Ans.reads``), the key a cache keeps it by. Every node's evaluation asks the cache
-first; a hit is taken as the answer, into the memo, its read set noted as read, exactly as
-the evaluation would have left them. A miss is evaluated, and its answer kept, with its
-read set, after. A membership reading asks under its guards taken as holding. A node
-abandoned by the depth guard, or failing, keeps nothing.
+**The session** holds the counters, and may hold a node cache (``cache.NodeCache``): where
+it does, each answer carries the choices and facts its evaluation read (``Ans.reads``), the
+key a cache keeps it by. Every node's evaluation asks the cache first; a hit is taken as the
+answer, into the memo, its read set noted as read, exactly as the evaluation would have left
+them. A miss is evaluated, and its answer offered to the cache, which keeps it unless its
+read set is wider than its width or a value has no key. A membership reading asks under its
+guards taken as holding. A node abandoned by the depth guard, or failing, keeps nothing.
 
 **The purity check.** The node cache, the domains' outcomes kept on the facts layer and
 the depth guard's restart all rest on purity. The check tests it (``Session.verifying``:
@@ -187,8 +187,10 @@ class NodeCache(Protocol):
 class Counters:
     """Work done: nodes evaluated, by kind; authored calls by kind; the most evaluations
     in flight at once; the depth guard's restarts. Where a node cache is on: its lookups
-    and hits, the values it hashed, the members it kept a read set for, the read sets it
-    kept, and the most read sets one member held at once (``cache.NodeCache``)."""
+    and hits, the values it hashed (each value whose key it computed, at lookup and at
+    keep; an answer not kept for its width is not hashed at keep), the answers it did not
+    keep for their width, the members it kept a read set for, the read sets it kept, and
+    the most read sets one member held at once (``cache.NodeCache``)."""
 
     evaluated: int = 0
     by_kind: dict[str, int] = field(default_factory=dict)
@@ -198,6 +200,7 @@ class Counters:
     lookups: int = 0
     hits: int = 0
     hashed: int = 0
+    too_wide: int = 0
     members: int = 0
     sets: int = 0
     most_sets: int = 0
