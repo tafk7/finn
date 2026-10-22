@@ -254,9 +254,9 @@ class QuantActBaseHandler(ABC):
             mt_inst.set_nodeattr("out_dtype", out_dtype)
         else:
             # Set datatype. Without out_scale and out_bias, the MultiThreshold outputs
-            # its count of thresholds reached: 0 or 1 for a BipolarQuant's one
-            # threshold, so BINARY, not the quantizer's BIPOLAR.
-            mt_inst.set_nodeattr("out_dtype", "BINARY" if bipolar else out_dtype)
+            # its count of thresholds reached: 0 or 1 for the one threshold of a
+            # BipolarQuant or 1-bit signed Quant, so BINARY, not the quantizer's BIPOLAR.
+            mt_inst.set_nodeattr("out_dtype", "BINARY" if out_dtype == "BIPOLAR" else out_dtype)
 
             # Insertion parameters
             up_stream_node = mt_node
@@ -322,7 +322,10 @@ class QuantActBaseHandler(ABC):
                     mul_shape,
                 )
                 graph.value_info.append(mul_tensor)
-                model.set_initializer(mul_tensor.name, mul_scale)
+                # A 1-bit Quant's doubled scale is float64; the Mul needs float32.
+                model.set_initializer(
+                    mul_tensor.name, np.asarray(mul_scale, dtype=np_default_dtype)
+                )
 
                 output_shape = model.get_tensor_shape(n.output[0])
                 act_mul_tensor = helper.make_tensor_value_info(

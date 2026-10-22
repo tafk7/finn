@@ -354,3 +354,14 @@ def test_a_bipolar_identity_with_a_scale_other_than_one_is_refused():
     model = _activation_model(None, "BipolarQuant", 0.5)
     with pytest.raises(ValueError):
         model.transform(ConvertQONNXtoFINN())
+
+
+@pytest.mark.transform
+def test_a_one_bit_signed_quant_converts():
+    model = _activation_model(None, "Quant", 1.0, 1, True, False)
+    converted = model.transform(ConvertQONNXtoFINN())
+    assert [n.op_type for n in converted.graph.node] == ["MultiThreshold", "Add", "Mul"]
+    x = np.array([[-2.0, -0.2, 0.0, 0.3]], dtype=np.float32)
+    expected = oxe.execute_onnx(model, {"global_in": x})["global_out"]
+    assert np.array_equal(expected, [[-1.0, -1.0, 1.0, 1.0]])
+    assert np.array_equal(_execute_checking_datatypes(converted, x), expected)
