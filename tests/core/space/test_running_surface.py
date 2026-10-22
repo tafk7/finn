@@ -64,6 +64,7 @@ from finn.core.space import (
     divisors_of,
     domain,
     inspection,
+    occurrence,
     reject,
     view,
 )
@@ -425,6 +426,41 @@ def test_a_configuration_is_its_design_space_at_a_scope() -> None:
     with pytest.raises(ValueUnavailableError):
         S.selected_candidate(at, House.heating, running.session)
     assert S.query(at, House.garage, running.session) == point.query(House.garage)
+
+
+@pytest.mark.parametrize(
+    ("x", "chosen"),
+    [(None, None), (1, None), (0, "direct"), (1, "lane"), (2, "stage")],
+    ids=["both open", "picked set, chosen open", "None cases", "lane", "stage"],
+)
+def test_the_selected_candidate_of_a_chosen_and_a_picked_selector(
+    x: int | None, chosen: str | None
+) -> None:
+    """The candidate a selector selects, a chosen one (``chosen``) and one picked by a
+    derived value (``picked``, ``Select(by=)``), each as today's: open, it raises as a value
+    unavailable; its ``None`` case selected, ``None``; else its case's configuration, the
+    one ``candidate`` names."""
+    point = design_space(ByArgument())
+    given: dict[object, object] = {}
+    if x is not None:
+        given[ByArgument.x] = x
+    if chosen is not None:
+        given[ByArgument.chosen] = chosen
+    if given:
+        point = bind(point, given).instance
+    running = Running()
+    at = S.At(cast(Any, running.open(point)).ds)
+    picked = None if x is None else ("direct", "lane", "stage")[x]
+    for decision, case in ((ByArgument.chosen, chosen), (ByArgument.picked, picked)):
+        today = _outcome(lambda: occurrence.selected_candidate(point, decision))
+        assert _outcome(lambda: S.selected_candidate(at, decision, running.session)) == today
+        if case is None:
+            assert isinstance(today, tuple) and today[:2] == ("raises", ValueUnavailableError)
+        elif case == "direct":
+            assert today == ("answers", None)
+        else:
+            named = inspection.candidate(point, decision, case)
+            assert named is not None and today == ("answers", ("configuration", named._scope))
 
 
 # -- evidence for a choice whose presence is unknown ---------------------------------------

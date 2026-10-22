@@ -38,7 +38,7 @@ from ..inspection import (
     _ordered,
     _waits,
 )
-from ..ir import NodeId
+from ..ir import Node, NodeId
 from ..results import (
     Available,
     ConstraintAssessment,
@@ -47,6 +47,7 @@ from ..results import (
     Rejected,
     Unresolved,
 )
+from ..semantics import equal, snapshot
 from .evaluate import INAPPLICABLE, TRUE, Evaluation, Session, evaluation
 from .structure import record
 from .value import DesignSpace, FactsLayer
@@ -84,14 +85,25 @@ def presence(ev: Evaluation, index: NodeId) -> tuple[Presence, QueryResult[objec
     return "absent", answer
 
 
+def placed(ev: Evaluation, index: NodeId) -> Evaluation:
+    """Where the choice ``index``'s values are checked and listed: its membership reading
+    (as if it existed), its guard read here first, as today's engine reads it to place the
+    check. The reading answers the same whatever the guard answers (a domain reads facts
+    only); a failure in the guard, a dependency cycle through the choice among them, is met
+    there first, as today's meets it."""
+    guard = ev.raw[index].guard
+    if guard is not None:
+        ev.result(guard)
+    return ev.membership(index)
+
+
 def check(ev: Evaluation, index: NodeId, value: object = _MISSING) -> QueryResult[bool]:
-    """A value's type check (the stored one by default), on its choice's membership
-    reading (as if it existed)."""
+    """A value's type check (the stored one by default), where it is placed (``placed``)."""
     node = ev.raw[index]
+    reading = placed(ev, index)
     if node.domain is None:
         return HOLDS
     held = ev.ds.stored[index] if value is _MISSING else value
-    reading = ev.membership(index)
     return cast(QueryResult[bool], ev.run(lambda: reading.type_check(node, Available(held), [])))
 
 
@@ -412,6 +424,28 @@ def _same(left: Mapping[NodeId, object], right: Mapping[NodeId, object]) -> bool
     return left.keys() == right.keys() and all(left[i] is right[i] for i in left)
 
 
+def _equal(node: Node, left: object, right: object, role: str, *, detach: bool) -> bool:
+    """Whether two values of ``node`` are equal by its semantics, in ``role``: a fact's
+    ("parameter equality") as given, a choice's ("configuration equality") each detached
+    first, so equality cannot change a stored value (today's assignment's)."""
+    if left is right:
+        return True
+    semantics = node.semantics
+    assert semantics is not None
+    if detach:
+        left = snapshot(semantics, left, owner=node.owner, role=role)
+        right = snapshot(semantics, right, owner=node.owner, role=role)
+    return equal(semantics, left, right, owner=node.owner, role=role)
+
+
+def _stored(node: Node, value: object, old: object) -> object:
+    """A choice's ``value`` as stored: the held object ``old`` where the two are equal by
+    the choice's semantics (so nothing reads it anew), else ``value``."""
+    if old is not _MISSING and _equal(node, value, old, "configuration equality", detach=True):
+        return old
+    return value
+
+
 def change(
     ds: DesignSpace,
     facts: Mapping[NodeId, object],
@@ -434,7 +468,9 @@ def change(
     changed: set[NodeId] = set()
     for i in facts:
         old = held_facts.get(i, _MISSING)
-        if old is not _MISSING and W._same_value(nodes[i], old, values[i]):
+        if old is not _MISSING and _equal(
+            nodes[i], old, values[i], "parameter equality", detach=False
+        ):
             given[i] = old
         else:
             given[i] = values[i]
@@ -448,9 +484,7 @@ def change(
         if value is REMOVE:
             stored.pop(i, None)
         else:
-            old = before.get(i, _MISSING)
-            same = old is not _MISSING and W._same_value(nodes[i], values[i], old)
-            stored[i] = old if same else values[i]
+            stored[i] = _stored(nodes[i], values[i], before.get(i, _MISSING))
 
     def owner(index: NodeId) -> str:
         return linked.header(index).owner
@@ -507,11 +541,7 @@ def bind(ds: DesignSpace, saved: Sequence[tuple[NodeId, object]], session: Sessi
     nodes = ds.layer.structure.raw_nodes
     values = prepare(linked, {i: (v, "choice") for i, v in saved})
     held = ds.stored
-    kept_values = {}
-    for i, _ in saved:
-        old = held.get(i, _MISSING)
-        same = old is not _MISSING and W._same_value(nodes[i], values[i], old)
-        kept_values[i] = old if same else values[i]
+    kept_values = {i: _stored(nodes[i], values[i], held.get(i, _MISSING)) for i, _ in saved}
     empty = ds.with_stored({}) if held else ds
     made, checks = _instantiate(empty, ds.facts, kept_values, session)
     if _same(made.stored, held):
@@ -531,7 +561,7 @@ def viable(ds: DesignSpace, index: NodeId, session: Session) -> Viable:
     """One choice's listed values, each tried alone as a change would set it."""
     ev = evaluation(ds, session)
     node = ev.raw[index]
-    reading = ev.membership(index)
+    reading = placed(ev, index)
     listed = ev.run(lambda: reading.listed(node, []))
     if not isinstance(listed, Available) or listed.value is None:
         return Viable(node.key, None, _waits(listed))
@@ -553,6 +583,7 @@ __all__ = [
     "check",
     "moved",
     "pairs",
+    "placed",
     "presence",
     "standing",
     "state_of",
