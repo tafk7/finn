@@ -26,8 +26,8 @@ with the template: what it finds there (choices; for a reach, facts too), what i
 in the Spaces it places (an import continued in the child's template by the child's
 summary, and what that reaches out of the child followed into this template's
 bindings), and what it reaches out of the template, which it reports as **exits**
-(``_compose.Exit``: one of its formals, the guard it is placed under, a name its placing
-template owns in it). A dynamic method's subtree is one summary per template too.
+(``_compose.Exit``: one of its formals, or the guard it is placed under). A dynamic
+method's subtree is one summary per template too.
 
 **Per scope, composition.** A summary's finds are addressed in the scope it is read at
 (``Structure.walk`` and ``ident``: a scope's record, no node); each exit is followed

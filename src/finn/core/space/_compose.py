@@ -25,16 +25,15 @@ template says of itself, never by copying a placement:
   template, each domain's walk follows what its membership inputs may read (arguments,
   alternatives, a view's validity and a validity's pieces, outputs, selectors, guards,
   a method's inferred reads and what ``present()`` reads), skipping the guards that
-  decide whether the Decision exists; it stops at a
-  choice (``domain-reads-choice``), and at the template's own formals, the guard it is
-  placed under and the names its placing template owns in it, which it reports as
-  reached. A child's are followed into the placing template's bindings, with the guards
-  above the slot as existence guards of the child's Decision too, and so up to the root,
-  per placement chain. A template records, for its own formals, which are reached by any
+  decide whether the Decision exists; it stops at a choice (``domain-reads-choice``),
+  and at the template's own formals and the guard it is placed under, which it reports
+  as reached. A child's are followed into the placing template's bindings, with the
+  guards above the slot as existence guards of the child's Decision too, and so up to
+  the root, per placement chain. A template records, for its own formals, which are reached by any
   domain in its subtree (``_Entry``), once per placement signature.
 
 A template is read **at a placement** (``Placement``): the Decisions over nodes of it that
-never apply there, and the names its placing template owns in the scope. A placement
+never apply there. A placement
 changes a template only where such a Decision never applies: its selector is a
 constant, what is read through it has no alternatives, and its candidates, what exists
 only where it applies and the validity pieces of both are not placed.
@@ -200,7 +199,8 @@ def _never_selection(template: Template, at: Placement, node: int) -> bool:
 
 def pieces(template: Template, at: Placement) -> list[Ref]:
     """A validity node's pieces at ``at``: its constraints and Decisions, then each placed
-    Space's validity."""
+    Space's validity. A formal it lists stands for nothing here (no binding is a Decision
+    of its own)."""
     own: list[Ref] = []
     placed: list[Ref] = []
     for piece in template.nodes[template.validity].constraints:
@@ -208,7 +208,7 @@ def pieces(template: Template, at: Placement) -> list[Ref]:
             if not _dropped(template, at, piece):
                 placed.append(piece)
             continue
-        if excluded(template, at, piece):
+        if piece in template.formal_names or excluded(template, at, piece):
             continue
         if template.selectors.get(piece) not in at.never:
             own.append(piece)
