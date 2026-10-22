@@ -828,3 +828,70 @@ def test_an_optional_fact_left_out_reads_none() -> None:
 
 def test_an_optional_fact_given_reads_its_value() -> None:
     OPTIONAL.start({"width": 8}).check_answer("lanes")
+
+
+# -- 9. a refused guard counts once (reading 8) ---------------------------------------------------
+#
+# ``heated`` refuses at gate 1, and ``plant``, present when it holds, holds one selector,
+# ``heating``, of two cases. Under the refused guard the model counts one guard piece, owned by
+# ``plant``: the cases under it add nothing. Written as the selector's own guard
+# (``Decision(..., when=)``, ``Spelling.guarded_selectors``), the guard and the cases' guards
+# are nodes of one Space, and today's engine counts a piece for each, 1 + 2, until T4a; written
+# as a guarded child, the cases are another Space's, and it counts one.
+
+
+def heated(read: Mapping[str, Any]) -> object:
+    return Refuse("gate-refused") if read["gate"] == 1 else True
+
+
+HEATED_PLANT = Space(
+    ("gate",),
+    Scope(
+        "",
+        derived=(Derived("heated", ("gate",), heated),),
+        children=(
+            Scope(
+                "plant",
+                when=When(("heated",), lambda read: bool(read["heated"])),
+                selectors=(
+                    Selector(
+                        "heating",
+                        (
+                            Scope("boiler", choices=(Choice("stages", listed(1, 2, 3)),)),
+                            Scope("heat_pump", choices=(Choice("cop", listed(2, 3, 4)),)),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+GUARDED_SELECTOR = Case(
+    "a chosen selector under a refused when",
+    HEATED_PLANT,
+    Spelling(types={"heated": bool}, guarded_selectors=frozenset({"plant"})),
+)
+GUARDED_CHILD = Case(
+    "a selector in a child under a refused when", HEATED_PLANT, Spelling(types={"heated": bool})
+)
+
+
+@expected("guard-counted-once")
+def test_a_chosen_selector_under_a_refused_when_is_one_piece() -> None:
+    GUARDED_SELECTOR.start({"gate": 1}).check_validity()
+
+
+def test_a_selector_in_a_child_under_a_refused_when_is_one_piece() -> None:
+    GUARDED_CHILD.start({"gate": 1}).check_validity()
+
+
+def test_a_chosen_selector_under_a_refused_when_puts_its_cases_out_of_play() -> None:
+    point = GUARDED_SELECTOR.start({"gate": 1})
+    point.check_state("plant.heating")
+    point.check_state("plant.heating.boiler.stages")
+
+
+def test_a_chosen_selector_under_a_when_that_holds_is_set_as_any_selector() -> None:
+    point = GUARDED_SELECTOR.start({"gate": 2}, {"plant.heating": "boiler"})
+    point.check_state("plant.heating.boiler.stages")
+    point.check_validity()
