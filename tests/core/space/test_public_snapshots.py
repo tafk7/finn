@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 import pytest
 
@@ -115,11 +116,11 @@ def test_choice_states_and_possible_values_hand_out_detached_values() -> None:
     base = design_space(Mutable(source=Bag([1])))
     (possible,) = inspection.viable(base, [Mutable.choice])
     assert possible.values is not None
-    possible.values[0].value.values.append(9)
+    cast(Bag, possible.values[0].value).values.append(9)
     point = base.with_choices(choice=Bag([3]))
     held = dict(inspection.states(point))["choice"]
     assert isinstance(held, inspection.Set)
-    held.value.values.append(8)
+    cast(Bag, held.value).values.append(8)
     assert dict(inspection.states(point))["choice"] == inspection.Set(Bag([3]))
     assert point.choice == Bag([3])
     (again,) = inspection.viable(base, [Mutable.choice])
