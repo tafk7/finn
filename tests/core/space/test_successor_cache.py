@@ -143,13 +143,17 @@ def test_a_change_does_not_evaluate_the_guard_of_a_choice_it_does_not_reach() ->
 
     base = commit(design_space(Guarded(width=3)), {"compute": "packed", "depth": 1})
     guards.clear()
-    # The change reaches neither ``depth`` nor its guard: the successor takes the guard's
-    # entry from its base, and asks nothing again.
+    # The change reaches neither ``depth`` nor its guard: the successor finds the guard's
+    # answer in the model's node cache, and asks nothing again.
     glossy = commit(base, {"finish": "gloss"})
     assert guards == [] and glossy.depth == 1
-    assert inspection.explain(glossy, Guarded.depth) == inspection.explain(
-        recomputed(glossy), Guarded.depth
-    )
-    # Built from nothing, the guard's method is answered by the model's memo: it read the
-    # same core.
-    assert guards == []
+    built = recomputed(glossy)
+    # Built from nothing, in a session of its own with no cache (a recomputation shares
+    # nothing with the model's cache), its bind calls the guard's method again: once to
+    # check ``depth``'s stored value (its guard read first), once for what the bind moved
+    # (``depth``'s presence).
+    assert guards == ["packed", "packed"]
+    assert inspection.explain(glossy, Guarded.depth) == inspection.explain(built, Guarded.depth)
+    # Asked through the public API, the design space built is the successor's: found in
+    # the model's node cache.
+    assert guards == ["packed", "packed"]
