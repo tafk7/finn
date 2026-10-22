@@ -15,7 +15,7 @@ made with the model (``compiler.Model``) and held by it for its life.
 - ``session()``: the model's one ``evaluate.Session``, made on first use: every public
   question about a design space of the model runs in it, under the model's lock, and its
   node cache (``cache.NodeCache``, made in its default mode) keeps answers for the model's
-  life.
+  life, or until the session is dropped (``drop_session``).
 
 A table built by hand has no templates: it answers no question about its whole design space
 (its flow order, its presence readers). Each part is made under the model's lock (``lock``).
@@ -102,6 +102,18 @@ class PerClass:
 
                 self._session = Session(cache=NodeCache())
             return self._session
+
+    def drop_session(self) -> None:
+        """The model's session dropped, its node cache and counters with it: the next
+        question makes a new one, and evaluates cold (a measurement's way to ask a question
+        cold, and to release what the cache keeps before the model goes). The cache is
+        taken from the dropped session too: a design space still alive keeps its
+        evaluations in it (the facts layer's design space with nothing stored, which every
+        membership reading evaluates, among them), and with them the session."""
+        with self.lock:
+            if self._session is not None:
+                self._session.cache = None
+            self._session = None
 
 
 def scopes_below(linked: Linked, root: int) -> Collection[int]:

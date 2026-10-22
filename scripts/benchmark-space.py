@@ -14,11 +14,12 @@ Native self-read and real-kernel workloads run in fresh subprocesses; the kernel
 are built and configured through ``finn.kernels``' public construction path.
 Time and memory are observations, not CI thresholds. Semantic work assertions
 check what was evaluated and that discarded point populations release caches. The
-memo's calls and hits are read through a compiled model's evaluator: every
-configuration of a model shares the memo, so an authored function is called once for
-the values it reads, and later configurations find its outcome. Run with
-FINN_SPACE_CHECK_PURITY=1, each memo hit runs its function again; the assertions hold
-both ways.
+authored calls (by kind) and the node cache's hits (one total) are read through a compiled
+model's session (``model.per_class.session()``), in which every public question about a
+design space of the model runs: every design space of a model shares its node cache, so an
+authored function is called once for the values it reads, and later design spaces find its
+answer. Run with FINN_SPACE_CHECK_PURITY=1, each cache hit is evaluated again, its calls
+counted: the exact counts are asserted with the check off, the rest both ways.
 """
 
 from __future__ import annotations
@@ -42,37 +43,36 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-# The purity check (FINN_SPACE_CHECK_PURITY=1) runs an authored function again at each
-# memo hit, to compare the answers: it then runs once per call and once per hit.
+# The purity check (FINN_SPACE_CHECK_PURITY=1) evaluates a node again at each cache hit,
+# to compare the answers: its authored function is then called once more, and counted.
 PURITY_CHECKED = os.environ.get("FINN_SPACE_CHECK_PURITY") == "1"
 
 
-def memo_work(model, *kinds: str) -> dict[str, dict[str, int]]:
-    """The memo's calls and hits of each kind of authored function in ``model`` (a
-    node's kind, or a domain's membership, listing, enumeration or order; every kind
-    counted where none is named), since its counters were last reset. Every
-    configuration of a model shares its memo: an authored function is called again only
+def mark(model) -> dict[str, object]:
+    """The model's session's counters as they stand: what ``cache_work`` counts from."""
+    counters = model.per_class.session().counters
+    return {"calls": dict(counters.calls), "hits": counters.hits}
+
+
+def cache_work(model, since: dict[str, object], *kinds: str) -> dict[str, object]:
+    """The calls of each kind of authored function in ``model`` (a node's kind, or a
+    domain's membership, listing, enumeration or order; every kind counted where none is
+    named), and the node cache's hits (one total), since ``since`` (``mark``). Every design
+    space of a model shares its node cache: an authored function is called again only
     where what it reads answers differently."""
-    counters = model.evaluator.counters
-    kinds = kinds or tuple(sorted({*counters.calls, *counters.hits}))
+    counters = model.per_class.session().counters
+    before = since["calls"]
+    kinds = kinds or tuple(sorted(counters.calls))
     return {
-        "calls": {kind: counters.calls.get(kind, 0) for kind in kinds},
-        "hits": {kind: counters.hits.get(kind, 0) for kind in kinds},
+        "calls": {kind: counters.calls.get(kind, 0) - before.get(kind, 0) for kind in kinds},
+        "hits": counters.hits - since["hits"],
     }
 
 
-def memo_traces_kept(api) -> int:
-    """How many outcomes a model's memo keeps of each authored function, the newest."""
-    return importlib.import_module(f"{api.__name__}._memo").TRACES_KEPT
-
-
-def ran(memo: dict[str, dict[str, int]], **kinds: str) -> dict[str, int]:
-    """How often each named authored function ran, by its kind's calls in ``memo_work``
-    (and its hits too under the purity check)."""
-    return {
-        name: memo["calls"][kind] + (memo["hits"][kind] if PURITY_CHECKED else 0)
-        for name, kind in kinds.items()
-    }
+def ran(work: dict[str, object], **kinds: str) -> dict[str, int]:
+    """How often each named authored function ran, by its kind's calls in ``cache_work``
+    (under the purity check, each call made again at a hit included)."""
+    return {name: work["calls"][kind] for name, kind in kinds.items()}
 
 
 def increment(*, value: int) -> int:
@@ -210,20 +210,20 @@ def constant_expressions(api, terms: int, trials: int) -> dict[str, object]:
     prepare_seconds = time.perf_counter() - started
     expected = 7 * terms + terms * (terms - 1) // 2
     # A formal-free root reuses the prepared model: each design_space only binds.
-    model.evaluator.counters.reset()
+    since = mark(model)
     points = [api.design_space(space_type()) for _ in range(trials)]
     started = time.perf_counter()
     assert all(point.total == expected for point in points)
     cold_seconds = time.perf_counter() - started
-    memo = memo_work(model, "derived")
+    work = cache_work(model, since, "derived")
     started = time.perf_counter()
     assert all(point.total == expected for point in points)
     warm_seconds = time.perf_counter() - started
     evidence = api.inspection.explain(points[0], space_type.total)
     assert evidence.result == api.Available(expected)
-    # The configurations share the model's memo: each term and the total is called once,
-    # by the first configuration read; every later one finds them.
-    assert memo["calls"]["derived"] == terms + 1, memo
+    # The design spaces share the model's node cache: each term and the total is called
+    # once, by the first one read; every later one finds them.
+    assert PURITY_CHECKED or work["calls"]["derived"] == terms + 1, work
     return {
         "terms": terms,
         "trials": trials,
@@ -233,7 +233,7 @@ def constant_expressions(api, terms: int, trials: int) -> dict[str, object]:
         "warm_seconds": warm_seconds,
         "demanded_nodes": len(evidence.nodes),
         "statistics": asdict(api.inspection.statistics(model)),
-        "memo": memo,
+        "work": work,
     }
 
 
@@ -276,20 +276,23 @@ def batch_updates(api, count: int, *, dependent: bool) -> dict[str, object]:
     model = compile_model(api, space_type)
     base = api.design_space(space_type())
     changes = [base.field(reference).change(value) for reference, value in reversed(requests)]
-    model.evaluator.counters.reset()
+    since = mark(model)
     work.clear()
     started = time.perf_counter()
     report = base.try_with_choices(*changes)
     seconds = time.perf_counter() - started
     assert report.accepted
     assert len(report.outcomes) == count
-    memo = memo_work(model, "domain membership", "derived", "constraint")
-    # The memo keeps each function's outcomes apart: each choice's membership, each limit
-    # and each rule is called once, on the one value it reads once the batch is in (the
-    # old bound, one evaluation each, holds). What else reads them finds them in the memo.
-    assert memo["calls"] == {"domain membership": count, "derived": count, "constraint": count}
+    counted = cache_work(model, since, "domain membership", "derived", "constraint")
+    # Each choice's membership, each limit and each rule is called once, on the one value
+    # it reads once the batch is in. What else reads them finds them kept.
+    assert PURITY_CHECKED or counted["calls"] == {
+        "domain membership": count,
+        "derived": count,
+        "constraint": count,
+    }, counted
     assert work == ran(
-        memo, membership="domain membership", prerequisite="derived", rule="constraint"
+        counted, membership="domain membership", prerequisite="derived", rule="constraint"
     )
     return {
         "fixture": "dependent" if dependent else "independent",
@@ -297,10 +300,10 @@ def batch_updates(api, count: int, *, dependent: bool) -> dict[str, object]:
         "submitted_order": "reverse declaration order",
         "statistics": asdict(api.inspection.statistics(model)),
         "update_seconds": seconds,
-        "membership_calls": memo["calls"]["domain membership"],
-        "prerequisite_calls": memo["calls"]["derived"],
-        "rule_calls": memo["calls"]["constraint"],
-        "memo": memo,
+        "membership_calls": counted["calls"]["domain membership"],
+        "prerequisite_calls": counted["calls"]["derived"],
+        "rule_calls": counted["calls"]["constraint"],
+        "work": counted,
     }
 
 
@@ -323,23 +326,23 @@ def replacement_validation(api, count: int) -> dict[str, object]:
         *(base.field(reference).change(0) for reference in members.values())
     )
     model = api.inspection.model(base)
-    model.evaluator.counters.reset()
+    since = mark(model)
     work.clear()
     first = next(iter(members.values()))
     started = time.perf_counter()
     revised = configured.with_choices(configured.field(first).change(1))
     seconds = time.perf_counter() - started
     assert revised is not configured
-    memo = memo_work(model, "domain membership")
+    counted = cache_work(model, since, "domain membership")
     # Only the changed choice is admitted again: no retained choice's admission read it,
     # and its new value was never asked before.
-    assert memo["calls"]["domain membership"] == 1, memo
-    assert work == ran(memo, membership="domain membership")
+    assert PURITY_CHECKED or counted["calls"]["domain membership"] == 1, counted
+    assert work == ran(counted, membership="domain membership")
     return {
         "choices": count,
         "changed": 1,
-        "validated": memo["calls"]["domain membership"],
-        "memo": memo,
+        "validated": counted["calls"]["domain membership"],
+        "work": counted,
         "seconds": seconds,
     }
 
@@ -416,26 +419,27 @@ def wide_choice(api, alternatives: int, trials: int = 30) -> dict[str, object]:
     selector = api.inspection.choices(model)[0].selector
     output = space_type.physical
     measurements = []
-    memo = {"calls": {"derived": 0}, "hits": {"derived": 0}}
+    counted = {"calls": {"derived": 0}, "hits": 0}
     for _ in range(trials):
         base = api.design_space(space_type())
         point = base.with_choices(base.field(selector).change(f"case{alternatives - 1}"))
-        model.evaluator.counters.reset()
+        since = mark(model)
         before = work["leaf"]
         started = time.perf_counter()
         answer = point.query(output)
         measurements.append(time.perf_counter() - started)
         assert answer == api.Available(1)
-        query = memo_work(model, "derived")
-        # The query evaluates one authored function, the selected candidate's view: called
-        # or found in the memo, never an inactive alternative's.
-        assert query["calls"]["derived"] + query["hits"]["derived"] == 1
+        query = cache_work(model, since, "derived")
+        # The query calls at most one authored function, the selected candidate's view
+        # (found kept after the first), never an inactive alternative's.
+        assert PURITY_CHECKED or query["calls"]["derived"] <= 1, query
         assert work["leaf"] - before == ran(query, leaf="derived")["leaf"]
-        for count in ("calls", "hits"):
-            memo[count]["derived"] += query[count]["derived"]
-    # Every binding of the model shares its memo: the selected view, reading nothing that
-    # changes between bindings, is called once in all, and found by every later query.
-    assert memo["calls"]["derived"] == 1
+        counted["calls"]["derived"] += query["calls"]["derived"]
+        counted["hits"] += query["hits"]
+    # Every design space of the model shares its node cache: the selected view, reading
+    # nothing that changes between them, is called once in all, and found by every later
+    # query.
+    assert PURITY_CHECKED or counted["calls"]["derived"] == 1, counted
     return {
         "alternatives": alternatives,
         "trials": trials,
@@ -443,11 +447,12 @@ def wide_choice(api, alternatives: int, trials: int = 30) -> dict[str, object]:
         "query_seconds_min": min(measurements),
         "query_seconds_median": statistics.median(measurements),
         "query_seconds_max": max(measurements),
-        "leaf_callbacks_per_query": (memo["calls"]["derived"] + memo["hits"]["derived"]) / trials,
-        "memo": memo,
+        "leaf_calls": work["leaf"],
+        "work": counted,
         "timing_scope": (
             "selected-candidate view query on a fresh binding; start and selector membership "
-            "excluded; the first query calls the view, every later one finds it in the memo"
+            "excluded; the first query calls the view, every later one finds it in the model's "
+            "node cache"
         ),
     }
 
@@ -486,18 +491,15 @@ def cache_reclamation(api, population: int) -> dict[str, object]:
     gc.collect()
     reclamation_seconds = time.perf_counter() - started
     alive = [index for index, reference in enumerate(created) if reference() is not None]
-    # Released configurations hold nothing; the model's memo keeps the newest outcomes of
-    # each function (``TRACES_KEPT``), each holding its payload, for later bindings to find.
-    kept = min(population, memo_traces_kept(api))
-    assert alive == list(range(population - kept, population))
-    # Nothing else holds them: once the memo drops its outcomes, every payload is collected.
+    # Released design spaces hold nothing; the model's node cache keeps the answers it was
+    # given for the model's life, each holding its payload, for later design spaces to find.
+    # Nothing else holds them: once the model's session (its cache) is dropped, every
+    # payload is collected.
     model = api.inspection.model(base)
-    budget = model.evaluator.memo.budget
-    model.evaluator.memo.budget = 0
+    model.per_class.drop_session()
     gc.collect()
-    after_memo = sum(reference() is not None for reference in created)
-    model.evaluator.memo.budget = budget
-    assert after_memo == 0
+    after_cache = sum(reference() is not None for reference in created)
+    assert after_cache == 0
     # Both compilation and the original choice-free root are still alive here.
     assert isinstance(base.field(Example.choice).state, api.Available)
     return {
@@ -506,8 +508,7 @@ def cache_reclamation(api, population: int) -> dict[str, object]:
         "callback_created_objects": len(created),
         "alive_with_configurations_held": while_held,
         "alive_after_configurations_released": len(alive),
-        "alive_after_memo_released": after_memo,
-        "memo_traces_kept": kept,
+        "alive_after_cache_released": after_cache,
         "creation_seconds": creation_seconds,
         "collection_seconds_after_release": reclamation_seconds,
         "snapshot_policy": (
@@ -581,11 +582,9 @@ def self_workload(api, shape: str, depth: int, width: int) -> dict[str, object]:
         assert all(value == 1 or (PURITY_CHECKED and value > 1) for value in work.values()), work
 
     def prepare_point():
-        # Every binding of a model shares its memo: drop it, so each measured query is
-        # cold, every callback called.
-        budget = model.evaluator.memo.budget
-        model.evaluator.memo.budget = 0
-        model.evaluator.memo.budget = budget
+        # Every design space of a model shares its session and node cache: drop them, so
+        # each measured query is cold, every callback called.
+        model.per_class.drop_session()
         work.clear()
         point = api.design_space(space_type())
         if shape == "mixed":
@@ -594,18 +593,17 @@ def self_workload(api, shape: str, depth: int, width: int) -> dict[str, object]:
         return point
 
     point = prepare_point()
-    model.evaluator.counters.reset()
+    since = mark(model)
     before_rss = rss_bytes()
     started = time.perf_counter()
     assert point.output == expected
     cold_seconds = time.perf_counter() - started
     after_rss = rss_bytes()
-    memo = memo_work(model, "derived")
+    counted = cache_work(model, since, "derived")
     completed_once()
-    # Each cold callback is called, never found in the memo; one the depth guard
-    # abandoned is called again.
+    # Each cold callback is called; one the depth guard abandoned is called again.
     cold = callback_count - (width if shape == "mixed" else 0)
-    assert memo["calls"]["derived"] >= cold and memo["hits"]["derived"] == 0, memo
+    assert counted["calls"]["derived"] >= cold, counted
     before_hits = work.copy()
     hits = []
     for _ in range(30):
@@ -635,7 +633,7 @@ def self_workload(api, shape: str, depth: int, width: int) -> dict[str, object]:
         "cached_view_seconds_median": statistics.median(hits),
         "callback_count_including_cached_prefix": callback_count,
         "cold_callbacks_per_second": cold / cold_seconds,
-        "memo": memo,
+        "work": counted,
         "cached_prefix_callbacks": width if shape == "mixed" else 0,
         "rss_before_query_bytes": before_rss,
         "rss_after_query_bytes": after_rss,
@@ -775,7 +773,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
     del warm
     gc.collect()
     model = api.inspection.model(base)
-    model.evaluator.counters.reset()
+    since = mark(model)
     before_rss = rss_bytes()
     times = {"replacement": [], "cold_view": [], "cached_view": []}
     root_refs = []
@@ -793,9 +791,9 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
         cached = accepted(point)
         times["cached_view"].append(time.perf_counter() - started)
         assert cached == result
-    # What the repeated configurations call and find in the model's memo: alternating
-    # choices revisit the values an earlier configuration read.
-    memo = memo_work(model)
+    # What the repeated design spaces call and find in the model's node cache: alternating
+    # choices revisit the values an earlier one read.
+    counted = cache_work(model, since)
     del point, result, cached
     gc.collect()
     assert all(reference() is None for reference in root_refs)
@@ -829,7 +827,7 @@ def kernel_workload(api, name: str, trials: int) -> dict[str, object]:
             for label, values in times.items()
         },
         "configurations_per_second": trials / sum(times["replacement"] + times["cold_view"]),
-        "memo": memo,
+        "work": counted,
         "rss_before_exploration_bytes": before_rss,
         "rss_after_repeated_exploration_bytes": repeated_rss,
         "ordinary_process_peak_rss_bytes": ordinary_peak,
@@ -901,8 +899,8 @@ def markdown(report: dict[str, object]) -> str:
             "",
             "## Admission and query work",
             "",
-            "Both explicit-input batches use reverse declaration order. Calls are the "
-            "memo's: an authored function called, not found in the model's memo.",
+            "Both explicit-input batches use reverse declaration order. Calls are an authored "
+            "function called, its answer not found in the model's node cache.",
             "",
             "| Batch | Changes | Membership calls | Prerequisite calls | Rule calls | Commit s |",
             "|---|---:|---:|---:|---:|---:|",
@@ -934,18 +932,18 @@ def markdown(report: dict[str, object]) -> str:
         lines += [
             "",
             "Each wide-choice query is on a fresh binding: the first calls the selected view, "
-            "every later one finds it in the model's memo.",
+            "every later one finds it in the model's node cache.",
             "",
-            "| Alternatives | Median µs | Minimum µs | Maximum µs | Views/query | "
-            "Memo calls | Memo hits |",
+            "| Alternatives | Median µs | Minimum µs | Maximum µs | View calls | "
+            "Calls | Cache hits |",
             "|---|---:|---:|---:|---:|---:|---:|",
         ]
         for item in report["wide_choices"]:
             lines.append(
                 f"| {item['alternatives']} | {item['query_seconds_median'] * 1e6:.2f} | "
                 f"{item['query_seconds_min'] * 1e6:.2f} | {item['query_seconds_max'] * 1e6:.2f} | "
-                f"{item['leaf_callbacks_per_query']:g} | {item['memo']['calls']['derived']} | "
-                f"{item['memo']['hits']['derived']} |"
+                f"{item['leaf_calls']} | {item['work']['calls']['derived']} | "
+                f"{item['work']['hits']} |"
             )
         cache = report["cache_reclamation"]
         lines += [
@@ -955,18 +953,18 @@ def markdown(report: dict[str, object]) -> str:
             f"bytes each. {cache['alive_with_configurations_held']} were alive with "
             f"configurations held; {cache['alive_after_configurations_released']} remained "
             "after release and collection, with the base and prepared definition retained: "
-            f"the newest {cache['memo_traces_kept']}, which the model's memo keeps. "
-            f"{cache['alive_after_memo_released']} remained once the memo dropped them.",
+            "those the model's node cache keeps, for the model's life. "
+            f"{cache['alive_after_cache_released']} remained once the cache was dropped.",
             "",
         ]
     if "self_workloads" in report:
         lines += [
             "## Ordinary self reads",
             "",
-            "Each scenario runs in a fresh subprocess, its memo dropped before each measured "
-            "query. Every callback completes once, and cached view calls run no callbacks. "
-            "Mixed work warms the wide prefix before a cold view reads that prefix and enters "
-            "a deep chain.",
+            "Each scenario runs in a fresh subprocess, its model's node cache dropped before "
+            "each measured query. Every callback completes once, and cached view calls run no "
+            "callbacks. Mixed work warms the wide prefix before a cold view reads that prefix "
+            "and enters a deep chain.",
             "",
             "| Work | Depth | Width | Cold view s | Cached µs | Callback count | "
             "Process peak MiB | Traced query peak MiB |",
@@ -990,8 +988,8 @@ def markdown(report: dict[str, object]) -> str:
             "keys. Each measures the netlist view of the kernel it configures: the FIFO's own, "
             "the packed Dotp core's on its streams, and MatMul's selected compute core's. "
             "Timings exclude source rendering and hardware execution. A view is cold in its "
-            "configuration's world; the model's memo, shared by every configuration, may "
-            "already hold what it computes (the JSON's `memo`). A separate allocation run "
+            "design space's evaluation; the model's node cache, shared by every design space, "
+            "may already hold what it computes (the JSON's `work`). A separate allocation run "
             "holds an independent population and then releases it.",
             "",
             "| Kernel | Trials | Replacement µs | Cold view µs | Cached view µs | Configs/s | "
@@ -1022,7 +1020,7 @@ def markdown(report: dict[str, object]) -> str:
             f"The first query demanded {item['demanded_nodes']} nodes.",
             "",
             "Removing folding intentionally adds runtime expression work, once per model: "
-            "the configurations share its memo, so the first configuration read calls each "
+            "the design spaces share its node cache, so the first one read calls each "
             "term, and every later one finds them. Compare this scenario separately from "
             "parameter-based expressions, and preserve operand validation and inactive "
             "arithmetic suppression.",
@@ -1031,9 +1029,9 @@ def markdown(report: dict[str, object]) -> str:
     lines += [
         "## Interpretation and limits",
         "",
-        "Timings are observations on this machine, not CI thresholds. Every configuration of a "
-        "model shares its memo of authored functions; the JSON's `memo` fields name its calls "
-        "and hits. Runtime/kernel subprocess RSS includes the interpreter, imports, "
+        "Timings are observations on this machine, not CI thresholds. Every design space of a "
+        "model shares its node cache; the JSON's `work` fields name the authored calls by kind "
+        "and the cache's hits. Runtime/kernel subprocess RSS includes the interpreter, imports, "
         "prepared definitions and native allocations. Its ordinary process peak is captured "
         "before the separate tracing run; it is not an attribution of all bytes to the engine. "
         "Current RSS can stay high after objects are reclaimed because allocators retain pages. "

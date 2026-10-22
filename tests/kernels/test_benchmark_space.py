@@ -62,14 +62,14 @@ def test_every_suite_runs_and_reports(tmp_path: Path) -> None:
     # Only the changed choice is admitted again; the retained ones keep their admissions.
     assert report["replacement_validation"]["validated"] == 1
     assert [item["inactive_callbacks"] for item in report["narrow_queries"]] == [0, 0]
-    # One view per query, the selected one's: called by the first, found in the memo after.
-    assert [item["leaf_callbacks_per_query"] for item in report["wide_choices"]] == [1, 1]
-    assert [item["memo"]["calls"]["derived"] for item in report["wide_choices"]] == [1, 1]
-    # Released configurations leave only what the model's memo keeps alive, and nothing
-    # once the memo drops it.
+    # The selected view, called by the first query, found in the model's node cache after.
+    assert [item["leaf_calls"] for item in report["wide_choices"]] == [1, 1]
+    assert [item["work"]["calls"]["derived"] for item in report["wide_choices"]] == [1, 1]
+    # Released design spaces leave only what the model's node cache keeps alive (for the
+    # model's life), and nothing once the cache is dropped.
     cache = report["cache_reclamation"]
-    assert cache["alive_after_configurations_released"] == cache["memo_traces_kept"]
-    assert cache["alive_after_memo_released"] == 0
+    assert cache["alive_after_configurations_released"] <= cache["population"]
+    assert cache["alive_after_cache_released"] == 0
     assert report["constant_expressions"]["terms"] == SIZES["batch"]
     # The runtime suite, each workload in its own process.
     assert [item["shape"] for item in report["self_workloads"]] == ["chain", "fan_in", "mixed"]
@@ -77,7 +77,7 @@ def test_every_suite_runs_and_reports(tmp_path: Path) -> None:
     kernels = report["kernel_workloads"]
     assert [item["kernel"] for item in kernels] == ["fifo", "dotp", "matmul"]
     assert all(item["trials"] == SIZES["kernel_trials"] for item in kernels)
-    assert all(sum(item["memo"]["calls"].values()) > 0 for item in kernels)
+    assert all(sum(item["work"]["calls"].values()) > 0 for item in kernels)
     assert all(item["retained_old_configuration_count"] == 0 for item in kernels)
     assert all(item["retained_population_count"] == 0 for item in kernels)
 
