@@ -73,6 +73,7 @@ from finn.core.space._running import evaluate
 from finn.core.space._running import surface as S
 from finn.core.space._running.evaluate import Evaluation, Session
 from finn.core.space._running.value import DesignSpace
+from finn.core.space._structure import PERMUTE
 from finn.core.space._world import World
 from finn.core.space.occurrence import prepare_values, state
 from finn.core.space.references import ValueHandle
@@ -468,9 +469,11 @@ def test_the_selected_candidate_of_a_chosen_and_a_picked_selector(
 # With ``style`` open, each case's choice is a piece read from its list as if it existed:
 # what that list read (the facts, through anything) is in validity's evidence, as today's
 # has it. Asked of the root's validity, each case's validity, a piece and a choice inside a
-# case. ``plain``'s list reads two facts, ``depth`` first: the running type gives them in
-# node order, today's in the order its model first read them, which on a model asked nothing
-# before (each test's class is its own) is that order too.
+# case. ``plain``'s list reads two facts, ``depth`` first: the running type gives them in key
+# order (scope path, member), the same in every numbering and process, today's in the order
+# its model first read them, a history (here ``width``, which ``packed``'s list read before).
+# That order is a named break: today's evidence is the running type's but for the order of
+# those reads. A permuted model's evidence is the default one's.
 
 
 def _kernel() -> type[Space]:
@@ -503,6 +506,40 @@ def _kernel() -> type[Space]:
     return Kernel
 
 
+def _by_key(point: Space, evidence: object) -> object:
+    """``evidence`` (a ``QueryEvidence``) with every node named by its key, so two models'
+    numberings compare: each node's key, answer, the keys it read in order, its presence,
+    state, selector and guard flags, and the keys it read through."""
+    linked = state(point).linked
+    found = cast(Any, evidence)
+    return (
+        found.query.key,
+        found.result,
+        tuple(
+            (
+                node.declaration.key,
+                node.result,
+                tuple(linked.header(each._node).key for each in node.dependencies),
+                node.input_presence,
+                node.decision_state,
+                node.selector,
+                node.is_guard,
+                tuple(item.key for item in node.via),
+            )
+            for node in found.nodes
+        ),
+    )
+
+
+def _reads_unordered(point: Space, evidence: object) -> object:
+    """``_by_key``'s form with each node's reads as a set: where only their order differs."""
+    nodes = cast(Any, _by_key(point, evidence))
+    return (
+        *nodes[:2],
+        tuple((*node[:2], frozenset(node[2]), *node[3:]) for node in nodes[2]),
+    )
+
+
 def _handle(point: Space, key: str | int) -> ValueHandle[object]:
     """The node at ``key``, or the validity of the scope at that index."""
     linked = state(point).linked
@@ -510,14 +547,13 @@ def _handle(point: Space, key: str | int) -> ValueHandle[object]:
     return ValueHandle[object](linked, cast(int, index))
 
 
-@pytest.mark.parametrize(
-    ("facts", "plain"),
-    [({"width": 12, "depth": 3}, ["width", "depth"]), ({"width": 12}, ["depth"])],
-    ids=["given", "missing"],
-)
-def test_evidence_of_a_choice_of_unknown_presence_holds_what_its_list_read(
-    facts: dict[str, int], plain: list[str]
-) -> None:
+FACTS = {"given": {"width": 12, "depth": 3}, "missing": {"width": 12}}
+"""``Kernel``'s facts: ``plain``'s list reads both, or halts on a missing ``depth``."""
+
+
+def _explained(facts: dict[str, int]) -> tuple[Space, dict[str, object], dict[str, object]]:
+    """A fresh ``Kernel`` with ``facts``, made in the numbering the environment asks for:
+    its configuration, and each question's evidence, the running type's and today's."""
     kernel = _kernel()
     point = design_space(kernel(**cast(Any, facts)))
     running = Running()
@@ -533,19 +569,57 @@ def test_evidence_of_a_choice_of_unknown_presence_holds_what_its_list_read(
         "a piece inside a case": _handle(point, "style.packed.fits"),
         "a choice inside a case": _handle(point, "style.plain.simd"),
     }
-    for what, reference in asked.items():
-        evidence = S.explain(at, reference, running.session)
-        assert evidence == inspection.explain(point, reference), what
-    root = S.explain(at, asked["the root's validity"], running.session)
+    mine = {what: S.explain(at, reference, running.session) for what, reference in asked.items()}
+    today = {what: inspection.explain(point, reference) for what, reference in asked.items()}
+    return point, cast(dict[str, object], mine), cast(dict[str, object], today)
+
+
+def _reads(point: Space, evidence: object) -> dict[str, list[str]]:
+    """Each evidence node's reads, in order, by key."""
     linked = state(point).linked
-    read = {
+    return {
         node.declaration.key: [linked.header(each._node).key for each in node.dependencies]
-        for node in root.nodes
+        for node in cast(Any, evidence).nodes
     }
-    # each case's piece: its guard, then the facts its list read (``plain``'s halts on a
-    # missing ``depth``, read first), then the rest of its validity
+
+
+@pytest.mark.parametrize(
+    ("facts", "plain", "today"),
+    [("given", ["depth", "width"], ["width", "depth"]), ("missing", ["depth"], ["depth"])],
+    ids=["given", "missing"],
+)
+def test_evidence_of_a_choice_of_unknown_presence_holds_what_its_list_read(
+    facts: str, plain: list[str], today: list[str]
+) -> None:
+    point, mine, todays = _explained(FACTS[facts])
+    for what, evidence in mine.items():
+        assert _reads_unordered(point, evidence) == _reads_unordered(point, todays[what]), what
+        if plain == today:
+            assert evidence == todays[what], what
+    read = _reads(point, mine["the root's validity"])
+    # each case's piece: its guard, then the facts its list read in key order (``plain``'s
+    # halts on a missing ``depth``), then the rest of its validity
     assert read["style.packed.$validity"][:2] == ["style.packed.$selected", "width"], read
     assert read["style.plain.$validity"] == ["style.plain.$selected", *plain], read
+    held = _reads(point, todays["the root's validity"])
+    assert held["style.plain.$validity"] == ["style.plain.$selected", *today], held
+
+
+@pytest.mark.parametrize("facts", sorted(FACTS))
+def test_evidence_of_a_choice_of_unknown_presence_is_the_same_in_a_permuted_numbering(
+    facts: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same questions on a model numbered downward, each block in reverse
+    (``FINN_SPACE_PERMUTE``): every answer's evidence, by key, the default numbering's."""
+    point, mine, _ = _explained(FACTS[facts])
+    with monkeypatch.context() as permuted:
+        permuted.setenv(PERMUTE, "1")  # read when the model is made
+        other, theirs, _ = _explained(FACTS[facts])
+    ids = [state(each).linked.keys["style.plain.depth"] for each in (point, other)]
+    width = [state(each).linked.keys["style.plain.width"] for each in (point, other)]
+    assert (ids[0] < width[0]) != (ids[1] < width[1])  # the two facts' ids in either order
+    for what, evidence in mine.items():
+        assert _by_key(point, evidence) == _by_key(other, theirs[what]), what
 
 
 # -- failure completion ------------------------------------------------------------------

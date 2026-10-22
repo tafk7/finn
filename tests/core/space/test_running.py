@@ -30,10 +30,15 @@ model, through the class-based oracle (``support.space_oracle``), as the impleme
   impure function caught with it on and not with it off, and the toys' and the reference
   walks with it on, with no disagreement and no impure function; a cache wrong on purpose
   (a read left out of each key) caught; each type the cache keys by ``==`` checked against
-  its value semantics, the rule keying a value class field by field checked on sample
-  classes, and nothing else keyed: no value under semantics of its own (two design spaces
-  differing only in two values ``==`` holds equal and such semantics tell apart answer as
-  today's by that check alone), nor a value class with a field annotated so.
+  its value semantics, the rules keying an enum member (its class keeping ``Enum``'s ``==``
+  and hash) and a value class field by field checked on sample classes, and nothing else
+  keyed: no enum with an ``==`` or hash of its own or a mixin's, no value under semantics of
+  its own (two design spaces differing only in two values ``==`` holds equal and such
+  semantics tell apart answer as today's by that check alone), nor a value class with a
+  field annotated so.
+- **The facts layer's domain outcomes**, keyed as the cache keys values: a membership
+  candidate under semantics finer than ``==`` gets its own verdict, as today's; with the
+  semantics left out of that key, another candidate's.
 
 The implementations are loaded by name, as ``--implementation`` names them
 (``core.space._running_type``, a private module of these tests).
@@ -52,6 +57,7 @@ import weakref
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Annotated, Any, cast
@@ -105,6 +111,7 @@ from finn.core.space import (
     derived,
     design_space,
     divisors_of,
+    domain,
     inspection,
     reject,
     view,
@@ -112,10 +119,17 @@ from finn.core.space import (
 from finn.core.space._failure import NativeEvaluationError
 from finn.core.space._running import cache as cache_module
 from finn.core.space._running import evaluate, questions, structure
-from finn.core.space._running.cache import CHECKED, PLAIN, NodeCache, plain, value_class
+from finn.core.space._running.cache import (
+    CHECKED,
+    PLAIN,
+    NodeCache,
+    enum_class,
+    plain,
+    value_class,
+)
 from finn.core.space._running.cache import key as cache_key
 from finn.core.space._running.evaluate import MembershipReadsChoice, Session
-from finn.core.space._running.value import DesignSpace, FactsLayer
+from finn.core.space._running.value import DesignSpace, FactsLayer, hashkey
 from finn.core.space._structure import Structure
 from finn.core.space._world import _same_value, check_purity
 from finn.core.space.ir import Node
@@ -1430,11 +1444,15 @@ def test_the_reference_walks_hold_strictly_with_the_purity_check_over_the_cache(
 # (``cache.PLAIN``) and the classes in ``cache.CHECKED``, each listed here with the value
 # semantics in force and its ``==`` and hash checked against them (``_world._same_value``):
 # values equal by the semantics are ``==`` and hash alike, and values the semantics tell
-# apart are not ``==``, so their keys differ. Tuples and frozen sets of keyed values are
+# apart are not ``==``, so their keys differ. An enum member is keyed by its type and the
+# member where its class keeps ``Enum``'s own ``==`` (identity) and hash, as its MRO
+# resolves them (``cache.enum_class``): an enum with an ``==`` or a hash of its own, or a
+# mixin's (``Mixed``, an ``int`` enum), has no key. Tuples and frozen sets of keyed values are
 # keyed item by item; a value class (``cache.value_class``: a frozen dataclass whose ``==``
-# and hash are the generated ones) field by field, each field's value keyed in turn. The
-# rule is checked on this module's own sample classes: under the default semantics, a frozen
-# dataclass's generated ``==`` is its semantics' equality, and its key is never coarser. A
+# and hash are the generated ones) field by field, each field's value keyed in turn (an
+# enum member included: ``Moded``). The rules are checked on this module's own sample
+# classes: under the default semantics, an enum's identity and a frozen dataclass's
+# generated ``==`` are its semantics' equality, and its key is never coarser. A
 # value under semantics of its own (``PAIR``, ``ENCODING``, ``WIDTH``) has no key, whatever
 # its type, and neither has a value class with a field annotated with them (``Labelled``):
 # the cache cannot read a semantics' equality, and ``WIDTH``'s is finer than ``==``. Any
@@ -1597,6 +1615,59 @@ class Counted:
     count: Annotated[int, default_semantics(int)]
 
 
+class Mode(Enum):
+    """An enum keeping ``Enum``'s ``==`` (identity) and hash: keyed by type and member.
+    ``QUICK`` is an alias of ``FAST``: one member."""
+
+    FAST = 1
+    SLOW = 2
+    QUICK = 1
+
+
+@dataclass(frozen=True)
+class Moded:
+    """A value class holding an enum member: keyed field by field."""
+
+    mode: Mode
+    lanes: int
+
+
+class OwnEq(Enum):
+    """An ``==`` of its own (every member equal to its value): not keyed."""
+
+    A = 1
+    B = 2
+
+    def __eq__(self, other: object) -> bool:
+        return other is self or other == self.value
+
+    __hash__ = Enum.__hash__
+
+
+class OwnHash(Enum):
+    """A hash of its own: not keyed."""
+
+    A = 1
+    B = 2
+
+    def __hash__(self) -> int:
+        return hash(self.value)
+
+
+class Mixed(int, Enum):
+    """An ``int`` mixed in: ``==`` and hash are ``int``'s (``Mixed.ONE == 1``), not keyed."""
+
+    ONE = 1
+    TWO = 2
+
+
+@dataclass(frozen=True)
+class HoldsMixed:
+    """A value class holding a member of an enum not keyed: no key."""
+
+    mode: Mixed
+
+
 VALUE_TYPES: dict[str, tuple[ValueSemantics[Any], tuple[object, ...]]] = {
     "None": (default_semantics(type(None)), (None,)),
     "bool": (default_semantics(bool), (False, True)),
@@ -1646,11 +1717,16 @@ VALUE_TYPES: dict[str, tuple[ValueSemantics[Any], tuple[object, ...]]] = {
     ),
     "Tagged": (default_semantics(Tagged), (Tagged(1), Tagged(1, "a"), Tagged(2))),
     "Counted": (default_semantics(Counted), (Counted(1), Counted(cast(int, True)), Counted(2))),
+    "Mode": (default_semantics(Mode), (Mode.FAST, Mode.SLOW, Mode.QUICK, Mode(1))),
+    "Moded": (
+        default_semantics(Moded),
+        (Moded(Mode.FAST, 1), Moded(Mode.QUICK, 1), Moded(Mode.SLOW, 1), Moded(Mode.FAST, 2)),
+    ),
 }
 """Each hashable value type by name: its value semantics, and values to compare. Those
 under semantics of their own (``PAIR``, ``ENCODING``) are left unkeyed."""
 
-VALUE_CLASSES = (Spec, Encoding, Capabilities, Stream, Tagged, Counted)
+VALUE_CLASSES = (Spec, Encoding, Capabilities, Stream, Tagged, Counted, Moded)
 """The sample value classes above, each keyed by the rule."""
 
 NOT_VALUE_CLASSES: dict[str, tuple[type, object]] = {
@@ -1661,6 +1737,13 @@ NOT_VALUE_CLASSES: dict[str, tuple[type, object]] = {
     "a field with semantics of its own": (Labelled, Labelled(Width(8))),
 }
 """Classes the rule does not key, each with a value."""
+
+NOT_KEYED_ENUMS: dict[str, tuple[type[Enum], Enum]] = {
+    "an == of its own": (OwnEq, OwnEq.A),
+    "a hash of its own": (OwnHash, OwnHash.A),
+    "a mixin's == and hash": (Mixed, Mixed.ONE),
+}
+"""Enums the rule does not key, one override of each kind, each with a member."""
 
 UNHASHABLE: dict[str, tuple[ValueSemantics[Any], tuple[object, ...]]] = {
     "list": (default_semantics(list), ([], [1], [1, 2])),
@@ -1762,6 +1845,56 @@ def test_the_cache_keys_the_types_this_test_checks_and_value_classes_by_their_ru
         assert plain_key((1, value)) is None, name
     assert value_class(HoldsList) and plain_key(HoldsList([1])) is None
     assert plain_key((1, "a", frozenset({2.0}), Spec(True, 2))) is not None
+    assert enum_class(Mode) and plain_key((Mode.SLOW, Moded(Mode.FAST, 1))) is not None
+
+
+@pytest.mark.parametrize("name", sorted(NOT_KEYED_ENUMS))
+def test_an_enum_overriding_equality_or_hash_is_not_keyed(name: str) -> None:
+    """An enum is keyed by its class's rule, not by a list: one with an ``==`` of its own, a
+    hash of its own, or a mixin's (``int``'s), has no key, alone, in a tuple or in a value
+    class. Each differs from ``Enum``'s as the rule reads it: ``==`` past identity, or a hash
+    not by name."""
+    kind, member = NOT_KEYED_ENUMS[name]
+    assert issubclass(kind, Enum) and not enum_class(kind)
+    assert plain_key(member) is None and plain_key((1, member)) is None
+    assert kind.__eq__ is not Enum.__eq__ or kind.__hash__ is not Enum.__hash__
+    if kind is Mixed:
+        assert cast(int, Mixed.ONE) == 1 and hash(Mixed.ONE) == hash(1)
+        assert value_class(HoldsMixed) and plain_key(HoldsMixed(Mixed.ONE)) is None
+    assert enum_class(Mode) and plain_key(Mode.FAST) == plain_key(Mode.QUICK) is not None
+
+
+@pytest.mark.usefixtures("purity_unchecked")
+def test_an_enum_fact_is_found_again_and_one_not_keyed_keeps_nothing() -> None:
+    """A fact holding a ``Mode`` member is keyed, and what read it found again in a second
+    design space; one holding a ``Mixed`` member keeps nothing for what read it. Both answer
+    as today's engine."""
+
+    class Paced(Space):
+        mode: Mode = Param()
+
+        @derived
+        def fast(self) -> bool:
+            return self.mode is Mode.FAST
+
+    class Counting(Space):
+        mode: Mixed = Param()
+
+        @derived
+        def double(self) -> int:
+            return int(self.mode) * 2
+
+    for shape, fact, answer, kept in (
+        (Paced, Mode.QUICK, "fast", True),
+        (Counting, Mixed.TWO, "double", False),
+    ):
+        running = cached()
+        for _ in range(2):
+            made = running.make(shape, {"mode": fact}, {})
+            made.query(answer)
+        assert (counters(running).hits > 0) is kept, shape
+        today = TODAY.make(shape, {"mode": fact}, {})
+        assert compare.everything(today, made).lines() == [], shape
 
 
 @pytest.mark.usefixtures("purity_unchecked")
@@ -1891,3 +2024,50 @@ def test_a_value_class_with_a_field_of_semantics_of_its_own_is_not_keyed(
         patched.setattr(cache_module, "_VALUE_CLASSES", weakref.WeakKeyDictionary())
         assert value_class(Labelled)
         assert plain_key(one) == plain_key(other) is not None
+
+
+# -- the facts layer's domain outcomes, keyed as the cache keys values --------------------
+#
+# ``Approved``'s choice is a ``Width`` under ``WIDTH`` (finer than ``==``), its domain holding
+# a width by its note. Its membership verdicts are kept on the facts layer by the candidate
+# and the inputs' answers, each keyed as the cache keys values (``cache.key``, under its
+# member's semantics): a candidate under semantics of its own has no key, and its verdict is
+# not kept. So two candidates ``==`` holds equal and ``WIDTH`` tells apart get their own
+# verdicts, as today's. With the semantics left out of that key (by type and ``==``), the
+# second takes the first's.
+
+
+class Approved(Space):
+    width: Width = Decision(
+        semantics=WIDTH, domain=domain(accepts=lambda *, candidate: candidate.note == "a")
+    )
+
+
+def _verdicts(implementation: Implementation) -> tuple[list[bool], list[str]]:
+    """Each of ``NOTED`` set on ``Approved`` with nothing stored, one after the other by
+    ``implementation`` (one facts layer): whether the change is accepted, and what tells its
+    report apart from today's."""
+    accepted: list[bool] = []
+    lines: list[str] = []
+    for value in NOTED:
+        made = implementation.make(Approved, {}, {}).change({"width": value}, [])
+        held = TODAY.make(Approved, {}, {}).change({"width": value}, [])
+        accepted.append(made.report.accepted)
+        if forms.report(made.report) != forms.report(held.report):
+            lines.append(f"{value}: today {held.report!r}, running {made.report!r}")
+    return accepted, lines
+
+
+def test_a_candidate_under_semantics_finer_than_eq_gets_its_own_domain_verdict() -> None:
+    assert NOTED[0] == NOTED[1] and evaluate.answer_key(_member(WIDTH), Available(NOTED[0])) is None
+    assert _verdicts(cached()) == ([True, False], [])
+    assert _verdicts(fresh()) == ([True, False], [])
+
+
+@pytest.mark.usefixtures("purity_unchecked")
+def test_without_the_semantics_in_its_key_a_candidate_takes_anothers_domain_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(evaluate, "value_key", lambda value, semantics: hashkey(value))
+    accepted, lines = _verdicts(fresh())
+    assert accepted == [True, True] and len(lines) == 1

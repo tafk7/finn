@@ -6,7 +6,8 @@ type's node cache keys them (``finn.core.space._running.cache``).
 
 The cache matches a value read by type and ``==`` (``cache.key``), and only where its
 choice's or fact's value semantics are the default ones: a value under semantics of its own
-is never keyed. Under the default semantics it keys the plain types, tuples and frozen sets
+is never keyed. Under the default semantics it keys the plain types, enum members (where
+their class keeps ``Enum``'s ``==`` and hash) by type and member, tuples and frozen sets
 item by item, and value classes (frozen dataclasses with the generated ``==`` and hash)
 field by field. Any other type has no key: nothing that read it is kept, and a lookup there
 is a miss, never a wrong answer.
@@ -21,14 +22,18 @@ is a miss, never a wrong answer.
   not hold (``made``). Each verdict holds on them.
 - **The safe direction**, on every pair of samples of one name: a key hit is a value the
   semantics hold equal (``_world._same_value``).
+- **The enums** the samples hold, at any depth (``ENUMS``): each listed with whether the
+  cache keys its members, and every pair of its members checked in the safe direction.
 
 **What it costs.** An answer that read a value with no key is never kept: it is evaluated
-again in every design space that asks it. The enums (``Form``, a platform's DSP block and
-fabric, a beat sequence's repetition, a plan's steps, a transport's endpoint and marker
-kinds) and the QONNX datatypes inside a ``Tensor`` leave the platform, every tensor, every
-beat sequence and every port contract unkeyed, and the datatypes and integer tensors are
-under semantics of their own. Where a kernel is its own root, its facts are these values,
-so an answer that reads one is evaluated again in each design space. Stage 7's chain, made
+again in every design space that asks it. The enums the kernels' values hold are keyed
+(``Form``, a beat sequence's repetition, a plan's steps, a transport's endpoint and marker
+kinds), but for the platform's DSP block and fabric, which mix in ``str`` (their ``==`` is
+``str``'s, not ``Enum``'s): the platform stays unkeyed. The QONNX datatype inside a
+``Tensor`` leaves every tensor and every port contract unkeyed, and the datatypes and
+integer tensors are under semantics of their own. Where a kernel is its own root, its
+facts are these values, so an answer that reads one is evaluated again in each design
+space. Stage 7's chain, made
 one Space by ``support.one_space``, holds no root facts (its kernels' facts are constants
 of its class) and stores only str, int and bool choices: there nothing is left unkeyed.
 """
@@ -43,6 +48,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
 from functools import cache
+from types import SimpleNamespace
 from typing import Any, Literal, cast
 
 import pytest
@@ -52,17 +58,21 @@ from support.helpers import full_platform, in_order, stage_tensor
 
 import finn.kernels
 from finn.core.space import Space, ValueSemantics
-from finn.core.space._running.cache import CHECKED, PLAIN, key, plain, value_class
+from finn.core.space._running.cache import CHECKED, PLAIN, enum_class, key, plain, value_class
 from finn.core.space._structure import Structure
 from finn.core.space._world import _same_value
 from finn.core.space.compiler import compile_model
 from finn.core.space.ir import Node
 from finn.core.space.occurrence import state
+from finn.core.space.semantics import default_semantics
 from finn.dataflow.gemm import Form, Window
 from finn.dataflow.plan import Hop, Plan, Step
+from finn.dataflow.traversal import Repetition
+from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import PortContract
 from finn.kernels.movers import MoverOffer
-from finn.platform.capabilities import DspBlock
+from finn.kernels.transport import MarkerKind
+from finn.platform.capabilities import DspBlock, Fabric
 
 DATATYPE = "QONNX datatype"
 """How a QONNX datatype is named among the types a value holds (its classes are
@@ -93,20 +103,18 @@ VERDICTS: dict[str, Verdict] = {
     "Traversal": Verdict("always", "a value class of int tuples and loops (value classes of ints)"),
     "Window": Verdict("always", "a value class of int pairs"),
     "Plan": Verdict(
-        "by value",
-        "a value class: the direct plan (no hops) is keyed; a hop holds its step and its beat "
-        "sequences' repetition, enums",
-        frozenset({"Step", "Repetition"}),
+        "always",
+        "a value class: the direct plan (no hops), and hops of a step and beat sequences, "
+        "enum members keyed by member",
     ),
     "BeatSequence": Verdict(
-        "never", "a value class whose repetition is an enum", frozenset({"Repetition"})
+        "always", "a value class whose repetition is an enum member, keyed by member"
     ),
-    "Form": Verdict(
-        "never", "an enum: neither a plain type nor a value class", frozenset({"Form"})
-    ),
+    "Form": Verdict("always", "an enum member, keyed by type and member"),
     "Platform": Verdict(
         "never",
-        "a value class whose DSP block and fabric are enums",
+        "a value class whose DSP block and fabric are enums mixing in str: their == is str's, "
+        "not Enum's",
         frozenset({"DspBlock", "Fabric"}),
     ),
     "Tensor": Verdict(
@@ -116,14 +124,12 @@ VERDICTS: dict[str, Verdict] = {
     ),
     "StreamContract": Verdict(
         "never",
-        "a value class holding enums (its transport's endpoint and marker kinds, its "
-        "repetition) and its element's QONNX datatype",
-        frozenset({"Endpoint", "MarkerKind", "Repetition", DATATYPE}),
+        "a value class holding its element's QONNX datatype (its enums, the transport's "
+        "endpoint and marker kinds and its repetition, are keyed)",
+        frozenset({DATATYPE}),
     ),
     "PortContract": Verdict(
-        "never",
-        "a value class holding a stream contract",
-        frozenset({"Endpoint", "MarkerKind", "Repetition", DATATYPE}),
+        "never", "a value class holding a stream contract", frozenset({DATATYPE})
     ),
     "QONNXDataType": Verdict(
         "never", "semantics of its own: equal when they are the same canonical datatype"
@@ -188,7 +194,7 @@ def made() -> dict[str, tuple[object, ...]]:
             Window((4, 4), (3, 3), stride=(1, 1)),
         ),
         "Traversal": (in_order(eight).form, in_order(four).form, in_order(stage_tensor(8)).form),
-        "BeatSequence": (in_order(eight), in_order(four)),
+        "BeatSequence": (in_order(eight), in_order(four), in_order(stage_tensor(8))),
         "Plan": (Plan(), Plan(()), Plan((Hop(Step.WIDTH, in_order(eight), in_order(four)),))),
         "Form": (Form.DENSE, Form.DEPTHWISE),
         "Platform": (full_platform(DspBlock.DSP58),),
@@ -233,7 +239,7 @@ def unkeyed_types(value: object) -> set[str]:
     """The types (by name) ``value`` holds, itself included, that the cache does not key
     under the default semantics: a QONNX datatype as ``DATATYPE``."""
     kind = type(value)
-    if kind in PLAIN or kind in CHECKED:
+    if kind in PLAIN or kind in CHECKED or enum_class(kind):
         return set()
     if kind is tuple or kind is frozenset:
         return set().union(*(unkeyed_types(item) for item in cast(Any, value)))
@@ -297,11 +303,68 @@ def test_a_key_hit_is_a_value_the_semantics_hold_equal(name: str) -> None:
         assert hits, name
 
 
-def test_an_enum_and_a_datatype_have_no_key_even_under_the_default_semantics() -> None:
-    """What leaves the platform, the tensors and the contracts unkeyed: an enum member (equal
-    by identity) and a QONNX datatype are neither plain types nor value classes."""
-    assert issubclass(Form, Enum) and issubclass(DspBlock, Enum)
-    _, plain_enum = semantics_of("Form")
-    assert plain(plain_enum) and key(Form.DENSE, plain_enum) is None
+ENUMS: dict[type[Enum], bool] = {
+    Form: True,
+    Repetition: True,
+    Step: True,
+    Endpoint: True,
+    MarkerKind: True,
+    DspBlock: False,
+    Fabric: False,
+}
+"""Every enum the samples hold, at any depth, and whether the cache keys its members: not
+the platform's DSP block and fabric, which mix in ``str``."""
+
+
+def held_enums(value: object) -> set[type[Enum]]:
+    """The enums ``value`` holds, itself included: in a tuple or a frozen set, and in a
+    dataclass's compared fields."""
+    kind = type(value)
+    if isinstance(value, Enum):
+        return {type(value)}
+    if kind is tuple or kind is frozenset:
+        return set().union(*(held_enums(item) for item in cast(Any, value)))
+    if dataclasses.is_dataclass(value):
+        return set().union(
+            *(
+                held_enums(getattr(value, item.name))
+                for item in dataclasses.fields(value)
+                if item.compare
+            )
+        )
+    return set()
+
+
+def test_every_enum_the_samples_hold_has_a_verdict() -> None:
+    found = set().union(*(held_enums(value) for values in samples().values() for value in values))
+    assert found == set(ENUMS)
+
+
+@pytest.mark.parametrize("kind", list(ENUMS), ids=lambda kind: kind.__qualname__)
+def test_an_enum_member_is_keyed_by_its_class_and_a_key_hit_is_the_same_member(
+    kind: type[Enum],
+) -> None:
+    """Every pair of ``kind``'s members under its default semantics (as a member annotated
+    with it holds them): keyed by the class's rule (``cache.enum_class``), and a key hit is
+    a value the semantics hold equal; two members never share a key. An enum mixing in
+    ``str`` compares as its string: no key."""
+    semantics = default_semantics(kind)
+    node = cast(Node, SimpleNamespace(semantics=semantics, owner="value"))
+    assert plain(semantics) and enum_class(kind) is ENUMS[kind]
+    members = list(kind)
+    assert len(members) >= 2, kind
+    for left, right in itertools.product(members, repeat=2):
+        found = key(left, semantics)
+        assert (found is not None) is ENUMS[kind], left
+        if found is not None and found == key(right, semantics):
+            assert left is right and _same_value(node, left, right), (left, right)
+    if not ENUMS[kind]:
+        assert issubclass(kind, str) and all(member == member.value for member in members)
+
+
+def test_a_datatype_has_no_key_even_under_the_default_semantics() -> None:
+    """What leaves the tensors and the contracts unkeyed: a QONNX datatype is neither a
+    plain type, an enum member, nor a value class."""
     _, tensor = semantics_of("Tensor")
     assert plain(tensor) and key(stage_tensor(8), tensor) is None
+    assert key(DataType["INT8"], default_semantics(type(DataType["INT8"]))) is None

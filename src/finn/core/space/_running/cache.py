@@ -40,13 +40,16 @@ hit is evaluated anyway and compared with what was kept, by the member's value s
 **Values it keys** (``key``): a value of a choice or fact whose value semantics are the
 default ones (``plain``: recognition by exact type, equality by ``==``, a default snapshot),
 by type and ``==``: the plain types (``PLAIN``) and the classes in ``CHECKED``, each checked
-by the value-type test (``==`` and hash against the value semantics); tuples and frozen sets
-of keyed values, item by item; and an instance of a value class (``value_class``: a frozen
-dataclass whose ``==`` and hash are the ones ``dataclasses`` generates, and none of whose
-compared fields is annotated with value semantics of its own), field by field, each field's
-value keyed in turn. Item by item and field by field, the key tells types apart (``True``
-is not ``1``): it is never coarser than ``==``, so a hit is never a value ``==`` tells
-apart, nor, under the default semantics, a value the semantics tell apart. A value of a
+by the value-type test (``==`` and hash against the value semantics); an enum member whose
+class keeps ``Enum``'s own ``==`` and hash (``enum_class``: equal by identity, hashed by
+name), by its type and the member; tuples and frozen sets of keyed values, item by item;
+and an instance of a value class (``value_class``: a frozen dataclass whose ``==`` and hash
+are the ones ``dataclasses`` generates, and none of whose compared fields is annotated with
+value semantics of its own), field by field, each field's value keyed in turn. Item by
+item and field by field, the key tells types apart (``True`` is not ``1``): it is never
+coarser than ``==``, so a hit is never a value ``==`` tells apart, nor, under the default
+semantics, a value the semantics tell apart. An enum overriding ``==`` or hash, itself or
+through a mixin (``class E(int, Enum)`` compares as an ``int``), has no key. A value of a
 choice or fact with semantics of its own (``ValueSemantics(...)``, ``immutable_nominal``),
 which may tell apart values ``==`` holds equal, is never hashed, whatever its type; nor is a
 value of any other type: it has no key, and nothing is kept for an answer whose read set
@@ -56,7 +59,9 @@ The check is made where the semantics are: a value's semantics are its choice's 
 (``Param(semantics=...)``, an annotation's), not its type's, and one class may be held by
 one member under the default semantics and by another under its own. So ``key`` is given
 the semantics of the choice or fact read (the node's, as ``_world._same_value`` reads it),
-and ``value_class`` checks what a class itself declares: its fields' annotations.
+and ``value_class`` and ``enum_class`` check what a class itself declares: its fields'
+annotations, its ``==`` and hash. The facts layer keys the domains' outcomes by the same
+``key`` (``evaluate.Evaluation.domain_outcome``).
 
 **Counters**, on the session's (``evaluate.Counters``): lookups, hits, values hashed (at
 lookup and at keep), the members holding a read set, the read sets kept, and the most read
@@ -70,6 +75,7 @@ from __future__ import annotations
 import dataclasses
 import random
 import weakref
+from enum import Enum
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any, cast, get_args, get_type_hints
 
@@ -171,6 +177,32 @@ def _value_class(kind: type) -> bool:
     )
 
 
+def _resolved(kind: type, name: str) -> object:
+    """``name`` as ``kind``'s instances find it: the first definition along its MRO."""
+    return next((base.__dict__[name] for base in kind.__mro__ if name in base.__dict__), None)
+
+
+_ENUM_METHODS = tuple((name, _resolved(Enum, name)) for name in ("__eq__", "__hash__"))
+"""``Enum``'s own ``==`` (``object``'s: identity) and hash (by name), as its MRO resolves
+them."""
+
+_ENUM_CLASSES: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
+"""``enum_class``'s answer by class, made once."""
+
+
+def enum_class(kind: type) -> bool:
+    """Whether the cache keys ``kind``'s members by type and member: an ``Enum`` whose
+    ``__eq__`` and ``__hash__`` are ``Enum``'s own, as its MRO resolves them (equal by
+    identity, hashed by name). An enum overriding either, itself or through a mixin (an
+    ``int`` mixed in compares as an ``int``), is not."""
+    found = _ENUM_CLASSES.get(kind)
+    if found is None:
+        found = _ENUM_CLASSES[kind] = issubclass(kind, Enum) and all(
+            _resolved(kind, name) is own for name, own in _ENUM_METHODS
+        )
+    return found
+
+
 def key(value: object, semantics: ValueSemantics[Any] | None) -> object:
     """``value``, the value of a choice or fact with ``semantics``, as the cache keys it,
     by type and ``==`` (see the module docstring); ``None`` where the semantics are not the
@@ -179,10 +211,11 @@ def key(value: object, semantics: ValueSemantics[Any] | None) -> object:
 
 
 def _key(value: object) -> object:
-    """``value`` by type and ``==``: a tuple or a frozen set item by item, a value class
-    field by field; ``None`` where it is unhashable or holds a type not keyed."""
+    """``value`` by type and ``==``: an enum member by type and member, a tuple or a frozen
+    set item by item, a value class field by field; ``None`` where it is unhashable or holds
+    a type not keyed."""
     kind = type(value)
-    if kind in PLAIN or kind in CHECKED:
+    if kind in PLAIN or kind in CHECKED or enum_class(kind):
         return hashkey(value)
     if kind is tuple or kind is frozenset:
         parts = [_key(item) for item in value]  # type: ignore[attr-defined]
@@ -319,4 +352,4 @@ class NodeCache:
         answers[values] = found
 
 
-__all__ = ["CHECKED", "PLAIN", "NodeCache", "key", "plain", "value_class"]
+__all__ = ["CHECKED", "PLAIN", "NodeCache", "enum_class", "key", "plain", "value_class"]

@@ -36,7 +36,7 @@ where they apply: an answer, its findings sorted; a validity; a choice's state; 
 values; a change's report. Anything else compares field by field (a dataclass), in order (a
 sequence), sorted (a set or a mapping), and a value with no form by ``==``. One named
 difference is not a disagreement: ``explain`` lists the facts a node read (a domain's fact
-reads) in node order in the running type, and in the order the process first read them in
+reads) in key order in the running type, and in the order the process first read them in
 today's engine, so each node's fact reads compare as a set, the rest of its reads in order
 (counted apart). A raise on one side and an answer on the other is a disagreement; both
 raising compare by the error's type and message.

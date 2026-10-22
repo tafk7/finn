@@ -113,8 +113,9 @@ from ..results import (
     assess_view,
     merged_findings,
 )
+from .cache import key as value_key
 from .structure import Record, record
-from .value import DesignSpace, hashkey
+from .value import DesignSpace
 
 if TYPE_CHECKING:
     from .._structure import Structure
@@ -363,11 +364,12 @@ def invoke(
     return cast(_Returned | _Halted, outcome)
 
 
-def answer_key(answer: QueryResult[object]) -> object:
-    """An answer as a key: a value by ``hashkey``, a non-value by its variant and
-    findings; ``None`` where it cannot be hashed."""
+def answer_key(node: Node, answer: QueryResult[object]) -> object:
+    """``node``'s answer as a key: a value as the node cache keys it under ``node``'s value
+    semantics (``cache.key``), a non-value by its variant and findings; ``None`` where it
+    has no key (semantics of its own, a type not keyed, unhashable findings)."""
     if isinstance(answer, Available):
-        found = hashkey(answer.value)
+        found = value_key(answer.value, node.semantics)
         return None if found is None else ("value", found)
     try:
         hash(answer.findings)
@@ -614,9 +616,9 @@ class Evaluation:
 
     def sources(self, trace: Trace | _Tr) -> list[tuple[NodeId, QueryResult[object]]]:
         """The choices and facts what ``trace`` records read here, through anything, each
-        with its answer here, in node order: a function of the value. (Today's lists them
-        in the order its model first read them in the process, a history a value does not
-        hold; the two agree where that was node order.)"""
+        with its answer here, in key order (scope path, member): a function of the value,
+        the same in every numbering and process. (Today's lists them in the order its model
+        first read them in the process, a history a value does not hold.)"""
         found: dict[NodeId, QueryResult[object]] = {}
         seen: set[NodeId] = set()
         pending = [iter(trace)]
@@ -633,7 +635,7 @@ class Evaluation:
                 found[index] = answer
             else:
                 pending.append(iter(self.get(index).trace))
-        return sorted(found.items(), key=lambda item: item[0])
+        return sorted(found.items(), key=lambda item: self.linked.header(item[0]).key)
 
     def membership(self, index: NodeId) -> Evaluation:
         """Where the choice ``index``'s membership is read as if it existed: its facts
@@ -750,10 +752,12 @@ class Evaluation:
         self, key: tuple[NodeId, str], kind: str, inputs: Trace, compute: Callable[[], W.Called]
     ) -> QueryResult[object]:
         """A domain's outcome, kept on the facts layer by its inputs' answers (a domain
-        reads facts only, so every design space of the layer shares it)."""
+        reads facts only, so every design space of the layer shares it): each answer keyed
+        as the node cache keys it, under its member's value semantics (the membership
+        candidate's, its choice's); nothing kept where one has no key (``_outcome_key``)."""
         outcomes = self.ds.layer.outcomes
-        local = tuple(answer_key(answer) for _, answer in inputs)
-        memo_key = None if any(part is None for part in local) else (key, local)
+        local = self._outcome_key(inputs)
+        memo_key = None if local is None else (key, local)
         if memo_key is not None:
             held = outcomes.get(memo_key)
             if held is not None:
@@ -767,6 +771,12 @@ class Evaluation:
         if memo_key is not None:
             outcomes[memo_key] = called
         return called.result
+
+    def _outcome_key(self, inputs: Trace) -> tuple[object, ...] | None:
+        """A domain outcome's inputs as the facts layer keeps it by (``answer_key``, each
+        under its node's semantics); ``None`` where one has no key."""
+        local = tuple(answer_key(self.raw[index], answer) for index, answer in inputs)
+        return None if any(part is None for part in local) else local
 
     def call_explicit(self, node: Node, answers: list[QueryResult[object]]) -> W.Called:
         arguments = {
@@ -929,8 +939,10 @@ class Evaluation:
         if blocked is not None:
             return blocked
         inputs = self._inputs(node, answers)
-        local = tuple(answer_key(answer) for _, answer in inputs)
-        made = self.ds.layer.outcomes.get(((node.index, "listing"), local))
+        local = self._outcome_key(inputs)
+        made = (
+            None if local is None else self.ds.layer.outcomes.get(((node.index, "listing"), local))
+        )
         if made is not None:
             found = made.result
             if self.session.verifying:  # the kept list, made again and compared
