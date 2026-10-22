@@ -18,7 +18,6 @@ by identity).
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable, Iterator
 from typing import Any, cast
 
@@ -195,7 +194,8 @@ def test_the_depth_guard_is_todays() -> None:
 
 
 def test_the_purity_switch_is_read_at_each_ask_and_answers_as_todays() -> None:
-    assert purity._PURITY == (os.environ.get("FINN_SPACE_CHECK_PURITY") == "1")
+    # The tests' switch flips both (``support.purity``): on for every test here.
+    assert purity._PURITY is _world._PURITY is True
     first = purity.check_purity(True)
     try:
         today = _world.check_purity(True)
@@ -228,13 +228,13 @@ def test_a_design_space_opened_on_its_facts_is_the_layers_with_nothing_stored(na
 
 
 def test_opening_a_design_space_checks_its_facts_as_todays() -> None:
-    from finn.core.space.occurrence import bind  # noqa: PLC0415 - today's opener
+    from finn.core.space.occurrence import _world_open  # noqa: PLC0415 - today's opener
 
     model = state(design_space(toys.Boundary(width=3))).model
     width, inner = model.linked.keys["width"], model.linked.keys["outside.width"]
     for given in ({width: 4}, {}, {width: 3, inner: 3}, {width: "wide"}):
         mine = _outcome(lambda: dict(facts.open(model, given).facts))
-        todays = _outcome(lambda: dict(state(bind(model, given)).facts))
+        todays = _outcome(lambda: dict(state(_world_open(model, given)).facts))
         assert mine == todays, given
 
 

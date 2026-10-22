@@ -1,8 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 """Every Space operation must restore the caller's evaluation context (no authored call
-left active); every memo hit runs its function again and compares (the purity check),
-but in a test that counts the calls the memo saves (``purity_unchecked``, from
+left active); every cache hit runs its function again and compares (the purity check),
+but in a test that counts the calls the cache saves (``purity_unchecked``, from
 ``support.purity``).
 
 ``--space-implementation MODULE:ATTRIBUTE`` (or a registered name; ``today`` by default,
@@ -22,11 +22,14 @@ from collections.abc import Generator, Iterator, Sequence
 from typing import Any
 
 import pytest
-from support.purity import purity_unchecked  # noqa: F401
+from support.purity import (
+    check_purity,
+    purity_unchecked,  # noqa: F401
+    restore_purity,
+)
 
 from core.space.reference_harness.implementation import OPTION, Option
 from finn.core.space._failure import current
-from finn.core.space._world import check_purity
 
 
 @pytest.fixture(autouse=True)
@@ -38,11 +41,11 @@ def evaluation_context_is_reset() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def purity_checked() -> Iterator[None]:
-    """Every memo hit, and every method the depth guard abandoned, runs its function again
-    and compares the answers (``_world.check_purity``)."""
+    """Every cache hit, and every method the depth guard abandoned, runs its function again
+    and compares the answers (both switches: ``support.purity.check_purity``)."""
     previous = check_purity(True)
     yield
-    check_purity(previous)
+    restore_purity(previous)
 
 
 # -- the reference harness's implementation ----------------------------------------------------
