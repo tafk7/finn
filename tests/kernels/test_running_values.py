@@ -24,11 +24,13 @@ is a miss, never a wrong answer.
 
 **What it costs.** An answer that read a value with no key is never kept: it is evaluated
 again in every design space that asks it. The enums (``Form``, a platform's DSP block and
-fabric, a beat sequence's repetition, a plan's steps, a transport's endpoint) and the QONNX
-datatypes inside a ``Tensor`` leave the platform, every tensor, every beat sequence and
-every port contract unkeyed, and the datatypes and integer tensors are under semantics of
-their own. So in a kernel's design space nearly every answer that reads a tensor, the
-platform or a contract is evaluated again in each design space.
+fabric, a beat sequence's repetition, a plan's steps, a transport's endpoint and marker
+kinds) and the QONNX datatypes inside a ``Tensor`` leave the platform, every tensor, every
+beat sequence and every port contract unkeyed, and the datatypes and integer tensors are
+under semantics of their own. Where a kernel is its own root, its facts are these values,
+so an answer that reads one is evaluated again in each design space. Stage 7's chain, made
+one Space by ``support.one_space``, holds no root facts (its kernels' facts are constants
+of its class) and stores only str, int and bool choices: there nothing is left unkeyed.
 """
 
 from __future__ import annotations
