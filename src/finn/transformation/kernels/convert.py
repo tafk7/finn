@@ -8,17 +8,16 @@ order, inferring shapes and datatypes as it goes (``infer_node``), so each node 
 inputs as the nodes before it left them.
 
 The KernelOps anchored at a node's op type each try to match it. The matches are tried
-on a copy of the model, largest first, and for each its kernel's default policies are
-applied once, on the kernel alone (``KernelOp.defaulted``, ``finn.kernels.defaults``):
-the kernel bound to the node's facts, each choice in play given its fixed or first valid
-value. The first match whose kernel takes every value replaces the nodes it covers with
-one KernelOp, which keeps the anchor's name and the covered nodes' outside tensors, and
-its choices are the values its policies set, written once (``persist_kernel``): its
-kernel's, never a channel's, so nothing is written on a tensor. Conversion builds no
-channel: a partition's channels are made at the cut. A node that no match converts stays
-on the host, unchanged, with why: its kernel refused on its facts alone, or a choice no
-value can be set for (``choice-no-valid-value``), each value's refusal among the
-findings. Two
+on a copy of the model, largest first, and for each the op's policies are applied once,
+on the kernel alone (``KernelOp.defaulted``, ``finn.kernels.policies``): the kernel bound
+to the node's facts, each choice in play given its fixed or first valid value. The first
+match whose kernel takes every value replaces the nodes it covers with one KernelOp, which
+keeps the anchor's name and the covered nodes' outside tensors, and its choices are the
+values its policies set, written once (``persist_kernel``): its kernel's, never a
+channel's, so nothing is written on a tensor. Conversion builds no channel: a partition's
+channels are made at the cut. A node that no match converts stays on the host, unchanged,
+with why: its kernel refused on its facts alone, or a choice no value can be set for
+(``choice-no-valid-value``), each value's refusal among the findings. Two
 KernelOps matching the same nodes is an authoring error: one computation is one KernelOp,
 its alternatives a decision of its kernel.
 
@@ -52,6 +51,7 @@ from finn.core.reporting.findings import Finding, FindingKind, by_code
 from finn.custom_op.kernels.base import KernelOp, Match, kernel_op, unstated
 from finn.custom_op.kernels.network import persist_kernel
 from finn.kernels.base import KernelSpace
+from finn.kernels.policies import Defaulted
 from finn.platform.target import Target
 from finn.transformation.kernels.infer import infer_node
 
@@ -66,7 +66,8 @@ class Outcome:
     ``op`` is the KernelOp the nodes became, None for nodes left on the host. For a
     node left, ``findings`` say why. For a conversion, they say why nothing else
     converted the node: the other patterns' findings, and the refusals of the matches
-    tried before the one that won.
+    tried before the one that won; and each choice its policies set in listed order where
+    a ranking could not be read (``choice-order-unknown``).
     """
 
     nodes: tuple[str, ...]
@@ -151,10 +152,11 @@ class ToKernelOps(Transformation):
                     moved = True  # visit the nodes it moved before the anchor first
                     break
                 trial, defaulted = _trial(model, op, match, subgraph)
-                if isinstance(defaulted, KernelSpace):
+                if isinstance(defaulted, Defaulted):
                     labels = tuple(_label(model.graph.node[i]) for i in subgraph.indices)
                     model, converted = trial, op.op_type
-                    persist_kernel(model, model.graph.node[index], defaulted)
+                    persist_kernel(model, model.graph.node[index], defaulted.point)
+                    findings.extend(defaulted.fallbacks)
                     break
                 findings.extend(defaulted)
             if moved:
@@ -290,14 +292,14 @@ def _move_upstream(model: ModelWrapper, subgraph: _Subgraph) -> bool:
 
 def _trial(
     model: ModelWrapper, op: type[KernelOp], match: Match, subgraph: _Subgraph
-) -> tuple[ModelWrapper, KernelSpace | tuple[Finding, ...]]:
+) -> tuple[ModelWrapper, Defaulted[KernelSpace] | tuple[Finding, ...]]:
     """Try ``match`` on a copy of the model: replace the covered nodes with one
-    KernelOp, named as the anchor, on their outside tensors, and apply its kernel's
-    default policies (``KernelOp.defaulted``). Returns the copy and, where every value is
-    set, the node's kernel with them (its outputs then inferred), else the refusals, each
-    finding's causes in its place (each value's refusal, where no value can be set): a
-    missing shape or datatype as ``fact-unstated``. A copy, so a refused trial leaves
-    ``model`` as it was. Any other wrong fact raises."""
+    KernelOp, named as the anchor, on their outside tensors, and apply the op's policies
+    to its kernel (``KernelOp.defaulted``). Returns the copy and, where every value is set,
+    the node's kernel with them (its outputs then inferred) and the rankings it could not
+    read, else the refusals, each finding's causes in its place (each value's refusal, where
+    no value can be set): a missing shape or datatype as ``fact-unstated``. A copy, so a
+    refused trial leaves ``model`` as it was. Any other wrong fact raises."""
     trial = copy.deepcopy(model)
     index = subgraph.indices[0]
     new = helper.make_node(
@@ -323,11 +325,11 @@ def _trial(
     node = trial.graph.node[index]
     try:
         defaulted = kernel_op(trial, node).defaulted()
-        if isinstance(defaulted, KernelSpace):
+        if isinstance(defaulted, Defaulted):
             infer_node(trial, node)
     except FactUnstated as error:
         return trial, (unstated(op.op_type, str(error), tensor=error.tensor),)
-    if isinstance(defaulted, KernelSpace):
+    if isinstance(defaulted, Defaulted):
         return trial, defaulted
     flat = (cause for finding in defaulted for cause in (finding.causes or (finding,)))
     return trial, tuple(dict.fromkeys(flat))

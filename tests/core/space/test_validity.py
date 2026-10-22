@@ -40,6 +40,7 @@ from finn.core.space import (
     Members,
     Param,
     Rejected,
+    Select,
     Space,
     Unresolved,
     View,
@@ -52,7 +53,6 @@ from finn.core.space import (
     inspection,
     occurrence,
     reject,
-    selected,
     view,
 )
 from finn.core.space.inspection import Piece, Validity
@@ -211,7 +211,7 @@ class Plain(Space):
 
 class Selector(Space):
     width: int = Param()
-    compute: Refusing | Plain = Decision({"refusing": Refusing, "plain": Plain}, width=width)
+    compute: Refusing | Plain = Select(refusing=Refusing, plain=Plain, width=width)
 
 
 def test_a_case_not_selected_contributes_nothing_and_the_selected_one_counts() -> None:
@@ -234,7 +234,7 @@ def test_a_case_not_selected_contributes_nothing_and_the_selected_one_counts() -
 
 class Either(Space):
     width: int = Param()
-    compute: Plain | Core = Decision({"plain": Plain, "core": Core}, width=width)
+    compute: Plain | Core = Select(plain=Plain, core=Core, width=width)
 
 
 def test_the_pieces_of_a_placed_space_whose_presence_waits_are_unknown_each_under_its_guard() -> (
@@ -264,7 +264,7 @@ def test_a_placed_space_with_no_pieces_whose_presence_waits_contributes_nothing(
 
     class Open(Space):
         width: int = Param()
-        compute: Plain | Bare = Decision({"plain": Plain, "bare": Bare}, width=width)
+        compute: Plain | Bare = Select(plain=Plain, bare=Bare, width=width)
 
     # An open choice and a view are no pieces: the configuration is valid while the
     # selector is open. A choice stored inside waits on the selector, and is no piece
@@ -626,13 +626,17 @@ class Large(Space):
     pass
 
 
+def _case_name(*, case: str) -> str:
+    return case
+
+
 class Chooser(Space):
     """The owner's constraint reads its own selector, then a formal and another choice."""
 
     strict: bool = Param()
     other: int = Decision(values=(1, 2))
-    core: Small | Large = Decision({"small": Small, "large": Large})
-    which = selected(core)
+    core: Small | Large = Select(small=Small, large=Large)
+    which: str = derived(case=core)(_case_name)
 
     @constraint
     def allowed(self) -> bool | Rejected:
@@ -680,7 +684,7 @@ class Channel(Space):
     below it, inside the selector's candidate."""
 
     depth: int = Param()
-    transport: Queue | Wire = Decision({"queue": Queue, "wire": Wire})
+    transport: Queue | Wire = Select(queue=Queue, wire=Wire)
 
     @constraint
     def compatible(self) -> bool | Rejected:
@@ -798,7 +802,7 @@ def test_an_empty_list_under_a_selector_still_open_is_an_unknown_piece() -> None
 
     class Open(Space):
         width: int = Param()
-        compute: Plain | Hollow = Decision({"plain": Plain, "hollow": Hollow}, width=width)
+        compute: Plain | Hollow = Select(plain=Plain, hollow=Hollow, width=width)
 
     # Its presence waits: the piece waits on the selector, as every piece of its Space.
     validity = inspection.validity(design_space(Open(width=8)))
@@ -888,7 +892,7 @@ class Sourced(Space):
     """The memory as its source's one case: nothing selects it but a change."""
 
     ultra: bool = Param()
-    source: Store = Decision({"memory": Store}, ultra=ultra)
+    source: Store = Select(memory=Store, ultra=ultra)
 
 
 def committed_choices(point: Space) -> dict[str, object]:
@@ -987,7 +991,7 @@ class Shallow(Space):
 class Banked(Space):
     """A choice whose domain reads ``span``, a value of the selector's ``spanned`` case."""
 
-    mode: Spanned | Shallow = Decision({"spanned": Spanned, "shallow": Shallow})
+    mode: Spanned | Shallow = Select(spanned=Spanned, shallow=Shallow)
     lanes: int = Decision(
         domain=domain(
             accepts=lambda *, candidate, span: span % candidate == 0,

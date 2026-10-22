@@ -140,7 +140,6 @@ class Header:
     source_owner: str | None
     origin: str | None
     domain: Domain[object] | None
-    required_choice: bool
     guard: NodeId | None
     record: ScopeRecord
     node: int
@@ -833,7 +832,6 @@ class Structure:
                     owner,
                     node.origin,
                     None,
-                    False,
                     self._guard(record, node.guard, key),
                     record,
                     at,
@@ -849,7 +847,6 @@ class Structure:
                 owner if owner is not None else self._owned(parent, written),
                 written.origin,
                 written.domain,
-                written.required_choice,
                 self._guard(parent, written.guard, key),
                 parent,
                 cast(int, binding.node),
@@ -866,7 +863,6 @@ class Structure:
                 owner,
                 None,
                 None,
-                False,
                 self._guard(record, choice.guard, key),
                 record,
                 at,
@@ -883,7 +879,6 @@ class Structure:
                 owner,
                 node.origin,
                 None,
-                False,
                 self._guard(record, node.guard, key),
                 record,
                 at,
@@ -897,7 +892,6 @@ class Structure:
             owner if owner is not None else self._owned(record, node),
             node.origin,
             node.domain,
-            node.required_choice,
             self._guard(record, node.guard, key),
             record,
             at,

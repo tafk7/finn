@@ -107,13 +107,11 @@ def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() ->
 
 
 def test_the_pending_milestones_are_the_rulings_the_engine_has_not_reached() -> None:
-    # The engine core's and the facts-instance milestones are accepted, their rows removed;
-    # the model holds SZ100's rulings before the engine (T4b: views read out; T4c: an
-    # optional fact left out is None), and its reading 8 (T4a: a refused guard counts once).
-    assert MILESTONES == ("base", "T4a", "T4b", "T4c")
+    # The engine core's, the facts-instance and T4a's milestones are accepted, their rows
+    # removed; the model holds SZ100's rulings before the engine (T4b: views read out; T4c:
+    # an optional fact left out is None).
+    assert MILESTONES == ("base", "T4b", "T4c")
     assert [(row.id, row.milestone) for row in ROWS] == [
-        ("guard-counted-once", "T4a"),
-        ("guard-unknown-under-unknown", "T4a"),
         ("view-read-in", "T4b"),
         ("optional-fact-none", "T4c"),
     ]

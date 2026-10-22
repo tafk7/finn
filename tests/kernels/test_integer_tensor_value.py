@@ -166,7 +166,7 @@ def test_a_new_configuration_reads_only_the_stated_facts() -> None:
     # needs (INT2); MatMul reads INT3. Its contracts wait on MatMul's core and folding.
     assert base.member("matmul").weight_tensor == Tensor((4, 4), ScalarEncoding(int3))
     point = choose(base, {"matmul.compute": "packed"})
-    folded = choose(point, {"matmul.compute.packed.pe": 2, "matmul.compute.packed.simd": 2})
+    folded = choose(point, {"matmul.pe": 2, "matmul.simd": 2})
     folded = choose(folded, {"w.source.memstream.ram_style": "block"})
     w = folded.member("w")
     assert w.tensor == Tensor((4, 4), ScalarEncoding(DataType["INT2"], TensorRange(-1, 1)))

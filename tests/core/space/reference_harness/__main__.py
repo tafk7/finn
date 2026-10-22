@@ -12,7 +12,8 @@ unattributed one fails its walk. ``--without MILESTONE`` takes its rows as remov
 disagreements fail their walks (its engine walked as if it had removed them). ``--strict``
 draws neither cause, and every disagreement fails. ``--implementation module:attribute``
 (or a registered name; ``today`` by default) names the implementation compared with the
-model, asked through ``support.space_oracle``'s interface; the summary names it. It exits 1
+model, asked through ``support.space_oracle``'s interface; the summary names it. ``--by``
+draws selectors picked by a derived value too (the model's reading 17). It exits 1
 when a walk failed. The walks are imported by their command alone, so the matrix prints
 whatever state the walks are in."""
 
@@ -40,6 +41,11 @@ def main(argv: list[str]) -> int:
         "disagreement fails",
     )
     walks.add_argument(
+        "--by",
+        action="store_true",
+        help="draw selectors picked by a derived value too (Select(by=...), reading 17)",
+    )
+    walks.add_argument(
         "--implementation",
         default="today",
         help="the implementation compared with the model: a registered name, or "
@@ -56,7 +62,7 @@ def main(argv: list[str]) -> int:
     implementation = load(arguments.implementation)
     without = [item.strip() for item in arguments.without.split(",") if item.strip()]
     tallies = [
-        walk(seed, arguments.steps, without, arguments.strict, implementation)
+        walk(seed, arguments.steps, without, arguments.strict, implementation, arguments.by)
         for seed in seeds(arguments.seeds)
     ]
     print(table(tallies, without))

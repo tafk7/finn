@@ -23,6 +23,7 @@ from finn.core.space import (
     Decision,
     Param,
     QueryResult,
+    Select,
     Space,
     View,
     ViewAssessment,
@@ -31,7 +32,6 @@ from finn.core.space import (
     derived,
     design_space,
     inspection,
-    selected,
     view,
 )
 from finn.core.space.inspection import ChoiceInfo
@@ -63,6 +63,10 @@ class SmallImplementation(Space):
     exports = {RESULT: physical}
 
 
+def _case_name(case: str) -> str:
+    return case
+
+
 class Pipeline(Space):
     size: int = Param()
     # Calling a Space class declares a node, typed as the class.
@@ -87,18 +91,15 @@ class Pipeline(Space):
     def output(self) -> int:
         return self.cycles
 
-    # The structural choice: a Decision over nodes, typed as its candidates.
-    implementation: FixedImplementation | SmallImplementation = Decision(
-        {
-            "fast": FixedImplementation(size=size),
-            "small": SmallImplementation(size=size),
-        }
+    # The structural choice: a selector, typed as its cases.
+    implementation: FixedImplementation | SmallImplementation = Select(
+        fast=FixedImplementation(size=size), small=SmallImplementation(size=size)
     )
     assert_type(implementation, FixedImplementation | SmallImplementation)
     # A member every candidate has is read through the choice.
     assert_type(implementation.result, int)
     chosen = View(implementation.physical)
-    case = selected(implementation)
+    case: str = derived(case=implementation)(_case_name)  # a binding reads the case's name
 
     @derived
     def chosen_case(self) -> str:

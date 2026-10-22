@@ -4,9 +4,7 @@
 """The acceptance matrix: every disagreement between the engine and the reference model
 expected at this commit, by the milestone that removes it. The model holds the human's
 rulings on the core types (DECISIONS SZ100) before the engine does: T4b reads views out
-(SZ100 (3)), T4c reads an optional fact left out as None (SZ100 (5)). It also holds its
-reading 8 before the engine does: T4a counts a refused guard once, at the highest refused
-guard of its chain.
+(SZ100 (3)), T4c reads an optional fact left out as None (SZ100 (5)).
 
 Each row names the change that removes it, in one sentence, and its **witness**: the one
 test that shows it, marked with :func:`expected` (a strict expected failure raising
@@ -16,7 +14,10 @@ fails) and it removes the rows. The engine core (the rewrite to the semantics th
 states: assignment, refusal at the origin, dormant choices) was the first, accepted when
 it landed with the model: its rows' witnesses are plain tests. The facts-instance milestone
 (a change of facts as a new design space, never refused: § 16.24) was the second, accepted
-when the engine dropped and reported as the model does.
+when the engine dropped and reported as the model does. T4a (the model's reading 8: a
+refused guard counts once, at the highest refused guard of its chain, and a refused guard
+below an unknown one leaves its piece unknown) was the third, accepted when the engine
+counted and waited as the model does: its witnesses are plain tests.
 
 A later milestone joins ``MILESTONES`` with its rows; while it has rows the walks count
 their disagreements, and fail on each once none has.
@@ -38,7 +39,7 @@ import pytest
 from .compare import Disagreement
 
 #: in order: the line as it is, then each later milestone with rows to remove
-MILESTONES: tuple[str, ...] = ("base", "T4a", "T4b", "T4c")
+MILESTONES: tuple[str, ...] = ("base", "T4b", "T4c")
 
 
 @dataclass(frozen=True)
@@ -56,25 +57,6 @@ class Row:
 
 
 ROWS: tuple[Row, ...] = (
-    Row(
-        "guard-counted-once",
-        "T4a",
-        "The engine counts a refused guard once, at the highest refused guard of its chain "
-        "(reading 8)",
-        "test_reference_cases::test_a_chosen_selector_under_a_refused_when_is_one_piece",
-        "today it counts one piece per refused guard node, so a chosen selector under a "
-        "refused when gives 1 + N pieces",
-    ),
-    # provisional: T4a or T2, pending a decision
-    Row(
-        "guard-unknown-under-unknown",
-        "T4a",
-        "A refused guard below an unknown selector or parent leaves validity open, not "
-        "counted (reading 8)",
-        "test_reference_cases::test_a_refused_when_in_a_case_of_an_open_selector_leaves_validity_open",
-        "today's engine leaves that refused guard out, so an open selector holding a case "
-        "whose when is refused gives valid where the model gives open",
-    ),
     Row(
         "view-read-in",
         "T4b",

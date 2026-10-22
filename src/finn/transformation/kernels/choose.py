@@ -137,6 +137,7 @@ from finn.kernels.explore import (
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.movers import MEMORY_LATENCY, MoverContract
 from finn.kernels.network import Key, dotted
+from finn.kernels.policies import Required
 from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
 from finn.platform.capabilities import Platform
 from finn.platform.catalog import part_report
@@ -303,13 +304,14 @@ def _cost_report(network: Partition, cost: Cost, resources: dict[str, object]) -
 def _fifo_storage(seam: Seam, network: Partition) -> dict[str, dict[str, object]]:
     """Each FIFO's memory style, by the graph name (a node or a tensor) and key that
     persist it, beside the storage the RTL selects for it (FinnLib's ``auto``: shift,
-    distributed, block or ultra) and what it uses."""
+    distributed, block or ultra) and what it uses: each ``ChannelFifo``'s, found by its
+    class (``Seam.fifos``), its memory its buffer's ``ram_style``."""
     found: dict[str, dict[str, object]] = {}
-    declared = seam.declared(network)
+    memories = set(seam.fifos(network).values())
     for (owner, key), value in seam.chosen(network).items():
-        path, _, name = key.rpartition(".")
-        if declared.get((owner, key)) is not FifoKernel or name != "ram_style":
+        if (owner, key) not in memories:
             continue
+        path = key.rpartition(".")[0]
         # A selector's case names no attribute: the selector's value is the case's Space.
         fifo = reduce(
             lambda found, name: getattr(found, name, found),
@@ -361,18 +363,19 @@ def _judged(entry: Mapping[str, Any] | None, check: FifoCheck | None) -> str:
 
 def _placed(seam: Seam, network: Partition) -> dict[Key, object]:
     """Every FIFO placed on ``network``: each transport at its FIFO case, with its depth
-    (None where it is open)."""
+    (None where it is open): its ``ChannelFifo``'s own, found by its class."""
     chosen = seam.chosen(network)
+    fifos = seam.fifos(network)
     found: dict[Key, object] = {}
     for key, fifo in seam.transports(network).items():
         if chosen.get(key) == fifo:
             depth = next(
                 (
-                    value
-                    for (owner, name), value in chosen.items()
-                    if owner == key[0]
-                    and name.startswith(f"{key[1]}.{fifo}.")
-                    and name.endswith(".depth")
+                    chosen[held]
+                    for held in fifos
+                    if held[0] == key[0]
+                    and held[1].startswith(f"{key[1]}.{fifo}.")
+                    and held in chosen
                 ),
                 None,
             )
@@ -524,6 +527,11 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         }
         if isinstance(strategy, Hold):
             entry["held"] = [dotted(key) for key in strategy.held]
+        if seam.fallbacks:
+            # A ranking a policy could not read: its choice offered in listed order.
+            entry["fallbacks"] = {
+                dotted(key): why((finding,)) for key, finding in seam.fallbacks.items()
+            }
     refused = seam.refusals(network)
     if refused:
         raise KernelOpError(
@@ -550,7 +558,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
         # The folding is no longer the one the target throughput explored.
         model.delete(OBJECTIVE_FPS)
     left = [
-        dotted(key) + (" (required)" if getattr(network.decision(key), "required", False) else "")
+        dotted(key) + (" (required)" if isinstance(seam.policy(network, key), Required) else "")
         for key in network.undecided()
     ]
     cost = seam.cost(network)

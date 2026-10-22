@@ -14,7 +14,7 @@ from support.helpers import (
     FULL_DSP48E2,
     choose,
     dotp_extents,
-    with_adapter_memories,
+    with_channel_defaults,
     with_direct_transports,
 )
 
@@ -65,6 +65,8 @@ def placing(*, w_port: str | None = "in1_V") -> Network:
                 x_tensor=X,
                 w_tensor=W,
                 **dotp_extents(W),
+                pe=2,
+                simd=2,
                 platform=FULL_DSP48E2,
             ),
         }
@@ -72,8 +74,6 @@ def placing(*, w_port: str | None = "in1_V") -> Network:
 
 
 FOLDING = {
-    "compute.pe": 2,
-    "compute.simd": 2,
     "compute.compute_pumping": False,
     "compute.reducer": "tree",
 }
@@ -81,7 +81,7 @@ FOLDING = {
 
 def placed(**transport: object) -> Network:
     folded = choose(placing(), FOLDING)
-    return with_adapter_memories(with_direct_transports(choose(folded, transport)))
+    return with_channel_defaults(with_direct_transports(choose(folded, transport)))
 
 
 def test_an_adapted_channel_places_its_stage_and_wires_each_hop() -> None:
@@ -107,7 +107,7 @@ def test_a_buffered_channel_places_its_fifo_below_its_transport() -> None:
     point = placed(
         **{
             "w.transport": "fifo",
-            "w.transport.fifo.buffer.depth": 4,
+            "w.transport.fifo.depth": 4,
             "w.transport.fifo.buffer.ram_style": "auto",
         }
     )

@@ -45,12 +45,14 @@ from finn.transformation.kernels import InferKernelTensors, kernel_choices_confi
 
 FOLDING: dict[str, object] = {
     "compute": "packed",
-    "compute.packed.pe": 2,
-    "compute.packed.simd": 2,
+    "pe": 2,
+    "simd": 2,
     "compute.packed.compute_pumping": False,
     "compute.packed.reducer": "tree",
 }
 """MatMul's folding, its core with it."""
+PUMPING = "compute.int8_dsp58.compute_pumping"
+"""A choice of the INT8 core's own, under its case."""
 WEIGHT_SOURCE: dict[str, object] = {
     "source": "memstream",
     "source.memstream.ram_style": "block",
@@ -103,17 +105,17 @@ def retarget(model: ModelWrapper, target: Target) -> ModelWrapper:
 
 
 def test_a_node_choice_under_a_case_not_selected_is_kept_out_of_play_and_saved() -> None:
-    """``compute.int8_dsp58.pe`` on a DSP48E2 target, where ``compute`` is ``packed``:
-    written raw, as a graph FINN did not write holds it. It is a value of its domain under
-    a case not selected: the node's Space and the network keep it, out of play (dormant),
-    nothing stale; saving writes it, and bound again it is kept the same."""
+    """``compute.int8_dsp58.compute_pumping`` on a DSP48E2 target, where ``compute`` is
+    ``packed``: written raw, as a graph FINN did not write holds it. It is a value of its
+    domain under a case not selected: the node's Space and the network keep it, out of play
+    (dormant), nothing stale; saving writes it, and bound again it is kept the same."""
     model = configured(matmul_model(), {"first": FOLDING})
-    write_raw(model, "first", "compute.int8_dsp58.pe", 2)
+    write_raw(model, "first", PUMPING, True)
     point = kernel_op(model, node(model)).point()
-    assert dict(inspection.states(point))["compute.int8_dsp58.pe"] == inspection.Dormant(2)
+    assert dict(inspection.states(point))[PUMPING] == inspection.Dormant(True)
     first = bound(model)
     assert not first.stale and first.member("first").compute.pe == 2
-    assert persist(model, first)["first"] == {**FOLDING, "compute.int8_dsp58.pe": 2}
+    assert persist(model, first)["first"] == {**FOLDING, PUMPING: True}
     again = bound(model)
     assert not again.stale and again.chosen() == first.chosen()
 
@@ -144,22 +146,22 @@ def test_a_node_choice_a_changed_fact_refuses_is_dropped_with_candidates_and_cle
     divides them. Bound again, the network drops ``pe`` as stale: its domain's finding names
     the value stored and the values ``pe`` could take now. Saving clears it and keeps the
     rest; bound again, nothing is stale, ``pe`` is open, the rest reads as stored."""
-    model = configured(matmul_model(), {"first": {**FOLDING, "compute.packed.pe": 4}})
+    model = configured(matmul_model(), {"first": {**FOLDING, "pe": 4}})
     widened = np.concatenate([WEIGHTS, WEIGHTS[:, :2]], axis=1).astype(np.float32)
     model.set_initializer("w", widened)
     model = model.transform(InferKernelTensors())
     first = bound(model)
     ((key, (own,)),) = first.stale.items()
-    assert key == "first.compute.packed.pe"
-    assert (own.code, own.owner) == ("domain-membership", "compute.packed.pe")
+    assert key == "first.pe"
+    assert (own.code, own.owner) == ("domain-membership", "pe")
     assert dict(own.details) == {"value": 4, "candidates": (1, 2, 3, 6)}
     assert own.message == "not one of 1, 2, 3, 6"
-    kept = {name: value for name, value in FOLDING.items() if name != "compute.packed.pe"}
+    kept = {name: value for name, value in FOLDING.items() if name != "pe"}
     assert persist(model, first)["first"] == kept
-    assert "compute.packed.pe" not in kernel_choices_config(model)["first"]
+    assert "pe" not in kernel_choices_config(model)["first"]
     again = bound(model)
     assert not again.stale
-    assert ("first", "compute.packed.pe") in again.undecided()
+    assert ("first", "pe") in again.undecided()
     assert again.chosen(["first"]) == {("first", name): value for name, value in kept.items()}
 
 

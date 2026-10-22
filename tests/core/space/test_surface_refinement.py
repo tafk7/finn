@@ -16,6 +16,7 @@ from finn.core.space import (
     Available,
     Decision,
     Param,
+    Select,
     Space,
     Unresolved,
     ValueSemantics,
@@ -146,7 +147,7 @@ def test_nested_custom_instance_initialization_is_rejected() -> None:
         compile_model(Parent)
 
     class ChoiceParent(Space):
-        child: Child = Decision({"only": Child(value=1)})
+        child: Child = Select(only=Child(value=1))
 
     with refused("instance-constructor-custom", error=DefinitionError):
         compile_model(ChoiceParent)
@@ -154,8 +155,8 @@ def test_nested_custom_instance_initialization_is_rejected() -> None:
 
 def test_structural_choices_cannot_be_shadowed_on_instances() -> None:
     class Example(Space):
-        implementation: Space = Decision({"a": Space(), "b": Space()})
-        singleton: Space = Decision({"only": Space()})
+        implementation: Space = Select(a=Space(), b=Space())
+        singleton: Space = Select(only=Space())
 
     instance = design_space(Example()).with_choices(implementation="a")
     with pytest.raises(AttributeError, match="immutable configuration field"):

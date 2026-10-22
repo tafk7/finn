@@ -29,10 +29,11 @@ from support.helpers import (
     keyed,
     matmul_point,
     with_adapter_memories,
+    with_channel_defaults,
     with_direct_transports,
 )
 
-from finn.core.space import Available, Rejected
+from finn.core.space import Available, Rejected, inspection
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.gemm import Form
 from finn.dataflow.plan import Step
@@ -123,6 +124,8 @@ def placed(
                 x_tensor=a_tensor,
                 w_tensor=w_tensor,
                 **dotp_extents(w_tensor),
+                pe=pe,
+                simd=SIMD,
                 platform=FULL_DSP58,
             ),
         }
@@ -130,15 +133,15 @@ def placed(
     chosen = choose(
         network,
         {
-            "compute.pe": pe,
-            "compute.simd": SIMD,
             "compute.compute_pumping": False,
             **({"compute.reducer": "tree"} if core is PackedDotpKernel else {}),
             "weights.ram_style": "auto",
             "weights.pumped_memory": False,
         },
     )
-    return with_direct_transports(chosen)
+    # The core is given its folding, so no change brings its channels new facts: their
+    # adapters are set as the cut sets them.
+    return with_channel_defaults(with_direct_transports(chosen))
 
 
 def test_every_port_presents_what_the_schedule_derives():
@@ -171,9 +174,12 @@ def test_depthwise_activations_carry_pe_channels_of_simd_window_positions():
     assert isinstance(point.member("w_s").query(Channel.netlist), Available)
 
 
-def test_a_folding_factor_that_does_not_divide_its_extent_is_refused_where_it_is_committed():
-    with pytest.raises(ValueError, match="compute.pe"):
-        placed(pe=3)
+def test_a_folding_factor_that_does_not_divide_its_extent_refuses_the_core_given_it():
+    # A core is given its folding (its role's choice, refused there by its domain): one
+    # that does not divide its extent refuses the core's schedule.
+    found = inspection.validity(placed(pe=3).member("compute"))
+    assert found.status == "refused"
+    assert {(f.code, f.owner) for f in found.result.findings} == {("kernel-schedule", "schedule")}
 
 
 def test_a_producer_presenting_another_order_is_a_plan_its_stream_adapts():
@@ -239,8 +245,8 @@ def test_one_kernel_refusal_reaches_the_change_that_selects_it():
         keyed(
             {
                 "matmul.compute": "packed",
-                "matmul.compute.packed.pe": 2,
-                "matmul.compute.packed.simd": 2,
+                "matmul.pe": 2,
+                "matmul.simd": 2,
                 "matmul.compute.packed.compute_pumping": False,
                 "matmul.compute.packed.reducer": "tree",
             }

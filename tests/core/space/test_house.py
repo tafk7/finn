@@ -21,10 +21,14 @@ from finn.core.space import (
     Decision,
     Inapplicable,
     Located,
+    Select,
     Unresolved,
     design_space,
     inspection,
 )
+
+# A case's member, read through the case's path.
+PUMP_COP = House.heating["heat_pump"].cop  # type: ignore[index]
 
 
 def test_the_house_is_declared_then_configured() -> None:
@@ -35,7 +39,7 @@ def test_the_house_is_declared_then_configured() -> None:
         {
             House.want_garage: False,
             House.heating: "heat_pump",
-            House.heat_pump.cop: 3,
+            PUMP_COP: 3,
             House.hall.finish: 1,
             House.kitchen.finish: 2,
             House.dining.finish: 2,
@@ -60,12 +64,12 @@ def test_a_structural_choice_reads_as_the_selected_candidate() -> None:
     assert boiler.thermostat.kw == 24
     selected = boiler.heating
     assert isinstance(selected, Boiler) and selected.kw == 24
-    assert isinstance(boiler.query(House.heat_pump.cop), Inapplicable)
-    pump = boiler.with_choices({House.heating: "heat_pump", House.heat_pump.cop: 4})
+    assert isinstance(boiler.query(PUMP_COP), Inapplicable)
+    pump = boiler.with_choices({House.heating: "heat_pump", PUMP_COP: 4})
     assert isinstance(pump.heating, HeatPump) and pump.heating.cop == 4
     # A stale candidate-local choice is kept, dormant, when switching away.
     back = pump.with_choices(heating="boiler")
-    assert isinstance(back.query(House.heat_pump.cop), Inapplicable)
+    assert isinstance(back.query(PUMP_COP), Inapplicable)
     again = back.with_choices(heating="heat_pump").heating
     assert isinstance(again, HeatPump) and again.cop == 4
     cleared = pump.with_choices(pump.heating.field(HeatPump.cop).clear(), heating="boiler")
@@ -138,7 +142,7 @@ def test_keys_commitments_and_inspection_use_declaration_paths() -> None:
         "dining.finish",
         "garage.finish",
     }
-    point = house.with_choices({House.heating: "heat_pump", House.heat_pump.cop: 4})
+    point = house.with_choices({House.heating: "heat_pump", PUMP_COP: 4})
     chosen = committed(point)
     assert chosen == {"heating": "heat_pump", "heating.heat_pump.cop": 4}
     replayed = replay(design_space(House(budget=999)), chosen)
@@ -155,8 +159,11 @@ class Estate(House):
     """A subclass customizes the house it inherits: data and structure, redeclared."""
 
     kitchen = FixedRoom(area=14)  # a larger kitchen of one finish
-    heat_pump = HeatPump(kw=6)
-    heating: HeatPump = Decision({"heat_pump": heat_pump})  # the heat pump alone
+    heating: HeatPump = Select(heat_pump=HeatPump(kw=6))  # the heat pump alone
+
+
+# A case's member, read through the case's path.
+ESTATE_PUMP_COP = Estate.heating["heat_pump"].cop  # type: ignore[index]
 
 
 def test_an_estate_customizes_the_house_it_inherits() -> None:
@@ -167,7 +174,7 @@ def test_an_estate_customizes_the_house_it_inherits() -> None:
         {
             Estate.want_garage: True,
             Estate.heating: "heat_pump",
-            Estate.heat_pump.cop: 3,
+            ESTATE_PUMP_COP: 3,
             Estate.hall.finish: 1,
             Estate.dining.finish: 2,
             Estate.garage.finish: 1,

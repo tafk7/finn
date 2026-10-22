@@ -9,12 +9,17 @@ A description is a tree of scopes. Each scope holds:
   declared reads that returns one, possibly empty), optionally narrowed by a
   membership predicate, or *membership-only* (a predicate of the value and declared
   reads, never enumerated). Membership reads facts only: facts, and derived values
-  whose reads are, through derived values, facts only. A domain may also carry an
-  ``order``, a function of other declared reads (choices too) that ranks the listed
-  values and checks nothing. A required choice has no safe value; no flow defaults it.
-  No domain reads a view (SZ100 (3)).
+  whose reads are, through derived values, facts only. No domain reads a view (SZ100
+  (3)). A domain carries no ranking and a choice no policy (SZ103): those are a
+  compiler's, never the semantics'.
 - **selectors**: a choice whose cases are named child scopes; only the selected case
-  is present. Its value is the case's name.
+  is present. Its value is the case's name. A selector **picked by a derived value**
+  (``Selector(..., by=d)``, the engine's ``Select(by=d)``) is no choice: it has no key
+  and is never stored. Its path reads its value, ``d``'s where that names one of its
+  cases, refused ``"select-no-case"`` (:data:`NO_CASE`) where it names none (``None``
+  included: a picker never answers "nothing"; a case that places nothing does,
+  :func:`nothing`). Its cases take no ``when`` of their own. The model's reading 17
+  states its semantics.
 - **derived** values: a function of declared reads, which returns a value or a
   :class:`Refuse` with its code (the derived value then reads refused, and every reader
   of it receives a refused input).
@@ -50,7 +55,7 @@ reads nothing else.
 :meth:`Space.validate` rejects a malformed description (an unknown or unreadable
 read, a duplicate name, a malformed domain or guard), a **view read in** (SZ100 (3),
 ``"view-read-in"``: a constraint, a derived value, a ``when`` guard, or a domain's
-membership, computed list or ``order`` reading a view; and, since the model expresses no
+membership or computed list reading a view; and, since the model expresses no
 view-side ``Members``, a ``Members`` naming one; checked before the rest), a domain
 whose membership reads anything but facts, or an input whose existence a choice decides
 other than through the choice's own guards (``"domain-reads-choice"``: a relation to
@@ -64,19 +69,18 @@ dependencies form a graph in which
   value's and a view's on their reads; a ``Members``'s on its entries; a view's also on
   its Space's validity;
 - a constraint depends on its reads and its scope's presence;
-- a scope's presence depends on its parent's, its selector's value and its guard's
-  reads;
+- a scope's presence depends on its parent's, its selector's value (a chosen one's, or
+  the value of the derived selector it is a case of) and its guard's reads;
 - a listed domain's piece (does it list a value?) depends on its choice's presence
-  and membership; a guard's piece on its scope's presence;
+  and membership; a guard's piece on its scope's presence; a derived selector's guard
+  piece on its holding scope's presence and its value;
 - a Space's validity depends on every constraint, listed domain's piece and guard's
-  piece in its scope and below.
+  piece in its scope and below (a derived selector's among them).
 
 Any cycle in that graph is an error naming its path: derived values reading each other
 in a ring, a guard reading a value of the scope it guards, views reading each other in a
 ring. A view read in closes none any more: only views read views (SZ100 (3)), so a view,
-which depends on its Space's validity, is never below a piece of it. A domain's
-``order`` is no node of the graph: nothing depends on it (validity and refusals never
-read it), so it cannot close a cycle; it reads no view.
+which depends on its Space's validity, is never below a piece of it.
 """
 
 from __future__ import annotations
@@ -87,9 +91,6 @@ from typing import Any
 
 #: what every function of a description receives: each declared read's value by path
 Reads = Mapping[str, Any]
-
-#: a domain's ranking: the membership list and the order's reads, to a permutation
-Order = Callable[[tuple[Any, ...], Reads], Sequence[Any]]
 
 
 class DefinitionError(Exception):
@@ -111,17 +112,12 @@ class Domain:
     from ``reads``; ``member`` narrows a listed domain, or alone makes a
     membership-only domain. A listed domain lists all its values: a value outside the
     list is not a member, and every listed value is also checked by ``member``.
-    ``reads`` are membership's, facts only.
-
-    ``order``, over ``order_reads`` (anything readable), ranks the membership list: it
-    receives the list and returns a permutation of it, and checks nothing."""
+    ``reads`` are membership's, facts only."""
 
     values: tuple[Any, ...] | None = None
     enumerate: Callable[[Reads], Sequence[Any]] | None = None
     member: Callable[[Any, Reads], bool] | None = None
     reads: tuple[str, ...] = ()
-    order: Order | None = None
-    order_reads: tuple[str, ...] = ()
 
     @property
     def listed(self) -> bool:
@@ -132,29 +128,21 @@ def listed(
     *values: Any,
     member: Callable[[Any, Reads], bool] | None = None,
     reads: tuple[str, ...] = (),
-    order: Order | None = None,
-    order_reads: tuple[str, ...] = (),
 ) -> Domain:
     """A fixed list of values, optionally narrowed by a membership predicate over
-    ``reads``, optionally ranked by ``order`` over ``order_reads``."""
+    ``reads``."""
 
-    return Domain(
-        values=tuple(values), member=member, reads=reads, order=order, order_reads=order_reads
-    )
+    return Domain(values=tuple(values), member=member, reads=reads)
 
 
 def computed(
     enumerate: Callable[[Reads], Sequence[Any]],
     reads: tuple[str, ...],
     member: Callable[[Any, Reads], bool] | None = None,
-    order: Order | None = None,
-    order_reads: tuple[str, ...] = (),
 ) -> Domain:
     """A list computed from declared reads."""
 
-    return Domain(
-        enumerate=enumerate, member=member, reads=reads, order=order, order_reads=order_reads
-    )
+    return Domain(enumerate=enumerate, member=member, reads=reads)
 
 
 def membership(member: Callable[[Any, Reads], bool], reads: tuple[str, ...] = ()) -> Domain:
@@ -167,7 +155,6 @@ def membership(member: Callable[[Any, Reads], bool], reads: tuple[str, ...] = ()
 class Choice:
     name: str
     domain: Domain
-    required: bool = False
 
 
 @dataclass(frozen=True)
@@ -232,11 +219,37 @@ class Scope:
 
 @dataclass(frozen=True)
 class Selector:
-    """A choice among child scopes, its cases; its value is a case's name."""
+    """A choice among child scopes, its cases; its value is a case's name. With ``by``
+    (a readable path), it is picked by that value and is no choice: its path reads the
+    picked case's name (``Index.derived`` holds it, reading ``by``), refused
+    :data:`NO_CASE` where ``by`` names no case."""
 
     name: str
     cases: tuple[Scope, ...]
-    required: bool = False
+    by: str | None = None
+
+
+#: the code a selector picked by a derived value refuses with where the value names no case
+NO_CASE = "select-no-case"
+
+
+def nothing(name: str) -> Scope:
+    """A case that places nothing (the engine's ``Select(direct=None, ...)``): an empty
+    scope."""
+
+    return Scope(name)
+
+
+def _picker(cases: tuple[str, ...], by: str) -> Callable[[Reads], Any]:
+    """A derived selector's value: ``by``'s, where it names one of ``cases``."""
+
+    def pick(read: Reads) -> Any:
+        value = read[by]
+        if type(value) is str and value in cases:
+            return value
+        return Refuse(NO_CASE)
+
+    return pick
 
 
 @dataclass(frozen=True)
@@ -270,6 +283,9 @@ class ScopeInfo:
     case: str | None
     when: When | None
     scope: Scope
+    #: a case of a selector picked by a derived value: that selector's path (its
+    #: ``selector`` is then ``None``: no choice decides it)
+    picker: str | None = None
 
 
 @dataclass(frozen=True)
@@ -277,7 +293,6 @@ class ChoiceInfo:
     path: str
     scope: str
     domain: Domain
-    required: bool
     #: the case names, for a selector
     cases: tuple[str, ...] | None
 
@@ -302,6 +317,9 @@ class Index:
     facts: frozenset[str] = frozenset()
     #: the optional facts (SZ100 (5)); the other facts are required
     optional: frozenset[str] = frozenset()
+    #: each selector picked by a derived value, by path: its holding scope, the path it
+    #: reads (``by``) and its cases
+    pickers: dict[str, tuple[str, str, tuple[str, ...]]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         names: set[str] = set()
@@ -344,8 +362,9 @@ class Index:
         selector: str | None,
         case: str | None,
         taken: set[str],
+        picker: str | None = None,
     ) -> None:
-        self.scopes[path] = ScopeInfo(path, parent, selector, case, scope.when, scope)
+        self.scopes[path] = ScopeInfo(path, parent, selector, case, scope.when, scope, picker)
         for choice in scope.choices:
             self._name_ok(choice.name, path)
             node = join(path, choice.name)
@@ -355,9 +374,7 @@ class Index:
                 raise DefinitionError("malformed", (node,), "a domain lists or computes")
             if not domain.listed and domain.member is None:
                 raise DefinitionError("malformed", (node,), "a domain needs values")
-            if domain.order is not None and not domain.listed:
-                raise DefinitionError("malformed", (node,), "only a listed domain is ordered")
-            self.choices[node] = ChoiceInfo(node, path, domain, choice.required, None)
+            self.choices[node] = ChoiceInfo(node, path, domain, None)
         for selector_ in scope.selectors:
             self._name_ok(selector_.name, path)
             node = join(path, selector_.name)
@@ -365,9 +382,16 @@ class Index:
             cases = tuple(case_.name for case_ in selector_.cases)
             if len(set(cases)) != len(cases):
                 raise DefinitionError("duplicate", (node,), "two cases share a name")
-            self.choices[node] = ChoiceInfo(
-                node, path, Domain(values=cases), selector_.required, cases
-            )
+            if selector_.by is not None:
+                if any(case_.when is not None for case_ in selector_.cases):
+                    raise DefinitionError(
+                        "malformed", (node,), "a case of a derived selector takes no guard"
+                    )
+                self.pickers[node] = (path, selector_.by, cases)
+                pick = Derived(selector_.name, (selector_.by,), _picker(cases, selector_.by))
+                self.derived[node] = (pick, path)
+                continue
+            self.choices[node] = ChoiceInfo(node, path, Domain(values=cases), cases)
         for derived in scope.derived:
             self._name_ok(derived.name, path)
             node = join(path, derived.name)
@@ -395,11 +419,20 @@ class Index:
             self._add_scope(child, node, path, None, None, taken)
         for selector_ in scope.selectors:
             node = join(path, selector_.name)
+            picked = selector_.by is not None
             for case_ in selector_.cases:
                 self._name_ok(case_.name, node)
                 case_path = join(node, case_.name)
                 self._claim(case_path, taken)
-                self._add_scope(case_, case_path, path, node, case_.name, taken)
+                self._add_scope(
+                    case_,
+                    case_path,
+                    path,
+                    None if picked else node,
+                    case_.name,
+                    taken,
+                    node if picked else None,
+                )
 
     def _check_reads(self) -> None:
         for node, reads in self._declared_reads():
@@ -412,7 +445,6 @@ class Index:
     def _declared_reads(self) -> Iterator[tuple[str, tuple[str, ...]]]:
         for path, info in self.choices.items():
             yield path, info.domain.reads
-            yield path, info.domain.order_reads
         for path, (derived, _) in self.derived.items():
             yield path, derived.reads
         for path, (view, _) in self.views.items():
@@ -466,7 +498,10 @@ class Index:
         Space's validity). So does a derived value whose existence depends on a choice
         other than through the choice's own existence guards (§ 16.17): a selector of
         one of its scopes that does not hold the choice, or a ``when`` there reading
-        anything but facts in this sense."""
+        anything but facts in this sense, or a derived selector there whose value does (a
+        picker over facts alone is a ``when`` over facts). A scope holding the choice is
+        never asked, so an input in the choice's own case is a definition whatever picks
+        that case (§ 16.20: the case's guard is the choice's own existence guard)."""
 
         for path in sorted(self.choices):
             own = self.choices[path].scope
@@ -503,6 +538,9 @@ class Index:
                     if info.when is not None:
                         guarded = (*through, read, current)
                         stack.extend((inner, guarded) for inner in reversed(info.when.reads))
+                    if info.picker is not None:
+                        # a derived selector's case: a guard reading the selector's value
+                        stack.append((info.picker, (*through, read, current)))
                     current = info.parent
 
     # -- queries
@@ -578,7 +616,8 @@ class Index:
         )
 
     def presence_seeds(self, scope: str) -> frozenset[str]:
-        """The selector and the ``when`` reads of ``scope`` and of every scope above it."""
+        """The selector (chosen, or the derived selector a case is of) and the ``when``
+        reads of ``scope`` and of every scope above it."""
 
         seeds: set[str] = set()
         current: str | None = scope
@@ -586,6 +625,8 @@ class Index:
             info = self.scopes[current]
             if info.selector is not None:
                 seeds.add(info.selector)
+            if info.picker is not None:
+                seeds.add(info.picker)
             if info.when is not None:
                 seeds.update(info.when.reads)
             current = info.parent
@@ -650,13 +691,19 @@ class Index:
                 out.append(("presence", info_.parent))
             if info_.selector is not None:
                 out.append(("value", info_.selector))
+            if info_.picker is not None:
+                out.append(("value", info_.picker))
             if info_.when is not None:
                 out.extend(("value", read) for read in info_.when.reads)
         elif kind == "domain":
             out.append(("presence", self.choices[path].scope))
             out.append(("membership", path))
         elif kind == "guard":
-            out.append(("presence", path))
+            if path in self.pickers:  # a derived selector's guard: its holding scope, its value
+                out.append(("presence", self.pickers[path][0]))
+                out.append(("value", path))
+            else:
+                out.append(("presence", path))
         else:  # validity
             out.extend(
                 ("constraint", name)
@@ -672,6 +719,11 @@ class Index:
                 ("guard", name)
                 for name, info__ in sorted(self.scopes.items())
                 if info__.when is not None and self.within(name, path)
+            )
+            out.extend(
+                ("guard", name)
+                for name, (owner, _, _) in sorted(self.pickers.items())
+                if self.within(owner, path)
             )
         return out
 

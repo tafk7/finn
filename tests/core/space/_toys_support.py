@@ -13,6 +13,7 @@ from finn.core.space import (
     Members,
     Param,
     Rejected,
+    Select,
     Space,
     ViewKey,
     constraint,
@@ -72,9 +73,7 @@ class House(Space):
     kitchen = Room(area=12)
     dining = Room(area=16)
     garage = Room(area=20, when=want_garage)
-    # A class attribute may name a candidate: a typed handle, not a placement.
-    heat_pump = HeatPump(kw=8)
-    heating: Boiler | HeatPump = Decision({"boiler": Boiler(kw=24), "heat_pump": heat_pump})
+    heating: Boiler | HeatPump = Select(boiler=Boiler(kw=24), heat_pump=HeatPump(kw=8))
     thermostat = Thermostat(kw=heating.kw)
     hall.area = kitchen.area  # an edge declared after its nodes
     costs = Members(COST)

@@ -6,8 +6,8 @@
 ``configured(model, {graph name: {key: value}})``: the KernelOps' network of ``model`` bound
 in the shell of its target (as exploration binds a partition's body), the values set through
 the seam as a strategy sets them (``Seam.set``, one batch, as ``Hold`` does), then each
-channel's open choices that are not required set by the interim channel rule, as the cut
-sets them (``interim_channel_defaults``; a FIFO's depth stays open), and the result
+channel's open choices that are not required set by the cut's policies, as the cut sets
+them (``finn.kernels.cut.channel_defaulted``; a FIFO's depth stays open), and the result
 persisted (``finn.custom_op.kernels.network.persist``, the one writer of choices). What the
 seam refuses is refused, by its findings (the seam's own codes, ``not-a-decision``,
 ``held``, or the engine's: a value outside its domain, ``domain-membership``, or each rule
@@ -44,8 +44,8 @@ from finn.core.reporting.findings import Refusal
 from finn.custom_op.kernels.network import persist, persist_kernel
 from finn.custom_op.kernels.shell import in_shell
 from finn.kernels.configure import chosen
+from finn.kernels.cut import channel_defaulted
 from finn.kernels.explore import Accepted, Refused, Seam
-from finn.kernels.network import interim_channel_defaults
 
 
 def configured(model: ModelWrapper, choices: Mapping[str, Mapping[str, object]]) -> ModelWrapper:
@@ -73,11 +73,13 @@ def configured(model: ModelWrapper, choices: Mapping[str, Mapping[str, object]])
         if network.unbound(name) is not None:
             continue
         point = network.member(name)
-        done = interim_channel_defaults(point)
+        done = channel_defaulted(point)
         if isinstance(done, tuple):
             continue  # a choice no value can be set for: emission names it
         values = {
-            (name, key): value for key, value in chosen(done).items() if key not in chosen(point)
+            (name, key): value
+            for key, value in chosen(done.point).items()
+            if key not in chosen(point)
         }
         if values:
             step = seam.set(network, values)

@@ -28,7 +28,7 @@ from finn.core.space import Decision, DefinitionError, Space, design_space, insp
 TOY = """
 from __future__ import annotations
 from dataclasses import dataclass
-from finn.core.space import Decision, Param, Space, derived
+from finn.core.space import Decision, Param, Select, Space, derived
 
 class Port(Space):
     rate: {annotation} = Param()
@@ -83,7 +83,7 @@ def test_a_forward_into_a_pending_formal_links(tmp_path: Path) -> None:
             "a node is not a value; bind one of its members",
         ),
         (
-            {"extra": '    extra = Port(rate=Decision({"p": Port}))'},
+            {"extra": "    extra = Port(rate=Select(p=Port))"},
             "node-not-value",
             "a node is not a value; bind one of its members",
         ),

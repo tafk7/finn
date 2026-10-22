@@ -17,6 +17,7 @@ from finn.core.space import (
     Inapplicable,
     Param,
     Rejected,
+    Select,
     Space,
     Unresolved,
     ValueUnavailableError,
@@ -47,7 +48,7 @@ class Wide(Space):
 
 class Root(Space):
     extent: int = Param()
-    mode: Leaf | Wide = Decision({"leaf": Leaf(extent=extent), "wide": Wide})
+    mode: Leaf | Wide = Select(leaf=Leaf(extent=extent), wide=Wide)
     width: int = Decision(values=(8, 16))
 
     @constraint
@@ -105,7 +106,7 @@ class Bare(Space):
 
 class UnderOpen(Space):
     f: int = Param(required=False)
-    s: Bounded | Bare = Decision({"a": Bounded(f=f), "b": Bare()})
+    s: Bounded | Bare = Select(a=Bounded(f=f), b=Bare())
 
 
 class RefusingInput(Space):

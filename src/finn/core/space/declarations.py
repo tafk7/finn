@@ -529,65 +529,76 @@ class Const(ValueDecl[T], Generic[T]):
 
 Guard: TypeAlias = "ValueRef[bool] | bool | None"
 
+_RETIRED: Mapping[str, tuple[str, str]] = {
+    "optional": (
+        "decision-optional",
+        "a case that places nothing is a None case of a selector: write Select(none=None, ...)",
+    ),
+    "required": (
+        "decision-required",
+        "a Decision states no policy; a choice no default may set is the compiler's to "
+        "state: write FINN's Required() policy on the Decision, in its KernelOp or the cut",
+    ),
+    "name": (
+        "decision-named",
+        "a Decision belongs to the Space class that declares it: write it as a class "
+        "attribute, and bind that attribute to each formal it supplies",
+    ),
+}
+
+
+def _refuse_retired(entries: tuple[object, ...], retired: Mapping[str, object]) -> None:
+    """The retired spellings of a Decision, each refused with its replacement."""
+    where = at(source_origin())
+    if entries:
+        raise DefinitionError.broken(
+            "decision-over-nodes",
+            _OWNER,
+            f"Decision{where}: a Decision keeps value domains (values= or domain=); a choice "
+            "among Space classes is a selector: write Select(name=Class, other=Class(...), "
+            "shared=...), a case that places nothing as None, Select(none=None, ...)",
+        )
+    for keyword in retired:
+        if keyword in _RETIRED:
+            code, replacement = _RETIRED[keyword]
+            raise DefinitionError.broken(code, _OWNER, f"Decision{where}: {replacement}")
+    if retired:
+        raise TypeError(
+            f"Decision() got unexpected keyword arguments {sorted(retired)}; it takes values= "
+            "or domain=, semantics=, when= and ordered="
+        )
+
 
 class Decision(ValueDecl[T], Generic[T]):
     """An independently editable choice, annotated with its value type.
 
     ``finish: int = Decision(values=(1, 2, 3))`` chooses a value; the
     annotation is its value type, ``semantics=`` gives custom value semantics.
-    ``heating: Boiler | HeatPump = Decision({"boiler": Boiler, "pump": HeatPump(cop=4)},
-    area=area)`` chooses a node: the persisted value is the key; each candidate
-    is a node named ``<decision>.<key>`` whose presence derives from the
-    decision. An entry is a Space class (a fresh node) or a call on one carrying the
-    bindings only that candidate takes; the keyword arguments are shared
-    bindings, supplied to every candidate, each of which must declare them.
-    ``optional=True`` adds a ``None`` candidate keyed ``"none"``, which places
-    nothing. A Decision's values are its domain, whose membership reads facts only:
+    A Decision keeps value domains only: a choice among Space classes is a selector,
+    ``Select`` (``heating = Select(boiler=Boiler, pump=HeatPump(cop=4), area=area)``).
+    A Decision's values are its domain, whose membership reads facts only:
     a rule linking a value to anything else (``ultra`` needs UltraRAM) is a
     ``@constraint`` of the Space that owns the choice, and a change that breaks it
     is refused, naming it. ``ordered=True`` states that listed values
     are in an order (a domain states its own, ``divisors_of``); otherwise they
-    are unordered. The engine sets no choice itself, by default or otherwise.
-    ``required=True`` marks a choice no default policy may set (a FIFO's depth,
-    which a strategy sizes): it stays open until something chooses it. It changes
-    nothing in how the Decision accepts or evaluates values;
-    ``inspection.decisions`` reports it (``DecisionInfo.required``).
+    are unordered. The engine sets no choice itself, by default or otherwise, and holds
+    no policy: whether a policy may set a choice, and how, is the compiler's.
 
-    ``heating.area`` reads a member every candidate declares;
-    ``heating["pump"].cop`` reads one candidate's member, inapplicable while
-    another is selected.
-
-    A Decision that is not a class attribute takes its value type from the
-    formal it supplies. It may supply exactly one formal
-    (``Fifo(depth=Decision(values=(4, 8)))``), and is keyed by that formal's
-    path. One that supplies several formals is shared and must be named: a
-    class attribute, or ``Decision(..., name="depth")``, which is owned by the
-    lowest scope containing every node it supplies.
-
-    A Decision belongs to its Space class: no body supplies it a value, a key or
-    another Decision. A choice is committed on a configuration
+    A Decision belongs to the Space class that declares it, as a class attribute,
+    and is supplied to a formal by binding that attribute
+    (``depth: int = Decision(...)``, then ``buffer = Fifo(depth=depth)``). No body
+    supplies it a value, a key or another Decision. A choice is set on a design space
     (``with_choices``); a narrower one is a subclass's.
+
+    Retired spellings, each refused with its replacement: entries
+    (``Decision({...})``: ``Select``), ``optional=`` (a ``None`` case of a ``Select``),
+    ``required=`` (a policy, the compiler's), ``name=`` and a Decision given at a call
+    (declare it on the class, and bind it).
     """
 
     domain: Domain[T]
     explicit: ValueSemantics[T] | None
     resolved: bool
-    # ``required=True``: no default policy may set it; it stays open until chosen.
-    required: bool
-    # Where this Decision supplies a formal (for the shared-decision rule).
-    sites: list[str]
-
-    @overload
-    def __new__(
-        cls,
-        entries: Mapping[str, type[Space] | Space],
-        /,
-        *,
-        optional: bool = False,
-        required: bool = False,
-        when: Guard = None,
-        **shared: object,
-    ) -> Any: ...
 
     @overload
     def __new__(  # type: ignore[misc]
@@ -597,9 +608,7 @@ class Decision(ValueDecl[T], Generic[T]):
         values: Iterable[T],
         semantics: ValueSemantics[T] | None = None,
         when: Guard = None,
-        name: str | None = None,
         ordered: bool = False,
-        required: bool = False,
     ) -> T: ...
 
     @overload
@@ -610,70 +619,25 @@ class Decision(ValueDecl[T], Generic[T]):
         domain: Domain[T],
         semantics: ValueSemantics[T] | None = None,
         when: Guard = None,
-        name: str | None = None,
-        required: bool = False,
     ) -> T: ...
 
     def __new__(
         cls,
-        entries: object = None,
-        /,
-        *,
+        *entries: object,
         domain: object = None,
         values: object = None,
         semantics: object = None,
         when: object = None,
-        name: object = None,
-        optional: object = False,
         ordered: object = None,
-        required: object = False,
-        **shared: object,
+        **retired: object,
     ) -> Any:
-        if type(required) is not bool:
-            raise DefinitionError.broken(
-                "required-not-bool",
-                _OWNER,
-                f"Decision{at(source_origin())}: required= is True or False",
-            )
-        if entries is not None:
-            reserved = {
-                key: value
-                for key, value in (
-                    ("domain", domain),
-                    ("values", values),
-                    ("semantics", semantics),
-                    ("name", name),
-                    ("ordered", ordered),
-                )
-                if value is not None
-            }
-            if reserved:
-                raise DefinitionError.broken(
-                    "shared-binding-reserved",
-                    _OWNER,
-                    f"Decision{at(source_origin())}: shared bindings {sorted(reserved)} are "
-                    "named like the Decision's own arguments; rename the Param (values -> "
-                    "contents), or write the binding on each entry that takes it",
-                )
-            from ._nodes import entry_choice
-
-            return entry_choice(
-                entries, shared, optional=optional, required=required, when=guard(when)
-            )
-        if shared or optional is not False:
-            raise DefinitionError.broken(
-                "entries-only-option",
-                _OWNER,
-                "optional= and shared bindings apply to a Decision over candidate entries: "
-                'Decision({"key": Room, ...}, ...)',
-            )
+        _refuse_retired(entries, retired)
         if domain is None and isinstance(values, Mapping):
             raise DefinitionError.broken(
                 "node-decision-not-entries",
                 _OWNER,
-                f"Decision{at(source_origin())}: a Decision over nodes lists its candidates as "
-                'entries, Decision({"key": Room, "other": Room(...)}); optional=True adds '
-                'the None candidate "none"',
+                f"Decision{at(source_origin())}: a choice among Space classes is a selector: "
+                "write Select(key=Room, other=Room(...)); a case that places nothing is None",
             )
         if (domain is None) == (values is None):
             raise DefinitionError.broken(
@@ -707,21 +671,9 @@ class Decision(ValueDecl[T], Generic[T]):
             if domain is not None
             else finite(cast(Iterable[object], values), explicit, ordered=ordered is True)
         )
-        instance.sites = []
-        instance.required = required
-        if name is not None:
-            instance.name = local_name(cast(str, name), "decision name")
         return instance
 
     def __set_name__(self, owner: type[object], name: str) -> None:
-        if self.owner is None and self.name is not None and self.name != name:
-            raise DefinitionError.broken(
-                "decision-misnamed",
-                _OWNER,
-                f"{owner.__qualname__}.{name}: Decision{at(self.origin)} is named "
-                f"{self.name!r}; a class attribute takes its attribute name",
-                declaration=f"{owner.__qualname__}.{name}",
-            )
         super().__set_name__(owner, name)
         try:
             self.resolve()
@@ -729,12 +681,13 @@ class Decision(ValueDecl[T], Generic[T]):
             pass  # a forward reference: resolved again when the Space class is collected
 
     def resolve(self) -> Decision[T]:
-        """A class attribute reads its annotation; an inline one waits for its formal."""
+        """A class attribute reads its annotation (in its class body, before the class is
+        made, as its sibling's binding reads it)."""
         if self.resolved:
             return self
         annotation = declared_annotation(self, "Decision")
         if annotation is MISSING and self.owner is None:
-            return self  # inline: typed by the formal it supplies
+            return self  # still in its class body: resolved when the class is made
         if annotation is MISSING and self.explicit is None:
             raise _unannotated(self, "Decision")
         self.semantics = _annotation_semantics(
@@ -742,6 +695,40 @@ class Decision(ValueDecl[T], Generic[T]):
         )
         self.resolved = True
         return self
+
+
+def Select(  # noqa: N802 - a declaration, spelled as one
+    *,
+    by: object = None,
+    when: object = None,
+    **members: object,
+) -> Any:
+    """A selector: ``heating = Select(boiler=Boiler(kw=24), heat_pump=HeatPump, kw=kw)``.
+
+    Each keyword whose value is a Space class, a call on one or ``None`` is a **case**
+    (``None`` places nothing); each other keyword is a **shared binding**, supplied to
+    every case that places something, which must declare it; a class object as a shared
+    binding is refused (``select-binding-class``). Picked by a choice, its stored value is
+    the case's name (``heating``'s key). Picked by a derived value, ``Select(by=chain,
+    ...)``, it has no key and is never a choice: the case is the one the value names, and
+    a value naming no case (``None`` included: a ``None`` case is named by its key)
+    refuses, ``select-no-case``. While the value waits its cases wait; while it refuses
+    they are not in play, refusing the Space once, in the selector's name. A picked
+    selector's ``when=`` is no ``supplied()`` guard (``select-by-supplied``).
+
+    **Reading it.** A case's path is ``<selector>.<case>``: ``heating["boiler"].kw``
+    reads one case's member, and ``heating.kw`` a member every case declares. A binding
+    to the selector itself (``derived(case=heating)(f)``, a view's, a rule's or a
+    guard's argument) reads its value, the case's name: a ``None`` case's included, its
+    key (``"none"`` for ``none=None``). In a method body, ``self.heating`` is the
+    selected case's design space, ``None`` for a ``None`` case.
+
+    ``optional=`` and ``required=`` are refused (``select-optional``,
+    ``select-required``): a ``None`` case, and a policy (the compiler's).
+    """
+    from ._nodes import select_choice
+
+    return select_choice(members, by=by, when=guard(when))
 
 
 class Required:
@@ -1397,25 +1384,12 @@ class ChoiceMemberRef(_Symbolic, ValueRef[Any]):
 
 
 class CaseRef(ValueDecl[str]):
-    """The key a structural decision selects, read-only (see ``selected``)."""
+    """A selector's value, the case's name, read-only: what a binding to the selector
+    reads."""
 
     def __init__(self, path: tuple[Declaration, ...]) -> None:
         self.path = path
         self.semantics = cast("ValueSemantics[str]", STRING)
-
-
-def selected(decision: object) -> str:
-    """The selected key of a Decision over nodes, as a read-only value.
-
-    Typed as ``str`` like every reference; inside a method it reads the key.
-    """
-    from ._nodes import NodeChoice
-
-    if not isinstance(decision, NodeChoice):
-        raise DefinitionError.broken(
-            "selected-not-node-decision", _OWNER, "selected() requires a Decision over nodes"
-        )
-    return cast(str, CaseRef(decision._space_path))
 
 
 class Supplied(ValueDecl[bool]):
@@ -1485,7 +1459,6 @@ __all__ = [
     "constraint",
     "derived",
     "required",
-    "selected",
     "supplied",
     "unfinished",
     "unmet_required",

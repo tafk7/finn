@@ -104,7 +104,8 @@ def test_the_kernels_and_the_test_support_answer_as_the_line() -> None:
 
 def test_stage_7s_chain_of_eight_kernels_answers_as_the_line() -> None:
     whole, _ = chain_space(4)
-    assert _answers_as_the_line([whole]) == 189
+    # The choices compared: each MatMul's folding is its own, not each core's.
+    assert _answers_as_the_line([whole]) == 181
 
 
 def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
@@ -142,7 +143,7 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     three's port contracts are made, not read: each MatMul's served contract
     (``x_contract``) takes its core's through the selector (an argument of each case's), and
     a channel reads it. Then ``viable`` of the middle MatMul's choices and one change of its
-    ``compute.packed.pe``: what trials resolve more."""
+    ``pe``: what trials resolve more."""
     monkeypatch.delenv(EAGER, raising=False)
     whole, stored = chain_space(4)
     point = design_space(whole())
@@ -152,7 +153,7 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     assert structure.counts() == {
         "scopes addressed": 216,
         "scopes in play": 55,
-        "nodes resolved": 1487,
+        "nodes resolved": 1476,
         "const nodes resolved": 76,
     }
     in_play = set(structure._in_play)
@@ -197,19 +198,19 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
         assert guard is not None and isinstance(before.result(guard), Unresolved)
     handles = {item.key: item.reference for item in inspection.decisions(committed)}
     middle = [key for key in handles if key.startswith("mm2.")]
-    assert len(middle) == 9
+    assert len(middle) == 7
     inspection.viable(committed, [handles[key] for key in middle])
     assert structure.counts() == {
         "scopes addressed": 216,
         "scopes in play": 66,
-        "nodes resolved": 1560,
+        "nodes resolved": 1554,
         "const nodes resolved": 76,
     }
-    report = committed.try_with_choices({handles["mm2.compute.packed.pe"]: 2})
+    report = committed.try_with_choices({handles["mm2.pe"]: 2})
     assert report.accepted
     assert structure.counts() == {
         "scopes addressed": 216,
         "scopes in play": 66,
-        "nodes resolved": 1560,
+        "nodes resolved": 1554,
         "const nodes resolved": 76,
     }

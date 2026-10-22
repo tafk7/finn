@@ -1,12 +1,11 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""A Decision over candidate entries: shared bindings once, reads, keys, required(), forcing.
+"""A selector's cases: shared bindings once, reads, keys, required(), forcing.
 
 Two cores with disjoint choices share one fact (``width``); the packed core
-also takes a binding of its own (``narrow_weights``). The Decision names each
-candidate once, as a Space class or a call carrying its own bindings, and supplies
-the shared bindings to every candidate. An enclosing body pins it by a key or
-narrows it by a Decision over keys, keeping the declared candidates.
+also takes a binding of its own (``narrow_weights``). The ``Select`` names each
+case once, as a Space class or a call carrying its own bindings, and supplies
+the shared bindings to every case. An enclosing body pins it by a key.
 """
 
 from __future__ import annotations
@@ -26,6 +25,7 @@ from finn.core.space import (
     Inapplicable,
     Param,
     Rejected,
+    Select,
     Space,
     Unresolved,
     View,
@@ -118,8 +118,8 @@ class Narrow(Space):
 
 class Unit(Space):
     width: int = Param()
-    compute: PackedCore | StubCore = Decision(
-        {"packed": PackedCore(narrow_weights=True), "stub": StubCore}, width=width
+    compute: PackedCore | StubCore = Select(
+        packed=PackedCore(narrow_weights=True), stub=StubCore, width=width
     )
     cycles = View(compute.cycles)  # every candidate declares cycles: int
     narrow = View(compute["packed"].narrow_weights)  # type: ignore[index]
@@ -133,11 +133,8 @@ class Earlier(Space):
     """The same choice spelled with ``values=``: every binding per candidate."""
 
     width: int = Param()
-    compute: PackedCore | StubCore = Decision(
-        {
-            "packed": PackedCore(width=width, narrow_weights=True),
-            "stub": StubCore(width=width),
-        }
+    compute: PackedCore | StubCore = Select(
+        packed=PackedCore(width=width, narrow_weights=True), stub=StubCore(width=width)
     )
     cycles = View(compute.cycles)
 
@@ -181,23 +178,21 @@ def test_a_shared_binding_a_candidate_lacks_is_refused_naming_it() -> None:
 
         class Lacking(Space):
             width: int = Param()
-            compute: PackedCore | Narrow = Decision(
-                {"packed": PackedCore, "narrow": Narrow}, width=width
-            )
+            compute: PackedCore | Narrow = Select(packed=PackedCore, narrow=Narrow, width=width)
 
     message = str(raised.value)
-    assert "shared binding 'width' is not declared by candidates ['narrow (Narrow)']" in message
+    assert "shared binding 'width' is not declared by cases ['narrow (Narrow)']" in message
     assert "test_candidate_entries.py" in message
     with refused(
         "shared-binding-invalid",
         error=DefinitionError,
-        message=r"'cycles' is not declared by candidates",
+        message=r"'cycles' is not declared by cases",
     ):
 
         class Behaviour(Space):
             width: int = Param()
-            compute: PackedCore | StubCore = Decision(
-                {"packed": PackedCore, "stub": StubCore}, width=width, cycles=width
+            compute: PackedCore | StubCore = Select(
+                packed=PackedCore, stub=StubCore, width=width, cycles=width
             )
 
 
@@ -205,39 +200,19 @@ def test_a_shared_binding_also_written_on_an_entry_is_a_double_assignment() -> N
     with refused(
         "shared-binding-repeated",
         error=DefinitionError,
-        message="candidate 'packed' already binds width",
+        message="case 'packed' already binds width",
     ):
 
         class Twice(Space):
             width: int = Param()
-            compute: PackedCore | StubCore = Decision(
-                {"packed": PackedCore(width=4), "stub": StubCore}, width=width
+            compute: PackedCore | StubCore = Select(
+                packed=PackedCore(width=4), stub=StubCore, width=width
             )
-
-
-def test_shared_bindings_named_like_the_decisions_own_arguments_are_refused() -> None:
-    for name in ("values", "domain", "semantics", "name"):
-        with refused(
-            "shared-binding-reserved",
-            error=DefinitionError,
-            message=rf"shared bindings \['{name}'\]",
-        ):
-            Decision({"packed": PackedCore}, **{name: 1})  # type: ignore[call-overload]
-    with refused(
-        "candidate-not-space", error=DefinitionError, message="must be a Space class or a call"
-    ):
-        Decision({"packed": 3})  # type: ignore[dict-item]
-    with refused(
-        "entries-only-option",
-        error=DefinitionError,
-        message="apply to a Decision over candidate entries",
-    ):
-        Decision(values=(1, 2), optional=True)  # type: ignore[call-overload]
 
 
 def test_an_unsupplied_required_input_is_an_authoring_error_naming_the_candidate() -> None:
     class Open(Space):
-        compute: PackedCore | StubCore = Decision({"packed": PackedCore, "stub": StubCore})
+        compute: PackedCore | StubCore = Select(packed=PackedCore, stub=StubCore)
 
     with pytest.raises(DefinitionError) as raised:
         design_space(Open())
@@ -248,15 +223,15 @@ def test_an_unsupplied_required_input_is_an_authoring_error_naming_the_candidate
 # -- required() --------------------------------------------------------------------------
 
 
-def test_an_unmet_required_member_cannot_be_placed_or_named_as_an_entry() -> None:
+def test_an_unmet_required_member_cannot_be_placed_or_named_as_a_case() -> None:
     assert unmet_required(Unfinished) == ("ProtoKernel.schedule",)
     assert unmet_required(PackedCore) == ()
     with refused(
         "required-unmet", error=DefinitionError, message=r"Unfinished .* ProtoKernel\.schedule"
     ):
         Unfinished(width=4)
-    with refused("required-unmet", error=DefinitionError, message=r"candidate 'unfinished'"):
-        Decision({"packed": PackedCore, "unfinished": Unfinished})
+    with refused("required-unmet", error=DefinitionError, message=r"case 'unfinished'"):
+        Select(packed=PackedCore, unfinished=Unfinished)
 
     class Defined(Unfinished):
         schedule = "fixed"  # any attribute meets it
@@ -282,7 +257,7 @@ def test_direct_reads_need_a_member_every_candidate_declares_with_one_type() -> 
     with refused(
         "direct-read-undeclared",
         error=DefinitionError,
-        message=r"candidates \['stub'\] do not declare 'pe'",
+        message=r"cases \['stub'\] do not declare 'pe'",
     ) as err:
         Unit.compute.pe  # type: ignore[union-attr]  # noqa: B018
     assert 'compute["packed"].pe' in str(err.error)
@@ -292,9 +267,7 @@ def test_direct_reads_need_a_member_every_candidate_declares_with_one_type() -> 
 
         class Mixed(Space):
             width: int = Param()
-            compute: PackedCore | WideCore = Decision(
-                {"packed": PackedCore, "wide": WideCore}, width=width
-            )
+            compute: PackedCore | WideCore = Select(packed=PackedCore, wide=WideCore, width=width)
             cycles = View(compute.cycles)
 
     with pytest.raises(AttributeError):
@@ -309,22 +282,30 @@ def test_qualified_reads_are_inapplicable_when_another_candidate_is_selected() -
     stub = commit(base, {"compute": "stub", "compute.stub.rows": 1})
     assert isinstance(stub.query(Unit.narrow), Inapplicable)
     assert isinstance(stub.query(Unit.compute["packed"].narrow_weights), Inapplicable)  # type: ignore[index]
-    with refused("candidate-unknown", error=DefinitionError, message="no candidate 'bogus'"):
+    with refused("candidate-unknown", error=DefinitionError, message="no case 'bogus'"):
         Unit.compute["bogus"]  # type: ignore[index]  # noqa: B018
 
 
-def test_a_class_body_handle_is_the_typed_spelling_of_a_qualified_read() -> None:
-    class Handled(Space):
-        width: int = Param()
-        packed = PackedCore(narrow_weights=True)  # a handle, not a second placement
-        compute: PackedCore | StubCore = Decision({"packed": packed, "stub": StubCore}, width=width)
-        narrow = View(packed.narrow_weights)
-        indexed = View(compute["packed"].narrow_weights)  # type: ignore[index]
+def test_a_class_body_handle_naming_a_case_is_refused() -> None:
+    """A class attribute naming a case's node places it twice: the case's path names it."""
+    with refused(
+        "select-case-handle",
+        error=DefinitionError,
+        message=r"Handled\.packed: names case 'packed' of a selector .* placed twice",
+    ) as caught:
 
-    base = design_space(Handled(width=8))
-    assert keys(base) == keys(design_space(Unit(width=8)))
-    packed = commit(base, {"compute": "packed"})
-    assert packed.narrow is True and packed.indexed is True
+        class Handled(Space):
+            width: int = Param()
+            packed = PackedCore(narrow_weights=True)
+            compute: PackedCore | StubCore = Select(packed=packed, stub=StubCore, width=width)
+
+    assert '<selector>["packed"].<member>' in str(caught.error)
+    with refused("select-case-handle", error=DefinitionError, message="Indexed.packed"):
+
+        class Indexed(Space):
+            width: int = Param()
+            compute: PackedCore | StubCore = Select(packed=PackedCore, stub=StubCore, width=width)
+            packed = compute["packed"]  # type: ignore[index]
 
 
 # -- keys ----------------------------------------------------------------------------------
@@ -361,26 +342,20 @@ def test_a_choice_answers_the_same_with_and_without_collapse() -> None:
         assert answers(collapsed) == answers(plain)
 
 
-# -- optional ----------------------------------------------------------------------------
+# -- a None case ---------------------------------------------------------------------------
 
 
-def test_optional_adds_a_none_candidate_that_places_nothing() -> None:
+def test_a_none_case_places_nothing() -> None:
     class Maybe(Space):
         width: int = Param()
-        compute: PackedCore | StubCore | None = Decision(
-            {"packed": PackedCore, "stub": StubCore}, optional=True, width=width
+        compute: PackedCore | StubCore | None = Select(
+            none=None, packed=PackedCore, stub=StubCore, width=width
         )
 
     base = design_space(Maybe(width=8))
     (choice,) = inspection.choices(base)
     assert [case.name for case in choice.cases] == ["none", "packed", "stub"]
     assert commit(base, {"compute": "none"}).compute is None
-    with refused(
-        "candidate-key-reserved",
-        error=DefinitionError,
-        message="'none' is the key of the None candidate",
-    ):
-        Decision({"none": PackedCore}, optional=True)
 
 
 # -- replay ------------------------------------------------------------------------------
@@ -413,7 +388,7 @@ def test_commitments_replay_by_key_and_an_unknown_case_is_refused() -> None:
 def build_unit(name: str, cores: dict[str, type[ProtoKernel]]) -> type[Space]:
     """As a graph adapter would: a Space class built at run time from facts."""
     width = Param[int]()
-    members: dict[str, object] = {"width": width, "compute": Decision(dict(cores), width=width)}
+    members: dict[str, object] = {"width": width, "compute": Select(**cores, width=width)}
     return composite(name, members, annotations={"width": int})
 
 

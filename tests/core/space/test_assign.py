@@ -27,6 +27,7 @@ from finn.core.space import (
     Inapplicable,
     Param,
     Rejected,
+    Select,
     Space,
     constraint,
     derived,
@@ -123,7 +124,7 @@ class Plain(Space):
 
 class Selected(Space):
     extent: int = Param()
-    mode: Mode | Plain = Decision({"mode": Mode(extent=extent), "plain": Plain})
+    mode: Mode | Plain = Select(mode=Mode(extent=extent), plain=Plain)
 
 
 def test_a_choice_under_a_case_not_selected_is_checked_there_and_kept_dormant() -> None:

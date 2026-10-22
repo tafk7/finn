@@ -21,6 +21,7 @@ from support.space_walk import fresh as recomputed
 from finn.core.space import (
     Decision,
     Param,
+    Select,
     Space,
     Unresolved,
     derived,
@@ -70,8 +71,8 @@ def test_a_successor_keeps_what_its_change_does_not_reach_and_derives_the_rest()
 def test_a_successor_answers_as_a_configuration_built_from_nothing() -> None:
     class Two(Space):
         width: int = Param()
-        left: Packed | Stub = Decision(CORES, width=width)
-        right: Packed | Stub = Decision(CORES, width=width)
+        left: Packed | Stub = Select(**CORES, width=width)
+        right: Packed | Stub = Select(**CORES, width=width)
 
     def answers(point: Any) -> dict[str, object]:
         return {
@@ -115,7 +116,7 @@ def test_a_change_does_not_evaluate_the_guard_of_a_choice_it_does_not_reach() ->
     class Guarded(Space):
         width: int = Param()
         finish: str = Decision(values=("matte", "gloss"))
-        compute: Packed | Stub = Decision(CORES, width=width)
+        compute: Packed | Stub = Select(**CORES, width=width)
 
         @derived
         def packed(self) -> bool:

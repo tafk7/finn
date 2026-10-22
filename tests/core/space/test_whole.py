@@ -76,27 +76,6 @@ def test_the_space_tests_classes_answer_as_the_line() -> None:
 
 # -- the ways the corpus does not take ----------------------------------------------------------
 
-_SHARED: int = Decision(values=(1, 2, 4), name="shared")
-
-
-class Probe(Space):
-    """A method reading a name its placing Space owns in its scope (a named shared
-    Decision), and a choice whose presence reads it."""
-
-    first: int = Param()
-
-    @derived
-    def big(self) -> bool:
-        return 2 * cast(int, self.shared) > 2  # type: ignore[attr-defined]
-
-    lanes: int = Decision(values=(1, 2), when=big)
-
-
-class OwnsForProbe(Space):
-    pick: bool = Decision(values=(False, True))
-    probe = Probe(first=_SHARED)  # ``shared`` is the probe's alone: owned in its scope
-    after: int = Decision(values=(1, 2), when=probe.big)
-
 
 class Inner(Space):
     depth: int = Param()
@@ -109,11 +88,12 @@ LANES = "lanes"
 
 class Dynamic(Space):
     """A dynamic method: it may read every node of its scope and below: a formal its
-    placing Space binds, a placed Space's formal bound to a fresh Decision, the named
-    shared Decision its placing Space owns in it."""
+    placing Space binds to a Decision of its own, and a placed Space's formal bound to a
+    Decision of this class."""
 
     width: int = Param()
-    inner = Inner(depth=Decision(values=(3, 4)))
+    depth: int = Decision(values=(3, 4))
+    inner = Inner(depth=depth)
 
     @derived
     def wide(self) -> bool:
@@ -122,12 +102,10 @@ class Dynamic(Space):
     gated: int = Decision(values=(1, 2), when=wide)
 
 
-_OWNED: int = Decision(values=(5, 6), name="owned")
-
-
 class PlacesDynamic(Space):
     pick: bool = Decision(values=(False, True))
-    dynamic = Dynamic(width=_OWNED)
+    owned: int = Decision(values=(5, 6))
+    dynamic = Dynamic(width=owned)
     later: int = Decision(values=(1, 2), when=dynamic.wide)
 
 
@@ -137,9 +115,10 @@ class Room(Space):
 
 class Pieces(Space):
     """A guard reading a view, which reads its Space's validity: the walk from the guard
-    reaches a validity piece, a placed Space's formal bound to a fresh Decision."""
+    reaches a validity piece, a Decision of the class bound into a placed Space's formal."""
 
-    room = Room(depth=Decision(values=(1, 2)))
+    depth: int = Decision(values=(1, 2))
+    room = Room(depth=depth)
 
     @view
     def flag(self) -> bool:
@@ -154,7 +133,7 @@ class Pieces(Space):
 
 @pytest.mark.parametrize(
     "space_type",
-    (OwnsForProbe, PlacesDynamic, Pieces),
+    (PlacesDynamic, Pieces),
     ids=lambda space_type: space_type.__name__,
 )
 def test_a_way_the_corpus_does_not_take_answers_as_the_line(space_type: type[Space]) -> None:
@@ -163,15 +142,9 @@ def test_a_way_the_corpus_does_not_take_answers_as_the_line(space_type: type[Spa
     assert not compared.gained
 
 
-def test_a_method_reading_a_name_its_placing_space_owns_reads_that_choice() -> None:
-    keys = [item.key for item in inspection.decisions(OwnsForProbe)]
-    # Both read ``probe.shared`` through ``big``; ``after`` is declared first.
-    assert keys == ["pick", "probe.shared", "after", "probe.lanes"]
-
-
 def test_a_dynamic_method_reads_its_scopes_subtree_and_what_its_placing_space_owns() -> None:
     keys = [item.key for item in inspection.decisions(PlacesDynamic)]
-    for read in ("dynamic.owned", "dynamic.inner.lanes", "dynamic.inner.depth"):
+    for read in ("owned", "dynamic.inner.lanes", "dynamic.depth"):
         assert keys.index(read) < keys.index("dynamic.gated")
         assert keys.index(read) < keys.index("later")
 

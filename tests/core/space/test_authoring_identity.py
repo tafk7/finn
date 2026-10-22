@@ -12,6 +12,7 @@ from finn.core.space import (
     Const,
     Decision,
     Param,
+    Select,
     Space,
     View,
     ViewKey,
@@ -25,12 +26,12 @@ from finn.core.space.errors import DefinitionError
 
 @pytest.mark.parametrize("name", ["", "a.b", "$selector", "has space", "ümlaut"])
 def test_authored_names_are_unambiguous_segments(name: str) -> None:
-    # Export keys (ViewKey) and the candidate keys of a Decision over nodes are
-    # authored names, so each must be one segment.
+    # Export keys (ViewKey) and the case names of a selector are authored names, so each
+    # must be one segment.
     with refused("name-invalid", error=DefinitionError, message="name segment"):
         ViewKey(name, int)
     with refused("name-invalid", error=DefinitionError):
-        Decision({name: Space()})
+        Select(**{name: Space()})
     with refused("name-invalid", error=DefinitionError):
         composite("Named", {name: Const(3)})
     space_type = type("BadIdentity", (Space,), {name: Const(3)})
@@ -40,33 +41,32 @@ def test_authored_names_are_unambiguous_segments(name: str) -> None:
 
 def test_malformed_candidates_fail_as_definitions() -> None:
     # A node is declared by calling its Space class, so the malformed forms are a
-    # candidate that is not a node, and a composite over a non-Space base.
+    # case that is not a node, and a composite over a non-Space base.
     class Holder(Space):
         held: int = Param()
 
     with refused("composite-base-not-space", error=DefinitionError, message="Space base class"):
         composite("NotSpace", {}, base=cast(type[Space], int))
-    with refused("candidate-not-space", error=DefinitionError):
-        Decision({"case": cast(Space, 4)})
-    # Candidates are entries, not a mapping of values.
+    # A value that is no Space class is a shared binding: a Select of it places nothing.
+    with refused("select-no-node", error=DefinitionError):
+        Select(case=cast(Space, 4))
+    # A choice among nodes is a selector, not a Decision over a mapping.
     with refused(
         "node-decision-not-entries",
         error=DefinitionError,
-        message="lists its candidates as entries",
+        message="a choice among Space classes is a selector",
     ):
         Decision(values={"case": Holder()})
     with refused(
         "node-not-value",
         error=DefinitionError,
-        message="a node or a Decision over nodes is not a value",
+        message="a node or a selector is not a value",
     ):
         Holder(held=cast(int, Holder(held=1)))
-    with refused(
-        "node-decision-no-candidate", error=DefinitionError, message="at least one candidate"
-    ):
-        Decision({})
-    with refused("node-decision-no-candidate", error=DefinitionError):
-        Decision({}, optional=True)  # the None candidate alone places nothing
+    with refused("select-no-node", error=DefinitionError):
+        Select()
+    with refused("select-no-node", error=DefinitionError):
+        Select(none=None)  # the None case alone places nothing
     # A duplicate export name is refused on the Space class.
     first = ViewKey("result", int)
     second = ViewKey("result", int)
@@ -82,7 +82,7 @@ def test_malformed_candidates_fail_as_definitions() -> None:
 
 def test_case_ids_can_use_hyphens_without_becoming_paths() -> None:
     class Root(Space):
-        implementation: Space = Decision({"low-area": Space()})
+        implementation: Space = Select(**{"low-area": Space()})
 
     point = design_space(Root())
     (choice,) = inspection.choices(point)

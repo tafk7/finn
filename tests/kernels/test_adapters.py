@@ -179,7 +179,7 @@ def test_a_fifo_sits_between_the_two_sides():
         point,
         {
             "x.transport": "fifo",
-            "x.transport.fifo.buffer.depth": 16,
+            "x.transport.fifo.depth": 16,
             "x.transport.fifo.buffer.ram_style": "auto",
         },
     )
@@ -221,7 +221,7 @@ def validity_of(point):
 
 #: The FIFO of channel ``x`` of ``adapted`` (its output adapter's vpc before it, its
 #: input adapter's input_gen after it), 32 words deep.
-FIFO = {"x.transport": "fifo", "x.transport.fifo.buffer.depth": 32}
+FIFO = {"x.transport": "fifo", "x.transport.fifo.depth": 32}
 WAITING = {"decision-unassigned"}
 
 
@@ -233,7 +233,7 @@ def test_a_fifo_in_a_memory_the_platform_lacks_is_refused_by_its_rule():
         keyed(
             {
                 "a.transport": "fifo",
-                "a.transport.fifo.buffer.depth": 32,
+                "a.transport.fifo.depth": 32,
                 "a.transport.fifo.buffer.ram_style": "ultra",
             }
         )
@@ -309,7 +309,7 @@ def test_a_channel_s_cost_waits_on_no_memory_style():
     assert point.member("x").query(Channel.cycles).value == 9
     assert point.member("x").query(Channel.buffering).value == 16 * 4 * 4
     # A FIFO's depth adds its words, and no cycles.
-    deep = choose(point, {"x.transport": "fifo", "x.transport.fifo.buffer.depth": 32})
+    deep = choose(point, {"x.transport": "fifo", "x.transport.fifo.depth": 32})
     assert deep.member("x").query(Channel.cycles).value == 9
     assert deep.member("x").query(Channel.buffering).value == 16 * 4 * 4 + 32 * 4 * 4
     # A channel of wires takes no cycles of its own.

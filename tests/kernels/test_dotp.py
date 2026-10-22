@@ -6,11 +6,14 @@
 Each compute core is its own kernel over the shared ``DotpAxiKernel``
 declaration; most cases exercise the packed core, which every DSP target has.
 A core sits between three channels (``helpers.placed_dotp``): its elements and
-extents come from their tensors, and PE, SIMD and pumping are its Decisions.
+extents come from their tensors. PE and SIMD are given to it (its role's choices,
+MatMul's), and pumping is its Decision. What a core requires of its folding is its rules
+over the given values, which the role's choices meet (``role``).
 """
 
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 from qonnx.core.datatype import DataType
@@ -34,8 +37,10 @@ from finn.kernels.artifacts.abi import Clock, Data
 from finn.kernels.artifacts.abi import Derived as DerivedClock
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.base import KernelSpace
+from finn.kernels.configure import commit
 from finn.kernels.dotp import REDUCERS, DotpAxiKernel, Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.library import library_module
+from finn.kernels.matmul import MatMulKernel
 from finn.kernels.port import AxiStreamPort, axis
 from finn.kernels.transport import AxisBeat
 from finn.platform.capabilities import DspBlock
@@ -101,14 +106,14 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
         "window",
         "x_tensor",
         "w_tensor",
-        # The extents its folding factors' domains read, stated by its parent.
+        # The extents its parent states, and its folding, the parent's choices.
         "columns",
         "widest_reduction",
+        "pe",
+        "simd",
     }
     # The core's own choices.
     assert {item.key for item in inspection.decisions(point)} == {
-        "pe",
-        "simd",
         "compute_pumping",
         "reducer",
     }
@@ -241,11 +246,20 @@ def test_space_rejects_mistyped_values_at_binding(updates, error):
         kernel(**updates)
 
 
-@pytest.mark.parametrize("factor", ("pe", "simd"))
-def test_a_folding_factor_must_divide_its_extent(factor):
-    extents = {"outputs": 6, "reduction": 6}
-    with pytest.raises(ValueError, match=f"compute.{factor}"):
-        kernel(**{**extents, factor: 4})
+@pytest.mark.parametrize(
+    ("factor", "pieces"),
+    (
+        ("pe", {("stream_widths_supported", "kernel-schedule")}),
+        ("simd", {("simd_fits", "dotp-simd"), ("stream_widths_supported", "kernel-schedule")}),
+    ),
+)
+def test_a_folding_factor_given_that_does_not_divide_its_extent_refuses_the_core(factor, pieces):
+    """The role's domains list only divisors (``role``); a core given another is refused
+    by its schedule, and SIMD by its own rule too."""
+    point = kernel(**{"outputs": 6, "reduction": 6, "pe": 2, "simd": 2, factor: 4})
+    status, found = validity_of(point)
+    assert status == "refused"
+    assert {(owner, code) for owner, codes in found for code in codes} == pieces
 
 
 def test_constraints_gate_acceptance_and_the_module_does_not_revalidate_them():
@@ -274,36 +288,50 @@ def broken(result):
     ]
 
 
+def role(weights_dtype: str = "INT3") -> Any:
+    """A core's role: MatMul on activations (1, 4) and weights (4, 2) on DSP58 (N 2, K 4),
+    the packed core chosen, which holds the folding the core is given."""
+    x = Tensor((1, 4), ScalarEncoding(DataType["INT3"]))
+    w = Tensor((4, 2), ScalarEncoding(DataType[weights_dtype]))
+    return design_space(MatMulKernel(platform=FULL_DSP58, x_tensor=x, w_tensor=w))
+
+
+PUMPING = "compute.packed.compute_pumping"
+
+
 def test_pumping_needs_lanes_to_split_and_is_not_possible_with_one():
-    """Pumping splits SIMD lanes over the doubled clock (``pumping_has_lanes``): with SIMD 1
-    setting it is refused by that rule, SIMD standing in its way, so only False is
-    possible; set together with SIMD 1 it is refused by the rule alone. Committed before
-    SIMD, it is its value at once and the rule reading both waits on SIMD; SIMD 1 is then
-    refused, pumping standing in its way, and lanes to split are valid."""
+    """Pumping splits SIMD lanes over the doubled clock (``pumping_has_lanes``): a core given
+    SIMD 1 refuses it by that rule, so only False is possible, and given two lanes either.
+    Through the role, which holds SIMD: with SIMD 1 set, setting pumping is refused by the
+    core's rule, SIMD standing in its way. Committed before SIMD, it is its value at once
+    and the rule reading both waits on SIMD; SIMD 1 is then refused, pumping standing in
+    its way, and lanes to split are taken."""
     one = kernel(simd=1, compute_pumping=None, outputs=2, reduction=4)
     (viable,) = inspection.viable(one, [type(one).compute_pumping])
     assert viable.cases == (False,)
     (refused,) = [item for item in viable.values if isinstance(item, inspection.Refused)]
     assert refused.value is True
-    assert broken(refused) == [("pumping_has_lanes", ("simd",), {"dotp-pumping"})]
-    waiting = kernel(simd=None, compute_pumping=None, outputs=2, reduction=4)
-    together = waiting.try_with_choices(simd=1, compute_pumping=True)
-    assert not together.accepted
-    assert broken(together) == [("pumping_has_lanes", (), {"dotp-pumping"})]
+    assert broken(refused) == [("pumping_has_lanes", (), {"dotp-pumping"})]
     two = kernel(simd=2, compute_pumping=None, outputs=2, reduction=4)
     (viable,) = inspection.viable(two, [type(two).compute_pumping])
     assert viable.cases == (False, True)
-    early = waiting.try_with_choices(compute_pumping=True)
+    packed = commit(role(), {"compute": "packed", "compute.packed.reducer": "tree"})
+    pumping = next(info.reference for info in inspection.decisions(packed) if info.key == PUMPING)
+    (viable,) = inspection.viable(commit(packed, {"simd": 1}), [pumping])
+    assert viable.cases == (False,)
+    (refused,) = [item for item in viable.values if isinstance(item, inspection.Refused)]
+    assert broken(refused) == [("compute.packed.pumping_has_lanes", ("simd",), {"dotp-pumping"})]
+    early = packed.try_with_choices({pumping: True})
     assert early.accepted
-    assert early.instance.query(PackedDotpKernel.compute_pumping) == Available(True)
+    assert early.instance.query(pumping) == Available(True)
     status, pieces = validity_of(early.instance)
-    assert status == "open" and ("pumping_has_lanes", {"decision-unassigned"}) in pieces
-    split = early.instance.try_with_choices(simd=1)
+    assert status == "open"
+    assert ("compute.packed.pumping_has_lanes", {"decision-unassigned"}) in pieces
+    split = early.instance.try_with_choices({MatMulKernel.simd: 1})
     assert not split.accepted
-    assert broken(split) == [("pumping_has_lanes", ("compute_pumping",), {"dotp-pumping"})]
-    lanes = early.instance.try_with_choices(simd=2)
-    assert lanes.accepted and validity_of(lanes.instance) == ("valid", [])
-    assert lanes.instance.query(PackedDotpKernel.compute_pumping) == Available(True)
+    assert broken(split) == [("compute.packed.pumping_has_lanes", (PUMPING,), {"dotp-pumping"})]
+    lanes = early.instance.try_with_choices({MatMulKernel.simd: 2})
+    assert lanes.accepted and lanes.instance.query(pumping) == Available(True)
 
 
 def test_narrow_weights_derive_from_the_weight_stream_s_range():
@@ -352,16 +380,18 @@ def test_the_reducer_left_open_is_a_choice_no_platform_refuses(dsp):
 
 
 def test_the_core_refuses_before_its_folding_factors_are_chosen():
-    point = kernel(weights_dtype=DataType["INT27"], pe=None, simd=None, compute_pumping=None)
-    assert codes(point.inspect(type(point).core_supported).result) == {"dotp-weight-width"}
-    # The module waits on the folding factors; the refusal is already known.
-    module = point.inspect(DotpAxiKernel.netlist).accepted_result
-    assert not isinstance(module, Available)
-    # Folding factors left open leave a core its facts allow unresolved, not refused.
-    open_factors = kernel(pe=None, simd=None, compute_pumping=None, outputs=2, reduction=4)
-    assert isinstance(open_factors.inspect(type(open_factors).core_supported).result, Available)
-    assert isinstance(open_factors.inspect(DotpAxiKernel.netlist).accepted_result, Unresolved)
-    assert open_factors.x_element.bits == 3
+    """Through the role, its folding open: a core whose bounds the weights break is refused
+    as a case of ``compute`` already; one its facts allow leaves the module waiting on the
+    folding, unresolved, not refused."""
+    point = role("INT27")
+    (found,) = inspection.viable(point, [MatMulKernel.compute])
+    (refused,) = [item for item in found.values if item.value == "packed"]
+    assert isinstance(refused, inspection.Refused)
+    assert {code for _, _, found in broken(refused) for code in found} == {"dotp-weight-width"}
+    open_factors = commit(role(), {"compute": "packed"})
+    assert isinstance(open_factors.query(MatMulKernel.pe), Unresolved)
+    assert isinstance(open_factors.query(MatMulKernel.netlist), Unresolved)
+    assert open_factors.compute.x_element.bits == 3
 
 
 @pytest.mark.parametrize(
@@ -382,6 +412,8 @@ def test_a_core_s_stated_extents_are_checked_against_its_tensors(columns, widest
             w_tensor=w,
             columns=columns,
             widest_reduction=widest,
+            pe=1,
+            simd=1,
             platform=FULL_DSP58,
         )
     )
@@ -594,15 +626,12 @@ def test_depthwise_activations_carry_pe_channels_of_simd_and_only_int8_reads_the
     ("field", "extent", "other"), [("pe", "outputs", "simd"), ("simd", "reduction", "pe")]
 )
 def test_dotp_rejects_native_parameter_overflow(field, extent, other):
-    """A folding factor past a native unsigned int: setting it is refused by the rule on
-    the stream widths it makes, the other factor standing in its way."""
-    point = kernel(**{field: None, extent: 2**32})
-    result = point.try_with_choices(**{field: 2**32})
-    assert not result.accepted
-    assert broken(result) == [("stream_widths_supported", (other,), {"dotp-stream-width"})]
+    """A folding factor past a native unsigned int: a core given it is refused by the rule
+    on the stream widths it makes."""
+    point = kernel(**{field: 2**32, extent: 2**32})
+    assert validity_of(point) == ("refused", [("stream_widths_supported", {"dotp-stream-width"})])
 
 
 def test_dotp_rejects_packed_width_overflow_even_when_dimensions_fit():
-    result = kernel(pe=None, simd=2, outputs=2**30).try_with_choices(pe=2**30)
-    assert not result.accepted
-    assert broken(result) == [("stream_widths_supported", ("simd",), {"dotp-stream-width"})]
+    point = kernel(pe=2**30, simd=2, outputs=2**30)
+    assert validity_of(point) == ("refused", [("stream_widths_supported", {"dotp-stream-width"})])

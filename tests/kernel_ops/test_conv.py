@@ -98,7 +98,7 @@ def folded(name: str, simd: int, pe: int, directory: Path) -> ModelWrapper:
     what that opens (pumping, at SIMD 2 and more) set as the cut sets it (``MakeCutChoices``)."""
     body = single_layer(name, directory)
     (node,) = body.graph.node
-    configured(body, {node.name: {"compute.packed.simd": simd, "compute.packed.pe": pe}})
+    configured(body, {node.name: {"simd": simd, "pe": pe}})
     return body.transform(MakeCutChoices())
 
 
@@ -164,7 +164,7 @@ def thresholded(pe: int, simd: int) -> ModelWrapper:
         model,
         {
             first.name: {"pe": pe},
-            second.name: {"compute.packed.simd": simd, "compute.packed.pe": 2},
+            second.name: {"simd": simd, "pe": 2},
         },
     )
     return model

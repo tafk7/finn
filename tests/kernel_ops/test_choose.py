@@ -74,7 +74,7 @@ class Last:
 
 def test_the_test_policy_folds_to_its_lanes_or_the_largest_factor() -> None:
     policy = Lanes(4)
-    fold = Choice(("first", "compute.packed.pe"), None, (1, 2, 4, 8), True)
+    fold = Choice(("first", "pe"), None, (1, 2, 4, 8), True)
     assert list(policy.rank(fold)) == [4, 8, 2, 1]
     odd = Choice(("x", "simd"), None, (1, 3), True)
     assert list(policy.rank(odd)) == [3, 1] and list(Lanes().rank(odd)) == [1, 3]
@@ -97,7 +97,7 @@ def test_the_packed_reducer_is_offered_open_its_adder_tree_first() -> None:
 def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path) -> None:
     model = kernel_model().transform(ranked(Lanes(2)))
     saved = choices(model)
-    assert saved["first"]["compute.packed.pe"] == 2
+    assert saved["first"]["pe"] == 2
     assert saved["activate"]["pe"] == 2
     model.save(tmp_path / "chosen.onnx")
     again = ModelWrapper(str(tmp_path / "chosen.onnx"))
@@ -106,7 +106,7 @@ def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path)
     # A second pass reopens every choice and ranks it again: the same policy makes the
     # same choices, another replaces them.
     assert choices(again.transform(ranked(Lanes(2)))) == saved
-    assert choices(again.transform(ranked(Lanes())))["first"]["compute.packed.pe"] == 1
+    assert choices(again.transform(ranked(Lanes())))["first"]["pe"] == 1
 
 
 def test_the_policy_is_offered_every_open_choice_its_possible_values_only() -> None:
@@ -145,18 +145,16 @@ def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> N
     model = kernel_model().transform(explore)
     assert explore.explored is not None
     left = explore.explored.report["open"]
-    assert left and all(name.endswith("transport.fifo.buffer.depth (required)") for name in left)
+    assert left and all(name.endswith("transport.fifo.depth (required)") for name in left)
     with refused("choices-open", error=KernelOpError, node="the chain") as open_choices:
         configured_network(model, "the chain")
     assert isinstance(open_choices.error, KernelOpError)
-    assert all(key.endswith("transport.fifo.buffer.depth") for key in open_choices.error.keys)
+    assert all(key.endswith("transport.fifo.depth") for key in open_choices.error.keys)
     required = "(required: run step_size_fifos or step_placeholder_choices)"
     assert str(open_choices.error).count(required) == len(left)
     # The debug placeholder strategy takes the first case of a required choice, and
     # refuses one known by membership only, named.
-    with refused(
-        "placeholder-no-case", error=ExploreError, message=r"transport\.fifo\.buffer\.depth"
-    ):
+    with refused("placeholder-no-case", error=ExploreError, message=r"transport\.fifo\.depth"):
         model.transform(ExploreKernelChoices(DebugPlaceholder()))
 
 

@@ -38,8 +38,8 @@ from finn.transformation.kernels import InferKernelTensors
 
 FOLDED = {
     "compute": "packed",
-    "compute.packed.pe": 2,
-    "compute.packed.simd": 2,
+    "pe": 2,
+    "simd": 2,
     "compute.packed.reducer": "tree",
 }
 THRESHOLDS_FOLDED = {"pe": 2, "ram_style": "distributed", "block_stages": 1}
@@ -86,7 +86,7 @@ def test_a_channels_choices_are_set_with_its_kernels_in_one_batch() -> None:
         model,
         {"first": FOLDED, "w": {"source.memstream.ram_style": "block", "transport": "direct"}},
     )
-    assert stored(model)["compute.packed.pe"] == 2
+    assert stored(model)["pe"] == 2
     assert channel_choices(model, "w") == {
         "source": "memstream",
         "source.memstream.ram_style": "block",
@@ -95,10 +95,10 @@ def test_a_channels_choices_are_set_with_its_kernels_in_one_batch() -> None:
     }
     assert network(model, model.graph.node).member("w").source.ram_style == "block"
     # What a later call does not name stays.
-    configured(model, {"w": {"transport": "fifo", "transport.fifo.buffer.depth": 8}})
+    configured(model, {"w": {"transport": "fifo", "transport.fifo.depth": 8}})
     assert channel_choices(model, "w")["source.memstream.ram_style"] == "block"
-    assert channel_choices(model, "w")["transport.fifo.buffer.depth"] == 8
-    assert stored(model)["compute.packed.pe"] == 2
+    assert channel_choices(model, "w")["transport.fifo.depth"] == 8
+    assert stored(model)["pe"] == 2
 
 
 def test_the_chain_is_configured_as_the_compiler_states_it() -> None:
@@ -112,7 +112,7 @@ def test_the_chain_is_configured_as_the_compiler_states_it() -> None:
     )
     bound = network(model, model.graph.node)
     assert not bound.stale
-    assert bound.member("first").compute.pe == MATMUL["compute.packed.pe"]
+    assert bound.member("first").compute.pe == MATMUL["pe"]
     assert {key for key in bound.chosen() if key[0] in channels} >= {
         ("w1", "transport"),
         ("levels", "transport"),
@@ -130,7 +130,7 @@ def test_a_choice_with_one_possible_value_is_stored_as_any() -> None:
     model = matmul_model()
     configured(model, {"first": MATMUL})
     assert stored(model)["compute"] == "packed"
-    assert stored(model)["compute.packed.pe"] == MATMUL["compute.packed.pe"]
+    assert stored(model)["pe"] == MATMUL["pe"]
     model = thresholding_model()
     configured(model, {"activate": {**THRESHOLDING, "ram_style": "distributed", "block_stages": 1}})
     assert (stored(model)["use_axilite"], stored(model)["ultra_stages"]) == (0, 0)
@@ -145,7 +145,7 @@ def test_a_whole_folding_is_one_batch() -> None:
     pumping = "compute.packed.compute_pumping"
     assert stored(model)[pumping] == MATMUL[pumping]
     assert stored(model)["compute"] == "packed"
-    assert stored(model)["compute.packed.simd"] == MATMUL["compute.packed.simd"]
+    assert stored(model)["simd"] == MATMUL["simd"]
 
 
 def test_a_value_a_rule_refuses_is_refused_by_the_rule() -> None:
@@ -193,12 +193,12 @@ def test_a_value_outside_a_domain_is_refused() -> None:
     """3 does not divide the channels: the engine's domain refuses it, whether the core
     it lies under is set or not (membership as if the choice existed)."""
     model = matmul_model()
-    with refused("domain-membership", owner="compute.packed.pe"):
-        configured(model, {"first": {"compute.packed.pe": 3}})
+    with refused("domain-membership", owner="pe"):
+        configured(model, {"first": {"pe": 3}})
     configured(model, {"first": FOLDED})
-    with refused("domain-membership", owner="compute.packed.pe"):
-        configured(model, {"first": {"compute.packed.pe": 3}})
-    assert stored(model)["compute.packed.pe"] == 2
+    with refused("domain-membership", owner="pe"):
+        configured(model, {"first": {"pe": 3}})
+    assert stored(model)["pe"] == 2
     with refused("domain-membership", owner="pe"):
         configured(thresholding_model(), {"activate": {"pe": 3}})
 
@@ -207,12 +207,13 @@ def test_a_nested_choice_under_a_case_not_selected_is_stored_out_of_play() -> No
     """A choice under a case not selected is accepted and stored, out of play (dormant):
     it comes back in play with its case."""
     model = matmul_model()
-    configured(model, {"first": {**FOLDED, "compute.int8_dsp58.pe": 2}})
-    assert stored(model)["compute.int8_dsp58.pe"] == 2
+    configured(model, {"first": {**FOLDED, "compute.int8_dsp58.compute_pumping": False}})
+    assert stored(model)["compute.int8_dsp58.compute_pumping"] == 0  # stored as an int
     bound = network(model, model.graph.node)
-    assert dict(bound.states(("first",)))[("first", "compute.int8_dsp58.pe")] == (
-        inspection.Dormant(2)
-    )
+    states = dict(bound.states(("first",)))
+    assert states[("first", "compute.int8_dsp58.compute_pumping")] == inspection.Dormant(False)
+    # The folding is MatMul's: in play whatever the core.
+    assert states[("first", "pe")] == inspection.Set(2)
 
 
 def test_a_stored_memory_is_checked_with_the_choice_beside_it() -> None:
@@ -239,8 +240,8 @@ def test_a_channels_value_of_another_type_is_refused() -> None:
     model = matmul_model()
     configured(model, {"first": FOLDED})
     before = channel_choices(model, "w")
-    with refused("request-refused", owner="transport.fifo.buffer.depth"):
-        configured(model, {"w": {"transport": "fifo", "transport.fifo.buffer.depth": "8"}})
+    with refused("request-refused", owner="transport.fifo.depth"):
+        configured(model, {"w": {"transport": "fifo", "transport.fifo.depth": "8"}})
     assert channel_choices(model, "w") == before
 
 
@@ -311,8 +312,8 @@ def test_none_is_no_value_and_the_seam_has_no_clearing() -> None:
     model = matmul_model()
     configured(model, {"first": FOLDED})
     before = stored(model)
-    with refused("request-refused", owner="compute.packed.simd"):
-        configured(model, {"first": {"compute.packed.simd": None}})
+    with refused("request-refused", owner="simd"):
+        configured(model, {"first": {"simd": None}})
     assert stored(model) == before
 
 
@@ -323,13 +324,13 @@ def test_write_raw_stands_for_a_graph_finn_did_not_write() -> None:
     """A choice as the node's raw attribute, replaced when there, removed for ``None``;
     nothing is checked (a divisor-less ``pe`` is written), the read side finds it."""
     model = matmul_model()
-    write_raw(model, "first", "compute.packed.pe", 3)
+    write_raw(model, "first", "pe", 3)
     write_raw(model, "first", "compute.packed.reducer", "tree")
-    assert stored(model) == {"compute.packed.pe": 3, "compute.packed.reducer": "tree"}
-    write_raw(model, "first", "compute.packed.pe", 2)
-    assert stored(model)["compute.packed.pe"] == 2
-    write_raw(model, "first", "compute.packed.pe", None)
-    write_raw(model, "first", "compute.packed.simd", None)  # none there: nothing
+    assert stored(model) == {"pe": 3, "compute.packed.reducer": "tree"}
+    write_raw(model, "first", "pe", 2)
+    assert stored(model)["pe"] == 2
+    write_raw(model, "first", "pe", None)
+    write_raw(model, "first", "simd", None)  # none there: nothing
     assert stored(model) == {"compute.packed.reducer": "tree"}
     assert [attribute.name for attribute in model.graph.node[0].attribute] == [
         "compute.packed.reducer"

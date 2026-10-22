@@ -22,6 +22,7 @@ from finn.core.space import (
     Decision,
     Param,
     Rejected,
+    Select,
     Space,
     constraint,
     derived,
@@ -70,7 +71,7 @@ class Unit(Space):
     """A selector over two cores; its output width follows the selected core's choice."""
 
     width: int = Param()
-    compute: Packed | Stub = Decision(CORES, width=width)
+    compute: Packed | Stub = Select(**CORES, width=width)
 
     @derived
     def lanes(self) -> int:
@@ -109,8 +110,8 @@ class Link(Space):
 
     width: int = Param()
     upstream_packed: bool = Param()
-    adapter: Direct | Gearbox = Decision(
-        {"direct": Direct, "gearbox": Gearbox}, width=width, upstream_packed=upstream_packed
+    adapter: Direct | Gearbox = Select(
+        direct=Direct, gearbox=Gearbox, width=width, upstream_packed=upstream_packed
     )
     burst: int = Decision(values=(1, 2, 4))
     beat: int = Decision(values=(1, 2))

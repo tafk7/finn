@@ -8,7 +8,7 @@ stations: a design space, opened by today's API, and the change made on it.
   an optional fact left out), each opened and changed once;
 - ``chain-8``, ``chain-64``: stage 7's chain of 8 or 64 kernels (``support.one_space``),
   configured with what conversion and the cut stored (``commit``), then the middle
-  MatMul's ``compute.packed.pe`` set to 2;
+  MatMul's ``pe`` set to 2;
 - ``tfc``: TFC's partition after the cut and after each of seven strategy sequences, in
   ``tfc_target`` (it reads FINN's builder), joined to these by the tool's entry.
 
@@ -65,7 +65,7 @@ def _middle(names: Sequence[str]) -> str:
 
 def chain(kernels: int) -> list[Station]:
     """Stage 7's chain of ``kernels`` kernels, configured as conversion and the cut store
-    it, then the middle MatMul's ``compute.packed.pe`` set to 2."""
+    it, then the middle MatMul's ``pe`` set to 2."""
     whole, stored = chain_space(kernels // 2)
     middle = _middle([f"mm{layer}" for layer in range(kernels // 2)])
     return [_partition(f"chain-{kernels}", whole, stored, kernels, middle, change=True)]
@@ -90,7 +90,7 @@ def _partition(
     return Station(
         label,
         make,
-        {f"{middle}.compute.packed.pe": 2} if change else None,
+        {f"{middle}.pe": 2} if change else None,
         viable,
         stored=dict(stored),
     )

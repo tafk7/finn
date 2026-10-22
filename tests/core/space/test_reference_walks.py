@@ -12,10 +12,10 @@ standing choices), and the engine's own checks hold (its walked configuration ag
 built from nothing). Each seed walks twice (DESIGN § 6): the strict run draws neither of the
 rulings' causes the engine has not reached (no view read in, every fact given, no unset),
 and each disagreement fails it; the full run draws both, attributes each disagreement by its
-cause to T4b or T4c (or T4a, whose shape a walk is given by hand) and counts it under that
-pending milestone, and fails on an unattributed one, or on one whose milestone is taken as
-removed. Every invariant's checker is also shown
-catching a deliberately wrong answer on a small description.
+cause to T4b or T4c and counts it under that pending milestone, and fails on an unattributed
+one, or on one whose milestone is taken as removed. Every invariant's checker is also shown
+catching a deliberately wrong answer on a small description. Reading 8's shapes, which no
+drawn description holds, are walked by hand.
 
 The gate runs a fixed set of seeds; ``python -m core.space.reference_harness walks`` (from
 ``tests``) runs more and prints what they met.
@@ -53,7 +53,7 @@ from core.space.reference import (
     listed,
 )
 from core.space.reference_harness import Case, walks
-from core.space.reference_harness.compare import agrees, answer_form, change_form, possible_form
+from core.space.reference_harness.compare import answer_form
 from core.space.reference_harness.engine import Engine, Point, Spelling, build
 from core.space.reference_harness.forms import (
     AnswerForm,
@@ -78,7 +78,6 @@ from core.space.reference_harness.walks import (
     order_problems,
     pending,
     questions,
-    refused_below,
     table,
     walk,
 )
@@ -247,10 +246,12 @@ def test_a_question_reaching_an_optional_fact_left_out_is_counted_under_t4c() ->
     assert removed.failure is not None and "walk: the answer of f1" in removed.failure
 
 
-# T4a (reading 8): no drawn description holds a guard below a refused guard (nothing is drawn
-# below the guarded scope), so a walk is given one: a chosen selector under a refused when,
-# written as the selector's own guard (the matrix's witness's shape). Today's engine counts a
-# piece for each case's guard beside the selector's.
+# Reading 8's two shapes, which no drawn description holds (nothing is drawn below the
+# guarded scope ``g``), given to a walk by hand: a chosen selector under a refused ``when``,
+# written as the selector's own guard (the shape of a channel's adapter), and a refused
+# ``when`` in a case of an open selector. The engine agrees with the model at every step
+# (T4a's milestone, retired). The first is also invariant 2's shape under reading 26:
+# setting the selector moves the other case's choice from refused to inapplicable.
 
 HEATED = Space(
     ("gate",),
@@ -276,75 +277,7 @@ HEATED = Space(
         ),
     ),
 )
-
-
-@pytest.fixture
-def guard_below_a_refused_guard(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every walk draws ``HEATED`` at gate 1, its selector carrying ``plant``'s guard."""
-    spelling = Spelling(types={"heated": bool}, guarded_selectors=frozenset({"plant"}))
-
-    def drawn(*_: object, **__: object) -> tuple[walks.Generated, Engine]:
-        return walks.Generated(HEATED, "HEATED", {"gate": 1}), build(HEATED, spelling)
-
-    monkeypatch.setattr(walks, "generate", drawn)
-
-
-@pytest.mark.usefixtures("guard_below_a_refused_guard")
-def test_a_guard_refused_below_a_refused_guard_is_counted_under_t4a() -> None:
-    # by the model's presence states, the cases are T4a's scopes while plant's guard refuses
-    configuration = Configuration(HEATED, {"gate": 1})
-    found = refused_below(configuration.index, configuration.solve())
-    assert found == {"plant.heating.boiler", "plant.heating.heat_pump"}
-    assert not refused_below(configuration.index, Configuration(HEATED, {"gate": 2}).solve())
-    structure = Structure(configuration.index)
-    assert structure.reaches_scope({"plant.heating.boiler.stages"}, found)
-    assert not structure.reaches_scope({"heated"}, found)
-    # validity, and possible values and changes carrying its findings, differ: each counted
-    tally = walk(0, 20)
-    assert tally.failure is None, tally.failure
-    assert set(tally.by_milestone) == {"T4a"} and tally.by_question["validity"]
-    assert first_line(walk(0, 20, without=("T4a",))) == (
-        "seed 0, step 0: the engine disagrees (validity; T4a not pending)"
-    )
-    assert first_line(walk(0, 20, strict=True)) == (
-        "seed 0, step 0: the engine disagrees (validity; strict run)"
-    )
-
-
-@pytest.mark.usefixtures("guard_below_a_refused_guard")
-def test_the_cause_of_a_question_reaching_a_guard_below_a_refused_guard_is_t4a() -> None:
-    # The walk's own attribution, asked directly: at gate 1 validity (no subject) and an
-    # answer under ``plant`` reach the cases' guards, refused below plant's; ``heated``,
-    # outside ``plant``, reaches none. At gate 2 the guard holds: nothing has a cause.
-    walked = walks._Walk(0, 0, False, pending())
-    refused, holding = Configuration(HEATED, {"gate": 1}), Configuration(HEATED, {"gate": 2})
-    assert walked.cause(None, refused) == "T4a"
-    assert walked.cause("plant.heating.boiler.stages", refused) == "T4a"
-    assert walked.cause("heated", refused) is None
-    for subject in (None, "plant.heating.boiler.stages", "heated"):
-        assert walked.cause(subject, holding) is None
-
-
-@pytest.mark.usefixtures("guard_below_a_refused_guard")
-def test_switching_a_selector_under_a_refused_when_is_attributed_t4a() -> None:
-    # A case stored under the refused guard: switching to the other case adds no pair in the
-    # model (one guard piece, plant's, before and after). Today's engine counts each case's
-    # guard apart, so the switch adds one: it refuses the change, and lists the case as
-    # impossible. Both questions reach the whole description, attributed T4a, as the walk
-    # asks them (a change against its predecessor and the published facts).
-    spelling = Spelling(types={"heated": bool}, guarded_selectors=frozenset({"plant"}))
-    pair = Case("switch", HEATED, spelling).start({"gate": 1}, {"plant.heating": "boiler"})
-    switch = Change(commit={"plant.heating": "heat_pump"})
-    expected = change_form(pair.model, switch, change(pair.model, switch))
-    found, _ = pair.engine.change(switch)
-    assert expected.accepted and not found.accepted
-    viable = possible_form(pair.solution(), "plant.heating")
-    assert not agrees(viable, pair.engine.possible("plant.heating"))
-    walked = walks._Walk(0, 0, False, pending())
-    published = Configuration(HEATED, {"gate": 1})
-    assert walked.cause(None, pair.model, published) == "T4a"  # the change
-    assert walked.cause(None, pair.model) == "T4a"  # the possible values
-
+HEATED_SPELLING = Spelling(types={"heated": bool}, guarded_selectors=frozenset({"plant"}))
 
 # A refused guard below an unknown one (reading 8's second half): ``s`` open, its case ``a``
 # holding ``g``, present when ``d`` is at least 1, and ``d`` refusing an odd ``f``.
@@ -377,27 +310,87 @@ IN_AN_OPEN_CASE = Space(
 )
 
 
-def test_the_cause_of_a_question_reaching_a_refused_guard_under_an_open_selector_is_t4a(
+def given(
     monkeypatch: pytest.MonkeyPatch,
+    description: Space,
+    facts: dict[str, int],
+    spelling: Spelling | None = None,
 ) -> None:
+    """Every walk draws ``description`` with ``facts``."""
+
     def drawn(*_: object, **__: object) -> tuple[walks.Generated, Engine]:
-        generated = walks.Generated(IN_AN_OPEN_CASE, "IN_AN_OPEN_CASE", {"f": 1})
-        return generated, build(IN_AN_OPEN_CASE)
+        generated = walks.Generated(description, "given by hand", facts)
+        return generated, build(description, spelling)
 
     monkeypatch.setattr(walks, "generate", drawn)
-    walked = walks._Walk(0, 0, False, pending())
-    open_ = Configuration(IN_AN_OPEN_CASE, {"f": 1})
-    assert refused_below(open_.index, open_.solve()) == {"s.a.g"}
-    # ``s`` open: validity, and a subject under ``g``, reach ``g``'s guard
-    assert walked.cause(None, open_) == "T4a"
-    assert walked.cause("s.a.g.q", open_) == "T4a"
-    # a subject outside ``a`` reaches none
-    for subject in ("s.b.r", "d"):
-        assert walked.cause(subject, open_) is None
-    # ``s`` set to ``b``: ``g`` is absent, nothing has a cause
-    other = Configuration(IN_AN_OPEN_CASE, {"f": 1}, {"s": "b"})
-    assert not refused_below(other.index, other.solve())
-    assert walked.cause(None, other) is None
+
+
+@pytest.mark.parametrize("seed", [0, 1, 4, 5])
+def test_a_walk_given_a_chosen_selector_under_a_refused_when_agrees_strictly(
+    monkeypatch: pytest.MonkeyPatch, seed: int
+) -> None:
+    # seeds 1, 4 and 5 met invariant 2's reading-26 step before it was written in
+    given(monkeypatch, HEATED, {"gate": 1}, HEATED_SPELLING)
+    tally = walk(seed, 20, strict=True)
+    assert tally.failure is None, tally.failure
+    assert tally.checks["2 additions"]
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_a_walk_given_a_refused_when_in_a_case_of_an_open_selector_agrees_strictly(
+    monkeypatch: pytest.MonkeyPatch, seed: int
+) -> None:
+    given(monkeypatch, IN_AN_OPEN_CASE, {"f": 1})
+    tally = walk(seed, 20, strict=True)
+    assert tally.failure is None, tally.failure
+
+
+def test_switching_a_selector_under_a_refused_when_is_accepted_on_both_sides() -> None:
+    # A case stored under the refused guard: switching to the other case adds no pair (one
+    # guard piece, plant's, before and after). The engine accepts it, and lists both cases
+    # possible (before T4a it counted each case's guard apart and refused the switch).
+    pair = Case("switch", HEATED, HEATED_SPELLING).start({"gate": 1}, {"plant.heating": "boiler"})
+    pair.check_possible("plant.heating")
+    switch = Change(commit={"plant.heating": "heat_pump"})
+    assert isinstance(change(pair.model, switch), Accepted)
+    assert pair.check_change(switch) is not None
+
+
+# Reading 26, invariant 2's one excused move: under ``plant``'s refused guard, setting the
+# selector finds the other case absent (absent dominates refused in presence's AND), so the
+# value of its choice moves from refused to inapplicable. An answer refused on its own never
+# does while its scope stays present.
+
+
+def test_an_answer_refused_through_its_scopes_presence_may_become_inapplicable() -> None:
+    before = Configuration(HEATED, {"gate": 1}).solve()
+    after = Configuration(HEATED, {"gate": 1}, {"plant.heating": "boiler"}).solve()
+    asked = questions(before.index)
+    old, new = model_forms(before, asked), model_forms(after, asked)
+    cop = ("answer", "plant.heating.heat_pump.cop")
+    assert (old[cop], new[cop]) == (
+        AnswerForm("refused", codes=old[cop].codes),  # type: ignore[union-attr]
+        AnswerForm("inapplicable"),
+    )
+    out = walks.refused_then_absent(before, after)
+    assert out == {"plant.heating.heat_pump.cop"}
+    committed = {"plant.heating": "boiler"}
+    assert order_problems(old, new, committed) == {cop: "refused -> inapplicable"}
+    assert order_problems(old, new, committed, out) == {}
+
+
+def test_an_answer_refused_on_its_own_moving_to_inapplicable_is_still_named() -> None:
+    # the same move, of a node whose scope is not out by reading 26: named
+    old = {("answer", "d"): AnswerForm("refused", codes=frozenset({("d-odd", "d")}))}
+    new = {("answer", "d"): AnswerForm("inapplicable")}
+    assert order_problems(old, new, {}, frozenset({"other"})) == {
+        ("answer", "d"): "refused -> inapplicable"
+    }
+    # and only refused -> inapplicable is excused for a node that is: refused -> a value is not
+    valued = {("answer", "d"): AnswerForm("value", 2)}
+    assert order_problems(old, valued, {}, frozenset({"d"})) == {
+        ("answer", "d"): "refused -> value"
+    }
 
 
 def test_each_facts_answer_is_asked_at_each_configuration() -> None:
@@ -447,13 +440,13 @@ def test_the_summary_names_the_runs_the_milestones_and_the_checks() -> None:
     assert "walks 2 (full 1, strict 1)" in text
     assert "implementation: today" in text.splitlines()
     assert (
-        "engine disagreements (full: attributed by cause, counted while pending (T4a, T4b, "
-        "T4c), else failing; strict: every one failing): by milestone T4a 0, T4b 0, T4c 2; by "
+        "engine disagreements (full: attributed by cause, counted while pending (T4b, T4c), "
+        "else failing; strict: every one failing): by milestone T4b 0, T4c 2; by "
         "question answer 1, rule 1"
     ) in text
     assert text.splitlines()[2].startswith("| 7 | full | 3 |")
     assert text.splitlines()[3].startswith("| 7 | strict | 3 |")
-    removed = ("T4a", "T4b", "T4c")
+    removed = ("T4b", "T4c")
     assert "every one failing (no milestone with rows pending)" in table(tallies, removed)
 
 

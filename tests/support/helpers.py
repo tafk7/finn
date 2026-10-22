@@ -10,7 +10,7 @@ A kernel reads tensors and presents its ports' contracts on channels, so a test 
 it in a network (``finn.kernels.network``): its kernels and channels by name, each its
 own space, each channel taking the contracts its kernels present (``Interface``) and, for a
 parameter channel, what its kernel states for it (``Fact``). A test names a choice as
-``member.key`` (``matmul.compute.packed.pe``, ``w.transport``): ``keyed`` makes it the
+``member.key`` (``matmul.pe``, ``w.transport``): ``keyed`` makes it the
 network's pair, ``choose`` commits a batch. ``placed_dotp`` places a dot-product core
 between three boundary channels. ``matmul_network`` places a MatMul (``matmul``) on
 ``x`` (``in0_V``), ``w`` (``in1_V``, buffered), ``y`` (``out0_V``) and, with several
@@ -24,7 +24,7 @@ given to MatMul (``w_contents``); the weight channel carries what MatMul states 
 their range), with ``set``'s tensor its ``index_tensor`` (one index per row) and ``set``
 taking its ``set_contract``, so the channel's ``source`` stores them. The edge choices are
 the channels' (``x.adapter``, ``w.transport``, ``w.source.memstream.ram_style``), the
-MatMul's its own (``matmul.compute.packed.pe``). ``matmul_assembly`` configures one
+MatMul's its own (``matmul.pe``). ``matmul_assembly`` configures one
 from concrete facts and choices. A network's module is named ``finn_<stem>``
 (``module_of``).
 
@@ -62,8 +62,8 @@ from finn.kernels.artifacts.abi import Pin
 from finn.kernels.artifacts.module import Composed, Held, Leaf, ProducerIdentity
 from finn.kernels.base import CYCLES, KernelSpace
 from finn.kernels.configure import chosen, commit, describe
+from finn.kernels.cut import Cut, channel_defaulted
 from finn.kernels.declaration import KernelDeclaration, ModuleOrder, Product
-from finn.kernels.defaults import defaulted, ranked
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.explore import Choice, Defaults, Seam
 from finn.kernels.fifo import FifoKernel
@@ -77,9 +77,9 @@ from finn.kernels.network import (
     Network,
     Wire,
     dotted,
-    interim_channel_defaults,
     wire,
 )
+from finn.kernels.policies import Unstated, defaulted, ranked
 from finn.kernels.port import AxiStreamPort, axis, transport
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.transport import AxisBeat, ReadyValidTransport
@@ -236,11 +236,14 @@ def placed_dotp(
     reduction: int | None = None,
     **facts: object,
 ) -> S:
-    """A dot-product core between three boundary channels, its folding factors committed.
+    """A dot-product core between three boundary channels, its folding factors given and
+    its own choices committed.
 
     The core takes its extents from its tensors: ``outputs`` (N) defaults to PE
-    and ``reduction`` (K) to SIMD, one fold each. A folding factor left ``None``
-    stays open, as does ``reducer``, which only a core that declares it commits.
+    and ``reduction`` (K) to SIMD, one fold each. PE and SIMD are facts a core is
+    given (its role's choices, MatMul's): one left ``None`` is not given. Pumping and
+    ``reducer``, which only a core that declares it commits, are its choices; one left
+    ``None`` stays open.
     ``weights_range`` is the range of values the weight channel carries; the
     datatype's own by default. ``result_range`` is the results' range, from which the core
     derives its accumulator; ``result_dtype``'s own by default. The results channel
@@ -284,6 +287,9 @@ def placed_dotp(
                 w_tensor=w_tensor,
                 result_range=result_range or ordinary_integer_bounds(result_dtype),
                 **dotp_extents(w_tensor),
+                **{
+                    name: value for name, value in (("pe", pe), ("simd", simd)) if value is not None
+                },
                 **facts,
             ),
         }
@@ -291,8 +297,6 @@ def placed_dotp(
     choices = {
         key: value
         for key, value in (
-            ("compute.pe", pe),
-            ("compute.simd", simd),
             ("compute.compute_pumping", compute_pumping),
             ("compute.reducer", reducer if is_decision(space_type, "reducer") else None),
         )
@@ -642,12 +646,13 @@ def _committed(subject: P, choices: Mapping[str, object]) -> P:
 
 
 def _first_valid(point: Space, key: str) -> object:
-    """The first value of ``point``'s choice ``key`` that setting alone accepts, in its
-    domain's order (``finn.kernels.defaults.ranked``), as its first valid policy takes it."""
-    reference = cast(Any, decision(point, key)).reference
-    (found,) = inspection.viable(point, [reference])
-    items = ranked(point, reference, found.values or ())
-    assert isinstance(items, tuple), f"{key}: its order is not known: {items}"
+    """The first value of ``point``'s channel choice ``key`` that setting alone accepts, in
+    its policy's order (the cut's, ``finn.kernels.policies.ranked``), as its first valid
+    policy takes it."""
+    info = cast(Any, decision(point, key))
+    (found,) = inspection.viable(point, [info.reference])
+    items, fallback = ranked(point, Cut, info, found.values or ())
+    assert fallback is None, f"{key}: {fallback}"
     first = next((item for item in items if isinstance(item, inspection.Possible)), None)
     assert first is not None, f"{key} has no possible value: {found}"
     return first.value
@@ -655,8 +660,8 @@ def _first_valid(point: Space, key: str) -> object:
 
 def with_adapter_memories(subject: P, ram_style: str | None = None) -> P:
     """Each open adapter input_gen's memory takes ``ram_style``, or where None its first
-    valid value (an explicit style, by the size the buffer holds: the domain's order), as
-    its first valid policy takes it, on a network or a point. A channel's adapter is set
+    valid value (an explicit style, by the size the buffer holds: its kernel's ranking), as
+    the cut's first valid policy takes it, on a network or a point. A channel's adapter is set
     first (a network sets it as it builds the channel, by the interim channel rule)."""
     styles = _undecided(subject, ADAPTER_RAM_STYLES)
     if not styles:
@@ -677,8 +682,9 @@ def with_adapter_memories(subject: P, ram_style: str | None = None) -> P:
 def with_defaults(network: N) -> N:
     """``network`` with every open choice in play that is not required set as conversion
     and the cut set them (``Defaults``, through a seam of its own holding every stored
-    choice, so that only the open ones are set): a kernel's by conversion's policies, a
-    channel's by the interim channel rule; a FIFO's depth left open. The set-up of a test
+    choice, so that only the open ones are set): each by its policy, a kernel's (none
+    stated: a network built by hand has no KernelOp) first valid, a channel's the cut's; a
+    FIFO's depth left open. The set-up of a test
     that explores a network that never went through a graph."""
     seam = Seam()
     seam.held.update(network.chosen())
@@ -687,16 +693,19 @@ def with_defaults(network: N) -> N:
 
 def with_channel_defaults(network: N) -> N:
     """``network`` with each bound channel's open choices in play that are not required set
-    as the cut sets them, by the interim channel rule (``interim_channel_defaults``: first
+    as the cut sets them, by its policies (``finn.kernels.cut.channel_defaulted``: first
     valid; a FIFO's depth stays open): for a network built by hand, which no cut made."""
     for name in network.channels:
         if network.unbound(name) is not None:
             continue
         point = network.member(name)
-        done = interim_channel_defaults(point)
+        done = channel_defaulted(point)
         assert not isinstance(done, tuple), f"{name}: " + "; ".join(map(str, done))
+        assert done.fallbacks == (), f"{name}: {done.fallbacks}"
         before = chosen(point)
-        values = {(name, key): value for key, value in chosen(done).items() if key not in before}
+        values = {
+            (name, key): value for key, value in chosen(done.point).items() if key not in before
+        }
         if values:
             network = network.with_choices(values)
     return network
@@ -790,9 +799,10 @@ def matmul_assembly(
     it directly. The ``platform``'s clock period is the clock the module must
     meet; it sets dotp's DSP58 chain segmentation. ``core`` names the
     compute core (``packed`` or ``int8_dsp58``) and ``realization`` a depthwise
-    MatMul's; each left out takes the kernel's own default policy, first valid in the
-    flow order (``finn.kernels.defaults.defaulted``: the realization before the core),
-    as conversion would set it. PE, SIMD and pumping are the core's, and the
+    MatMul's; each left out takes its policy, first valid in the flow order
+    (``finn.kernels.policies.defaulted``: the realization before the core), as conversion
+    would set it (MatMul states no policy; this layer reaches no KernelOp, so
+    ``Unstated``). PE, SIMD and pumping are the core's, and the
     packed core's ``reducer``. The kernel's choices are set first, then its channels',
     whose contracts are its: the network builds each channel as its contracts become
     known and gives its choices their first valid values (the interim channel rule), the
@@ -823,7 +833,7 @@ def matmul_assembly(
         channel["w.source.memstream.ram_style"] = ram_style
         channel["w.source.memstream.pumped_memory"] = pumped_memory
     if buffered:
-        channel["w.transport.fifo.buffer.depth"] = weight_fifo_depth
+        channel["w.transport.fifo.depth"] = weight_fifo_depth
         channel["w.transport.fifo.buffer.ram_style"] = "auto"
     network = matmul_point(realization=realization, **facts)
     # What the caller leaves out of the realization and the core takes the kernel's
@@ -831,12 +841,12 @@ def matmul_assembly(
     point = network.member("matmul")
     left = {"realization", "compute"} - ({"compute"} if core is not None else set())
     kept = {key for key, _ in inspection.states(point)} - left
-    defaulted_point = defaulted(point, kept=kept)
-    if isinstance(defaulted_point, tuple):
-        raise ValueError("no value can be set: " + "; ".join(map(str, defaulted_point)))
+    done = defaulted(point, Unstated, kept=kept)
+    if isinstance(done, tuple):
+        raise ValueError("no value can be set: " + "; ".join(map(str, done)))
     taken = {
         f"matmul.{key}": value
-        for key, value in chosen(defaulted_point).items()
+        for key, value in chosen(done.point).items()
         if key in left and key not in chosen(point)
     }
     network = choose(network, {**taken, **({"matmul.compute": core} if core is not None else {})})
@@ -844,8 +854,8 @@ def matmul_assembly(
     network = choose(
         network,
         {
-            f"matmul.compute.{core}.pe": pe,
-            f"matmul.compute.{core}.simd": simd,
+            "matmul.pe": pe,
+            "matmul.simd": simd,
             f"matmul.compute.{core}.compute_pumping": compute_pumping,
             **({"matmul.compute.packed.reducer": reducer} if core == "packed" else {}),
         },

@@ -25,6 +25,7 @@ from finn.core.space import (
     Inapplicable,
     Param,
     Rejected,
+    Select,
     Space,
     Unresolved,
     constraint,
@@ -196,7 +197,7 @@ class Plain(Space):
 
 
 class Core(Space):
-    compute: Packed | Plain = Decision({"packed": Packed, "plain": Plain})
+    compute: Packed | Plain = Select(packed=Packed, plain=Plain)
 
 
 def test_a_rule_in_a_case_never_names_its_selector_standing() -> None:
@@ -261,7 +262,7 @@ class Alternative(Space):
 
 
 class Selected(Space):
-    s: Alternative | Plain = Decision({"a": Alternative, "b": Plain})
+    s: Alternative | Plain = Select(a=Alternative, b=Plain)
 
     @constraint
     def q(self) -> bool:
@@ -331,7 +332,7 @@ class Switch(Space):
             return reject("negative", "a negative width")
         return reject("c-two", "c of 2 leaves no depth") if self.c == 2 else self.w
 
-    mode: Inner | Shallow = Decision({"inner": Inner(depth=depth), "shallow": Shallow})
+    mode: Inner | Shallow = Select(inner=Inner(depth=depth), shallow=Shallow)
 
 
 def test_switching_into_a_case_whose_rule_is_false_outside_it_is_refused() -> None:
@@ -526,7 +527,7 @@ class Wire(Space):
 
 class Sourced(Space):
     ultra: bool = Param()
-    source: Store | Wire = Decision({"memory": Store(ultra=ultra), "wire": Wire})
+    source: Store | Wire = Select(memory=Store(ultra=ultra), wire=Wire)
 
 
 def test_a_selector_switched_away_and_back_keeps_its_cases_choices_dormant() -> None:
@@ -603,11 +604,11 @@ class Bare(Space):
 
 
 class Middle(Space):
-    inner: Leaf | Bare = Decision({"leaf": Leaf, "bare": Bare})
+    inner: Leaf | Bare = Select(leaf=Leaf, bare=Bare)
 
 
 class Outer(Space):
-    outer: Middle | Bare = Decision({"middle": Middle, "bare": Bare})
+    outer: Middle | Bare = Select(middle=Middle, bare=Bare)
 
 
 def test_presence_is_the_and_over_the_whole_path_above_a_choice() -> None:
@@ -644,12 +645,12 @@ class Threshold(Space):
 
 class Over(Space):
     k: int = Param()
-    s: Threshold | Bare = Decision({"a": Threshold(k=k), "b": Bare()})
+    s: Threshold | Bare = Select(a=Threshold(k=k), b=Bare())
 
 
 class OverChoice(Space):
     k: int = Decision(values=(0, 5))
-    s: Threshold | Bare = Decision({"a": Threshold(k=k), "b": Bare()})
+    s: Threshold | Bare = Select(a=Threshold(k=k), b=Bare())
 
 
 def test_a_false_when_beneath_an_open_selector_makes_its_scope_absent() -> None:
@@ -694,7 +695,7 @@ class Switched(Space):
 
 
 class OverOwn(Space):
-    s: OwnGate | Switched | Bare = Decision({"a": OwnGate(), "w": Switched(), "b": Bare()})
+    s: OwnGate | Switched | Bare = Select(a=OwnGate(), w=Switched(), b=Bare())
 
 
 @pytest.mark.parametrize(("case", "stored"), [("a", 0), ("w", False)])
@@ -894,10 +895,10 @@ def domain_of_positive() -> Domain[int]:
 
 class States(Space):
     extent: int = Param(required=False)
-    source: Store | Wire = Decision({"memory": Store(ultra=True), "wire": Wire})
+    source: Store | Wire = Select(memory=Store(ultra=True), wire=Wire)
     enabled: bool = Decision(values=(False, True))
     lanes: int = Decision(domain=divisors_of(extent))
-    depth: int = Decision(domain=domain_of_positive(), required=True, when=enabled)
+    depth: int = Decision(domain=domain_of_positive(), when=enabled)
 
 
 def test_every_choice_has_one_of_five_states_in_rank_order() -> None:
@@ -907,10 +908,10 @@ def test_every_choice_has_one_of_five_states_in_rank_order() -> None:
     ).instance
     found = dict(inspection.states(point))
     assert found == {
-        "source": Open((), False),
+        "source": Open(()),
         "source.memory.style": Waiting("block", ("source",)),
-        "source.memory.depth": Open(("source",), False),
-        "source.wire.taps": Open(("source",), False),
+        "source.memory.depth": Open(("source",)),
+        "source.wire.taps": Open(("source",)),
         "enabled": Set(False),
         "lanes": Waiting(4, ("extent",)),
         "depth": Dormant(8),
@@ -922,11 +923,11 @@ def test_every_choice_has_one_of_five_states_in_rank_order() -> None:
     states = dict(inspection.states(wire))
     assert states["source.memory.style"] == Dormant("block")
     assert states["source.memory.depth"] == Absent()
-    assert states["source.wire.taps"] == Open((), False)
+    assert states["source.wire.taps"] == Open(())
     on = dict(inspection.states(wire.with_choices(enabled=True)))
     assert on["depth"] == Set(8)
     cleared = wire.with_choices(wire.field(States.depth).clear(), enabled=True)
-    assert dict(inspection.states(cleared))["depth"] == Open((), True)
+    assert dict(inspection.states(cleared))["depth"] == Open(())
     (depth,) = inspection.viable(cleared, [States.depth])
     assert depth.values is None  # known by membership only
     assert [item.key for item in inspection.decisions(cleared) if not item.listed] == ["depth"]
