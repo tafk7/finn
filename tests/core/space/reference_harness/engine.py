@@ -30,8 +30,7 @@ legacy form, and no answer the adapter computes in its place.
   explicitly; ``ByName`` is a ``@constraint`` method reading its inputs by attribute name,
   ``getattr(self, name)``. A view carries no rule. A domain with a membership predicate is
   a ``domain(accepts=, candidates=)``: membership is the model's whole membership, the
-  enumeration the listed values. A domain's ``order`` is not built: no compared answer
-  reads it.
+  enumeration the listed values.
 - **Questions**, each the implementation's own answer (``Answers``; today's through
   ``inspection`` and the point's public API):
 
@@ -60,8 +59,9 @@ legacy form, and no answer the adapter computes in its place.
 The description becomes one Space class per scope, built with ``composite``. Every member
 keeps the description's path as its key: a choice ``compute.packed.pe`` is the engine's
 Decision ``compute.packed.pe``. A scope that reads something outside it takes it as a formal
-(``in-<path>``), bound by its parent; a selector's value is read through a derived member
-``key-<name>`` (``selected``); a selector picked by a derived value (the model's reading
+(``in-<path>``), bound by its parent; a chosen selector is a ``Select`` of its cases, its
+value read through a derived member ``key-<name>`` that binds the selector (a binding to a
+selector reads its case's name); a selector picked by a derived value (the model's reading
 17) is ``Select(by=...)``, a case whose scope holds nothing a ``None`` case, its value read
 by binding the selector itself (a binding to a selector reads its case's name); a child's
 guard is a derived member ``when-<name>``. Facts
@@ -108,7 +108,6 @@ from finn.core.space import (
     domain,
     inspection,  # its answer types alone: every question goes to an Answers
     reject,
-    selected,
     view,
 )
 from finn.core.space.edits import BrokenRule, ChangeOutcome
@@ -187,7 +186,7 @@ class Spelling:
     rules: Mapping[str, Rule] = field(default_factory=dict)
     types: Mapping[str, type] = field(default_factory=dict)
     #: guarded scopes holding one selector and nothing else, each written as that
-    #: selector's own guard: the scope a plain child, its selector a ``Decision(...,
+    #: selector's own guard: the scope a plain child, its selector a ``Select(...,
     #: when=)`` under the scope's ``when``, so the guard and the cases' guards are nodes of
     #: one Space. A guard piece of the selector names the scope, as the model's does
     guarded_selectors: frozenset[str] = frozenset()
@@ -473,7 +472,7 @@ class _Builder:
 
     def _selector_key(self, scope: str, path: str) -> object:
         decision = self.selector(scope, path)
-        return derived(a0=selected(decision))(_explicit(("key",), lambda read: read["key"], str))
+        return derived(a0=decision)(_explicit(("key",), lambda read: read["key"], str))
 
     def selector(self, scope: str, path: str) -> Any:
         if path in self.selectors:
@@ -484,7 +483,7 @@ class _Builder:
         for case in info.cases:
             entries[case] = self.node(scope, f"{path}.{case}")
         guard = {"when": self.member(scope, OWN_GUARD)} if path in self.guards else {}
-        self.selectors[path] = Decision(entries, required=info.required, **guard)
+        self.selectors[path] = Select(**entries, **guard)
         return self.selectors[path]
 
     def picked(self, scope: str, path: str) -> Any:
@@ -509,7 +508,7 @@ class _Builder:
         domain_ = info.domain
         simple = domain_.values is not None and domain_.member is None and not domain_.reads
         if simple and domain_.values:
-            return Decision(values=domain_.values, required=info.required)
+            return Decision(values=domain_.values)
         reads = domain_.reads
         names = [f"a{position}" for position in range(len(reads))]
 
@@ -539,7 +538,7 @@ class _Builder:
             candidates=candidates if domain_.listed else None,
             **dict(zip(names, (self.reference(scope, read) for read in reads), strict=True)),
         )
-        return Decision(domain=built, required=info.required)
+        return Decision(domain=built)
 
     def _derived(self, scope: str, path: str) -> object:
         """A derived value; one whose function refuses rejects with the refusal's code."""

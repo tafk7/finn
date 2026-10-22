@@ -23,8 +23,7 @@ reads refused.
 are given: a value is a member, outside, refused through a refused input, or refused
 because an input does not apply (reading 6). Facts are always known (SZ100 (5)), so
 membership never waits. A listed
-domain's membership list is its listed values that are members, in listed order; its
-``order`` ranks that list and checks nothing.
+domain's membership list is its listed values that are members, in listed order.
 
 **Presence.** A scope is present; absent (another case selected, or its ``when``
 false); unknown (its selector open, or a ``when`` input waiting); or refused (its
@@ -48,8 +47,8 @@ reads its inputs: all known, its body answers (a :class:`~.description.Refuse` i
 refusal at its origin); an input refused, it is refused through it; an input waiting,
 it waits; an input inapplicable, it is inapplicable. A view also refuses, through,
 when its Space's validity is false. *Views are read out* (SZ100 (3)): no constraint,
-derived value, ``when`` guard or domain (its membership, its computed list, its
-``order``) reads a view, and a description that does is no definition
+derived value, ``when`` guard or domain (its membership, its computed list) reads a
+view, and a description that does is no definition
 (``view-read-in``); a view reads anything readable, other views included, its own
 Space's and its children's. A ``Members`` (SZ100 (6)) reads its entries,
 derived values in scopes below it: its value is the (entry, value) pairs of the
@@ -118,7 +117,19 @@ space, and is never refused for its facts (§ 16.24).
 
 **Possible values** of a choice with a known membership list are one change per member
 value, in membership's list order: possible (with what moves) or impossible (with
-each refusal). The ranking is a separate answer; validity and refusals never read it.
+each refusal).
+
+**Policy is not the model's** (SZ103: default policies belong to FINN's compiler, on a
+KernelOp for its kernel's choices and at the cut for a channel's). The model states no
+ranking of a domain and no ``required`` choice, and two of its answers lose a part:
+
+- reading 10 is retired: a domain had an ``order`` over reads of its own, ranking its
+  membership list for a policy, answered by ``Solution.ordered``. Both are gone; a
+  ranking is a view of a kernel, which a policy names, and the walks no longer ask "the
+  ranking of" a choice. Possible values keep membership's list order;
+- a choice's state ``Open`` loses ``required``, which said that no policy gives it a value.
+  Whether a policy gives one is the compiler's to say, never the state's. Nothing else
+  read it: no answer, piece, refusal or standing set depended on it.
 
 Readings chosen where the semantics leave room
 ==============================================
@@ -215,10 +226,8 @@ corpus; § 16 holds the readings its author gave for this model.
    ``broken``, nothing standing. A selector switch bringing such a choice into play is
    still refused, by 3, as a newly present false piece, nothing standing. A domain
    already empty before the change adds no pair.
-10. *A domain's order* (§ 16.10) ranks the membership list over ``order_reads``, which
-    may read choices, never a view (SZ100 (3)): :meth:`Solution.ordered` is the
-    ranking, known, or waiting while a read waits. Possible values are answered in
-    membership's list order.
+10. *Retired* (SZ103): a domain's order (§ 16.10) is no part of the semantics; see
+    "Policy is not the model's" above.
 11. *An unknown guard answers unknown* for every piece under it (constraints, empty
     listed domains, guards), not Kleene's implication (the canon's text in § 11: "a scope
     whose guard waits counts each of its pieces as unknown").
@@ -337,16 +346,6 @@ def _distinct(values: tuple[Any, ...]) -> tuple[Any, ...]:
 
 def _same_mapping(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
     return a.keys() == b.keys() and all(same(a[key], b[key]) for key in a)
-
-
-def _permutation(ranked: tuple[Any, ...], values: tuple[Any, ...]) -> bool:
-    rest = list(values)
-    for value in ranked:
-        position = next((i for i, item in enumerate(rest) if same(item, value)), None)
-        if position is None:
-            return False
-        del rest[position]
-    return not rest
 
 
 @dataclass(frozen=True)
@@ -914,7 +913,7 @@ class _Evaluation:
         if choice not in self.stored:
             if presence.state in _OUT:
                 return Absent()
-            return Open(tuple(sorted(presence.waits)), info.required)
+            return Open(tuple(sorted(presence.waits)))
         value = self.stored[choice]
         if presence.state in _OUT:
             return Dormant(value)
@@ -1349,25 +1348,3 @@ class Solution:
             else:
                 out.append((value, Impossible(result.refusals)))
         return tuple(out)
-
-    def ordered(self, choice: str) -> Answer | None:
-        """The membership list ranked by the domain's order: known, waiting while an
-        order read waits, refused through a refused input, inapplicable when an order read
-        does not apply; ``None`` for a membership-only domain."""
-
-        self._choice(choice)
-        info = self.index.choices[choice]
-        listing = self.evaluation.facts.listing(choice)
-        if not isinstance(listing, Known) or info.domain.order is None:
-            return listing
-        inputs = self.evaluation.inputs(info.domain.order_reads)
-        if inputs.refused:
-            reason = Reason(ReasonKind.INPUT_REFUSED, choice, info.scope, related=inputs.refused)
-            return Refused((reason,))
-        if inputs.waits:
-            return Unresolved(tuple(sorted(inputs.waits)))
-        if inputs.values is None:
-            return Inapplicable()
-        ranked = tuple(info.domain.order(listing.value, inputs.values))
-        assert _permutation(ranked, listing.value), (choice, ranked, listing.value)
-        return Known(ranked)

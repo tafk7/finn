@@ -1287,37 +1287,6 @@ def test_reading_13_a_listed_choice_under_an_open_selector_is_no_piece() -> None
     )
 
 
-def ranked() -> Space:
-    def order(values: tuple[Any, ...], r: Reads) -> tuple[Any, ...]:
-        return tuple(reversed(values)) if r["size"] == "large" else values
-
-    return Space(
-        (),
-        Scope(
-            "",
-            choices=(
-                Choice("size", listed("small", "large")),
-                Choice("style", listed("block", "ultra", order=order, order_reads=("size",))),
-                Choice("depth", membership(lambda v, r: v > 0)),
-            ),
-        ),
-    )
-
-
-def test_reading_10_the_ranking_is_its_own_answer_and_possible_keeps_list_order() -> None:
-    both = (("block", Possible()), ("ultra", Possible()))
-    open_size = solve(ranked())
-    assert open_size.ordered("style") == Unresolved(("size",))
-    assert open_size.possible("style") == both
-    large = solve(ranked(), size="large")
-    assert large.ordered("style") == Known(("ultra", "block"))
-    assert large.possible("style") == both
-    assert solve(ranked(), size="small").ordered("style") == Known(("block", "ultra"))
-    assert large.ordered("size") == Known(("small", "large"))
-    assert large.ordered("depth") is None
-    assert large.possible("depth") is None
-
-
 # --- § 16.15: a change is refused by a new (false piece, origin) pair ---------------------
 
 
@@ -1997,14 +1966,13 @@ def test_a_domain_whose_membership_reaches_a_choice_is_a_definition_error() -> N
         with pytest.raises(DefinitionError) as raised:
             space.validate()
         assert (raised.value.kind, raised.value.path) == ("domain-reads-choice", path)
-    # facts, and derived values over facts, are allowed; an order may read a choice
+    # facts, and derived values over facts, are allowed
     domain_reading("d", derived=(Derived("d", ("n",), lambda r: r["n"]),)).validate()
-    ranked().validate()
 
 
 def test_reading_a_view_in_is_no_definition() -> None:
     """SZ100 (3): only a view reads a view. A constraint, a derived value, a ``when``
-    guard, a domain's membership, computed list or ``order``, and a ``Members``, reading a
+    guard, a domain's membership or computed list, and a ``Members``, reading a
     view of their own Space, of a Space above or of a child, are ``view-read-in``,
     checked before cycles (a constraint on a view of its own Space was one)."""
 
@@ -2049,12 +2017,6 @@ def test_reading_a_view_in_is_no_definition() -> None:
         (
             ("y", "inner.w"),
             described(choices=(Choice("y", computed(lambda r: (1,), ("inner.w",))),)),
-        ),
-        (
-            ("y", "total"),
-            described(
-                choices=(Choice("y", listed(1, 2, order=lambda v, r: v, order_reads=("total",))),)
-            ),
         ),
         (("m", "inner.w"), described(members=(Members("m", ("inner.w",)),))),
     ]

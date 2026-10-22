@@ -9,10 +9,9 @@ A description is a tree of scopes. Each scope holds:
   declared reads that returns one, possibly empty), optionally narrowed by a
   membership predicate, or *membership-only* (a predicate of the value and declared
   reads, never enumerated). Membership reads facts only: facts, and derived values
-  whose reads are, through derived values, facts only. A domain may also carry an
-  ``order``, a function of other declared reads (choices too) that ranks the listed
-  values and checks nothing. A required choice has no safe value; no flow defaults it.
-  No domain reads a view (SZ100 (3)).
+  whose reads are, through derived values, facts only. No domain reads a view (SZ100
+  (3)). A domain carries no ranking and a choice no policy (SZ103): those are a
+  compiler's, never the semantics'.
 - **selectors**: a choice whose cases are named child scopes; only the selected case
   is present. Its value is the case's name. A selector **picked by a derived value**
   (``Selector(..., by=d)``, the engine's ``Select(by=d)``) is no choice: it has no key
@@ -56,7 +55,7 @@ reads nothing else.
 :meth:`Space.validate` rejects a malformed description (an unknown or unreadable
 read, a duplicate name, a malformed domain or guard), a **view read in** (SZ100 (3),
 ``"view-read-in"``: a constraint, a derived value, a ``when`` guard, or a domain's
-membership, computed list or ``order`` reading a view; and, since the model expresses no
+membership or computed list reading a view; and, since the model expresses no
 view-side ``Members``, a ``Members`` naming one; checked before the rest), a domain
 whose membership reads anything but facts, or an input whose existence a choice decides
 other than through the choice's own guards (``"domain-reads-choice"``: a relation to
@@ -81,9 +80,7 @@ dependencies form a graph in which
 Any cycle in that graph is an error naming its path: derived values reading each other
 in a ring, a guard reading a value of the scope it guards, views reading each other in a
 ring. A view read in closes none any more: only views read views (SZ100 (3)), so a view,
-which depends on its Space's validity, is never below a piece of it. A domain's
-``order`` is no node of the graph: nothing depends on it (validity and refusals never
-read it), so it cannot close a cycle; it reads no view.
+which depends on its Space's validity, is never below a piece of it.
 """
 
 from __future__ import annotations
@@ -94,9 +91,6 @@ from typing import Any
 
 #: what every function of a description receives: each declared read's value by path
 Reads = Mapping[str, Any]
-
-#: a domain's ranking: the membership list and the order's reads, to a permutation
-Order = Callable[[tuple[Any, ...], Reads], Sequence[Any]]
 
 
 class DefinitionError(Exception):
@@ -118,17 +112,12 @@ class Domain:
     from ``reads``; ``member`` narrows a listed domain, or alone makes a
     membership-only domain. A listed domain lists all its values: a value outside the
     list is not a member, and every listed value is also checked by ``member``.
-    ``reads`` are membership's, facts only.
-
-    ``order``, over ``order_reads`` (anything readable), ranks the membership list: it
-    receives the list and returns a permutation of it, and checks nothing."""
+    ``reads`` are membership's, facts only."""
 
     values: tuple[Any, ...] | None = None
     enumerate: Callable[[Reads], Sequence[Any]] | None = None
     member: Callable[[Any, Reads], bool] | None = None
     reads: tuple[str, ...] = ()
-    order: Order | None = None
-    order_reads: tuple[str, ...] = ()
 
     @property
     def listed(self) -> bool:
@@ -139,29 +128,21 @@ def listed(
     *values: Any,
     member: Callable[[Any, Reads], bool] | None = None,
     reads: tuple[str, ...] = (),
-    order: Order | None = None,
-    order_reads: tuple[str, ...] = (),
 ) -> Domain:
     """A fixed list of values, optionally narrowed by a membership predicate over
-    ``reads``, optionally ranked by ``order`` over ``order_reads``."""
+    ``reads``."""
 
-    return Domain(
-        values=tuple(values), member=member, reads=reads, order=order, order_reads=order_reads
-    )
+    return Domain(values=tuple(values), member=member, reads=reads)
 
 
 def computed(
     enumerate: Callable[[Reads], Sequence[Any]],
     reads: tuple[str, ...],
     member: Callable[[Any, Reads], bool] | None = None,
-    order: Order | None = None,
-    order_reads: tuple[str, ...] = (),
 ) -> Domain:
     """A list computed from declared reads."""
 
-    return Domain(
-        enumerate=enumerate, member=member, reads=reads, order=order, order_reads=order_reads
-    )
+    return Domain(enumerate=enumerate, member=member, reads=reads)
 
 
 def membership(member: Callable[[Any, Reads], bool], reads: tuple[str, ...] = ()) -> Domain:
@@ -174,7 +155,6 @@ def membership(member: Callable[[Any, Reads], bool], reads: tuple[str, ...] = ()
 class Choice:
     name: str
     domain: Domain
-    required: bool = False
 
 
 @dataclass(frozen=True)
@@ -246,7 +226,6 @@ class Selector:
 
     name: str
     cases: tuple[Scope, ...]
-    required: bool = False
     by: str | None = None
 
 
@@ -314,7 +293,6 @@ class ChoiceInfo:
     path: str
     scope: str
     domain: Domain
-    required: bool
     #: the case names, for a selector
     cases: tuple[str, ...] | None
 
@@ -396,9 +374,7 @@ class Index:
                 raise DefinitionError("malformed", (node,), "a domain lists or computes")
             if not domain.listed and domain.member is None:
                 raise DefinitionError("malformed", (node,), "a domain needs values")
-            if domain.order is not None and not domain.listed:
-                raise DefinitionError("malformed", (node,), "only a listed domain is ordered")
-            self.choices[node] = ChoiceInfo(node, path, domain, choice.required, None)
+            self.choices[node] = ChoiceInfo(node, path, domain, None)
         for selector_ in scope.selectors:
             self._name_ok(selector_.name, path)
             node = join(path, selector_.name)
@@ -407,8 +383,6 @@ class Index:
             if len(set(cases)) != len(cases):
                 raise DefinitionError("duplicate", (node,), "two cases share a name")
             if selector_.by is not None:
-                if selector_.required:
-                    raise DefinitionError("malformed", (node,), "a derived selector is no choice")
                 if any(case_.when is not None for case_ in selector_.cases):
                     raise DefinitionError(
                         "malformed", (node,), "a case of a derived selector takes no guard"
@@ -417,9 +391,7 @@ class Index:
                 pick = Derived(selector_.name, (selector_.by,), _picker(cases, selector_.by))
                 self.derived[node] = (pick, path)
                 continue
-            self.choices[node] = ChoiceInfo(
-                node, path, Domain(values=cases), selector_.required, cases
-            )
+            self.choices[node] = ChoiceInfo(node, path, Domain(values=cases), cases)
         for derived in scope.derived:
             self._name_ok(derived.name, path)
             node = join(path, derived.name)
@@ -473,7 +445,6 @@ class Index:
     def _declared_reads(self) -> Iterator[tuple[str, tuple[str, ...]]]:
         for path, info in self.choices.items():
             yield path, info.domain.reads
-            yield path, info.domain.order_reads
         for path, (derived, _) in self.derived.items():
             yield path, derived.reads
         for path, (view, _) in self.views.items():

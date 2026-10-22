@@ -13,8 +13,8 @@ not. At every step (each change tried, accepted or refused):
 **steps of choices**:
 
 1. *History-independence.* The walked configuration answers every question (each choice's
-   state, each value's answer, each rule, validity, each listed choice's possible values
-   and ranking) as ``Configuration(space, facts, stored)`` built from nothing; and the
+   state, each value's answer, each rule, validity, each listed choice's possible values)
+   as ``Configuration(space, facts, stored)`` built from nothing; and the
    bind of its own choices from nothing, ``bind(space, facts, stored)``, publishes it,
    dropping nothing and reporting no rule broken, for every configuration the walk reaches
    by accepted changes of choices that set (FN3: what a step publishes binds again with
@@ -129,7 +129,6 @@ from support.space_oracle import Implementation
 from support.space_oracle.today import TODAY
 
 from core.space import reference as model
-from core.space.reference.description import Order
 from core.space.reference.model import same
 
 from .compare import (
@@ -198,7 +197,7 @@ class _Draw:
     """One description drawn from ``rng``, and its text.
 
     Membership reads facts only: facts, and ``h``, a derived value over facts that refuses
-    on some. A listed domain may carry an ``order`` reading a choice. The root holds two to
+    on some. The root holds two to
     six value choices in all, a selector whose cases hold choices (sometimes one level
     deeper), a derived value ``d`` over facts and root choices (sometimes refusing), a
     ``when``-guarded scope ``g`` (its guard sometimes reading ``d``; in the root, or in the
@@ -273,15 +272,13 @@ class _Draw:
                 )
             return model.listed(*values, member=_not_one), f"listed{values} where value != 1"
         if draw < 0.58:
-            # an order reading a choice: it ranks, and checks nothing
+            # A plain listed domain where a ranked one was drawn (a domain's order is gone,
+            # SZ103). Its draws are spent as before, its order's read included, so that each
+            # seed draws the description it drew before, less the ranking.
             values = tuple(sorted(rng.sample(VALUES, rng.randint(2, 3))))
             roots = self.roots()
             if roots:
-                read = rng.choice(roots)
-                return (
-                    model.listed(*values, order=_reversed_past(read), order_reads=(read,)),
-                    f"listed{values}, reversed while {read} >= 2",
-                )
+                rng.choice(roots)
             return model.listed(*values), f"listed{values}"
         if draw < 0.72:
             fact = self.fact()
@@ -306,10 +303,10 @@ class _Draw:
     def choice(self, scope: str, indent: str) -> model.Choice:
         name = self.name("c")
         domain, text = self.domain()
-        required = self.rng.random() < 0.1
+        self.rng.random()  # spent as when it drew a required choice (gone, SZ103): same seeds
         self.ints.append(_join(scope, name))
-        self.lines.append(f"{indent}choice {name}: {text}" + (" (required)" if required else ""))
-        return model.Choice(name, domain, required)
+        self.lines.append(f"{indent}choice {name}: {text}")
+        return model.Choice(name, domain)
 
     def relation(self, reads: Sequence[str]) -> _Fn:
         """A predicate over two or three integer reads."""
@@ -525,11 +522,11 @@ class _Draw:
         name = "s" if depth == 0 else "t"
         path = _join(scope, name)
         cases = ("a", "b", "c")[: self.rng.choice((2, 2, 3))] if depth == 0 else ("x", "y")
-        required = self.rng.random() < 0.1
-        self.lines.append(f"{indent}selector {name}" + (" (required)" if required else ""))
+        self.rng.random()  # spent as when it drew a required selector (gone, SZ103): same seeds
+        self.lines.append(f"{indent}selector {name}")
         self.selectors[path] = cases
         built = tuple(self.case(path, case, depth, indent + "  ") for case in cases)
-        return model.Selector(name, built, required)
+        return model.Selector(name, built)
 
     def guarded(self, scope: str, indent: str) -> model.Scope:
         """``g``, guarded by a ``when``: in the root, or now and then in a case of ``s`` (so
@@ -670,10 +667,6 @@ def _dividing(read: str) -> Callable[[model.Reads], tuple[int, ...]]:
 
 def _above(read: str) -> Callable[[model.Reads], tuple[int, ...]]:
     return lambda r: tuple(v for v in VALUES if r[read] is None or v > r[read])
-
-
-def _reversed_past(read: str) -> Order:
-    return lambda values, r: tuple(reversed(values)) if r[read] >= 2 else values
 
 
 def _sum_at_most(reads: tuple[str, ...], k: int) -> Callable[[model.Reads], bool]:
@@ -827,8 +820,8 @@ def generate(
 
 # --- the questions --------------------------------------------------------------------------------
 
-#: a question: what is asked ("state", "answer", "rule", "validity", "possible", "ordered")
-#: and of which path; "ordered" (a listed domain's ranking) is the model's alone
+#: a question: what is asked ("state", "answer", "rule", "validity", "possible") and of
+#: which path
 Question = tuple[str, str]
 
 #: the kinds of question both sides answer, and the walk's own: a change, and the engine's
@@ -840,7 +833,7 @@ def questions(index: model.Index) -> list[Question]:
     """What both sides are asked at each configuration: each choice's state; each fact's,
     choice's, derived value's, view's and ``Members``'s answer (a fact's is always known,
     SZ100 (5): its value, or ``None`` for an optional one left out); each rule; validity;
-    each listed choice's possible values, and the model's ranking of them."""
+    each listed choice's possible values."""
     found: list[Question] = [("state", path) for path in sorted(index.choices)]
     found += [
         ("answer", path)
@@ -852,20 +845,7 @@ def questions(index: model.Index) -> list[Question]:
     found.append(("validity", ""))
     listed = sorted(path for path, info in index.choices.items() if info.domain.listed)
     found += [("possible", path) for path in listed]
-    found += [("ordered", path) for path in listed if index.choices[path].cases is None]
     return found
-
-
-def ordered_form(solution: model.Solution, path: str) -> AnswerForm:
-    """A listed domain's ranking as an answer (the model's alone: the engine builds no order)."""
-    answer = solution.ordered(path)
-    if isinstance(answer, model.Known):
-        return AnswerForm("value", answer.value)
-    if isinstance(answer, model.Unresolved):
-        return AnswerForm("unresolved", blockers=frozenset(answer.waits))
-    if isinstance(answer, model.Refused):
-        return AnswerForm("refused")
-    return AnswerForm("inapplicable")
 
 
 def model_forms(
@@ -883,11 +863,8 @@ def model_forms(
             forms[question] = rule_form(solution, path)
         elif what == "validity":
             forms[question] = validity_form(solution)
-        elif what == "possible":
-            if possible:
-                forms[question] = possible_form(solution, path)
-        else:
-            forms[question] = ordered_form(solution, path)
+        elif what == "possible" and possible:
+            forms[question] = possible_form(solution, path)
     return forms
 
 
@@ -910,8 +887,9 @@ def engine_forms(point: Point, asked: Iterable[Question]) -> dict[Question, Form
 
 def ask(question: Question) -> str:
     what, path = question
-    labels = {"possible": "the possible values of", "ordered": "the ranking of"}
-    return "validity" if what == "validity" else f"{labels.get(what, f'the {what} of')} {path}"
+    if what == "validity":
+        return "validity"
+    return f"the possible values of {path}" if what == "possible" else f"the {what} of {path}"
 
 
 def _equal(left: Form, right: Form) -> bool:
