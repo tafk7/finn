@@ -222,3 +222,55 @@ def test_QONNX_to_FINN_unsupported_channel_axis():
     model = _make_single_quant_model(x, scale, zeropt, bitwidth, 1, 0, "ROUND")
     with pytest.raises(ValueError):
         model.transform(ConvertQONNXtoFINN())
+
+
+def _activation_model(activation, quantizer, scale, bits=None, signed=False, narrow=False):
+    """global_in -> ``activation`` (None for none) -> ``quantizer`` (Quant with ``bits``,
+    ``signed`` and ``narrow``, or BipolarQuant) -> global_out, over a [1, 4] tensor."""
+    gi = helper.make_tensor_value_info("global_in", TensorProto.FLOAT, [1, 4])
+    go = helper.make_tensor_value_info("global_out", TensorProto.FLOAT, [1, 4])
+    nodes = []
+    quant_in = "global_in"
+    if activation is not None:
+        nodes.append(helper.make_node(activation, ["global_in"], ["act_out"]))
+        quant_in = "act_out"
+    inits = [nph.from_array(np.asarray(scale, dtype=np.float32), "scale")]
+    if quantizer == "Quant":
+        inits += [
+            nph.from_array(np.asarray(0.0, dtype=np.float32), "zeropt"),
+            nph.from_array(np.asarray(float(bits), dtype=np.float32), "bitwidth"),
+        ]
+        nodes.append(
+            helper.make_node(
+                "Quant",
+                [quant_in, "scale", "zeropt", "bitwidth"],
+                ["global_out"],
+                domain="qonnx.custom_op.general",
+                signed=int(signed),
+                narrow=int(narrow),
+                rounding_mode="ROUND",
+            )
+        )
+    else:
+        nodes.append(
+            helper.make_node(
+                "BipolarQuant",
+                [quant_in, "scale"],
+                ["global_out"],
+                domain="qonnx.custom_op.general",
+            )
+        )
+    graph = helper.make_graph(nodes, "activation", [gi], [go], initializer=inits)
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.opset_import.append(helper.make_opsetid("qonnx.custom_op.general", 1))
+    return ModelWrapper(model).transform(InferShapes()).transform(InferDataTypes())
+
+
+@pytest.mark.transform
+@pytest.mark.parametrize("scale", [0.5, 1.0])
+def test_a_bipolar_quant_after_a_relu_is_refused(scale):
+    model = _activation_model("Relu", "BipolarQuant", scale)
+    x = np.array([[-2.0, -0.2, 0.0, 0.3]], dtype=np.float32)
+    assert np.all(oxe.execute_onnx(model, {"global_in": x})["global_out"] == scale)
+    with pytest.raises(ValueError, match=r"outputs \+scale for every input .* 1-bit QuantReLU"):
+        model.transform(ConvertQONNXtoFINN())

@@ -378,7 +378,14 @@ class QuantReluHandler(QuantActBaseHandler):
                         "for Relu activations."
                     )
         elif self._q_node.op_type == "BipolarQuant":
-            return
+            act_node = self._model.find_direct_predecessors(self._q_node)[0]
+            if act_node.op_type == "Relu":
+                raise ValueError(
+                    f"BipolarQuant node {self._q_node.name!r}: a BipolarQuant after a Relu "
+                    "outputs +scale for every input (its input is never negative), so it "
+                    "is a constant; FINN does not convert it. Brevitas exports a 1-bit "
+                    "QuantReLU this way; use bit_width >= 2 or a signed 1-bit quantizer."
+                )
         else:
             raise RuntimeError("Got an unexpected quantizer node type")
 
