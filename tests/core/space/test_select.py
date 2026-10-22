@@ -72,7 +72,7 @@ class HeatPump(Space):
         return self.cop * self.kw
 
 
-# -- 1. a chosen Select --------------------------------------------
+# -- 1. a chosen Select ------------------------------------------------------------------------
 
 
 class BySelect(Space):
