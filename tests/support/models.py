@@ -285,8 +285,8 @@ THRESHOLDING = {
     "ultra_stages": 0,
 }
 WEIGHT_CHANNEL: dict[str, object] = {
-    "source.memstream.ram_style": "distributed",
-    "source.memstream.pumped_memory": False,
+    "source.ram_style": "distributed",
+    "source.pumped_memory": False,
     "transport": "direct",
 }
 """A stored weight's channel, as ``support.chain`` configures it."""

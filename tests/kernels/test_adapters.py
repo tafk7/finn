@@ -37,6 +37,7 @@ from support.helpers import (
 
 from finn.core.space import Available, Rejected, design_space, inspection
 from finn.dataflow.steps import Step, steps
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, Traversal, vector_major
 from finn.kernels.adapters import Convert, realize
@@ -131,20 +132,18 @@ BOTH = {"x.output_adapter": "vpc", "x.adapter": "input_gen"}
 
 
 def test_exactly_one_candidate_a_side_carries_out_its_steps():
-    for source, pe, sides in (
-        (vector_major((ROWS, CHANNELS), 4), 2, {"x.output_adapter": "vpc"}),
-        (columns_first(ROWS, CHANNELS, 4), 4, {"x.adapter": "input_gen"}),
-        (
-            columns_first(ROWS, CHANNELS, 4),
-            2,
-            {"x.output_adapter": "vpc", "x.adapter": "input_gen"},
-        ),
+    for source, pe, sides, placed in (
+        (vector_major((ROWS, CHANNELS), 4), 2, {}, True),
+        (columns_first(ROWS, CHANNELS, 4), 4, {"x.adapter": "input_gen"}, False),
+        (columns_first(ROWS, CHANNELS, 4), 2, {"x.adapter": "input_gen"}, True),
     ):
         x = adapted(source, pe).member("x")
-        # The one chain a side that carries out its steps is its first valid value, set as
-        # the network builds the channel (the interim channel rule).
+        # The output side's one chain is placed where its steps convert a width; the input
+        # side's one chain that carries out its steps is its first valid value, set as the
+        # network builds the channel (the interim channel rule).
         adapters = {key: value for key, value in chosen(x).items() if key.endswith("adapter")}
         assert {f"x.{key}": value for key, value in adapters.items()} == sides
+        assert x.output_adapting == placed
     # Every other candidate refuses its side's steps: possible values, one.
     (adapter,) = inspection.viable(x, [handle(x, "adapter")])
     assert adapter.cases == ("input_gen",)
@@ -263,12 +262,12 @@ def test_a_fifo_in_a_memory_the_platform_lacks_is_refused_by_its_rule():
             [("realizable", {"channel-plan"})],
             None,
         ),
-        # The FIFO's memory open: its stage, a module, waits on it.
+        # The FIFO's memory open: its stage's module waits on it, and its rules; the
+        # channel's ``compatible`` reads its streams, which do not.
         (
             lambda: choose(adapted(columns_first(ROWS, CHANNELS, 4), 2), FIFO),
             "open",
             [
-                ("compatible", WAITING),
                 ("transport.fifo.buffer.capacity_supported", WAITING),
                 ("transport.fifo.buffer.uram_present", WAITING),
             ],
@@ -285,18 +284,29 @@ def test_a_fifo_in_a_memory_the_platform_lacks_is_refused_by_its_rule():
 def test_a_channel_s_rules_and_its_fifo_read_the_values_its_views_present(
     channel, status, pieces, candidate
 ):
-    """``compatible`` reads the stages as a value (``staged``: its children's ``stages``),
-    not the channel's ``stages`` view, which its netlist and its network's hops to the
-    ports beside it read; and the FIFO candidate reads what arrives through its formal,
-    after the output adapter's stages: valid, refused and open each answer, with no
-    dependency cycle."""
+    """``compatible`` reads the stages' streams (``staged``: each stage kernel's derived
+    values, through its holder's ``stage_streams``), not the channel's ``stages`` view,
+    which its netlist and its network's hops to the ports beside it read; and the FIFO
+    candidate reads what arrives through its formal, after the output adapter's
+    realization: valid, refused and open each answer, with no dependency cycle."""
     network = channel()
     point = network.member("x")
     assert validity_of(point) == (status, pieces)
     if candidate is not None:
         assert validity_of(point.transport) == candidate
     if status == "valid":
-        assert point.stages == point.staged
+        # The same stages, by their streams and by their contracts.
+        assert [
+            (stage.label, stage.input, stage.output, stage.width) for stage in point.staged
+        ] == [
+            (
+                stage.label,
+                Stream(stage.input.element, stage.input.sequence),
+                Stream(stage.output.element, stage.output.sequence),
+                stage.output.transport.data_width,
+            )
+            for stage in point.stages
+        ]
         assert point.query(Channel.netlist).value.links
         hops = network.hops("x")
         assert isinstance(hops, OuterHops) and (hops.producer or hops.consumer)

@@ -1043,8 +1043,10 @@ def _transport_of(transports: Mapping[Key, str], key: Key) -> Key | None:
 def _folding(seam: Seam, network: Composition) -> list[Key]:
     """The scope of a strategy that folds: every stored kernel choice not held. A
     channel's choices are not a fold's: a transport, or a FIFO's choice under it, is
-    ``SizeFifos``'; the others are the interim channel rule's, which derives again, as
-    the network rebuilds a channel, what a fold makes its new facts refuse."""
+    ``SizeFifos``'; the others (its input adapter, its memories' styles, its source's
+    pumping) are the interim channel rule's, which derives again, as the network rebuilds
+    a channel, what a fold makes its new facts refuse. Its source, its output adapter and
+    its mover are placed, not chosen."""
     channels = set(network.channels)
     return [key for key in seam.chosen(network) if key not in seam.held and key[0] not in channels]
 

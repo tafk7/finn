@@ -216,15 +216,15 @@ def test_one_network_carries_the_weights_of_whichever_realization_is_committed()
             },
         )
         # Whether the weight channel has a value is the weights' presence, a fact: its
-        # source's one case is set by the interim channel rule as the channel is built.
+        # source is placed as the channel is built, no choice.
         assert folded.member("w").valued and folded.member("w").tensor.shape == shape
-        assert folded.chosen()[("w", "source")] == "memstream"
+        assert ("w", "source") not in folded.chosen()
         configured = choose(
             folded,
             {
                 "w.transport": "direct",
-                "w.source.memstream.ram_style": "auto",
-                "w.source.memstream.pumped_memory": False,
+                "w.source.ram_style": "auto",
+                "w.source.pumped_memory": False,
             },
         )
         module = module_of(with_direct_transports(with_adapter_memories(configured)), "matmul")

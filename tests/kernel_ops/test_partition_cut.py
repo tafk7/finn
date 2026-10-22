@@ -294,49 +294,45 @@ def test_an_iodma_mover_refuses_w2_repeated_or_tiled_by_name() -> None:
     """The Chain's streamed w2 presents its pass once per row of x, three times a frame,
     which an IODMA mover does not repeat (SZ11 (f)): the pynq shell refuses it,
     ``mover-repetition``, at any folding; at the Chain's own each pass is also in 2 x 2
-    tiles, which the driver's row-major buffer does not hold, ``mover-order``. The cut can
-    set w2's mover to no value (``choice-no-valid-value``, each rule's finding its causes)
-    and leaves it open; emission refuses it, naming the rules it breaks, their findings
-    its causes."""
+    tiles, which the driver's row-major buffer does not hold, ``mover-order``. The mover
+    is placed on w2's free side, no choice, so its rules are the channel's: the cut leaves
+    nothing open, and emission refuses w2 by them, each finding keyed by the mover's rule;
+    a folding that breaks one is refused by it."""
     repeated = (
-        r"mover\.iodma_hls\.single_pass: mover-repetition: s_axis_1: an iodma_hls mover moves "
-        r"one pass of a \[4, 4\] buffer a frame, and this free side presents it 3 times a "
-        r"frame \(repetition by the host or the mover is not designed yet\)"
+        r"s_axis_1: an iodma_hls mover moves one pass of a \[4, 4\] buffer a frame, and this "
+        r"free side presents it 3 times a frame \(repetition by the host or the mover is not "
+        r"designed yet\)"
     )
     tiled = (
-        r"mover\.iodma_hls\.row_major: mover-order: s_axis_1: an iodma_hls mover moves a "
-        r"row-major buffer, and this free side presents 4 beats of 4 lanes of \[4, 4\]"
+        r"s_axis_1: an iodma_hls mover moves a row-major buffer, and this free side presents "
+        r"4 beats of 4 lanes of \[4, 4\]"
     )
-    for folding, refusals in ((None, (tiled, repeated)), (ROW_MAJOR_W2, (repeated,))):
-        model = kernel_model(second_weights=False)
-        write_target(model, ZYNQ)
-        if folding is not None:
-            # A folding the shell refuses at its mover: w2's mover, open, can take no value
-            # under it, so the interim channel rule sets none.
-            configured(model, {"second": folding})
-        cut = MakeCutChoices()
-        model = model.transform(cut)
-        ((code, causes),) = [(f.code, f.causes) for f in cut.unset["w2.mover"]]
-        assert code == "choice-no-valid-value"
-        found = "; ".join(str(cause) for cause in causes)
-        for refusal in refusals:
-            assert re.search(refusal, found)
-        assert ("mover-order" in found) == (tiled in refusals)
-        choose_memories(model)
-        with refused(
-            "choices-open",
-            error=KernelOpError,
-            owner="configured_network",
-            node="partition",
-            keys=("w2.mover",),
-            message=r"w2\.mover: no value is possible: 'iodma_hls' breaks .*single_pass",
-        ) as caught:
-            configured_network(model, "partition")
-        # Each open choice no value fits is a cause, with the findings of the rules its
-        # values break, as the cut reports it.
-        ((cause, owner, why),) = [(f.code, f.owner, f.causes) for f in caught.finding.causes]
-        assert (cause, owner) == ("choice-no-valid-value", "w2.mover")
-        assert set(why) == set(causes)
+    model = kernel_model(second_weights=False)
+    write_target(model, ZYNQ)
+    cut = MakeCutChoices()
+    model = model.transform(cut)
+    assert cut.unset == {}
+    choose_memories(model)
+    with refused(
+        "mover-repetition",
+        error=KernelOpError,
+        owner="mover.single_pass",
+        message=repeated,
+        tensor="w2",
+    ) as caught:
+        configured_network(model, "partition")
+    assert {(f.code, f.owner) for f in caught.error.findings} == {
+        ("mover-order", "mover.row_major"),
+        ("mover-repetition", "mover.single_pass"),
+    }
+    (order,) = [f for f in caught.error.findings if f.code == "mover-order"]
+    assert re.search(tiled, order.message)
+    # A row-major folding of w2 still presents its pass three times a frame: refused by
+    # the mover's rule, the fold with it.
+    model = kernel_model(second_weights=False)
+    write_target(model, ZYNQ)
+    with refused("mover-repetition", owner="mover.single_pass", message=repeated):
+        configured(model, {"second": ROW_MAJOR_W2})
 
 
 def test_a_mover_or_bus_the_block_design_cannot_wire_is_refused_by_name(tmp_path: Path) -> None:
@@ -443,11 +439,11 @@ def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
 ) -> None:
     """SR6's two moments on TFC_W2A2: conversion stores each KernelOp's own choices,
     each at its default policy, first valid (44 values on 8 nodes), and no channel's; the
-    cut creates the channels' by the interim channel rule, first valid (35 values on 13
-    tensors: transports, the weights' sources and memories, the input buffers' adapters
-    and memories, the two boundary movers), on the body's network, where it binds the
-    nodes' in context: 79 values, the nodes' the same 44 (none dropped), nothing left
-    open."""
+    cut creates the channels' by the interim channel rule, first valid (29 values on 13
+    tensors: transports, the weights' memories, the input buffers' adapters and memories;
+    the weights' sources and the two boundary movers are placed, no choices), on the body's
+    network, where it binds the nodes' in context: 73 values, the nodes' the same 44 (none
+    dropped), nothing left open."""
     model = ModelWrapper(str(tfc_streamlined)).transform(ToKernelOps(ULTRA96))
     model = model.transform(InferKernelTensors())
     nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
@@ -461,18 +457,15 @@ def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
     config = kernel_choices_config(body)
     assert {name: config[name] for name in converted} == converted
     channels = {name: held for name, held in config.items() if name not in converted}
-    assert (len(channels), sum(map(len, channels.values()))) == (13, 35)
+    assert (len(channels), sum(map(len, channels.values()))) == (13, 29)
     assert {held["transport"] for held in channels.values()} == {"direct"}
-    assert sorted(name for name, held in channels.items() if "source" in held) == [
+    assert sorted(name for name, held in channels.items() if "source.ram_style" in held) == [
         f"MatMul_{index}_param0" for index in range(4)
     ]
     assert sorted(name for name, held in channels.items() if "adapter" in held) == [
         f"MultiThreshold_{index}_out0" for index in range(4)
     ]
-    assert {name: held["mover"] for name, held in channels.items() if "mover" in held} == {
-        "MatMul_3_out0": "iodma_hls",
-        "Reshape_0_out0": "iodma_hls",
-    }
+    assert not [name for name, held in channels.items() if "mover" in held]
     bound = in_shell(body, body.graph.node)
     assert bound.stale == {}
     assert bound.undecided() == ()

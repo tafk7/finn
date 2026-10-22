@@ -61,8 +61,8 @@ def tfc_built() -> dict[str, dict[str, object]]:
                 "transport": "direct",
             }
             built[f"MatMul_{layer}_param0"] = {
-                "source.memstream.pumped_memory": False,
-                "source.memstream.ram_style": "distributed" if node == "MatMul_3" else "block",
+                "source.pumped_memory": False,
+                "source.ram_style": "distributed" if node == "MatMul_3" else "block",
                 "transport": "direct",
             }
         else:
@@ -82,26 +82,17 @@ def tfc_built() -> dict[str, dict[str, object]]:
 TFC_BUILT = tfc_built()
 
 
-#: What conversion, the cut and the fold store on TFC beside ``TFC_BUILT``, 27 values
+#: What conversion, the cut and the fold store on TFC beside ``TFC_BUILT``, 16 values
 #: forcing left unstored: each MatMul's core (conversion's first valid), each
-#: Thresholding's AXI-Lite and UltraRAM stages (conversion's), each weight's source and
-#: each activation's adapter (the interim channel rule's one possible), the mover of each
-#: boundary channel the pynq row offers one, and the output adapter the fold at 1e6 frames
-#: a second brings into play on each activation and on the first MatMul's output (the
-#: interim channel rule's).
+#: Thresholding's AXI-Lite and UltraRAM stages (conversion's), and each activation's
+#: adapter (the interim channel rule's one possible). A weight's source, a boundary
+#: channel's mover and an output adapter are placed, not chosen: nothing stores them.
 STORED: dict[str, dict[str, object]] = {
     **{f"MatMul_{index}": {"compute": "packed"} for index in range(4)},
     **{f"MultiThreshold_{index}": {"use_axilite": 0, "ultra_stages": 0} for index in range(4)},
-    **{f"MatMul_{index}_param0": {"source": "memstream"} for index in range(4)},
-    **{
-        f"MultiThreshold_{index}_out0": {"adapter": "input_gen", "output_adapter": "vpc"}
-        for index in range(4)
-    },
-    "MatMul_0_out0": {"output_adapter": "vpc"},
-    "Reshape_0_out0": {"mover": "iodma_hls"},
-    "MatMul_3_out0": {"mover": "iodma_hls"},
+    **{f"MultiThreshold_{index}_out0": {"adapter": "input_gen"} for index in range(4)},
 }
 
-#: Every value TFC_W2A2 is built with and stores at 1,000,000 frames a second, 84 by
+#: Every value TFC_W2A2 is built with and stores at 1,000,000 frames a second, 73 by
 #: graph name: ``TFC_BUILT`` and ``STORED``.
 TFC_STORED = {owner: {**TFC_BUILT[owner], **STORED.get(owner, {})} for owner in TFC_BUILT}

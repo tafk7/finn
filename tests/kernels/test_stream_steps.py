@@ -37,7 +37,7 @@ from finn.dataflow.traversal import (
     tile,
     vector_major,
 )
-from finn.kernels.adapters import INPUT_CHAINS, OUTPUT_CHAINS, Convert, realize
+from finn.kernels.adapters import INPUT_CHAINS, OUTPUT_ADAPTER, Convert, realize
 from finn.kernels.input_generator import Generate
 
 Beats = list[tuple[Position, ...]]
@@ -99,10 +99,10 @@ def check(source: BeatSequence, sink: BeatSequence) -> tuple[str, ...]:
             depth = levels.index(rule)
             asserted = [mark[depth] for mark in marks]
             assert asserted == [rule.asserted(beat) for beat in range(len(beats))]
-    # Each side of the transport is one candidate's chain, and together they are all the steps'.
+    # Each side of the transport is one chain, and together they are all the steps'.
     sides = realize(found.output), realize(found.input)
     assert (*sides[0], *sides[1]) == stages
-    for side, chains in zip(sides, (OUTPUT_CHAINS, INPUT_CHAINS)):
+    for side, chains in zip(sides, ((OUTPUT_ADAPTER.modules,), INPUT_CHAINS)):
         assert not side or tuple(stage.kind for stage in side) in chains, side
     return tuple(stage.kind for stage in stages)
 

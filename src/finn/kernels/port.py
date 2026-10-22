@@ -626,10 +626,12 @@ class Served(KernelDeclaration):
     kernel, or a selector over children, ``Select``) and that child's port ``port``. It
     lowers to ``<name>_stream`` and ``<name>_data_width``, the selected child's stream and
     word width, and ``<name>_contract``, the child's contract labelled below the kernel
-    (``compute.<case>.x``; ``child.x`` for a child)."""
+    (``compute.<case>.x``; ``child.x`` for a child; ``<labelled>.x`` where the kernel
+    states the label its child keeps: a channel's source, ``source.memstream.set``)."""
 
     child: Any
     port: str
+    labelled: str | None = None
 
     def lower(self, owner: type[KernelSpace], name: str) -> Mapping[str, object]:
         child = next(
@@ -666,7 +668,14 @@ class Served(KernelDeclaration):
             case = selected(self.child)  # a selector over children: the case it selects
         except DefinitionError:
             case = None
-        if case is not None:
+        if self.labelled is not None:
+            label = self.labelled
+
+            def stated(contract: PortContract) -> PortContract:
+                return contract.under(label)
+
+            members[f"{name}_contract"] = view(semantics=PORT_CONTRACT, contract=offered)(stated)
+        elif case is not None:
 
             def chosen(case: str, contract: PortContract) -> PortContract:
                 return contract.under(f"{child}.{case}")
@@ -683,10 +692,11 @@ class Served(KernelDeclaration):
         return members
 
 
-def served(child: Any, port: str) -> Served:
-    """A port a kernel with children presents as ``child``'s ``port`` (``Served``). Declare
-    it in the class body after the child (``x = served(compute, "x")``)."""
-    return Served(child, port)
+def served(child: Any, port: str, *, label: str | None = None) -> Served:
+    """A port a kernel with children presents as ``child``'s ``port`` (``Served``), labelled
+    below the child's node, or below the ``label`` the kernel states its child keeps.
+    Declare it in the class body after the child (``x = served(compute, "x")``)."""
+    return Served(child, port, label)
 
 
 __all__ = [

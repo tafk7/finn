@@ -15,7 +15,9 @@ when this module is imported:
 - a memory's style (a source's, ``MemStreamKernel.ram_style``, and an adapter's input
   generator's, ``InputGeneratorKernel.ram_style``) is first valid in its kernel's ranking
   (``ram_preference``, by the bits it holds);
-- every other choice of a channel is first valid, in listed order.
+- every other choice of a channel is first valid, in listed order: its transport, its
+  input adapter and its source's pumped memory. Its source, its output adapter and its
+  mover are placements, no choices: each is placed where its condition holds.
 
 ``Cut`` is their owner, as ``finn.kernels.policies.policy`` reads it; ``channel_defaulted``
 applies them once to a channel's point.

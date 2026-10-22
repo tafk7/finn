@@ -104,8 +104,7 @@ def whole_space(layers: int) -> Space:
 
 def test_eight_kernels_answer_as_a_recomputation() -> None:
     # Few steps: each recomputes the base and the successor from nothing, ~0.7 s on this
-    # chain. Seed 13 accepts, refuses, clears, pairs and puts stored choices dormant (a
-    # core's own: a core switch keeps the folding, MatMul's, in play).
-    report = walk(whole_space(4), seed=13, steps=20, everything=False)
+    # chain. Seed 17 accepts, refuses, clears, pairs and puts a stored choice dormant.
+    report = walk(whole_space(4), seed=17, steps=20, everything=False)
     check(report)
     assert report.tallies.dormant, report.tallies

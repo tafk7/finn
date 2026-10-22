@@ -50,8 +50,8 @@ point = choose(point, {
     "matmul.compute.packed.reducer": "tree",
 })
 point = choose(point, {
-    "w.source.memstream.ram_style": "auto",
-    "w.source.memstream.pumped_memory": False,
+    "w.source.ram_style": "auto",
+    "w.source.pumped_memory": False,
 })
 built = module_of(with_direct_transports(with_adapter_memories(point)), "matmul")
 assert isinstance(built, Available), built

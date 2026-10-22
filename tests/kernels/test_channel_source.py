@@ -98,8 +98,8 @@ def configured(point, *, style=None, pe=2, simd=2):
     choices = {"w.transport": "direct"}
     if style is not None:
         choices |= {
-            "w.source.memstream.ram_style": style,
-            "w.source.memstream.pumped_memory": False,
+            "w.source.ram_style": style,
+            "w.source.pumped_memory": False,
         }
     # The activation channel's adapter is forced by the folding; its memory is the flow's.
     return with_direct_transports(
@@ -159,15 +159,14 @@ def test_known_weights_give_the_weight_channel_its_source():
         assert isinstance(module, Composed)
         assert {p.name for p in module.abi.pins if isinstance(p, Bus)} == ports
         assert labels(module) == instances
-    # Known weights: the channel has a value, and its one source is set, first valid, as
-    # the network builds the channel (the interim channel rule): stored as any choice.
+    # Known weights: the channel has a value, so its source is placed: no choice, nothing
+    # stored for it.
     w = stored_.member("w")
-    assert w.valued and stored_.chosen(("w",))[("w", "source")] == "memstream"
-    state = w.field(handle(w, "source")).state
-    assert isinstance(state, Available) and state.value.status == "committed"
+    assert w.valued and ("w", "source") not in stored_.chosen(("w",))
     assert isinstance(w.source, MemStreamKernel)
     assert w.source.image == (0x22C, 0x6BE, 0xDD3, 0x941)
-    # The weight channel's producer is its source, a leaf below the channel.
+    # The weight channel's producer is its source, a leaf below the channel at the label
+    # the channel states for it.
     assert w.sides.source_owner == "source.memstream"
     assert instance_parameters(stored_, STORED_INSTANCE)["RAM_STYLE"] == '"block"'
     # Unknown weights: no value, no source; the channel is the boundary in1_V.
@@ -199,10 +198,11 @@ def test_an_unvalued_channel_never_demands_its_source():
 
 def test_the_channel_owns_its_source_and_its_choices():
     records = {item.key: item for item in inspection.decisions(Channel)}
-    assert records["source"].selector and records["source"].cases == ("memstream",)
-    local = records["source.memstream.ram_style"]
+    # The source is placed where the channel has a value: no choice of its own.
+    assert "source" not in records
+    local = records["source.ram_style"]
     # The choice belongs to the memory kernel the channel places as its source.
-    assert local.scope == "source.memstream" and not local.selector
+    assert local.scope == "source" and not local.selector
     assert not any(key[1].startswith("memory") for key in base(weights=WEIGHTS).decisions())
     # Its choices apply as soon as the source is set: the explicit styles, LUTRAM first
     # for a table of 64 bits, and ``auto`` last.
@@ -212,10 +212,10 @@ def test_the_channel_owns_its_source_and_its_choices():
     )
     # Without a value the source is absent, and so are its choices: one set is accepted
     # and kept, dormant, out of play.
-    unvalued = folded(base()).trial(keyed({"w.source.memstream.ram_style": "block"}))
+    unvalued = folded(base()).trial(keyed({"w.source.ram_style": "block"}))
     assert unvalued.accepted
     states = dict(unvalued.network.states(("w",)))
-    assert states[("w", "source.memstream.ram_style")] == inspection.Dormant("block")
+    assert states[("w", "source.ram_style")] == inspection.Dormant("block")
 
 
 def test_the_stored_memory_takes_its_choices_with_its_channel_and_refuses_bad_weights():
@@ -223,9 +223,8 @@ def test_the_stored_memory_takes_its_choices_with_its_channel_and_refuses_bad_we
     # (the interim channel rule): LUTRAM for a table of 64 bits, unpumped.
     built_with = configured(base(weights=WEIGHTS))
     assert built_with.chosen(("w",)) == {
-        ("w", "source"): "memstream",
-        ("w", "source.memstream.ram_style"): "distributed",
-        ("w", "source.memstream.pumped_memory"): False,
+        ("w", "source.ram_style"): "distributed",
+        ("w", "source.pumped_memory"): False,
         ("w", "transport"): "direct",
     }
     assert isinstance(module_of(built_with, "matmul"), Available)
@@ -312,7 +311,7 @@ def test_the_cores_do_not_wait_on_the_source():
 def test_the_sources_choices_round_trip_through_another_network():
     point = configured(base(weights=WEIGHTS), style="block")
     saved = point.chosen()
-    # Every choice is stored: the source and the adapter too, set where the network
+    # Every choice is stored: the source's and the adapter too, set where the network
     # builds their channels (the interim channel rule).
     assert sorted(f"{owner}.{key}" for owner, key in saved) == [
         "matmul.compute",
@@ -320,9 +319,8 @@ def test_the_sources_choices_round_trip_through_another_network():
         "matmul.compute.packed.reducer",
         "matmul.pe",
         "matmul.simd",
-        "w.source",
-        "w.source.memstream.pumped_memory",
-        "w.source.memstream.ram_style",
+        "w.source.pumped_memory",
+        "w.source.ram_style",
         "w.transport",
         "x.adapter",
         "x.adapter.input_gen.input_gen.ram_style",
@@ -337,8 +335,7 @@ def test_the_sources_choices_round_trip_through_another_network():
     # Without known weights the channel has no source: its choices are kept, dormant.
     unvalued = base().with_choices(saved)
     states = dict(unvalued.states(("w",)))
-    assert states[("w", "source")] == inspection.Dormant("memstream")
-    assert states[("w", "source.memstream.ram_style")] == inspection.Dormant("block")
+    assert states[("w", "source.ram_style")] == inspection.Dormant("block")
     # Facts that invalidate a saved folding refuse replay atomically: five outputs.
     wider = tuple((*row, 0) for row in WEIGHTS)
     with pytest.raises(NetworkError, match="matmul.pe"):
@@ -353,7 +350,7 @@ def test_several_weight_sets_without_known_weights_leave_the_set_channel_unused(
     assert "channel-unused" in codes(answer)
 
 
-def test_a_source_no_value_of_which_can_be_set_refuses_the_change_that_brings_it_into_play():
+def test_a_source_whose_rule_is_false_refuses_the_change_that_places_it():
     # Several sets need the set channel; a memory without one refuses itself.
     members = {
         **{name: stored(FULL_DSP48E2).wiring(name) for name in ("x", "y")},
@@ -371,23 +368,23 @@ def test_a_source_no_value_of_which_can_be_set_refuses_the_change_that_brings_it
         ),
     }
     folding = {**FOLDING, "matmul.pe": 2, "matmul.simd": 2}
-    # The folding brings the weight channel's source into play, and no value of it can be
-    # set by the interim channel rule: the channel would newly read refused, so the fold
-    # is refused naming w.source, its one value's refusal the cause. A strategy can now be
-    # stopped by a channel it does not decide, where forcing accepted the fold and left
-    # the channel silently refused.
+    # The folding gives the weight channel its value, so its source is placed, and the
+    # memory's own rule is false: the channel would newly read refused, so the fold is
+    # refused by that rule, the channel's own refusal. A strategy can be stopped by a
+    # channel it does not decide, where forcing accepted the fold and left the channel
+    # silently refused.
     trial = Network(members).trial(keyed(folding))
-    (why,) = trial.refused[("w", "source")]
-    assert why.code == "choice-no-valid-value"
-    assert "memstream-set-channel" in {cause.code for cause in why.causes}
-    # Bound with the folding stored, the network sets nothing: the source stays open,
-    # and setting it is refused by the memory's rule.
+    assert set(trial.refused) == {("w", "")}
+    (why,) = trial.refused[("w", "")]
+    assert (why.code, why.owner) == ("memstream-set-channel", "source.selected")
+    # Bound with the folding stored, the channel is refused by the memory's rule.
     w = Network(members, stored=keyed(folding)).member("w")
-    report = w.try_with_choices({handle(w, "source"): "memstream"})
-    assert not report.accepted
-    assert "memstream-set-channel" in {
-        finding.code for rule in report.broken for finding in rule.result.findings
-    }
+    validity = inspection.validity(w)
+    assert validity.status == "refused"
+    assert [
+        (piece.owner, {finding.code for finding in piece.result.findings})
+        for piece in validity.pieces
+    ] == [("source.selected", {"memstream-set-channel"})]
 
 
 @pytest.mark.parametrize(
@@ -400,17 +397,17 @@ def test_a_source_no_value_of_which_can_be_set_refuses_the_change_that_brings_it
 )
 def test_the_platform_narrows_the_source_memory(platform, refused):
     point = folded(stored(platform))
-    trial = point.trial(keyed({"w.source.memstream.ram_style": "ultra"}))
+    trial = point.trial(keyed({"w.source.ram_style": "ultra"}))
     assert trial.accepted == (not refused)
     if refused:
         # The style's domain holds it, and the memory's rule refuses it on the platform:
         # the change is refused, naming the rule.
         ((rule, why),) = trial.refused.items()
-        assert rule[0] == "w" and rule[1].startswith("source.memstream.")
+        assert rule[0] == "w" and rule[1].startswith("source.")
         assert {finding.code for finding in why} == refused
     # The platform does not narrow pumping: the doubled clock is the shell's, which
     # its root supplies.
-    ((_, pumping),) = point.viable([("w", "source.memstream.pumped_memory")])
+    ((_, pumping),) = point.viable([("w", "source.pumped_memory")])
     assert pumping.cases == (False, True)
 
 

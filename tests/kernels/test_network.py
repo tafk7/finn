@@ -106,12 +106,10 @@ def test_a_change_reaches_its_kernel_and_the_channels_that_read_it() -> None:
         changed.member(name) is not folded.member(name) for name in ("first", "x", "w1", "hidden")
     )
     # Its stored choices kept on the channels it rebuilt from their new facts, and the
-    # output adapter those facts bring into play at its first valid value (the interim
-    # channel rule): PE 1 against the thresholding's 2 lanes.
-    assert changed.chosen(("hidden",)) == {
-        **folded.chosen(("hidden",)),
-        ("hidden", "output_adapter"): "vpc",
-    }
+    # output adapter those facts bring into play placed, no choice: PE 1 against the
+    # thresholding's 2 lanes.
+    assert changed.chosen(("hidden",)) == folded.chosen(("hidden",))
+    assert changed.member("hidden").output_adapting
 
 
 def with_transports(network: Network) -> Network:

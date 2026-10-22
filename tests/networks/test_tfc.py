@@ -269,6 +269,4 @@ def test_tfc_w2a2_binds_the_ultra96_platform(tfc_streamlined: Path, tmp_path: Pa
     # change is refused.
     for key in adapters:
         assert "uram-absent" in refused_codes(bound, {key: "ultra"})
-    assert "uram-absent" in refused_codes(
-        bound, {f"{weights[0]}.source.memstream.ram_style": "ultra"}
-    )
+    assert "uram-absent" in refused_codes(bound, {f"{weights[0]}.source.ram_style": "ultra"})

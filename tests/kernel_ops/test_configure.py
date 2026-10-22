@@ -84,19 +84,18 @@ def test_a_channels_choices_are_set_with_its_kernels_in_one_batch() -> None:
     model = matmul_model()
     configured(
         model,
-        {"first": FOLDED, "w": {"source.memstream.ram_style": "block", "transport": "direct"}},
+        {"first": FOLDED, "w": {"source.ram_style": "block", "transport": "direct"}},
     )
     assert stored(model)["pe"] == 2
     assert channel_choices(model, "w") == {
-        "source": "memstream",
-        "source.memstream.ram_style": "block",
-        "source.memstream.pumped_memory": False,
+        "source.ram_style": "block",
+        "source.pumped_memory": False,
         "transport": "direct",
     }
     assert network(model, model.graph.node).member("w").source.ram_style == "block"
     # What a later call does not name stays.
     configured(model, {"w": {"transport": "fifo", "transport.fifo.depth": 8}})
-    assert channel_choices(model, "w")["source.memstream.ram_style"] == "block"
+    assert channel_choices(model, "w")["source.ram_style"] == "block"
     assert channel_choices(model, "w")["transport.fifo.depth"] == 8
     assert stored(model)["pe"] == 2
 
@@ -250,29 +249,26 @@ def test_a_channel_whose_contracts_wait_on_an_open_kernel_is_refused() -> None:
     be checked."""
     model = matmul_model()
     with refused("decision-unassigned", owner="compute"):
-        configured(model, {"w": {"source.memstream.ram_style": "ultra"}})
+        configured(model, {"w": {"source.ram_style": "ultra"}})
     assert channel_choices(model, "w") == {}
 
 
 def test_a_memory_the_device_cannot_build_is_refused() -> None:
     """Ultra96 has no UltraRAM: batched with the folding, the style is stored as the
-    channel is first bound, and its source, which the interim channel rule then sets,
-    can take no value (``choice-no-valid-value``), the memory's rules its causes, the
-    style standing in their way; once the channel is made, the style is refused by the
-    memory's rules themselves."""
-    ultra = {"w": {"source.memstream.ram_style": "ultra"}}
+    channel is first bound, and its source, placed since the channel has a value, refuses
+    it by the memory's rules themselves, each under its key; once the channel is made, so
+    does a change of the style alone."""
+    ultra = {"w": {"source.ram_style": "ultra"}}
     model = matmul_model()
-    with refused(
-        "choice-no-valid-value", owner="source", message="uram_present .with source.memstream"
-    ) as caught:
+    with refused("uram-absent", owner="source.uram_present") as caught:
         configured(model, {"first": FOLDED, **ultra})
-    assert {(cause.owner, cause.code) for cause in caught.finding.causes} == {
-        ("source.memstream.uram_present", "uram-absent"),
-        ("source.memstream.uram_init_taken", "uram-init"),
+    assert {(finding.owner, finding.code) for finding in caught.error.findings} == {
+        ("source.uram_present", "uram-absent"),
+        ("source.uram_init_taken", "uram-init"),
     }
     configured(model, {"first": FOLDED})
     before = channel_choices(model, "w")
-    with refused("uram-absent", owner="source.memstream.uram_present"):
+    with refused("uram-absent", owner="source.uram_present"):
         configured(model, ultra)
     assert channel_choices(model, "w") == before
 

@@ -5,12 +5,11 @@
 
 A boundary channel of a partition's network has a side without a port, its **free
 side**: the AXIS port the network presents (``Channel.free_side``). A shell with movers
-offers each such channel the movers it can place there (``MoverOffer``), and the channel's
-``mover`` selector chooses one, by kind (``MOVERS``), as it places its ``source``; the
-interim channel rule sets it where the network builds the channel (the first valid mover,
-the one offered), and it is persisted. A mover binds no RTL in the partition's
-module: its pins stay its own, and the shell integrates the mover beside the IP from its
-facts (``MoverContract``).
+offers each such channel the movers it can place there (``MoverOffer``, each of a kind
+``MOVERS`` knows), and the channel places its ``mover`` there where the shell offers one,
+as it places its ``source`` where its tensor has a value: no choice. A mover binds no RTL
+in the partition's module: its pins stay its own, and the shell integrates the mover
+beside the IP from its facts (``MoverContract``).
 
 **``IODMA_hls``** (kind ``iodma_hls``), the Zynq shell's memory mover, modelled at its
 stream side, the free side's contract:

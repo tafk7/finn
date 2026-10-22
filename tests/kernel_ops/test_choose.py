@@ -78,7 +78,7 @@ def test_the_test_policy_folds_to_its_lanes_or_the_largest_factor() -> None:
     assert list(policy.rank(fold)) == [4, 8, 2, 1]
     odd = Choice(("x", "simd"), None, (1, 3), True)
     assert list(policy.rank(odd)) == [3, 1] and list(Lanes().rank(odd)) == [1, 3]
-    memory = offer("w.source.memstream.ram_style", ("block", "auto"))
+    memory = offer("w.source.ram_style", ("block", "auto"))
     assert list(policy.rank(memory)) == ["block", "auto"]
 
 
@@ -118,23 +118,24 @@ def test_the_policy_is_offered_every_open_choice_its_possible_values_only() -> N
     assert offered and all(cases for cases in offered.values())
     # Ultra96 has no UltraRAM: ultra is never offered; on DSP48E2 the packed core is the
     # one possible, and offered so.
-    memories = [cases for key, cases in offered.items() if key.endswith("memstream.ram_style")]
+    memories = [cases for key, cases in offered.items() if key.endswith("source.ram_style")]
     assert memories and all("ultra" not in cases for cases in memories)
     assert {key: cases for key, cases in offered.items() if key.endswith(".compute")} == {
         "first.compute": ("packed",),
         "second.compute": ("packed",),
     }
-    assert offered["w1.source"] == ("memstream",)
+    # A weight's source is placed, no choice: never offered.
+    assert "w1.source" not in offered
     # Stored, each of them, as any choice.
     stored = {key for node in choices(model).values() for key in node}
-    assert {"compute", "source", "adapter", "ultra_stages"} <= stored
+    assert {"compute", "source.ram_style", "adapter", "ultra_stages"} <= stored
 
 
 def test_a_refused_case_is_never_picked_even_when_preferred() -> None:
     model = kernel_model().transform(ranked(Last(memories=True)))
-    assert choices(model)["w1"]["source.memstream.ram_style"] not in ("ultra", "auto")
+    assert choices(model)["w1"]["source.ram_style"] not in ("ultra", "auto")
     uram = kernel_model(URAM).transform(ranked(Last(memories=True)))
-    assert choices(uram)["w1"]["source.memstream.ram_style"] == "ultra"
+    assert choices(uram)["w1"]["source.ram_style"] == "ultra"
 
 
 def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> None:
@@ -161,7 +162,7 @@ def test_a_required_choice_left_open_is_refused_by_name_where_it_is_built() -> N
 def test_a_policy_ranking_a_case_that_is_not_viable_is_refused() -> None:
     class Ultra:
         def rank(self, choice: Choice) -> Sequence[object]:
-            if choice.key[1].endswith("memstream.ram_style"):
+            if choice.key[1].endswith("source.ram_style"):
                 return ("ultra",)
             return choice.cases or ()
 

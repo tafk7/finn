@@ -130,7 +130,7 @@ def test_a_lifted_initializers_source_choices_are_out_of_play_in_the_partition()
     weight edge's, are the partition's: it keeps them out of play (dormant)."""
     model = matmul_model()
     configured(model, {"first": MATMUL})  # folded, so its channels' contracts are known
-    configured(model, {"w": {"source.memstream.ram_style": "block"}})
+    configured(model, {"w": {"source.ram_style": "block"}})
     owned = network(model, model.graph.node)
     assert owned.member("w").source.ram_style == "block"  # the node owns w's channel
     lift(model, "w")
@@ -153,12 +153,11 @@ def test_a_lifted_initializers_source_choices_are_out_of_play_in_the_partition()
         network(model, model.graph.node)
     model = model.transform(InferKernelTensors())
     streamed = kernel_op(model, model.graph.node[0])
-    # The node replays its own choices only: the weight edge's are the partition's, the
-    # source and its memory's (the interim channel rule's beside the one set).
+    # The node replays its own choices only: the weight edge's are the partition's, its
+    # source's memory's (the interim channel rule's beside the one set).
     source = {
-        "source": "memstream",
-        "source.memstream.ram_style": "block",
-        "source.memstream.pumped_memory": False,
+        "source.ram_style": "block",
+        "source.pumped_memory": False,
     }
     assert channel_choices(model, "w") == {**source, "transport": "direct"}
     point: Any = streamed.point()
@@ -256,9 +255,9 @@ def test_members_are_named_as_the_graph() -> None:
 def test_a_choice_in_the_network_persists_on_the_weights_tensor() -> None:
     model = kernel_model()
     bound = network(model, model.graph.node, name="chain")
-    written = persist(model, choose(bound, {"w2.source.memstream.ram_style": "block"}))
-    assert written["w2"]["source.memstream.ram_style"] == "block"
-    assert channel_choices(model, "w2")["source.memstream.ram_style"] == "block"
+    written = persist(model, choose(bound, {"w2.source.ram_style": "block"}))
+    assert written["w2"]["source.ram_style"] == "block"
+    assert channel_choices(model, "w2")["source.ram_style"] == "block"
     rebuilt = network(model, model.graph.node, name="chain")
     assert rebuilt.member("w2").source.ram_style == "block" and not rebuilt.stale
 

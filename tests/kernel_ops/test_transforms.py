@@ -194,9 +194,8 @@ def test_the_export_of_the_choices_round_trips_through_configured() -> None:
         "transport": "direct",
     }
     weights = {
-        "source": "memstream",
-        "source.memstream.pumped_memory": False,
-        "source.memstream.ram_style": "distributed",
+        "source.pumped_memory": False,
+        "source.ram_style": "distributed",
         "transport": "direct",
     }
     matmul = {
@@ -210,7 +209,7 @@ def test_the_export_of_the_choices_round_trips_through_configured() -> None:
         "x": adapted,
         "w1": weights,
         "first": {**matmul, "pe": 2},
-        "hidden": {"output_adapter": "vpc", "transport": "direct"},
+        "hidden": {"transport": "direct"},
         "activate": {
             "block_stages": 0,
             "deep_pipeline": 0,

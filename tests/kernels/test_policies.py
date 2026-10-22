@@ -315,7 +315,7 @@ def test_the_cut_states_a_channel_s_policies() -> None:
         if isinstance(each, FirstValid) and each.order is not None
     }
     assert ranked_keys == {
-        "source.memstream.ram_style",
+        "source.ram_style",
         "adapter.input_gen.input_gen.ram_style",
         "adapter.input_gen_vpc.input_gen.ram_style",
         "adapter.input_gen_vpc_input_gen.input_gen.ram_style",

@@ -216,7 +216,6 @@ def test_a_batch_commits_a_selector_and_a_choice_nested_under_it_together() -> N
     assert {
         k: v for k, v in chosen(explorer, outcome.network).items() if k.startswith("hidden.")
     } == {
-        "hidden.output_adapter": "vpc",
         "hidden.transport": "fifo",
         "hidden.transport.fifo.depth": 16,
     }

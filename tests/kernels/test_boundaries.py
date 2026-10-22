@@ -147,8 +147,8 @@ for memory in ("none", "memstream"):
     }
     if memory == "memstream":
         choices |= {
-            ("w", "source.memstream.ram_style"): "auto",
-            ("w", "source.memstream.pumped_memory"): False,
+            ("w", "source.ram_style"): "auto",
+            ("w", "source.pumped_memory"): False,
         }
     network = network.with_choices(choices)
     assert network.member("matmul").result_type == result.dtype

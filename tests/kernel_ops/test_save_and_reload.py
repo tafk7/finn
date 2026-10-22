@@ -54,9 +54,8 @@ FOLDING: dict[str, object] = {
 PUMPING = "compute.int8_dsp58.compute_pumping"
 """A choice of the INT8 core's own, under its case."""
 WEIGHT_SOURCE: dict[str, object] = {
-    "source": "memstream",
-    "source.memstream.ram_style": "block",
-    "source.memstream.pumped_memory": False,
+    "source.ram_style": "block",
+    "source.pumped_memory": False,
     "transport": "direct",
 }
 """The weights' channel's choices, as a set-up and the interim channel rule make them."""
@@ -175,10 +174,8 @@ def test_a_channel_choice_a_rule_a_changed_fact_makes_false_refuses_the_bind() -
     each rule by its key once (``network-invalid``), the rules' findings its causes, about
     the channel; nothing is dropped behind the user's back."""
     model = retarget(matmul_model(), VERSAL)
-    configured(
-        model, {"first": FOLDING, "w": {**WEIGHT_SOURCE, "source.memstream.ram_style": "ultra"}}
-    )
-    assert channel_choices(model, "w")["source.memstream.ram_style"] == "ultra"
+    configured(model, {"first": FOLDING, "w": {**WEIGHT_SOURCE, "source.ram_style": "ultra"}})
+    assert channel_choices(model, "w")["source.ram_style"] == "ultra"
     model = retarget(model, TARGET)
     with refused(
         "network-invalid",
@@ -188,10 +185,10 @@ def test_a_channel_choice_a_rule_a_changed_fact_makes_false_refuses_the_bind() -
         bound(model)
     assert caught.finding.message.count("uram_present") == 1
     assert {(f.code, f.owner, dict(f.details)["tensor"]) for f in caught.finding.causes} == {
-        ("uram-absent", "source.memstream.uram_present", "w"),
-        ("uram-init", "source.memstream.uram_init_taken", "w"),
+        ("uram-absent", "source.uram_present", "w"),
+        ("uram-init", "source.uram_init_taken", "w"),
     }
-    assert channel_choices(model, "w")["source.memstream.ram_style"] == "ultra"
+    assert channel_choices(model, "w")["source.ram_style"] == "ultra"
 
 
 # -- a scope left unknown ------------------------------------------------------------------------

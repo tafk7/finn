@@ -238,7 +238,7 @@ def test_exploring_with_no_strategy_sets_nothing_and_every_value_is_saved() -> N
     # last), every transport direct (no size_fifos: nothing sized).
     assert saved["first"]["pe"] == saved["first"]["simd"] == 1
     assert saved["first"]["compute.packed.reducer"] == "tree"
-    assert saved["w1"]["source.memstream.ram_style"] == "distributed"
+    assert saved["w1"]["source.ram_style"] == "distributed"
     assert saved["activate"]["ram_style"] == "distributed"
     assert saved["activate"]["block_stages"] == 0
     assert saved["levels"]["transport"] == "direct"
@@ -269,8 +269,8 @@ def test_the_report_logs_what_each_strategy_changed_kept_and_set() -> None:
     """A log of the exploration (provenance is logged, never stored): each value its
     strategy changed, before and after, how many it reopened and gave back, those it set by
     their policy (none here), and who set each value: the body, the strategy, or the
-    interim channel rule (a channel's value its rebuild gave it: the levels' output adapter
-    the fold brings into play)."""
+    interim channel rule (a channel's value its rebuild gave it: none here, the levels'
+    output adapter the fold brings into play being placed, no choice)."""
     model = cut_model()
     report = explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 6))).report
     target = report["strategy"]
@@ -278,10 +278,9 @@ def test_the_report_logs_what_each_strategy_changed_kept_and_set() -> None:
     assert target["changed"]["first.simd"] == [1, 4]
     # Pumping, stored at conversion, is given back at SIMD 4: unchanged.
     assert "first.compute.packed.compute_pumping" not in target["changed"]
-    assert target["changed"]["levels.output_adapter"] == [None, "vpc"]
     assert target["committed"] == len(target["changed"])
     assert (target["by_policy"], target["unset"], target["rederived"]) == ([], {}, {})
-    assert target["interim"] == ["levels.output_adapter"]
+    assert target["interim"] == []
     assert target["reopened"] > target["kept"] > 0 and "held" not in target
     entries = report["choices"]
     assert entries["first"]["pe"] == {"value": 2, "by": "target_throughput"}
@@ -289,7 +288,7 @@ def test_the_report_logs_what_each_strategy_changed_kept_and_set() -> None:
     # transports, what the cut stored.
     assert entries["first"]["compute.packed.reducer"] == {"value": "tree", "by": "saved"}
     assert entries["levels"]["transport"] == {"value": "direct", "by": "saved"}
-    assert entries["levels"]["output_adapter"] == {"value": "vpc", "by": "interim channel rule"}
+    assert "output_adapter" not in entries["levels"]
     assert json.loads(json.dumps(report)) == report
     # Sizing next, a second exploration: it reopens the 6 transports and changes none (the
     # Chain needs no FIFO here); what the target set is now the body's.
@@ -343,7 +342,7 @@ def test_a_hold_is_committed_held_in_the_body_and_the_rest_explored() -> None:
 
 #: A memory pinned ``auto``: the first MatMul's weights (on their tensor) and the
 #: thresholds' stages.
-AUTO = {"w1": {"source.memstream.ram_style": "auto"}, "activate": {"ram_style": "auto"}}
+AUTO = {"w1": {"source.ram_style": "auto"}, "activate": {"ram_style": "auto"}}
 
 
 def auto(model: ModelWrapper) -> dict[str, dict[str, object]]:
@@ -362,7 +361,7 @@ def stated_auto(report: Mapping[str, Any]) -> None:
         for why in reasons.values()
     )
     assert "activate" in reasons
-    assert report["choices"]["w2"]["source.memstream.ram_style"]["value"] == "distributed"
+    assert report["choices"]["w2"]["source.ram_style"]["value"] == "distributed"
 
 
 def test_a_memory_saved_or_pinned_auto_is_kept_and_stated_as_vivado_s(tmp_path: Path) -> None:
@@ -688,15 +687,15 @@ def test_tfc_at_a_million_frames_a_second_is_saved_as_the_57_values_it_is_built_
 ) -> None:
     """TFC's body explored by target_throughput 1e6, then size_fifos, saves the 57 values
     it was built with when exploration left choices open and a completion policy
-    completed them on a copy (``TFC_BUILT``), and the 27 conversion, the cut and the
-    fold now store beside them, which forcing left unstored (``TFC_STORED``, both): the target
+    completed them on a copy (``TFC_BUILT``), and the 16 conversion and the cut now store
+    beside them, which forcing left unstored (``TFC_STORED``, both): the target
     reopens the kernels' choices, folds and gives the rest back; sizing places no FIFO."""
     model = ModelWrapper(tfc.model.__deepcopy__())
     target = explore_kernel_choices(model, TargetThroughput(1e6)).report["strategy"]
     report = explore_kernel_choices(model, SizeFifos()).report
     found = kernel_choices_config(model)
     assert found == TFC_STORED
-    assert sum(map(len, TFC_BUILT.values())) == 57 and sum(map(len, found.values())) == 84
+    assert sum(map(len, TFC_BUILT.values())) == 57 and sum(map(len, found.values())) == 73
     sizing = report["strategy"]
     assert (target["by_policy"], target["unset"], target["rederived"]) == ([], {}, {})
     assert (sizing["reopened"], sizing["changed"], sizing["fifo_bits"]) == (13, {}, 0)

@@ -23,7 +23,7 @@ given to MatMul (``w_contents``); the weight channel carries what MatMul states 
 (``carried_weights``, ``stored_weights``: block-diagonal for a dense realization, over
 their range), with ``set``'s tensor its ``index_tensor`` (one index per row) and ``set``
 taking its ``set_contract``, so the channel's ``source`` stores them. The edge choices are
-the channels' (``x.adapter``, ``w.transport``, ``w.source.memstream.ram_style``), the
+the channels' (``x.adapter``, ``w.transport``, ``w.source.ram_style``), the
 MatMul's its own (``matmul.pe``). ``matmul_assembly`` configures one
 from concrete facts and choices. A network's module is named ``finn_<stem>``
 (``module_of``).
@@ -830,8 +830,8 @@ def matmul_assembly(
     # The memory's style is ordered by the bits its table holds, which a depthwise
     # weight channel's realization sets: it is committed after the realization.
     if weight_delivery is WeightDelivery.MEMSTREAM:
-        channel["w.source.memstream.ram_style"] = ram_style
-        channel["w.source.memstream.pumped_memory"] = pumped_memory
+        channel["w.source.ram_style"] = ram_style
+        channel["w.source.pumped_memory"] = pumped_memory
     if buffered:
         channel["w.transport.fifo.depth"] = weight_fifo_depth
         channel["w.transport.fifo.buffer.ram_style"] = "auto"

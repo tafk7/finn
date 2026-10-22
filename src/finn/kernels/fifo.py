@@ -242,6 +242,8 @@ class FifoKernel(KernelSpace):
         input_stream: ClassVar[Stream]
         input_data_width: ClassVar[int]
         input_contract: ClassVar[PortContract]
+        output_stream: ClassVar[Stream]
+        output_data_width: ClassVar[int]
         output_contract: ClassVar[PortContract]
 
     @constraint

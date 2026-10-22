@@ -22,38 +22,44 @@ carries it, ``channel-padding``). A channel runs, in order:
     source -> output adapter -> transport -> input adapter -> consumer
 
 The steps split at the transport: their output side (width conversions) is the
-``output_adapter`` selector, their input side (a reorder, replay included, and markers) the
-``adapter`` selector, each over fixed chains (``finn.kernels.adapters``). The
-``transport`` selector is ``direct`` or ``fifo``; the FIFO owns its ``depth`` (the cut's
-policy requires it: an exploration sizes it, ``finn.kernels.cut``) and its ``ram_style``,
-and carries data words only (``fifo-markers``). Its keys are the channel's, by its name
-(``("x", "transport")``).
+``output_adapter``, the ``vpc`` chain placed where they convert a width, their input side
+(a reorder, replay included, and markers) the ``adapter`` selector over fixed chains
+(``finn.kernels.adapters``). The ``transport`` selector is ``direct``, which places
+nothing, or ``fifo``; the FIFO owns its ``depth`` (the cut's policy requires it: an
+exploration sizes it, ``finn.kernels.cut``) and its ``ram_style``, and carries data words
+only (``fifo-markers``). Its keys are the channel's, by its name (``("x", "transport")``).
 
 A channel with a port on one side only is a boundary: its ``port`` names the module's
 AXIS port (``in0_V``), refused where absent (``channel-boundary``), whose contract the
 channel builds from its facts (``boundary``). The boundary presents what its inner side
 presents, by one rule: an input without the replay or window its receiver realizes
 (``unreplayed``), an output as produced, neither with markers. Where a
-shell offers movers (``mover_offer``, ``finn.kernels.movers``), the ``mover`` selector places one
-on that free side; it binds no RTL in the module and exports its contract (``MOVER``) for
-the shell's budget check and resources.
+shell offers movers (``mover_offer``, ``finn.kernels.movers``), the channel places its
+``mover`` on that free side; it binds no RTL in the module and exports its contract
+(``MOVER``) for the shell's budget check and resources.
 
-A channel whose tensor has a known value (``contents``) has a ``source`` (``SOURCES``: a
-memory) as its only producer (``channel-users``), storing one period in the order its
-consumer reads it; with several sets, the source's set port is the channel's port
-(``set``, served by its source: ``set_stream``), which the index tensor's channel
-consumes.
+A channel whose tensor has a known value (``contents``) places its ``source`` (a
+memory, ``MemStreamKernel``) as its only producer (``channel-users``), storing one period
+in the order its consumer reads it; with several sets, the source's set port is the
+channel's port (``set``, served by its source: ``set_stream``), which the index tensor's
+channel consumes.
+
+The source and the output adapter are placed where their condition holds, not chosen,
+and each keeps the label it is placed at (``SOURCE_LABEL``, ``OUTPUT_ADAPTER_LABEL``),
+so the names emitted from them do not depend on its node.
 
 As a kernel with children (a ``KernelSpace`` binding no module), its members are its
 source, its adapters' stages, its FIFO (``ChannelFifo``) and its mover, in the order the
-stream runs through them. Its answers are the base's views over theirs, but for two it
-states itself, calling the base's: its netlist adds the hops between its own ends (its
-source, its stages, its boundary; ``NETLIST``), and a channel of wires takes no cycles of
-its own (0). Its hops to the ports beside it need those ports' contracts, which its
-network holds: the network wires them (``outer_hops``, from the ports it read,
-``Neighbours``) and places them around the channel's netlist. It exports its boundary's AXIS bus
-(``BOUNDARY``) and its mover's contract (``MOVER``: ``placed_mover``, from the mover's own
-derived ``contract``). It is no module of its own.
+stream runs through them. It checks its stages by their streams (``staged``, each stage's
+own derived values) and wires them by their contracts (``stages``, a view). Its answers
+are the base's views over theirs, but for two it states itself, calling the base's: its
+netlist places its source and its output adapter at their labels and adds the hops between
+its own ends (its source, its stages, its boundary; ``NETLIST``), and a channel of wires
+takes no cycles of its own (0). Its hops to the ports beside it need those ports'
+contracts, which its network holds: the network wires them (``outer_hops``, from the ports
+it read, ``Neighbours``) and places them around the channel's netlist. It exports its
+boundary's AXIS bus (``BOUNDARY``) and its mover's contract (``MOVER``: ``placed_mover``,
+from the mover's own derived ``contract``). It is no module of its own.
 """
 
 from __future__ import annotations
@@ -66,7 +72,6 @@ from finn.core.space import (
     Param,
     Rejected,
     Select,
-    Space,
     ValueSemantics,
     View,
     constraint,
@@ -82,7 +87,14 @@ from finn.dataflow.steps import steps as between
 from finn.dataflow.streams import Stream, Streams, misfit
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Traversal, period, unreplayed
-from finn.kernels.adapters import ADAPTERS, OUTPUT_ADAPTERS, Stage, StreamAdapter
+from finn.kernels.adapters import (
+    ADAPTERS,
+    OUTPUT_ADAPTER,
+    RealizedStage,
+    Stage,
+    StageStreams,
+    StreamAdapter,
+)
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import CLOCK, RESET, Bus, Endpoint
 from finn.kernels.artifacts.module import Fragment, Link, LinkEnd, Marker
@@ -100,7 +112,7 @@ from finn.kernels.declaration import declared_reads
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.movers import MOVER, MOVERS, IodmaMover, MoverContract, MoverOffer
+from finn.kernels.movers import MOVER, IodmaMover, MoverContract, MoverOffer
 from finn.kernels.port import STREAM, served
 from finn.kernels.transport import (
     AxisBeat,
@@ -118,8 +130,22 @@ from finn.kernels.values.semantics import (
 )
 from finn.platform.capabilities import Platform
 
-SOURCES: dict[str, type[MemStreamKernel]] = {"memstream": MemStreamKernel}
-"""The kernels that can drive a channel with its known value, by case: a memory."""
+# -- the labels a channel's placements keep --------------------------------------------------
+#
+# Each was the node of a one-case selector's case. As a placement its node is the member's
+# name (``source``, ``output_adapter``), but the names emitted from it (its instances, the
+# nets on its pins, its set port's) keep these labels: the channel's netlist places it there.
+
+SOURCE_LABEL = "source.memstream"
+"""Where a channel's netlist places its source: its producer's owner (``source_label``), and
+the label of the set port it serves (``source.memstream.set``)."""
+
+OUTPUT_ADAPTER_LABEL = "output_adapter.vpc"
+"""Where a channel's netlist places its output adapter, its chain's stages below it
+(``output_adapter.vpc.vpc``: a chain labels its stages by its chain, then the stage)."""
+
+_PLACED = {"source": SOURCE_LABEL, "output_adapter": OUTPUT_ADAPTER_LABEL}
+"""Each placement's node, and the label the channel's netlist places it at."""
 
 BOUNDARY_CONTRACT: ValueSemantics[StreamContract | None] = ValueSemantics(
     StreamContract,
@@ -279,18 +305,14 @@ def outer_hops(channel: Channel, neighbours: Neighbours, *, owner: str) -> Outer
     return OuterHops(produced, consumed)
 
 
-def _source_label(case: str) -> str:
-    """A channel's source's label, ``source.<case>``: its producer's owner."""
-    return f"source.{case}"
+def _below(holder: str, stages: tuple[StageStreams, ...]) -> tuple[StageStreams, ...]:
+    """``stages``, each labelled below ``holder``, the channel's member that holds them."""
+    return tuple(replace(stage, label=f"{holder}.{stage.label}") for stage in stages)
 
 
-class _Direct(Space):
-    """No stage: the hop across the transport connects directly. It places nothing, so
-    it exports nothing its channel sums."""
-
-    @view
-    def stages(self) -> tuple[Stage, ...]:
-        return ()
+def _below_stages(holder: str, stages: tuple[Stage, ...]) -> tuple[Stage, ...]:
+    """``stages``, each labelled below ``holder``, as ``_below``."""
+    return tuple(replace(stage, label=f"{holder}.{stage.label}") for stage in stages)
 
 
 class ChannelFifo(KernelSpace):
@@ -299,9 +321,9 @@ class ChannelFifo(KernelSpace):
     Its netlist, buffering and resources are its FIFO's, by the base. It exports no
     cycles: a FIFO presents what arrives, whose beats are counted where they are made
     (the channel's producer, its source, its output adapter), so its channel's cycles
-    are its other members'. It presents no port: its channel wires it hop by hop
-    (``stages``: its FIFO's module, read from the FIFO's netlist, and its ports'
-    contracts).
+    are its other members'. It presents no port: its channel checks it by its FIFO's
+    streams (``stage_streams``) and wires it hop by hop (``stages``: its FIFO's module,
+    read from the FIFO's netlist, and its ports' contracts).
     """
 
     id = "finn.channel.fifo"
@@ -340,6 +362,16 @@ class ChannelFifo(KernelSpace):
             )
         return True
 
+    @derived
+    def stage_streams(self) -> tuple[StageStreams, ...]:
+        """Its FIFO's streams and output word width, its derived values, labelled as its
+        ``Stage`` is."""
+        buffer = self.buffer
+        stage = StageStreams(
+            "fifo.buffer", buffer.input_stream, buffer.output_stream, buffer.output_data_width
+        )
+        return (stage,)
+
     @view
     @declared_reads("buffer.netlist", "buffer.input_contract", "buffer.output_contract")
     def stages(self) -> tuple[Stage, ...]:
@@ -363,7 +395,7 @@ class ChannelFifo(KernelSpace):
 @dataclass(frozen=True)
 class ChannelSides:
     """A channel's producing and consuming sides: each side's owner (its port's label from
-    the network, ``matmul.compute.packed.x``; the channel's source label, ``source.<case>``,
+    the network, ``matmul.compute.packed.x``; the channel's source label, ``SOURCE_LABEL``,
     for a known value; None on the boundary) and its stream (on the boundary, what the
     module's AXIS port presents: ``Channel.boundary``)."""
 
@@ -382,8 +414,8 @@ class Channel(KernelSpace):
     ``consumer_label``: ``matmul.compute.packed.x``, as the network reads it), and the
     producer with its port's word width (``producer_width``, its ``x_data_width``). A side
     without a port is the boundary, presented as the AXIS port ``port`` (``boundary``),
-    where the ``mover`` the shell offers (``mover_offer``) sits. A channel with a known
-    value has its ``source`` as its producer; with several sets, the source reads the set
+    where the ``mover`` sits where the shell offers one (``mover_offer``). A channel with a
+    known value places its ``source`` as its producer; with several sets, the source reads the set
     indices (``index_tensor``) from the channel whose consumer is ``set_stream``, the one
     port it presents (``set``, its source's). ``platform`` is the target's: its source,
     its adapters' stages and its FIFO read it. Its members are declared in the order the
@@ -407,10 +439,10 @@ class Channel(KernelSpace):
     platform: Platform = Param()
     mover_offer: tuple[MoverOffer, ...] = Param(required=False)
     # Whether the channel carries a known value, which its source drives: where nothing
-    # supplies ``contents``, the source never applies and its candidates are not compiled.
+    # supplies ``contents``, the source is never placed.
     valued = supplied(contents)
     # Whether a shell offers movers on its free side: where nothing supplies the offers,
-    # the mover never applies and its candidates are not compiled.
+    # the mover is never placed.
     offered = supplied(mover_offer)
 
     @derived
@@ -440,8 +472,7 @@ class Channel(KernelSpace):
     def source_dtype(self) -> QONNXDataType:
         return self.tensor.element.dtype
 
-    source: MemStreamKernel = Select(
-        **SOURCES,
+    source = MemStreamKernel(
         when=valued,
         dtype=source_dtype,
         form=source_form,
@@ -450,12 +481,17 @@ class Channel(KernelSpace):
         set_tensor=index_tensor,
         platform=platform,
     )
-    source_label: str = derived(case=source)(_source_label)
 
-    # With several sets, its source's set port, a port of the channel labelled below it
-    # (``source.memstream.set``): the index tensor's channel's consumer. A channel without
-    # a known value has no source, so no set port: nothing reads the indices.
-    set = served(source, "set")
+    @derived(when=valued)
+    def source_label(self) -> str:
+        """Its source's label (``SOURCE_LABEL``): its producer's owner."""
+        return SOURCE_LABEL
+
+    # With several sets, its source's set port, a port of the channel labelled below the
+    # source's label (``source.memstream.set``): the index tensor's channel's consumer. A
+    # channel without a known value has no source, so no set port: nothing reads the
+    # indices.
+    set = served(source, "set", label=SOURCE_LABEL)
 
     @derived
     def sides(self) -> ChannelSides | Rejected:
@@ -534,7 +570,7 @@ class Channel(KernelSpace):
             )
         return found
 
-    mover: IodmaMover = Select(**MOVERS, when=offered, offers=mover_offer, side=free_side)
+    mover = IodmaMover(when=offered, offers=mover_offer, side=free_side)
     mover_contract = View(mover.contract)
 
     @derived
@@ -597,45 +633,26 @@ class Channel(KernelSpace):
             )
         return True
 
-    output_adapter: StreamAdapter = Select(
-        **OUTPUT_ADAPTERS,
-        when=output_adapting,
-        tensor=tensor,
-        steps=output_steps,
-        platform=platform,
+    output_adapter = OUTPUT_ADAPTER(
+        when=output_adapting, tensor=tensor, steps=output_steps, platform=platform
     )
     output_adapter_stages = View(output_adapter.stages)
 
     @derived
-    def output_adapted(self) -> tuple[Stage, ...]:
-        """The output adapter's stages (its ``stages``), in order, labelled below the
-        channel; none when the steps convert no width before the transport."""
-        if not self.output_adapting:
-            return ()
-        stages: tuple[Stage, ...] = self.output_adapter.stages
-        return tuple(replace(stage, label=f"output_adapter.{stage.label}") for stage in stages)
-
-    @derived
-    def adapted(self) -> tuple[Stage, ...]:
-        """The input adapter's stages (its ``stages``), in order, labelled below the
-        channel; none when nothing is left to do after the transport."""
-        if not self.adapting:
-            return ()
-        stages: tuple[Stage, ...] = self.adapter.stages
-        return tuple(replace(stage, label=f"adapter.{stage.label}") for stage in stages)
-
-    @derived
     def arriving(self) -> BeatSequence:
-        """What arrives at the transport: the beat sequence after the output adapter."""
-        adapted = self.output_adapted
-        output = adapted[-1].output if adapted else None
-        return self.sides.source.sequence if output is None else output.sequence
+        """What arrives at the transport: what the output adapter's last stage presents
+        (the last ``sink`` of its realization), or without one what the producer
+        presents."""
+        if not self.output_adapting:
+            return self.sides.source.sequence
+        realization: tuple[RealizedStage, ...] = self.output_adapter.realization
+        return realization[-1].sink
 
-    transport: _Direct | ChannelFifo = Select(
-        direct=_Direct,
+    # ``direct`` places nothing: the hop across the transport connects directly.
+    transport: ChannelFifo | None = Select(
+        direct=None,
         fifo=ChannelFifo(tensor=tensor, arriving=arriving, platform=platform),
     )
-    transport_stages = View(transport.stages)
 
     adapter: StreamAdapter = Select(
         **ADAPTERS, when=adapting, tensor=tensor, steps=input_steps, platform=platform
@@ -643,16 +660,35 @@ class Channel(KernelSpace):
     adapter_stages = View(adapter.stages)
 
     @derived
-    def staged(self) -> tuple[Stage, ...]:
-        """The output adapter's stages, the transport's FIFO, if any, then the input
-        adapter's stages: each its child's ``stages``, labelled below the channel."""
-        transport: tuple[Stage, ...] = self.transport.stages
-        transported = tuple(replace(stage, label=f"transport.{stage.label}") for stage in transport)
-        return (*self.output_adapted, *transported, *self.adapted)
+    def staged(self) -> tuple[StageStreams, ...]:
+        """Each stage's streams and output word width (each holder's ``stage_streams``,
+        its stage kernels' derived values), in the order the stream runs through them: the
+        output adapter's, the transport's FIFO, if any, then the input adapter's, each
+        labelled as its ``Stage`` is in ``stages``."""
+        found: list[StageStreams] = []
+        if self.output_adapting:
+            found += _below("output_adapter", self.output_adapter.stage_streams)
+        fifo = self.transport
+        if fifo is not None:
+            found += _below("transport", fifo.stage_streams)
+        if self.adapting:
+            found += _below("adapter", self.adapter.stage_streams)
+        return tuple(found)
 
-    # The stages, the product its holder reads (its netlist, and its network's
-    # ``outer_hops``); ``compatible`` reads the value.
-    stages = View(staged)
+    @view
+    def stages(self) -> tuple[Stage, ...]:
+        """Its stages' modules and ports' contracts (each holder's ``stages``), in the order
+        the stream runs through them, labelled below the channel: the product its netlist
+        and its network's ``outer_hops`` read to wire them."""
+        found: list[Stage] = []
+        if self.output_adapting:
+            found += _below_stages("output_adapter", self.output_adapter.stages)
+        fifo = self.transport
+        if fifo is not None:
+            found += _below_stages("transport", fifo.stages)
+        if self.adapting:
+            found += _below_stages("adapter", self.adapter.stages)
+        return tuple(found)
 
     @constraint
     def compatible(self) -> bool | Rejected:
@@ -669,8 +705,8 @@ class Channel(KernelSpace):
         current = sides.source
         width: int | None = None
         for stage in self.staged:
-            found += compatibility(current, _stream(stage.input))
-            current, width = _stream(stage.output), stage.output.transport.data_width
+            found += compatibility(current, stage.input)
+            current, width = stage.output, stage.width
         found += compatibility(current, sides.sink)
         boundary: StreamContract | None = self.boundary
         if sides.sink_owner is None and boundary is not None:
@@ -701,11 +737,12 @@ class Channel(KernelSpace):
     def netlist(self) -> Fragment | Rejected:
         """Its members' netlists under their nodes, in the order the stream runs through
         them (its source, its output adapter's stages, its FIFO, its input adapter's
-        stages), and its own hops, as wires (``wired``): each hop both of whose ends are
-        its own (its source, below it at its label; its stages, at theirs; its boundary,
-        the module's own pins), from its children's contracts (its ``stages`` and its
-        source's). Its hops to the ports beside it are its network's (``outer_hops``); a
-        channel of wires between two kernels places nothing."""
+        stages), its source and its output adapter at their labels (``SOURCE_LABEL``,
+        ``OUTPUT_ADAPTER_LABEL``), and its own hops, as wires (``wired``): each hop both of
+        whose ends are its own (its source, below it at its label; its stages, at theirs;
+        its boundary, the module's own pins), from its children's contracts (its
+        ``stages`` and its source's). Its hops to the ports beside it are its network's
+        (``outer_hops``); a channel of wires between two kernels places nothing."""
         sides = self.sides
         boundary: StreamContract | None = self.boundary
         current: _End | None = None
@@ -727,7 +764,7 @@ class Channel(KernelSpace):
             # A hop that does not connect (another element, say) is refused by the
             # channel's constraints; its wires do not exist.
             return reject("channel-link", str(error))
-        return KernelSpace._netlist(self, tuple(links))
+        return KernelSpace._netlist(self, tuple(links), _PLACED)
 
     @view
     @declared_reads("member_cycles")
@@ -768,7 +805,8 @@ def _refusal(found: Sequence[Mismatch]) -> bool | Rejected:
 
 
 __all__ = [
-    "SOURCES",
+    "OUTPUT_ADAPTER_LABEL",
+    "SOURCE_LABEL",
     "Channel",
     "ChannelFifo",
     "ChannelSides",

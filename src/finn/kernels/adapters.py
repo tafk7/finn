@@ -7,20 +7,21 @@ two streams.
 A channel compares what its source presents with what its sink requires and
 derives the steps between them (``finn.dataflow.steps``): reorders, width conversions
 and marker synthesis, split at the channel's transport. Each side of the transport has
-its adapter selector, which chooses the hardware that carries out that side's steps.
-Each candidate is a fixed chain of FinnLib modules and refuses all steps that chain
-does not realize, so at most one candidate survives a side:
+its adapter, a fixed chain of FinnLib modules that refuses all steps it does not
+realize:
 
-- the output side, before the transport (``OUTPUT_ADAPTERS``): ``vpc``, a width
-  conversion;
-- the input side, after it (``ADAPTERS``): ``input_gen``, a reorder, replay
-  and sliding windows included, and marker synthesis; ``input_gen_vpc``, a reorder, then new lanes;
-  ``input_gen_vpc_input_gen``, a reorder, new lanes, then markers (a ``vpc``
-  carries none).
+- the output side, before the transport (``OUTPUT_ADAPTER``): ``vpc``, a width
+  conversion, the one chain its steps can take, which the channel places where they
+  convert a width;
+- the input side, after it, the cases of the channel's ``adapter`` selector
+  (``ADAPTERS``): ``input_gen``, a reorder, replay and sliding windows included, and
+  marker synthesis; ``input_gen_vpc``, a reorder, then new lanes;
+  ``input_gen_vpc_input_gen``, a reorder, new lanes, then markers (a ``vpc`` carries
+  none).
 
-These are every shape a side's steps can take (``OUTPUT_CHAINS``,
-``INPUT_CHAINS``), so all realizable steps have exactly one candidate a side;
-each is keyed by its modules, joined (``input_gen_vpc``).
+These are every shape a side's steps can take (``OUTPUT_ADAPTER.modules``,
+``INPUT_CHAINS``), so all realizable steps have exactly one chain a side; each is keyed
+by its modules, joined (``input_gen_vpc``).
 
 ``realize`` maps the steps onto modules. A reorder becomes an ``input_gen`` whose
 frame, ``DIMS`` and ``COEFS`` are ``classify``'s; the marker step that follows
@@ -32,13 +33,15 @@ step: the connection ties it high. A width conversion is a ``vpc`` over vectors 
 the two lane counts' least common multiple: its two sides carry the same elements in
 whole beats, a common multiple of both lane counts, so the vectors are whole.
 
-Each candidate is a kernel with children (a ``KernelSpace`` binding no module): it
+Each chain is a kernel with children (a ``KernelSpace`` binding no module): it
 places its modules as kernel children (``InputGeneratorKernel``, ``VpcKernel``) named by
 stage, each given its tensor and the two sides of its step, the beat sequences its ports
-present, from which it derives its generics. Each becomes a ``Stage``: the child's module
-(read from its netlist, ``finn.kernels.library.library_module``) and its ports'
-contracts, which the channel checks like any other port's, and which the channel wires
-hop by hop, so an adapter presents no port of its own. Its netlist, cycles (the most
+present, from which it derives its generics. Each child's streams and output word width
+are a ``StageStreams`` (``stage_streams``, from the child's derived values), which the
+channel checks like any other port's streams; and a ``Stage``: the child's module (read
+from its netlist, ``finn.kernels.library.library_module``) and its ports' contracts
+(``stages``, a view), which the channel wires hop by hop, so an adapter presents no port
+of its own. Its netlist, cycles (the most
 beats any of its stages' ports carries), buffering (the buffers its ``input_gen`` stages
 hold, ``BUF_SIZE`` words each, read from the RTL: ``nest_geometry``) and resources are its
 stages' own, by the base's views.
@@ -67,6 +70,7 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.steps import Hop, Step, Steps, Unrealizable
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.module import Leaf
@@ -99,6 +103,18 @@ class Stage:
     input: StreamContract
     output: StreamContract
     label: str
+
+
+@dataclass(frozen=True)
+class StageStreams:
+    """A stage inside a channel by its streams: the ``Stream`` it takes (``input``) and the
+    one it presents (``output``), each its kernel's derived value, and its output's word
+    width in bits (``width``), at ``label``, as its ``Stage`` is."""
+
+    label: str
+    input: Stream
+    output: Stream
+    width: int
 
 
 # -- realizing the steps -----------------------------------------------------------------
@@ -162,7 +178,7 @@ def _stage_name(kinds: Sequence[str], index: int) -> str:
     return kind if not earlier else f"{kind}_{earlier}"
 
 
-# -- the cases of a channel's adapter selector -------------------------------------------
+# -- a channel's adapters ----------------------------------------------------------------
 
 
 def _side(name: str, side: str) -> BeatSequence:
@@ -184,12 +200,13 @@ class StreamAdapter(KernelSpace):
     """A fixed chain of FinnLib modules carrying out the steps between a channel's two
     streams, or refusing them.
 
-    Each candidate places its modules as kernel children named by stage
+    Each chain places its modules as kernel children named by stage
     (``input_gen``, ``vpc``, then ``input_gen_1``), each given the channel's tensor and
     the two sides of its step of the realization, which its ports present. An
     ``input_gen`` child owns its memory's ``ram_style``, on the channel's ``platform``.
     Its netlist, cycles, buffering and resources are its stages', by the base. It
-    presents no port: its channel wires its stages hop by hop (``stages``).
+    presents no port: its channel checks its stages' streams (``stage_streams``) and
+    wires its stages hop by hop (``stages``).
     """
 
     id = "finn.channel.adapter"
@@ -208,6 +225,11 @@ class StreamAdapter(KernelSpace):
 
     @constraint
     def realizes(self) -> bool | Rejected:
+        found = self._unrealized()
+        return True if found is None else found
+
+    def _unrealized(self) -> Rejected | None:
+        """Why its chain does not carry out its steps (``adapter-plan``), or None."""
         kinds = tuple(stage.kind for stage in self.realization)
         if kinds != self.modules:
             return reject(
@@ -215,7 +237,7 @@ class StreamAdapter(KernelSpace):
                 f"{' -> '.join(self.modules)} does not carry out {self.steps.describe()}, "
                 f"which takes {' -> '.join(kinds)}",
             )
-        return True
+        return None
 
     def _named(self, name: str) -> RealizedStage | Rejected:
         realization: tuple[RealizedStage, ...] = self.realization
@@ -233,27 +255,53 @@ class StreamAdapter(KernelSpace):
     vpc_arriving = _side("vpc", "source")
     vpc_leaving = _side("vpc", "sink")
 
+    @derived
+    @declared_reads("realization", "steps")
+    def stage_streams(self) -> tuple[StageStreams, ...] | Rejected:
+        """Each child's streams and output word width, its derived values, labelled as its
+        ``Stage`` is. Each chain declares what its own stages read (``_chain``); this base
+        places no stage."""
+        return self._stage_streams()
+
     @view
     @declared_reads("realization")
     def stages(self) -> tuple[Stage, ...]:
-        """Each child's module and its ports' contracts, labelled below the adapter
-        selector: its case (the chain), then the stage. Each chain declares what its
-        own stages read (``_chain``); this base places no stage."""
+        """Each child's module and its ports' contracts, labelled below what holds the
+        chain: the chain, then the stage (``vpc.vpc``). Each chain declares what its own
+        stages read (``_chain``); this base places no stage."""
         return self._stages()
+
+    def _named_stages(self) -> tuple[tuple[str, str], ...]:
+        """Each stage's child's name, and its label below what holds the chain."""
+        modules = type(self).modules
+        chain = "_".join(modules)
+        names = [_stage_name(modules, index) for index in range(len(modules))]
+        return tuple((name, f"{chain}.{name}") for name in names)
+
+    def _stage_streams(self) -> tuple[StageStreams, ...] | Rejected:
+        """``stage_streams``: each stage's child read by the name its chain gives it;
+        refused where its chain does not carry out its steps (``realizes``)."""
+        unrealized = self._unrealized()
+        if unrealized is not None:
+            return unrealized
+        found: list[StageStreams] = []
+        for name, label in self._named_stages():
+            kernel = getattr(self, name)
+            found.append(
+                StageStreams(
+                    label, kernel.input_stream, kernel.output_stream, kernel.output_data_width
+                )
+            )
+        return tuple(found)
 
     def _stages(self) -> tuple[Stage, ...]:
         """``stages``: each stage's child read by the name its chain gives it."""
-        kinds = [stage.kind for stage in self.realization]
-        chain = "_".join(type(self).modules)
         found: list[Stage] = []
-        for index in range(len(kinds)):
-            name = _stage_name(kinds, index)
+        for name, label in self._named_stages():
             kernel = getattr(self, name)
             given: PortContract = kernel.input_contract
             presented: PortContract = kernel.output_contract
-            found.append(
-                Stage(library_module(kernel), given.contract, presented.contract, f"{chain}.{name}")
-            )
+            found.append(Stage(library_module(kernel), given.contract, presented.contract, label))
         return tuple(found)
 
     exports = {
@@ -281,9 +329,6 @@ def _vpc(name: str) -> VpcKernel:
     )
 
 
-OUTPUT_CHAINS: tuple[tuple[str, ...], ...] = (("vpc",),)
-"""Every chain the output side's steps can take: its width conversion."""
-
 INPUT_CHAINS: tuple[tuple[str, ...], ...] = (
     ("input_gen",),
     ("input_gen", "vpc"),
@@ -293,28 +338,36 @@ INPUT_CHAINS: tuple[tuple[str, ...], ...] = (
 
 
 def _chain(modules: tuple[str, ...]) -> type[StreamAdapter]:
-    """The candidate placing ``modules`` in order, each child named by its stage. Its
-    ``stages`` reads its children by the names its chain fixes, which it declares
-    (``__reads__``: the realization, and each stage's module and ports' contracts)."""
+    """The chain placing ``modules`` in order, each child named by its stage. Its
+    ``stage_streams`` and ``stages`` read its children by the names its chain fixes,
+    which each declares (``__reads__``: the realization, and each stage's streams and
+    output word width, or its module and ports' contracts)."""
     members: dict[str, object] = {"modules": modules}
     names = [_stage_name(modules, index) for index in range(len(modules))]
     for name, kind in zip(names, modules):
         members[name] = _input_gen(name) if kind == "input_gen" else _vpc(name)
 
+    values = ("input_stream", "output_stream", "output_data_width")
     parts = ("netlist", "input_contract", "output_contract")
+
+    @declared_reads(
+        "realization", "steps", *(f"{name}.{part}" for name in names for part in values)
+    )
+    def stage_streams(self: StreamAdapter) -> tuple[StageStreams, ...] | Rejected:
+        return StreamAdapter._stage_streams(self)
 
     @declared_reads("realization", *(f"{name}.{part}" for name in names for part in parts))
     def stages(self: StreamAdapter) -> tuple[Stage, ...]:
         return StreamAdapter._stages(self)
 
+    members["stage_streams"] = derived(stage_streams)
     members["stages"] = view(stages)
     return composite("_".join(modules), members, base=StreamAdapter)
 
 
-OUTPUT_ADAPTERS: dict[str, type[StreamAdapter]] = {
-    "_".join(chain): _chain(chain) for chain in OUTPUT_CHAINS
-}
-"""The cases of a channel's ``output_adapter`` selector, by key."""
+OUTPUT_ADAPTER: type[StreamAdapter] = _chain(("vpc",))
+"""A channel's output adapter: the one chain the output side's steps can take, its width
+conversion, placed where they convert a width."""
 
 ADAPTERS: dict[str, type[StreamAdapter]] = {
     "_".join(chain): _chain(chain) for chain in INPUT_CHAINS
@@ -325,11 +378,11 @@ ADAPTERS: dict[str, type[StreamAdapter]] = {
 __all__ = [
     "ADAPTERS",
     "INPUT_CHAINS",
-    "OUTPUT_ADAPTERS",
-    "OUTPUT_CHAINS",
+    "OUTPUT_ADAPTER",
     "Convert",
     "RealizedStage",
     "Stage",
+    "StageStreams",
     "StreamAdapter",
     "realize",
 ]

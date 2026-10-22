@@ -6,7 +6,7 @@
 Facts are the formals of the declaration given to ``design_space``
 (``design_space(MatMulKernel(x_tensor=..., ...))``). Keys are the ones ``inspection``
 reports: a structural Decision such as ``"compute"``, or a candidate-local choice such as
-``"pe"`` or ``"w.source.memstream.ram_style"``. All choices are committed
+``"pe"`` or ``"w.source.ram_style"``. All choices are committed
 in one atomic batch. Refusals are raised as ``ValueError`` with their findings.
 
 Nothing is set but what is committed: the engine fills nothing in.
