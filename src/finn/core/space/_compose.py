@@ -10,9 +10,8 @@ template says of itself, never by copying a placement:
 - **Cycles** (``order``). A template's dependency order runs over its own nodes, with an
   edge from each import to what its target reaches in the child: the formals it reaches
   by structural edges (each followed to the placing template's binding: its node, or the
-  guard the scope is placed under for a literal or a default), the guard the child is
-  placed under, a formal its validity lists (bound to a fresh Decision) and the named
-  shared Decisions the placing template owns there, through any depth (``exits``). A
+  guard the scope is placed under for a literal or a default) and the guard the child is
+  placed under, through any depth (``exits``). A
   cycle through a child is found once, in the placing class's template, and named by
   that template's keys: its own nodes, its imports and bindings, and the nodes of the
   Spaces it places on the way, as the one table of every placement named them, relative
@@ -54,7 +53,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
 from ._collapse import forwards
 from ._ordering import cyclic, dependency_order
-from ._reads import _Contributed, _Dynamic, _Missing, _Ref, _TemplateInference
+from ._reads import _Dynamic, _Missing, _Ref, _TemplateInference
 from ._table import Binding, Table, member_key
 from .errors import DefinitionError
 
@@ -70,41 +69,34 @@ _OWNER = "space.compose"
 @dataclass(frozen=True, slots=True)
 class Placement:
     """A template read at a placement: the Decisions over nodes of it that never apply
-    there (guarded by ``supplied`` of a formal the placing template leaves unsupplied), and
-    the names of the named shared Decisions the placing template owns in the scope."""
+    there (guarded by ``supplied`` of a formal the placing template leaves unsupplied)."""
 
     never: frozenset[int] = frozenset()
-    owned: frozenset[str] = frozenset()
 
 
 ROOT = Placement()
 
 
-def placement(
-    template: Template, bindings: Mapping[str, Binding], owned: Iterable[str]
-) -> Placement:
+def placement(template: Template, bindings: Mapping[str, Binding]) -> Placement:
     never = frozenset(
         choice.index
         for choice in template.choices
         if choice.never_formal is not None and bindings[choice.never_formal].kind == "unsupplied"
     )
-    return Placement(never, frozenset(owned))
+    return Placement(never)
 
 
 @dataclass(frozen=True, slots=True)
 class _Slot:
     """A Space a template places (a placed stub): its class's template and placement, the
-    bindings of its formals, the node it is placed under, the Decision over nodes whose
-    candidate it is (where that may never apply), and the named shared Decisions the
-    placing template owns there (its validity pieces, and by name)."""
+    bindings of its formals, the node it is placed under, and the Decision over nodes whose
+    candidate it is (where that may never apply)."""
 
     template: Template
     placement: Placement
     bindings: Mapping[str, Binding]
     guard: int
     requires: int | None
-    contributed: tuple[int, ...]
-    owned: Mapping[str, int]
 
 
 def _cache(template: Template, name: str) -> dict[Any, Any]:
@@ -120,15 +112,12 @@ def slot(template: Template, stub: int) -> _Slot:
 
         scope = template.scopes[stub]
         child = link_template(scope.space_type)
-        owned = dict(scope.named_members)
         found = cache[stub] = _Slot(
             child,
-            placement(child, scope.bindings, owned),
+            placement(child, scope.bindings),
             scope.bindings,
             cast(int, scope.guard),
             scope.requires,
-            tuple(node for node in template.named if template.nodes[node].scope == stub),
-            owned,
         )
     return cast(_Slot, found)
 
@@ -139,12 +128,10 @@ def _table_slot(table: Table, stub: int) -> _Slot:
     held = table.stub(stub)
     return _Slot(
         held.template,
-        placement(held.template, held.bindings, draft.named_members),
+        placement(held.template, held.bindings),
         held.bindings,
         cast(int, draft.guard),
         held.requires,
-        tuple(node for node in table.named if table.nodes[node].scope == stub),
-        dict(draft.named_members),
     )
 
 
@@ -174,11 +161,9 @@ def _table_path(table: Table, stub: int) -> tuple[int, ...]:
 
 # -- a template at a placement -----------------------------------------------------------------
 
-# A reference out of a template: a formal's (``formal``, name, mode), the guard it is placed
-# under (``guard``, mode), a formal its validity lists (``piece``, name), the named shared
-# Decisions its placing template owns in it (``vcontrib``), or one of them by name
-# (``owned``, name, mode). A mode: ``r`` reached, ``s`` followed as ``present()`` follows a
-# value's sources, ``S`` the first such step.
+# A reference out of a template: a formal's (``formal``, name, mode), or the guard it is
+# placed under (``guard``, mode). A mode: ``r`` reached, ``s`` followed as ``present()``
+# follows a value's sources, ``S`` the first such step.
 Exit: TypeAlias = tuple[str, ...]
 Mode = Literal["r", "s", "S"]
 Ref: TypeAlias = "int | Exit"
@@ -214,10 +199,8 @@ def _never_selection(template: Template, at: Placement, node: int) -> bool:
 
 
 def pieces(template: Template, at: Placement) -> list[Ref]:
-    """A validity node's pieces at ``at``: its constraints and Decisions (a formal as a
-    ``piece``: one where its binding is a fresh Decision), the named shared Decisions its
-    placing template owns in it, its own, then each placed Space's validity."""
-    named = set(template.named)
+    """A validity node's pieces at ``at``: its constraints and Decisions, then each placed
+    Space's validity."""
     own: list[Ref] = []
     placed: list[Ref] = []
     for piece in template.nodes[template.validity].constraints:
@@ -225,19 +208,11 @@ def pieces(template: Template, at: Placement) -> list[Ref]:
             if not _dropped(template, at, piece):
                 placed.append(piece)
             continue
-        if piece in named or excluded(template, at, piece):
+        if excluded(template, at, piece):
             continue
-        formal = template.formal_names.get(piece)
-        if formal is not None:
-            own.append(("piece", formal))
-        elif template.selectors.get(piece) not in at.never:
+        if template.selectors.get(piece) not in at.never:
             own.append(piece)
-    owned = [
-        node
-        for node in template.named
-        if template.nodes[node].scope == 0 and not excluded(template, at, node)
-    ]
-    return [*own, ("vcontrib",), *owned, *placed]
+    return [*own, *placed]
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,8 +274,7 @@ def lift(slot_: _Slot, exits: Iterable[Exit]) -> Iterator[tuple[int, Mode]]:
     """What a placed Space's references out stand for in its placing template: a formal,
     its binding's node (or, for a literal or a default, the guard the scope is placed
     under: a constant's or an unsupplied formal's only edge); the guard it is placed
-    under; a validity piece, a formal bound to a fresh Decision and the named shared
-    Decisions owned there."""
+    under."""
     for exit in exits:
         kind = exit[0]
         if kind == "formal":
@@ -309,17 +283,8 @@ def lift(slot_: _Slot, exits: Iterable[Exit]) -> Iterator[tuple[int, Mode]]:
                 yield binding.node, cast(Mode, exit[2])
             else:
                 yield slot_.guard, "r"
-        elif kind == "guard":
+        else:  # guard
             yield slot_.guard, cast(Mode, exit[1])
-        elif kind == "piece":
-            binding = slot_.bindings[exit[1]]
-            if binding.kind == "local-decision":
-                yield cast(int, binding.node), "r"
-        elif kind == "vcontrib":
-            for node in slot_.contributed:
-                yield node, "r"
-        else:  # owned
-            yield slot_.owned[exit[1]], cast(Mode, exit[2])
 
 
 def _classify(template: Template, ref: Ref, mode: Mode) -> Exit | None:
@@ -845,21 +810,10 @@ class _Domains:
         return outcome
 
     def _dynamic(self, template: Template, at: Placement, items: Iterable[object]) -> bool:
-        """Whether a method's reads are not fixed at ``at``: a dynamic read placed there,
-        or one of a helper its own scope's name stands for where the placing template owns
-        nothing of that name."""
-        for item in items:
-            if isinstance(item, _Dynamic):
-                if self._placed(template, at, item.when):
-                    return True
-            elif (
-                isinstance(item, _Contributed)
-                and item.name not in at.owned
-                and item.helper is not None
-                and self._dynamic(template, at, self.inference.reads(item.helper, template))
-            ):
-                return True
-        return False
+        """Whether a method's reads are not fixed at ``at``: a dynamic read placed there."""
+        return any(
+            isinstance(item, _Dynamic) and self._placed(template, at, item.when) for item in items
+        )
 
     def _reads(
         self,
@@ -878,13 +832,6 @@ class _Domains:
                     push(item.node, mode, route)
                 elif self._placed(template, at, item.steps):
                     down(item.steps, item.node, mode, route)
-            elif isinstance(item, _Contributed):
-                if item.name in at.owned:
-                    push(("owned", item.name, "S" if item.presence else "r"), "r", route)
-                elif item.helper is not None:
-                    self._reads(
-                        template, at, self.inference.reads(item.helper, template), route, push, down
-                    )
             else:
                 assert isinstance(item, (_Missing, _Dynamic))
 
