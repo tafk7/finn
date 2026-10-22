@@ -16,8 +16,9 @@ it.
 **What it keeps.** Its tables are per model, held weakly by the model's structure (the
 object the model's record is keyed by, ``structure.record``), so a model's tables go with
 the model, and a new model never finds an old one's, whatever its ``id()``. A table is
-keyed by member, (the guards taken as holding, node): a membership reading, made with its
-choice's existence guards taken as holding, is a member of its own. Each member keeps its
+keyed by member, (the guards taken as holding, node), ``None`` for a design space's own
+evaluation: a membership reading, made with its choice's existence guards taken as
+holding (none for a choice with no guard), is a member of its own. Each member keeps its
 read sets (the choices and facts its evaluation read, by node, sorted), and each read set
 the answers (``evaluate.Ans``, with their trace and their read set) by the values read:
 each value by ``key`` (type and ``==``; a tuple item by item), a choice or fact not given
@@ -75,7 +76,7 @@ _UNCHECKED_NAMES = frozenset(name.rpartition(".")[2] for name in UNCHECKED)
 _PLAIN = (int, str, bool, type(None), float, bytes)
 _NOT_GIVEN = ("not given",)
 
-Member = tuple[frozenset[NodeId], NodeId]
+Member = tuple[frozenset[NodeId] | None, NodeId]
 ReadSet = tuple[NodeId, ...]
 
 

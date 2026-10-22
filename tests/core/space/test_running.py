@@ -9,11 +9,12 @@ model, through the class-based oracle (``support.space_oracle``), as the impleme
 - **The reference walks**: seeds 0-23, 40 steps, strict, the running type against the
   reference model, every invariant and every permanent check holding.
 - **Hand cases**: a ``when`` read past its guard through a formal of its scope; a chosen
-  selector under a refused ``when``, one piece; an answer refused through its scope turning
+  selector under a refused ``when``, one piece; a refused ``when`` below a guard that waits,
+  unknown until all above it holds; an answer refused through its scope turning
   inapplicable; a reader beside a formal's scope; a formal read from outside its scope;
   models dropped and their ids reused, the node cache's tables with them; a line deeper
   than the recursion limit allows without the depth guard; a membership reading that reads
-  a decision.
+  a decision, for a guarded choice and for a choice with no guard.
 - **The node cache** (``_running.cache``): the toys walked with a cache dropping half its
   entries at random, with no disagreement; a cache wrong on purpose (a read left out of
   each key) caught; every value type a choice or a fact holds in the engine's tests, the
@@ -32,7 +33,7 @@ import math
 import pkgutil
 import sys
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from types import SimpleNamespace
@@ -56,12 +57,14 @@ from core.space.reference import (
     listed,
 )
 from core.space.reference import Space as Description
-from core.space.reference_harness import Case
+from core.space.reference_harness import Case, Spelling
 from core.space.reference_harness import walks as reference_walks
+from core.space.reference_harness.forms import ValidityForm
 from core.space.test_compose import Spec
 from core.space.test_extensions import ENCODING, Encoding
 from core.space.test_possible import Capabilities
 from core.space.test_public_snapshots import BAG, Bag
+from core.space.test_reference_cases import IN_AN_OPEN_CASE, even
 from core.space.test_value_inputs import PAIR
 from core.space.test_world import GRID, Grid
 from finn.core.space import (
@@ -289,6 +292,120 @@ def test_a_selector_in_a_scope_under_a_refused_when_is_its_scopes_one_piece_as_t
         bound = pair.check_bind(stored)
         bound.check_validity()
         bound.check_possible("h.heating")
+
+
+# -- a refused ``when`` below a guard that waits: unknown, until all above it holds ------------
+#
+# ``g``'s ``when`` reads ``d``, refused for an odd ``f``. Below a guard that waits (``g`` in
+# case ``a`` of the open selector ``s``; or in ``p``, whose ``when`` reads the open choice
+# ``c``), ``g`` waits with it: its piece is unknown, waiting on what that guard waits on, and
+# validity is open. The refusal takes effect once all above it holds: ``s`` bound to ``a``
+# (or ``c`` to 1), ``g``'s guard is one false piece, and setting it is refused. Today's
+# engine leaves the refused guard out below the wait, and answers valid. The same with the
+# refused ``when`` a selector's own (``plant``, written as ``heating``'s guard), in a case of
+# an open selector: there the piece is the selector's.
+
+
+def _heated(read: Mapping[str, Any]) -> object:
+    return Refuse("gate-refused") if read["gate"] == 1 else True
+
+
+UNDER_A_WAITING_PARENT = Case(
+    "a refused when under a parent whose when waits",
+    Description(
+        ("f",),
+        Scope(
+            "",
+            choices=(Choice("c", listed(0, 1)),),
+            derived=(Derived("d", ("f",), even),),
+            children=(
+                Scope(
+                    "p",
+                    when=When(("c",), lambda read: read["c"] == 1),
+                    choices=(Choice("x", listed(1, 2)),),
+                    children=(
+                        Scope(
+                            "g",
+                            when=When(("d",), lambda read: read["d"] >= 1),
+                            choices=(Choice("q", listed(1, 2)),),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+
+GUARDED_SELECTOR_IN_AN_OPEN_CASE = Case(
+    "a selector's own refused when in a case of an open selector",
+    Description(
+        ("gate",),
+        Scope(
+            "",
+            derived=(Derived("heated", ("gate",), _heated),),
+            selectors=(
+                Selector(
+                    "s",
+                    (
+                        Scope(
+                            "a",
+                            children=(
+                                Scope(
+                                    "plant",
+                                    when=When(("heated",), lambda read: bool(read["heated"])),
+                                    selectors=(
+                                        Selector(
+                                            "heating",
+                                            (
+                                                Scope(
+                                                    "boiler",
+                                                    choices=(Choice("stages", listed(1, 2)),),
+                                                ),
+                                                Scope(
+                                                    "pump", choices=(Choice("cop", listed(2, 3)),)
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                        Scope("b", choices=(Choice("r", listed(1, 2)),)),
+                    ),
+                ),
+            ),
+        ),
+    ),
+    Spelling(types={"heated": bool}, guarded_selectors=frozenset({"s.a.plant"})),
+)
+
+WAITING = (
+    (IN_AN_OPEN_CASE, {"f": 1}, "s", {"s": "a"}),
+    (UNDER_A_WAITING_PARENT, {"f": 1}, "c", {"c": 1}),
+    (GUARDED_SELECTOR_IN_AN_OPEN_CASE, {"gate": 1}, "s", {"s": "a"}),
+)
+
+
+@pytest.mark.parametrize("cached_", [False, True], ids=["running", "cached"])
+@pytest.mark.parametrize("number", range(len(WAITING)))
+def test_a_refused_when_below_a_guard_that_waits_is_unknown_until_all_above_it_holds(
+    number: int, cached_: bool
+) -> None:
+    case, facts, waits_on, holding = WAITING[number]
+    implementation = cached() if cached_ else RUNNING
+    pair = case.start(facts, implementation=implementation)
+    pair.check_validity()
+    assert pair.engine.validity() == ValidityForm("open", blockers=frozenset({waits_on}))
+    assert case.start(facts).engine.validity() == ValidityForm("valid")  # today's
+    pair.check_possible(waits_on)
+    assert pair.check_change(Change(commit=holding)) is None  # refused on both sides
+    bound = pair.check_bind(holding)
+    bound.check_validity()
+    assert bound.engine.validity().verdict == "refused"
+    # an even fact: nothing refused, valid on both sides, the wait notwithstanding
+    other = case.start({name: 2 for name in facts}, implementation=implementation)
+    other.check_validity()
+    assert other.engine.validity() == ValidityForm("valid")
 
 
 # -- an answer refused through its scope may turn inapplicable ------------------------------
@@ -631,6 +748,32 @@ def test_a_membership_reading_that_reads_a_decision_is_an_error_naming_both(
     error = raised.value.primary
     assert isinstance(error, MembershipReadsChoice)
     assert (error.choice, error.decision) == ("g.pe", "w")
+
+
+def test_a_membership_reading_of_a_choice_with_no_guard_that_reads_a_decision_is_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``pe`` has no guard, and its domain reads the choice ``w``: built past the compile
+    check as above. Its membership is read on the facts layer with nothing stored, as a
+    guarded choice's is, so the reading meets ``w`` and raises."""
+    monkeypatch.setattr(_compose, "check_domains", lambda template: None)
+
+    class Unguarded(Space):
+        w: int = Decision(values=(4, 6))
+        pe: int = Decision(domain=divisors_of(w))
+
+    model = cast(Any, state(design_space(Unguarded())).model)
+    keys = model.linked.keys
+    ds = DesignSpace(FactsLayer.of(model, {}), {keys["w"]: 4})
+    ev = evaluate.evaluation(ds, Session())
+    reading = ev.membership(keys["pe"])
+    assert reading.ds is ds.layer.bare and reading.assumed == frozenset()
+    for value in (2, 3):
+        with pytest.raises(NativeEvaluationError) as raised:
+            questions.check(ev, keys["pe"], value)
+        error = raised.value.primary
+        assert isinstance(error, MembershipReadsChoice)
+        assert (error.choice, error.decision) == ("pe", "w")
 
 
 # -- the node cache: a dropping cache, and a cache wrong on purpose -------------------------------

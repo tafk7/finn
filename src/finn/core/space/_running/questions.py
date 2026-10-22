@@ -67,7 +67,7 @@ def presence(ev: Evaluation, index: NodeId) -> tuple[Presence, QueryResult[objec
     guards = ev.inferred.guards(index)
     if not guards:
         return "present", TRUE
-    if not ev.assumed:
+    if ev.assumed is None:
         for outer in reversed(guards[1:]):
             held = ev.result(outer)
             if isinstance(held, Inapplicable):
@@ -84,25 +84,14 @@ def presence(ev: Evaluation, index: NodeId) -> tuple[Presence, QueryResult[objec
     return "absent", answer
 
 
-def placed(ev: Evaluation, index: NodeId) -> Evaluation:
-    """Where a choice's type check is made: here where its guard holds, else its
-    membership reading (as if it existed)."""
-    node = ev.raw[index]
-    if node.guard is None:
-        return ev
-    guard = ev.result(node.guard)
-    if isinstance(guard, Available) and guard.value is True:
-        return ev
-    return ev.membership(index)
-
-
 def check(ev: Evaluation, index: NodeId, value: object = _MISSING) -> QueryResult[bool]:
-    """A value's type check (the stored one by default), as if its choice existed."""
+    """A value's type check (the stored one by default), on its choice's membership
+    reading (as if it existed)."""
     node = ev.raw[index]
     if node.domain is None:
         return HOLDS
     held = ev.ds.stored[index] if value is _MISSING else value
-    return cast(QueryResult[bool], placed(ev, index).type_check(node, Available(held), []))
+    return cast(QueryResult[bool], ev.membership(index).type_check(node, Available(held), []))
 
 
 def _refuses(result: QueryResult[bool]) -> bool:
@@ -542,7 +531,7 @@ def viable(ds: DesignSpace, index: NodeId, session: Session) -> Viable:
     """One choice's listed values, each tried alone as a change would set it."""
     ev = evaluation(ds, session)
     node = ev.raw[index]
-    listed = placed(ev, index).listed(node, [])
+    listed = ev.membership(index).listed(node, [])
     if not isinstance(listed, Available) or listed.value is None:
         return Viable(node.key, None, _waits(listed))
     found: list[Possible | Refused] = []
@@ -563,7 +552,6 @@ __all__ = [
     "check",
     "moved",
     "pairs",
-    "placed",
     "presence",
     "standing",
     "state_of",

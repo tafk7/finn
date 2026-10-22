@@ -21,15 +21,21 @@ is its answer's trace.
 **Validity's pieces.** A piece whose guard is refused through an input counts once, at
 the highest refused guard of its chain (each guard's own guard read in turn). Counted at
 a guard above its own, the piece is that guard's owner's, keyed by the owner where the
-owner is a node: a selector's cases make one piece, the selector's. This holds in both
-places pieces are made, a Space's validity and a choice's piece.
+owner is a node: a selector's cases make one piece, the selector's. A ``when`` refused
+through an input below a guard that waits (a case of an open selector, or a parent whose
+guard waits) is refused only once all above it holds: until then what it guards waits, a
+Space's validity included (``Evaluation.refused_waiting``), and its piece is unknown,
+waiting on what that guard waits on, counted once at the highest such ``when`` of the
+chain and keyed as a refused guard's piece is. This holds in both places pieces are made,
+a Space's validity and a choice's piece.
 
-**Membership readings.** A choice's membership read as if the choice existed is an
-evaluation of its facts layer with nothing stored, its existence guards taken as holding
-(``Evaluation.membership``). By the domain rule it reads facts only: a membership reading
-that reads a decision raises ``MembershipReadsChoice``, naming the choice and the
-decision. That is a definition the compile check should have refused, never a case to
-fall back on.
+**Membership readings.** A choice's membership is read as if the choice existed, every
+time: an evaluation of its facts layer with nothing stored (``FactsLayer.bare``), its
+existence guards, where it has any, taken as holding (``Evaluation.membership``). By the
+domain rule it reads facts only: a membership reading that reads a decision raises
+``MembershipReadsChoice``, naming the choice and the decision, for a choice with no guard
+as for any other. That is a definition the compile check should have refused, never a
+case to fall back on.
 
 **Depth.** Evaluation recurses on the Python stack up to ``DEPTH`` evaluations in flight
 (today's guard, ``_world.DEPTH``). Past it, ``Deeper`` unwinds to the outermost read
@@ -220,10 +226,11 @@ class Session:
 
 
 def evaluation(
-    ds: DesignSpace, session: Session, assumed: frozenset[NodeId] = frozenset()
+    ds: DesignSpace, session: Session, assumed: frozenset[NodeId] | None = None
 ) -> Evaluation:
     """The evaluation of ``ds`` in ``session`` (one per design space value, session and
-    guards taken as holding)."""
+    guards taken as holding: ``None`` for the design space's own, a frozen set for a
+    membership reading)."""
     found = ds.evaluations.get((session, assumed))
     if found is None:
         found = ds.evaluations[(session, assumed)] = Evaluation(ds, session, assumed)
@@ -292,11 +299,12 @@ _Tr = list[tuple[NodeId, QueryResult[object]]]
 
 class Evaluation:
     """Every answer of one design space value (see the module docstring). ``assumed``:
-    guards taken as holding, where a choice's membership is read as if it existed (an
-    evaluation of the facts layer's design space with nothing stored, ``membership``)."""
+    ``None`` for the design space's own evaluation; for a membership reading (an
+    evaluation of the facts layer's design space with nothing stored, ``membership``), the
+    guards taken as holding, none for a choice with no guard."""
 
     def __init__(
-        self, ds: DesignSpace, session: Session, assumed: frozenset[NodeId] = frozenset()
+        self, ds: DesignSpace, session: Session, assumed: frozenset[NodeId] | None = None
     ) -> None:
         self.ds = ds
         self.session = session
@@ -404,18 +412,15 @@ class Evaluation:
 
     def membership(self, index: NodeId) -> Evaluation:
         """Where the choice ``index``'s membership is read as if it existed: its facts
-        layer with nothing stored, its existence guards taken as holding (this evaluation
-        itself for a choice with no guard)."""
-        guards = self.inferred.guards(index)
-        if not guards:
-            return self
-        found = evaluation(self.ds.layer.bare, self.session, frozenset(guards))
+        layer with nothing stored, its existence guards (if any) taken as holding."""
+        guards = frozenset(self.inferred.guards(index))
+        found = evaluation(self.ds.layer.bare, self.session, guards)
         found.asking = index
         return found
 
     def _reads_choice(self, decision: NodeId) -> None:
         """A membership reading reading a decision: the domain rule broken."""
-        if self.assumed:
+        if self.assumed is not None:
             choice = self.raw[self.asking].key if self.asking is not None else "?"
             raise MembershipReadsChoice(choice, self.raw[decision].key)
 
@@ -426,7 +431,7 @@ class Evaluation:
 
     def _evaluate(self, index: NodeId) -> Ans:
         node = self.raw[index]
-        if index in self.assumed:
+        if self.assumed and index in self.assumed:
             return Ans(TRUE)
         self.counters.evaluated += 1
         self.counters.by_kind[node.kind] = self.counters.by_kind.get(node.kind, 0) + 1
@@ -444,7 +449,9 @@ class Evaluation:
             if node.kind == "constraint" and isinstance(inactive, Rejected):
                 inactive = INAPPLICABLE  # the guard's piece stands for it
             if inactive is not None and not (
-                node.kind == "validity" and isinstance(inactive, Unresolved)
+                node.kind == "validity"
+                and isinstance(inactive, Unresolved)
+                and self.refused_waiting(node.guard, trace, node) is None
             ):
                 return Ans(inactive, tuple(trace), W._guard_assessment(node, inactive))
         return _FRAMES[node.kind](self, node, trace, node)
@@ -464,6 +471,13 @@ class Evaluation:
             return None if value is _MISSING or value == case else False
         if node.output is None:
             return None
+        answer = self._condition(node, trace)
+        return False if isinstance(answer, Available) and answer.value is False else None
+
+    def _condition(self, node: Node, trace: _Tr) -> QueryResult[object]:
+        """A ``when`` guard's condition (``node``: the guard, its reader, under a guard of
+        its own), read past the condition's own guard where the guard implies it."""
+        assert node.output is not None and node.guard is not None
         output = self.source(node.output, node)
         condition = self.raw[output]
         if (
@@ -471,13 +485,34 @@ class Evaluation:
             or condition.kind in _OWN_BIT
             or not guard_implies(self.raw, condition.guard, node.guard)
         ):
-            found = self.read(trace, output, node)
-        else:
-            # Past its own guard: its frame alone, the guard its reader.
-            found = _FRAMES[condition.kind](self, condition, [], node)
-            trace.extend(found.trace)
-        answer = found.result
-        return False if isinstance(answer, Available) and answer.value is False else None
+            return self.read(trace, output, node).result
+        # Past its own guard: its frame alone, the guard its reader.
+        found = _FRAMES[condition.kind](self, condition, [], node)
+        trace.extend(found.trace)
+        return found.result
+
+    def refused_waiting(self, guard: NodeId, trace: _Tr, reader: Node) -> NodeId | None:
+        """The highest ``when`` guard in the chain of ``guard`` (which waits) refused
+        through an input below a guard that waits, or ``None``: climbing from ``guard``
+        while each guard waits, a ``when`` guard whose own condition, read past its guard,
+        is refused. What it guards waits, on what the guard above it waits on (refused
+        takes effect once all above it holds); where nothing above waits, the guard
+        answers refused, and the refused guard's piece counts (``_guard_refused``)."""
+        found: NodeId | None = None
+        index = guard
+        while (outer := self.raw[index].guard) is not None:
+            node = self.raw[index]
+            if (
+                node.kind == "guard"
+                and node.output is not None
+                and self.case(index) is None
+                and isinstance(self._condition(node, trace), Rejected)
+            ):
+                found = index
+            index = outer
+            if not isinstance(self.read(trace, index, reader).result, Unresolved):
+                break
+        return found
 
     # -- authored functions
 
@@ -855,7 +890,8 @@ Piece = tuple[str, QueryResult[bool]]
 def _validity(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
     """Kleene's AND of a Space's pieces, a placed Space's read from its guard first; a
     piece whose guard is refused through an input counted once, at the highest refused
-    guard of its chain (``_guard_refused``)."""
+    guard of its chain (``_guard_refused``), and one refused below a guard that waits,
+    unknown, at the highest such ``when`` (``_guard_waiting``)."""
     linked = ev.linked
     answers: dict[str, QueryResult[bool]] = {}
     guards: set[NodeId] = set()
@@ -878,6 +914,15 @@ def _validity(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
                 answers[found[0]] = found[1]
             continue
         answer = cast(QueryResult[bool], ev.read(trace, index, reader).result)
+        if isinstance(answer, Unresolved) and piece.guard is not None:
+            guard = placed if placed is not None else ev.read(trace, piece.guard, reader)
+            if isinstance(guard.result, Unresolved):
+                top = ev.refused_waiting(piece.guard, trace, reader)
+                if top is not None:
+                    counted = _guard_waiting(ev, piece, top, trace, reader, guards)
+                    if counted is not None:
+                        answers[counted[0]] = counted[1]
+                    continue
         if isinstance(answer, (Inapplicable, Rejected)) and piece.guard is not None:
             guard = placed if placed is not None else ev.read(trace, piece.guard, reader)
             if isinstance(guard.result, Rejected):
@@ -917,18 +962,41 @@ def _guard_refused(
     return key, W._guard_piece(owner, cast(Rejected, found))
 
 
+def _guard_waiting(
+    ev: Evaluation, piece: Node, top: NodeId, trace: _Tr, reader: Node, guards: set[NodeId]
+) -> Piece | None:
+    """The piece of ``piece``, below ``top``, a ``when`` refused through an input below a
+    guard that waits (``Evaluation.refused_waiting``): unknown, waiting on what the guard
+    above ``top`` waits on, counted once at ``top`` and keyed as ``_guard_refused`` keys a
+    refused guard's piece; ``None`` where ``top`` is counted already."""
+    if top in guards:
+        return None
+    guards.add(top)
+    key = piece.key
+    if top != piece.guard:
+        owner = ev.raw[top].owner
+        if owner in ev.linked.keys:
+            key = owner
+    above = cast(NodeId, ev.raw[top].guard)
+    return key, cast(QueryResult[bool], ev.read(trace, above, reader).result)
+
+
 def _choice_piece(
     ev: Evaluation, piece: Node, trace: _Tr, reader: Node, guards: set[NodeId]
 ) -> Piece | None:
     """A choice's piece by key, or ``None`` where it is no piece: a guard refused through
-    an input (``_guard_refused``), else read from its guard and its listed values (never
-    from its stored value)."""
+    an input (``_guard_refused``), or refused below a guard that waits
+    (``_guard_waiting``); else read from its guard and its listed values (never from its
+    stored value)."""
     waiting: Unresolved | None = None
     if piece.guard is not None:
         answer = ev.read(trace, piece.guard, reader).result
         if isinstance(answer, Rejected):
             return _guard_refused(ev, piece, piece.owner, trace, reader, guards)
         if isinstance(answer, Unresolved):
+            top = ev.refused_waiting(piece.guard, trace, reader)
+            if top is not None:
+                return _guard_waiting(ev, piece, top, trace, reader, guards)
             waiting = answer
         elif W._guard_result(piece, answer) is not None:
             return None
