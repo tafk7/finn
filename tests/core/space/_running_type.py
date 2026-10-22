@@ -25,15 +25,19 @@ scope's named members), the scope list (the model's scope records) and the keys.
 are the structure's, shared by every implementation of the same class.
 
 One ``Session`` per implementation object, holding its node cache where it has one
-(``Running(cache=...)``): one cache is shared by every design space it opens or makes in a
-process, and its counters cover everything it answered (``RUNNING.session.counters``:
-evaluations, calls by kind, the most evaluations in flight, and the cache's lookups, hits
-and values hashed). The named implementations, each loadable as ``core.space._running_type:NAME``:
+(``Running(cache=...)``), with the purity check on where it is made so (``verify``; else
+as today's switch says, ``evaluate.Session.verifying``): one cache is shared by every
+design space it opens or makes in a process, and its counters cover everything it answered
+(``RUNNING.session.counters``: evaluations, calls by kind, the most evaluations in flight,
+and the cache's lookups, hits and values hashed). The named implementations, each loadable
+as ``core.space._running_type:NAME``:
 
 - ``RUNNING``: no cache;
 - ``RUNNING_CACHED``: the cache on, unbounded;
 - ``RUNNING_BOUNDED``: at most one read set kept per member;
 - ``RUNNING_DROPPING``: half the entries dropped at random, at lookup and at keep (seed 0);
+- ``RUNNING_VERIFIED``: the cache on, unbounded, with the purity check on: each hit
+  evaluated anyway and compared, and so is each node the depth guard abandoned;
 - ``RUNNING_PLANTED``: a cache wrong on purpose (``LeavesOneOut``): each answer is kept
   with the last read of its read set (by node) left out of its key, so a design space
   differing from the one evaluated in that read alone takes its answer. The walks and the
@@ -150,14 +154,15 @@ class RunningAnswers:
 @dataclass(frozen=True, eq=False)
 class Running:
     """The running type, through ``_running``: its one ``session``, holding ``cache``
-    (none by default), named ``label``."""
+    (none by default), with the purity check on where ``verify`` is, named ``label``."""
 
     cache: NodeCache | None = None
     label: str = "running"
+    verify: bool = False
     session: Session = field(init=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "session", Session(cache=self.cache))
+        object.__setattr__(self, "session", Session(cache=self.cache, verify=self.verify))
 
     @property
     def name(self) -> str:
@@ -235,6 +240,7 @@ RUNNING = Running()
 RUNNING_CACHED = Running(NodeCache(), "running, cached")
 RUNNING_BOUNDED = Running(NodeCache(bound=1), "running, cached, bounded 1")
 RUNNING_DROPPING = Running(NodeCache(drop=0.5, seed=0), "running, cached, dropping 0.5")
+RUNNING_VERIFIED = Running(NodeCache(), "running, cached, verified", verify=True)
 RUNNING_PLANTED = Running(LeavesOneOut(), "running, cached, planted: a read left out")
 RUNNING_PLANTED_WIDE = Running(
     LeavesOneOut(wider_than=4), "running, cached, planted: a read left out of sets over 4"
@@ -247,6 +253,7 @@ __all__ = [
     "RUNNING_DROPPING",
     "RUNNING_PLANTED",
     "RUNNING_PLANTED_WIDE",
+    "RUNNING_VERIFIED",
     "LeavesOneOut",
     "Running",
     "RunningAnswers",

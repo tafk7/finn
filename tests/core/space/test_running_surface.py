@@ -35,10 +35,10 @@ import pytest
 from support.space_oracle import toys
 from support.space_oracle.today import TodayAnswers
 
+from core.space._running_shapes import Ranked
 from core.space._running_type import Running
 from core.space._toys_support import Boiler, House
 from core.space._world_support import open_world, source_line
-from core.space.test_inspection import Listed as Ranked
 from finn.core.space import (
     Available,
     BoundDecision,
@@ -59,8 +59,10 @@ from finn.core.space import (
     constraint,
     derived,
     design_space,
+    divisors_of,
     domain,
     inspection,
+    reject,
     view,
 )
 from finn.core.space._failure import NativeEvaluationError, cancellation_details
@@ -69,7 +71,7 @@ from finn.core.space._running import surface as S
 from finn.core.space._running.evaluate import Evaluation, Session
 from finn.core.space._running.value import DesignSpace
 from finn.core.space._world import World
-from finn.core.space.occurrence import prepare_values
+from finn.core.space.occurrence import prepare_values, state
 from finn.core.space.references import ValueHandle
 from finn.core.space.results import ConstraintAssessment
 
@@ -227,7 +229,7 @@ def test_every_surface_question_on_the_house_at_each_heating_case_answers_as_tod
 
 
 # The evidence tests' shapes (``test_evidence``), and a choice whose candidates its domain's
-# order ranks by another choice (``test_inspection``'s ``Listed``).
+# order ranks by another choice (``_running_shapes.Ranked``).
 
 PHYSICAL = ViewKey("physical", int)
 
@@ -300,6 +302,41 @@ class Refusing(Space):
     physical = View(selected)
 
 
+# A selector whose cases' choices list values read from the facts (``Kernel``): with the
+# selector open, each case's choices are of unknown presence, and their pieces are read from
+# their lists as if they existed. ``plain.simd`` lists the divisors of a derived value
+# reading a fact.
+
+
+class Packed(Space):
+    width: int = Param()
+    pe: int = Decision(domain=divisors_of(width))
+
+    @constraint
+    def fits(self) -> bool | Rejected:
+        return True if self.pe <= 8 else reject("pe-wide", "pe past 8")
+
+
+class Plain(Space):
+    depth: int = Param()
+
+    @derived
+    def lanes(self) -> int:
+        return self.depth * 4
+
+    simd: int = Decision(domain=divisors_of(lanes))
+
+
+class Kernel(Space):
+    width: int = Param()
+    depth: int = Param(required=False)
+    style: Packed | Plain = Decision({"packed": Packed(width=width), "plain": Plain(depth=depth)})
+
+    @view
+    def bits(self) -> int:
+        return self.width * 2
+
+
 SHAPES: dict[str, Callable[[], Space]] = {
     "alternatives open": lambda: design_space(Alternatives(size=12)),
     "alternatives, good": lambda: design_space(Alternatives(size=12)).with_choices(
@@ -317,6 +354,13 @@ SHAPES: dict[str, Callable[[], Space]] = {
     "an order reading a choice set": lambda: design_space(Ranked()).with_choices(
         {Ranked.source.b: 2}
     ),
+    "an open selector's cases listing from the facts": lambda: design_space(
+        Kernel(width=12, depth=3)
+    ),
+    "an open selector's cases, a fact missing": lambda: design_space(Kernel(width=12)),
+    "a selector's case listing from the facts, chosen": lambda: design_space(
+        Kernel(width=12, depth=3)
+    ).with_choices({Kernel.style: "plain"}),
 }
 
 
@@ -369,6 +413,93 @@ def test_a_configuration_is_its_design_space_at_a_scope() -> None:
     with pytest.raises(ValueUnavailableError):
         S.selected_candidate(at, House.heating, running.session)
     assert S.query(at, House.garage, running.session) == point.query(House.garage)
+
+
+# -- evidence for a choice whose presence is unknown ---------------------------------------
+#
+# With ``style`` open, each case's choice is a piece read from its list as if it existed:
+# what that list read (the facts, through anything) is in validity's evidence, as today's
+# has it. Asked of the root's validity, each case's validity, a piece and a choice inside a
+# case. ``plain``'s list reads two facts, ``depth`` first: the running type gives them in
+# node order, today's in the order its model first read them, which on a model asked nothing
+# before (each test's class is its own) is that order too.
+
+
+def _kernel() -> type[Space]:
+    """``Kernel``, its plain case's list reading ``depth`` then ``width``: a class of its
+    own each time."""
+
+    class Packed(Space):
+        width: int = Param()
+        pe: int = Decision(domain=divisors_of(width))
+
+        @constraint
+        def fits(self) -> bool | Rejected:
+            return True if self.pe <= 8 else reject("pe-wide", "pe past 8")
+
+    class Plain(Space):
+        width: int = Param()
+        depth: int = Param()
+
+        @derived
+        def lanes(self) -> int:
+            return self.depth * self.width
+
+        simd: int = Decision(domain=divisors_of(lanes))
+
+    class Kernel(Space):
+        width: int = Param()
+        depth: int = Param(required=False)
+        style: Packed | Plain = Decision(
+            {"packed": Packed(width=width), "plain": Plain(width=width, depth=depth)}
+        )
+
+    return Kernel
+
+
+def _handle(point: Space, key: str | int) -> ValueHandle[object]:
+    """The node at ``key``, or the validity of the scope at that index."""
+    linked = state(point).linked
+    index = linked.keys[key] if isinstance(key, str) else linked.scopes[key].validity
+    return ValueHandle[object](linked, cast(int, index))
+
+
+@pytest.mark.parametrize(
+    ("facts", "plain"),
+    [({"width": 12, "depth": 3}, ["width", "depth"]), ({"width": 12}, ["depth"])],
+    ids=["given", "missing"],
+)
+def test_evidence_of_a_choice_of_unknown_presence_holds_what_its_list_read(
+    facts: dict[str, int], plain: list[str]
+) -> None:
+    kernel = _kernel()
+    point = design_space(kernel(**cast(Any, facts)))
+    running = Running()
+    at = S.At(cast(Any, running.open(point)).ds)
+    cases = {
+        case: cast(Space, inspection.candidate(point, getattr(kernel, "style"), case))._scope
+        for case in ("packed", "plain")
+    }
+    asked = {
+        "the root's validity": _handle(point, 0),
+        "packed's validity": _handle(point, cases["packed"]),
+        "plain's validity": _handle(point, cases["plain"]),
+        "a piece inside a case": _handle(point, "style.packed.fits"),
+        "a choice inside a case": _handle(point, "style.plain.simd"),
+    }
+    for what, reference in asked.items():
+        evidence = S.explain(at, reference, running.session)
+        assert evidence == inspection.explain(point, reference), what
+    root = S.explain(at, asked["the root's validity"], running.session)
+    linked = state(point).linked
+    read = {
+        node.declaration.key: [linked.header(each._node).key for each in node.dependencies]
+        for node in root.nodes
+    }
+    # each case's piece: its guard, then the facts its list read (``plain``'s halts on a
+    # missing ``depth``, read first), then the rest of its validity
+    assert read["style.packed.$validity"][:2] == ["style.packed.$selected", "width"], read
+    assert read["style.plain.$validity"] == ["style.plain.$selected", *plain], read
 
 
 # -- failure completion ------------------------------------------------------------------
@@ -807,9 +938,9 @@ POINTS: dict[tuple[str, str], tuple[Callable[..., object], str]] = {
     ("today", "suspended-read"): (_world.MethodReader._take, "entry = self.world._get(index)"),
     ("running", "suspended-read"): (evaluate.Reader._take, "found = self.ev.get(index)"),
     ("today", "publish"): (World._get, "return self.cache.setdefault(node, entry)"),
-    ("running", "publish"): (Evaluation._get, "self.memo[index] = found\nexcept Deeper:"),
+    ("running", "publish"): (Evaluation._compute, "self.memo[index] = found\nexcept Deeper:"),
     ("today", "record"): (World._get, "run.failures[key] = failing.failure"),
-    ("running", "record"): (Evaluation._get, "session.failures[key] = failing.failure"),
+    ("running", "record"): (Evaluation._compute, "session.failures[key] = failing.failure"),
     ("today", "delivery"): (
         _world.MethodReader._take,
         "remember_failure(self.call, failing.failure)",
@@ -822,7 +953,8 @@ POINTS: dict[tuple[str, str], tuple[Callable[..., object], str]] = {
 """Each interruption point, by way: the function and the line (by a marker in it)."""
 
 NODE = {"today": "node", "running": "index"}
-"""The name each way's ``_get`` gives the node it evaluates."""
+"""The name each way's evaluating function (``World._get``, ``Evaluation._compute``) gives
+the node it evaluates."""
 
 
 def _interrupt_at(

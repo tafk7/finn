@@ -17,10 +17,13 @@ model, through the class-based oracle (``support.space_oracle``), as the impleme
   membership reading that reads a decision, for a guarded choice and for a choice with no
   guard.
 - **The node cache** (``_running.cache``): the toys walked with a cache dropping half its
-  entries at random, with no disagreement; a cache wrong on purpose (a read left out of
-  each key) caught; every value type a choice or a fact holds in the engine's tests, the
-  toys and the reference harness, its ``==`` and hash checked against its value semantics,
-  and only the types checked keyed.
+  entries at random, with no disagreement; the purity check over it (each hit evaluated
+  anyway, and each node the depth guard abandoned evaluated again, and compared): a planted
+  impure function caught with it on and not with it off, and the toys' and the reference
+  walks with it on, with no disagreement and no impure function; a cache wrong on purpose
+  (a read left out of each key) caught; each type the cache keys by ``==`` checked against
+  its value semantics, the rule keying a value class field by field checked on sample
+  classes, and nothing else keyed.
 
 The implementations are loaded by name, as ``--implementation`` names them
 (``core.space._running_type``, a private module of these tests).
@@ -29,17 +32,16 @@ The implementations are loaded by name, as ``--implementation`` names them
 from __future__ import annotations
 
 import gc
-import importlib
 import itertools
 import math
 import os
-import pkgutil
 import re
 import subprocess
 import sys
 import weakref
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, cast
@@ -50,6 +52,7 @@ from support.space_oracle.today import TODAY
 
 from core.space import _running_cases as running_cases
 from core.space._running_cases import Rebinding
+from core.space._running_shapes import IN_AN_OPEN_CASE, even
 from core.space._running_type import LeavesOneOut, Running
 from core.space._toys_support import House
 from core.space.reference import (
@@ -68,17 +71,9 @@ from core.space.reference_harness import MILESTONES, ROWS, Case, Spelling
 from core.space.reference_harness import walks as reference_walks
 from core.space.reference_harness.engine import Engine
 from core.space.reference_harness.forms import ValidityForm
-from core.space.test_compose import Spec
-from core.space.test_extensions import ENCODING, Encoding
-from core.space.test_possible import Capabilities
-from core.space.test_public_snapshots import BAG, Bag
-from core.space.test_reference_cases import IN_AN_OPEN_CASE, even
-from core.space.test_value_inputs import PAIR
-from core.space.test_world import GRID, Grid
 from finn.core.space import (
     Available,
     Decision,
-    DefinitionError,
     Inapplicable,
     Param,
     Rejected,
@@ -97,13 +92,12 @@ from finn.core.space import (
 )
 from finn.core.space._failure import NativeEvaluationError
 from finn.core.space._running import evaluate, questions, structure
-from finn.core.space._running.cache import CHECKED, PLAIN, NodeCache
+from finn.core.space._running.cache import CHECKED, PLAIN, NodeCache, value_class
 from finn.core.space._running.cache import key as cache_key
 from finn.core.space._running.evaluate import MembershipReadsChoice, Session
 from finn.core.space._running.value import DesignSpace, FactsLayer
 from finn.core.space._structure import Structure
-from finn.core.space._world import _same_value
-from finn.core.space.compiler import compile_model
+from finn.core.space._world import _same_value, check_purity
 from finn.core.space.ir import Node
 from finn.core.space.occurrence import state
 from finn.core.space.semantics import default_semantics
@@ -111,6 +105,7 @@ from finn.core.space.semantics import default_semantics
 RUNNING: Implementation = load("core.space._running_type:RUNNING")
 RUNNING_DROPPING: Implementation = load("core.space._running_type:RUNNING_DROPPING")
 RUNNING_PLANTED: Implementation = load("core.space._running_type:RUNNING_PLANTED")
+RUNNING_VERIFIED: Implementation = load("core.space._running_type:RUNNING_VERIFIED")
 
 TOYS = toys.TOYS
 
@@ -959,6 +954,7 @@ def test_without_the_depth_guard_the_line_overflows_the_stack(
         fresh().open(configuration).query("value_300")
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_with_a_cache_the_depth_guard_keeps_nothing_for_an_abandoned_node() -> None:
     """Every answer the cache kept on the line reads ``value_0`` alone: no node abandoned by
     the depth guard was kept with the reads it had made so far. The line answers anew for
@@ -1040,6 +1036,8 @@ def test_a_membership_reading_of_a_choice_with_no_guard_that_reads_a_decision_is
 # work. ``RUNNING_DROPPING`` drops half its hits and half its keeps, at random (seeded), and
 # must answer as today's engine does. ``RUNNING_PLANTED`` keys each answer without the last
 # read of its read set: the comparison must catch it, or the cache's proofs have no teeth.
+# A test that counts what a hit saves, or that a wrong hit is answered, runs with the
+# purity check off (``purity_unchecked``): the check evaluates every hit anyway.
 
 
 @pytest.mark.parametrize("seed", [0, 1])
@@ -1065,6 +1063,7 @@ class Ordered(Space):
         return True if self.a <= self.b else reject("unordered", "a past b")
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_a_cache_leaving_a_read_out_of_its_key_answers_otherwise_and_is_caught() -> None:
     """``ordered`` reads ``a`` and ``b``; the planted cache keys it by ``a`` alone. Asked at
     (2, 3), then at (2, 1), it answers the second as the first: valid where today's
@@ -1083,6 +1082,7 @@ def test_a_cache_leaving_a_read_out_of_its_key_answers_otherwise_and_is_caught()
     assert counters(planted).hits > 0
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_a_hit_leaves_the_evaluation_as_evaluating_would() -> None:
     """Every node of a house, asked of a design space equal to one evaluated before with
     the same cache, is a hit; each answer is the one evaluating gives (its result, trace,
@@ -1105,6 +1105,7 @@ def test_a_hit_leaves_the_evaluation_as_evaluating_would() -> None:
     assert counters(cold).evaluated > 0
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_a_walk_catches_the_planted_cache() -> None:
     house = TOYS["house"]
     found = compare.walk(house.make, house.facts, 0, 5, TODAY, RUNNING_PLANTED)
@@ -1112,28 +1113,263 @@ def test_a_walk_catches_the_planted_cache() -> None:
     assert {"members", "validity"} <= set(found.by_kind), found.by_kind
 
 
-# -- the value types a choice or a fact holds ------------------------------------------------------
+# -- the purity check over the cache and the depth guard ------------------------------------------
+#
+# The node cache and the depth guard's restart rest on purity: an authored function answers
+# from what it reads alone. The purity check (``evaluate.Session.verifying``: today's switch,
+# ``_world.check_purity``, which this package's conftest turns on, or a session made with
+# ``verify``) evaluates a cache hit anyway, and a node the depth guard abandoned again once it
+# completes, and compares: an impure function is its ``EvaluationError``. A planted impure
+# function is caught with the check on, and answers silently with it off.
+
+STAMPS = itertools.count()
+
+
+class Stamped(Space):
+    """Impure: each answer reads a counter outside the Space."""
+
+    width: int = Param()
+
+    @derived
+    def stamped(self) -> int:
+        return self.width + next(STAMPS) % 2
+
+    @derived
+    def numbered(*, width: int) -> int:
+        return width + next(STAMPS) % 2
+
+
+SWITCHES = ("off", "the session's", "today's")
+
+
+@contextmanager
+def switched(switch: str) -> Iterator[Running]:
+    """A cached running type with the purity check as ``switch`` says: off, on by its
+    session's ``verify``, or on by today's switch alone."""
+    previous = check_purity(switch == "today's")
+    try:
+        yield Running(
+            NodeCache(), f"running, cached, check {switch}", verify=switch == "the session's"
+        )
+    finally:
+        check_purity(previous)
+
+
+@pytest.mark.parametrize("switch", SWITCHES)
+@pytest.mark.parametrize("key", ["stamped", "numbered"])
+def test_the_purity_check_evaluates_a_cache_hit_again_and_names_an_impure_function(
+    key: str, switch: str
+) -> None:
+    with switched(switch) as running:
+        first = running.make(Stamped, {"width": 4}, {}).query(key)
+        again = running.make(Stamped, {"width": 4}, {})  # an equal design space: a hit
+        if switch == "off":
+            assert again.query(key) == first  # the kept answer, silently
+            assert counters(running).hits == 1
+            return
+        with pytest.raises(NativeEvaluationError) as caught:
+            again.query(key)
+    assert counters(running).hits == 2  # the function's, and its fact's, read again
+    assert caught.value.primary.owner == key
+    assert "answered differently when run again" in str(caught.value.primary)
+
+
+def _impure_line(depth: int) -> type[Space]:
+    """``LINE``'s shape, its last value impure: past the depth guard, it is abandoned."""
+    members: dict[str, object] = {"__annotations__": {"value_0": int}, "value_0": Param()}
+
+    def step(previous: str, impure: bool) -> Callable[[Space], int]:
+        def compute(self: Space) -> int:
+            return cast(int, getattr(self, previous)) + 1 + (next(STAMPS) % 2 if impure else 0)
+
+        return compute
+
+    for number in range(1, depth + 1):
+        members[f"value_{number}"] = derived(step(f"value_{number - 1}", number == depth))
+    return cast(type[Space], type("ImpureLine", (Space,), members))
+
+
+IMPURE_LINE = _impure_line(100)
+
+
+@pytest.mark.parametrize("switch", SWITCHES)
+def test_the_purity_check_evaluates_a_node_the_depth_guard_abandoned_again(switch: str) -> None:
+    with switched(switch) as cached_:
+        running = Running(verify=cached_.verify)  # no cache: the depth guard's alone
+        answers = running.make(IMPURE_LINE, {"value_0": 0}, {})
+        if switch == "off":
+            assert isinstance(answers.query("value_100"), Available)
+        else:
+            with pytest.raises(NativeEvaluationError) as caught:
+                answers.query("value_100")
+            assert caught.value.primary.owner == "value_100"
+            assert "answered differently when run again" in str(caught.value.primary)
+    assert counters(running).restarts > 0
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+@pytest.mark.parametrize("toy", sorted(TOYS))
+def test_the_toys_walk_as_today_with_the_purity_check_over_the_cache(toy: str, seed: int) -> None:
+    before = counters(RUNNING_VERIFIED).hits
+    found = compare.walk(
+        TOYS[toy].make, TOYS[toy].facts, seed, 20, TODAY, RUNNING_VERIFIED, forms.ALL
+    )
+    assert found.lines() == []
+    assert found.tally["changes"] > 0 and found.tally["cold builds"] > 0
+    assert counters(RUNNING_VERIFIED).hits > before  # each one evaluated again, the same
+
+
+@pytest.mark.parametrize("seed", range(24))
+def test_the_reference_walks_hold_strictly_with_the_purity_check_over_the_cache(
+    seed: int,
+) -> None:
+    before = counters(RUNNING_VERIFIED).hits
+    tally = reference_walks.walk(seed, 40, strict=True, implementation=RUNNING_VERIFIED)
+    assert tally.failure is None, tally.failure
+    assert tally.implementation == "running, cached, verified"
+    assert tally.steps == 40 and not tally.by_milestone and tally.engine_errors == 0
+    assert tally.engine_checks["cold"] == tally.engine_checks["bind"] == tally.compared
+    assert tally.engine_checks["cold change"] == tally.steps
+    assert counters(RUNNING_VERIFIED).hits > before
+
+
+# -- the value types the cache keys -------------------------------------------------------------
 #
 # The cache matches values by type and ``==`` (``cache.key``): where a type's ``==`` is
-# coarser than its value semantics, the cache is wrong, not slow. Each type a choice or a
-# fact holds in the engine's tests, the toys and the reference harness is listed here, with
-# the value semantics in force, and its ``==`` and hash are checked against them
-# (``_world._same_value``): values equal by the semantics are ``==`` and hash alike, and
-# values the semantics tell apart are not ``==``, so their keys differ. The cache keys only
-# the types checked here (``cache.PLAIN``, tuples and frozen sets of them, and the classes
-# named in ``cache.CHECKED``): any other type has no key, nor has an unhashable one, and
-# nothing that read it is kept. FINN's own value types come later.
-#
-# Where found: the module-level Space classes of ``tests/core/space`` and of the toys
-# (``test_every_choice_and_fact_type_is_listed`` reads them); the reference harness's
-# builder (``reference_harness.engine``: ``bool``, ``int``, ``str`` by a choice's values,
-# ``int`` otherwise, ``bool``, ``str`` and ``tuple`` by a case's spelling); and, declared
-# inside test functions, ``list`` under several semantics (unhashable), ``int`` and
-# ``tuple`` under semantics whose equality is ``==``, and the two ``Rate`` classes (never
-# keyed: neither is checked). ``support.value_classes`` names the immutable atoms a frozen
-# value class may hold: each is listed too.
+# coarser than its value semantics, the cache is wrong, not slow. It keys the plain types
+# (``cache.PLAIN``) and the classes in ``cache.CHECKED``, each listed here with the value
+# semantics in force and its ``==`` and hash checked against them (``_world._same_value``):
+# values equal by the semantics are ``==`` and hash alike, and values the semantics tell
+# apart are not ``==``, so their keys differ. Tuples and frozen sets of keyed values are
+# keyed item by item; a value class (``cache.value_class``: a frozen dataclass whose ``==``
+# and hash are the generated ones) field by field, each field's value keyed in turn. The
+# rule is checked on this module's own sample classes: under the default semantics and an
+# immutable nominal one, a frozen dataclass's generated ``==`` is its semantics' equality,
+# and its key is never coarser. Any other type has no key, nor has an unhashable one, and
+# nothing that read it is kept: an unlisted type is a miss, never a wrong answer.
 
 NAN, OTHER_NAN = float("nan"), float("nan")
+
+
+@dataclass(frozen=True)
+class Spec:
+    enabled: bool
+    lanes: int
+
+
+@dataclass(frozen=True)
+class Encoding:
+    bits: int
+    integer: bool = True
+
+
+@dataclass(frozen=True)
+class Capabilities:
+    fast: bool = True
+    ports: int = 1
+
+
+@dataclass(frozen=True)
+class Stream:
+    """A value class holding a value class, a tuple and a float."""
+
+    dtype: Encoding
+    shape: tuple[int, ...]
+    rate: float
+
+
+@dataclass(frozen=True)
+class Tagged:
+    """A field left out of ``==`` (``compare=False``) is left out of the key."""
+
+    n: int
+    note: str = field(default="", compare=False)
+
+
+@dataclass(frozen=True)
+class HandWritten:
+    """Equal by ``lanes`` alone, by its own ``==``: not a value class."""
+
+    lanes: int
+    bits: int
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, HandWritten) and other.lanes == self.lanes
+
+    def __hash__(self) -> int:
+        return hash(self.lanes)
+
+
+@dataclass(frozen=True, eq=False)
+class Identity:
+    """Equal by identity: not a value class."""
+
+    lanes: int
+
+
+class Inherits(Spec):
+    """A plain subclass of a value class: not one itself."""
+
+
+@dataclass(frozen=True)
+class HoldsList:
+    """A value class whose field holds a list: no key."""
+
+    cells: list[int]
+
+
+@dataclass
+class Bag:
+    values: list[int]
+
+
+BAG = ValueSemantics(
+    Bag,
+    "bag",
+    lambda value: type(value) is Bag,
+    lambda left, right: left.values == right.values,
+    lambda value: Bag(list(value.values)),
+)
+
+
+class Grid:
+    """A value like an array: ``==`` answers cell by cell, with no truth value."""
+
+    def __init__(self, cells: tuple[int, ...]) -> None:
+        self.cells = cells
+
+    def __eq__(self, other: object) -> Cells:  # type: ignore[override]
+        assert isinstance(other, Grid)
+        return Cells(tuple(a == b for a, b in zip(self.cells, other.cells)))
+
+    __hash__ = None  # type: ignore[assignment]
+
+
+class Cells:
+    def __init__(self, cells: tuple[bool, ...]) -> None:
+        self.cells = cells
+
+    def __bool__(self) -> bool:
+        raise ValueError("the truth value of a grid comparison is ambiguous")
+
+
+GRID = ValueSemantics(
+    Grid,
+    "grid",
+    lambda value: type(value) is Grid,
+    lambda left, right: left.cells == right.cells,
+    lambda value: Grid(value.cells),
+)
+
+PAIR: ValueSemantics[tuple[int, int]] = ValueSemantics(
+    tuple[int, int],
+    "pair",
+    lambda value: type(value) is tuple and len(value) == 2,
+    lambda left, right: left == right,
+    lambda value: value,
+)
+
+ENCODING = ValueSemantics.immutable_nominal(Encoding)
 
 VALUE_TYPES: dict[str, tuple[ValueSemantics[Any], tuple[object, ...]]] = {
     "None": (default_semantics(type(None)), (None,)),
@@ -1152,26 +1388,51 @@ VALUE_TYPES: dict[str, tuple[ValueSemantics[Any], tuple[object, ...]]] = {
         default_semantics(frozenset),
         (frozenset(), frozenset({1}), frozenset({True}), frozenset({1, 2})),
     ),
-    "pair (test_value_inputs.PAIR)": (PAIR, ((1, 2), (2, 1), (1, 1), (True, 2))),
-    "Encoding (test_extensions.ENCODING)": (
+    "pair": (PAIR, ((1, 2), (2, 1), (1, 1), (True, 2))),
+    "Encoding (immutable nominal)": (
         ENCODING,
         (Encoding(8), Encoding(8, False), Encoding(16), Encoding(8, cast(bool, 1))),
     ),
-    "Spec (test_compose)": (
+    "Spec": (
         default_semantics(Spec),
         (Spec(True, 1), Spec(False, 1), Spec(True, 2), Spec(cast(bool, 1), 1)),
     ),
-    "Capabilities (test_possible)": (
+    "Capabilities": (
         default_semantics(Capabilities),
         (Capabilities(), Capabilities(False), Capabilities(True, 2)),
     ),
+    "Stream": (
+        default_semantics(Stream),
+        (
+            Stream(Encoding(8), (1, 2), 0.0),
+            Stream(Encoding(8), (1, 2), -0.0),
+            Stream(Encoding(8), (2, 1), 0.0),
+            Stream(Encoding(16), (1, 2), 0.0),
+            Stream(Encoding(8, cast(bool, 1)), (1, 2), 0.0),
+            Stream(Encoding(8), (True, 2), 0.0),
+            Stream(Encoding(8), (1, 2), NAN),
+            Stream(Encoding(8), (1, 2), OTHER_NAN),
+        ),
+    ),
+    "Tagged": (default_semantics(Tagged), (Tagged(1), Tagged(1, "a"), Tagged(2))),
 }
 """Each hashable value type by name: its value semantics, and values to compare."""
 
+VALUE_CLASSES = (Spec, Encoding, Capabilities, Stream, Tagged)
+"""The sample value classes above, each keyed by the rule."""
+
+NOT_VALUE_CLASSES: dict[str, tuple[type, object]] = {
+    "a hand-written ==": (HandWritten, HandWritten(1, 8)),
+    "equal by identity": (Identity, Identity(1)),
+    "mutable": (Bag, Bag([1])),
+    "a plain subclass": (Inherits, Inherits(True, 1)),
+}
+"""Classes the rule does not key, each with a value."""
+
 UNHASHABLE: dict[str, tuple[ValueSemantics[Any], tuple[object, ...]]] = {
     "list": (default_semantics(list), ([], [1], [1, 2])),
-    "Bag (test_public_snapshots.BAG)": (BAG, (Bag([1]), Bag([1, 2]))),
-    "Grid (test_world.GRID)": (GRID, (Grid((1,)), Grid((1, 2)))),
+    "Bag": (BAG, (Bag([1]), Bag([1, 2]))),
+    "Grid": (GRID, (Grid((1,)), Grid((1, 2)))),
 }
 """Each unhashable value type by name: never keyed."""
 
@@ -1199,6 +1460,7 @@ def test_a_value_types_equality_and_hash_agree_with_its_semantics(name: str) -> 
             assert cache_key(left) != cache_key(right), (left, right)
         if cache_key(left) == cache_key(right):
             assert same, (left, right)  # a hit is never a value the semantics tell apart
+    assert all(cache_key(value) is not None for value in values)
 
 
 @pytest.mark.parametrize("name", sorted(UNHASHABLE))
@@ -1211,9 +1473,9 @@ def test_an_unhashable_value_type_is_never_keyed(name: str) -> None:
 
 def test_true_and_1_and_the_two_zeros_are_keyed_as_their_semantics_say() -> None:
     """``True`` and ``1``: no member holds both (each type recognizes its own), and their
-    keys differ. Inside a tuple the semantics hold them equal, and the key still tells them
-    apart: a miss, never a wrong hit. ``-0.0`` and ``0.0`` are equal by the semantics, and
-    keyed alike, alone and inside a tuple."""
+    keys differ. Inside a tuple or a value class the semantics hold them equal, and the key
+    still tells them apart: a miss, never a wrong hit. ``-0.0`` and ``0.0`` are equal by
+    the semantics, and keyed alike, alone, inside a tuple and inside a value class."""
     boolean, integer, pair = (
         VALUE_TYPES["bool"][0],
         VALUE_TYPES["int"][0],
@@ -1224,65 +1486,64 @@ def test_true_and_1_and_the_two_zeros_are_keyed_as_their_semantics_say() -> None
     assert _same_value(_member(pair), (True,), (1,)) and cache_key((True,)) != cache_key((1,))
     assert _same_value(_member(pair), ((1, True),), ((1, 1),))
     assert cache_key(((1, True),)) != cache_key(((1, 1),))
+    spec = VALUE_TYPES["Spec"][0]
+    assert _same_value(_member(spec), Spec(True, 1), Spec(cast(bool, 1), 1))
+    assert cache_key(Spec(True, 1)) != cache_key(Spec(cast(bool, 1), 1))
     real = VALUE_TYPES["float"][0]
     assert _same_value(_member(real), -0.0, 0.0) and cache_key(-0.0) == cache_key(0.0)
     assert _same_value(_member(pair), (-0.0, 1), (0.0, 1)) and cache_key((-0.0, 1)) == cache_key(
         (0.0, 1)
     )
+    stream = Stream(Encoding(8), (1,), 0.0)
+    assert cache_key(stream) == cache_key(Stream(Encoding(8), (1,), -0.0))
     assert not _same_value(_member(real), NAN, OTHER_NAN) and cache_key(NAN) != cache_key(OTHER_NAN)
 
 
-def _stand_in(module: str, qualname: str) -> type:
-    """A frozen value class named as ``module.qualname`` (``heads``: an int)."""
-    made = type(qualname, (), {"__annotations__": {"heads": int}, "__qualname__": qualname})
-    made.__module__ = module
-    return cast(type, dataclass(frozen=True)(made))
+def test_the_cache_keys_the_types_this_test_checks_and_value_classes_by_their_rule() -> None:
+    """Every type the cache keys by ``==`` (``cache.PLAIN``, ``cache.CHECKED``), tuples and
+    frozen sets are types whose semantics this test checks, and so are the harness's. The
+    rule (``cache.value_class``) holds for each sample value class, and for none of the
+    classes it must not key: a hand-written ``==``, equality by identity, a mutable
+    dataclass, a plain subclass of a value class. A value class holding a value with no
+    key has none."""
+    checked = {semantics.type_token for semantics, _ in VALUE_TYPES.values()}
+    assert {*PLAIN, *CHECKED, tuple, frozenset, *HARNESS} <= checked
+    assert set(VALUE_CLASSES) <= checked
+    assert all(value_class(kind) for kind in VALUE_CLASSES)
+    for name, (kind, value) in NOT_VALUE_CLASSES.items():
+        assert not value_class(kind), name
+        assert cache_key(value) is None, name
+        assert cache_key((1, value)) is None, name
+    assert value_class(HoldsList) and cache_key(HoldsList([1])) is None
+    assert cache_key((1, "a", frozenset({2.0}), Spec(True, 2))) is not None
 
 
-def _name(kind: type) -> str:
-    return f"{kind.__module__}.{kind.__qualname__}"
-
-
-def test_the_cache_keys_only_the_types_this_test_checks() -> None:
-    """Every type the cache keys (``cache.PLAIN``, tuples and frozen sets, the classes named
-    in ``cache.CHECKED``) is a type whose semantics this test checks, and each of its values
-    here has a key."""
-    checked = {semantics.type_token: values for semantics, values in VALUE_TYPES.values()}
-    named = {_name(token): token for token in checked if isinstance(token, type)}
-    assert set(PLAIN) <= set(checked) and {tuple, frozenset} <= set(checked)
-    assert CHECKED <= set(named), CHECKED - set(named)
-    for kind in (*PLAIN, tuple, frozenset, *(named[name] for name in CHECKED)):
-        assert all(cache_key(value) is not None for value in checked[kind]), kind
-
-
-def test_a_value_of_a_type_not_checked_is_never_keyed() -> None:
-    """A stand-in for ``toy_forward.Rate`` (a type this test never checks) has no key,
-    alone or inside a tuple or a frozen set, nor has a frozen value class declared here; a
-    design space whose fact holds one keeps nothing for what read it (every lookup there a
-    miss), and still answers as today's engine."""
-    held = _stand_in("toy_forward", "Rate")
-    value = held(3)
-    assert _name(held) not in CHECKED
-    assert (
-        cache_key(value) is None
-        and cache_key((1, value)) is None
-        and cache_key(frozenset({value})) is None
-    )
-    assert cache_key(_stand_in("core.space.test_compose", "Other")(3)) is None
-    assert cache_key((1, "a", frozenset({2.0}))) is not None
+@pytest.mark.usefixtures("purity_unchecked")
+def test_a_value_of_a_type_not_keyed_keeps_nothing_and_a_value_class_is_found_again() -> None:
+    """A fact holding a ``HandWritten`` (a frozen dataclass with its own ``==``: no key)
+    keeps nothing for what read it, every lookup there a miss; a fact holding a value class
+    is keyed, and found again. Both answer as today's engine."""
 
     class Holds(Space):
-        rate = Param(semantics=default_semantics(held))  # type: ignore[var-annotated]
+        rate = Param(semantics=default_semantics(HandWritten))
         n: int = Param()
 
         @derived
         def total(self) -> int:
-            return cast(int, cast(Any, self.rate).heads) * 2
+            return cast(int, cast(Any, self.rate).lanes) * 2
 
         @derived
         def double(self) -> int:
             return self.n * 2
 
+    class Specified(Space):
+        spec: Spec = Param()
+
+        @derived
+        def lanes(self) -> int:
+            return self.spec.lanes * 2
+
+    value = HandWritten(3, 8)
     running = cached()
     cache = cast(NodeCache, running.cache)
     for _ in range(2):
@@ -1292,41 +1553,11 @@ def test_a_value_of_a_type_not_checked_is_never_keyed() -> None:
     assert cache.answers() == 2  # ``n`` and ``double``: nothing that read ``rate``
     today = TODAY.make(Holds, {"rate": value, "n": 4}, {})
     assert compare.everything(today, made).lines() == []
-
-
-def _space_classes() -> list[type[Space]]:
-    """The module-level Space classes of ``tests/core/space`` and of the toys."""
-    package = importlib.import_module("core.space")
-    names = [
-        f"core.space.{info.name}"
-        for info in pkgutil.iter_modules(package.__path__)
-        if info.name.startswith(("test_", "_"))
-    ]
-    names += ["support.space_oracle.toys", "support.space_cores", "support.space_pipeline"]
-    found: dict[type[Space], None] = {}
-    for name in names:
-        for value in vars(importlib.import_module(name)).values():
-            if isinstance(value, type) and issubclass(value, Space) and value is not Space:
-                found[value] = None
-    return list(found)
-
-
-def test_every_choice_and_fact_type_is_listed() -> None:
-    """Every choice's and fact's value type in the module-level Space classes is listed
-    above (checked or unhashable); so are the harness's."""
-    listed = {
-        semantics.type_token for semantics, _ in (*VALUE_TYPES.values(), *UNHASHABLE.values())
-    }
-    found: dict[object, str] = {}
-    for space_class in _space_classes():
-        try:
-            model = compile_model(space_class)
-        except DefinitionError:
-            continue  # a refused definition holds no value
-        for node in cast(Structure, model.linked).raw_nodes:
-            if node.kind in ("param", "decision") and node.semantics is not None:
-                found.setdefault(node.semantics.type_token, space_class.__qualname__)
-    unknown = {token: where for token, where in found.items() if token not in listed}
-    assert unknown == {}
-    assert {bool, int, str} <= set(found)
-    assert set(HARNESS) <= listed
+    hits = counters(running).hits
+    for _ in range(2):
+        found = running.make(Specified, {"spec": Spec(True, 3)}, {})
+        assert found.query("lanes") == Available(6)
+    assert counters(running).hits == hits + 1  # ``lanes``, the second time
+    assert (
+        compare.everything(TODAY.make(Specified, {"spec": Spec(True, 3)}, {}), found).lines() == []
+    )

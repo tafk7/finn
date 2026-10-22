@@ -444,7 +444,8 @@ def _evidence(ev: Evaluation, index: NodeId) -> QueryEvidence[object]:
 def _read_through(ev: Evaluation, node: Node, demanded: tuple[NodeId, ...]) -> tuple[NodeId, ...]:
     """The formals bound by reference ``node`` read at their source: each node its
     definition names (its output, arguments, domain inputs, alternatives, selector, and a
-    method's possible reads) that ``node`` reads at another node it then read."""
+    method's possible reads, in the order it read their sources) that ``node`` reads at
+    another node it then read."""
     named: list[NodeId] = []
     if node.output is not None:
         named.append(node.output)
@@ -454,7 +455,11 @@ def _read_through(ev: Evaluation, node: Node, demanded: tuple[NodeId, ...]) -> t
     if node.selector is not None:
         named.append(node.selector)
     if node.call_style == "self":
-        named.extend(sorted(ev.inferred.methods.get(node.index) or ()))
+        order = {source: position for position, source in enumerate(demanded)}
+        possible = sorted(ev.inferred.methods.get(node.index) or ())
+        named.extend(
+            sorted(possible, key=lambda formal: order.get(ev.source(formal, node), len(order)))
+        )
     read = set(demanded)
     found: dict[NodeId, None] = {}
     for target in named:
