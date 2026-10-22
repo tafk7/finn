@@ -44,6 +44,7 @@ from .answers import (
     kleene_and,
 )
 from .description import (
+    NO_CASE,
     Choice,
     Constraint,
     DefinitionError,
@@ -61,6 +62,7 @@ from .description import (
     computed,
     listed,
     membership,
+    nothing,
 )
 from .model import (
     Accepted,
@@ -77,6 +79,7 @@ from .model import (
 )
 
 __all__ = [
+    "NO_CASE",
     "Absent",
     "Accepted",
     "Answer",
@@ -128,5 +131,6 @@ __all__ = [
     "kleene_and",
     "listed",
     "membership",
+    "nothing",
     "same",
 ]

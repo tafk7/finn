@@ -400,6 +400,43 @@ def test_the_cause_of_a_question_reaching_a_refused_guard_under_an_open_selector
     assert walked.cause(None, other) is None
 
 
+# Reading 26, invariant 2's one excused move: under ``plant``'s refused guard, setting the
+# selector finds the other case absent (absent dominates refused in presence's AND), so the
+# value of its choice moves from refused to inapplicable. An answer refused on its own never
+# does while its scope stays present.
+
+
+def test_an_answer_refused_through_its_scopes_presence_may_become_inapplicable() -> None:
+    before = Configuration(HEATED, {"gate": 1}).solve()
+    after = Configuration(HEATED, {"gate": 1}, {"plant.heating": "boiler"}).solve()
+    asked = questions(before.index)
+    old, new = model_forms(before, asked), model_forms(after, asked)
+    cop = ("answer", "plant.heating.heat_pump.cop")
+    assert (old[cop], new[cop]) == (
+        AnswerForm("refused", codes=old[cop].codes),  # type: ignore[union-attr]
+        AnswerForm("inapplicable"),
+    )
+    out = walks.refused_then_absent(before, after)
+    assert out == {"plant.heating.heat_pump.cop"}
+    committed = {"plant.heating": "boiler"}
+    assert order_problems(old, new, committed) == {cop: "refused -> inapplicable"}
+    assert order_problems(old, new, committed, out) == {}
+
+
+def test_an_answer_refused_on_its_own_moving_to_inapplicable_is_still_named() -> None:
+    # the same move, of a node whose scope is not out by reading 26: named
+    old = {("answer", "d"): AnswerForm("refused", codes=frozenset({("d-odd", "d")}))}
+    new = {("answer", "d"): AnswerForm("inapplicable")}
+    assert order_problems(old, new, {}, frozenset({"other"})) == {
+        ("answer", "d"): "refused -> inapplicable"
+    }
+    # and only refused -> inapplicable is excused for a node that is: refused -> a value is not
+    valued = {("answer", "d"): AnswerForm("value", 2)}
+    assert order_problems(old, valued, {}, frozenset({"d"})) == {
+        ("answer", "d"): "refused -> value"
+    }
+
+
 def test_each_facts_answer_is_asked_at_each_configuration() -> None:
     # A fact's answer is always known (SZ100 (5)): the model answers its value, or None for
     # an optional one left out (seed 7's f1), and the engine is asked it through ``query``

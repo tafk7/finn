@@ -28,7 +28,8 @@ domain's membership list is its listed values that are members, in listed order;
 
 **Presence.** A scope is present; absent (another case selected, or its ``when``
 false); unknown (its selector open, or a ``when`` input waiting); or refused (its
-``when`` reads a refused input: a derived value refusing). A scope under a
+``when`` reads a refused input: a derived value refusing; or it is a case of a derived
+selector whose value refuses, reading 17). A scope under a
 refused guard is not in play: its stored choices are dormant, its open choices
 absent, its constraints add nothing, and every value in it reads refused through the
 guard.
@@ -69,10 +70,10 @@ wait. Its reads made are the entries that answered a value (reading 4).
 or not in play: true, not applying; an input refused: false through it; an input
 waiting: unknown; an input inapplicable: true, not applying; else its predicate on its
 own values, false at its origin); each listed domain that lists no value (false), or
-whose list cannot be made (reading 13); each guard refused through an input
-(false). A listed domain that lists a value is no piece, whatever its presence. A
-piece of a scope whose presence is unknown is unknown, whatever it would answer. No
-choice is otherwise a piece.
+whose list cannot be made (reading 13); each guard refused through an input, a derived
+selector's refusing value among them (false; readings 8 and 17). A listed domain that
+lists a value is no piece, whatever its presence. A piece of a scope whose presence is
+unknown is unknown, whatever it would answer. No choice is otherwise a piece.
 
 **A change** (commit or replace choices, clear choices, set or unset facts, as one
 batch) publishes its successor whole, or is refused with each refusal and the original
@@ -240,6 +241,36 @@ corpus; § 16 holds the readings its author gave for this model.
     waiting on that input (a guard over a value that does not exist neither holds nor
     refuses).
 16. *Cycles* are the dependency rule written at :mod:`.description`.
+17. *A selector picked by a derived value* (``Selector(by=d)``, the engine's
+    ``Select(by=d)``; § 2.1's table of ``records/selectors-ownership-2026-10-21/NOTE.md``).
+    It is no choice: no key, never stored, never listed. Its path reads its value: ``d``'s
+    where that names one of its cases; refused ``"select-no-case"`` at the selector where
+    it names none (an origin of kind ``"derived"``, the selector's own); refused through
+    ``d`` where ``d`` refuses. A picker never answers "nothing": ``None`` names no case (a
+    case that places nothing does). A case is present where the value names it and its
+    holding scope is present; absent where it names another case; unknown while the value
+    waits (or reads an input that does not apply, as reading 15), so the pieces of the
+    rules inside are unknown, as under an open chosen selector (reading 13); and not in
+    play where the value refuses, as under a guard refused through an input (reading 8):
+    one ``GUARD`` piece, owned by and in the selector's own name, its cases adding none,
+    their stored choices dormant. *Standing:* the selector reads its value to find its
+    case, an existence read, so the choices ``d`` reads decide its cases' existence
+    (reading 4's deciders). They never stand for an origin inside a case, even where it
+    reads them as values; they stand for an origin outside the cases that reads them as
+    values (§ 16.22). *The domain rule:* a domain's input existing under a case is
+    ``domain-reads-choice`` exactly when ``d`` reads a choice (a picker over facts alone is
+    a ``when`` over facts); an input in the choice's own case is a definition whatever
+    picks that case, its guard being the choice's own existence guard (§ 16.20).
+26. *Refused, then inapplicable, is a move up* (numbered as the semantics note records it;
+    ruled in the design's review, § 10 of ``records/selectors-ownership-2026-10-21/NOTE.md``).
+    Presence is Kleene's AND with absent dominating refused (§ 16.21:
+    :meth:`_Evaluation._presence` asks absent first), so a scope refused through a guard
+    above can still be found absent when another part of its path is decided (a chosen
+    selector inside a case that is out of play is set): an answer refused through its
+    scope's presence becomes inapplicable. It never becomes present. So an addition may move
+    an answer refused **through its scope's presence** to inapplicable, and invariant 2
+    (additions move answers only up) accepts exactly that move, nothing wider: an answer
+    refused on its own never becomes inapplicable while its scope stays present.
 """
 
 from __future__ import annotations
@@ -415,6 +446,18 @@ class FactsOnly:
         while current is not None and not self.index.within(within, current):
             info = self.index.scopes[current]
             assert info.selector is None, (path, current)  # domain-reads-choice
+            if info.picker is not None:
+                # a derived selector's case, its value over facts here: does it name the case
+                answers.append(self.applies(info.picker, within))
+                picked = self.value(info.picker)
+                if isinstance(picked, Refused):
+                    reason = Reason(
+                        ReasonKind.INPUT_REFUSED, current, current, related=(info.picker,)
+                    )
+                    answers.append(Refused((reason,)))
+                else:
+                    assert isinstance(picked, Known), (path, current)
+                    answers.append(Known(same(picked.value, info.case)))
             if info.when is not None:
                 answers.extend(self.applies(read, within) for read in info.when.reads)
                 inputs = self.inputs(info.when.reads)
@@ -577,6 +620,8 @@ class _Evaluation:
                 selector = _PRESENT if held else _ABSENT
             else:
                 selector = _Presence(Presence.UNKNOWN, frozenset({info.selector}))
+        elif info.picker is not None and parent.state is not Presence.ABSENT:
+            selector = self.picked(info.picker, info.case)
         when = _PRESENT
         if info.when is not None and Presence.ABSENT not in (parent.state, selector.state):
             inputs = self.inputs(info.when.reads)
@@ -597,11 +642,26 @@ class _Evaluation:
                 when = _Presence(Presence.UNKNOWN, frozenset(inputs.inapplicable))
         return parent, selector, when
 
+    def picked(self, picker: str, case: str | None) -> _Presence:
+        """A derived selector's part in its case's presence (reading 17): present where its
+        value names the case, absent where it names another, unknown while it waits (or
+        reads an input that does not apply: reading 15), refused where it refuses (through
+        its input, or naming no case)."""
+
+        answer = self.read(picker)
+        if isinstance(answer, Known):
+            return _PRESENT if same(answer.value, case) else _ABSENT
+        if isinstance(answer, Unresolved):
+            return _Presence(Presence.UNKNOWN, frozenset(answer.waits))
+        if isinstance(answer, Refused):
+            return _Presence(Presence.REFUSED, guards=(picker,), reasons=answer.reasons)
+        return _Presence(Presence.UNKNOWN, frozenset({picker}))
+
     def _presence(self, scope: str) -> _Presence:
         if self.index.scopes[scope].parent is None:
             return _PRESENT
         parts = self.parts(scope)
-        parent, _, when = parts
+        parent, selector, when = parts
         states = {part.state for part in parts}
         if Presence.ABSENT in states:
             return _ABSENT
@@ -610,6 +670,8 @@ class _Evaluation:
         if Presence.UNKNOWN in states:
             waits = frozenset().union(*(p.waits for p in parts if p.state is Presence.UNKNOWN))
             return _Presence(Presence.UNKNOWN, waits)
+        if selector.state is Presence.REFUSED:
+            return selector  # a derived selector refusing: its cases are not in play
         if when.state is Presence.REFUSED:
             return when
         return _PRESENT
@@ -790,6 +852,27 @@ class _Evaluation:
             kind, scope, scope, Verdict.FALSE, reasons=sorted_reasons((reason, *when.reasons))
         )
 
+    def picker_guard(self, picker: str) -> Piece | None:
+        """A derived selector whose value refuses (through its input, or naming no case):
+        one ``GUARD`` piece in the selector's own name, standing for its cases, none of which
+        adds one (readings 8 and 17). None where its holding scope is not present: absent,
+        refused above (that guard's piece counts), or unknown (its value then waits)."""
+
+        owner = self.index.pickers[picker][0]
+        if self.presence(owner).state is not Presence.PRESENT:
+            return None
+        answer = self.read(picker)
+        if not isinstance(answer, Refused):
+            return None
+        reason = Reason(ReasonKind.INPUT_REFUSED, picker, picker, related=(picker,))
+        return Piece(
+            PieceKind.GUARD,
+            picker,
+            picker,
+            Verdict.FALSE,
+            reasons=sorted_reasons((reason, *answer.reasons)),
+        )
+
     # -- validity
 
     def validity(self, scope: str) -> Validity:
@@ -811,6 +894,11 @@ class _Evaluation:
         for name in sorted(index.scopes):
             if index.within(name, scope):
                 guard = self.guard(name)
+                if guard is not None:
+                    pieces.append(guard)
+        for name, (owner, _, _) in sorted(index.pickers.items()):
+            if index.within(owner, scope):
+                guard = self.picker_guard(name)
                 if guard is not None:
                     pieces.append(guard)
         verdict = kleene_and(piece.verdict for piece in pieces)
@@ -870,6 +958,8 @@ class _Evaluation:
                         ):
                             for read in reason.related:
                                 self.facts.origins(read, origins)
+            elif piece.subject in self.index.pickers:
+                self._read_origins(piece.subject, origins)  # a derived selector refusing
             else:
                 for read in self.parts(piece.subject)[2].guards:
                     self._read_origins(read, origins)
