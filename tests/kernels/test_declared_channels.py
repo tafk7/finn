@@ -195,6 +195,38 @@ def test_a_boundary_presents_its_free_side_without_the_replay_the_receiver_reali
     assert sides.sink.sequence.form == vector_major((2, 4), 2).replayed(3, inner_beats=2)
 
 
+def test_a_producer_wired_as_a_consumer_is_refused_by_the_network():
+    # A stream has no direction: the network, which reads each side's contract, refuses a
+    # port wired to the side its endpoint is not as it binds the channel, owned by it.
+    clash = Network(
+        {
+            # b's contract given as the consumer is a producer's all the same.
+            "shared": wire(
+                tensor=VECTOR,
+                port="out0_V",
+                producer=Interface("a", "output_contract"),
+                consumer=Interface("b", "output_contract"),
+                platform=FULL_DSP48E2,
+            ),
+            "a": source((1, 2, 3, 4), VECTOR),
+            "b": source((1, 2, 3, 4), VECTOR),
+        }
+    )
+    assert clash.unbound("shared") is not None
+    validity = clash.validity("shared")
+    assert validity.status == "refused"
+    (piece,) = validity.pieces
+    assert piece.owner == "shared"
+    (users,) = piece.result.findings
+    assert (users.code, users.owner) == ("channel-users", "shared")
+    assert users.message == (
+        "a channel has at most one producer and one consumer; its ports are a.output, b.output"
+    )
+    refused = clash.netlist()
+    assert isinstance(refused, Rejected)
+    assert [f.code for f in refused.findings] == ["channel-users"]
+
+
 def test_an_adapter_under_a_refused_guard_is_one_piece():
     # A selector whose ``when`` is refused counts once, at the highest refused guard of its
     # chain: one piece keyed by the selector, none for its cases. A correction: the engine

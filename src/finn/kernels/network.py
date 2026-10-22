@@ -15,7 +15,10 @@ read from a member:
   ``PortContract`` the member presents for it, read outside the channel and labelled from
   the network (``PortContract.under``: ``first.compute.packed.x``; ``producer_label``,
   ``consumer_label``), and on the producer's side its word width (``x_data_width``,
-  ``producer_width``); a side without one is a boundary. The contracts stay the
+  ``producer_width``); a side without one is a boundary. A stream has no direction, so
+  a port wired to the side its contract's endpoint is not (a producer's on the
+  consumer's side) leaves the channel refused as it is bound (``channel-users``, owned
+  by the channel). The contracts stay the
   network's: its hops to the channel (``hops``) and FIFO sizing's paces (``neighbours``)
   read them;
 - a fact a member states (``Fact(member, name)``): a parameter channel's tensor and
@@ -98,7 +101,7 @@ from finn.core.space import (
     reject,
 )
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import Bus
+from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed, Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose
 from finn.kernels.base import BOUNDARY, NETLIST, PortContract, merged
@@ -357,6 +360,28 @@ def _observed_rebuilt(entry: Rebuilt) -> object:
         return (None, dict(entry.why), dict(entry.standing))
     point, again, fallbacks = entry
     return (observed(Configured(point)), dict(again), fallbacks)
+
+
+def _users(name: str, ports: Mapping[str, PortContract]) -> Rejected | None:
+    """Why channel ``name``'s ports (``ports``, the contracts its sides were read from, by
+    side) are not one producer and one consumer, or None: a port is wired to the side its
+    contract's endpoint is not (a producer's port, an AXIS initiator, on the consumer's side,
+    or a consumer's on the producer's). A stream has no direction, so the network, which
+    reads the contracts, refuses it as it binds the channel (``channel-users``, owned by
+    ``name``)."""
+    miswired = [
+        side
+        for side, port in ports.items()
+        if (port.contract.transport.endpoint is Endpoint.INITIATOR) != (side == "producer")
+    ]
+    if not miswired:
+        return None
+    named = ", ".join(ports[side].label for side in ("producer", "consumer") if side in ports)
+    return reject(
+        "channel-users",
+        f"a channel has at most one producer and one consumer; its ports are {named}",
+        owner=name,
+    )
 
 
 def _rebuild(
@@ -912,6 +937,7 @@ class Network:
         """Channel ``name``'s facts, each read from the members it names, or why not."""
         resolved: dict[str, object] = {}
         stored: Mapping[str, object] = {}
+        ports: dict[str, PortContract] = {}
         for fact, value in self._wires[name].facts.items():
             if not isinstance(value, (Interface, Fact)):
                 resolved[fact] = value
@@ -922,12 +948,18 @@ class Network:
                 return Unbound(held.member, held.result, stored)
             point = points[source]
             if isinstance(value, Interface):
-                port = self._port(name, fact, value, point)
+                contract = self._contract(name, value, point)
+                if isinstance(contract, Inapplicable):
+                    continue
+                if isinstance(contract, (Unresolved, Rejected)):
+                    return Unbound(source, contract, stored)
+                port = self._port(name, fact, value, point, contract)
                 if isinstance(port, Inapplicable):
                     continue
                 if isinstance(port, (Unresolved, Rejected)):
                     return Unbound(source, port, stored)
                 resolved |= port
+                ports[fact] = contract
                 continue
             answer = point.query(_handle(name, source, point, value.name))
             if isinstance(answer, Inapplicable):
@@ -935,6 +967,9 @@ class Network:
             if isinstance(answer, (Unresolved, Rejected)):
                 return Unbound(source, answer, stored)
             resolved[fact] = answer.value
+        users = _users(name, ports)
+        if users is not None:
+            return Unbound(name, users, stored)
         return tuple(sorted(resolved.items(), key=lambda item: item[0]))
 
     def _contract(
@@ -954,16 +989,13 @@ class Network:
         return found.under(self._nodes[value.member])
 
     def _port(
-        self, name: str, fact: str, value: Interface, point: Space
+        self, name: str, fact: str, value: Interface, point: Space, contract: PortContract
     ) -> dict[str, object] | Inapplicable | Unresolved | Rejected:
-        """The facts the port ``value`` names gives channel ``name`` on its side ``fact``:
-        its stream (``x_stream``), its contract's label (``<fact>_label``) and on the
-        producer's side its word width (``x_data_width``, ``producer_width``), each read
-        from its member's ``point``; or the read's answer where one has no value, its
-        contract's first (as the channel took it)."""
-        contract = self._contract(name, value, point)
-        if not isinstance(contract, PortContract):
-            return contract
+        """The facts the port ``value`` names gives channel ``name`` on its side ``fact``
+        (its ``contract``, read first, as the channel took it): its stream
+        (``x_stream``), its contract's label (``<fact>_label``) and on the producer's side
+        its word width (``x_data_width``, ``producer_width``), each read from its member's
+        ``point``; or the read's answer where one has no value."""
         found: dict[str, object] = {f"{fact}_label": contract.label}
         reads = {fact: f"{value.port}_stream"}
         if fact == "producer":
