@@ -5,9 +5,9 @@
 engine.
 
 - **Every question, everywhere**: on FINN's toys (each opened, after its change, and with
-  other facts), the house at each heating case, the evidence tests' shapes and a ranked
-  choice, every
-  member's answer (``query``), its value and its answer through its bound accessor
+  other facts), the house at each heating case, the evidence tests' shapes, selectors
+  chosen and picked by a derived value (given as a binding's argument, picked by a choice),
+  every member's answer (``query``), its value and its answer through its bound accessor
   (``field``), its evidence (``explain``), every view's and constraint's assessment
   (``inspect``), every Decision's state and candidates, and at every scope its children's
   presence and configurations, its value inputs' presence, each candidate's configuration
@@ -35,7 +35,7 @@ import pytest
 from support.space_oracle import toys
 from support.space_oracle.today import TodayAnswers
 
-from core.space._running_shapes import Ranked
+from core.space._running_shapes import ByArgument, PickedByAChoice
 from core.space._running_type import Running
 from core.space._toys_support import Boiler, House
 from core.space._world_support import open_world, source_line
@@ -48,6 +48,7 @@ from finn.core.space import (
     Inapplicable,
     Param,
     Rejected,
+    Select,
     Space,
     Unresolved,
     ValueSemantics,
@@ -56,6 +57,7 @@ from finn.core.space import (
     ViewKey,
     _failure,
     _world,
+    bind,
     constraint,
     derived,
     design_space,
@@ -228,8 +230,8 @@ def test_every_surface_question_on_the_house_at_each_heating_case_answers_as_tod
     assert found == [] and asked > 100
 
 
-# The evidence tests' shapes (``test_evidence``), and a choice whose candidates its domain's
-# order ranks by another choice (``_running_shapes.Ranked``).
+# The evidence tests' shapes (``test_evidence``), and the selectors of ``_running_shapes``:
+# chosen and picked, given as a binding's argument, and picked by a choice.
 
 PHYSICAL = ViewKey("physical", int)
 
@@ -254,7 +256,7 @@ class Bad(Space):
 
 class Alternatives(Space):
     size: int = Param()
-    implementation: Good | Bad = Decision({"good": Good(size=size), "bad": Bad()})
+    implementation = Select(good=Good(size=size), bad=Bad())
     physical = View(implementation.physical)
 
 
@@ -330,7 +332,7 @@ class Plain(Space):
 class Kernel(Space):
     width: int = Param()
     depth: int = Param(required=False)
-    style: Packed | Plain = Decision({"packed": Packed(width=width), "plain": Plain(depth=depth)})
+    style = Select(packed=Packed(width=width), plain=Plain(depth=depth))
 
     @view
     def bits(self) -> int:
@@ -350,10 +352,6 @@ SHAPES: dict[str, Callable[[], Space]] = {
     "an inactive formal, forwarded": lambda: design_space(Forwarded(value=12345)),
     "an inactive formal, literal": lambda: design_space(Literal()),
     "a refusal": lambda: design_space(Refusing()),
-    "an order reading an open choice": lambda: design_space(Ranked()),
-    "an order reading a choice set": lambda: design_space(Ranked()).with_choices(
-        {Ranked.source.b: 2}
-    ),
     "an open selector's cases listing from the facts": lambda: design_space(
         Kernel(width=12, depth=3)
     ),
@@ -361,6 +359,20 @@ SHAPES: dict[str, Callable[[], Space]] = {
     "a selector's case listing from the facts, chosen": lambda: design_space(
         Kernel(width=12, depth=3)
     ).with_choices({Kernel.style: "plain"}),
+    "selectors given as arguments, open": lambda: design_space(ByArgument()),
+    "selectors given as arguments, a None case": lambda: (
+        bind(design_space(ByArgument()), {ByArgument.x: 0, ByArgument.chosen: "direct"}).instance
+    ),
+    "selectors given as arguments, a case each": lambda: (
+        bind(design_space(ByArgument()), {ByArgument.x: 1, ByArgument.chosen: "stage"}).instance
+    ),
+    "a selector picked by a choice, open": lambda: design_space(PickedByAChoice(f=2)),
+    "a selector picked by a choice, its case placed": lambda: (
+        bind(design_space(PickedByAChoice(f=2)), {PickedByAChoice.x: 0}).instance
+    ),
+    "a selector picked by a choice, its None case": lambda: (
+        bind(design_space(PickedByAChoice(f=2)), {PickedByAChoice.x: 1}).instance
+    ),
 }
 
 
@@ -450,9 +462,7 @@ def _kernel() -> type[Space]:
     class Kernel(Space):
         width: int = Param()
         depth: int = Param(required=False)
-        style: Packed | Plain = Decision(
-            {"packed": Packed(width=width), "plain": Plain(width=width, depth=depth)}
-        )
+        style = Select(packed=Packed(width=width), plain=Plain(width=width, depth=depth))
 
     return Kernel
 

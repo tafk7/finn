@@ -191,7 +191,7 @@ class DesignSpace:
     # -- addresses: (scope path, member) as today's keys spell them
 
     def node(self, key: str) -> NodeId:
-        """The node a key addresses (``"mm1.compute.packed.pe"``: scope path, member)."""
+        """The node a key addresses (``"mm1.pe"``: scope path, member)."""
         return self.model.linked.keys[key]
 
     def key(self, node: NodeId) -> str:

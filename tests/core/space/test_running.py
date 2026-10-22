@@ -6,16 +6,22 @@ model, through the class-based oracle (``support.space_oracle``), as the impleme
 
 - **The toys' walks**: each of FINN's toys walked from seeds 0 and 1, 20 steps, the running
   type against today's engine, with no disagreement.
-- **The reference walks**: seeds 0-23, 40 steps, strict, the running type against the
-  reference model, every invariant and every permanent check holding.
+- **The reference walks**: seeds 0-23, 40 steps, strict, with and without selectors picked
+  by a derived value, the running type against the reference model, every invariant and
+  every permanent check holding.
+- **The reference harness's hand cases** under the running type, in a process of their own
+  (``core.space._running_cases``).
 - **Hand cases**: a ``when`` read past its guard through a formal of its scope; a chosen
   selector under a refused ``when``, one piece; a refused ``when`` below a guard that waits,
-  unknown until all above it holds, and two nested ones, one piece; an answer refused
-  through its scope turning inapplicable; a reader beside a formal's scope; a formal read
-  from outside its scope; models dropped and their ids reused, the node cache's tables with
-  them; a line deeper than the recursion limit allows without the depth guard; a
-  membership reading that reads a decision, for a guarded choice and for a choice with no
-  guard.
+  unknown until all above it holds, and two nested ones, one piece (each as today's
+  engine answers it, and the model); an answer refused through its scope turning
+  inapplicable; a reader beside a formal's scope; a formal read from outside its scope;
+  models dropped and their ids reused, the node cache's tables with them; a line deeper
+  than the recursion limit allows without the depth guard; a membership reading that reads
+  a decision, for a guarded choice and for a choice with no guard; a choice in a case of a
+  selector picked by a choice, whose membership reads its case's guard as holding, and one
+  outside the case, whose reading reaches the choice; a selector given as a binding's
+  argument, reading its case's name (a ``None`` case's too).
 - **The node cache** (``_running.cache``): the toys walked with a cache dropping half its
   entries at random, with no disagreement; the purity check over it (each hit evaluated
   anyway, and each node the depth guard abandoned evaluated again, and compared): a planted
@@ -54,7 +60,14 @@ from support.space_oracle.today import TODAY
 
 from core.space import _running_cases as running_cases
 from core.space._running_cases import Rebinding
-from core.space._running_shapes import IN_AN_OPEN_CASE, even
+from core.space._running_shapes import (
+    IN_AN_OPEN_CASE,
+    ByArgument,
+    Capped,
+    PickedByAChoice,
+    capped,
+    even,
+)
 from core.space._running_type import LeavesOneOut, Running
 from core.space._toys_support import House
 from core.space.reference import (
@@ -76,9 +89,11 @@ from core.space.reference_harness.forms import ValidityForm
 from finn.core.space import (
     Available,
     Decision,
+    DefinitionError,
     Inapplicable,
     Param,
     Rejected,
+    Select,
     Space,
     Unresolved,
     ValueSemantics,
@@ -142,9 +157,10 @@ def test_the_toys_walk_as_today(toy: str, seed: int) -> None:
     assert found.tally["reports"] + found.tally["requests raising alike"] == asked
 
 
+@pytest.mark.parametrize("by", [False, True], ids=["chosen", "by"])
 @pytest.mark.parametrize("seed", range(24))
-def test_the_reference_walks_hold_strictly(seed: int) -> None:
-    tally = reference_walks.walk(seed, 40, strict=True, implementation=RUNNING)
+def test_the_reference_walks_hold_strictly(seed: int, by: bool) -> None:
+    tally = reference_walks.walk(seed, 40, strict=True, implementation=RUNNING, by=by)
     assert tally.failure is None, tally.failure
     assert tally.implementation == "running"
     assert tally.steps == 40 and not tally.by_milestone and tally.engine_errors == 0
@@ -155,8 +171,8 @@ def test_the_reference_walks_hold_strictly(seed: int) -> None:
 # -- the reference harness's hand cases under the running type ---------------------------------
 #
 # ``core.space._running_cases`` rebinds the harness's default implementation to the running
-# type and expects the ``T4a`` milestone's witnesses to pass. The gate's pytest takes no
-# plugin, so the hand cases run here, in a process of their own.
+# type. The gate's pytest takes no plugin, so the hand cases run here, in a process of their
+# own.
 
 TESTS = Path(__file__).parent.parent.parent
 HAND_CASES = tuple(
@@ -168,6 +184,7 @@ HAND_CASES = tuple(
         "test_reference_model",
         "test_reference_rules",
         "test_reference_scopes",
+        "test_reference_selectors",
     )
 )
 """The modules of hand cases run under the running type, each named (from ``tests``)."""
@@ -202,28 +219,23 @@ purpose, deselected by node id (from the worktree's root, as pytest matches
 _COUNTS = re.compile(r"(\d+) (passed|failed|errors?|xfailed|xpassed|skipped|deselected)")
 
 
-def test_the_reference_hand_cases_pass_under_the_running_type_with_t4as_witnesses() -> None:
-    """Every hand case of the reference harness's six modules of them, run with
+def test_the_reference_hand_cases_pass_under_the_running_type() -> None:
+    """Every hand case of the reference harness's seven modules of them, run with
     ``core.space._running_cases``: none fails or passes unexpectedly or is skipped, today's
     engine is never opened or made, exactly the harness's tests naming today's engine are
-    deselected, and the expected failures are exactly the witnesses of the rows the running
-    type does not implement (the milestones after ``T4a``), each ``T4a`` witness passing.
+    deselected, and the expected failures are exactly the witnesses of the matrix's rows
+    (``matrix.ROWS``: the milestones neither engine has reached).
 
     ``test_reference_walks`` is not run here: it pins today's engine by design (its walks'
     own default, and its tests' "today"), and runs under today's in the gate as ever; the
     running type's walks are this module's own."""
-    later = MILESTONES[MILESTONES.index(running_cases.MILESTONE) + 1 :]
     stems = {PurePosixPath(module).stem for module in HAND_CASES}
-
-    def here(milestones: tuple[str, ...]) -> list[str]:
-        return sorted(
-            row.witness
-            for row in ROWS
-            if row.milestone in milestones and row.witness.partition("::")[0] in stems
-        )
-
-    unimplemented, witnesses = here(later), here((running_cases.MILESTONE,))
-    assert unimplemented and witnesses
+    unimplemented = sorted(
+        row.witness
+        for row in ROWS
+        if row.milestone in MILESTONES[1:] and row.witness.partition("::")[0] in stems
+    )
+    assert unimplemented
     command = [
         sys.executable,
         "-m",
@@ -264,8 +276,6 @@ def test_the_reference_hand_cases_pass_under_the_running_type_with_t4as_witnesse
     assert counts.get("passed", 0) == expected, tail
     assert "today's engine opened or made: 0" in lines, tail
     assert "space implementation: running (core.space._running_type:RUNNING)" in ran.stdout, tail
-    flipped = f"{running_cases.MILESTONE} witnesses expected to pass: {', '.join(witnesses)}"
-    assert flipped in lines, tail
 
 
 @pytest.mark.parametrize(
@@ -277,7 +287,6 @@ def test_the_reference_hand_cases_pass_under_the_running_type_with_t4as_witnesse
         {"targets": (("core.space.reference_harness.compare", "Case.start", "facts"),)},
         {"today": "support.space_oracle.today:YESTERDAY"},
         {"today": "core.space._running_type:RUNNING"},
-        {"milestone": "T4z"},
     ],
     ids=[
         "missing-function",
@@ -286,15 +295,13 @@ def test_the_reference_hand_cases_pass_under_the_running_type_with_t4as_witnesse
         "another-default",
         "missing-default",
         "not-todays",
-        "missing-milestone",
     ],
 )
 def test_the_hand_case_plugin_refuses_anything_not_where_it_expects_it(
     change: dict[str, Any],
 ) -> None:
-    """Pointed at a name that is missing, or at a default that is not today's engine, or at
-    a milestone the matrix does not hold, the plugin raises a usage error and rebinds
-    nothing."""
+    """Pointed at a name that is missing, or at a default that is not today's engine, the
+    plugin raises a usage error and rebinds nothing."""
     rebinding = Rebinding(**change)
     with pytest.raises(pytest.UsageError, match="core.space._running_cases: "):
         rebinding.apply()
@@ -387,12 +394,12 @@ def test_a_when_read_past_its_guard_reads_its_scopes_formal_at_its_source() -> N
 
 # -- a chosen selector under a refused ``when``: one piece ------------------------------------
 #
-# A Decision over nodes whose ``when`` reads a refused derived value: the selector's piece
-# and each case's would each count the refused guard. It counts once, at the highest refused
-# guard of the chain, in the selector's name; today's engine counts one piece more per case
-# in play. Setting the other case under the refused guard is then possible: it adds no pair.
-# The reference harness spells no selector with a ``when`` of its own; there, the selector
-# sits in a scope the ``when`` places, and the model's one piece is the running type's.
+# A chosen selector whose ``when`` reads a refused derived value: the selector's piece and
+# each case's would each count the refused guard. It counts once, at the highest refused
+# guard of the chain, in the selector's name, as today's engine counts it. Setting the other
+# case under the refused guard is then possible: it adds no pair. The reference harness
+# spells no selector with a ``when`` of its own; there, the selector sits in a scope the
+# ``when`` places, and the model's one piece is the running type's.
 
 
 class Boiler(Space):
@@ -412,11 +419,7 @@ class Guarded(Space):
     def heated(self) -> bool | Rejected:
         return reject("gate-refused", "gate 1 refuses") if self.gate == 1 else True
 
-    heating = Decision(
-        {"boiler": Boiler, "heat_pump": HeatPump},  # type: ignore[dict-item]
-        kw=8,
-        when=heated,
-    )
+    heating = Select(boiler=Boiler, heat_pump=HeatPump, kw=8, when=heated)
 
 
 ONE_PIECE = ("heating", [("gate-refused", "heated"), ("guard-refused", "heating")])
@@ -437,12 +440,10 @@ def test_a_chosen_selector_under_a_refused_when_is_one_piece(case: str | None) -
     point = bind(design_space(Guarded()), stored).instance
     found = RUNNING.open(point).validity()
     assert found.status == "refused" and _pieces(found) == [ONE_PIECE]
-    # today's counts the refused guard again for each case in play
-    today = _pieces(TODAY.open(point).validity())
-    assert today[0] == ONE_PIECE and len(today) == (3 if case is None else 2)
     if case is not None:
         (viable,) = RUNNING.open(point).viable(["heating"])
         assert all(isinstance(item, inspection.Possible) for item in viable.values or ())
+    assert compare.everything(TODAY.open(point), RUNNING.open(point)).lines() == []
 
 
 def test_a_selector_in_a_scope_under_a_refused_when_is_its_scopes_one_piece_as_the_model_says() -> (
@@ -490,9 +491,9 @@ def test_a_selector_in_a_scope_under_a_refused_when_is_its_scopes_one_piece_as_t
 # ``c``), ``g`` waits with it: its piece is unknown, waiting on what that guard waits on, and
 # validity is open. The refusal takes effect once all above it holds: ``s`` bound to ``a``
 # (or ``c`` to 1), ``g``'s guard is one false piece, and setting it is refused. Today's
-# engine leaves the refused guard out below the wait, and answers valid. The same with the
-# refused ``when`` a selector's own (``plant``, written as ``heating``'s guard), in a case of
-# an open selector: there the piece is the selector's.
+# engine answers the same, as the model does. The same with the refused ``when`` a
+# selector's own (``plant``, written as ``heating``'s guard), in a case of an open
+# selector: there the piece is the selector's.
 
 
 def _heated(read: Mapping[str, Any]) -> object:
@@ -585,7 +586,9 @@ def test_a_refused_when_below_a_guard_that_waits_is_unknown_until_all_above_it_h
     pair = case.start(facts, implementation=implementation)
     pair.check_validity()
     assert pair.engine.validity() == ValidityForm("open", blockers=frozenset({waits_on}))
-    assert case.start(facts).engine.validity() == ValidityForm("valid")  # today's
+    today = case.start(facts)  # today's engine, against the model too
+    today.check_validity()
+    assert today.engine.answers.validity() == pair.engine.answers.validity()
     pair.check_possible(waits_on)
     assert pair.check_change(Change(commit=holding)) is None  # refused on both sides
     bound = pair.check_bind(holding)
@@ -600,7 +603,8 @@ def test_a_refused_when_below_a_guard_that_waits_is_unknown_until_all_above_it_h
 # Two refused ``when``s, one inside the other, in case ``a`` of the open selector ``s``:
 # ``outer``'s reads ``d``, ``inner``'s reads ``e``, both refused for an odd ``f``. They count
 # once, at the highest refused ``when`` of the chain: one piece, unknown, waiting on ``s``,
-# keyed by ``outer``. With ``s`` bound to ``a``, that piece is refused, still one.
+# keyed by ``outer``. With ``s`` bound to ``a``, that piece is refused, still one. Today's
+# engine answers the same.
 
 
 def _odd(read: Mapping[str, Any]) -> object:
@@ -663,6 +667,10 @@ def test_two_nested_refused_whens_in_a_case_of_an_open_selector_are_one_unknown_
     refused = bound.engine.answers.validity()
     assert refused.status == "refused"
     assert [piece.owner for piece in refused.pieces] == ["s.a.outer"]
+    today = NESTED_IN_AN_OPEN_CASE.start({"f": 1})
+    today.check_validity()
+    assert today.engine.answers.validity() == found
+    assert today.check_bind({"s": "a"}).engine.answers.validity() == refused
 
 
 # -- an answer refused through its scope may turn inapplicable ------------------------------
@@ -1032,6 +1040,112 @@ def test_a_membership_reading_of_a_choice_with_no_guard_that_reads_a_decision_is
         error = raised.value.primary
         assert isinstance(error, MembershipReadsChoice)
         assert (error.choice, error.decision) == ("pe", "w")
+
+
+# -- a choice in a case of a selector picked by a choice: the case's guard is its own ------------
+#
+# ``sel.a.z``'s domain reads ``sel.a.cap`` in its own case, and ``sel`` is picked by ``pick``,
+# which reads the choice ``x`` (``_running_shapes.PickedByAChoice``). Reading ``z``'s
+# membership as if it existed reads the case's guard, ``z``'s own existence guard, taken as
+# holding: it never reaches ``x``, and every answer is today's. The same read from a choice
+# outside the case (``w`` at the root) reads that guard as any other: it reaches ``x``, which
+# the compile check refuses (``domain-reads-choice``), and, built past it, the membership
+# assertion names ``w`` and ``x``.
+
+
+@pytest.mark.parametrize("f", [1, 2])
+def test_a_choice_in_a_case_picked_by_a_choice_reads_its_cases_guard_as_holding(f: int) -> None:
+    point = design_space(PickedByAChoice(f=f))
+    model = cast(Any, state(point).model)
+    keys = model.linked.keys
+    ds = DesignSpace(FactsLayer.of(model, {keys["f"]: f}), {})
+    ev = evaluate.evaluation(ds, Session())
+    reading = ev.membership(keys["sel.a.z"])
+    assert reading.assumed == frozenset({keys["sel.$known"], keys["sel.a.$selected"]})
+    checks = [questions.check(ev, keys["sel.a.z"], value) for value in (1, 2, 3)]
+    assert [isinstance(check, Available) for check in checks] == [
+        value <= f + 1 for value in (1, 2, 3)
+    ]
+    z = PickedByAChoice.sel["a"].z
+    for stored in (
+        {},
+        {PickedByAChoice.x: 0},
+        {PickedByAChoice.x: 1},
+        {PickedByAChoice.x: 0, z: 2},
+    ):
+        bound = bind(point, stored).instance
+        assert compare.everything(TODAY.open(bound), RUNNING.open(bound)).lines() == []
+
+
+def test_a_choice_outside_the_case_reading_its_value_reads_the_picker_and_is_an_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def outside() -> type[Space]:
+        class Outside(Space):
+            f: int = Param()
+            x: int = Decision(values=(0, 1))
+
+            @derived
+            def pick(self) -> str:
+                return ("a", "b")[self.x]
+
+            sel = Select(by=pick, a=Capped(f=f), b=None)
+            w: int = Decision(domain=capped(sel["a"].cap))
+
+        return Outside
+
+    with pytest.raises(DefinitionError) as refused:
+        design_space(outside()(f=2))  # type: ignore[call-arg]
+    assert [finding.code for finding in refused.value.findings] == ["domain-reads-choice"]
+    monkeypatch.setattr(_compose, "check_domains", lambda template: None)
+    model = cast(Any, state(design_space(outside()(f=2))).model)  # type: ignore[call-arg]
+    keys = model.linked.keys
+    ds = DesignSpace(FactsLayer.of(model, {keys["f"]: 2}), {keys["x"]: 0})
+    ev = evaluate.evaluation(ds, Session())
+    assert ev.membership(keys["w"]).assumed == frozenset()
+    assert questions.check(ev, keys["sel.a.z"], 3) == Available(True)
+    with pytest.raises(NativeEvaluationError) as raised:
+        questions.check(ev, keys["w"], 2)
+    error = raised.value.primary
+    assert isinstance(error, MembershipReadsChoice)
+    assert (error.choice, error.decision) == ("w", "x")
+
+
+# -- a selector given as a binding's argument reads its case name -------------------------------
+#
+# ``_running_shapes.ByArgument``: a chosen and a picked selector, each with the ``None`` case
+# ``direct``, given as the argument of derived values, views, constraints and a guard's
+# derived value. The argument reads the case's name, ``"direct"`` for the ``None`` case, as
+# lowering resolves it: the running type follows with no frame of its own, and answers every
+# question as today's.
+
+
+@pytest.mark.parametrize(
+    ("x", "chosen", "names"),
+    [
+        (None, None, (None, None)),
+        (0, None, (None, "direct")),
+        (0, "direct", ("direct", "direct")),
+        (1, "lane", ("lane", "lane")),
+        (1, "direct", ("direct", "lane")),
+        (2, "stage", ("stage", "stage")),
+    ],
+)
+def test_a_selector_given_as_a_bindings_argument_reads_its_case_name_as_today(
+    x: int | None, chosen: str | None, names: tuple[str | None, str | None]
+) -> None:
+    stored: dict[object, object] = {}
+    if x is not None:
+        stored[ByArgument.x] = x
+    if chosen is not None:
+        stored[ByArgument.chosen] = chosen
+    point = bind(design_space(ByArgument()), stored).instance
+    answers = RUNNING.open(point)
+    found = tuple(
+        getattr(answers.query(key), "value", None) for key in ("chosen_name", "picked_name")
+    )
+    assert found == names
+    assert compare.everything(TODAY.open(point), answers).lines() == []
 
 
 # -- the node cache: a dropping cache, and a cache wrong on purpose -------------------------------

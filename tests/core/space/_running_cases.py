@@ -10,17 +10,14 @@ in ``TARGETS``). For the session, this plugin rebinds each of those defaults to 
 type, ``core.space._running_type:RUNNING`` (no cache), and names it in pytest's header and
 summary.
 
-**By milestone, not by name.** The running type implements the ``T4a`` milestone's rulings
-(``MILESTONE``) and neither later one. So every row of the acceptance matrix
-(``reference_harness.matrix.ROWS``) whose milestone is ``T4a`` is expected to pass: its
-witness's strict expected failure is removed. The witnesses of the later milestones' rows
-stay expected failures.
+**The matrix as it stands.** The running type implements the rulings today's engine does,
+and no later milestone's: every row of the acceptance matrix
+(``reference_harness.matrix.ROWS``) stays an expected failure, its witness marked as the
+matrix marks it. Nothing is flipped.
 
 **It fails loudly.** At configure time, each default it rebinds must be today's engine, at
-the parameter it names, and ``T4a`` must be a milestone of the matrix with rows; at
-collection, each ``T4a`` witness of a module collected must be collected, marked as its row
-marks it. Anything else is a usage error: a rename never lets it test today's engine in
-silence.
+the parameter it names. Anything else is a usage error: a rename never lets it test today's
+engine in silence.
 
 **It counts today's engine.** For the session, every ``open`` and ``make`` of today's
 implementation (its class's, whatever instance or wrapper calls it) is counted, by the test
@@ -57,10 +54,6 @@ TODAY = "support.space_oracle.today:TODAY"
 
 RUNNING = "core.space._running_type:RUNNING"
 """The implementation each default is rebound to."""
-
-MATRIX = "core.space.reference_harness.matrix"
-MILESTONE = "T4a"
-"""The milestone whose rows the running type implements."""
 
 
 def _module(name: str) -> Any:
@@ -104,20 +97,14 @@ def _position(function: FunctionType, parameter: str) -> int:
 
 @dataclass
 class Rebinding:
-    """The defaults in ``targets`` rebound from ``today`` to ``running``, and the witnesses
-    of ``milestone``'s rows expected to pass (each checked first: ``check``)."""
+    """The defaults in ``targets`` rebound from ``today`` to ``running`` (each checked
+    first: ``check``)."""
 
     targets: Sequence[tuple[str, str, str]] = TARGETS
     today: str = TODAY
     running: str = RUNNING
-    matrix: str = MATRIX
-    milestone: str = MILESTONE
     #: each function rebound, its defaults before
     saved: list[tuple[FunctionType, tuple[Any, ...]]] = field(default_factory=list)
-    #: each witness of the milestone's rows (``module::function``)
-    witnesses: frozenset[str] = frozenset()
-    #: the witnesses whose expected failure was removed
-    flipped: set[str] = field(default_factory=set)
     #: today's implementation's class, its ``open`` and ``make`` counted while applied
     counted: type | None = None
     #: each ``open`` or ``make`` of today's implementation, by the test it ran in
@@ -127,7 +114,7 @@ class Rebinding:
 
     def check(self) -> list[tuple[FunctionType, int]]:
         """Each target's function and the position of its default, each default today's
-        engine; the milestone's witnesses. A usage error where any is not as expected."""
+        engine. A usage error where any is not as expected."""
         today = _load(self.today)
         found = []
         for module, qualname, parameter in self.targets:
@@ -139,18 +126,6 @@ class Rebinding:
                     f"{self.today} by default"
                 )
             found.append((function, position))
-        matrix = _module(self.matrix)
-        if self.milestone not in getattr(matrix, "MILESTONES", ()):
-            raise pytest.UsageError(
-                f"core.space._running_cases: no milestone {self.milestone!r} in {self.matrix}"
-            )
-        rows = [row for row in getattr(matrix, "ROWS", ()) if row.milestone == self.milestone]
-        if not rows or not all("::" in row.witness for row in rows):
-            raise pytest.UsageError(
-                f"core.space._running_cases: no rows of {self.milestone!r} with witnesses in "
-                f"{self.matrix}"
-            )
-        self.witnesses = frozenset(row.witness for row in rows)
         return found
 
     def apply(self) -> None:
@@ -195,35 +170,6 @@ class Rebinding:
         where = "; ".join(f"{test}: {number}" for test, number in sorted(self.opened.items()))
         return f"today's engine opened or made: {total}" + (f" ({where})" if where else "")
 
-    def flip(self, items: Sequence[pytest.Item]) -> None:
-        """Remove each milestone witness's strict expected failure, its own marker; a
-        witness of a module collected that is missing, or not marked so, is an error."""
-        modules = set()
-        for item in items:
-            if not isinstance(item, pytest.Function):
-                continue
-            module = item.module.__name__.rpartition(".")[2]
-            modules.add(module)
-            if f"{module}::{item.originalname}" not in self.witnesses:
-                continue
-            marks = [mark for mark in item.own_markers if mark.name == "xfail"]
-            if len(marks) != 1 or marks[0].kwargs.get("strict") is not True:
-                raise pytest.UsageError(
-                    f"core.space._running_cases: {item.nodeid} is not marked as one strict "
-                    "expected failure"
-                )
-            item.own_markers.remove(marks[0])
-            self.flipped.add(f"{module}::{item.originalname}")
-        missing = sorted(
-            witness
-            for witness in self.witnesses - self.flipped
-            if witness.partition("::")[0] in modules
-        )
-        if missing:
-            raise pytest.UsageError(
-                f"core.space._running_cases: {self.milestone} witnesses not collected: {missing}"
-            )
-
     def header(self) -> str:
         names = ", ".join(qualname for _, qualname, _ in self.targets)
         return (
@@ -249,10 +195,6 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
 def pytest_report_header(config: pytest.Config) -> str:
     return config.stash[_KEY].header()
-
-
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    config.stash[_KEY].flip(items)
 
 
 _DESELECTED = pytest.StashKey[list[str]]()
@@ -283,12 +225,10 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 def pytest_terminal_summary(terminalreporter: Any, config: pytest.Config) -> None:
     rebinding = config.stash[_KEY]
     terminalreporter.write_line(rebinding.header())
-    flipped = ", ".join(sorted(rebinding.flipped)) or "none"
-    terminalreporter.write_line(f"{rebinding.milestone} witnesses expected to pass: {flipped}")
     deselected = config.stash[_DESELECTED] if _DESELECTED in config.stash else []
     for node in sorted(deselected) or ["none"]:
         terminalreporter.write_line(f"deselected: {node}")
     terminalreporter.write_line(rebinding.count())
 
 
-__all__ = ["MILESTONE", "RUNNING", "TARGETS", "TODAY", "Rebinding"]
+__all__ = ["RUNNING", "TARGETS", "TODAY", "Rebinding"]

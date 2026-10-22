@@ -50,9 +50,8 @@ class Record:
         self.layers: weakref.WeakValueDictionary[object, FactsLayer] = weakref.WeakValueDictionary()
 
     def bound(self, linked: Structure, index: NodeId) -> tuple[int, NodeId] | None:
-        """Where ``index`` is a formal bound by reference (to a member or a named shared
-        Decision: an alias whose template node is a formal of a placed Space), its scope
-        and the node it is bound to; else ``None``."""
+        """Where ``index`` is a formal bound by reference (an alias whose template node is a
+        formal of a placed Space), its scope and the node it is bound to; else ``None``."""
         if index in self._bound:
             return self._bound[index]
         found: tuple[int, NodeId] | None = None

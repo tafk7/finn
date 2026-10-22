@@ -16,7 +16,7 @@ compiled class's; here it is only read, to address the answer.
 - ``present``: whether a node is present, or a value input supplied;
 - ``inspect``: a view's or a constraint's assessment;
 - ``decision_state``: a Decision's commitment; ``candidates``: a choice's listed values,
-  ranked by its domain's order where it has one, under its guard;
+  in their listed order, under its guard;
 - ``field``: a bound accessor (``Field``, ``DecisionField``) asking the above;
 - ``explain``: what an answer read, each node through what it read (``QueryEvidence``);
 - ``root``, ``child``, ``candidate``, ``selected_candidate``: the configurations below.
@@ -33,7 +33,6 @@ from typing import Any, Literal, cast
 
 from .. import _world as W
 from .._configuration import Space
-from .._failure import Call
 from .._nodes import NodeDecl
 from .._state import copy_assessment, copy_result
 from ..declarations import Param, declared_path
@@ -53,7 +52,7 @@ from ..results import (
     require_value,
 )
 from ..semantics import snapshot
-from .evaluate import INAPPLICABLE, Ans, Evaluation, Session, _Returned, evaluation, invoke
+from .evaluate import INAPPLICABLE, Ans, Evaluation, Session, evaluation
 from .questions import presence
 from .value import DesignSpace
 
@@ -143,7 +142,7 @@ def present(at: At, node: object, session: Session) -> bool:
                 return applies
             require_value(_public(ev, applies), context=ev.linked.header(applies).owner)
             raise AssertionError("an undecided presence read halts")
-        raise RequestError("present() takes a node (a child or a candidate) or a value input")
+        raise RequestError("present() takes a node (a child or a selector's case) or a value input")
     guard = at.ds.model.linked.scopes[target].guard
     if guard is None:
         return True
@@ -240,9 +239,8 @@ def candidates(
     at: At, reference: object, session: Session
 ) -> QueryResult[tuple[object, ...]] | None:
     """A choice's listed values (its domain's enumeration, each value its membership
-    accepts, read as if the choice existed), ranked by its domain's order where it has
-    one, under its guard: ``None`` where it is known by membership only
-    (``BoundDecision.candidates``)."""
+    accepts, read as if the choice existed), in their listed order, under its guard:
+    ``None`` where it is known by membership only (``BoundDecision.candidates``)."""
     index = at.ds.model.decision(at.scope, reference)
     ev = _evaluation(at, session)
     node = ev.raw[index]
@@ -269,32 +267,7 @@ def _candidates(ev: Evaluation, node: Node) -> QueryResult[object]:
         inactive = W._guard_result(node, ev.result(node.guard))
         if inactive is not None:
             return inactive
-    listed = ev.membership(node.index).listed(node, [])
-    if domain.order is None or not isinstance(listed, Available) or listed.value is None:
-        return listed
-    arguments = W.order_arguments(node)
-    answers = [ev.result(argument.node) for argument in arguments]
-    blocked = W._blocked([answer for answer in answers if not isinstance(answer, Available)])
-    if blocked is not None:
-        return blocked
-    values = {
-        argument.name: W._clone(
-            ev.raw[argument.node],
-            cast(Available[object], answer).value,
-            owner=node.owner,
-            role="dependency snapshot",
-        )
-        for argument, answer in zip(arguments, answers)
-    }
-    ev.counters.call("domain order")
-    ranked = invoke(
-        ev.session,
-        Call(node.owner, "domain order"),
-        domain.rank,
-        (listed.value, values),
-        {"semantics": semantics, "owner": node.owner},
-    )
-    return Available(cast(_Returned, ranked).value)
+    return ev.membership(node.index).listed(node, [])
 
 
 # -- bound accessors --------------------------------------------------------------------
@@ -359,12 +332,12 @@ def candidate(at: At, decision: object, case: str) -> At | None:
     """A candidate's configuration whether or not it is selected (``None`` for a case
     placing nothing; ``inspection.candidate``)."""
     if type(case) is not str:
-        raise RequestError("a candidate key must be a string")
+        raise RequestError("a case name must be a string")
     choice = _scope_choice(at.ds.model.linked, at.scope, decision)
     for key, index in choice.cases:
         if key == case:
             return None if index is None else At(at.ds, index)
-    raise RequestError(f"{choice.key}: unknown candidate {case!r}")
+    raise RequestError(f"{choice.key}: unknown case {case!r}")
 
 
 def selected_candidate(at: At, decision: object, session: Session) -> At | None:

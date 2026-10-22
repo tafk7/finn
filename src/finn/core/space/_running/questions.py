@@ -140,8 +140,7 @@ def state_of(ev: Evaluation, index: NodeId) -> ChoiceState:
     if index not in stored:
         if found == "absent":
             return Absent()
-        required = ev.linked.header(index).required_choice
-        return Open(_waits(guard) if found == "unknown" else (), required)
+        return Open(_waits(guard) if found == "unknown" else ())
     value = stored[index]
     if found == "absent":
         return Dormant(value)
