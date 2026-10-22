@@ -52,8 +52,8 @@ from core.space.reference import (
     computed,
     listed,
 )
-from core.space.reference_harness import walks
-from core.space.reference_harness.compare import answer_form
+from core.space.reference_harness import Case, walks
+from core.space.reference_harness.compare import agrees, answer_form, change_form, possible_form
 from core.space.reference_harness.engine import Engine, Point, Spelling, build
 from core.space.reference_harness.forms import (
     AnswerForm,
@@ -323,6 +323,27 @@ def test_the_cause_of_a_question_reaching_a_guard_below_a_refused_guard_is_t4a()
     assert walked.cause("heated", refused) is None
     for subject in (None, "plant.heating.boiler.stages", "heated"):
         assert walked.cause(subject, holding) is None
+
+
+@pytest.mark.usefixtures("guard_below_a_refused_guard")
+def test_switching_a_selector_under_a_refused_when_is_attributed_t4a() -> None:
+    # A case stored under the refused guard: switching to the other case adds no pair in the
+    # model (one guard piece, plant's, before and after). Today's engine counts each case's
+    # guard apart, so the switch adds one: it refuses the change, and lists the case as
+    # impossible. Both questions reach the whole description, attributed T4a, as the walk
+    # asks them (a change against its predecessor and the published facts).
+    spelling = Spelling(types={"heated": bool}, guarded_selectors=frozenset({"plant"}))
+    pair = Case("switch", HEATED, spelling).start({"gate": 1}, {"plant.heating": "boiler"})
+    switch = Change(commit={"plant.heating": "heat_pump"})
+    expected = change_form(pair.model, switch, change(pair.model, switch))
+    found, _ = pair.engine.change(switch)
+    assert expected.accepted and not found.accepted
+    viable = possible_form(pair.solution(), "plant.heating")
+    assert not agrees(viable, pair.engine.possible("plant.heating"))
+    walked = walks._Walk(0, 0, False, pending())
+    published = Configuration(HEATED, {"gate": 1})
+    assert walked.cause(None, pair.model, published) == "T4a"  # the change
+    assert walked.cause(None, pair.model) == "T4a"  # the possible values
 
 
 # A refused guard below an unknown one (reading 8's second half): ``s`` open, its case ``a``
