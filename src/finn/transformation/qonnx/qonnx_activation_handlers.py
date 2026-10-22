@@ -29,6 +29,7 @@ import numpy as np
 from abc import ABC, abstractmethod
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.custom_op.general.quant import max_int, min_int, quant
 from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import get_by_name
 
@@ -391,6 +392,8 @@ class QuantReluHandler(QuantActBaseHandler):
                         "FINN only supports unsigned and non-narrow Quant nodes "
                         "for Relu activations."
                     )
+            else:
+                self._selu_attributes(act_node)
         elif self._q_node.op_type == "BipolarQuant":
             act_node = self._model.find_direct_predecessors(self._q_node)[0]
             if act_node.op_type == "Relu":
@@ -438,27 +441,29 @@ class QuantReluHandler(QuantActBaseHandler):
         if act_node.op_type == "Relu":
             bias = np.array([0.0], dtype=np_default_dtype)
         elif act_node.op_type == "Selu":
-            # Gather parameters
-            q_inst = getCustomOp(self._q_node)
-            if self._q_node.op_type == "Quant":
-                bit_width = self._model.get_initializer(self._q_node.input[3])
-                narrow = q_inst.get_nodeattr("narrow")
-            elif self._q_node.op_type == "BipolarQuant":
-                bit_width = 1.0
-            else:
-                raise RuntimeError("Got an unexpected quantizer node type")
-            # Calculate bias, see: https://github.com/Xilinx/brevitas/blob/
-            # a5bfd6dc5e030f0047ac1ee47932b60e8e873e17/src/brevitas/export/
-            # onnx/finn/handler/act.py#L64
-            if bit_width == 1.0:
+            if self._is_bipolar():
                 bias = np.array([-0.5], dtype=np_default_dtype)
             else:
-                if narrow:
-                    min_non_scaled_val = -(2 ** (bit_width - 1) - 1)
-                else:
-                    min_non_scaled_val = -(2 ** (bit_width - 1))
-                bias = np.array([min_non_scaled_val], dtype=np_default_dtype)
+                # The MultiThreshold counts the levels above the Quant's lowest integer
+                lowest, _ = self._quant_integer_range()
+                bias = np.array([lowest], dtype=np_default_dtype)
         return bias
+
+    def _is_bipolar(self):
+        """Whether the quantizer is a BipolarQuant or a 1-bit signed Quant, which QONNX
+        executes as a BipolarQuant."""
+        if self._q_node.op_type == "BipolarQuant":
+            return True
+        signed = getCustomOp(self._q_node).get_nodeattr("signed")
+        return signed and self._model.get_initializer(self._q_node.input[3]) == 1
+
+    def _quant_integer_range(self):
+        """Return the lowest and highest integer of the Quant node."""
+        q_inst = getCustomOp(self._q_node)
+        signed = q_inst.get_nodeattr("signed")
+        narrow = q_inst.get_nodeattr("narrow")
+        bit_width = int(self._model.get_initializer(self._q_node.input[3]))
+        return min_int(signed, narrow, bit_width), max_int(signed, narrow, bit_width)
 
     def _calculate_thresholds(self):
         # Gather parameters
@@ -490,7 +495,7 @@ class QuantReluHandler(QuantActBaseHandler):
                 for t in range(num_thresholds):
                     thresholds[c][t] = min_threshold[c] + step[c] * t
 
-        elif self._q_node.op_type == "BipolarQuant":
+        elif self._is_bipolar():
             # After a Selu: +scale where Selu(x) >= 0. In float32 exp(x) rounds to 1 for
             # -2**-25 <= x < 0 (1 - 2**-25 is the midpoint between 1 - 2**-24 and 1, and
             # rounds to even), so Selu(x) is 0 there and the one threshold is -2**-25,
@@ -499,30 +504,48 @@ class QuantReluHandler(QuantActBaseHandler):
             thresholds = np.full((1, 1), -(2.0**-25), dtype=np.float64)
 
         elif act_node.op_type == "Selu":
+            alpha, gamma = self._selu_attributes(act_node)
+            lowest, highest = self._quant_integer_range()
+            # The Selu outputs at which the Quant's rounding reaches each level above
+            # its lowest, per channel
+            levels = lowest + 0.5 + np.arange(highest - lowest, dtype=np.float64)
+            scale = np.abs(quant_scale.flatten().astype(np.float64))
+            selu_out = scale[:, np.newaxis] * levels[np.newaxis, :]
+            # In float32, exp(x) - 1 rounds to -1 for x below about -17.3, so Selu's
+            # lowest output, -(gamma * alpha), is the output of every input below that.
+            # Every input reaches the level the Quant gives this lowest output, and the
+            # levels below it: their thresholds are -inf.
+            product = np.float32(gamma) * np.float32(alpha)
             q_inst = getCustomOp(self._q_node)
-            narrow = q_inst.get_nodeattr("narrow")
-            if narrow:
-                num_distinct_values = 2**bit_width - 1
-            else:
-                num_distinct_values = 2**bit_width
-
-            num_thresholds = int(num_distinct_values - 1)
-            flat_scale = quant_scale.flatten().astype(np.float64)
-            num_scale_channels = flat_scale.shape[0]
-            scale = np.abs(flat_scale)
-            half_scale = scale / 2
-            # alpha and lambda
-            # from https://pytorch.org/docs/stable/generated/torch.nn.SELU.html
-            alpha = 1.6732632423543772848170429916717
-            selu_scale = 1.0507009873554804934193349852946
-            thresholds = np.empty((num_scale_channels, num_thresholds), dtype=np.float64)
-            for c in range(num_scale_channels):
-                for t in range(num_thresholds):
-                    step = -1.0 + half_scale[c] + scale[c] * t
-                    if step <= 0:
-                        thresholds[c][t] = np.log(step / (alpha * selu_scale) + 1)
-                    else:
-                        thresholds[c][t] = step / selu_scale
+            lowest_out = quant(
+                np.full(quant_scale.flatten().shape, -product, dtype=np.float32),
+                quant_scale.flatten(),
+                self._model.get_initializer(self._q_node.input[2]),
+                self._model.get_initializer(self._q_node.input[3]),
+                q_inst.get_nodeattr("signed"),
+                q_inst.get_nodeattr("narrow"),
+                q_inst.get_nodeattr("rounding_mode"),
+            )
+            lowest_level = np.round(lowest_out / quant_scale.flatten())
+            reached = levels[np.newaxis, :] + 0.5 <= lowest_level[:, np.newaxis]
+            # Selu's inverse: y / gamma above 0, log(1 + y / (gamma * alpha)) below
+            with np.errstate(divide="ignore", invalid="ignore"):
+                below = 1.0 + selu_out / float(product)
+                thresholds = np.where(
+                    selu_out > 0, selu_out / gamma, np.log1p(np.maximum(below - 1.0, -1.0))
+                )
+            # Close to the lowest output, the float32 Selu is almost flat: there, its
+            # rounding and the Quant's decide the level over a wide range of inputs, so
+            # a boundary closer than gamma * alpha * 2**-12 to it is refused.
+            flat = ~reached & (selu_out <= 0) & (below < 2.0**-12)
+            if flat.any():
+                raise ValueError(
+                    f"Quant node {self._q_node.name!r}: the level boundary "
+                    f"{selu_out[flat][0]} is within gamma * alpha * 2**-12 of the lowest "
+                    f"output {-product} of Selu node {act_node.name!r}, where the float32 "
+                    "Selu is too flat for a threshold; FINN does not convert it."
+                )
+            thresholds = np.where(reached, -np.inf, thresholds)
 
         # narrow back to the storage dtype only after the accumulation
         thresholds = thresholds.astype(np_default_dtype)
@@ -552,7 +575,7 @@ class QuantReluHandler(QuantActBaseHandler):
         # Calculate scale, see: https://github.com/Xilinx/brevitas/blob/
         # a5bfd6dc5e030f0047ac1ee47932b60e8e873e17/src/brevitas/export/
         # onnx/finn/handler/act.py#L40
-        if self._q_node.op_type == "BipolarQuant":
+        if self._is_bipolar():
             # The MultiThreshold's 0 and 1, less the bias 0.5, times this: -scale and scale.
             return quant_scale * np.float32(2)
         return quant_scale

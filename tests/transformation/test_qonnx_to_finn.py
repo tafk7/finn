@@ -340,12 +340,73 @@ def test_a_bipolar_quant_after_a_selu_matches_near_zero(act_attrs):
 
 
 @pytest.mark.transform
+@pytest.mark.parametrize("quantizer", ["BipolarQuant", "Quant"])
 @pytest.mark.parametrize(
     "act_attrs", [{"alpha": 0.0}, {"alpha": -1.0}, {"gamma": 0.0}, {"gamma": -1.0}]
 )
-def test_a_selu_with_a_non_positive_alpha_or_gamma_is_refused(act_attrs):
-    model = _activation_model("Selu", "BipolarQuant", 1.0, act_attrs=act_attrs)
+def test_a_selu_with_a_non_positive_alpha_or_gamma_is_refused(quantizer, act_attrs):
+    model = _activation_model("Selu", quantizer, 0.125, 4, True, act_attrs=act_attrs)
     with pytest.raises(ValueError, match="only for alpha > 0 and gamma > 0"):
+        model.transform(ConvertQONNXtoFINN())
+
+
+@pytest.mark.transform
+@pytest.mark.parametrize(
+    "bits, signed, narrow, scale, act_attrs",
+    [
+        (4, True, False, 0.125, {}),  # a Brevitas QuantIdentity after a SELU
+        (4, True, False, 0.125, {"alpha": 0.5, "gamma": 2.0}),
+        (4, True, False, [0.125, 0.25, 0.3, 0.5], {"alpha": 3.0, "gamma": 0.7}),
+        (4, True, True, 0.125, {}),
+        (3, True, False, 0.6, {}),  # its lowest levels are below Selu's lowest output
+        (4, False, False, 0.25, {"alpha": 1.0, "gamma": 1.5}),
+        (1, True, False, 0.5, {}),
+    ],
+)
+def test_a_quant_after_a_selu_converts(bits, signed, narrow, scale, act_attrs):
+    x = np.linspace(-6.0, 6.0, 4 * 1001, dtype=np.float32).reshape(-1, 4)
+    model = _activation_model(
+        "Selu", "Quant", scale, bits, signed, narrow, rows=x.shape[0], act_attrs=act_attrs
+    )
+    converted = model.transform(ConvertQONNXtoFINN())
+    assert "Selu" not in [n.op_type for n in converted.graph.node]
+    expected = oxe.execute_onnx(model, {"global_in": x})["global_out"]
+    assert np.array_equal(oxe.execute_onnx(converted, {"global_in": x})["global_out"], expected)
+
+
+# Inputs at and below the start of Selu's float32 lowest output (x below about -17.3)
+_selu_lowest_inputs = np.array(
+    [[-16.0, -17.0, -17.5, -18.0], [-20.0, -30.0, -100.0, -1000.0]], dtype=np.float32
+)
+
+
+@pytest.mark.transform
+@pytest.mark.parametrize(
+    "bits, scale, act_attrs",
+    [
+        (3, 1.0, {"alpha": 2.5, "gamma": 1.0}),  # -2.5 rounds to -2, as does every level
+        (3, 0.6, {}),  # the lowest output, -1.758, rounds to -3
+        (4, 0.125, {"alpha": 0.5, "gamma": 2.0}),  # the lowest output is the lowest level
+    ],
+)
+def test_a_quant_after_a_selu_converts_at_its_lowest_output(bits, scale, act_attrs):
+    x = _selu_lowest_inputs
+    model = _activation_model("Selu", "Quant", scale, bits, True, rows=2, act_attrs=act_attrs)
+    converted = model.transform(ConvertQONNXtoFINN())
+    expected = oxe.execute_onnx(model, {"global_in": x})["global_out"]
+    assert np.array_equal(oxe.execute_onnx(converted, {"global_in": x})["global_out"], expected)
+
+
+@pytest.mark.transform
+@pytest.mark.parametrize("alpha", [1.5, 1.5 / (1 - 2.0**-14)])
+def test_a_quant_boundary_at_the_lowest_selu_output_is_refused(alpha):
+    # Selu's lowest output is -alpha, which ROUND gives -2 (-1.5 to even), so level -1
+    # starts at or just above it: the float32 rounding of Selu decides where.
+    x = _selu_lowest_inputs
+    act_attrs = {"alpha": alpha, "gamma": 1.0}
+    model = _activation_model("Selu", "Quant", 1.0, 3, True, rows=2, act_attrs=act_attrs)
+    assert np.all(oxe.execute_onnx(model, {"global_in": x})["global_out"][1] == -2.0)
+    with pytest.raises(ValueError, match=r"within gamma \* alpha \* 2\*\*-12 of the lowest"):
         model.transform(ConvertQONNXtoFINN())
 
 
