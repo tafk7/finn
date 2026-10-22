@@ -44,6 +44,7 @@ from qonnx.util.cleanup import cleanup
 from tempfile import TemporaryDirectory
 
 import finn.core.onnx_exec as oxe
+from finn.transformation.fpgadataflow.convert_to_hw_layers import InferThresholdingLayer
 from finn.transformation.qonnx.convert_qonnx_to_finn import (
     QONNX_QUANT_OP_TYPES,
     ConvertQONNXtoFINN,
@@ -224,15 +225,18 @@ def test_QONNX_to_FINN_unsupported_channel_axis():
         model.transform(ConvertQONNXtoFINN())
 
 
-def _activation_model(activation, quantizer, scale, bits=None, signed=False, narrow=False):
-    """global_in -> ``activation`` (None for none) -> ``quantizer`` (Quant with ``bits``,
-    ``signed`` and ``narrow``, or BipolarQuant) -> global_out, over a [1, 4] tensor."""
-    gi = helper.make_tensor_value_info("global_in", TensorProto.FLOAT, [1, 4])
-    go = helper.make_tensor_value_info("global_out", TensorProto.FLOAT, [1, 4])
+def _activation_model(
+    activation, quantizer, scale, bits=None, signed=False, narrow=False, rows=1, act_attrs=None
+):
+    """global_in -> ``activation`` (None for none; attributes ``act_attrs``) -> ``quantizer``
+    (Quant with ``bits``, ``signed`` and ``narrow``, or BipolarQuant) -> global_out, over a
+    [``rows``, 4] tensor."""
+    gi = helper.make_tensor_value_info("global_in", TensorProto.FLOAT, [rows, 4])
+    go = helper.make_tensor_value_info("global_out", TensorProto.FLOAT, [rows, 4])
     nodes = []
     quant_in = "global_in"
     if activation is not None:
-        nodes.append(helper.make_node(activation, ["global_in"], ["act_out"]))
+        nodes.append(helper.make_node(activation, ["global_in"], ["act_out"], **(act_attrs or {})))
         quant_in = "act_out"
     inits = [nph.from_array(np.asarray(scale, dtype=np.float32), "scale")]
     if quantizer == "Quant":
@@ -273,4 +277,80 @@ def test_a_bipolar_quant_after_a_relu_is_refused(scale):
     x = np.array([[-2.0, -0.2, 0.0, 0.3]], dtype=np.float32)
     assert np.all(oxe.execute_onnx(model, {"global_in": x})["global_out"] == scale)
     with pytest.raises(ValueError, match=r"outputs \+scale for every input .* 1-bit QuantReLU"):
+        model.transform(ConvertQONNXtoFINN())
+
+
+def _execute_checking_datatypes(model, x):
+    """Execute ``model`` on ``x``, check that every tensor's datatype annotation allows
+    its values, and return the output."""
+    context = oxe.execute_onnx(model, {"global_in": x}, return_full_exec_context=True)
+    for name, value in context.items():
+        dt = model.get_tensor_datatype(name)
+        assert np.all(dt.allowed(value)), f"{name} is annotated {dt.name} but holds {value}"
+    return context["global_out"]
+
+
+_bipolar_scales = [0.5, 1.0, 2.0, 3.0, [0.5, 1.0, 2.0, 0.25], [2.0, 3.0, 1.0, 1.0]]
+
+
+@pytest.mark.transform
+@pytest.mark.parametrize("scale", _bipolar_scales)
+def test_a_bipolar_quant_after_a_selu_converts(scale):
+    model = _activation_model("Selu", "BipolarQuant", scale)
+    converted = model.transform(ConvertQONNXtoFINN())
+    assert [n.op_type for n in converted.graph.node][0] == "MultiThreshold"
+    assert "Selu" not in [n.op_type for n in converted.graph.node]
+    x = np.random.default_rng(0).uniform(-4.0, 4.0, size=(1, 4)).astype(np.float32)
+    for inp in (x, np.array([[-2.0, -0.2, 0.0, 0.3]], dtype=np.float32)):
+        expected = oxe.execute_onnx(model, {"global_in": inp})["global_out"]
+        assert np.array_equal(_execute_checking_datatypes(converted, inp), expected)
+
+
+# Scale 1 gives FINN's bipolar MultiThreshold (out_scale 2), which InferThresholdingLayer
+# does not take; a binary MVAU absorbs it instead.
+@pytest.mark.transform
+@pytest.mark.parametrize("scale", [s for s in _bipolar_scales if s != 1.0])
+def test_a_bipolar_quant_after_a_selu_becomes_a_thresholding_layer(scale):
+    model = _activation_model("Selu", "BipolarQuant", scale)
+    hw = model.transform(ConvertQONNXtoFINN()).transform(InferThresholdingLayer())
+    assert "Thresholding" in [n.op_type for n in hw.graph.node]
+    x = np.array([[-2.0, -0.2, 0.0, 0.3]], dtype=np.float32)
+    expected = oxe.execute_onnx(model, {"global_in": x})["global_out"]
+    assert np.array_equal(_execute_checking_datatypes(hw, x), expected)
+
+
+@pytest.mark.transform
+@pytest.mark.parametrize("act_attrs", [{}, {"alpha": 2.0, "gamma": 0.5}])
+def test_a_bipolar_quant_after_a_selu_matches_near_zero(act_attrs):
+    # In float32, Selu(x) is 0, not negative, for -2**-25 <= x < 0
+    b = np.float32(-(2.0**-25))
+    x = np.array(
+        [
+            [np.nextafter(b, np.float32(-1)), b, np.nextafter(b, np.float32(0)), -1e-8],
+            [-1e-10, -1e-45, -0.0, 0.0],
+            [1e-45, 1e-10, 1e-8, -1e-7],
+        ],
+        dtype=np.float32,
+    )
+    model = _activation_model("Selu", "BipolarQuant", 1.0, rows=3, act_attrs=act_attrs)
+    expected = oxe.execute_onnx(model, {"global_in": x})["global_out"]
+    assert np.array_equal(expected, np.where(x >= b, 1.0, -1.0))
+    converted = model.transform(ConvertQONNXtoFINN())
+    assert np.array_equal(oxe.execute_onnx(converted, {"global_in": x})["global_out"], expected)
+
+
+@pytest.mark.transform
+@pytest.mark.parametrize(
+    "act_attrs", [{"alpha": 0.0}, {"alpha": -1.0}, {"gamma": 0.0}, {"gamma": -1.0}]
+)
+def test_a_selu_with_a_non_positive_alpha_or_gamma_is_refused(act_attrs):
+    model = _activation_model("Selu", "BipolarQuant", 1.0, act_attrs=act_attrs)
+    with pytest.raises(ValueError, match="only for alpha > 0 and gamma > 0"):
+        model.transform(ConvertQONNXtoFINN())
+
+
+@pytest.mark.transform
+def test_a_bipolar_identity_with_a_scale_other_than_one_is_refused():
+    model = _activation_model(None, "BipolarQuant", 0.5)
+    with pytest.raises(ValueError):
         model.transform(ConvertQONNXtoFINN())
