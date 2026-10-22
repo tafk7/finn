@@ -18,7 +18,8 @@ asks compares one answer:
   one the model does not name.
 
 The engine's side is an implementation of the engine's public questions
-(``support.space_oracle``), today's by default: ``Case.start(..., implementation=)`` names
+(``support.space_oracle``), the harness's default by default (``implementation.default``:
+today's engine unless a session names another): ``Case.start(..., implementation=)`` names
 another, such as a planted fault (``support.space_oracle.today.Planted``), which a hand
 case must then report by question.
 
@@ -33,7 +34,6 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, fields
 
 from support.space_oracle import Implementation
-from support.space_oracle.today import TODAY
 
 from core.space import reference
 from core.space.reference.model import same
@@ -323,11 +323,11 @@ class Case:
         self,
         facts: Mapping[str, object] | None = None,
         stored: Mapping[str, object] | None = None,
-        implementation: Implementation = TODAY,
+        implementation: Implementation | None = None,
     ) -> Pair:
         """The configuration with ``facts``, then ``stored`` committed as one change (a step:
         it must be accepted on both sides), the engine's side as ``implementation`` answers
-        it (today's engine by default)."""
+        it (the harness's default by default, ``Engine.open``'s)."""
         facts = dict(facts or {})
         model = reference.Configuration(self.description, facts)
         pair = Pair(self, model, self.engine.open(facts, implementation))

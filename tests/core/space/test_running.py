@@ -9,8 +9,10 @@ model, through the class-based oracle (``support.space_oracle``), as the impleme
 - **The reference walks**: seeds 0-23, 40 steps, strict, with and without selectors picked
   by a derived value, the running type against the reference model, every invariant and
   every permanent check holding.
-- **The reference harness's hand cases** under the running type, in a process of their own
-  (``core.space._running_cases``).
+- **The reference harness's hand cases** under the running type, in a process of their own,
+  the harness's default implementation named by its option (``--space-implementation``);
+  the option itself, and the matrix's expected failures by the milestones an implementation
+  has reached.
 - **Hand cases**: a ``when`` read past its guard through a formal of its scope; a chosen
   selector under a refused ``when``, one piece; a refused ``when`` below a guard that waits,
   unknown until all above it holds, and two nested ones, one piece (each as today's
@@ -55,11 +57,9 @@ from types import SimpleNamespace
 from typing import Annotated, Any, cast
 
 import pytest
-from support.space_oracle import Implementation, compare, forms, load, toys
+from support.space_oracle import Answers, Implementation, compare, forms, load, toys
 from support.space_oracle.today import TODAY
 
-from core.space import _running_cases as running_cases
-from core.space._running_cases import Rebinding
 from core.space._running_shapes import (
     IN_AN_OPEN_CASE,
     ByArgument,
@@ -82,10 +82,12 @@ from core.space.reference import (
     listed,
 )
 from core.space.reference import Space as Description
-from core.space.reference_harness import MILESTONES, ROWS, Case, Spelling
+from core.space.reference_harness import MILESTONES, ROWS, Case, Spelling, expected, reached
+from core.space.reference_harness import implementation as harness_implementation
 from core.space.reference_harness import walks as reference_walks
-from core.space.reference_harness.engine import Engine
+from core.space.reference_harness.engine import definition
 from core.space.reference_harness.forms import ValidityForm
+from core.space.reference_harness.implementation import OUTSIDE, Option
 from finn.core.space import (
     Available,
     Decision,
@@ -170,9 +172,8 @@ def test_the_reference_walks_hold_strictly(seed: int, by: bool) -> None:
 
 # -- the reference harness's hand cases under the running type ---------------------------------
 #
-# ``core.space._running_cases`` rebinds the harness's default implementation to the running
-# type. The gate's pytest takes no plugin, so the hand cases run here, in a process of their
-# own.
+# ``--space-implementation`` makes the running type the harness's default implementation. The
+# gate's pytest names none, so the hand cases run here, in a process of their own.
 
 TESTS = Path(__file__).parent.parent.parent
 HAND_CASES = tuple(
@@ -221,10 +222,11 @@ _COUNTS = re.compile(r"(\d+) (passed|failed|errors?|xfailed|xpassed|skipped|dese
 
 def test_the_reference_hand_cases_pass_under_the_running_type() -> None:
     """Every hand case of the reference harness's seven modules of them, run with
-    ``core.space._running_cases``: none fails or passes unexpectedly or is skipped, today's
-    engine is never opened or made, exactly the harness's tests naming today's engine are
-    deselected, and the expected failures are exactly the witnesses of the matrix's rows
-    (``matrix.ROWS``: the milestones neither engine has reached).
+    ``--space-implementation core.space._running_type:RUNNING``: none fails or passes
+    unexpectedly or is skipped, today's engine is never opened or made, exactly the harness's
+    tests naming today's engine are deselected, and the expected failures are exactly the
+    witnesses of the matrix's rows the running type has not reached (``matrix.ROWS``,
+    ``matrix.reached``).
 
     ``test_reference_walks`` is not run here: it pins today's engine by design (its walks'
     own default, and its tests' "today"), and runs under today's in the gate as ever; the
@@ -233,7 +235,9 @@ def test_the_reference_hand_cases_pass_under_the_running_type() -> None:
     unimplemented = sorted(
         row.witness
         for row in ROWS
-        if row.milestone in MILESTONES[1:] and row.witness.partition("::")[0] in stems
+        if row.milestone in MILESTONES[1:]
+        and row.milestone not in reached(RUNNING)
+        and row.witness.partition("::")[0] in stems
     )
     assert unimplemented
     command = [
@@ -242,9 +246,8 @@ def test_the_reference_hand_cases_pass_under_the_running_type() -> None:
         "pytest",
         "-p",
         "no:xdist",
-        "-p",
-        "core.space._running_cases",
         "-q",
+        f"--space-implementation={RUNNING_SPEC}",
         *(f"--deselect={node}" for node in TODAYS_SELF_TESTS),
         *HAND_CASES,
     ]
@@ -272,72 +275,136 @@ def test_the_reference_hand_cases_pass_under_the_running_type() -> None:
     assert deselected == sorted(TODAYS_SELF_TESTS), tail
     assert counts.get("deselected", 0) == len(TODAYS_SELF_TESTS), tail
     assert counts.get("xfailed", 0) == len(unimplemented), tail
-    expected = int(collected.group(1)) - len(unimplemented) - len(TODAYS_SELF_TESTS)
-    assert counts.get("passed", 0) == expected, tail
+    expected_passed = int(collected.group(1)) - len(unimplemented) - len(TODAYS_SELF_TESTS)
+    assert counts.get("passed", 0) == expected_passed, tail
     assert "today's engine opened or made: 0" in lines, tail
-    assert "space implementation: running (core.space._running_type:RUNNING)" in ran.stdout, tail
+    assert f"space implementation: running ({RUNNING_SPEC})" in ran.stdout, tail
+
+
+RUNNING_SPEC = "core.space._running_type:RUNNING"
+"""The running type, as an implementation is named (``support.space_oracle.load``)."""
+
+TOY = Case("a toy", Description(("wide",), Scope("", choices=(Choice("x", listed(1, 2)),))))
+
+
+@dataclass(frozen=True)
+class _Recording:
+    """The running type, recording what it opened and made."""
+
+    name: str = "recording"
+    calls: list[str] = field(default_factory=list)
+
+    def open(self, configuration: Space) -> Answers:
+        self.calls.append("open")
+        return RUNNING.open(configuration)
+
+    def make(
+        self, space_class: type[Space], facts: Mapping[str, object], stored: Mapping[str, object]
+    ) -> Answers:
+        self.calls.append("make")
+        return RUNNING.make(space_class, facts, stored)
+
+
+@dataclass(frozen=True)
+class _Reaching(_Recording):
+    """An implementation declaring it has reached T4b."""
+
+    milestones: frozenset[str] = frozenset({"T4b"})
+
+
+@contextmanager
+def _default(implementation: Implementation) -> Iterator[None]:
+    previous = harness_implementation.use(implementation)
+    try:
+        yield
+    finally:
+        harness_implementation.use(previous)
+
+
+def test_the_harness_asks_its_default_wherever_a_test_names_none() -> None:
+    """``Engine.open``, ``Engine.make``, ``definition`` and ``Case.start`` ask the default
+    implementation where they are given none, and the one named where one is."""
+    assert harness_implementation.default() is TODAY
+    recording = _Recording()
+    with _default(recording):
+        assert TOY.engine.open({"wide": 1}).implementation == "recording"
+        assert TOY.engine.make({"wide": 1}, {"x": 2}).implementation == "recording"
+        assert TOY.start({"wide": 1}, {"x": 1}).engine.implementation == "recording"
+        assert definition(TOY.description, facts={"wide": 1}).error is None
+        assert recording.calls == ["open", "make", "open", "open"]
+        assert TOY.engine.open({"wide": 1}, TODAY).implementation == "today"
+    assert harness_implementation.default() is TODAY
+    assert TOY.start({"wide": 1}).engine.implementation == "today"
 
 
 @pytest.mark.parametrize(
-    "change",
-    [
-        {"targets": (("core.space.reference_harness.engine", "Engine.opened", "implementation"),)},
-        {"targets": (("core.space.reference_harness.engine", "Engine.path", "implementation"),)},
-        {"targets": (("core.space.reference_harness.engin", "Engine.open", "implementation"),)},
-        {"targets": (("core.space.reference_harness.compare", "Case.start", "facts"),)},
-        {"today": "support.space_oracle.today:YESTERDAY"},
-        {"today": "core.space._running_type:RUNNING"},
-    ],
-    ids=[
-        "missing-function",
-        "no-such-parameter",
-        "missing-module",
-        "another-default",
-        "missing-default",
-        "not-todays",
-    ],
+    "spec",
+    ["core.space._running_type:NOWHERE", "core.space._nowhere:RUNNING", "running"],
+    ids=["missing-attribute", "missing-module", "not-registered"],
 )
-def test_the_hand_case_plugin_refuses_anything_not_where_it_expects_it(
-    change: dict[str, Any],
-) -> None:
-    """Pointed at a name that is missing, or at a default that is not today's engine, the
-    plugin raises a usage error and rebinds nothing."""
-    rebinding = Rebinding(**change)
-    with pytest.raises(pytest.UsageError, match="core.space._running_cases: "):
-        rebinding.apply()
-    assert Engine.open.__defaults__ == (TODAY,) and not rebinding.saved
+def test_the_option_refuses_a_name_that_names_nothing(spec: str) -> None:
+    """A name that loads nothing is a usage error, and the default stays today's engine."""
+    with pytest.raises(pytest.UsageError, match="--space-implementation "):
+        Option.start(spec)
+    assert harness_implementation.default() is TODAY
 
 
-def test_the_hand_case_plugin_rebinds_each_default_and_restores_it() -> None:
-    """While applied, each default is the running type, and each ``open`` and ``make`` of
-    today's engine is counted by the test it ran in; restored, both are as before."""
-    rebinding = Rebinding()
-    before = [
-        running_cases._function(module, qualname).__defaults__
-        for module, qualname, _ in running_cases.TARGETS
-    ]
+def test_the_option_makes_its_implementation_the_default_and_counts_todays() -> None:
+    """Started, the running type is the default and each ``open`` and ``make`` of today's
+    engine is counted by the test it ran in; stopped, both are as before. Named today's, it
+    counts nothing and adds nothing to the summary."""
     methods = (type(TODAY).open, type(TODAY).make)
-    rebinding.apply()
+    option = Option.start(RUNNING_SPEC)
     try:
-        for module, qualname, parameter in running_cases.TARGETS:
-            function = running_cases._function(module, qualname)
-            position = running_cases._position(function, parameter)
-            assert (function.__defaults__ or ())[position] is RUNNING
-        assert rebinding.count() == "today's engine opened or made: 0"
-        rebinding.running_test = "here"
-        TODAY.make(Ordered, {}, {"a": 2, "b": 1})
+        assert harness_implementation.default() is RUNNING and option.opens is not None
+        assert option.opens.count() == "today's engine opened or made: 0" and not option.failed()
+        with option.running("here"):
+            TODAY.make(Ordered, {}, {"a": 2, "b": 1})
+            TODAY.open(design_space(Ordered()))
         TODAY.open(design_space(Ordered()))
-        assert rebinding.opened == {"here": 2}
-        assert rebinding.count() == "today's engine opened or made: 2 (here: 2)"
+        assert option.opens.opened == {"here": 2, OUTSIDE: 1} and option.failed()
+        option.deselected.append("a::test")
+        assert option.summary() == [
+            f"space implementation: running ({RUNNING_SPEC}), the harness's default "
+            "(--space-implementation)",
+            "deselected: a::test",
+            f"today's engine opened or made: 3 ({OUTSIDE}: 1; here: 2)",
+        ]
     finally:
-        rebinding.restore()
-    assert before == [
-        running_cases._function(module, qualname).__defaults__
-        for module, qualname, _ in running_cases.TARGETS
-    ]
+        option.stop()
+    assert harness_implementation.default() is TODAY
     assert (type(TODAY).open, type(TODAY).make) == methods
-    TODAY.make(Ordered, {}, {"a": 2, "b": 1})
-    assert rebinding.opened == {"here": 2}
+    today = Option.start("today")
+    try:
+        assert today.opens is None and today.summary() == [] and not today.failed()
+        assert (type(TODAY).open, type(TODAY).make) == methods
+    finally:
+        today.stop()
+    assert harness_implementation.default() is TODAY
+
+
+def test_a_witness_is_expected_to_fail_for_a_default_short_of_its_milestone() -> None:
+    """A row's witness is a strict expected failure for a default that has not reached the
+    row's milestone (today's engine, the running type: neither declares any), and a plain
+    test for one that has."""
+
+    def witness() -> None: ...
+
+    def marks(test: Callable[[], None]) -> list[str]:
+        return [mark.name for mark in getattr(test, "pytestmark", [])]
+
+    assert reached(TODAY) == reached(RUNNING) == frozenset()
+    assert reached(_Reaching()) == {"T4b"}
+    with pytest.raises(ValueError, match="no later milestones"):
+        reached(_Reaching(milestones=frozenset({"T9"})))
+
+    def other() -> None: ...
+
+    assert marks(expected("view-read-in")(witness)) == ["xfail"]
+    with _default(_Reaching()):
+        assert marks(expected("view-read-in")(witness)) == ["xfail"]
+        assert marks(expected("view-read-in")(other)) == []
+        assert marks(expected("optional-fact-none")(other)) == ["xfail"]
 
 
 # -- a ``when`` read past its guard, through a formal of its scope ----------------------------

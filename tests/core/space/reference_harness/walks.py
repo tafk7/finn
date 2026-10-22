@@ -70,12 +70,12 @@ walked configuration's stored choices. An engine error always fails.
 
 **The implementation compared** (``walk(..., implementation=)``, the CLI's
 ``--implementation module:attribute``; today's engine, ``support.space_oracle.today.TODAY``,
-by default) is asked every question through the class-based oracle's interface
-(``support.space_oracle.Answers``; ``engine.Point``). The summary and every failure name it.
-Every permanent check holds for every implementation: the binds through ``Answers.bind``,
-and the check against one built from nothing through ``Implementation.make`` (history
-independence, which T1 claims by construction and its cache could break), so none is
-skipped.
+by default, whatever the harness's default is) is asked every question through the
+class-based oracle's interface (``support.space_oracle.Answers``; ``engine.Point``). The
+summary and every failure name it. Every permanent check holds for every implementation:
+the binds through ``Answers.bind``, and the check against one built from nothing through
+``Implementation.make`` (history independence, which T1 claims by construction and its
+cache could break), so none is skipped.
 
 **Two runs, and attribution by cause** (DESIGN § 6). The model holds rulings the engine has
 not reached (SZ100 (3), (5)), each a pending milestone of the matrix with one row.
@@ -126,6 +126,12 @@ from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 from support.space_oracle import Implementation
+
+# The walks default to today's engine itself, never to the harness's default
+# (``implementation.default``, a session's ``--space-implementation``): their tests pin
+# today's engine by design (each asserts it walked "today"), and another implementation's
+# walks name it explicitly (``walk(..., implementation=)``, the CLI's ``--implementation``),
+# as the running type's run in its own tests.
 from support.space_oracle.today import TODAY
 
 from core.space import reference as model

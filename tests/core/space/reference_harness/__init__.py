@@ -8,7 +8,9 @@ package imports both. :mod:`.engine` is the adapter to the engine core: it build
 description as an engine Space and asks it the model's questions, each answered by the
 engine's own reading in the model's terms (everything that depends on how the engine is
 authored or asked is there); :mod:`.compare` puts the model's answers in the same form
-(:mod:`.forms`) and compares them; :mod:`.matrix` records every disagreement a pending
+(:mod:`.forms`) and compares them, the engine's side as the harness's default implementation
+answers (:mod:`.implementation`: today's engine unless a session names another) wherever a
+test names none; :mod:`.matrix` records every disagreement a pending
 milestone still expects, by the milestone that removes it (none: the engine core's and the
 facts-instance milestones are accepted, and the engine agrees with the model); :mod:`.walks`
 compares the two over seeded random walks (imported on its own, never by this package). The
@@ -41,7 +43,7 @@ from .forms import (
     StateForm,
     ValidityForm,
 )
-from .matrix import MILESTONES, ROWS, Row, expected, markdown
+from .matrix import MILESTONES, ROWS, Reaching, Row, expected, markdown, reached
 
 __all__ = [
     "MILESTONES",
@@ -60,6 +62,7 @@ __all__ = [
     "Pair",
     "Plain",
     "PossibleForm",
+    "Reaching",
     "RefusalForm",
     "Requirement",
     "Row",
@@ -71,4 +74,5 @@ __all__ = [
     "check_definition",
     "expected",
     "markdown",
+    "reached",
 ]
