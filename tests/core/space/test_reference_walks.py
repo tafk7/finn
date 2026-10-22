@@ -311,6 +311,20 @@ def test_a_guard_refused_below_a_refused_guard_is_counted_under_t4a() -> None:
     )
 
 
+@pytest.mark.usefixtures("guard_below_a_refused_guard")
+def test_the_cause_of_a_question_reaching_a_guard_below_a_refused_guard_is_t4a() -> None:
+    # The walk's own attribution, asked directly: at gate 1 validity (no subject) and an
+    # answer under ``plant`` reach the cases' guards, refused below plant's; ``heated``,
+    # outside ``plant``, reaches none. At gate 2 the guard holds: nothing has a cause.
+    walked = walks._Walk(0, 0, False, pending())
+    refused, holding = Configuration(HEATED, {"gate": 1}), Configuration(HEATED, {"gate": 2})
+    assert walked.cause(None, refused) == "T4a"
+    assert walked.cause("plant.heating.boiler.stages", refused) == "T4a"
+    assert walked.cause("heated", refused) is None
+    for subject in (None, "plant.heating.boiler.stages", "heated"):
+        assert walked.cause(subject, holding) is None
+
+
 def test_each_facts_answer_is_asked_at_each_configuration() -> None:
     # A fact's answer is always known (SZ100 (5)): the model answers its value, or None for
     # an optional one left out (seed 7's f1), and the engine is asked it through ``query``
