@@ -134,8 +134,9 @@ ranking of a domain and no ``required`` choice, and two of its answers lose a pa
 Readings chosen where the semantics leave room
 ==============================================
 
-The note is ``records/space-semantics-defaults-2026-10-18/NOTE.md`` in the design
-corpus; § 16 holds the readings its author gave for this model.
+Each reading below is stated in full: the rule the semantics' author chose for this model
+where the semantics leave room. A "§ 16.n" is the number its author gave the reading,
+kept as its label; the text here is the rule.
 
 1. *A view refused because its Space is refused is refused through, never an origin*
    (FN2 for views): its Space's false pieces are counted on their own. A view's body
@@ -251,7 +252,7 @@ corpus; § 16 holds the readings its author gave for this model.
     refuses).
 16. *Cycles* are the dependency rule written at :mod:`.description`.
 17. *A selector picked by a derived value* (``Selector(by=d)``, the engine's
-    ``Select(by=d)``; § 2.1's table of ``records/selectors-ownership-2026-10-21/NOTE.md``).
+    ``Select(by=d)``: its cases by what ``d`` names, waits on, refuses, or names none of).
     It is no choice: no key, never stored, never listed. Its path reads its value: ``d``'s
     where that names one of its cases; refused ``"select-no-case"`` at the selector where
     it names none (an origin of kind ``"derived"``, the selector's own); refused through
@@ -270,8 +271,9 @@ corpus; § 16 holds the readings its author gave for this model.
     ``domain-reads-choice`` exactly when ``d`` reads a choice (a picker over facts alone is
     a ``when`` over facts); an input in the choice's own case is a definition whatever
     picks that case, its guard being the choice's own existence guard (§ 16.20).
-26. *Refused, then inapplicable, is a move up* (numbered as the semantics note records it;
-    ruled in the design's review, § 10 of ``records/selectors-ownership-2026-10-21/NOTE.md``).
+26. *Refused, then inapplicable, is a move up* (numbered after the other readings; ruled
+    when walks with derived selectors found an answer refused through its scope's presence
+    turning inapplicable, the engine answering alike).
     Presence is Kleene's AND with absent dominating refused (§ 16.21:
     :meth:`_Evaluation._presence` asks absent first), so a scope refused through a guard
     above can still be found absent when another part of its path is decided (a chosen
