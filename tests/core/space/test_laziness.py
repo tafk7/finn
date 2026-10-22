@@ -32,10 +32,11 @@ from finn.core.space import (
     inspection,
     reject,
 )
+from finn.core.space._running.evaluate import Ans, evaluation
 from finn.core.space._state import bind, presence
 from finn.core.space._structure import EAGER, Structure
 from finn.core.space._world import INAPPLICABLE
-from finn.core.space.occurrence import state
+from finn.core.space.occurrence import ask, held
 
 
 class Fast(Space):
@@ -99,6 +100,12 @@ def _handles(point: Space) -> dict[str, Any]:
     return {item.key: item.reference for item in inspection.decisions(point)}
 
 
+def _answer(point: Space, index: int) -> Ans:
+    """``index``'s answer in the design space ``point`` holds, in its model's session."""
+    ds = held(point).ds
+    return ask(ds.model, lambda session: evaluation(ds, session).get(index))
+
+
 def test_an_absent_placed_spaces_validity_is_read_from_its_guard() -> None:
     blank = _blank()
     structure = _structure(blank)
@@ -114,10 +121,10 @@ def test_an_absent_placed_spaces_validity_is_read_from_its_guard() -> None:
     assert validity is not None
     guard = structure.find("compute.fast.$selected")
     fast = structure.find("compute.fast.$validity")
-    world = state(slow).world
-    read = [index for index, _ in world.entry(validity).trace]
+    found = _answer(slow, validity)
+    read = [index for index, _ in found.trace]
     assert guard in read and fast not in read
-    assessment = world.entry(validity).assessment
+    assessment = found.assessment
     assert isinstance(assessment, ConstraintAssessment)
     assert isinstance(assessment.results["compute.fast.$validity"], Inapplicable)
     assert fast not in structure._raw
@@ -142,8 +149,7 @@ def test_a_placed_space_selected_later_is_read_and_refuses_as_before() -> None:
     assert inspection.validity(back).status == "valid"
     validity = structure.scopes[0].validity
     assert validity is not None
-    world = state(back).world
-    read = [index for index, _ in world.entry(validity).trace]
+    read = [index for index, _ in _answer(back, validity).trace]
     assert structure.find("compute.fast.$validity") not in read
     assert inspection.validity(fast.with_choices({handles["compute.fast.lanes"]: 1})).status == (
         "valid"

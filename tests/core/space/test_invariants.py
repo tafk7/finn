@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """Concrete stability laws for fixed facts and compatible additional choices."""
 
+import pytest
+
 from finn.core.space import (
     Available,
     Decision,
@@ -15,6 +17,7 @@ from finn.core.space import (
 )
 
 
+@pytest.mark.usefixtures("purity_unchecked")  # a cache hit is counted once, not run again
 def test_settled_values_and_acceptance_survive_unrelated_added_choices() -> None:
     calls: list[int] = []
 
@@ -45,7 +48,8 @@ def test_settled_values_and_acceptance_survive_unrelated_added_choices() -> None
     second = first.with_choices(style="fast")
     assert second.query(Example.cycles) == Available(4)
     assert second.inspect(Example.physical) == before
-    # The successor keeps what its base evaluated that read no Decision the change touched.
+    # The successor finds again, in the model's cache, what its base evaluated that read no
+    # Decision the change touched.
     assert first.cycles == 4 and calls == [4]
     assert isinstance(first.query(Example.style), Unresolved)
     # Replacement is allowed to change an already-settled computation.

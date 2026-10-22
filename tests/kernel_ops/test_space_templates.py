@@ -27,8 +27,9 @@ import finn.kernels
 from finn.core.space import Space, design_space, inspection
 from finn.core.space._structure import EAGER, expand
 from finn.core.space._template import link_template
-from finn.core.space.occurrence import state
-from finn.core.space.results import Available, Unresolved
+from finn.core.space._running.evaluate import evaluation
+from finn.core.space.occurrence import ask, held
+from finn.core.space.results import Available, QueryResult, Unresolved
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 
@@ -137,26 +138,16 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     """``commit`` of the chain's stored values on a design space made from scratch, before
     any trial or ``viable``. Listing its choices (``inspection.decisions``, in the flow
     order) makes every scope's record and resolves no node; the change resolves what it
-    and its checks read. An absent scope's validity is read from its guard and its
-    choices' presence from their guards, so no scope absent at the baseline has a node
-    resolved for either. The scopes with a node resolved are the 38 present at the
-    baseline (the line's present scopes) and 4 more, of unknown presence in the design
-    space before the change: each MatMul's ``compute.int8_dsp58`` case. The first's is read:
-    the list of what the change moved (``_assign._moved``) reads, of each choice
-    whose presence may read a choice the change sets, its presence after, and before only
-    where that decides a list: ``x.adapter_ram_style`` is stored and present after, so
-    whether it comes into play reads its presence before, where its guard (the picker of
-    the channel's input adapter, ``input_chain``, reading its steps) reads the first
-    MatMul's views, whose validity there reads that case's (its selector still open). The
-    other
-    three's port streams are made, not read: each MatMul's served stream (``x_stream``)
-    takes its core's through the selector (an argument of each case's), and a channel
-    reads it. A channel's sides' labels are constants (20 of the constant nodes), and so is
-    its platform, an input of its adapter memory's UltraRAM rule, which every channel
-    states (5 more: the channels that place no memory, ``h0``-``h3`` and ``y``); it reads
-    no port's contract. Then ``viable`` of the middle MatMul's choices and one change
-    of its ``pe``: what trials resolve more (the channels beside it, ``w2`` and ``h2``, read
-    its ports' streams and reach none of their adapters' cases)."""
+    and its checks read, each node as its structure resolves it. An absent scope's validity
+    is read from its guard and its choices' presence from their guards, so no scope absent
+    at the baseline has a node resolved for either, and none of unknown presence in the
+    design space before the change either: the scopes with a node resolved are exactly the
+    38 present at the baseline (the line's present scopes). Each MatMul's
+    ``compute.int8_dsp58`` case, of unknown presence before the change, has none resolved.
+    Then ``viable`` of the middle MatMul's choices and one change of its ``pe``: what trials
+    resolve more (the middle MatMul's ``int8_dsp58`` case, which a trial selects, and the
+    output adapters of the channels beside it, ``a1`` and ``h2``, which read its ports'
+    streams)."""
     monkeypatch.delenv(EAGER, raising=False)
     whole, stored = chain_space(4)
     point = design_space(whole())
@@ -165,65 +156,63 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     committed = commit(point, stored)
     assert structure.counts() == {
         "scopes addressed": 225,
-        "scopes in play": 42,
-        "nodes resolved": 1383,
-        "const nodes resolved": 101,
+        "scopes in play": 38,
+        "nodes resolved": 1366,
+        "const nodes resolved": 96,
     }
     in_play = set(structure._in_play)
-    world, before = state(committed).world, state(point).world
 
-    def holds(guard: int | None, world: Any) -> bool:
-        return guard is None or world.result(guard) == Available(True)
+    def answer(of: Space, index: int) -> QueryResult[object]:
+        """``index``'s answer in the design space ``of`` holds, in its model's session."""
+        ds = held(of).ds
+        return ask(ds.model, lambda session: evaluation(ds, session).result(index))
+
+    def holds(guard: int | None, of: Space) -> bool:
+        return guard is None or answer(of, guard) == Available(True)
 
     def present(index: int) -> bool:
         record: Any = structure.records[index]
         while record is not None:
-            if not holds(structure.guard_of(record), world):
+            if not holds(structure.guard_of(record), committed):
                 return False
             record = record.parent
         return True
 
     present_scopes = {record.index for record in structure.records if present(record.index)}
     assert len(present_scopes) == 38
-    read_for_the_report = {
-        record.index
-        for record in structure.records
-        if record.name.startswith("mm0.compute.int8_dsp58")
+    assert in_play == present_scopes
+    unknown = {
+        record.index for record in structure.records if record.name.endswith(".compute.int8_dsp58")
     }
-    assert {structure.records[index].name for index in read_for_the_report} == {
-        "mm0.compute.int8_dsp58",
+    assert {structure.records[index].name for index in unknown} == {
+        f"mm{layer}.compute.int8_dsp58" for layer in range(4)
     }
-    assert not read_for_the_report & present_scopes
-    assert read_for_the_report <= in_play
-    made = in_play - read_for_the_report - present_scopes
-    assert {structure.records[index].name for index in made} == {
-        f"mm{layer}.compute.int8_dsp58" for layer in (1, 2, 3)
-    }
-    assert {
-        node.key.rsplit(".", 1)[-1] for node in structure._raw.values() if node.scope in made
-    } == {
-        "x_stream",
-        "w_stream",
-        "y_stream",
-    }
-    for index in read_for_the_report:
+    assert not unknown & in_play
+    for index in unknown:
         guard = structure.guard_of(structure.records[index])
-        assert guard is not None and isinstance(before.result(guard), Unresolved)
+        assert guard is not None and isinstance(answer(point, guard), Unresolved)
     handles = {item.key: item.reference for item in inspection.decisions(committed)}
     middle = [key for key in handles if key.startswith("mm2.")]
     assert len(middle) == 7
     inspection.viable(committed, [handles[key] for key in middle])
     assert structure.counts() == {
         "scopes addressed": 225,
-        "scopes in play": 46,
-        "nodes resolved": 1478,
-        "const nodes resolved": 101,
+        "scopes in play": 43,
+        "nodes resolved": 1464,
+        "const nodes resolved": 96,
+    }
+    assert {structure.records[index].name for index in set(structure._in_play) - in_play} == {
+        "mm2.compute.int8_dsp58",
+        "a1.output_adapter",
+        "a1.output_adapter.vpc",
+        "h2.output_adapter",
+        "h2.output_adapter.vpc",
     }
     report = committed.try_with_choices({handles["mm2.pe"]: 2})
     assert report.accepted
     assert structure.counts() == {
         "scopes addressed": 225,
-        "scopes in play": 46,
-        "nodes resolved": 1478,
-        "const nodes resolved": 101,
+        "scopes in play": 43,
+        "nodes resolved": 1464,
+        "const nodes resolved": 96,
     }

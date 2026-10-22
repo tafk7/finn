@@ -37,10 +37,11 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.core.space._origins import pairs
+from finn.core.space._running.evaluate import evaluation
+from finn.core.space._running.questions import pairs
 from finn.core.space.edits import ConfigurationResult
 from finn.core.space.inspection import Absent, Dormant, Open, Possible, Refused, Set, Waiting
-from finn.core.space.occurrence import state
+from finn.core.space.occurrence import ask, held
 
 
 def handle(point: Any, key: str) -> Any:
@@ -68,12 +69,11 @@ def codes(result: object) -> set[str]:
 def held_pairs(point: Space) -> set[tuple[str, str]]:
     """Each false piece of the root's validity with each origin it is false through, by
     the piece's key and the origin's owner."""
-    current = state(point)
-    nodes = current.linked.nodes
+    ds = held(point).ds
+    header = ds.model.linked.header
+    found = ask(ds.model, lambda session: pairs(evaluation(ds, session)))
     return {
-        (piece, nodes[origin].owner)
-        for (piece, _), origins in pairs(current.world).items()
-        for origin in origins
+        (piece, header(origin).owner) for (piece, _), origins in found.items() for origin in origins
     }
 
 

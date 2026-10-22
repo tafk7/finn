@@ -16,10 +16,12 @@ from finn.core.space import (
     Select,
     Space,
     ValueSemantics,
+    bind,
     composite,
     constraint,
     design_space,
     domain,
+    inspection,
 )
 from finn.core.space.edits import ChangeRequest
 from finn.core.space.errors import (
@@ -28,7 +30,6 @@ from finn.core.space.errors import (
     RequestError,
 )
 from finn.core.space.inspection import candidate, choices, decision_handle
-from finn.core.space.occurrence import state
 from finn.core.space.results import Available, Inapplicable, Unresolved
 
 
@@ -51,7 +52,10 @@ def test_malformed_batch_structure_and_types_precede_every_snapshot_callback() -
         first: int = Decision(domain=domain(accepts=membership), semantics=semantics)
         second: int = Decision(values=(1, 2))
 
-    base, other = design_space(Trial()), design_space(Trial())
+    # A change applies to any design space equal to its own: a foreign one is a design
+    # space of other stored choices.
+    base, other = design_space(Trial()), design_space(Trial()).with_choices(second=2)
+    events.clear()
     first = base.field(Trial.first).change(1)
     bad_edits: tuple[ChangeRequest, ...] = (
         first,
@@ -60,7 +64,7 @@ def test_malformed_batch_structure_and_types_precede_every_snapshot_callback() -
         replace(first, node=True),
         # No identity of this model: as many as are allocated is past every block, or (in
         # the permuted mode, its blocks allocated downward from a large base) below them.
-        replace(first, node=len(state(base).linked.nodes)),
+        replace(first, node=len(inspection.model(base).linked.nodes)),
         other.field(Trial.second).change(1),
         base.field(Trial.second).change(cast(int, "wrong")),
         cast(ChangeRequest, object()),
@@ -70,6 +74,25 @@ def test_malformed_batch_structure_and_types_precede_every_snapshot_callback() -
             base.try_with_choices(first, bad)
         assert events == []
     assert isinstance(base.query(Trial.first), Unresolved)
+
+
+def test_a_change_applies_to_any_design_space_equal_to_its_own() -> None:
+    """A change holds the design space it was made on (``Change.base``), and applies to any
+    design space equal to it, another object included; not to one of other choices."""
+
+    class Pair(Space):
+        first: int = Decision(values=(1, 2))
+        second: int = Decision(values=(1, 2))
+
+    point = design_space(Pair()).with_choices(first=1)
+    equal = bind(design_space(Pair()), {Pair.first: 1}).instance
+    other = point.with_choices(first=2)
+    made = point.field(Pair.second).change(2)
+    assert inspection.model(equal) is inspection.model(point)
+    assert equal is not point
+    assert equal.with_choices(made).second == 2
+    with pytest.raises(RequestError, match="exact base snapshot"):
+        other.with_choices(made)
 
 
 def test_foreign_model_handles_are_rejected_before_evaluators() -> None:

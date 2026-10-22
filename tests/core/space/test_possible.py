@@ -12,7 +12,7 @@ until a change sets it. A successor takes from its base what its change does not
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from support.space_cores import CORES, Packed, Stub, built, commit
@@ -36,6 +36,8 @@ from finn.core.space import (
     occurrence,
     reject,
 )
+from finn.core.space._running.evaluate import Ans, Session, evaluation
+from finn.core.space._structure import Structure
 
 
 def unassigned(answer: object) -> bool:
@@ -64,12 +66,15 @@ def test_one_possible_case_and_why_the_other_is_refused() -> None:
     assert refusals(point, Unit.compute) == {"packed": {"compute.packed.fits": set()}}
 
 
-def test_inspection_answers_are_read_once_per_configuration_and_model() -> None:
+def test_inspection_answers_are_equal_for_a_design_space_and_read_once_per_model() -> None:
+    """A design space's validity is a function of its value: asked again it is equal (a
+    new answer each time, read from the model's cache; none is kept beside it). What is
+    the model's alone is read once per model."""
     point = design_space(Unit(width=128))
     stub = inspection.candidate(point, Unit.compute, "stub")
     assert stub is not None
-    assert inspection.validity(stub) is inspection.validity(stub)
-    assert inspection.validity(point) is inspection.validity(point)
+    assert inspection.validity(stub) == inspection.validity(stub)
+    assert inspection.validity(point) == inspection.validity(point)
     assert inspection.decisions(point) is inspection.decisions(Unit)
 
 
@@ -270,19 +275,29 @@ def test_a_successor_keeps_what_its_change_does_not_reach_whichever_order_declar
         design_space(space(width=7)),
         {"a.compute": "limited", "b.compute": "limited", "a.burst": 1, "b.burst": 1},
     )
-    base_world = occurrence.state(base).world
-    nodes = occurrence.state(base).linked.nodes
-    for node in nodes:
-        base_world.entry(node.index)
+    structure = cast(Structure, inspection.model(base).linked)
+    nodes = tuple(structure.all_nodes())
+
+    def answers(point: Any) -> dict[int, Ans]:
+        """Every node's answer in the design space ``point`` holds, in its model's session."""
+        ds = occurrence.held(point).ds
+
+        def every(session: Session) -> dict[int, Ans]:
+            ev = evaluation(ds, session)
+            return {index: ev.get(index) for index in nodes}
+
+        return occurrence.ask(ds.model, every)
+
+    held = answers(base)
 
     def kept(point: Any, prefix: str) -> bool:
-        world = occurrence.state(point).world
-        for node in nodes:
-            world.entry(node.index)
+        """Whether every answer under ``prefix`` is the base's own: a hit in the model's
+        cache is the answer kept, put into the evaluation as it is."""
+        found = answers(point)
         return all(
-            world.cache[node.index] is base_world.cache[node.index]
-            for node in nodes
-            if node.key.startswith(prefix)
+            found[index] is held[index]
+            for index in nodes
+            if structure.header(index).key.startswith(prefix)
         )
 
     # Outside a and b, nothing of theirs is evaluated again.
@@ -291,11 +306,14 @@ def test_a_successor_keeps_what_its_change_does_not_reach_whichever_order_declar
     # Inside a, what reads a's limit is evaluated again and nothing of b's.
     reached = commit(base, {"a.compute.limited.limit": 8})
     assert kept(reached, "b.") and not kept(reached, "a.")
-    # Each answers every node as a configuration built from nothing.
+    # Each answers every node as a design space bound from nothing, with no cache.
     for point in (unreached, reached):
-        got, want = occurrence.state(point).world, occurrence.state(fresh(point)).world
-        for node in nodes:
-            assert got.result(node.index) == want.result(node.index), node.key
+        got = answers(point)
+        ds = occurrence.held(fresh(point)).ds
+        with ds.model.lock:
+            want = evaluation(ds, Session())
+            for index in nodes:
+                assert got[index].result == want.result(index), structure.header(index).key
 
 
 @pytest.mark.usefixtures("purity_unchecked")

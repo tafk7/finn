@@ -28,8 +28,9 @@ from finn.core.space import (
     inspection,
     view,
 )
-from finn.core.space._world import Entry
-from finn.core.space.occurrence import state
+from finn.core.space._running.cache import NodeCache
+from finn.core.space._running.evaluate import Ans, Session, evaluation
+from finn.core.space.occurrence import ask, held
 
 
 @pytest.mark.parametrize("field", ("caught", "finally_return", "blocked"))
@@ -69,9 +70,10 @@ def test_caught_failure_and_nonvalue_cannot_publish_fallback(field: str) -> None
     else:
         with pytest.raises(NativeEvaluationError):
             getattr(point, field)
-        # A failure is never kept: the configuration's world holds no entry for it.
-        index = state(point).model.linked.keys[field]
-        assert index not in state(point).world.cache
+        # A failure is never kept: the design space's evaluation holds no answer for it.
+        ds = held(point).ds
+        index = ds.node(field)
+        assert index not in ask(ds.model, lambda session: evaluation(ds, session).memo)
 
 
 @pytest.mark.parametrize(
@@ -318,22 +320,23 @@ def test_self_cycles_are_reached_through_scopes_admission_and_guards() -> None:
         design_space(Guard()).with_choices(choice=1)
 
 
-def test_an_entry_a_query_keeps_has_read_what_a_fresh_evaluation_reads() -> None:
-    """A guard a query evaluates on its way is kept with the reads a configuration built
-    from nothing records for it."""
+def test_an_answer_a_query_keeps_has_read_what_a_fresh_evaluation_reads() -> None:
+    """A guard a query evaluates on its way is kept with the reads (its trace, and the
+    choices and facts it read) an evaluation from nothing records for it."""
 
     class Example(Space):
         want: bool = Decision(values=(True, False))
         choice: int = Decision(values=(1, 2), when=want)
 
-    def read(entry: Entry) -> tuple[int, ...]:
-        return tuple(dict.fromkeys(node for node, _ in entry.trace))
+    def read(found: Ans) -> tuple[int, ...]:
+        return tuple(dict.fromkeys(node for node, _ in found.trace))
 
     point = design_space(Example())
     assert isinstance(point.query(Example.choice), Unresolved)
-    fresh = state(design_space(Example()))
-    index = fresh.linked.keys["choice.$guard"]
-    held = state(point).world.cache[index]
-    alone = fresh.world.entry(index)
-    assert (read(held), held.via, held.reads) == (read(alone), alone.via, alone.reads)
-    assert fresh.evaluator.bits.nodes(held.reads) == (fresh.linked.keys["want"],)
+    ds = held(point).ds
+    index = ds.node("choice.$guard")
+    kept = ask(ds.model, lambda session: evaluation(ds, session).memo[index])
+    with ds.model.lock:
+        alone = evaluation(ds, Session(cache=NodeCache())).get(index)
+    assert (read(kept), kept.reads) == (read(alone), alone.reads)
+    assert kept.reads == {ds.node("want")}

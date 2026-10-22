@@ -108,6 +108,25 @@ def test_decision_reads_and_candidates_cannot_mutate_frozen_commitments() -> Non
     assert point.with_choices(choice=Bag([3])) is point
 
 
+def test_choice_states_and_possible_values_hand_out_detached_values() -> None:
+    """``inspection.states`` hands out each stored value, and ``inspection.viable`` each
+    listed value, detached by its choice's semantics: a reader changing one changes no
+    stored choice, and no listed value another design space of the same facts reads."""
+    base = design_space(Mutable(source=Bag([1])))
+    (possible,) = inspection.viable(base, [Mutable.choice])
+    assert possible.values is not None
+    possible.values[0].value.values.append(9)
+    point = base.with_choices(choice=Bag([3]))
+    held = dict(inspection.states(point))["choice"]
+    assert isinstance(held, inspection.Set)
+    held.value.values.append(8)
+    assert dict(inspection.states(point))["choice"] == inspection.Set(Bag([3]))
+    assert point.choice == Bag([3])
+    (again,) = inspection.viable(base, [Mutable.choice])
+    assert again.values is not None and again.values[0].value == Bag([3])
+    assert base.field(Mutable.choice).candidates() == Available((Bag([3]),))
+
+
 def test_public_snapshot_failure_retains_declaration_role_and_cause() -> None:
     fail = False
 

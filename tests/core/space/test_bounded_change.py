@@ -3,17 +3,19 @@
 """A successor answers as a recomputation: walks of random changes over engine-only Spaces.
 
 ``support.space_walk`` applies seeded changes (a value, a clear, a pair) and compares every
-successor with the configuration of the same facts and stored choices built from nothing:
+successor with the design space of the same facts and stored choices bound from nothing:
 its stored choices, every node's answer and what each read, and its validity. The Spaces
-here are where that matters: a successor's world takes from its base's what the change did
-not reach, and choices under selectors still open wait, go dormant and come back into play
-as the selectors move.
+here are where that matters: a successor finds in its model's cache what the change did not
+reach, and choices under selectors still open wait, go dormant and come back into play as
+the selectors move.
 
-A walk fails on any difference. A choice an entry reads records its guard's reads, as a
+A walk fails on any difference. A choice an answer reads records its guard's reads, as a
 recomputation does, and answers as one.
 """
 
 from __future__ import annotations
+
+from typing import cast
 
 import pytest
 from support.space_cores import chain
@@ -38,6 +40,8 @@ from finn.core.space import (
     occurrence,
     supplied,
 )
+from finn.core.space._running.evaluate import Session, evaluation
+from finn.core.space._structure import Structure
 from finn.core.space.inspection import candidate
 
 
@@ -95,12 +99,26 @@ class Host(Space):
 
 
 def decisions_read(point: Space, reference: object) -> set[str]:
-    """The keys of the choices ``reference``'s entry read, directly or through another."""
-    current = occurrence.state(point)
-    entry = current.world.entry(current.model.resolve(point._scope, reference))
-    nodes = current.linked.nodes
-    read = current.evaluator.bits.nodes(entry.reads)
-    return {nodes[i].key for i in read if nodes[i].kind == "decision"}
+    """The keys of the choices ``reference``'s answer read, directly or through another (in
+    its model's session, whose node cache records them)."""
+    ds = occurrence.held(point).ds
+    index = ds.model.resolve(point._scope, reference)
+    found = occurrence.ask(ds.model, lambda session: evaluation(ds, session).get(index))
+    header = ds.model.linked.header
+    return {header(i).key for i in found.reads if header(i).kind == "decision"}
+
+
+def _every(point: Space) -> None:
+    """Every node of the design space ``point`` holds evaluated, in its model's session."""
+    ds = occurrence.held(point).ds
+    structure = cast(Structure, ds.model.linked)
+
+    def every(session: Session) -> None:
+        ev = evaluation(ds, session)
+        for index in structure.all_nodes():
+            ev.get(index)
+
+    occurrence.ask(ds.model, every)
 
 
 def test_a_walk_over_a_guarded_decision_answers_as_a_recomputation() -> None:
@@ -123,7 +141,7 @@ def test_a_retained_choice_under_a_selector_the_change_opened_answers_as_a_recom
 
 
 def test_a_gearbox_change_after_a_warm_chain_answers_as_a_recomputation() -> None:
-    # Each successor answers every node, so the next change starts from a warm world. The
+    # Each successor answers every node, so the next change starts from a warm cache. The
     # last step commits the gearbox: the change is answered as a recomputation answers it.
     point = design_space(Pipeline(width=10))
     owned = {item.key: item.reference for item in inspection.decisions(point)}
@@ -142,9 +160,7 @@ def test_a_gearbox_change_after_a_warm_chain_answers_as_a_recomputation() -> Non
         result = point.try_with_choices({owned[k]: v for k, v in values.items()}, *changes)
         assert result.accepted, (values, clears)
         point = result.instance
-        current = occurrence.state(point)
-        for node in current.linked.nodes:
-            current.world.entry(node.index)
+        _every(point)
     got = point.try_with_choices({owned["l0.adapter"]: "gearbox"})
     want = fresh(point).try_with_choices({owned["l0.adapter"]: "gearbox"})
     assert got.accepted and want.accepted

@@ -33,9 +33,10 @@ from finn.core.space import (
     inspection,
 )
 from finn.core.space._failure import current
-from finn.core.space._state import State
+from finn.core.space._running.evaluate import evaluation
+from finn.core.space._running.value import DesignSpace
 from finn.core.space.declarations import ValueRef
-from finn.core.space.occurrence import state
+from finn.core.space.occurrence import ask, held
 
 
 def _chain_space(reverse: bool) -> type[Space]:
@@ -275,7 +276,7 @@ def test_observed_evidence_includes_cached_reads_and_omits_unselected_work() -> 
     via = {node.declaration.key: [alias.key for alias in node.via] for node in evidence.nodes}
     assert via["left.cycles"] == ["left.extent"]
     assert "unrelated" not in edges
-    calls = state(point).evaluator.counters.calls
+    calls = inspection.model(point).per_class.session().counters.calls
     before = sum(calls.values())
     assert inspection.explain(point, Pair.output) == evidence
     assert sum(calls.values()) == before  # a second explanation calls nothing
@@ -356,7 +357,7 @@ def test_native_wide_fan_in_and_cached_prefix_deep_dependency() -> None:
     wide = cast(type[Space], type("WideSelf", (Space,), leaves))
     fan = design_space(declare(wide, {f"leaf_{index}": index for index in range(1_000)}))
     assert getattr(fan, "total") == sum(range(1_000))
-    assert state(fan).evaluator.counters.calls == {"derived": 1}
+    assert inspection.model(fan).per_class.session().counters.calls == {"derived": 1}
 
 
 @dataclass(frozen=True)
@@ -395,25 +396,24 @@ def _reclaimed_example() -> type[Space]:
     return Example
 
 
-def _exercise(
-    example: type[Space], states: list[ReferenceType[State]], outputs: list[ReferenceType[Payload]]
-) -> None:
-    """Configurations made, changed, failed and refused; what they held, observed weakly."""
+def _exercise(example: type[Space], states: list[ReferenceType[DesignSpace]]) -> None:
+    """Design spaces made, changed, failed and refused; each observed weakly."""
     point = design_space(declare(example, {"fact": 2})).with_choices(choice=1)
     assert getattr(point, "payload") == Payload(1)
-    current_state = state(point)
-    states.append(ref(current_state))
-    answer = current_state.world.cache[current_state.linked.keys["payload"]].result
-    assert isinstance(answer, Available)
-    outputs.append(ref(cast(Payload, answer.value)))
+    current = held(point).ds
+    states.append(ref(current))
+    answer = ask(
+        current.model, lambda session: evaluation(current, session).memo[current.node("payload")]
+    ).result
+    assert isinstance(answer, Available) and answer.value == Payload(1)
     successor = point.with_choices(choice=2)
-    states.append(ref(state(successor)))
+    states.append(ref(held(successor).ds))
     assert getattr(successor, "payload") == Payload(2)
-    # A successor shares the facts it did not change, and the model's lock.
-    assert state(successor).world.facts is current_state.world.facts
-    assert state(successor).evaluator.lock is current_state.evaluator.lock
+    # A successor shares the facts layer it did not change, and the model's lock.
+    assert held(successor).ds.layer is current.layer
+    assert inspection.model(successor).lock is inspection.model(point).lock
     failed = design_space(declare(example, {"fact": 3}))
-    states.append(ref(state(failed)))
+    states.append(ref(held(failed).ds))
     with pytest.raises(NativeEvaluationError):
         _ = getattr(failed, "broken")
     with pytest.raises(KeyboardInterrupt):
@@ -429,25 +429,12 @@ def test_configurations_and_failed_computations_are_reclaimed() -> None:
     example = _reclaimed_example()
     model = inspection.model(example)
     survivor = design_space(declare(example, {"fact": 1}))
-    states: list[ReferenceType[State]] = []
-    outputs: list[ReferenceType[Payload]] = []
-    _exercise(example, states, outputs)
+    states: list[ReferenceType[DesignSpace]] = []
+    _exercise(example, states)
     gc.collect()
     assert states and all(item() is None for item in states)
     assert getattr(survivor, "fact") == 1 and inspection.model(survivor) is model
     assert inspection.model(example) is model
-
-
-def test_cached_outputs_of_discarded_configurations_are_reclaimed_past_the_memo_budget() -> None:
-    example = _reclaimed_example()
-    # With a budget of one the model's memo keeps only what it kept last: the membership
-    # of the refused value, after every output.
-    inspection.model(example).evaluator.memo.budget = 1
-    states: list[ReferenceType[State]] = []
-    outputs: list[ReferenceType[Payload]] = []
-    _exercise(example, states, outputs)
-    gc.collect()
-    assert outputs and all(item() is None for item in outputs)
 
 
 def test_concurrent_independent_models_and_cold_shared_configurations() -> None:
