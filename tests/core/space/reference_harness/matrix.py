@@ -72,8 +72,8 @@ ROWS: tuple[Row, ...] = (
         "A refused guard below an unknown selector or parent leaves validity open, not "
         "counted (reading 8)",
         "test_reference_cases::test_a_refused_when_in_a_case_of_an_open_selector_leaves_validity_open",
-        "today's engine counts it, so an open selector holding a case whose when is refused "
-        "gives valid where the model gives open",
+        "today's engine leaves that refused guard out, so an open selector holding a case "
+        "whose when is refused gives valid where the model gives open",
     ),
     Row(
         "view-read-in",
