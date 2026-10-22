@@ -34,7 +34,7 @@ def make_cfg(output_dir, steps, **kw):
         fpga_part="xc7z020clg400-1",
         steps=steps,
         generate_outputs=[DataflowOutputType.ESTIMATE_REPORTS],
-        **kw
+        **kw,
     )
 
 
