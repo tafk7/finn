@@ -17,9 +17,9 @@ from __future__ import annotations
 
 from typing import Any
 
-import finn.core.space as space
 from support.refusals import refused
 
+import finn.core.space as space
 from finn.core.space import (
     Decision,
     DefinitionError,

@@ -32,6 +32,7 @@ from ._nodes import (
     missing_formal,
 )
 from ._ordering import dependency_order
+from ._signatures import resolve_source
 from ._table import (
     UNSUPPLIED_BINDING,
     Binding,
@@ -61,7 +62,6 @@ from .declarations import (
 )
 from .domains import Domain, finite
 from .errors import DefinitionError
-from ._signatures import resolve_source
 from .expressions import Expr
 from .ir import Argument, NodeKind
 from .results import reject
