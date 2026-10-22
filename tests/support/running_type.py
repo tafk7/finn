@@ -37,7 +37,9 @@ and values hashed). The named implementations, each loadable as ``support.runnin
 - ``RUNNING_PLANTED``: a cache wrong on purpose (``LeavesOneOut``): each answer is kept
   with the last read of its read set (by node) left out of its key, so a design space
   differing from the one evaluated in that read alone takes its answer. The walks and the
-  toys must catch it.
+  toys must catch it;
+- ``RUNNING_PLANTED_WIDE``: the same fault, subtler (``LeavesOneOut(wider_than=4)``): a read
+  left out only where the read set holds more than 4 reads.
 """
 
 from __future__ import annotations
@@ -211,13 +213,19 @@ class Running:
 
 
 class LeavesOneOut(NodeCache):
-    """A node cache wrong on purpose: each answer is kept with the last read of its read
-    set (by node) left out, so its key misses that read (``RUNNING_PLANTED``)."""
+    """A node cache wrong on purpose: each answer whose read set holds more than
+    ``wider_than`` reads is kept with the last of them (by node) left out, so its key misses
+    that read (``RUNNING_PLANTED``: every answer that read anything; ``RUNNING_PLANTED_WIDE``:
+    only where more than 4 were read)."""
 
-    __slots__ = ()
+    __slots__ = ("wider_than",)
+
+    def __init__(self, *, wider_than: int = 0) -> None:
+        super().__init__()
+        self.wider_than = wider_than
 
     def keep(self, ev: Evaluation, index: NodeId, found: Ans) -> None:
-        if found.reads:
+        if len(found.reads) > self.wider_than:
             found = replace(found, reads=found.reads - {max(found.reads)})
         super().keep(ev, index, found)
 
@@ -227,6 +235,9 @@ RUNNING_CACHED = Running(NodeCache(), "running, cached")
 RUNNING_BOUNDED = Running(NodeCache(bound=1), "running, cached, bounded 1")
 RUNNING_DROPPING = Running(NodeCache(drop=0.5, seed=0), "running, cached, dropping 0.5")
 RUNNING_PLANTED = Running(LeavesOneOut(), "running, cached, planted: a read left out")
+RUNNING_PLANTED_WIDE = Running(
+    LeavesOneOut(wider_than=4), "running, cached, planted: a read left out of sets over 4"
+)
 
 __all__ = [
     "RUNNING",
@@ -234,6 +245,7 @@ __all__ = [
     "RUNNING_CACHED",
     "RUNNING_DROPPING",
     "RUNNING_PLANTED",
+    "RUNNING_PLANTED_WIDE",
     "LeavesOneOut",
     "Running",
     "RunningAnswers",

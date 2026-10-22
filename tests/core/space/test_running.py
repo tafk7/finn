@@ -19,7 +19,8 @@ model, through the class-based oracle (``support.space_oracle``), as the impleme
 - **The node cache** (``_running.cache``): the toys walked with a cache dropping half its
   entries at random, with no disagreement; a cache wrong on purpose (a read left out of
   each key) caught; every value type a choice or a fact holds in the engine's tests, the
-  toys and the reference harness, its ``==`` and hash checked against its value semantics.
+  toys and the reference harness, its ``==`` and hash checked against its value semantics,
+  and only the types checked keyed.
 
 The implementations are loaded by name, as ``--implementation`` names them: they are a
 support module of no layer.
@@ -90,7 +91,7 @@ from finn.core.space import (
 )
 from finn.core.space._failure import NativeEvaluationError
 from finn.core.space._running import evaluate, questions, structure
-from finn.core.space._running.cache import UNCHECKED, NodeCache
+from finn.core.space._running.cache import CHECKED, PLAIN, NodeCache
 from finn.core.space._running.cache import key as cache_key
 from finn.core.space._running.evaluate import MembershipReadsChoice, Session
 from finn.core.space._running.value import DesignSpace, FactsLayer
@@ -931,19 +932,19 @@ def test_a_walk_catches_the_planted_cache() -> None:
 # fact holds in the engine's tests, the toys and the reference harness is listed here, with
 # the value semantics in force, and its ``==`` and hash are checked against them
 # (``_world._same_value``): values equal by the semantics are ``==`` and hash alike, and
-# values the semantics tell apart are not ``==``, so their keys differ. An unhashable type
-# has no key: nothing that read it is kept. A type this test cannot reach to check (one
-# declared inside a test function, or in a module a test writes) is listed in
-# ``cache.UNCHECKED``, and the cache never keys it. FINN's own value types come later.
+# values the semantics tell apart are not ``==``, so their keys differ. The cache keys only
+# the types checked here (``cache.PLAIN``, tuples and frozen sets of them, and the classes
+# named in ``cache.CHECKED``): any other type has no key, nor has an unhashable one, and
+# nothing that read it is kept. FINN's own value types come later.
 #
 # Where found: the module-level Space classes of ``tests/core/space`` and of the toys
 # (``test_every_choice_and_fact_type_is_listed`` reads them); the reference harness's
 # builder (``reference_harness.engine``: ``bool``, ``int``, ``str`` by a choice's values,
 # ``int`` otherwise, ``bool``, ``str`` and ``tuple`` by a case's spelling); and, declared
 # inside test functions, ``list`` under several semantics (unhashable), ``int`` and
-# ``tuple`` under semantics whose equality is ``==``, and the two ``Rate`` classes (listed
-# unchecked). ``support.value_classes`` names the immutable atoms a frozen value class may
-# hold: each is listed too.
+# ``tuple`` under semantics whose equality is ``==``, and the two ``Rate`` classes (never
+# keyed: neither is checked). ``support.value_classes`` names the immutable atoms a frozen
+# value class may hold: each is listed too.
 
 NAN, OTHER_NAN = float("nan"), float("nan")
 
@@ -1051,19 +1052,37 @@ def _stand_in(module: str, qualname: str) -> type:
     return cast(type, dataclass(frozen=True)(made))
 
 
-def test_a_value_of_a_type_listed_unchecked_is_never_keyed() -> None:
-    """A stand-in for ``toy_forward.Rate`` (listed in ``cache.UNCHECKED``) has no key, alone
-    or inside a tuple or a frozen set; a design space whose fact holds one keeps nothing for
-    what read it, and still answers as today's engine."""
-    assert "toy_forward.Rate" in UNCHECKED
+def _name(kind: type) -> str:
+    return f"{kind.__module__}.{kind.__qualname__}"
+
+
+def test_the_cache_keys_only_the_types_this_test_checks() -> None:
+    """Every type the cache keys (``cache.PLAIN``, tuples and frozen sets, the classes named
+    in ``cache.CHECKED``) is a type whose semantics this test checks, and each of its values
+    here has a key."""
+    checked = {semantics.type_token: values for semantics, values in VALUE_TYPES.values()}
+    named = {_name(token): token for token in checked if isinstance(token, type)}
+    assert set(PLAIN) <= set(checked) and {tuple, frozenset} <= set(checked)
+    assert CHECKED <= set(named), CHECKED - set(named)
+    for kind in (*PLAIN, tuple, frozenset, *(named[name] for name in CHECKED)):
+        assert all(cache_key(value) is not None for value in checked[kind]), kind
+
+
+def test_a_value_of_a_type_not_checked_is_never_keyed() -> None:
+    """A stand-in for ``toy_forward.Rate`` (a type this test never checks) has no key,
+    alone or inside a tuple or a frozen set, nor has a frozen value class declared here; a
+    design space whose fact holds one keeps nothing for what read it (every lookup there a
+    miss), and still answers as today's engine."""
     held = _stand_in("toy_forward", "Rate")
     value = held(3)
+    assert _name(held) not in CHECKED
     assert (
         cache_key(value) is None
         and cache_key((1, value)) is None
         and cache_key(frozenset({value})) is None
     )
-    assert cache_key(_stand_in("toy_forward", "Other")(3)) is not None
+    assert cache_key(_stand_in("core.space.test_compose", "Other")(3)) is None
+    assert cache_key((1, "a", frozenset({2.0}))) is not None
 
     class Holds(Space):
         rate = Param(semantics=default_semantics(held))  # type: ignore[var-annotated]
@@ -1107,7 +1126,7 @@ def _space_classes() -> list[type[Space]]:
 
 def test_every_choice_and_fact_type_is_listed() -> None:
     """Every choice's and fact's value type in the module-level Space classes is listed
-    above (checked or unhashable) or unchecked; so are the harness's."""
+    above (checked or unhashable); so are the harness's."""
     listed = {
         semantics.type_token for semantics, _ in (*VALUE_TYPES.values(), *UNHASHABLE.values())
     }
@@ -1120,13 +1139,7 @@ def test_every_choice_and_fact_type_is_listed() -> None:
         for node in cast(Structure, model.linked).raw_nodes:
             if node.kind in ("param", "decision") and node.semantics is not None:
                 found.setdefault(node.semantics.type_token, space_class.__qualname__)
-    unknown = {
-        token: where
-        for token, where in found.items()
-        if token not in listed
-        and f"{getattr(token, '__module__', '')}.{getattr(token, '__qualname__', '')}"
-        not in UNCHECKED
-    }
+    unknown = {token: where for token, where in found.items() if token not in listed}
     assert unknown == {}
     assert {bool, int, str} <= set(found)
     assert set(HARNESS) <= listed

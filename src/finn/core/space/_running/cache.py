@@ -35,11 +35,11 @@ as such.
 
 With no cache, a session evaluates every member (``evaluate.Session(cache=None)``).
 
-**Values it never keys.** A value whose type ``==`` cannot be trusted for, by the
-value-type test, is listed by name in ``UNCHECKED`` (``module.qualname``). It is never
-hashed: a value of such a type, or a tuple or frozen set holding one, has no key, and
-nothing is kept for an answer whose read set holds one (nor looked up). An unhashable
-value has no key either.
+**Values it keys.** Only values of the types the value-type test has checked (``==`` and
+hash against the value semantics): the plain types (``PLAIN``), tuples and frozen sets of
+checked values, and the classes named in ``CHECKED`` (``module.qualname``). A value of any
+other type is never hashed: it has no key, and nothing is kept for an answer whose read set
+holds one, so a lookup there is a miss. An unhashable value has no key either.
 
 **Counters**, on the session's (``evaluate.Counters``): lookups, hits, values hashed (at
 lookup and at keep), the members holding a read set, the read sets kept, and the most read
@@ -60,43 +60,41 @@ from .value import hashkey
 if TYPE_CHECKING:
     from .evaluate import Ans, Evaluation
 
-UNCHECKED: frozenset[str] = frozenset(
+PLAIN: tuple[type, ...] = (type(None), bool, int, float, complex, str, bytes)
+"""The plain types the cache keys, each checked by the value-type test."""
+
+CHECKED: frozenset[str] = frozenset(
     {
-        # frozen dataclasses declared inside a test or in a module the test writes: the
-        # value-type test cannot reach them to check
-        "core.space.test_value_inputs."
-        "test_an_attribute_of_a_value_input_is_read_in_the_class_body.<locals>.Rate",
-        "toy_forward.Rate",
+        "pathlib.PurePosixPath",
+        # frozen value classes of the engine's tests
+        "core.space.test_compose.Spec",
+        "core.space.test_extensions.Encoding",
+        "core.space.test_possible.Capabilities",
     }
 )
-"""The value types the cache never keys, by ``module.qualname``: those the value-type test
-lists as unchecked."""
+"""The other value types the cache keys, by ``module.qualname``: each checked by the
+value-type test."""
 
-_UNCHECKED_NAMES = frozenset(name.rpartition(".")[2] for name in UNCHECKED)
-_PLAIN = (int, str, bool, type(None), float, bytes)
 _NOT_GIVEN = ("not given",)
 
 Member = tuple[frozenset[NodeId] | None, NodeId]
 ReadSet = tuple[NodeId, ...]
 
 
-def _unchecked(value: object) -> bool:
+def _checked(value: object) -> bool:
     kind = type(value)
-    if kind in _PLAIN:
-        return False
+    if kind in PLAIN:
+        return True
     if kind is tuple or kind is frozenset:
-        return any(_unchecked(item) for item in value)  # type: ignore[attr-defined]
-    return (
-        kind.__qualname__.rpartition(".")[2] in _UNCHECKED_NAMES
-        and f"{kind.__module__}.{kind.__qualname__}" in UNCHECKED
-    )
+        return all(_checked(item) for item in value)  # type: ignore[attr-defined]
+    return f"{kind.__module__}.{kind.__qualname__}" in CHECKED
 
 
 def key(value: object) -> object:
     """``value`` as the cache keys it: by type and ``==``, a tuple item by item
-    (``value.hashkey``); ``None`` where it is unhashable or holds a type listed in
-    ``UNCHECKED``."""
-    if _unchecked(value):
+    (``value.hashkey``); ``None`` where it is unhashable or holds a type not checked
+    (``PLAIN``, ``CHECKED``)."""
+    if not _checked(value):
         return None
     return hashkey(value)
 
@@ -219,4 +217,4 @@ class NodeCache:
         answers[values] = found
 
 
-__all__ = ["UNCHECKED", "NodeCache", "key"]
+__all__ = ["CHECKED", "PLAIN", "NodeCache", "key"]
