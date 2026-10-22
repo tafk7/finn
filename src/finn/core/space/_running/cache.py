@@ -9,7 +9,7 @@ compiled Space class, the sets of choices and facts the member was found to read
 each set the answer by those values. A design space asks the cache before it evaluates a
 member: for each kept set it takes its own values of that set and looks them up by hash. A
 hit is the answer; a miss is an evaluation, kept after. Values match by type and ``==``,
-and only where their choice's or fact's value semantics are the default ones. The cache
+and only where their choice's or fact's value semantics compare by ``==``. The cache
 belongs to no design space, only grows, and may drop any entry at any time: a miss changes
 nothing but the work. So a design space answers the same with it as without it.
 
@@ -21,7 +21,7 @@ evaluation: a membership reading, made with its choice's existence guards taken 
 holding (none for a choice with no guard), is a member of its own. Each member keeps its
 read sets (the choices and facts its evaluation read, by node, sorted), and each read set
 the answers (``evaluate.Ans``, with their trace and their read set) by the values read:
-each value by ``key`` (type and ``==`` under the default semantics; a tuple or frozen set
+each value by ``key`` (type and ``==`` under semantics it trusts; a tuple or frozen set
 item by item, a value class field by field), a choice or fact not given as such.
 
 **Modes**, fixed when the cache is made (there is no global):
@@ -37,24 +37,30 @@ With no cache, a session evaluates every member (``evaluate.Session(cache=None)`
 the purity check (the session's, ``evaluate.Session.verifying``), any of these verifies: a
 hit is evaluated anyway and compared with what was kept, by the member's value semantics.
 
-**Values it keys** (``key``): a value of a choice or fact whose value semantics are the
-default ones (``plain``: recognition by exact type, equality by ``==``, a default snapshot),
-by type and ``==``: the plain types (``PLAIN``) and the classes in ``CHECKED``, each checked
-by the value-type test (``==`` and hash against the value semantics); an enum member, by
-its type and its name (``enum_key``), whatever its class mixes in or overrides; tuples and
-frozen sets of keyed values, item by item; and an instance of a value class
-(``value_class``: a frozen dataclass whose ``==`` and hash are the ones ``dataclasses``
-generates, and none of whose compared fields is annotated with value semantics of its
-own), field by field, each field's value keyed in turn. Item by item and field by field,
-the key tells types apart (``True`` is not ``1``): it is never coarser than ``==``, so a
-hit is never a value ``==`` tells apart, nor, under the default semantics, a value the
-semantics tell apart. An enum member's key is finer still: an equal key is the same
-member, so an ``==`` or a hash of its class's own or a mixin's (``class E(int, Enum)``
-compares as an ``int``) can only make a hit a miss. A value of a
-choice or fact with semantics of its own (``ValueSemantics(...)``, ``immutable_nominal``),
-which may tell apart values ``==`` holds equal, is never hashed, whatever its type; nor is a
-value of any other type: it has no key, and nothing is kept for an answer whose read set
-holds one, so a lookup there is a miss. An unhashable value has no key either.
+**Values it keys** (``key``): a value of a choice or fact whose value semantics it trusts
+(``trusted``): the default ones (recognition by exact type, equality by ``==``, a default
+snapshot), or semantics whose equality is ``==`` itself, as their owner declares by
+``equal=operator.eq``. What is keyed is the value stored, after its semantics' snapshot.
+The trust widens which semantics are keyed, not which types: under them the cache keys, by
+type and ``==``, the plain types (``PLAIN``) and the value types (``is_value_type``: a class
+registered by its owner, ``finn.core.space.value_type``, whose ``==`` and hash are its
+semantics, checked by the owner's test); an enum member, by its type and its name
+(``enum_key``), whatever its class mixes in or overrides; tuples and frozen sets of keyed
+values, item by item; and an instance of a value class (``value_class``: a frozen dataclass
+whose ``==`` and hash are the ones ``dataclasses`` generates, and none of whose compared
+fields is annotated with value semantics the cache does not trust), field by field, each
+field's value keyed in turn (a value type held as a field included). Item by item and
+field by field, the key tells types apart (``True`` is not ``1``, and a value type whose
+``==`` holds it equal to a string is not that string): it is never coarser than ``==``, so
+a hit is never a value ``==`` tells apart, nor, under semantics that compare by ``==``, a
+value the semantics tell apart. An enum member's key is finer still: an equal key is the
+same member, so an ``==`` or a hash of its class's own or a mixin's (``class E(int, Enum)``
+compares as an ``int``) can only make a hit a miss. A value of a choice or fact with
+semantics whose equality is another function (``ValueSemantics(...)``,
+``immutable_nominal``), which may tell apart values ``==`` holds equal, is never hashed,
+whatever its type; nor is a value of any other type: it has no key, and nothing is kept
+for an answer whose read set holds one, so a lookup there is a miss. An unhashable value
+has no key either.
 
 The check is made where the semantics are: a value's semantics are its choice's or fact's
 (``Param(semantics=...)``, an annotation's), not its type's, and one class may be held by
@@ -74,12 +80,13 @@ Single-threaded, as the evaluator is: nothing here takes a lock.
 from __future__ import annotations
 
 import dataclasses
+import operator
 import random
 import weakref
 from enum import Enum
-from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any, cast, get_args, get_type_hints
 
+from .._value_types import is_value_type
 from ..ir import NodeId
 from ..semantics import ValueSemantics, default_semantics
 from .value import hashkey
@@ -89,10 +96,6 @@ if TYPE_CHECKING:
 
 PLAIN: tuple[type, ...] = (type(None), bool, int, float, complex, str, bytes)
 """The plain types the cache keys, each checked by the value-type test."""
-
-CHECKED: tuple[type, ...] = (PurePosixPath,)
-"""The other classes the cache keys by ``==`` (under the default semantics), each checked by
-the value-type test."""
 
 _NOT_GIVEN = ("not given",)
 
@@ -121,25 +124,31 @@ def _code(function: object) -> object:
     return getattr(function, "__code__", None)
 
 
-def plain(semantics: ValueSemantics[Any] | None) -> bool:
-    """Whether ``semantics`` are the default ones (``semantics.default_semantics``):
-    recognition by exact type, equality by ``==`` and a snapshot that keeps it. Semantics of
-    a value's own (``ValueSemantics(...)``, ``immutable_nominal``) or none (equal by
-    identity alone) are not, whatever their functions compute: the cache cannot read a
-    function's equality, so it keys none of their values."""
+def trusted(semantics: ValueSemantics[Any] | None) -> bool:
+    """Whether the cache keys values under ``semantics``: the default ones
+    (``semantics.default_semantics``: recognition by exact type, equality by ``==`` and a
+    snapshot that keeps it), or semantics whose equality is ``operator.eq``, by which their
+    owner declares that two stored values are equal exactly when ``==`` holds them equal.
+    Other semantics of a value's own (``ValueSemantics(...)`` with another ``equal``,
+    ``immutable_nominal``) or none (equal by identity alone) are not, whatever their
+    functions compute: the cache cannot read a function's equality, so it keys none of
+    their values."""
+    if semantics is None:
+        return False
+    if semantics.equal is operator.eq:
+        return True
     return (
-        semantics is not None
-        and _code(semantics.recognizes) is _code(_DEFAULT.recognizes)
+        _code(semantics.recognizes) is _code(_DEFAULT.recognizes)
         and _code(semantics.equal) is _code(_DEFAULT.equal)
         and any(semantics.snapshot is snapshot for snapshot in _DEFAULT_SNAPSHOTS)
     )
 
 
 def _own_semantics(annotation: object) -> bool:
-    """Whether ``annotation`` names value semantics other than the default ones, at any
-    depth (``Annotated[tuple[int, int], PAIR]``, as a projection reads it)."""
+    """Whether ``annotation`` names value semantics the cache does not trust (``trusted``), at
+    any depth (``Annotated[tuple[int, int], PAIR]``, as a projection reads it)."""
     if isinstance(annotation, ValueSemantics):
-        return not plain(annotation)
+        return not trusted(annotation)
     return any(_own_semantics(part) for part in get_args(annotation))
 
 
@@ -151,10 +160,10 @@ def value_class(kind: type) -> bool:
     """Whether the cache keys ``kind``'s instances field by field: a frozen dataclass
     (declared so itself, not by a base) whose ``__eq__`` and ``__hash__`` are the ones
     ``dataclasses`` generates, comparing the fields' values with ``==``, and none of whose
-    compared fields is annotated with value semantics of its own (``_own_semantics``). A
-    hand-written ``__eq__`` or hash, an ``eq=False`` dataclass (equal by identity), a
-    mutable one, a field with semantics of its own or annotations that do not resolve is
-    not."""
+    compared fields is annotated with value semantics the cache does not trust
+    (``_own_semantics``). A hand-written ``__eq__`` or hash, an ``eq=False`` dataclass
+    (equal by identity), a mutable one, a field with such semantics or annotations that do
+    not resolve is not."""
     found = _VALUE_CLASSES.get(kind)
     if found is None:
         found = _VALUE_CLASSES[kind] = _value_class(kind)
@@ -197,17 +206,17 @@ def enum_key(member: Enum) -> object:
 
 def key(value: object, semantics: ValueSemantics[Any] | None) -> object:
     """``value``, the value of a choice or fact with ``semantics``, as the cache keys it,
-    by type and ``==`` (see the module docstring); ``None`` where the semantics are not the
-    default ones (``plain``), or the value is unhashable or holds a type not keyed."""
-    return _key(value) if plain(semantics) else None
+    by type and ``==`` (see the module docstring); ``None`` where the cache does not trust
+    the semantics (``trusted``), or the value is unhashable or holds a type not keyed."""
+    return _key(value) if trusted(semantics) else None
 
 
 def _key(value: object) -> object:
-    """``value`` by type and ``==``: an enum member by type and name, a tuple or a frozen
-    set item by item, a value class field by field; ``None`` where it is unhashable or holds
-    a type not keyed."""
+    """``value`` by type and ``==``: a plain type or a value type itself, an enum member by
+    type and name, a tuple or a frozen set item by item, a value class field by field;
+    ``None`` where it is unhashable or holds a type not keyed."""
     kind = type(value)
-    if kind in PLAIN or kind in CHECKED:
+    if kind in PLAIN:
         return hashkey(value)
     if isinstance(value, Enum):
         return enum_key(value)
@@ -225,6 +234,8 @@ def _key(value: object) -> object:
         if any(part is None for part in fields):
             return None
         return (kind, tuple(fields))
+    if is_value_type(kind):
+        return hashkey(value)
     return None
 
 
@@ -346,4 +357,4 @@ class NodeCache:
         answers[values] = found
 
 
-__all__ = ["CHECKED", "PLAIN", "NodeCache", "enum_key", "key", "plain", "value_class"]
+__all__ = ["PLAIN", "NodeCache", "enum_key", "key", "trusted", "value_class"]

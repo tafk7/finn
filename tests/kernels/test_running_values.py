@@ -5,12 +5,13 @@
 type's node cache keys them (``finn.core.space._running.cache``).
 
 The cache matches a value read by type and ``==`` (``cache.key``), and only where its
-choice's or fact's value semantics are the default ones: a value under semantics of its own
-is never keyed. Under the default semantics it keys the plain types, enum members by type
-and name (whatever their class mixes in), tuples and frozen sets item by item, and value
-classes (frozen dataclasses with the generated ``==`` and hash) field by field. Any other
-type has no key: nothing that read it is kept, and a lookup there is a miss, never a
-wrong answer.
+choice's or fact's value semantics compare by ``==`` (``cache.trusted``: the default ones,
+or semantics declaring ``equal=operator.eq``, as FINN's datatype and integer-tensor
+semantics do). Under them it keys the plain types, the value types (``value_type``),
+enum members by type and name (whatever their class mixes in), tuples and frozen sets item
+by item, and value classes (frozen dataclasses with the generated ``==`` and hash) field by
+field. Any other type has no key: nothing that read it is kept, and a lookup there is a
+miss, never a wrong answer.
 
 - **The types** are found from the kernels' Space classes: every Space class of
   ``finn.kernels`` compiled, and each choice's and fact's value semantics read from its
@@ -26,45 +27,69 @@ wrong answer.
   equal to itself (an equal key is the same member, so the safe direction needs a
   reflexive ``==``), and every pair of its members checked in the safe direction.
 
+- **The register** (``finn.core.space.value_type``): FINN registers QONNX's datatypes and
+  its integer tensors, in one place (``finn.kernels.values.semantics``), and this test lists
+  the register exactly (``REGISTERED``). Each registered class has samples, every class the
+  registration covers among them; setting an attribute on a sample is refused; equal
+  samples hash alike, and their public attributes and ``repr`` agree; equal datatypes are
+  the same object, over every predefined one and generated widths, and equal integer
+  tensors hold the same shape, range and integers, compared element by element.
+
 **What it costs.** An answer that read a value with no key is never kept: it is evaluated
-again in every design space that asks it. The enums the kernels' values hold are keyed
-(``Form``, a beat sequence's repetition, a plan's steps, a transport's endpoint and marker
-kinds, and the platform's DSP block and fabric, which mix in ``str``): the platform is
-keyed. The QONNX datatype inside a ``Tensor`` leaves every tensor and every port contract
-unkeyed, and the datatypes and integer tensors are under semantics of their own. Where a
-kernel is its own root, its facts are these values, so an answer that reads one is
-evaluated again in each design space. Stage 7's chain, made one Space by
-``support.one_space``, holds no root facts (its kernels' facts are constants of its class)
-and stores only str, int and bool choices: there nothing is left unkeyed.
+again in every design space that asks it. Every value FINN's kernels hold is keyed: the
+enums (``Form``, a beat sequence's repetition, a plan's steps, a transport's endpoint and
+marker kinds, and the platform's DSP block and fabric, which mix in ``str``), the QONNX
+datatypes, alone and inside a ``Tensor``, a stream contract and a port contract, and the
+integer tensors. Stage 7's chain, made one Space by ``support.one_space``, holds no root
+facts (its kernels' facts are constants of its class) and stores only str, int and bool
+choices.
 """
 
 from __future__ import annotations
 
+import ast
+import copy
 import dataclasses
 import importlib
+import inspect
 import itertools
+import pickle
 import pkgutil
-from collections.abc import Iterator
+import random
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import Enum
 from functools import cache
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal, cast
 
+import numpy as np
 import pytest
-from qonnx.core.datatype import BaseDataType, DataType
+from qonnx.core.datatype import (
+    BipolarType,
+    DataType,
+    FixedPointType,
+    FloatType,
+    IntType,
+    resolve_datatype,
+)
 from support.chain import chain
 from support.helpers import full_platform, in_order, stage_tensor
 
+import finn
 import finn.kernels
+from finn.core.graph.facts import integer_tensor
 from finn.core.space import Space, ValueSemantics
-from finn.core.space._running.cache import CHECKED, PLAIN, enum_key, key, plain, value_class
+from finn.core.space._running.cache import PLAIN, enum_key, key, trusted, value_class
 from finn.core.space._structure import Structure
+from finn.core.space._value_types import is_value_type, registered
 from finn.core.space._world import _same_value
 from finn.core.space.compiler import compile_model
 from finn.core.space.ir import Node
 from finn.core.space.occurrence import state
 from finn.core.space.semantics import default_semantics
+from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import Form, Window
 from finn.dataflow.plan import Hop, Plan, Step
 from finn.dataflow.traversal import Repetition
@@ -72,11 +97,12 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import PortContract
 from finn.kernels.movers import MoverOffer
 from finn.kernels.transport import MarkerKind
+from finn.kernels.values.semantics import (
+    INTEGER_TENSOR,
+    QONNX_DATATYPE_VALUE_SEMANTICS,
+    IntegerTensorValue,
+)
 from finn.platform.capabilities import DspBlock, Fabric
-
-DATATYPE = "QONNX datatype"
-"""How a QONNX datatype is named among the types a value holds (its classes are
-``IntType``, ``FloatType``, ...)."""
 
 
 @dataclass(frozen=True)
@@ -117,24 +143,19 @@ VERDICTS: dict[str, Verdict] = {
         "type and name, and its resources a value class of ints",
     ),
     "Tensor": Verdict(
-        "never",
-        "a value class whose element's datatype is a QONNX datatype, which no rule keys",
-        frozenset({DATATYPE}),
+        "always", "a value class whose element's datatype is a QONNX datatype, a value type"
     ),
     "StreamContract": Verdict(
-        "never",
-        "a value class holding its element's QONNX datatype (its enums, the transport's "
-        "endpoint and marker kinds and its repetition, are keyed)",
-        frozenset({DATATYPE}),
+        "always",
+        "a value class holding its element's QONNX datatype, a value type, and enums (the "
+        "transport's endpoint and marker kinds and its repetition)",
     ),
-    "PortContract": Verdict(
-        "never", "a value class holding a stream contract", frozenset({DATATYPE})
-    ),
+    "PortContract": Verdict("always", "a value class holding a stream contract"),
     "QONNXDataType": Verdict(
-        "never", "semantics of its own: equal when they are the same canonical datatype"
+        "always", "semantics comparing by ==: a value type, the one instance of its name"
     ),
     "integer tensor": Verdict(
-        "never", "semantics of its own: equal by contents (a nested int tuple or its value)"
+        "always", "semantics comparing by ==: a value type, equal by its digest"
     ),
 }
 """Every value semantics a choice or fact of FINN's kernels holds, by name, with its
@@ -198,15 +219,19 @@ def made() -> dict[str, tuple[object, ...]]:
         "Form": (Form.DENSE, Form.DEPTHWISE),
         "Platform": (full_platform(DspBlock.DSP58),),
         "QONNXDataType": (DataType["INT8"], DataType["UINT2"]),
-        "integer tensor": (((1, 2), (3, 4)), ((1, 2), (3, 5))),
+        "integer tensor": (
+            IntegerTensorValue.of(((1, 2), (3, 4))),
+            integer_tensor(np.array([[1, 2], [3, 4]], dtype=np.float32)),
+            IntegerTensorValue.of(((1, 2), (3, 5))),
+        ),
     }
 
 
 @cache
 def samples() -> dict[str, list[object]]:
     """Each name's samples: the configured Chain's facts and stored choices (each read
-    with its member's semantics), the stream contracts its port contracts hold, and the
-    values ``made`` here."""
+    with its member's semantics), a copy of its first port contract, the stream contracts
+    its port contracts hold, and the values ``made`` here."""
     found: dict[str, list[object]] = {}
     network = chain()
     for name in network.members:
@@ -218,6 +243,7 @@ def samples() -> dict[str, list[object]]:
                 assert semantics is not None
                 found.setdefault(semantics.name, []).append(value)
     contracts = cast(list[PortContract], found.get("PortContract", []))
+    contracts.append(dataclasses.replace(contracts[0]))  # an equal one, another object
     found["StreamContract"] = [contract.contract for contract in contracts]
     for name, more in made().items():
         found.setdefault(name, []).extend(more)
@@ -228,7 +254,7 @@ def semantics_of(name: str) -> tuple[Node, ValueSemantics[Any]]:
     """A node holding ``name``'s values, and their semantics (one object for every member
     of that name)."""
     nodes = list(declared()[name].values())
-    assert len({plain(node.semantics) for node in nodes}) == 1, name
+    assert len({trusted(node.semantics) for node in nodes}) == 1, name
     node = nodes[0]
     assert node.semantics is not None
     return node, node.semantics
@@ -236,9 +262,9 @@ def semantics_of(name: str) -> tuple[Node, ValueSemantics[Any]]:
 
 def unkeyed_types(value: object) -> set[str]:
     """The types (by name) ``value`` holds, itself included, that the cache does not key
-    under the default semantics: a QONNX datatype as ``DATATYPE``."""
+    under semantics it trusts."""
     kind = type(value)
-    if kind in PLAIN or kind in CHECKED:
+    if kind in PLAIN or is_value_type(kind):
         return set()
     if isinstance(value, Enum):
         return set() if enum_key(value) is not None else {kind.__qualname__}
@@ -252,8 +278,6 @@ def unkeyed_types(value: object) -> set[str]:
                 if item.compare
             )
         )
-    if isinstance(value, BaseDataType):
-        return {DATATYPE}
     return {kind.__qualname__}
 
 
@@ -271,7 +295,7 @@ def test_every_value_type_the_kernels_declare_has_a_verdict() -> None:
 def test_a_value_types_verdict_holds_on_its_samples(name: str) -> None:
     """Keyed always: every sample has a key; never: none has; by value: some have, some
     have not. The types the samples hold that the cache does not key are the verdict's,
-    and none under semantics of their own."""
+    and none under semantics it does not trust."""
     _, semantics = semantics_of(name)
     verdict, values = VERDICTS[name], samples()[name]
     assert len(values) >= 2, name
@@ -279,7 +303,7 @@ def test_a_value_types_verdict_holds_on_its_samples(name: str) -> None:
     keyed = [found is not None for found in keys]
     expected = {"always": [True], "never": [False], "by value": [False, True]}[verdict.keyed]
     assert sorted(set(keyed)) == expected, (name, values)
-    if not plain(semantics):
+    if not trusted(semantics):
         assert verdict.holds == frozenset() and verdict.why.startswith("semantics of its own")
         return
     held = set().union(*(unkeyed_types(value) for value in values))
@@ -344,7 +368,7 @@ def test_an_enum_member_is_keyed_by_type_and_name_and_a_key_hit_is_the_same_memb
     compares as its string, and is keyed alike."""
     semantics = default_semantics(kind)
     node = cast(Node, SimpleNamespace(semantics=semantics, owner="value"))
-    assert plain(semantics)
+    assert trusted(semantics)
     members = list(kind)
     assert len(members) >= 2, kind
     assert all(member == member for member in members), kind
@@ -357,9 +381,238 @@ def test_an_enum_member_is_keyed_by_type_and_name_and_a_key_hit_is_the_same_memb
         assert all(member == member.value for member in members)
 
 
-def test_a_datatype_has_no_key_even_under_the_default_semantics() -> None:
-    """What leaves the tensors and the contracts unkeyed: a QONNX datatype is neither a
-    plain type, an enum member, nor a value class."""
+def test_a_datatype_is_keyed_apart_from_its_name_alone_and_inside_a_tensor() -> None:
+    """A QONNX datatype is equal to its name, a string, with an equal hash; its key tells
+    the two apart, alone, in a tuple and as a field, so a datatype and its name never share
+    an answer. Inside a ``Tensor`` (default semantics) it is keyed as a field."""
+    int8 = DataType["INT8"]
+    assert int8 == "INT8" and hash(int8) == hash("INT8")
+    datatype, name = QONNX_DATATYPE_VALUE_SEMANTICS, default_semantics(str)
+    assert key(int8, datatype) == (IntType, int8) != key("INT8", name)
+    assert key((int8,), default_semantics(tuple)) != key(("INT8",), default_semantics(tuple))
     _, tensor = semantics_of("Tensor")
-    assert plain(tensor) and key(stage_tensor(8), tensor) is None
-    assert key(DataType["INT8"], default_semantics(type(DataType["INT8"]))) is None
+    assert key(stage_tensor(8), tensor) == key(stage_tensor(8), tensor) is not None
+    assert key(stage_tensor(8), tensor) != key(stage_tensor(16), tensor)
+
+
+# -- the register of value types ----------------------------------------------------------
+#
+# ``finn.core.space.value_type``: a class whose owner states that its ``==`` and hash are its
+# semantics, that equal instances cannot be told apart and that none changes. FINN registers
+# its two in ``finn.kernels.values.semantics``. The test checks what can be checked:
+#
+# 1. the register is exactly ``REGISTERED``, and every registration in FINN's source is in
+#    that one place: a class registered anywhere else fails here until it is listed;
+# 2. each registered class has samples, of every class the registration covers (its own
+#    module's classes derived from it that keep its ``==`` and hash);
+# 3. setting an attribute on a sample is refused;
+# 4. equal samples hash alike, and every public attribute (a method taking no argument,
+#    called) and the ``repr`` agree; equal datatypes are the same object; equal integer
+#    tensors hold the same shape, range and integers, element by element.
+
+
+def datatype_samples() -> tuple[object, ...]:
+    """QONNX datatypes, each reached several ways: every predefined one (the special names,
+    the integers of 1 to 64 bits) and generated ones (wide integers, fixed point, scaled
+    integers, arbitrary floats), each by name, canonical name, a copy, a deep copy and a
+    pickle; aliases (``UINT1``, a float's default bias) and direct construction."""
+    names = ["BINARY", "BIPOLAR", "TERNARY", "FLOAT32", "FLOAT16"]
+    names += DataType.get_accumulator_dt_cands()
+    draw = random.Random(0)
+    for _ in range(12):
+        width = draw.randint(65, 512)
+        names += [f"INT{width}", f"UINT{width}"]
+        whole = draw.randint(2, 64)
+        names += [f"FIXED<{whole},{draw.randint(1, whole - 1)}>", f"SCALEDINT<{whole}>"]
+        exponent, mantissa = draw.randint(2, 11), draw.randint(1, 52)
+        names += [f"FLOAT<{exponent},{mantissa}>", f"FLOAT<{exponent},{mantissa},{exponent}>"]
+    found: list[object] = []
+    for name in dict.fromkeys(names):
+        value = DataType[name]
+        found += [value, resolve_datatype(value.name, canonical=True), copy.copy(value)]
+        found += [copy.deepcopy(value), pickle.loads(pickle.dumps(value))]
+    found += [DataType["UINT1"], DataType["FLOAT<5,10>"], DataType["FLOAT<5,10,15>"]]
+    found += [IntType(8, True), IntType(1, False), FixedPointType(8, 4)]
+    found += [BipolarType(), FloatType()]
+    return tuple(found)
+
+
+def tensor_samples() -> tuple[object, ...]:
+    """Integer tensors, equal ones made several ways: from nested tuples, flat, an
+    initializer's array of floats or of int8 (its integers loaded when first read), a
+    pickle; a vector, integers beyond 64 bits, and tensors differing in one integer or
+    in shape only."""
+    square = IntegerTensorValue.of(((1, -2), (3, 4)))
+    wide = IntegerTensorValue.of(((2**70, -1), (0, -(2**65))))
+    return (
+        square,
+        IntegerTensorValue.flat((2, 2), [1, -2, 3, 4]),
+        integer_tensor(np.array([[1, -2], [3, 4]], dtype=np.float32)),
+        integer_tensor(np.array([[1, -2], [3, 4]], dtype=np.int8)),
+        pickle.loads(pickle.dumps(square)),
+        IntegerTensorValue.flat((4,), [1, -2, 3, 4]),
+        IntegerTensorValue.of(((1, -2), (3, 5))),
+        IntegerTensorValue.of((7,)),
+        integer_tensor(np.array([7], dtype=np.int64)),
+        wide,
+        IntegerTensorValue.flat((2, 2), [2**70, -1, 0, -(2**65)]),
+    )
+
+
+REGISTERED: dict[type, Callable[[], tuple[object, ...]]] = {
+    QONNXDataType: datatype_samples,
+    IntegerTensorValue: tensor_samples,
+}
+"""The register, exactly: each registered class with its samples."""
+
+REGISTRATIONS = {
+    ("kernels/values/semantics.py", "QONNXDataType"),
+    ("kernels/values/semantics.py", "IntegerTensorValue"),
+}
+"""Every registration in FINN's source: the file, the class as written."""
+
+
+SPACE = ("finn.core.space", "finn.core.space._value_types")
+"""Where ``value_type`` is imported from."""
+
+
+def registrations() -> set[tuple[str, str]]:
+    """Each call or class decorator in FINN's source naming the engine's ``value_type``
+    (imported from ``SPACE``, under any name, or read from the module): its file (below
+    ``finn``) and its argument, as written."""
+    root = Path(finn.__file__).parent
+    found: set[tuple[str, str]] = set()
+    for path in sorted(root.rglob("*.py")):
+        text = path.read_text()
+        if "value_type" not in text:
+            continue
+        tree = ast.parse(text)
+        names: set[str] = set()
+        modules: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and (
+                node.module in SPACE or (node.level and node.module in ("_value_types", None))
+            ):
+                names |= {
+                    item.asname or item.name for item in node.names if item.name == "value_type"
+                }
+            if isinstance(node, ast.Import):
+                modules |= {item.asname or item.name for item in node.names if item.name in SPACE}
+
+        def named(node: ast.expr) -> bool:
+            if isinstance(node, ast.Name):
+                return node.id in names
+            return (
+                isinstance(node, ast.Attribute)
+                and node.attr == "value_type"
+                and ast.unparse(node.value) in modules
+            )
+
+        where = path.relative_to(root).as_posix()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and named(node.func):
+                found.add((where, ", ".join(ast.unparse(item) for item in node.args)))
+            if isinstance(node, ast.ClassDef) and any(map(named, node.decorator_list)):
+                found.add((where, node.name))
+    return found
+
+
+def covered(kind: type) -> set[type]:
+    """``kind`` and the classes derived from it that its registration covers."""
+    below = {kind}
+    for sub in kind.__subclasses__():
+        if is_value_type(sub):
+            below |= covered(sub)
+    return below
+
+
+def observed(value: object) -> object:
+    """``value`` as a comparison reads it: an array by its type, shape and elements, a
+    sequence item by item."""
+    if isinstance(value, np.ndarray):
+        return ("array", value.dtype.str, value.shape, value.tolist())
+    if isinstance(value, (tuple, list)):
+        return tuple(observed(item) for item in value)
+    return value
+
+
+def surface(value: object) -> dict[str, object]:
+    """What ``value`` shows: its ``repr``, and each public attribute, a method taking no
+    argument called; what raises, by its exception's type."""
+    shown: dict[str, object] = {"repr": repr(value)}
+    for name in dir(value):
+        if name.startswith("_"):
+            continue
+        try:
+            found = getattr(value, name)
+            if callable(found):
+                parameters = inspect.signature(found).parameters.values()
+                if any(
+                    item.default is inspect.Parameter.empty
+                    and item.kind not in (item.VAR_POSITIONAL, item.VAR_KEYWORD)
+                    for item in parameters
+                ):
+                    continue
+                found = found()
+            shown[name] = observed(found)
+        except Exception as error:  # noqa: BLE001 - what raises is part of the surface
+            shown[name] = ("raises", type(error))
+    return shown
+
+
+def test_the_register_is_listed_exactly_and_registered_in_one_place() -> None:
+    kernel_space_classes()  # every module of ``finn.kernels`` imported
+    assert set(registered()) == set(REGISTERED)
+    assert registrations() == REGISTRATIONS
+
+
+@pytest.mark.parametrize("kind", list(REGISTERED), ids=lambda kind: kind.__qualname__)
+def test_a_registered_class_has_samples_of_every_class_it_covers(kind: type) -> None:
+    found = REGISTERED[kind]()
+    assert found, kind
+    assert {type(value) for value in found} == covered(kind) - {
+        sub for sub in covered(kind) if inspect.isabstract(sub)
+    }
+
+
+@pytest.mark.parametrize("kind", list(REGISTERED), ids=lambda kind: kind.__qualname__)
+def test_a_registered_class_refuses_a_change(kind: type) -> None:
+    for value in REGISTERED[kind]():
+        for name in [name for name in dir(value) if not name.startswith("_")] + ["added"]:
+            with pytest.raises(AttributeError):
+                setattr(value, name, None)
+
+
+@pytest.mark.parametrize("kind", list(REGISTERED), ids=lambda kind: kind.__qualname__)
+def test_equal_values_of_a_registered_class_cannot_be_told_apart(kind: type) -> None:
+    """Every pair of samples: equal ones hash alike and show the same surface; equal
+    datatypes are the same object; equal integer tensors hold the same shape, range and
+    integers. Samples reached several ways are equal to others, so the check is not
+    empty."""
+    values = REGISTERED[kind]()
+    shown = [surface(value) for value in values]
+    others = [0] * len(values)
+    for (at, left), (other, right) in itertools.product(enumerate(values), repeat=2):
+        if not left == right:
+            continue
+        assert hash(left) == hash(right), (left, right)
+        assert shown[at] == shown[other], (left, right)
+        others[at] += at != other
+        if kind is QONNXDataType:
+            assert left is right, (left, right)
+        if kind is IntegerTensorValue:
+            one, two = cast(IntegerTensorValue, left), cast(IntegerTensorValue, right)
+            assert (one.shape, one.range) == (two.shape, two.range), (left, right)
+            assert len(one.integers) == len(two.integers)
+            assert all(a == b for a, b in zip(one.integers, two.integers)), (left, right)
+    assert sum(map(bool, others)) > len(values) // 2, kind
+
+
+def test_finns_value_semantics_compare_by_eq_and_are_trusted() -> None:
+    """The datatypes' and the integer tensors' semantics declare ``operator.eq``, so the
+    cache keys their stored values; each value is keyed as its value type."""
+    for semantics in (QONNX_DATATYPE_VALUE_SEMANTICS, INTEGER_TENSOR):
+        assert trusted(semantics), semantics.name
+    tensor = IntegerTensorValue.of(((1, 2),))
+    assert key(tensor, INTEGER_TENSOR) == (IntegerTensorValue, tensor)
+    assert key(DataType["UINT2"], QONNX_DATATYPE_VALUE_SEMANTICS) == (IntType, DataType["UINT2"])
