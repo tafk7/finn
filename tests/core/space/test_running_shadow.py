@@ -12,6 +12,9 @@ question both ways, held to its own contract.
 - **The count is right**: each question asked is counted once by its kind; a question a
   method asks of its receiver is left to today's engine, and so is one asked from another
   thread.
+- **What the running type is asked**: a change's items as the caller gave them, snapshotted
+  before today's run may change them; a clear in a bind, refused before any question, is
+  not compared; nor is a test named in ``UNCOMPARED``.
 - **Engine modules under it**: three of ``tests/core/space``'s modules that ask ``explain``
   and the bound accessors, run with the plugin, pass with 0 disagreements.
 """
@@ -32,7 +35,7 @@ from typing import cast
 
 import pytest
 
-from core.space._running_shadow import Shadow, form
+from core.space._running_shadow import UNCOMPARED, Shadow, form
 from core.space._toys_support import House
 from finn.core.space import (
     Available,
@@ -40,6 +43,7 @@ from finn.core.space import (
     Decision,
     Inapplicable,
     Param,
+    RequestError,
     Space,
     ValueUnavailableError,
     bind,
@@ -47,6 +51,7 @@ from finn.core.space import (
     design_space,
     inspection,
 )
+from finn.core.space.domains import Domain
 
 TESTS = Path(__file__).parent.parent.parent
 
@@ -261,6 +266,63 @@ def test_the_count_is_right() -> None:
     assert shadow.left["a receiver's or a declaration's"] >= 1
     assert shadow.left["asked from another thread"] == 1
     assert "explain's fact reads compared as a set: 0" in shadow.left_alone()
+
+
+# -- what the running type is asked -----------------------------------------------------------
+
+
+def test_a_planted_mutation_of_the_callers_input_is_not_a_disagreement() -> None:
+    """A membership callback appends to the list the caller set another choice to, while
+    today's change runs: today's had snapshotted it first, and the running type is asked
+    the snapshot taken before today's run, so the two agree."""
+    payload = [1]
+
+    def mutating(*, candidate: int) -> bool:
+        payload.append(2)
+        return candidate > 0
+
+    def accepting(*, candidate: list[int]) -> bool:
+        return True
+
+    class Trial(Space):
+        first: int = Decision(domain=Domain((), mutating))
+        second: list[int] = Decision(domain=Domain((), accepting))
+
+    with shadowed() as shadow:
+        base = design_space(Trial())
+        result = base.try_with_choices(
+            base.field(Trial.first).change(1), base.field(Trial.second).change(payload)
+        )
+        assert result.accepted and result.instance.second == [1]
+    assert payload[:2] == [1, 2]
+    assert shadow.compared["change"] == 1
+    assert not shadow.disagreements, "\n".join(map(str, shadow.disagreements))
+
+
+def test_a_clear_inside_a_bind_is_not_compared() -> None:
+    """Today's refuses a clear in a bind as it reads the bind's items: refused before any
+    question, left to today's engine, and nothing disagrees."""
+    with shadowed() as shadow:
+        point = design_space(Doubled(width=3)).with_choices(pe=2)
+        with pytest.raises(RequestError, match="clears none"):
+            bind(point, point.field(Doubled.pe).clear())
+    assert shadow.compared["bind"] == 0
+    assert shadow.left["refused before any question"] == 1
+    assert not shadow.disagreements, "\n".join(map(str, shadow.disagreements))
+
+
+def test_a_test_making_the_running_type_wrong_on_purpose_is_not_compared() -> None:
+    """Each test in ``UNCOMPARED`` exists, and its questions, even a planted wrong answer,
+    are left to today's engine."""
+    for test in UNCOMPARED:
+        module, name = test.split("::")
+        assert f"def {name}(" in (TESTS.parent / module).read_text(), test
+    with shadowed(query=lambda session, at, point, arguments: Available(-1)) as shadow:
+        shadow.begin(min(UNCOMPARED))
+        point = _opened()
+        assert point.query(House.total) != Available(-1)
+    assert not shadow.compared and not shadow.disagreements
+    assert shadow.left["a test making the running type wrong on purpose"] == 2
 
 
 # -- engine modules under the plugin ----------------------------------------------------------

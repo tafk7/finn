@@ -31,6 +31,12 @@ A configuration in an answer (a child's, a candidate's, a change's) compares as 
 space value and scope. A design space a change published is then answered from the running
 type's own value, so each later question of it reads the running type's history.
 
+**The caller's input** to a change or a bind is read before today's engine is asked, and
+each value snapshotted as today's snapshots it (``_state.prepare``): today's run may change
+the caller's objects (an authored callback holding one), and the running type is asked what
+today's was. Where recognizing or snapshotting a value raises, the values go as given, and
+the running type meets the same raise.
+
 **Comparing.** By the class-based oracle's canonical forms (``support.space_oracle.forms``)
 where they apply: an answer, its findings sorted; a validity; a choice's state; the possible
 values; a change's report. Anything else compares field by field (a dataclass), in order (a
@@ -77,7 +83,13 @@ by reason, and how many fact-read lists compared as sets::
   hand or collapsed): the running type reads a compiled structure only;
 - a request refused before any question is asked (a malformed or foreign change, a clear in
   a bind, an unknown fact) and a declaration today's front end refuses to open: those are
-  the front end's, which both engines share.
+  the front end's, which both engines share;
+- every question of a test that makes the running type answer wrongly on purpose, named by
+  its node id (``UNCOMPARED``): the test still runs, against today's answers alone. One,
+  in ``tests/core/space/test_running.py``:
+  ``test_without_the_semantics_check_the_cache_answers_with_another_design_spaces_note``,
+  which takes the cache's semantics check out to show the running type answering with
+  another design space's note.
 """
 
 from __future__ import annotations
@@ -108,7 +120,7 @@ from finn.core.space._running import surface as S
 from finn.core.space._running.cache import NodeCache
 from finn.core.space._running.evaluate import Session, evaluation
 from finn.core.space._running.value import DesignSpace, FactsLayer
-from finn.core.space._state import State
+from finn.core.space._state import State, prepare
 from finn.core.space._structure import Structure
 from finn.core.space.edits import ConfigurationResult
 from finn.core.space.errors import RequestError
@@ -118,6 +130,15 @@ from finn.core.space.results import Available, Inapplicable, Rejected, Unresolve
 
 OUTSIDE = "(outside any test)"
 """Where a question asked between tests is counted."""
+
+UNCOMPARED = frozenset(
+    {
+        "tests/core/space/test_running.py::"
+        "test_without_the_semantics_check_the_cache_answers_with_another_design_spaces_note",
+    }
+)
+"""The tests, by node id, that make the running type answer wrongly on purpose: each runs,
+and its questions are left to today's engine."""
 
 
 class ShadowDisagreement(AssertionError):
@@ -381,19 +402,45 @@ def _requests(
     changes: tuple[Any, ...],
     choices: Mapping[str, object] | None,
     facts: Mapping[Any, object] | None,
+    *,
+    bind: bool = False,
 ) -> Requests:
     """The items of a change of ``point`` (``try_with_choices``' keywords ``choices``,
-    ``try_with_facts``' ``facts``), read by today's front end, which raises where the
-    request is refused before any question is asked."""
+    ``try_with_facts``' ``facts``) or of a ``bind``, read by today's front end, which raises
+    where the request is refused before any question is asked: a clear in a bind too, which
+    today's refuses as it reads a bind's items (``_assign.bound``), after ``normalize``.
+    Each value is snapshotted (``_snapshot``)."""
     given = {} if facts is None else _assign._fact_nodes(point, facts)
     items = [
         *_assign._requests(point, changes),
         *(_assign._keyword_change(point, name, value) for name, value in (choices or {}).items()),
     ]
-    normalized = _assign.normalize(occurrence.state(point), items)
-    return Requests(
+    current = occurrence.state(point)
+    normalized = _assign.normalize(current, items)
+    if bind and any(item.remove for item in normalized.values()):
+        raise RequestError("a bind sets saved choices; it clears none")
+    requests = Requests(
         given,
         [(index, Q.REMOVE if item.remove else item.value) for index, item in normalized.items()],
+    )
+    return _snapshot(current, requests)
+
+
+def _snapshot(current: State, requests: Requests) -> Requests:
+    """``requests`` with each value as today's engine snapshots it (``_state.prepare``),
+    taken before today's is asked; where recognizing or snapshotting raises, ``requests``
+    as given, for the running type to meet the same raise."""
+    pending = {
+        **{index: (value, "parameter") for index, value in requests.facts.items()},
+        **{index: (value, "choice") for index, value in requests.choices if value is not Q.REMOVE},
+    }
+    try:
+        held = prepare(current.linked, pending)
+    except Exception:  # noqa: BLE001 - the running type meets it on the values as given
+        return requests
+    return Requests(
+        {index: held[index] for index in requests.facts},
+        [(index, value if value is Q.REMOVE else held[index]) for index, value in requests.choices],
     )
 
 
@@ -404,6 +451,9 @@ CHANGES: dict[str, Callable[[tuple[Any, ...], dict[str, Any]], tuple[Any, Any, A
 }
 """Each change's items as ``_requests`` reads them, from its arguments after the
 configuration: the changes, the keywords and the facts."""
+
+Before = tuple[Any, Any] | Requests | None
+"""What the running type reads before today's call (``Shadow._before``)."""
 
 
 def _made(model: Any, record: Any) -> DesignSpace:
@@ -584,9 +634,9 @@ class Shadow:
             if kind == "viable" and len(arguments) > 1:
                 # the keys read twice: an iterator becomes a tuple
                 arguments = (arguments[0], tuple(arguments[1]), *arguments[2:])
-            before = shadow._before(kind, arguments)
             shadow.depth += 1
             try:
+                before = shadow._before(kind, arguments, keywords)
                 try:
                     answer = original(*arguments, **keywords)
                 except Exception as error:
@@ -613,14 +663,23 @@ class Shadow:
             return "inside an authored call"
         if self.depth:
             return "inside another question"
+        if self.test in UNCOMPARED:
+            return "a test making the running type wrong on purpose"
         return None
 
-    def _before(self, kind: str, arguments: tuple[Any, ...]) -> tuple[Any, Any] | None:
-        """What the running type reads before today's call changes it: a root declaration's
-        model and record (``design_space``, which freezes the record)."""
-        if kind != "design_space" or not arguments:
-            return None
+    def _before(self, kind: str, arguments: tuple[Any, ...], keywords: dict[str, Any]) -> Before:
+        """What the running type reads before today's call may change it: a root
+        declaration's model and record (``design_space``, which freezes the record); a
+        change's or a bind's items, snapshotted (``_requests``). ``None`` where the front end
+        refuses it, and it is not compared."""
         try:
+            if kind in CHANGES:
+                point = cast(Space, arguments[0])
+                return _requests(
+                    point, *CHANGES[kind](arguments[1:], keywords), bind=kind == "bind"
+                )
+            if kind != "design_space" or not arguments:
+                return None
             record = compiler.root_record(arguments[0])
             return compiler.compile_model(record.space_type), record
         except Exception:  # noqa: BLE001 - today's refuses it, and it is not compared
@@ -633,7 +692,7 @@ class Shadow:
         kind: str,
         arguments: tuple[Any, ...],
         keywords: dict[str, Any],
-        before: tuple[Any, Any] | None,
+        before: Before,
         today: Outcome,
     ) -> None:
         """``_compare``, never raising into the caller: a failure of the comparison itself
@@ -652,7 +711,7 @@ class Shadow:
         kind: str,
         arguments: tuple[Any, ...],
         keywords: dict[str, Any],
-        before: tuple[Any, Any] | None,
+        before: Before,
         today: Outcome,
     ) -> None:
         if kind == "design_space":
@@ -663,12 +722,10 @@ class Shadow:
         self.touched.append(at.ds)
         rest = arguments[1:]
         if kind in CHANGES:
-            try:
-                requests = _requests(point, *CHANGES[kind](rest, keywords))
-            except Exception:  # noqa: BLE001 - refused before any question, by the front end
+            if not isinstance(before, Requests):
                 self.left["refused before any question"] += 1
                 return
-            self._compare_change(kind, at, requests, today)
+            self._compare_change(kind, at, before, today)
             return
         try:
             running = Outcome(self.running[kind](self.session, at, point, rest))
@@ -717,8 +774,8 @@ class Shadow:
                 _SPACES[current] = published
                 self.touched.append(published)
 
-    def _compare_opened(self, before: tuple[Any, Any] | None, today: Outcome) -> None:
-        if today.error is not None or before is None:
+    def _compare_opened(self, before: Before, today: Outcome) -> None:
+        if today.error is not None or not isinstance(before, tuple):
             self.left["refused by the front end"] += 1
             return
         if not isinstance(before[0].linked, Structure):
@@ -882,6 +939,7 @@ def pytest_terminal_summary(terminalreporter: Any, config: pytest.Config) -> Non
 __all__ = [
     "ENTRY_POINTS",
     "RUNNING",
+    "UNCOMPARED",
     "Disagreement",
     "Shadow",
     "ShadowDisagreement",
