@@ -56,12 +56,12 @@ class Model(Generic[S]):
     addressed, each node resolved from its template when read (``_structure.Structure``;
     a table built by hand, in tests). What is read of its structure alone (inspection's
     Decisions below a scope) is kept with it (``_read``). ``lock`` is the model's one lock:
-    resolution and every configuration's evaluation take it. Its ``evaluator`` is what
-    every configuration of it shares: what each ``self`` method may read, inferred from its
-    source as its nodes are read, the memo of authored functions (``_world.Evaluator``).
-    Its ``per_class`` record, made beside it, is what the running type reads once per
-    model: the inferred reads, the flow order, the presence readers and the model's one
-    session (``_running.per_class.PerClass``)."""
+    resolution and every public question about a design space of it take it. Its
+    ``per_class`` record is what the running type reads once per model: the inferred
+    reads, the flow order, the presence readers and the model's one session, in which every
+    public question runs (``_running.per_class.PerClass``). Its ``evaluator`` is the world
+    engine's (``_world.Evaluator``), which the running type still reads for the per-class
+    questions until the world engine is deleted."""
 
     space_type: type[S]
     linked: Linked
@@ -262,7 +262,7 @@ def design_space(node: S) -> S:
     configuration of the space, narrowed with ``with_choices``.
     """
 
-    from .occurrence import bind  # noqa: PLC0415 - keep compilation evaluator-independent
+    from .occurrence import opened  # noqa: PLC0415 - keep compilation evaluator-independent
 
     record = root_record(node)
     formals = space_formals(record.space_type)
@@ -285,7 +285,7 @@ def design_space(node: S) -> S:
             findings=error.findings,
         ) from error
     record.freeze("design_space() took it as a root")
-    return cast(S, bind(model, root_parameters(model, record)))
+    return cast(S, opened(model, root_parameters(model, record)))
 
 
 __all__ = ["Model", "compile_model", "design_space"]

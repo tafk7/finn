@@ -69,7 +69,7 @@ from ._world import FLATTEN, World, type_check
 from .edits import BrokenRule, Change, ChangeOutcome, ChangeRequest, ConfigurationResult
 from .errors import ConfigurationError, RequestError
 from .ir import Node, NodeId
-from .occurrence import attach, decision_index, state
+from .occurrence import attach, decision_index, state, state_of
 from .results import Available, QueryResult, Unresolved
 from .semantics import equal, snapshot
 
@@ -111,18 +111,23 @@ class Assigned:
 
 def normalize(current: State, changes: Sequence[Change[object]]) -> dict[NodeId, Change[object]]:
     """Each change by its choice: every one of this design space, naming an owned
-    Decision of its scope, once. Its scope and node are asked of the model
-    (``holds_scope``, ``holds_node``: an addressed scope, a node of one), never compared
-    with a length. A choice has one identity, the one its handles give: an id standing
-    for another node (an import, a formal's binding: ``_structure``) is no node, refused
-    here and never followed into the node it stands for, so the duplicate check and
-    every map keyed by a change's node (``stored``) see one id per choice."""
+        Decision of its scope, once. Its scope and node are asked of the model
+        (``holds_scope``, ``holds_node``: an addressed scope, a node of one), never compared
+        with a length. A choice has one identity, the one its handles give: an id standing
+        for another node (an import, a formal's binding: ``_structure``) is no node, refused
+        here and never followed into the node it stands for, so the duplicate check and
+        every map keyed by a change's node (``stored``) see one id per choice. A change made on
+    a design space value (the public ``BoundDecision.change``) targets that value's state
+    (``occurrence.state_of``)."""
+    from ._running.value import DesignSpace  # noqa: PLC0415 - the running type reads this module
+
     linked = current.linked
     pending: dict[NodeId, Change[object]] = {}
     for item in changes:
         if not isinstance(item, Change):
             raise RequestError("changes must come from a bound decision field")
-        if item.base is not current:
+        base = state_of(item.base) if isinstance(item.base, DesignSpace) else item.base
+        if base is not current:
             raise RequestError("all changes must target this exact base snapshot")
         if not linked.holds_scope(item.scope):
             raise RequestError("change scope does not belong to this model")

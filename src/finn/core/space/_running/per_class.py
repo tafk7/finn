@@ -10,9 +10,10 @@ made with the model (``compiler.Model``) and held by it for its life.
   templates, each loop in it noted (``flow-loop``);
 - ``presence_readers(source)``: the choices whose presence may read the choice or fact
   ``source``, from its templates;
-- ``session()``: the model's one ``evaluate.Session``, made on first use: every question
-  about a design space of the model runs in it, and its node cache, where it holds one,
-  keeps answers for the model's life. It is made as a session is made by default.
+- ``session()``: the model's one ``evaluate.Session``, made on first use: every public
+  question about a design space of the model runs in it, under the model's lock, and its
+  node cache (``cache.NodeCache``, made in its default mode) keeps answers for the model's
+  life.
 
 A table built by hand has no templates: it answers no question about its whole design space
 (its flow order, its presence readers). Each part is made under the model's lock (``lock``).
@@ -88,12 +89,14 @@ class PerClass:
             return self._whole().readers(source)
 
     def session(self) -> Session:
-        """The model's one session (made on first use, as a session is by default)."""
+        """The model's one session (made on first use), with a node cache in its default
+        mode."""
         with self.lock:
             if self._session is None:
-                from .evaluate import Session  # noqa: PLC0415 - evaluate reads the model
+                from .cache import NodeCache  # noqa: PLC0415 - evaluate reads the model
+                from .evaluate import Session  # noqa: PLC0415
 
-                self._session = Session()
+                self._session = Session(cache=NodeCache())
             return self._session
 
 

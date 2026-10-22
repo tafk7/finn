@@ -9,7 +9,7 @@ beside today's evaluator (``compiler.Model.per_class``), answers as today's eval
   and fact's presence readers, as today's;
 - a table built by hand: its inferred reads as today's, and no flow order or presence
   readers, refused as today's refuses them;
-- the model's one session (``session()``): made once, as a session is by default; a question
+- the model's one session (``session()``): made once, with a node cache; a question
   that fails in it leaves nothing the next question on the model reads (each failure is its
   run's: asked again, the function runs again).
 
@@ -21,16 +21,27 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from support.space_oracle import toys
 
 from core.space._per_class_support import same_as_todays
 from finn.core.reporting.manifest import FINDING
-from finn.core.space import Available, Decision, Param, Space, bind, derived, design_space
+from finn.core.space import (
+    Available,
+    Decision,
+    Param,
+    Space,
+    bind,
+    derived,
+    design_space,
+    domain,
+    inspection,
+)
 from finn.core.space._failure import NativeEvaluationError
 from finn.core.space._running import questions
+from finn.core.space._running.cache import NodeCache
 from finn.core.space._running.evaluate import Session, evaluation
 from finn.core.space._running.facts import open as open_design_space
 from finn.core.space._running.per_class import PerClass
@@ -110,12 +121,11 @@ def test_a_table_built_by_hand_answers_its_reads_and_refuses_the_rest_as_today()
 # -- the model's one session --------------------------------------------------------------------
 
 
-def test_the_model_holds_one_session_made_as_a_session_is_by_default() -> None:
+def test_the_model_holds_one_session_with_a_node_cache_in_its_default_mode() -> None:
     model = cast(Model[Space], compile_model(type(toys.TOYS["house"].make())))
     session = model.per_class.session()
     assert session is model.per_class.session()
-    default = Session()
-    assert (type(session.cache), session.verify) == (type(default.cache), default.verify)
+    assert type(session.cache) is NodeCache and session.verify is Session().verify
 
 
 CALLS: list[int] = []
@@ -153,4 +163,38 @@ def test_a_failing_question_leaves_nothing_the_next_on_the_model_reads() -> None
         assert (session.context, session.depth) == (None, 0)
         assert not (session.pending or session.failures or session.abandoned or session.stack)
         assert evaluation(stored, session).result(keys["double"]) == Available(6)
+    assert CALLS == [3, 3]
+
+
+def test_every_public_question_runs_in_the_models_session_under_its_lock() -> None:
+    """A read, a validity and a change of a design space each run in its model's one
+    session, holding the model's lock while they run; a public question that fails leaves
+    nothing in the session the next reads."""
+    CALLS.clear()
+    point = design_space(Brittle()).with_choices(size=3)
+    model = inspection.model(point)
+    session = model.per_class.session()
+    held: list[bool] = []
+    locks: list[object] = []
+
+    def holding(*, candidate: int) -> bool:
+        # an authored function the change calls: the model's lock is held while it runs
+        held.append(cast(Any, locks[0])._is_owned())
+        return True
+
+    class Locked(Space):
+        size: int = Decision(domain=domain(accepts=holding))
+
+    locks.append(inspection.model(Locked).lock)
+    design_space(Locked()).with_choices(size=1)
+    assert held and all(held)
+    for _ in range(2):  # each failure is its run's: asked again, the function runs again
+        before = session.counters.evaluated
+        with pytest.raises(NativeEvaluationError, match="three has no half"):
+            point.half  # noqa: B018
+        assert session.counters.evaluated > before
+        assert (session.context, session.depth) == (None, 0)
+        assert not (session.pending or session.failures or session.abandoned or session.stack)
+        assert point.double == 6
+        assert inspection.validity(point).status == "valid"
     assert CALLS == [3, 3]

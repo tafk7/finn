@@ -3,17 +3,23 @@
 
 """Public metadata, validity, possible values, choice states and demanded query evidence.
 
-Metadata inspection does not invoke evaluators or candidate providers. Validity reads
-a configuration's pieces in its world; ``viable`` tries each listed value of a choice as a
-change would set it, publishing nothing; ``states`` reads each choice's state; explain
-evaluates one query and follows the reads its entries recorded.
+Metadata inspection does not invoke evaluators or candidate providers. The questions of a
+design space are the running type's (``_running.questions``, ``_running.surface``), each
+asked in the model's one session under its lock (``occurrence.ask``): validity reads the
+pieces of a Space's validity; ``viable`` tries each listed value of a choice as a change
+would set it, publishing nothing; ``states`` reads each choice's state; explain evaluates
+one query and follows the reads its answers recorded. ``states`` and ``viable`` detach the
+values they hand out, by each choice's semantics. The world engine's bodies are kept,
+privately, as ``_world_<question>``, until it is deleted.
 """
 
+# The running type imports this module's types: it is imported inside the bodies here.
+# ruff: noqa: PLC0415
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable
-from dataclasses import dataclass
-from typing import Any, Generic, Literal, TypeAlias, TypeVar, cast, overload
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias, TypeVar, cast, overload
 
 from ._assign import check, placed, tried
 from ._configuration import Space
@@ -31,8 +37,8 @@ from .declarations import (
 from .edits import BrokenRule
 from .errors import RequestError
 from .ir import Linked, NodeId, NodeKind
+from .occurrence import ask, decision_index, held, model_of, state
 from .occurrence import candidate as _candidate
-from .occurrence import decision_index, model_of, state
 from .references import DecisionHandle, ValueHandle, decision_key
 from .results import (
     Available,
@@ -44,6 +50,9 @@ from .results import (
     Unresolved,
     ViewAssessment,
 )
+
+if TYPE_CHECKING:
+    from ._running.evaluate import Session
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
@@ -457,6 +466,16 @@ def validity(point: Space) -> Validity:
     no piece, and a candidate that is not selected contributes nothing. Valid, refused
     naming the false pieces, or open naming the unknown pieces and what each waits on
     (``Validity``)."""
+    from ._running.evaluate import evaluation
+    from ._running.questions import validity as valid
+
+    driver_only("validity")
+    at = held(point)
+    return ask(at.ds.model, lambda session: valid(evaluation(at.ds, session), at.scope))
+
+
+def _world_validity(point: Space) -> Validity:
+    """The world engine's ``validity``, kept on its state of the design space."""
     driver_only("validity")
     current = state(point)
     scope = point._scope
@@ -564,6 +583,42 @@ def viable(point: Space, keys: Iterable[object]) -> tuple[Viable, ...]:
     the stored choices standing in its way. A rule waiting on an open choice does not
     refuse; the value stored is possible (setting it changes nothing). In the order of
     ``keys``."""
+    from ._running import questions
+
+    driver_only("possible values")
+    at = held(point)
+    model = at.ds.model
+    indices = [model.decision(at.scope, key) for key in keys]
+
+    def answer(session: Session) -> tuple[Viable, ...]:
+        return tuple(
+            _detached_viable(model.linked, index, questions.viable(at.ds, index, session))
+            for index in indices
+        )
+
+    return ask(model, answer)
+
+
+def _detached(linked: Linked, index: NodeId, value: object) -> object:
+    """A choice's value detached for a reader, by the choice's semantics."""
+    from ._running.answers import copy_result as detached
+
+    return cast(Available[object], detached(linked, index, Available(value))).value
+
+
+def _detached_viable(linked: Linked, index: NodeId, found: Viable) -> Viable:
+    """``found`` with each listed value detached (a domain's list is the facts layer's,
+    shared by every design space of those facts)."""
+    if found.values is None:
+        return found
+    values = tuple(
+        replace(item, value=_detached(linked, index, item.value)) for item in found.values
+    )
+    return Viable(found.key, values, found.waits)
+
+
+def _world_viable(point: Space, keys: Iterable[object]) -> tuple[Viable, ...]:
+    """The world engine's ``viable``."""
     driver_only("possible values")
     current = state(point)
     indices = [decision_index(point, key) for key in keys]
@@ -644,6 +699,35 @@ def states(point: Space) -> tuple[tuple[str, ChoiceState], ...]:
     """Every choice below this scope, by key, with its state, in the flow order (each
     after every choice its presence, its list or its Space's facts read: a selector before
     the choices its cases hold)."""
+    from ._running.evaluate import evaluation
+    from ._running.questions import state_of
+
+    driver_only("choice states")
+    at = held(point)
+    model = at.ds.model
+    linked = model.linked
+    header = linked.header  # a choice's key, resolving nothing of an absent one
+
+    def answer(session: Session) -> tuple[tuple[str, ChoiceState], ...]:
+        ev = evaluation(at.ds, session)
+        return tuple(
+            (header(index).key, _detached_state(linked, index, state_of(ev, index)))
+            for index in _flow(model, at.scope)
+        )
+
+    return ask(model, answer)
+
+
+def _detached_state(linked: Linked, index: NodeId, found: ChoiceState) -> ChoiceState:
+    """A choice's state with its stored value detached (a stored value is the design
+    space's own)."""
+    if isinstance(found, (Set, Waiting, Dormant)):
+        return replace(found, value=_detached(linked, index, found.value))
+    return found
+
+
+def _world_states(point: Space) -> tuple[tuple[str, ChoiceState], ...]:
+    """The world engine's ``states``."""
     driver_only("choice states")
     current = state(point)
     header = current.linked.header  # a choice's key, resolving nothing of an absent one
@@ -749,13 +833,22 @@ def explain(point: Space, reference: T) -> QueryEvidence[T]: ...
 def explain(point: Space, reference: object) -> object:
     """Evaluate a query and detach evidence of exactly its demanded computation."""
 
+    from ._running.surface import explain as evidence
+
+    driver_only("dependency inspection")
+    at = held(point)
+    return ask(at.ds.model, lambda session: evidence(at, reference, session))
+
+
+def _world_explain(point: Space, reference: object) -> object:
+    """The world engine's ``explain``."""
     driver_only("dependency inspection")
     current = state(point)
     return _evidence(current, current.model.resolve(point._scope, reference))
 
 
 def candidate(point: Space, decision: object, case: str) -> Space | None:
-    """A candidate's configuration, selected or not; None for a None candidate."""
+    """A candidate's Space object, selected or not; None for a None candidate."""
 
     return _candidate(point, decision, case)
 

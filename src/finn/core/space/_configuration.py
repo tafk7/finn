@@ -4,9 +4,10 @@
 
 A ``Space`` object is one of two things. Calling a Space class, ``Room(area=12)``,
 returns a *declaration*: a template with bindings that reads its members as
-symbolic references. ``design_space(node)`` returns a *configuration* (at
-first the whole design space, every choice open) whose members read values.
-Both are typed as the Space class. Every value-like member follows this rule,
+symbolic references. ``design_space(node)`` returns a design space read at its
+root (every choice open; ``occurrence.held``: the design space value and the scope it
+holds), whose members read values, as does every Space object a change or a child read
+returns. Both are typed as the Space class. Every value-like member follows this rule,
 views included: a view reads as its accepted value, and its assessment is
 ``point.inspect(Room.view)``.
 """
@@ -90,12 +91,12 @@ class BoundDecision(BoundValue[T], Generic[T]):
         return cast(QueryResult[tuple[T, ...]] | None, candidates(self.instance, self.reference))
 
     def change(self, value: T) -> Change[T]:
-        from ._assign import change
+        from .occurrence import change
 
         return change(self.instance, self.reference, value)
 
     def clear(self) -> Change[T]:
-        from ._assign import clear
+        from .occurrence import clear
 
         return cast(Change[T], clear(self.instance, self.reference))
 
@@ -203,6 +204,7 @@ class Space(metaclass=SpaceMeta):
     """
 
     when: _When = _when_field(default=None, kw_only=True)
+    # A design space read at a scope (``_running.surface.At``), or a method's reader.
     _state: ClassVar[object]
     _scope: ClassVar[int]
     # A key maps to one view or derived value (a derived value is typed as its value).
@@ -361,14 +363,14 @@ class Space(metaclass=SpaceMeta):
         its report as ``try_with_choices`` answers it) where a value is outside its domain,
         or the change would make a rule newly false, naming the rule and the stored choices
         standing in its way."""
-        from ._assign import with_choices
+        from .occurrence import with_choices
 
         return with_choices(self, *changes, **choices)
 
     def try_with_choices(
         self, /, *changes: ChangeRequest | Mapping[Any, object], **choices: object
     ) -> ConfigurationResult[Self]:
-        from ._assign import try_with_choices
+        from .occurrence import try_with_choices
 
         return try_with_choices(self, *changes, **choices)
 
@@ -382,14 +384,14 @@ class Space(metaclass=SpaceMeta):
         constraint the new facts make false reads refused (``try_with_facts`` reports
         both). Raises ``ConfigurationError`` only where the batch's choices are refused,
         by the rules of ``with_choices`` judged against the new design space."""
-        from ._assign import with_facts
+        from .occurrence import with_facts
 
         return with_facts(self, facts, *changes)
 
     def try_with_facts(
         self, facts: Mapping[Any, object], /, *changes: ChangeRequest | Mapping[Any, object]
     ) -> ConfigurationResult[Self]:
-        from ._assign import try_with_facts
+        from .occurrence import try_with_facts
 
         return try_with_facts(self, facts, *changes)
 
