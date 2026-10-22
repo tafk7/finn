@@ -325,6 +325,60 @@ def test_the_cause_of_a_question_reaching_a_guard_below_a_refused_guard_is_t4a()
         assert walked.cause(subject, holding) is None
 
 
+# A refused guard below an unknown one (reading 8's second half): ``s`` open, its case ``a``
+# holding ``g``, present when ``d`` is at least 1, and ``d`` refusing an odd ``f``.
+
+IN_AN_OPEN_CASE = Space(
+    ("f",),
+    Scope(
+        "",
+        derived=(Derived("d", ("f",), lambda r: Refuse("d-odd") if r["f"] % 2 else r["f"]),),
+        selectors=(
+            Selector(
+                "s",
+                (
+                    Scope(
+                        "a",
+                        choices=(Choice("p", listed(1, 2)),),
+                        children=(
+                            Scope(
+                                "g",
+                                when=When(("d",), lambda r: r["d"] >= 1),
+                                choices=(Choice("q", listed(1, 2)),),
+                            ),
+                        ),
+                    ),
+                    Scope("b", choices=(Choice("r", listed(1, 2)),)),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def test_the_cause_of_a_question_reaching_a_refused_guard_under_an_open_selector_is_t4a(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def drawn(*_: object, **__: object) -> tuple[walks.Generated, Engine]:
+        generated = walks.Generated(IN_AN_OPEN_CASE, "IN_AN_OPEN_CASE", {"f": 1})
+        return generated, build(IN_AN_OPEN_CASE)
+
+    monkeypatch.setattr(walks, "generate", drawn)
+    walked = walks._Walk(0, 0, False, pending())
+    open_ = Configuration(IN_AN_OPEN_CASE, {"f": 1})
+    assert refused_below(open_.index, open_.solve()) == {"s.a.g"}
+    # ``s`` open: validity, and a subject under ``g``, reach ``g``'s guard
+    assert walked.cause(None, open_) == "T4a"
+    assert walked.cause("s.a.g.q", open_) == "T4a"
+    # a subject outside ``a`` reaches none
+    for subject in ("s.b.r", "d"):
+        assert walked.cause(subject, open_) is None
+    # ``s`` set to ``b``: ``g`` is absent, nothing has a cause
+    other = Configuration(IN_AN_OPEN_CASE, {"f": 1}, {"s": "b"})
+    assert not refused_below(other.index, other.solve())
+    assert walked.cause(None, other) is None
+
+
 def test_each_facts_answer_is_asked_at_each_configuration() -> None:
     # A fact's answer is always known (SZ100 (5)): the model answers its value, or None for
     # an optional one left out (seed 7's f1), and the engine is asked it through ``query``

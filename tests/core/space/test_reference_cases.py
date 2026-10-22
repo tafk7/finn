@@ -895,3 +895,53 @@ def test_a_chosen_selector_under_a_when_that_holds_is_set_as_any_selector() -> N
     point = GUARDED_SELECTOR.start({"gate": 2}, {"plant.heating": "boiler"})
     point.check_state("plant.heating.boiler.stages")
     point.check_validity()
+
+
+# A refused guard below an unknown one: ``s`` is open, its case ``a`` holds ``g``, present when
+# ``d`` is at least 1, and ``d`` refuses an odd ``f``, read by nothing else. The model leaves
+# ``g``'s piece unknown while ``a``'s presence is (reading 8): validity is open, waiting on
+# ``s``. Today's engine answers valid.
+
+
+def even(read: Mapping[str, Any]) -> object:
+    return Refuse("d-odd") if read["f"] % 2 else read["f"]
+
+
+IN_AN_OPEN_CASE = Case(
+    "a refused when in a case of an open selector",
+    Space(
+        ("f",),
+        Scope(
+            "",
+            derived=(Derived("d", ("f",), even),),
+            selectors=(
+                Selector(
+                    "s",
+                    (
+                        Scope(
+                            "a",
+                            choices=(Choice("p", listed(1, 2)),),
+                            children=(
+                                Scope(
+                                    "g",
+                                    when=When(("d",), lambda read: read["d"] >= 1),
+                                    choices=(Choice("q", listed(1, 2)),),
+                                ),
+                            ),
+                        ),
+                        Scope("b", choices=(Choice("r", listed(1, 2)),)),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+@expected("guard-unknown-under-unknown")
+def test_a_refused_when_in_a_case_of_an_open_selector_leaves_validity_open() -> None:
+    IN_AN_OPEN_CASE.start({"f": 1}).check_validity()
+
+
+def test_a_refused_when_in_an_unselected_case_does_not_apply() -> None:
+    IN_AN_OPEN_CASE.start({"f": 1}, {"s": "b"}).check_validity()

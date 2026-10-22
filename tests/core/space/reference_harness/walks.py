@@ -90,11 +90,11 @@ one row.
   answer, ``None`` in the model and unresolved in today's engine, reaches the fact itself;
   validity, possible values, a change, a bind and refinement reach the whole description);
   T4a, a question whose subject reaches a scope whose guard reads a refused input while a
-  guard above it is refused too, by the model's presence states (:func:`refused_below`,
+  guard above it is refused too, or unknown, by the model's presence states (:func:`refused_below`,
   :meth:`Structure.reaches_scope`; validity reaches everything below, and so does every
-  answer or change carrying its findings). Neither run draws T4a's shape (nothing is drawn
-  below the guarded scope ``g``), so the walks count 0 under it and its witness is a hand
-  case; the cause is there for an implementation walked on such a description. One
+  answer or change carrying its findings). Neither run draws a guard below a refused one
+  (nothing is drawn below the guarded scope ``g``); a refused ``g`` in an open selector's
+  case is drawn, seldom. The witnesses are hand cases. One
   attributed to a pending milestone (:func:`pending`) is **counted, not failed**, tallied
   by question and by milestone; one with no cause fails the walk, and so does one whose
   milestone is not pending (``--without``: its rows taken as removed). Refinement on the engine
@@ -1059,19 +1059,28 @@ class Structure:
 def refused_below(index: model.Index, solution: model.Solution) -> frozenset[str]:
     """T4a's cause in one design space (reading 8), from the description and the model's
     presence states alone: each scope with a guard (its ``when``, or its case of a
-    selector) that reads a refused input, while a guard above it is refused too (its
-    parent's presence refused) and it is not absent. The model counts the highest refused
-    guard of a chain alone; an engine counting a piece per refused guard node counts each
-    of these too, and validity reaches them, with every answer carrying its findings."""
+    selector) that reads a refused input, below a guard that is refused too (its parent's
+    presence refused, and it not absent) or unknown (its presence unknown: a selector or a
+    parent above it open). The model counts the highest refused guard of a chain alone, and
+    none below an unknown one; an engine counting a piece per refused guard node, or
+    reading a refused guard under an unknown one otherwise than unknown, differs at each of
+    these, and validity reaches them, with every answer carrying its findings."""
     found: set[str] = set()
     for path, info in index.scopes.items():
-        if info.parent is None or solution.presence(info.parent) is not model.Presence.REFUSED:
+        if info.parent is None:
             continue
-        if solution.presence(path) is not model.Presence.REFUSED:
+        presence = solution.presence(path)
+        if presence is model.Presence.UNKNOWN:
+            reads = info.when.reads if info.when is not None else ()
+        elif (
+            presence is model.Presence.REFUSED
+            and solution.presence(info.parent) is model.Presence.REFUSED
+        ):
+            reads = ((info.selector,) if info.selector is not None else ()) + (
+                info.when.reads if info.when is not None else ()
+            )
+        else:
             continue
-        reads = ((info.selector,) if info.selector is not None else ()) + (
-            info.when.reads if info.when is not None else ()
-        )
         if any(isinstance(solution.read(read), model.Refused) for read in reads):
             found.add(path)
     return frozenset(found)
@@ -1774,8 +1783,8 @@ class _Walk:
         description):
 
         - T4c, an optional fact left out (``None``);
-        - T4a, a scope whose guard is refused below another refused guard
-          (:func:`refused_below`, reading 8).
+        - T4a, a scope whose guard is refused below another refused guard, or below an
+          unknown one (:func:`refused_below`, reading 8).
 
         Where both reach, the first pending one; else none."""
         found: list[str] = []

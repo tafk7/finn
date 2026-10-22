@@ -113,6 +113,7 @@ def test_the_pending_milestones_are_the_rulings_the_engine_has_not_reached() -> 
     assert MILESTONES == ("base", "T4a", "T4b", "T4c")
     assert [(row.id, row.milestone) for row in ROWS] == [
         ("guard-counted-once", "T4a"),
+        ("guard-unknown-under-unknown", "T4a"),
         ("view-read-in", "T4b"),
         ("optional-fact-none", "T4c"),
     ]
