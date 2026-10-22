@@ -24,14 +24,26 @@ the answers (``evaluate.Ans``, with their trace and their read set) by the value
 each value by ``key`` (type and ``==`` under semantics it trusts; a tuple or frozen set
 item by item, a value class field by field), a choice or fact not given as such.
 
+An answer whose read set holds more than ``wide`` reads is not kept (``WIDE`` by
+default). A lookup of a member with no read set kept hashes nothing and misses, and the
+member is evaluated from its pieces, each looked up under its own, narrower read set. A
+read set as wide as the whole design space (a root's validity reads every stored choice)
+would otherwise be hashed in full at each lookup, once per read set kept. The width
+decides whether an answer is kept, never what its key holds: a kept answer is keyed by
+every value of its read set.
+
 **Modes**, fixed when the cache is made (there is no global):
 
-- on: no bound (``NodeCache()``);
+- width: no answer kept whose read set holds more than ``wide`` reads (``NodeCache()``,
+  at ``WIDE``; ``NodeCache(wide=w)``);
+- on: every answer kept, whatever its width (``NodeCache(wide=None)``);
 - bounded: at most ``bound`` read sets kept per member, the oldest dropped for a new one
   (``NodeCache(bound=n)``);
 - dropping: a seeded random eviction at the rate ``drop``, at lookup (a hit is dropped,
   and answers as a miss) and at keep (the answer is not kept)
   (``NodeCache(drop=rate, seed=s)``).
+
+The bounded and dropping modes compose with either of the first two.
 
 With no cache, a session evaluates every member (``evaluate.Session(cache=None)``). Under
 the purity check (the session's, ``evaluate.Session.verifying``), any of these verifies: a
@@ -71,8 +83,9 @@ and ``value_class`` checks what a class itself declares: its fields' annotations
 ``key`` (``evaluate.Evaluation.domain_outcome``).
 
 **Counters**, on the session's (``evaluate.Counters``): lookups, hits, values hashed (at
-lookup and at keep), the members holding a read set, the read sets kept, and the most read
-sets one member held at once.
+lookup and at keep; an answer too wide to keep is not hashed), the answers not kept for
+their width, the members holding a read set, the read sets kept, and the most read sets
+one member held at once.
 
 Single-threaded, as the evaluator is: nothing here takes a lock.
 """
@@ -101,6 +114,9 @@ _NOT_GIVEN = ("not given",)
 
 Member = tuple[frozenset[NodeId] | None, NodeId]
 ReadSet = tuple[NodeId, ...]
+
+WIDE = 32
+"""The most reads a kept answer's read set holds, by default (``NodeCache(wide=...)``)."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -243,13 +259,23 @@ class NodeCache:
     """A node cache in one mode (see the module docstring): ``lookup`` before a member is
     evaluated, ``keep`` after."""
 
-    __slots__ = ("bound", "drop", "seed", "_random", "_tables")
+    __slots__ = ("wide", "bound", "drop", "seed", "_random", "_tables")
 
-    def __init__(self, *, bound: int | None = None, drop: float = 0.0, seed: int = 0) -> None:
+    def __init__(
+        self,
+        *,
+        wide: int | None = WIDE,
+        bound: int | None = None,
+        drop: float = 0.0,
+        seed: int = 0,
+    ) -> None:
+        if wide is not None and wide < 0:
+            raise ValueError(f"a width is a number of reads, at least 0, not {wide}")
         if bound is not None and bound < 1:
             raise ValueError(f"a bound keeps at least one read set per member, not {bound}")
         if not 0.0 <= drop <= 1.0:
             raise ValueError(f"a drop rate is between 0 and 1, not {drop}")
+        self.wide = wide
         self.bound = bound
         self.drop = drop
         self.seed = seed
@@ -261,11 +287,13 @@ class NodeCache:
 
     @property
     def mode(self) -> str:
-        """``on``, ``bounded N``, ``dropping R (seed S)``, or both of the last two."""
-        parts = [] if self.bound is None else [f"bounded {self.bound}"]
+        """``width W`` or ``on``, then ``bounded N``, ``dropping R (seed S)``, or both."""
+        parts = ["on" if self.wide is None else f"width {self.wide}"]
+        if self.bound is not None:
+            parts.append(f"bounded {self.bound}")
         if self.drop:
             parts.append(f"dropping {self.drop} (seed {self.seed})")
-        return ", ".join(parts) or "on"
+        return ", ".join(parts)
 
     def models(self) -> int:
         """How many models' tables are alive (for the tests of their lifetime)."""
@@ -334,7 +362,11 @@ class NodeCache:
 
     def keep(self, ev: Evaluation, index: NodeId, found: Ans) -> None:
         """``found``, ``index``'s answer in ``ev``, kept by ``ev``'s values of its read
-        set (nothing kept where one has no key)."""
+        set (nothing kept where the set holds more than ``wide`` reads, or a value has no
+        key)."""
+        if self.wide is not None and len(found.reads) > self.wide:
+            ev.counters.too_wide += 1
+            return
         read = tuple(sorted(found.reads))
         values = self._values(ev, read)
         if values is None or self._drops():
@@ -357,4 +389,4 @@ class NodeCache:
         answers[values] = found
 
 
-__all__ = ["PLAIN", "NodeCache", "enum_key", "key", "trusted", "value_class"]
+__all__ = ["PLAIN", "WIDE", "NodeCache", "enum_key", "key", "trusted", "value_class"]
