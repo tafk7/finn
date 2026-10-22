@@ -52,6 +52,7 @@ from core.space.reference_harness import (
     RefusalForm,
     Row,
     RuleForm,
+    Spelling,
     StateForm,
     ValidityForm,
     markdown,
@@ -108,9 +109,11 @@ def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() ->
 def test_the_pending_milestones_are_the_rulings_the_engine_has_not_reached() -> None:
     # The engine core's and the facts-instance milestones are accepted, their rows removed;
     # the model holds SZ100's rulings before the engine (T4b: views read out; T4c: an
-    # optional fact left out is None).
-    assert MILESTONES == ("base", "T4b", "T4c")
+    # optional fact left out is None), and its reading 8 (T4a: a refused guard counts once).
+    assert MILESTONES == ("base", "T4a", "T4b", "T4c")
     assert [(row.id, row.milestone) for row in ROWS] == [
+        ("guard-counted-once", "T4a"),
+        ("guard-unknown-under-unknown", "T4a"),
         ("view-read-in", "T4b"),
         ("optional-fact-none", "T4c"),
     ]
@@ -391,6 +394,27 @@ def test_an_optional_fact_cannot_be_left_out_again_in_the_engine() -> None:
     # param it was given.
     with pytest.raises(NotTranslatable):
         NESTED.start({"width": 4}).check_change(Change(unset=("width",)))
+
+
+def test_a_selector_carries_its_scopes_guard_only_where_the_scope_holds_it_alone() -> None:
+    # ``Spelling.guarded_selectors``: a guarded scope holding one selector and nothing else
+    # is written as the selector's own guard; any other scope cannot be.
+    def described(*choices: Choice) -> Space:
+        heating = Selector("heating", (Scope("boiler"), Scope("heat_pump")))
+        plant = Scope(
+            "plant",
+            when=When(("on",), lambda r: bool(r["on"])),
+            selectors=(heating,),
+            choices=choices,
+        )
+        return Space(("on",), Scope("", children=(plant, Scope("hall"))))
+
+    spelled = Spelling(guarded_selectors=frozenset({"plant"}))
+    assert Case("alone", described(), spelled).engine.guards == {"plant.heating": "plant"}
+    with pytest.raises(NotTranslatable, match="one selector alone"):
+        Case("beside a choice", described(Choice("x", listed(1, 2))), spelled)
+    with pytest.raises(NotTranslatable, match="not a child"):
+        Case("unguarded", described(), Spelling(guarded_selectors=frozenset({"hall"})))
 
 
 def test_a_members_entry_is_exported_by_a_child_its_scope_places() -> None:
