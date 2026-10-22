@@ -24,7 +24,7 @@ their disagreements, and fail on each once none has.
 
 **By implementation.** A row's expected failure holds for an implementation that has not
 reached its milestone. An implementation declares the later milestones it has reached as
-``milestones`` (``Reaching``; none where it declares none, as today's engine), and
+``milestones`` (``Reaching``; none where it declares none, as the public API), and
 ``expected`` marks a witness for the harness's default (``implementation.default``, a
 session's ``--space-implementation``): a plain test where the default has reached the row's
 milestone.
@@ -72,7 +72,7 @@ ROWS: tuple[Row, ...] = (
         "The engine refuses a definition whose constraint, derived value, guard or domain reads "
         "a view, as a definition error (view-read-in)",
         "test_reference_cases::test_a_rule_reading_a_view_is_no_definition",
-        "today it builds the Space and answers",
+        "the engine builds the Space and answers",
     ),
     Row(
         "optional-fact-none",
@@ -80,7 +80,7 @@ ROWS: tuple[Row, ...] = (
         "The engine reads an optional fact left out as None, a known value, wherever it is "
         "read: in membership, guards, bodies and lists. It never reads it as unresolved",
         "test_reference_cases::test_an_optional_fact_left_out_reads_none",
-        "today an unsupplied optional param reads unresolved",
+        "an unsupplied optional param reads unresolved",
     ),
 )
 

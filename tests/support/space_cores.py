@@ -16,12 +16,15 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
-    bind,
     constraint,
     divisors_of,
     inspection,
+    occurrence,
     reject,
 )
+from finn.core.space._running import questions
+from finn.core.space._running.evaluate import Session
+from finn.core.space._running.surface import At
 
 
 class Packed(Space):
@@ -56,15 +59,21 @@ def commit(point: Any, choices: dict[str, object]) -> Any:
 
 def built(point: Any, choices: Mapping[str, object]) -> Any:
     """The design space of ``point``'s facts with exactly these stored choices (by key),
-    read at ``point``'s scope: bound as a saved graph is (``bind``), not reached by a
-    change, so no rule is checked: one that breaks a rule reads refused (a change to it
-    would be refused). Each value must be of its choice's type, dormant ones included."""
-    owned = {item.key: item.reference for item in inspection.decisions(inspection.model(point))}
-    report = bind(point, {owned[key]: value for key, value in choices.items()})
+    read at ``point``'s scope: bound as a saved graph is (``questions.bind``, in a session
+    of its own with no cache: a recomputation sharing nothing with the model's session),
+    not reached by a change, so no rule is checked: one that breaks a rule reads refused (a
+    change to it would be refused). Each value must be of its choice's type, dormant ones
+    included."""
+    at = occurrence.held(point)
+    keys = at.ds.model.linked.keys
+    saved = [(keys[key], value) for key, value in choices.items()]
+    with at.ds.model.lock:
+        report = questions.bind(at.ds.layer.bare, saved, Session())
     for outcome in report.outcomes:
         if outcome.status == "dropped":
             raise ValueError(f"{outcome.owner} is not of its type: {outcome.result}")
-    return report.instance
+    assert report.published is not None
+    return occurrence.place(At(report.published, at.scope))
 
 
 class Stage(Space):

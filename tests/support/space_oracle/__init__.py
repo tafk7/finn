@@ -3,12 +3,12 @@
 """The class-based oracle: any implementation of the engine's public questions, asked by
 key, and compared with another on real Space classes.
 
-An ``Implementation`` opens the design space today's API built (``design_space``,
+An ``Implementation`` opens the design space the public API built (``design_space``,
 ``commit``, a change's instance): the common input, since every implementation reads the
 same compiled classes. What it opens (``Answers``) is asked the public questions by key,
-the declaration paths (``mm2.pe``), and answers them in today's public
+the declaration paths (``mm2.pe``), and answers them in the public
 result types (``QueryResult``, ``inspection.Validity``, the states' ``ChoiceState``s,
-``inspection.Viable``, a change's ``ConfigurationResult``). No node id, handle or world
+``inspection.Viable``, a change's ``ConfigurationResult``). No node id, handle or session
 crosses this interface.
 
 An ``Implementation`` also builds a design space from nothing (``make``): a Space class
@@ -16,8 +16,10 @@ with exactly the given facts and stored choices, by key, unchecked. A design spa
 by changes must answer as the one built from its facts and stored choices does (history
 independence), and the walks hold every implementation to it through ``make``.
 
-Today's engine (``today.TODAY``) answers through the public API alone. A prototype or
-T1's evaluator plugs in as ``module:attribute`` (``load``), with no line here.
+Two are registered (``IMPLEMENTATIONS``): the public API (``public.PUBLIC``, its questions
+in the model's one session, its node cache on), and the public API with no cache
+(``core.space._running_type.RUNNING``: the running type asked directly, in a session of its
+own with no cache). Another plugs in as ``module:attribute`` (``load``), with no line here.
 
 - ``forms``: the answers by key in one canonical, JSON-able form;
 - ``compare``: two implementations at one design space, along one change, and a seeded
@@ -45,7 +47,7 @@ NO_FACTS: Mapping[str, object] = {}
 
 @dataclass(frozen=True)
 class Changed:
-    """A change's or a bind's report, in today's shape, and the successor's answers where
+    """A change's or a bind's report, in the public API's shape, and the successor's answers where
     it was accepted (``None`` where it was refused)."""
 
     report: ConfigurationResult[Any]
@@ -108,7 +110,7 @@ class Implementation(Protocol):
         ...
 
     def open(self, configuration: Space) -> Answers:
-        """The answers of the design space ``configuration`` (today's API built it)."""
+        """The answers of the design space ``configuration`` (the public API built it)."""
         ...
 
     def make(
@@ -127,7 +129,8 @@ class Implementation(Protocol):
 
 
 def load(spec: str) -> Implementation:
-    """A registered implementation by name (``today``), or one named ``module:attribute``."""
+    """A registered implementation by name (``public``, ``public, no cache``), or one named
+    ``module:attribute``."""
     if spec in IMPLEMENTATIONS:
         return IMPLEMENTATIONS[spec]
     module, colon, attribute = spec.partition(":")
@@ -138,11 +141,12 @@ def load(spec: str) -> Implementation:
     return found
 
 
-# Registered last: today's adapter reads the interface above.
-from support.space_oracle.today import TODAY  # noqa: E402
+# Registered last: each adapter reads the interface above.
+from core.space._running_type import RUNNING  # noqa: E402
+from support.space_oracle.public import PUBLIC  # noqa: E402
 
-IMPLEMENTATIONS: dict[str, Implementation] = {TODAY.name: TODAY}
-"""Every implementation the oracle compares with today's: today's alone at T0."""
+IMPLEMENTATIONS: dict[str, Implementation] = {PUBLIC.name: PUBLIC, RUNNING.name: RUNNING}
+"""Every registered implementation: the public API, and the public API with no cache."""
 
 __all__ = [
     "IMPLEMENTATIONS",

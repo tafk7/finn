@@ -1,16 +1,18 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Today's engine as an ``Implementation``, through its public API alone, and the planted
-faults: today's, altered in one answer each.
+"""The public API as an ``Implementation``, and the planted faults: an implementation
+altered in one answer each.
 
-``TODAY`` reads ``inspection.members``, ``decisions``, ``choices``, ``candidate``,
+``PUBLIC`` reads ``inspection.members``, ``decisions``, ``choices``, ``candidate``,
 ``states``, ``validity`` and ``viable``, ``point.query``, ``try_with_choices``,
-``try_with_facts`` and ``bind``; never a world, a state or a node id. A scope is reached
-by name from the root: a child by its attribute, a candidate of a Decision over nodes by
-``inspection.candidate`` (selected or not, whatever its selector holds). The one exception
-is ``Today.make``, the design space built from nothing, which today's public API cannot
-build unchecked: it reads today's internals (``occurrence.state``, ``World.start``), as
-``support.space_walk.fresh`` does, inside that one method.
+``try_with_facts`` and ``bind``; never a design space value, a session or a node id. Its
+questions run as every public question does, in the model's one session, its node cache
+on. A scope is reached by name from the root: a child by its attribute, a candidate of a
+Decision over nodes by ``inspection.candidate`` (selected or not, whatever its selector
+holds). The one exception is ``Public.make``, the design space built from nothing, which
+the public API cannot build unchecked: it is the public API with no cache's
+(``core.space._running_type.Running``), in a session of its own, so that what a change
+reaches is compared with a recomputation that shares no cache with it.
 
 ``Planted`` wraps an implementation and alters one thing (``FAULTS``): it drops one
 standing choice, refuses one possible value, swaps the root's validity status, or moves
@@ -24,7 +26,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Any, Literal, cast
+from typing import Literal, cast
 
 from finn.core.space import (
     Available,
@@ -33,17 +35,16 @@ from finn.core.space import (
     Rejected,
     Space,
     bind,
-    design_space,
     inspection,
     reject,
 )
 from finn.core.space.edits import ConfigurationResult
-from finn.core.space.ir import NodeKind
+from finn.core.space.ir import NodeId, NodeKind
 from support.space_oracle import NO_FACTS, Answers, Changed, Implementation
 
 
-class TodayAnswers:
-    """One configuration of today's engine, asked by key."""
+class PublicAnswers:
+    """One design space of the public API, read at its root, asked by key."""
 
     def __init__(self, point: Space) -> None:
         self.point = point
@@ -159,17 +160,17 @@ class TodayAnswers:
 
 
 def _changed(report: ConfigurationResult[Space]) -> Changed:
-    return Changed(report, TodayAnswers(report.instance) if report.accepted else None)
+    return Changed(report, PublicAnswers(report.instance) if report.accepted else None)
 
 
 @dataclass(frozen=True)
-class Today:
-    """Today's engine, through its public API."""
+class Public:
+    """The public API."""
 
-    name: str = "today"
+    name: str = "public"
 
     def open(self, configuration: Space) -> Answers:
-        return TodayAnswers(configuration)
+        return PublicAnswers(configuration)
 
     def make(
         self,
@@ -177,36 +178,29 @@ class Today:
         facts: Mapping[str, object],
         stored: Mapping[str, object],
     ) -> Answers:
-        """Built as ``support.space_walk.fresh`` builds its recomputation: from the design
-        space of ``space_class(**facts)``, a world of its own started with its facts and the
-        ``stored`` choices (recognized and frozen as a change's are), with no rule checked;
-        each stored value must pass its type check there. Today's public API has no such
-        build (a bind checks rules and may drop), so this one method reads today's
-        internals (``occurrence.state``, ``World.start``, the type check); nothing else in
-        this module does."""
-        from finn.core.space import occurrence  # noqa: PLC0415 - internals, this method alone
-        from finn.core.space._assign import check  # noqa: PLC0415
-        from finn.core.space._state import State  # noqa: PLC0415
-        from finn.core.space._world import World  # noqa: PLC0415
+        """The design space of ``space_class`` with exactly ``facts`` and ``stored``, built
+        from nothing and answered in a session of its own with no cache (the public API with
+        no cache's, ``core.space._running_type.Running``): a recomputation sharing nothing
+        with the model's session. No rule is checked; each stored value must pass its type
+        check there (a ``ValueError`` names one that does not)."""
+        from core.space._running_type import Running, RunningAnswers  # noqa: PLC0415
+        from finn.core.space._running import questions  # noqa: PLC0415
+        from finn.core.space._running.evaluate import evaluation  # noqa: PLC0415
 
-        opened = design_space(space_class(**cast(dict[str, Any], facts)))
-        current = occurrence.state(opened)
-        linked = current.linked
-        unknown = sorted(key for key in stored if linked.keys.get(key) not in linked.decisions)
-        if unknown:
-            raise KeyError(f"not choices of {space_class.__qualname__}: {unknown}")
-        values = occurrence.prepare_values(
-            linked, {linked.keys[key]: value for key, value in stored.items()}, "choice"
-        )
-        world = World.start(current.evaluator, dict(current.facts), values)
-        for index in world.stored:
-            found = check(world, index)
+        made = cast(RunningAnswers, Running().make(space_class, facts, stored))
+        ev = evaluation(made.ds, made.session)
+        for index in made.ds.stored:
+
+            def checked(index: NodeId = index) -> QueryResult[bool]:
+                return questions.check(ev, index)
+
+            found = ev.run(checked)
             if isinstance(found, Rejected):
-                raise ValueError(f"{linked.nodes[index].key}: its stored value fails {found}")
-        return TodayAnswers(occurrence.attach(State(current.model, world), 0))
+                raise ValueError(f"{made.ds.key(index)}: its stored value fails {found}")
+        return made
 
 
-TODAY = Today()
+PUBLIC = Public()
 
 
 # -- planted faults ----------------------------------------------------------------------
@@ -397,11 +391,11 @@ class Historied:
 __all__ = [
     "FAULTS",
     "PLANTED",
-    "TODAY",
+    "PUBLIC",
     "Fault",
     "Historied",
     "Planted",
     "PlantedAnswers",
-    "Today",
-    "TodayAnswers",
+    "Public",
+    "PublicAnswers",
 ]

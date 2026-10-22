@@ -176,10 +176,10 @@ FACT_STEPS = 0.15
 
 def facts_of(configuration: Space) -> dict[str, object]:
     """The root facts ``configuration`` was opened with, by key (an optional one left out
-    is absent), read through today's public API (the common input)."""
-    from support.space_oracle.today import TODAY  # noqa: PLC0415 - registered after this
+    is absent), read through the public API (the common input)."""
+    from support.space_oracle.public import PUBLIC  # noqa: PLC0415 - registered after this
 
-    answers = TODAY.open(configuration)
+    answers = PUBLIC.open(configuration)
     found: dict[str, object] = {}
     for key, kind in answers.members():
         if kind == "param" and "." not in key:

@@ -89,12 +89,11 @@ def _rebound(ds: DesignSpace, session: Session | None = None) -> DesignSpace:
 
 def fresh(point: Space) -> Space:
     """The recomputation: the design space of ``point``'s model, facts and stored choices,
-    bound from nothing in its model's session (``_rebound``), read at ``point``'s scope. A
-    design space equal to ``point``'s: a test asks it in a session of its own to evaluate it
-    from nothing."""
+    bound from nothing in a session of its own with no cache (``_rebound``), read at
+    ``point``'s scope. A design space equal to ``point``'s: a test asks it in a session of
+    its own to evaluate it from nothing."""
     at = occurrence.held(point)
-    model = at.ds.model
-    return occurrence.place(At(_rebound(at.ds, model.per_class.session()), at.scope))
+    return occurrence.place(At(_rebound(at.ds), at.scope))
 
 
 def _pairs(ds: DesignSpace) -> dict[tuple[str, bool], dict[NodeId, object]]:

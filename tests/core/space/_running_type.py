@@ -1,24 +1,25 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""The running type (``finn.core.space._running``) as an ``Implementation`` of the
-class-based oracle's interface (``support.space_oracle``): ``RUNNING``, named
-``core.space._running_type:RUNNING`` wherever an implementation is named.
+"""The running type (``finn.core.space._running``) asked directly, as an ``Implementation``
+of the class-based oracle's interface (``support.space_oracle``): ``RUNNING``, the public
+API with no cache (registered as ``public, no cache``; named
+``core.space._running_type:RUNNING`` wherever an implementation is named), and the cache's
+modes for the evidence.
 
-It opens today's configuration as the design space value it is (its model, facts and
-stored choices, read once) and answers every question from that value through
-``_running`` alone:
+It opens the design space a Space object holds (read at its root) and answers every
+question from that value through ``_running`` alone, in its own session:
 
 - a member's answer: ``evaluation(ds, session).result(node)``, the node at the member's
   key (a formal asked at its own address answers as a member of its scope);
 - a scope's validity: ``Q.validity``, the scope by its index;
 - the states: ``Q.states``; the possible values: ``Q.viable``, one choice at a time;
-- a change: ``Q.change`` (the facts, then the commits, then the clears, today's batch
-  order); a bind: ``Q.bind``; each report in today's ``ConfigurationResult``, its
+- a change: ``Q.change`` (the facts, then the commits, then the clears, the public batch
+  order); a bind: ``Q.bind``; each report in the public ``ConfigurationResult``, its
   published value the design space value (the receiver's where refused).
 
 ``make`` builds a design space from the Space class, its facts and stored choices: the
-class compiled by today's front end (``compile_model``), the facts and choices prepared as
-a change's values are, and nothing of today's engine evaluated.
+class compiled by the front end (``compile_model``), the facts and choices prepared as a
+change's values are (``_running.facts.prepare_values``), nothing evaluated.
 
 What it takes from the compiled model rather than answering: the member list (each
 scope's named members), the scope list (the model's scope records) and the keys. These
@@ -26,13 +27,13 @@ are the structure's, shared by every implementation of the same class.
 
 One ``Session`` per implementation object, holding its node cache where it has one
 (``Running(cache=...)``), with the purity check on where it is made so (``verify``; else
-as today's switch says, ``evaluate.Session.verifying``): one cache is shared by every
+as the process's switch says, ``evaluate.Session.verifying``): one cache is shared by every
 design space it opens or makes in a process, and its counters cover everything it answered
 (``RUNNING.session.counters``: evaluations, calls by kind, the most evaluations in flight,
 and the cache's lookups, hits and values hashed). The named implementations, each loadable
 as ``core.space._running_type:NAME``:
 
-- ``RUNNING``: no cache;
+- ``RUNNING``: no cache, the public API with no cache (``public, no cache``);
 - ``RUNNING_CACHED``: the cache on, at its default width (``cache.WIDE``), unbounded;
 - ``RUNNING_NARROW``: no answer kept whose read set holds more than one read;
 - ``RUNNING_BOUNDED``: at most one read set kept per member;
@@ -141,7 +142,7 @@ class RunningAnswers:
         return self._changed(Q.bind(ds, saved, self.session))
 
     def _changed(self, report: Q.Report) -> Changed:
-        """The report in today's shape: the published value, or the receiver where
+        """The report in the public API's shape: the published value, or the receiver where
         refused."""
         published = report.published
         shaped = ConfigurationResult(
@@ -163,7 +164,7 @@ class Running:
     (none by default), with the purity check on where ``verify`` is, named ``label``."""
 
     cache: NodeCache | None = None
-    label: str = "running"
+    label: str = "public, no cache"
     verify: bool = False
     session: Session = field(init=False)
 
@@ -175,15 +176,12 @@ class Running:
         return self.label
 
     def open(self, configuration: Space) -> Answers:
-        """The design space value of today's root configuration: its model, facts and
-        stored choices (dormant ones included), read once."""
-        from finn.core.space.occurrence import state  # noqa: PLC0415 - today's, read once
+        """The design space value a root Space object holds (``occurrence.held``)."""
+        from finn.core.space.occurrence import held  # noqa: PLC0415
 
         if configuration._scope != 0:
             raise ValueError("the running type opens a root configuration only")
-        current = state(configuration)
-        layer = FactsLayer.of(current.model, current.world.facts)
-        return RunningAnswers(DesignSpace(layer, current.world.stored), self.session)
+        return RunningAnswers(held(configuration).ds, self.session)
 
     def make(
         self,
@@ -192,9 +190,9 @@ class Running:
         stored: Mapping[str, object],
     ) -> Answers:
         """The design space of ``space_class`` with ``facts`` and exactly ``stored``: the
-        class compiled by today's front end, its root's facts and the stored choices
-        prepared as a change's values are; nothing evaluated or checked."""
-        from finn.core.space import occurrence  # noqa: PLC0415
+        class compiled by the front end, its root's facts and the stored choices prepared
+        as a change's values are; nothing evaluated or checked."""
+        from finn.core.space._running.facts import prepare_values  # noqa: PLC0415
         from finn.core.space.compiler import (  # noqa: PLC0415
             compile_model,
             root_parameters,
@@ -215,10 +213,8 @@ class Running:
         unknown = sorted(key for key in stored if linked.keys.get(key) not in linked.decisions)
         if unknown:
             raise KeyError(f"not choices of {space_class.__qualname__}: {unknown}")
-        layer = FactsLayer.of(
-            cast(Any, model), occurrence.prepare_values(linked, given, "parameter")
-        )
-        values = occurrence.prepare_values(
+        layer = FactsLayer.of(cast(Any, model), prepare_values(linked, given, "parameter"))
+        values = prepare_values(
             linked, {linked.keys[key]: value for key, value in stored.items()}, "choice"
         )
         return RunningAnswers(DesignSpace(layer, values), self.session)
@@ -256,7 +252,7 @@ class KeysFirstReads(NodeCache):
         super().keep(ev, index, found)
 
 
-RUNNING = Running()
+RUNNING: Running = Running()
 RUNNING_CACHED = Running(NodeCache(), "running, cached")
 RUNNING_NARROW = Running(NodeCache(wide=1), "running, cached, width 1")
 RUNNING_BOUNDED = Running(NodeCache(bound=1), "running, cached, bounded 1")

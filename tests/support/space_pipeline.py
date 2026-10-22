@@ -9,9 +9,9 @@ constraint (its width reads the choices upstream, and a domain reads facts only)
 ``Link`` between units reads whether the upstream core is packed, through constraints on its
 ``burst`` and its ``beat``; a ``Probe`` and a ``Meter`` close the chain with a Decision read
 through ``present`` and ``supplied``. Its rules read choices that move when a neighbour's
-choice moves: the Space the bounded change's walks (``core.space.test_bounded_change``) and
-the cache's source check (``core.space.test_cache_writes``) share, imported as
-``support.space_pipeline``.
+choice moves: the Space the bounded change's walks (``core.space.test_bounded_change``), the
+change of facts' tests (``core.space.test_with_facts``) and the oracle's toys share, imported
+as ``support.space_pipeline``.
 
 Engine-only: this module imports ``finn.core.space`` and nothing of FINN.
 """
