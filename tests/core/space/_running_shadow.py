@@ -85,11 +85,12 @@ by reason, and how many fact-read lists compared as sets::
   a bind, an unknown fact) and a declaration today's front end refuses to open: those are
   the front end's, which both engines share;
 - every question of a test that makes the running type answer wrongly on purpose, named by
-  its node id (``UNCOMPARED``): the test still runs, against today's answers alone. One,
-  in ``tests/core/space/test_running.py``:
-  ``test_without_the_semantics_check_the_cache_answers_with_another_design_spaces_note``,
-  which takes the cache's semantics check out to show the running type answering with
-  another design space's note.
+  its node id (``UNCOMPARED``): the test still runs, against today's answers alone. Two,
+  in ``tests/core/space/test_running.py``, each taking a semantics out of a key:
+  ``test_without_the_semantics_check_the_cache_answers_with_another_design_spaces_note``
+  (the cache's) and
+  ``test_without_the_semantics_in_its_key_a_candidate_takes_anothers_domain_verdict``
+  (a domain outcome's).
 """
 
 from __future__ import annotations
@@ -135,6 +136,8 @@ UNCOMPARED = frozenset(
     {
         "tests/core/space/test_running.py::"
         "test_without_the_semantics_check_the_cache_answers_with_another_design_spaces_note",
+        "tests/core/space/test_running.py::"
+        "test_without_the_semantics_in_its_key_a_candidate_takes_anothers_domain_verdict",
     }
 )
 """The tests, by node id, that make the running type answer wrongly on purpose: each runs,
