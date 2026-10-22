@@ -219,28 +219,28 @@ def test_make_cut_choices_does_to_a_body_made_by_hand_what_the_cut_does(tmp_path
     assert {name: config[name] for name in nodes} == nodes
     assert all(held["transport"] == "direct" for name, held in config.items() if name not in nodes)
     assert explore_kernel_choices(model).report["open"] == []
-    write_raw(model, "first", "compute.packed.simd", 2)  # past the space, as another tool wrote it
-    write_raw(model, "first", "compute.packed.pe", 3)
+    write_raw(model, "first", "simd", 2)  # past the space, as another tool wrote it
+    write_raw(model, "first", "pe", 3)
     model = model.transform(making)
     # Its input buffer's channel waits on the open pe, its stored choices with it.
-    assert sorted(making.dropped) == ["first.compute.packed.pe"]
+    assert sorted(making.dropped) == ["first.pe"]
     # Its own domain refuses 3: nothing else stands beside it.
-    assert {(f.code, f.owner) for f in making.dropped["first.compute.packed.pe"]} == {
-        ("domain-membership", "compute.packed.pe"),
+    assert {(f.code, f.owner) for f in making.dropped["first.pe"]} == {
+        ("domain-membership", "pe"),
     }
     first = kernel_op(model, model.graph.node[0])
     assert first.choices() == {
-        **{key: value for key, value in nodes["first"].items() if key != "compute.packed.pe"},
-        "compute.packed.simd": 2,
+        **{key: value for key, value in nodes["first"].items() if key != "pe"},
+        "simd": 2,
     }
     # The cut is the same step: the body it makes from the model holds the same values,
     # but for the PE left open, which a body that never had it set the cut sets late, by
     # conversion's policy (first valid, 1), reported.
     cut = CutKernelPartition(tmp_path)
     parent = model.transform(cut)
-    assert list(cut.late) == ["first.compute.packed.pe"]
+    assert list(cut.late) == ["first.pe"]
     expected = kernel_choices_config(model)
-    expected["first"] = {**expected["first"], "compute.packed.pe": 1}
+    expected["first"] = {**expected["first"], "pe": 1}
     assert kernel_choices_config(partition_body(parent)[1]) == expected
 
 
@@ -270,7 +270,7 @@ def test_the_export_names_nodes_and_tensors_and_hold_takes_it() -> None:
     explore_kernel_choices(model, Ranked(Lanes(2)))
     config = kernel_choices_config(model)
     assert list(config) == ["x", "w1", "first", "hidden", "activate", "levels", "w2", "second", "y"]
-    assert config["first"]["compute.packed.pe"] == 2
+    assert config["first"]["pe"] == 2
     assert config["w1"]["source.memstream.pumped_memory"] is False
     blank = open_model()
     report = explore_kernel_choices(blank, Hold(config)).report
@@ -278,7 +278,7 @@ def test_the_export_names_nodes_and_tensors_and_hold_takes_it() -> None:
     # Every value is held, by its owner as the export names it; what it changed is logged
     # as the hold's.
     assert report["held"] == config
-    assert report["choices"]["first"]["compute.packed.pe"] == {"value": 2, "by": "held"}
+    assert report["choices"]["first"]["pe"] == {"value": 2, "by": "held"}
     assert report["choices"]["levels"]["transport"]["value"] == config["levels"]["transport"]
     # A channel's key under its consumer is no Decision of the root: D8's form is
     # refused, named.

@@ -37,15 +37,15 @@ KERNEL: dict[str, dict[str, object]] = {
         "matmul.compute": "packed",
         "matmul.compute.packed.compute_pumping": False,
         "matmul.compute.packed.reducer": "tree",
-        "matmul.compute.packed.pe": 2,
-        "matmul.compute.packed.simd": 2,
+        "matmul.pe": 2,
+        "matmul.simd": 2,
     },
     "memstream-fifo": {
         "matmul.compute": "packed",
         "matmul.compute.packed.compute_pumping": False,
         "matmul.compute.packed.reducer": "tree",
-        "matmul.compute.packed.pe": 4,
-        "matmul.compute.packed.simd": 1,
+        "matmul.pe": 4,
+        "matmul.simd": 1,
     },
 }
 WEIGHT: dict[str, dict[str, object]] = {
@@ -112,7 +112,10 @@ def test_collapse_keeps_matmul_keys_and_evaluates_fewer_aliases() -> None:
     before = counts(_kernel("memstream-fifo", collapsed=False), read)
     after = counts(_kernel("memstream-fifo", collapsed=True), read)
     assert after.nodes == before.nodes and after.aliases == before.aliases
-    assert after.alias_edges < before.alias_edges
+    # The edges it redirected statically were the cores' PE domains reading N through
+    # their forwarded ``columns``; PE is MatMul's now, read from N itself, so the edges
+    # left name the selector's forwarding, which every read still skips.
+    assert after.alias_edges == before.alias_edges
     assert after.aliases_evaluated < before.aliases_evaluated
     assert after.evaluated < before.evaluated
     assert read(collapsed) == read(plain)

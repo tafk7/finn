@@ -74,7 +74,7 @@ class Last:
 
 def test_the_test_policy_folds_to_its_lanes_or_the_largest_factor() -> None:
     policy = Lanes(4)
-    fold = Choice(("first", "compute.packed.pe"), None, (1, 2, 4, 8), True)
+    fold = Choice(("first", "pe"), None, (1, 2, 4, 8), True)
     assert list(policy.rank(fold)) == [4, 8, 2, 1]
     odd = Choice(("x", "simd"), None, (1, 3), True)
     assert list(policy.rank(odd)) == [3, 1] and list(Lanes().rank(odd)) == [1, 3]
@@ -97,7 +97,7 @@ def test_the_packed_reducer_is_offered_open_its_adder_tree_first() -> None:
 def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path) -> None:
     model = kernel_model().transform(ranked(Lanes(2)))
     saved = choices(model)
-    assert saved["first"]["compute.packed.pe"] == 2
+    assert saved["first"]["pe"] == 2
     assert saved["activate"]["pe"] == 2
     model.save(tmp_path / "chosen.onnx")
     again = ModelWrapper(str(tmp_path / "chosen.onnx"))
@@ -106,7 +106,7 @@ def test_every_open_choice_is_committed_and_the_model_replays_it(tmp_path: Path)
     # A second pass reopens every choice and ranks it again: the same policy makes the
     # same choices, another replaces them.
     assert choices(again.transform(ranked(Lanes(2)))) == saved
-    assert choices(again.transform(ranked(Lanes())))["first"]["compute.packed.pe"] == 1
+    assert choices(again.transform(ranked(Lanes())))["first"]["pe"] == 1
 
 
 def test_the_policy_is_offered_every_open_choice_its_possible_values_only() -> None:

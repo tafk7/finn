@@ -377,7 +377,7 @@ CHAIN_TARGET = TargetRequest(part="xczu3eg-sbva484-1-e", period_ns=5.0)
 CHAIN_FPS = 1_000_000_000 // (5 * 6)
 
 #: A hold of the first MatMul's SIMD at its baseline, which the target throughput moves.
-CHAIN_PINS = {"first": {"compute.packed.simd": 1}}
+CHAIN_PINS = {"first": {"simd": 1}}
 
 
 def chain_build(
@@ -410,13 +410,13 @@ def test_a_hold_in_a_step_of_the_users_holds_across_a_later_folding_step(tmp_pat
     folding = ["step_target_throughput", "step_size_fifos"]
     free = chain_build(tmp_path / "free", folding, target_fps=CHAIN_FPS)
     _, body, _ = partition_body(run_steps(kernel_model(), free))
-    assert kernel_choices_config(body)["first"]["compute.packed.simd"] == 4
+    assert kernel_choices_config(body)["first"]["simd"] == 4
     pinned = chain_build(tmp_path / "pinned", [step_hold_first, *folding], target_fps=CHAIN_FPS)
     _, body, _ = partition_body(run_steps(kernel_model(), pinned))
     held = kernel_choices_config(body)
-    assert held["first"]["compute.packed.simd"] == 1
-    assert held["second"]["compute.packed.simd"] == 4
-    assert body.get(HELD) == {"first": ["compute.packed.simd"]}
+    assert held["first"]["simd"] == 1
+    assert held["second"]["simd"] == 4
+    assert body.get(HELD) == {"first": ["simd"]}
     written = json.loads((Path(pinned.output_dir) / "report" / "kernel_choices.json").read_text())
     assert written == held
     for step in folding:
@@ -589,9 +589,7 @@ def test_each_strategy_step_reports_what_it_changed_in_its_own_file(tmp_path: Pa
         report = strategy_report(cfg, step)
         assert report["strategy"]["strategy"] == strategy
         assert report["held"] == CHAIN_PINS
-    assert strategy_report(cfg, "step_hold_first")["strategy"]["held"] == [
-        "first.compute.packed.simd"
-    ]
+    assert strategy_report(cfg, "step_hold_first")["strategy"]["held"] == ["first.simd"]
     assert strategy_report(cfg, "step_size_fifos")["strategy"]["margin"] == 2
     target = strategy_report(cfg, "step_target_throughput")["strategy"]
     assert target["fps"] == CHAIN_FPS and target["changed"]
@@ -898,8 +896,8 @@ def test_a_choice_stale_at_the_cut_is_noted(
     left open for a strategy, and noted once: a limitation owned by the choice, the
     finding attached for the manifest."""
     model = open_model()
-    write_raw(model, "first", "compute.packed.simd", 2)  # past the space, as another tool wrote it
-    write_raw(model, "first", "compute.packed.pe", 3)
+    write_raw(model, "first", "simd", 2)  # past the space, as another tool wrote it
+    write_raw(model, "first", "pe", 3)
     with caplog.at_level(logging.INFO, logger=REPORTS_LOG):
         step_create_dataflow_partition(model, config(tmp_path))
     (noted,) = [record for record in caplog.records if record.levelno >= logging.WARNING]
@@ -912,17 +910,17 @@ def test_a_choice_stale_at_the_cut_is_noted(
     assert (finding.kind, finding.code, finding.owner) == (
         FindingKind.LIMITATION,
         "choice-stale",
-        "first.compute.packed.pe",
+        "first.pe",
     )
     assert "domain-membership" in finding.message
     # The key is named once, with the value and the values it could take; the kernel's
     # finding is kept as the note's cause: its domain's, nothing beside it.
-    assert finding.message.count("compute.packed.pe") == 1
+    assert finding.message.count("first.pe") == 1
     assert finding.message.startswith("dropped as stale at the cut (a kernel's left open")
-    assert "first.compute.packed.pe = 3: " in finding.message
+    assert "first.pe = 3: " in finding.message
     assert "not one of 1, 2, 4 (domain-membership)" in finding.message
     assert {(cause.code, cause.owner) for cause in finding.causes} == {
-        ("domain-membership", "compute.packed.pe"),
+        ("domain-membership", "pe"),
     }
     (own,) = finding.causes
     assert dict(own.details) == {"value": 3, "candidates": (1, 2, 4)}

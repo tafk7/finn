@@ -179,8 +179,9 @@ def test_a_graph_tensor_that_disagrees_with_the_facts_is_refused() -> None:
 
 def test_conversion_sets_each_choice_in_play_by_its_policy_on_the_kernel_alone() -> None:
     """Conversion's answer is the node's kernel, nothing else (no channel): each choice in
-    play, in declaration order, at its first valid value, the selector's case first, then
-    the choices of that case alone; those under the case not selected stay absent."""
+    play, in declaration order, at its first valid value: the folding first (MatMul's),
+    then the selector's case, then the choices of that case alone; those under the case not
+    selected stay absent."""
     model = matmul_model()
     op = kernel_op(model, model.graph.node[0])
     done = op.defaulted()
@@ -188,13 +189,11 @@ def test_conversion_sets_each_choice_in_play_by_its_policy_on_the_kernel_alone()
     point = done.point
     assert isinstance(point, MatMulKernel)
     assert dict(inspection.states(point)) == {
+        "pe": inspection.Set(1),
+        "simd": inspection.Set(1),
         "compute": inspection.Set("packed"),
-        "compute.packed.pe": inspection.Set(1),
-        "compute.packed.simd": inspection.Set(1),
         "compute.packed.compute_pumping": inspection.Set(False),
         "compute.packed.reducer": inspection.Set("tree"),
-        "compute.int8_dsp58.pe": inspection.Absent(),
-        "compute.int8_dsp58.simd": inspection.Absent(),
         "compute.int8_dsp58.compute_pumping": inspection.Absent(),
         "realization": inspection.Absent(),  # a dense MatMul has none
     }
@@ -308,7 +307,7 @@ def test_the_member_cache_keys_a_member_by_its_class_and_arguments_by_value() ->
 
 def test_a_key_tells_values_apart_by_their_exact_type() -> None:
     """1, 1.0 and True are equal in Python and three values to the engine."""
-    keys = {key(facts(), {"compute.packed.pe": value}, {}, ()) for value in (1, 1.0, True)}
+    keys = {key(facts(), {"pe": value}, {}, ()) for value in (1, 1.0, True)}
     assert len(keys) == 3
     assert typed((1, (True,))) != typed((1, (1,)))
     assert key(facts(), {}, {}, ()) == key(facts(), {}, {}, ())

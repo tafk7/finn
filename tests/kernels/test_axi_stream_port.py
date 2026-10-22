@@ -235,6 +235,8 @@ def test_dotp_binds_from_its_inputs_through_the_dense_view() -> None:
             x_tensor=x,
             w_tensor=w,
             **dotp_extents(w),
+            pe=1,
+            simd=1,
         )
     )
     assert (point.rows, point.outputs, point.reduction) == (2, 4, 12)
@@ -248,6 +250,8 @@ def test_dotp_binds_from_its_inputs_through_the_dense_view() -> None:
             x_tensor=tensor((2, 14), "INT3"),
             w_tensor=w,
             **dotp_extents(w),
+            pe=1,
+            simd=1,
         )
     )
     assert coded_messages(wide.query(PackedDotpKernel.extents)) == {

@@ -55,7 +55,7 @@ a change, atomic over the members it reaches:
 4. every channel rebuilt from new facts checked: its validity (``inspection.validity``).
 
 Keys are pairs, ``(owner, key)``: a member by name and the decision key in its space
-(``("first", "compute.packed.pe")``). Findings keep their owner, the key or the
+(``("first", "pe")``). Findings keep their owner, the key or the
 declaration inside the member's space; the network names the member beside them.
 
 **The module.** A network is emitted as one ``Composed`` module (``module``): each
@@ -128,7 +128,7 @@ Key = tuple[str, str]
 
 
 def dotted(key: Key) -> str:
-    """A key as text, its owner and key joined (``first.compute.packed.pe``), as a report
+    """A key as text, its owner and key joined (``first.pe``), as a report
     names a value; a member's own refusal (``(name, "")``) is its name. Text only: a
     member's name, a graph name, may hold a dot itself."""
     owner, name = key

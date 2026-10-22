@@ -59,7 +59,7 @@ class MakeCutChoices(Transformation):
     lists the stored choices dropped as stale, ``late`` the node choices set late,
     ``unset`` the choices no value could be set for and ``fallbacks`` those set in listed
     order where a ranking could not be read, by owner and key
-    (``MatMul_0.compute.packed.pe``), each with its findings."""
+    (``MatMul_0.pe``), each with its findings."""
 
     def __init__(self) -> None:
         super().__init__()

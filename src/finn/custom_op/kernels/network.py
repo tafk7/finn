@@ -155,8 +155,8 @@ def _described(bound: Network, stored: Mapping[Key, object]) -> dict[str, tuple[
 
 
 def stale_text(key: str, found: Iterable[Finding]) -> str:
-    """A stale choice as a line, its key (dotted, ``first.compute.packed.pe``) named once:
-    ``first.compute.packed.pe = 3: not one of 1, 2, 4 (domain-membership)``, the value
+    """A stale choice as a line, its key (dotted, ``first.pe``) named once:
+    ``first.pe = 3: not one of 1, 2, 4 (domain-membership)``, the value
     where the findings hold it, each finding's message and its code (a message that is its
     code, its code only)."""
     findings = tuple(found)

@@ -34,7 +34,6 @@ from finn.dataflow.gemm import Form
 from finn.dataflow.plan import Step
 from finn.dataflow.traversal import Traversal
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.members import decision
 
 FACTS = dict(
     m=2,
@@ -52,8 +51,8 @@ def point(core="int8_dsp58", **facts):
     choices = {
         "w.transport": "direct",
         "matmul.compute": core,
-        f"matmul.compute.{core}.pe": 2,
-        f"matmul.compute.{core}.simd": 3,
+        "matmul.pe": 2,
+        "matmul.simd": 3,
         f"matmul.compute.{core}.compute_pumping": False,
         **({"matmul.compute.packed.reducer": "tree"} if core == "packed" else {}),
     }
@@ -69,10 +68,12 @@ def parameters(module, label):
 
 def test_the_realization_comes_before_the_cores_choices():
     """The cores' facts read the realization (the datapath it gives them): in the flow
-    order it comes before their choices, and, declared first, before ``compute`` too."""
+    order it comes before their choices, and, declared first, before the folding and
+    ``compute`` too. The folding, MatMul's, is declared before ``compute``: conversion
+    folds first, then picks the core."""
     keys = [item.key for item in inspection.decisions(MatMulKernel)]
-    assert keys[:2] == ["realization", "compute"]
-    assert all(key.startswith("compute.") for key in keys[2:])
+    assert keys[:4] == ["realization", "pe", "simd", "compute"]
+    assert all(key.startswith("compute.") for key in keys[4:])
 
 
 def test_depthwise_rows_pass_once_with_a_frame_per_window():
@@ -207,8 +208,8 @@ def test_one_network_carries_the_weights_of_whichever_realization_is_committed()
             {
                 "matmul.realization": realization,
                 "matmul.compute": core,
-                f"matmul.compute.{core}.pe": 2,
-                f"matmul.compute.{core}.simd": 3,
+                "matmul.pe": 2,
+                "matmul.simd": 3,
                 f"matmul.compute.{core}.compute_pumping": False,
                 **({"matmul.compute.packed.reducer": "tree"} if core == "packed" else {}),
             },
@@ -314,12 +315,13 @@ def test_narrow_weights_follow_known_weights(weights, delivery, narrow):
 def test_a_cores_folding_factors_are_listed_from_facts_and_simd_fits_its_datapath(
     realization, core
 ):
-    """PE's and SIMD's domains read the operation's facts alone, whichever realization:
-    PE the channels' divisors, SIMD the divisors of the widest K (window times channels).
-    A native datapath's K is the window's, so the SIMDs that divide the widest K and not
-    the window's are listed and refused by their fit (``dotp-simd``). The packed core
-    refuses a native depthwise operation: selecting it is refused, and its factors are
-    listed with the core still open, each possible as far as anything decides."""
+    """PE's and SIMD's domains, MatMul's, read the operation's facts alone, whichever
+    realization: PE the channels' divisors, SIMD the divisors of the widest K (window times
+    channels). A native datapath's K is the window's, so the SIMDs that divide the widest K
+    and not the window's are listed and refused by the core's fit (``dotp-simd``). The
+    packed core refuses a native depthwise operation: selecting it is refused, and the
+    factors are listed with the core still open, each possible as far as anything
+    decides."""
     weights = tuple(tuple((r + c) % 5 - 2 for c in range(4)) for r in range(9))
     network = matmul_point(realization=realization, **FACTS, weights=weights)
     selected = network.trial(keyed({"matmul.compute": core}))
@@ -331,7 +333,7 @@ def test_a_cores_folding_factors_are_listed_from_facts_and_simd_fits_its_datapat
     kernel = (selected.network if selected.accepted else network).member("matmul")
     pe, simd = inspection.viable(
         kernel,
-        [decision(kernel, f"compute.{core}.{name}").reference for name in ("pe", "simd")],
+        [MatMulKernel.pe, MatMulKernel.simd],
     )
     widest = (1, 2, 3, 4, 6, 9, 12, 18, 36)
     assert [item.value for item in pe.values or ()] == [1, 2, 4] and pe.cases == (1, 2, 4)

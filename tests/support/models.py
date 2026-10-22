@@ -271,8 +271,8 @@ def schema_digest(cls: type[KernelOp]) -> str:
 
 MATMUL = {
     "compute": "packed",
-    "compute.packed.pe": chain.PE,
-    "compute.packed.simd": chain.SIMD,
+    "pe": chain.PE,
+    "simd": chain.SIMD,
     "compute.packed.compute_pumping": False,
     "compute.packed.reducer": "tree",
 }
@@ -325,7 +325,7 @@ def kernel_model(**options: Any) -> ModelWrapper:
 #: row-major at its free side, the order an IODMA mover moves (``IodmaMover.row_major``): a
 #: row of PE lanes a beat. At the Chain's own (2 x 2) it is tiled, and the pynq shell
 #: refuses it (``mover-order``).
-ROW_MAJOR_W2 = {"compute.packed.pe": 4, "compute.packed.simd": 1}
+ROW_MAJOR_W2 = {"pe": 4, "simd": 1}
 
 
 def streamed_w2_model() -> ModelWrapper:
@@ -336,7 +336,7 @@ def streamed_w2_model() -> ModelWrapper:
     that x is read once (at PE 2 it is read twice: over one row, the replay of each
     row is a repetition of the whole pass); the second folded ``ROW_MAJOR_W2``."""
     model = kernel_model(second_weights=False, rows=1)
-    return configured(model, {"first": {"compute.packed.pe": 4}, "second": ROW_MAJOR_W2})
+    return configured(model, {"first": {"pe": 4}, "second": ROW_MAJOR_W2})
 
 
 def open_memories(bound: Partition) -> tuple[Partition, list[str]]:

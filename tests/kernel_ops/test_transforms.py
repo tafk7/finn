@@ -182,7 +182,7 @@ def test_the_export_of_the_choices_round_trips_through_configured() -> None:
     configured(
         model,
         {
-            "first": {"compute.packed.pe": 2},
+            "first": {"pe": 2},
             "activate": {"ram_style": "auto"},
             "w1": {"transport": "direct"},
         },
@@ -202,14 +202,14 @@ def test_the_export_of_the_choices_round_trips_through_configured() -> None:
     matmul = {
         "compute": "packed",
         "compute.packed.compute_pumping": 0,
-        "compute.packed.pe": 1,
+        "pe": 1,
         "compute.packed.reducer": "tree",
-        "compute.packed.simd": 1,
+        "simd": 1,
     }
     assert config == {
         "x": adapted,
         "w1": weights,
-        "first": {**matmul, "compute.packed.pe": 2},
+        "first": {**matmul, "pe": 2},
         "hidden": {"output_adapter": "vpc", "transport": "direct"},
         "activate": {
             "block_stages": 0,

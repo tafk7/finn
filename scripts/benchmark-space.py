@@ -719,14 +719,15 @@ def kernel_fixtures(api):
                 # What a parent states from the operation's facts: N and K.
                 columns=4,
                 widest_reduction=4,
+                # Its folding, which its role (MatMul) holds and gives it.
+                pe=2,
+                simd=2,
                 result_range=(-128, 127),  # int8's: the core's accumulator is INT8
                 platform=platform,
             ),
             lambda point, index: commit(
                 point,
                 {
-                    "pe": 2,
-                    "simd": 2,
                     "reducer": "tree",
                     "compute_pumping": bool(index % 2),
                 },
@@ -744,8 +745,8 @@ def kernel_fixtures(api):
                 point,
                 {
                     "compute": "packed",
-                    "compute.packed.pe": (1, 2)[index % 2],
-                    "compute.packed.simd": 2,
+                    "pe": (1, 2)[index % 2],
+                    "simd": 2,
                     "compute.packed.compute_pumping": False,
                     "compute.packed.reducer": "tree",
                 },

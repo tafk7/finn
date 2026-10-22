@@ -16,7 +16,7 @@ class KernelOpError(Refusal):
     reports read, each owned by who refused (a KernelOp by its op type, a transformation,
     reader or check by its name) and naming the node or tensor it is about in its
     details; the error's message is its own. ``keys`` names what is refused, if
-    anything: a node's choice attributes (``compute.packed.pe``), a channel's keys
+    anything: a node's choice attributes (``pe``), a channel's keys
     (``transport``, or ``<tensor>.<key>``), or tensors whose channel choices are
     refused whole. ``refused`` makes the error of one rejection."""
 

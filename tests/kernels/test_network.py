@@ -45,8 +45,8 @@ FOLDING = {
     for layer in ("first", "second")
     for key, value in (
         ("compute", "packed"),
-        ("compute.packed.pe", 2),
-        ("compute.packed.simd", 2),
+        ("pe", 2),
+        ("simd", 2),
         ("compute.packed.compute_pumping", False),
         ("compute.packed.reducer", "tree"),
     )
@@ -99,7 +99,7 @@ def test_a_channel_is_bound_once_per_set_of_facts() -> None:
 
 def test_a_change_reaches_its_kernel_and_the_channels_that_read_it() -> None:
     folded = with_transports(choose(chain.network(), FOLDING))
-    changed = choose(folded, {"first.compute.packed.pe": 1})
+    changed = choose(folded, {"first.pe": 1})
     unchanged = ("activate", "second", "levels", "w2", "y")
     assert all(changed.member(name) is folded.member(name) for name in unchanged)
     assert all(
@@ -131,22 +131,20 @@ def test_a_trial_refuses_what_the_change_names_and_keeps_what_it_puts_out_of_pla
         ("hidden", "transport.fifo.depth"): 16,
     }
     # A value outside its domain refuses the change, by its key.
-    refused = fifo.trial(keyed({"first.compute.packed.pe": 3}))
+    refused = fifo.trial(keyed({"first.pe": 3}))
     assert not refused.accepted and refused.network is fifo
-    assert list(refused.refused) == [("first", "compute.packed.pe")]
-    assert [f.code for f in refused.refused[("first", "compute.packed.pe")]] == [
-        "domain-membership"
-    ]
+    assert list(refused.refused) == [("first", "pe")]
+    assert [f.code for f in refused.refused[("first", "pe")]] == ["domain-membership"]
     # A rule it would break refuses it, by the rule's key, with the stored choices
     # standing in its way: pumping needs lanes to split.
     pumped = choose(folded, {"first.compute.packed.compute_pumping": True})
-    broken = pumped.trial(keyed({"first.compute.packed.simd": 1}))
+    broken = pumped.trial(keyed({"first.simd": 1}))
     rule = ("first", "compute.packed.pumping_has_lanes")
     assert list(broken.refused) == [rule]
     assert [f.code for f in broken.refused[rule]] == ["dotp-pumping"]
     assert broken.standing == {rule: (("first", "compute.packed.compute_pumping"),)}
     with pytest.raises(NetworkError, match="pumping_has_lanes.*standing: first.compute.packed"):
-        pumped.with_choices(keyed({"first.compute.packed.simd": 1}))
+        pumped.with_choices(keyed({"first.simd": 1}))
 
 
 def test_its_module_is_one_netlist_in_the_order_declared() -> None:
@@ -176,13 +174,13 @@ def test_stored_choices_are_set_as_each_member_binds() -> None:
     stored = chain.chain().chosen()
     replayed = Network(chain.members(), stored=stored)
     assert replayed.chosen() == stored and not replayed.dropped
-    stale = Network(chain.members(), stored={**stored, ("first", "compute.packed.pe"): 3})
-    assert list(stale.dropped) == [("first", "compute.packed.pe")]
+    stale = Network(chain.members(), stored={**stored, ("first", "pe"): 3})
+    assert list(stale.dropped) == [("first", "pe")]
     # Its own domain refuses 3: no other piece stands beside it.
-    assert {(f.code, f.owner) for f in stale.dropped[("first", "compute.packed.pe")]} == {
-        ("domain-membership", "compute.packed.pe"),
+    assert {(f.code, f.owner) for f in stale.dropped[("first", "pe")]} == {
+        ("domain-membership", "pe"),
     }
-    assert ("first", "compute.packed.pe") in stale.undecided()
+    assert ("first", "pe") in stale.undecided()
     waiting = Network(chain.members(), stored={("x", "transport"): "direct"})
     held = waiting.unbound("x")
     assert held is not None and held.stored == {"transport": "direct"}

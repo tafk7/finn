@@ -42,10 +42,12 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.kernels import InferKernelTensors
 
+PUMPING = "compute.int8_dsp58.compute_pumping"
+"""A choice of the INT8 core's own, under its case."""
 FOLDING = {
     "compute": "packed",
-    "compute.packed.pe": 2,
-    "compute.packed.simd": 2,
+    "pe": 2,
+    "simd": 2,
     "compute.packed.compute_pumping": False,
     "compute.packed.reducer": "tree",
 }
@@ -111,10 +113,14 @@ def test_each_missing_or_refused_fact_is_named() -> None:
 
 def test_the_schema_is_the_kernels_decision_keys() -> None:
     schema = MatMul.schema()
-    assert len(schema) == 9
+    assert len(schema) == 7
     assert sum(kind == "s" for kind, _ in schema.values()) == 3
     assert schema["compute"] == ("s", ("packed", "int8_dsp58"))
-    assert schema["compute.packed.pe"] == ("i", ())
+    assert schema["pe"] == schema["simd"] == ("i", ())
+    # The folding is MatMul's: no core states its own.
+    assert not any(
+        name.startswith("compute.") and name.endswith((".pe", ".simd")) for name in schema
+    )
     assert schema["compute.packed.compute_pumping"] == ("i", ())
     assert schema["compute.packed.reducer"] == ("s", ())
     # A channel's keys are its tensor's (finn.channel), never the node's: none sits under
@@ -128,7 +134,7 @@ def test_the_schema_is_the_kernels_decision_keys() -> None:
 def test_the_schema_is_pinned_for_its_op_version() -> None:
     """Changing a kernel's keys changes the schema. Unreleased, the digest is re-pinned
     without an op-version bump (clean breaks)."""
-    assert (MatMul.op_version, schema_digest(MatMul)) == (1, "6a16c9aa62655d95")
+    assert (MatMul.op_version, schema_digest(MatMul)) == (1, "a934f6872bdba16d")
 
 
 # -- persistence ------------------------------------------------------------------------
@@ -139,13 +145,13 @@ def test_configured_choices_are_written_and_replay_reads_them() -> None:
     configured(model, {"first": FOLDING})
     # Every value set is stored, the core's case too.
     assert attributes(model) == sorted(FOLDING)
-    assert op(model).choices()["compute.packed.pe"] == 2
+    assert op(model).choices()["pe"] == 2
     point = op(model).point()
     assert point.compute.pe == 2
     # A refused choice writes nothing.
-    with refused("domain-membership", owner="compute.packed.pe"):
-        configured(model, {"first": {"compute.packed.pe": 3}})
-    assert op(model).choices()["compute.packed.pe"] == 2
+    with refused("domain-membership", owner="pe"):
+        configured(model, {"first": {"pe": 3}})
+    assert op(model).choices()["pe"] == 2
     # A value of another type, one no case holds, and a core this target (DSP48E2) refuses:
     # each refused by its code, the core by its own rule.
     with refused("request-refused", owner="compute"):
@@ -170,16 +176,16 @@ def test_a_graph_with_a_cleared_choice_a_rule_reads_waits_then_is_refused() -> N
     stored choice)."""
     model = matmul_model()
     configured(model, {"first": FOLDING})
-    write_raw(model, "first", "compute.packed.simd", None)
-    assert "compute.packed.simd" not in attributes(model)
+    write_raw(model, "first", "simd", None)
+    assert "simd" not in attributes(model)
     assert op(model).verify_node() == []
     states = dict(inspection.states(op(model).point()))
-    assert states["compute.packed.simd"] == inspection.Open()
+    assert states["simd"] == inspection.Open()
     assert states["compute.packed.compute_pumping"] == inspection.Set(False)
     # Pumped, it waits all the same; SIMD stated as one lane, the rule refuses it.
     write_raw(model, "first", "compute.packed.compute_pumping", True)
     assert op(model).verify_node() == []
-    write_raw(model, "first", "compute.packed.simd", 1)
+    write_raw(model, "first", "simd", 1)
     (problem,) = op(model).verify_node()
     assert problem.startswith("first: refused choices: compute.packed.pumping_has_lanes: ")
     assert "dotp-pumping: pumping requires SIMD >= 2" in problem
@@ -210,9 +216,9 @@ def test_persist_checks_every_value_before_it_writes_any(monkeypatch: pytest.Mon
     bound = network(model, model.graph.node)
     for forged, code in (
         ("compute.packed.typo", "choice-unknown"),
-        ("compute.packed.simd", "choice-value-invalid"),
+        ("simd", "choice-value-invalid"),
     ):
-        stated = {("first", "compute.packed.pe"): 4, ("first", forged): "two"}
+        stated = {("first", "pe"): 4, ("first", forged): "two"}
         monkeypatch.setattr(Partition, "chosen", lambda self, names=None, stated=stated: stated)
         with refused(
             code, error=KernelOpError, owner="MatMul", node="first", keys=(forged,)
@@ -266,43 +272,44 @@ def test_conversion_stores_every_value_its_policies_set() -> None:
     assert kernel_op(model, node).choices() == {
         "compute": "packed",
         "compute.packed.compute_pumping": 0,
-        "compute.packed.pe": 1,
+        "pe": 1,
         "compute.packed.reducer": "tree",
-        "compute.packed.simd": 1,
+        "simd": 1,
     }
 
 
 def test_a_nested_choice_under_a_case_not_selected_is_stored_out_of_play() -> None:
     """A choice under a case is set wherever it sits: under the open core it is stored and
     waits on ``compute``; under a core not selected it is stored and dormant, its rules
-    out of play."""
+    out of play. The folding, MatMul's, is set at once, whatever the core."""
     model = matmul_model()
-    configured(model, {"first": {"compute.int8_dsp58.pe": 2}})
-    assert attributes(model) == ["compute.int8_dsp58.pe"]
-    state = dict(inspection.states(op(model).point()))["compute.int8_dsp58.pe"]
-    assert state == inspection.Waiting(2, ("compute",))
+    configured(model, {"first": {PUMPING: False}})
+    assert attributes(model) == [PUMPING]
+    state = dict(inspection.states(op(model).point()))[PUMPING]
+    assert state == inspection.Waiting(False, ("compute",))
     configured(model, {"first": FOLDING})
-    assert attributes(model) == sorted({*FOLDING, "compute.int8_dsp58.pe"})
-    state = dict(inspection.states(op(model).point()))["compute.int8_dsp58.pe"]
-    assert state == inspection.Dormant(2)
+    assert attributes(model) == sorted({*FOLDING, PUMPING})
+    states = dict(inspection.states(op(model).point()))
+    assert states[PUMPING] == inspection.Dormant(False)
+    assert states["pe"] == inspection.Set(2)
 
 
 def test_a_choice_goes_stale_when_a_fact_changes() -> None:
     model = matmul_model()
-    configured(model, {"first": {**FOLDING, "compute.packed.pe": 4}})
+    configured(model, {"first": {**FOLDING, "pe": 4}})
     assert op(model).verify_node() == []
     # The weights' columns change from 4 to 6: pe = 4 no longer divides them.
     model.set_initializer("w", np.concatenate([WEIGHTS, WEIGHTS[:, :2]], axis=1).astype(np.float32))
     # The kernel states its results from its inputs, never from the graph's y: the stale
     # choice is refused at once, before inference states y again.
     stale = op(model).verify_node()
-    assert len(stale) == 1 and "compute.packed.pe: " in stale[0]
+    assert len(stale) == 1 and "pe: " in stale[0]
     model = model.transform(InferKernelTensors())
     problems = op(model).verify_node()
-    assert len(problems) == 1 and "compute.packed.pe: " in problems[0]
+    assert len(problems) == 1 and "pe: " in problems[0]
     with pytest.raises(KernelOpError) as error:
         op(model).point()
-    assert error.value.keys == ("compute.packed.pe",)
+    assert error.value.keys == ("pe",)
 
 
 def test_an_unknown_attribute_is_refused() -> None:
@@ -319,18 +326,18 @@ def test_an_unknown_attribute_is_refused() -> None:
 def test_replay_reads_the_stored_folding_and_verify_node_catches_a_misfolding() -> None:
     model = configured(matmul_model(), {"first": FOLDING})
     assert op(model).point().compute.pe == 2
-    # A folding naming only the nested key waits on its selector, open on a node made by
-    # hand, and replays once the core is set.
-    alone = configured(matmul_model(), {"first": {"compute.packed.pe": 2}})
-    state = dict(inspection.states(op(alone).point()))["compute.packed.pe"]
-    assert state == inspection.Waiting(2, ("compute",))
+    # A folding stated alone is set at once, its core open on a node made by hand (the
+    # folding is MatMul's), and the core is given it once set.
+    alone = configured(matmul_model(), {"first": {"pe": 2}})
+    state = dict(inspection.states(op(alone).point()))["pe"]
+    assert state == inspection.Set(2)
     configured(alone, {"first": {"compute": "packed"}})
     assert op(alone).point().compute.pe == 2
     # A misfolding the seam would refuse is stored raw, as a graph FINN did not write holds
     # it: the replay's verification names the key.
     misfolded = matmul_model()
-    write_raw(misfolded, "first", "compute.packed.pe", 3)
-    assert "compute.packed.pe" in op(misfolded).verify_node()[0]
+    write_raw(misfolded, "first", "pe", 3)
+    assert "pe" in op(misfolded).verify_node()[0]
 
 
 def test_choices_survive_save_and_load(tmp_path: Path) -> None:

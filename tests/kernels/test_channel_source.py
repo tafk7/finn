@@ -87,9 +87,7 @@ def base(**facts):
 
 def folded(point, *, pe=2, simd=2):
     """``point`` with MatMul's core and folding committed: its channels' contracts known."""
-    return choose(
-        point, {**FOLDING, "matmul.compute.packed.pe": pe, "matmul.compute.packed.simd": simd}
-    )
+    return choose(point, {**FOLDING, "matmul.pe": pe, "matmul.simd": simd})
 
 
 def handle(point, key):
@@ -287,8 +285,8 @@ def test_the_cores_do_not_wait_on_the_source():
     point = choose(
         point,
         {
-            "matmul.compute.packed.pe": 4,
-            "matmul.compute.packed.simd": 2,
+            "matmul.pe": 4,
+            "matmul.simd": 2,
             "matmul.compute.packed.compute_pumping": True,
             "matmul.compute.packed.reducer": "tree",
         },
@@ -303,9 +301,9 @@ def test_the_cores_do_not_wait_on_the_source():
     assert compute.parameters["NARROW_WEIGHTS"] == 0  # the weights hold -4
     assert inspection.validity(compute).status == "valid"
     folding = choose(base(weights=WEIGHTS), {"matmul.compute": "packed"})
-    folding = choose(folding, {"matmul.compute.packed.simd": 4})
+    folding = choose(folding, {"matmul.simd": 4})
     # Folding refusals come before a PE or a memory style is chosen.
-    trial = folding.trial(keyed({"matmul.compute.packed.pe": 3}))
+    trial = folding.trial(keyed({"matmul.pe": 3}))
     assert "domain-membership" in {
         finding.code for why in trial.refused.values() for finding in why
     }
@@ -319,9 +317,9 @@ def test_the_sources_choices_round_trip_through_another_network():
     assert sorted(f"{owner}.{key}" for owner, key in saved) == [
         "matmul.compute",
         "matmul.compute.packed.compute_pumping",
-        "matmul.compute.packed.pe",
         "matmul.compute.packed.reducer",
-        "matmul.compute.packed.simd",
+        "matmul.pe",
+        "matmul.simd",
         "w.source",
         "w.source.memstream.pumped_memory",
         "w.source.memstream.ram_style",
@@ -343,7 +341,7 @@ def test_the_sources_choices_round_trip_through_another_network():
     assert states[("w", "source.memstream.ram_style")] == inspection.Dormant("block")
     # Facts that invalidate a saved folding refuse replay atomically: five outputs.
     wider = tuple((*row, 0) for row in WEIGHTS)
-    with pytest.raises(NetworkError, match="matmul.compute.packed.pe"):
+    with pytest.raises(NetworkError, match="matmul.pe"):
         base(weights=wider, n=5).with_choices(saved)
 
 
@@ -372,7 +370,7 @@ def test_a_source_no_value_of_which_can_be_set_refuses_the_change_that_brings_it
             w_contents=(WEIGHTS, WEIGHTS),
         ),
     }
-    folding = {**FOLDING, "matmul.compute.packed.pe": 2, "matmul.compute.packed.simd": 2}
+    folding = {**FOLDING, "matmul.pe": 2, "matmul.simd": 2}
     # The folding brings the weight channel's source into play, and no value of it can be
     # set by the interim channel rule: the channel would newly read refused, so the fold
     # is refused naming w.source, its one value's refusal the cause. A strategy can now be

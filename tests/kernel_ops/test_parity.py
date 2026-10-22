@@ -147,8 +147,8 @@ VERSAL = platform_rows(TARGET.platform.period_ns)["versalaicore", "ip"]
 ON_VERSAL: dict[str, Mapping[str, object]] = {
     "matmul": {
         "first.compute": "int8_dsp58",
-        "first.compute.int8_dsp58.pe": 2,
-        "first.compute.int8_dsp58.simd": 4,
+        "first.pe": 2,
+        "first.simd": 4,
         "first.compute.int8_dsp58.compute_pumping": False,
         "x.adapter.input_gen.input_gen.ram_style": "ultra",
     },
@@ -179,8 +179,8 @@ def seed(label: str) -> int:
 #: cycle, so 144 accumulation steps a sum and 576 compute cycles in all, where SIMD 1
 #: takes 9 216 and the covering's full SIMD (2 304 lanes) would make a slow elaboration.
 WIDE_POINT: Mapping[str, object] = {
-    "first.compute.packed.pe": 3,
-    "first.compute.packed.simd": 16,
+    "first.pe": 3,
+    "first.simd": 16,
     "first.compute.packed.reducer": "tree",
     "first.compute.packed.compute_pumping": False,
 }

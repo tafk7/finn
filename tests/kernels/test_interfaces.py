@@ -23,7 +23,7 @@ from support.helpers import (
     cycles_of,
     dotp_extents,
     placed,
-    with_adapter_memories,
+    with_channel_defaults,
     with_direct_transports,
 )
 from support.netlist import Const, Drive, Pin
@@ -85,6 +85,8 @@ def activated(*, writable: bool) -> Network:
                 x_tensor=X,
                 w_tensor=WEIGHT_TENSOR,
                 **dotp_extents(WEIGHT_TENSOR),
+                pe=1,
+                simd=SIMD,
                 platform=FULL_DSP48E2,
             ),
             "activate": ThresholdingAxiKernel(
@@ -100,8 +102,6 @@ def activated(*, writable: bool) -> Network:
     chosen = choose(
         network,
         {
-            "compute.pe": 1,
-            "compute.simd": SIMD,
             "compute.compute_pumping": False,
             "compute.reducer": "tree",
             "activate.pe": 1,
@@ -111,7 +111,7 @@ def activated(*, writable: bool) -> Network:
             "activate.deep_pipeline": False,
         },
     )
-    return with_adapter_memories(with_direct_transports(chosen))
+    return with_channel_defaults(with_direct_transports(chosen))
 
 
 def activated_module(design: Network) -> Any:

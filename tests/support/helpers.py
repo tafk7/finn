@@ -10,7 +10,7 @@ A kernel reads tensors and presents its ports' contracts on channels, so a test 
 it in a network (``finn.kernels.network``): its kernels and channels by name, each its
 own space, each channel taking the contracts its kernels present (``Interface``) and, for a
 parameter channel, what its kernel states for it (``Fact``). A test names a choice as
-``member.key`` (``matmul.compute.packed.pe``, ``w.transport``): ``keyed`` makes it the
+``member.key`` (``matmul.pe``, ``w.transport``): ``keyed`` makes it the
 network's pair, ``choose`` commits a batch. ``placed_dotp`` places a dot-product core
 between three boundary channels. ``matmul_network`` places a MatMul (``matmul``) on
 ``x`` (``in0_V``), ``w`` (``in1_V``, buffered), ``y`` (``out0_V``) and, with several
@@ -24,7 +24,7 @@ given to MatMul (``w_contents``); the weight channel carries what MatMul states 
 their range), with ``set``'s tensor its ``index_tensor`` (one index per row) and ``set``
 taking its ``set_contract``, so the channel's ``source`` stores them. The edge choices are
 the channels' (``x.adapter``, ``w.transport``, ``w.source.memstream.ram_style``), the
-MatMul's its own (``matmul.compute.packed.pe``). ``matmul_assembly`` configures one
+MatMul's its own (``matmul.pe``). ``matmul_assembly`` configures one
 from concrete facts and choices. A network's module is named ``finn_<stem>``
 (``module_of``).
 
@@ -236,11 +236,14 @@ def placed_dotp(
     reduction: int | None = None,
     **facts: object,
 ) -> S:
-    """A dot-product core between three boundary channels, its folding factors committed.
+    """A dot-product core between three boundary channels, its folding factors given and
+    its own choices committed.
 
     The core takes its extents from its tensors: ``outputs`` (N) defaults to PE
-    and ``reduction`` (K) to SIMD, one fold each. A folding factor left ``None``
-    stays open, as does ``reducer``, which only a core that declares it commits.
+    and ``reduction`` (K) to SIMD, one fold each. PE and SIMD are facts a core is
+    given (its role's choices, MatMul's): one left ``None`` is not given. Pumping and
+    ``reducer``, which only a core that declares it commits, are its choices; one left
+    ``None`` stays open.
     ``weights_range`` is the range of values the weight channel carries; the
     datatype's own by default. ``result_range`` is the results' range, from which the core
     derives its accumulator; ``result_dtype``'s own by default. The results channel
@@ -284,6 +287,9 @@ def placed_dotp(
                 w_tensor=w_tensor,
                 result_range=result_range or ordinary_integer_bounds(result_dtype),
                 **dotp_extents(w_tensor),
+                **{
+                    name: value for name, value in (("pe", pe), ("simd", simd)) if value is not None
+                },
                 **facts,
             ),
         }
@@ -291,8 +297,6 @@ def placed_dotp(
     choices = {
         key: value
         for key, value in (
-            ("compute.pe", pe),
-            ("compute.simd", simd),
             ("compute.compute_pumping", compute_pumping),
             ("compute.reducer", reducer if is_decision(space_type, "reducer") else None),
         )
@@ -850,8 +854,8 @@ def matmul_assembly(
     network = choose(
         network,
         {
-            f"matmul.compute.{core}.pe": pe,
-            f"matmul.compute.{core}.simd": simd,
+            "matmul.pe": pe,
+            "matmul.simd": simd,
             f"matmul.compute.{core}.compute_pumping": compute_pumping,
             **({"matmul.compute.packed.reducer": reducer} if core == "packed" else {}),
         },

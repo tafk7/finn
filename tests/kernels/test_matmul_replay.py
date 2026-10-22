@@ -53,8 +53,8 @@ def choices(core: str = "packed") -> dict[str, object]:
     return {
         "w.transport": "direct",
         "matmul.compute": core,
-        f"matmul.compute.{core}.pe": 2,
-        f"matmul.compute.{core}.simd": 2,
+        "matmul.pe": 2,
+        "matmul.simd": 2,
         f"matmul.compute.{core}.compute_pumping": False,
         **({"matmul.compute.packed.reducer": "tree"} if core == "packed" else {}),
     }

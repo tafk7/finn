@@ -198,28 +198,27 @@ def test_a_folding_factor_outside_its_domain_is_refused_by_its_own_finding_alone
     selector."""
     trial = matmul_point(**FACTS).trial(
         {
-            ("matmul", "compute.packed.pe"): 3,
-            ("matmul", "compute.packed.simd"): 2,
+            ("matmul", "pe"): 3,
+            ("matmul", "simd"): 2,
             ("matmul", "compute.packed.compute_pumping"): False,
         },
         check=False,
     )
-    assert list(trial.refused) == [("matmul", "compute.packed.pe")]
-    found = {(item.code, item.owner) for item in trial.refused[("matmul", "compute.packed.pe")]}
-    assert ("domain-membership", "compute.packed.pe") in found
+    assert list(trial.refused) == [("matmul", "pe")]
+    found = {(item.code, item.owner) for item in trial.refused[("matmul", "pe")]}
+    assert ("domain-membership", "pe") in found
 
 
-def test_a_folding_factor_under_an_open_core_is_refused_by_its_domain_or_waits() -> None:
-    """On DSP58 two cores are possible, so ``compute`` stays open. PE is checked against
-    its domain all the same, as if its core were selected: 3 divides no extent of 4, and is
-    refused at its own commit by its own finding; 2 is stored, waiting on ``compute``
-    (its domain reads N from the facts alone). Both readings (other facts: twice the
-    rows)."""
+def test_a_folding_factor_under_an_open_core_is_refused_by_its_domain_or_set() -> None:
+    """On DSP58 two cores are possible, so ``compute`` stays open. PE is MatMul's, checked
+    against its domain whatever the core: 3 divides no extent of 4, and is refused at its
+    own commit by its own finding; 2 is set, waiting on nothing (its domain reads N from the
+    facts alone, and every core takes it). Both readings (other facts: twice the rows)."""
     point = design_space(
         MatMulKernel(platform=FULL_DSP58, x_tensor=int4((8, 4)), w_tensor=int4((4, 4)))
     )
     assert isinstance(point.query(MatMulKernel.compute), Unresolved)
-    pe = {item.key: item.reference for item in inspection.decisions(point)}["compute.packed.pe"]
+    pe = {item.key: item.reference for item in inspection.decisions(point)}["pe"]
     for reading in (
         lambda change: point.try_with_choices(change),
         lambda change: point.try_with_facts({MatMulKernel.x_tensor: int4((16, 4))}, change),
@@ -227,18 +226,18 @@ def test_a_folding_factor_under_an_open_core_is_refused_by_its_domain_or_waits()
         three = reading({pe: 3})
         assert not three.accepted
         (outcome,) = (item for item in three.outcomes if item.status == "refused")
-        assert outcome.owner == "compute.packed.pe"
+        assert outcome.owner == "pe"
         assert [item.code for item in outcome.result.findings] == ["domain-membership"]
         two = reading({pe: 2})
         assert two.accepted
-        state = dict(inspection.states(two.instance))["compute.packed.pe"]
-        assert state == inspection.Waiting(2, ("compute",))
+        state = dict(inspection.states(two.instance))["pe"]
+        assert state == inspection.Set(2)
 
 
 #: Known weights (K, N) = (4, 4) over [-3, 3]: INT3 values, which INT2 does not hold.
 KNOWN = ((1, -2, 3, 0), (2, 1, -1, 1), (0, 3, -2, 1), (1, 1, 1, -3))
-PACKED = {"compute": "packed", "compute.packed.pe": 2}
-FOLDED = {**PACKED, "compute.packed.simd": 2, "compute.packed.compute_pumping": False}
+PACKED = {"compute": "packed", "pe": 2}
+FOLDED = {**PACKED, "simd": 2, "compute.packed.compute_pumping": False}
 
 
 def validity_of(point):
@@ -298,7 +297,7 @@ def test_the_selected_core_s_own_rule_refuses_the_commit_that_breaks_it() -> Non
     facts = dict(w_contents=KNOWN, weights_dtype=DataType["INT4"])
     point = design_space(MatMulKernel(platform=FULL_DSP48E2, x_tensor=int4((2, 4)), **facts))
     handles = {item.key: item.reference for item in inspection.decisions(point)}
-    choices = {**PACKED, "compute.packed.simd": 1, "compute.packed.compute_pumping": True}
+    choices = {**PACKED, "simd": 1, "compute.packed.compute_pumping": True}
     result = point.try_with_choices({handles[key]: value for key, value in choices.items()})
     assert not result.accepted
     assert [
@@ -312,7 +311,7 @@ def test_weights_that_are_not_integers_are_unrecognized_as_the_weights_value() -
         assembly(weight_delivery=WeightDelivery.MEMSTREAM, weights=[[0.5] * 4] * 4)
 
 
-def test_the_core_is_one_possible_case_and_owns_its_folding_factors():
+def test_the_core_is_one_possible_case_and_is_given_the_folding():
     base = matmul_point(**FACTS)
     # On DSP48E2 only the packed core is possible, before any folding factor (the INT8
     # core is a DSP58 mode, refused by its own rule): ``compute`` is open until set, as
@@ -325,8 +324,8 @@ def test_the_core_is_one_possible_case_and_owns_its_folding_factors():
         base,
         {
             "matmul.compute": "packed",
-            "matmul.compute.packed.pe": 2,
-            "matmul.compute.packed.simd": 2,
+            "matmul.pe": 2,
+            "matmul.simd": 2,
         },
     )
     point = choose(
@@ -356,15 +355,18 @@ def test_the_core_is_one_possible_case_and_owns_its_folding_factors():
     assert [label for label, _ in matmul.netlist.instances] == ["compute.packed"]
     module = built(point, "matmul")
     assert labels(module) == ["x.adapter.input_gen.input_gen", "matmul.compute.packed"]
-    assert not hasattr(MatMulKernel, "contract") and not hasattr(MatMulKernel, "pe")
+    assert not hasattr(MatMulKernel, "contract")
+    # The folding is MatMul's, the role's, which every core is given.
+    assert isinstance(MatMulKernel.pe, Decision) and isinstance(MatMulKernel.simd, Decision)
+    assert matmul.compute.pe == matmul.pe == 2
     # Pumping with one SIMD lane is not possible: with SIMD 1 only False is, and the
     # change committing True is refused by the core's rule.
     one = choose(
         base,
         {
             "matmul.compute": "packed",
-            "matmul.compute.packed.pe": 2,
-            "matmul.compute.packed.simd": 1,
+            "matmul.pe": 2,
+            "matmul.simd": 1,
         },
     )
     ((_, pumping),) = one.viable([("matmul", "compute.packed.compute_pumping")])
@@ -416,6 +418,8 @@ def test_matmul_honors_its_cores_rules_not_just_its_raw_module(monkeypatch):
             w_tensor=MatMulKernel.carried_weights,
             columns=MatMulKernel.n,
             widest_reduction=MatMulKernel.widest_reduction,
+            pe=MatMulKernel.pe,
+            simd=MatMulKernel.simd,
         )
 
     # Substitute a fully authored Space class, without mutating declarations.
@@ -435,8 +439,8 @@ def test_matmul_honors_its_cores_rules_not_just_its_raw_module(monkeypatch):
         keyed(
             {
                 "matmul.compute": "packed",
-                "matmul.compute.packed.pe": 2,
-                "matmul.compute.packed.simd": 2,
+                "matmul.pe": 2,
+                "matmul.simd": 2,
                 "matmul.compute.packed.compute_pumping": False,
                 "matmul.compute.packed.reducer": "tree",
             }

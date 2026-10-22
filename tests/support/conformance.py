@@ -68,7 +68,7 @@ configurations name the kernel's own members: a Decision is committed, a Param i
 given (a folding factor that is still a Param), and a derived member is checked: the
 kernel must derive that value (a channel stage's generics, from the sequences it is
 given). A Decision below a child is named by its key below the kernel
-(``compute.packed.pe``). The adapter sample reuses the middle configuration.
+(``pe``). The adapter sample reuses the middle configuration.
 
 An output given as a shape takes its element from the kernel: the element of the
 tensor it states at that port (``<port>_tensor``), read before any output
@@ -141,7 +141,6 @@ from support.helpers import (
     choose,
     cycles_of,
     module_of,
-    with_adapter_memories,
     with_channel_defaults,
     with_direct_transports,
 )
@@ -415,8 +414,10 @@ def kernel_space(design: Any) -> tuple[Any, str, str]:
 
 def configured(design: Any, choices: Mapping[str, object]) -> Any:
     """A design with ``choices`` (``member.key``) committed, its channels' transports then
-    direct and its adapters' memories at their first possible values."""
-    return with_adapter_memories(with_direct_transports(_chosen(design, choices)))
+    direct and their other choices as the cut sets them (``with_channel_defaults``: an
+    adapter a kernel's given folding needs, and its memories at their first possible
+    values)."""
+    return with_channel_defaults(with_direct_transports(_chosen(design, choices)))
 
 
 def _chosen(design: Any, choices: Mapping[str, object]) -> Any:
@@ -496,7 +497,7 @@ def _committed(
     """Placed, with the configuration's Params given, its Decisions and ``choices``
     committed and its derived members checked."""
     # A configuration's key is a member (``pe``), or a Decision below a child
-    # (``compute.packed.pe``), which is never a Param.
+    # (``pe``), which is never a Param.
     given = {
         key: value
         for key, value in config.items()

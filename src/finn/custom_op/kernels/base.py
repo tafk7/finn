@@ -38,7 +38,7 @@ The test harness checks this (``finn.harness.reference``); builds do not.
 
 A node's attributes are its semantic attributes, which are part of the operation
 (Thresholding's ``bias``), and its kernel's choices, named by the kernel's own decision
-keys (``compute.packed.pe``), each set by the op's policy at conversion (a required
+keys (``pe``), each set by the op's policy at conversion (a required
 one is left open, for a strategy to set). A channel's
 choices are stored on its tensor instead, and only in a partition's body (``CHANNEL``).
 Only the compiler writes a choice (``persist``): ``get_nodeattr`` of a choice answers what
