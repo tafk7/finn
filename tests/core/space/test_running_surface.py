@@ -5,7 +5,8 @@
 engine.
 
 - **Every question, everywhere**: on FINN's toys (each opened, after its change, and with
-  other facts), the house at each heating case, and the evidence tests' shapes, every
+  other facts), the house at each heating case, the evidence tests' shapes and a ranked
+  choice, every
   member's answer (``query``), its value and its answer through its bound accessor
   (``field``), its evidence (``explain``), every view's and constraint's assessment
   (``inspect``), every Decision's state and candidates, and at every scope its children's
@@ -37,6 +38,7 @@ from support.space_oracle.today import TodayAnswers
 from core.space._running_type import Running
 from core.space._toys_support import Boiler, House
 from core.space._world_support import open_world, source_line
+from core.space.test_inspection import Listed as Ranked
 from finn.core.space import (
     Available,
     BoundDecision,
@@ -224,7 +226,8 @@ def test_every_surface_question_on_the_house_at_each_heating_case_answers_as_tod
     assert found == [] and asked > 100
 
 
-# The evidence tests' shapes (``test_evidence``).
+# The evidence tests' shapes (``test_evidence``), and a choice whose candidates its domain's
+# order ranks by another choice (``test_inspection``'s ``Listed``).
 
 PHYSICAL = ViewKey("physical", int)
 
@@ -310,6 +313,10 @@ SHAPES: dict[str, Callable[[], Space]] = {
     "an inactive formal, forwarded": lambda: design_space(Forwarded(value=12345)),
     "an inactive formal, literal": lambda: design_space(Literal()),
     "a refusal": lambda: design_space(Refusing()),
+    "an order reading an open choice": lambda: design_space(Ranked()),
+    "an order reading a choice set": lambda: design_space(Ranked()).with_choices(
+        {Ranked.source.b: 2}
+    ),
 }
 
 
