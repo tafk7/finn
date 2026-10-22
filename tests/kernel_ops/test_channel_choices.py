@@ -73,9 +73,11 @@ def test_the_namespace_is_generated_from_the_channels_decisions() -> None:
     """One key per Decision ``Channel`` declares, typed by its value semantics, a
     selector's values its cases; it follows its tensor into a cut."""
     assert list(CHANNEL_KEYS) == [item.key for item in inspection.decisions(Channel)]
-    assert len(CHANNEL_KEYS) == 10
-    # A channel's source, mover and output adapter are placed, no choices.
-    assert not {"source", "mover", "output_adapter"} & set(CHANNEL_KEYS)
+    assert len(CHANNEL_KEYS) == 6
+    # A channel's source, mover and output adapter are placed, and its input adapter
+    # picked by its steps: no choices. Its input adapter's memory is one choice.
+    assert not {"source", "mover", "output_adapter", "adapter"} & set(CHANNEL_KEYS)
+    assert [key for key in CHANNEL_KEYS if "adapter" in key] == ["adapter_ram_style"]
     assert (CHANNEL.name, CHANNEL.version, CHANNEL.follow) == ("finn.channel", 1, True)
     assert CHANNEL_KEYS["transport.fifo.depth"].encode(8) == "8"
     assert CHANNEL_KEYS["source.pumped_memory"].encode(True) == "true"
@@ -87,23 +89,20 @@ def test_the_namespace_is_generated_from_the_channels_decisions() -> None:
 
 def test_a_channels_choices_are_typed_entries_of_its_tensor() -> None:
     """Each choice an entry of its tensor, typed: those set, and those the interim channel
-    rule makes beside them (its adapter, which the folding needs, its memory, and the FIFO's
-    style)."""
+    rule makes beside them (its adapter's memory, and the FIFO's style)."""
     model = kernel_model()
     configured(model, {"levels": FIFO})
     assert entries(model, "levels") == {
         "finn.channel/@version": "1",
         "finn.channel/@follow": "true",
-        "finn.channel/adapter": "input_gen",
-        "finn.channel/adapter.input_gen.input_gen.ram_style": "distributed",
+        "finn.channel/adapter_ram_style": "distributed",
         "finn.channel/transport": "fifo",
         "finn.channel/transport.fifo.depth": "8",
         "finn.channel/transport.fifo.buffer.ram_style": "auto",
     }
     assert channel_choices(model, "levels") == {
         **FIFO,
-        "adapter": "input_gen",
-        "adapter.input_gen.input_gen.ram_style": "distributed",
+        "adapter_ram_style": "distributed",
         "transport.fifo.buffer.ram_style": "auto",
     }
     # Beside qonnx's own annotation of the tensor, which it leaves alone.
@@ -181,7 +180,7 @@ def test_the_cut_moves_a_channels_choices_into_the_body(tmp_path: Path) -> None:
     channels' choices into the body the cut makes, its boundary's (x, y) too; the parent's copy of
     a boundary tensor states none, and keeps its datatype. The cut keeps every value the
     model states; what it leaves open the interim channel rule sets (here nothing: the
-    helper made them, the adapter, its memory and the FIFO's style)."""
+    helper made them, the adapter's memory and the FIFO's style)."""
     model = kernel_model()
     configured(model, {"levels": FIFO})
     stated = kernel_choices_config(model)
@@ -196,8 +195,7 @@ def test_the_cut_moves_a_channels_choices_into_the_body(tmp_path: Path) -> None:
     assert all(config[name].items() >= held.items() for name, held in stated.items())
     assert config["levels"] == {
         **FIFO,
-        "adapter": "input_gen",
-        "adapter.input_gen.input_gen.ram_style": "distributed",
+        "adapter_ram_style": "distributed",
         "transport.fifo.buffer.ram_style": "auto",
     }
     assert not network(body, body.graph.node).stale
@@ -395,6 +393,32 @@ def test_a_row_saved_with_the_placements_as_choices_is_refused_by_name() -> None
         error=KernelOpError,
         message=r"\['source', 'source.memstream.ram_style'\] are not declared.*again",
         tensor="w1",
+    ):
+        network(model, model.graph.node)
+
+
+def test_a_row_saved_with_the_input_adapter_as_a_choice_is_refused_by_name() -> None:
+    """A clean break: a channel's input adapter is picked by its steps, not chosen, and
+    its memory is the channel's one style (``adapter_ram_style``); a tensor that stores the
+    old keys (``adapter``, ``adapter.input_gen.input_gen.ram_style``) states keys the
+    namespace does not declare, so the body is explored again."""
+    model = kernel_model()
+    (annotation,) = [
+        each for each in model.graph.quantization_annotation if each.tensor_name == "levels"
+    ]
+    annotation.quant_parameter_tensor_names.extend(
+        (
+            StringStringEntryProto(key="finn.channel/adapter", value="input_gen"),
+            StringStringEntryProto(
+                key="finn.channel/adapter.input_gen.input_gen.ram_style", value="distributed"
+            ),
+        )
+    )
+    with refused(
+        "channel-choices-unreadable",
+        error=KernelOpError,
+        message=r"\['adapter', 'adapter.input_gen.input_gen.ram_style'\] are not declared.*again",
+        tensor="levels",
     ):
         network(model, model.graph.node)
 

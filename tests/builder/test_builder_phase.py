@@ -1060,7 +1060,7 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
         f"MatMul_{index}.compute": "packed" for index in range(4)
     }
     assert (target["unfolded"], target["met"]) == ({}, True)
-    # Of TFC's 73 choices, every one saved: the target throughput changes the folding off
+    # Of TFC's 69 choices, every one saved: the target throughput changes the folding off
     # conversion's (6 of 12); the output adapter the new folding brings into play on five
     # channels is placed, no choice, so the interim channel rule sets none; the rest keep
     # the values stored at their creation (a node's at conversion, a channel's at the cut),
@@ -1072,7 +1072,7 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
         made_by.count("target_throughput"),
         made_by.count("interim channel rule"),
         made_by.count("saved"),
-    ) == (6, 0, 67)
+    ) == (6, 0, 63)
     assert report["open"] == []
     assert report["fifos"] == "not sized here (no size_fifos): each transport as it was"
     # The Zynq shell's input mover binds: 196 beats and a call's 4 cycles (SZ3 (a): a
@@ -1120,9 +1120,9 @@ def test_sizing_fifos_on_tfc_places_none_and_changes_no_choice(
     assert sizing["reopened"] == 13
     assert report["fifos"] == "sized by size_fifos: 13 channels, 0 FIFOs placed"
     # The movers change no choice: TFC is built with the 57 values of the build before the
-    # engine core, and the 16 forcing left unstored (``TFC_STORED``).
+    # engine core, and the 12 forcing left unstored (``TFC_STORED``).
     assert sized == TFC_STORED
-    assert sum(map(len, TFC_BUILT.values())) == 57 and sum(map(len, sized.values())) == 73
+    assert sum(map(len, TFC_BUILT.values())) == 57 and sum(map(len, sized.values())) == 69
     rows = sizing["channels"]
     assert {row["transport"] for row in rows.values()} == {"direct"}
     whys = {name: row["why"] for name, row in rows.items()}

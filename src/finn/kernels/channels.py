@@ -23,8 +23,13 @@ carries it, ``channel-padding``). A channel runs, in order:
 
 The steps split at the transport: their output side (width conversions) is the
 ``output_adapter``, the ``vpc`` chain placed where they convert a width, their input side
-(a reorder, replay included, and markers) the ``adapter`` selector over fixed chains
-(``finn.kernels.adapters``). The ``transport`` selector is ``direct``, which places
+(a reorder, replay included, and markers) the ``adapter``, the fixed chain
+(``finn.kernels.adapters``) its steps take, picked by them (``input_chain``): ``none``
+where nothing happens after the transport, refused where no FinnLib chain carries them
+out (``adapter-plan``). Its input generators share one memory style, the channel's choice
+(``adapter_ram_style``), ranked by the most bits one of them holds a frame
+(``adapter_ram_preference``), in UltraRAM only where the platform has it
+(``adapter_uram_present``). The ``transport`` selector is ``direct``, which places
 nothing, or ``fifo``; the FIFO owns its ``depth`` (the cut's policy requires it: an
 exploration sizes it, ``finn.kernels.cut``) and its ``ram_style``, and carries data words
 only (``fifo-markers``). Its keys are the channel's, by its name (``("x", "transport")``).
@@ -90,10 +95,11 @@ from finn.dataflow.traversal import BeatSequence, Traversal, period, unreplayed
 from finn.kernels.adapters import (
     ADAPTERS,
     OUTPUT_ADAPTER,
+    InputAdapter,
     RealizedStage,
     Stage,
     StageStreams,
-    StreamAdapter,
+    realize,
 )
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import CLOCK, RESET, Bus, Endpoint
@@ -123,6 +129,7 @@ from finn.kernels.transport import (
     marker_bit,
     marker_pairs,
 )
+from finn.kernels.utilization import memory_preference, memory_styles, uram_constraint
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
@@ -654,10 +661,51 @@ class Channel(KernelSpace):
         fifo=ChannelFifo(tensor=tensor, arriving=arriving, platform=platform),
     )
 
-    adapter: StreamAdapter = Select(
-        **ADAPTERS, when=adapting, tensor=tensor, steps=input_steps, platform=platform
+    @derived
+    def input_chain(self) -> str | Rejected:
+        """The chain its input adapter places (an ``ADAPTERS`` key): the kinds of the
+        stages that carry out the steps after the transport (``realize``), joined, or
+        ``none`` where it does not adapt. Refused where the steps are (``channel-plan``),
+        or where no FinnLib chain carries them out (``adapter-plan``)."""
+        if not self.adapting:
+            return "none"
+        try:
+            realization = realize(self.input_steps)
+        except Unrealizable as error:
+            return reject("adapter-plan", f"no FinnLib chain carries out the plan: {error}")
+        return "_".join(stage.kind for stage in realization)
+
+    @derived
+    def adapter_placed(self) -> bool:
+        """Whether its input adapter places a chain: ``input_chain`` names one."""
+        return self.input_chain != "none"
+
+    # The one memory style of its input adapter's generators, present where it places a
+    # chain; given to every chain, which gives it to each of its input generators.
+    adapter_ram_style: str = Decision(domain=memory_styles(), when=adapter_placed)
+    adapter_uram_present = uram_constraint(
+        platform, adapter_ram_style, ("ultra",), when=adapter_placed
     )
-    adapter_stages = View(adapter.stages)
+
+    adapter: InputAdapter | None = Select(
+        by=input_chain,
+        none=None,
+        **ADAPTERS,
+        tensor=tensor,
+        steps=input_steps,
+        platform=platform,
+        ram_style=adapter_ram_style,
+    )
+    adapter_stages = View(adapter.stages)  # type: ignore[union-attr]
+
+    @view(when=adapter_placed)
+    def adapter_ram_preference(self) -> tuple[str, ...]:
+        """Its adapter's memory styles in its preference for the most bits one of its
+        input generators holds a frame (the picked chain's ``frame_bits``,
+        ``memory_preference``): the ranking a first valid policy may follow."""
+        adapter = self.adapter
+        bits: int = 0 if adapter is None else adapter.frame_bits
+        return memory_preference(bits)
 
     @derived
     def staged(self) -> tuple[StageStreams, ...]:
@@ -671,8 +719,9 @@ class Channel(KernelSpace):
         fifo = self.transport
         if fifo is not None:
             found += _below("transport", fifo.stage_streams)
-        if self.adapting:
-            found += _below("adapter", self.adapter.stage_streams)
+        adapter = self.adapter
+        if adapter is not None:
+            found += _below("adapter", adapter.stage_streams)
         return tuple(found)
 
     @view
@@ -686,8 +735,9 @@ class Channel(KernelSpace):
         fifo = self.transport
         if fifo is not None:
             found += _below_stages("transport", fifo.stages)
-        if self.adapting:
-            found += _below_stages("adapter", self.adapter.stages)
+        adapter = self.adapter
+        if adapter is not None:
+            found += _below_stages("adapter", adapter.stages)
         return tuple(found)
 
     @constraint

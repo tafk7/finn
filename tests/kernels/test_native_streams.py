@@ -43,7 +43,11 @@ def test_loop_markers_remain_native_even_when_one_bit():
     _, replayed = nested(6, (3, 6), (0, 1))
     for leaving, loops in ((framed, 1), (replayed, 2)):
         node = InputGeneratorKernel(
-            input_tensor=tensor, arriving=once, leaving=leaving, platform=FULL_DSP48E2
+            input_tensor=tensor,
+            arriving=once,
+            leaving=leaving,
+            platform=FULL_DSP48E2,
+            ram_style="auto",
         )
         output = port_transport(design_space(node), "output")
         assert output.markers == (StreamMarker("olst", MarkerKind.LOOP_END, loops),)

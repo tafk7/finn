@@ -157,8 +157,8 @@ def input_gen() -> dict[str, Any]:
             generating(vector_major(STAGED, 2), columns_first(rows, cols, 2)),
             generating(vector_major(STAGED, 3), vector_major(STAGED, 3).replayed(2, inner_beats=2)),
         ),
-        choices={"ram_style": "auto"},
-        facts={"platform": FULL_DSP48E2},
+        # Its memory style is given (on a channel, the channel's one adapter style).
+        facts={"platform": FULL_DSP48E2, "ram_style": "auto"},
     )
 
 
@@ -201,14 +201,6 @@ INPUT_GEN = KernelSpec(
     reference=TEST_SIDE,
     cases={"input_gen": input_gen},
     space="input_gen",
-    probes=(
-        Probe(
-            "UltraRAM on a platform without it",
-            lambda: placed(input_gen(), platform=replace(FULL_DSP48E2, uram=False)),
-            frozenset({"uram-absent"}),
-            {"ram_style": "ultra"},
-        ),
-    ),
     sweeps=(ADAPTERS,),
     unit=("tests/kernels/test_input_generator.py", "tests/kernels/test_adapters.py"),
 )

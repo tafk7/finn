@@ -439,11 +439,12 @@ def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
 ) -> None:
     """SR6's two moments on TFC_W2A2: conversion stores each KernelOp's own choices,
     each at its default policy, first valid (44 values on 8 nodes), and no channel's; the
-    cut creates the channels' by the interim channel rule, first valid (29 values on 13
-    tensors: transports, the weights' memories, the input buffers' adapters and memories;
-    the weights' sources and the two boundary movers are placed, no choices), on the body's
-    network, where it binds the nodes' in context: 73 values, the nodes' the same 44 (none
-    dropped), nothing left open."""
+    cut creates the channels' by the interim channel rule, first valid (25 values on 13
+    tensors: transports, the weights' memories, the input buffers' adapters' memories; the
+    weights' sources and the two boundary movers are placed, and the input buffers'
+    adapters picked by their steps, no choices), on the body's network, where it binds the
+    nodes' in context: 69 values, the nodes' the same 44 (none dropped), nothing left
+    open."""
     model = ModelWrapper(str(tfc_streamlined)).transform(ToKernelOps(ULTRA96))
     model = model.transform(InferKernelTensors())
     nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
@@ -457,14 +458,15 @@ def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
     config = kernel_choices_config(body)
     assert {name: config[name] for name in converted} == converted
     channels = {name: held for name, held in config.items() if name not in converted}
-    assert (len(channels), sum(map(len, channels.values()))) == (13, 29)
+    assert (len(channels), sum(map(len, channels.values()))) == (13, 25)
     assert {held["transport"] for held in channels.values()} == {"direct"}
     assert sorted(name for name, held in channels.items() if "source.ram_style" in held) == [
         f"MatMul_{index}_param0" for index in range(4)
     ]
-    assert sorted(name for name, held in channels.items() if "adapter" in held) == [
+    assert sorted(name for name, held in channels.items() if "adapter_ram_style" in held) == [
         f"MultiThreshold_{index}_out0" for index in range(4)
     ]
+    assert not [name for name, held in channels.items() if "adapter" in held]
     assert not [name for name, held in channels.items() if "mover" in held]
     bound = in_shell(body, body.graph.node)
     assert bound.stale == {}

@@ -128,7 +128,7 @@ def test_the_policy_is_offered_every_open_choice_its_possible_values_only() -> N
     assert "w1.source" not in offered
     # Stored, each of them, as any choice.
     stored = {key for node in choices(model).values() for key in node}
-    assert {"compute", "source.ram_style", "adapter", "ultra_stages"} <= stored
+    assert {"compute", "source.ram_style", "adapter_ram_style", "ultra_stages"} <= stored
 
 
 def test_a_refused_case_is_never_picked_even_when_preferred() -> None:
@@ -188,17 +188,17 @@ def adapter_memories(model: ModelWrapper) -> dict[str, object]:
         f"{owner}.{key}": value
         for owner, saved in choices(model).items()
         for key, value in saved.items()
-        if key.startswith("adapter.") and key.endswith(".ram_style")
+        if key == "adapter_ram_style"
     }
 
 
 def test_an_adapter_memory_is_never_ultra_without_ultraram() -> None:
-    # Ultra96 has no UltraRAM: an adapter's input_gen is never offered ultra, so a
-    # policy that prefers it does not get it.
+    # Ultra96 has no UltraRAM: an adapter's memory (its channel's one style for its
+    # input_gen stages) is never offered ultra, so a policy that prefers it does not get it.
     policy = Recording(PreferUltra())
     ultra96 = kernel_model().transform(ranked(policy))
     offered = {dotted(choice.key): choice.cases or () for choice in policy.offered}
-    adapters = [cases for key, cases in offered.items() if ".adapter." in key]
+    adapters = [cases for key, cases in offered.items() if key.endswith(".adapter_ram_style")]
     assert adapters and all("ultra" not in cases for cases in adapters)
     memories = adapter_memories(ultra96)
     assert memories and "ultra" not in memories.values()

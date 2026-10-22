@@ -119,20 +119,21 @@ def test_a_node_choice_under_a_case_not_selected_is_kept_out_of_play_and_saved()
     assert not again.stale and again.chosen() == first.chosen()
 
 
-def test_a_channel_choice_under_an_adapter_not_selected_is_kept_out_of_play_and_saved() -> None:
-    """The levels edge's input adapter is ``input_gen``; a memory of the
-    ``input_gen_vpc`` chain, written on its tensor past the writer, is out of play: the
-    network keeps it, dormant, nothing stale, and saving writes it beside the edge's own
-    choices: bound again, the same."""
+def test_a_channel_choice_under_no_input_adapter_is_kept_out_of_play_and_saved() -> None:
+    """The hidden edge's steps place no input adapter (``input_chain`` is ``none``); its
+    adapter's memory, written on its tensor past the writer, is out of play: the network
+    keeps it, dormant, nothing stale, and saving writes it beside the edge's own choices:
+    bound again, the same."""
     model = kernel_model()
-    key = "adapter.input_gen_vpc.input_gen.ram_style"
-    model.set(CHANNEL_KEYS[key], "auto", tensor="levels")
+    key = "adapter_ram_style"
+    model.set(CHANNEL_KEYS[key], "auto", tensor="hidden")
     first = bound(model)
     assert not first.stale
-    assert dict(first.states(["levels"]))[("levels", key)] == inspection.Dormant("auto")
-    held = {name: value for (_, name), value in first.chosen(["levels"]).items()}
-    assert held[key] == "auto" and persist(model, first)["levels"] == held
-    assert channel_choices(model, "levels")[key] == "auto"
+    assert first.member("hidden").input_chain == "none"
+    assert dict(first.states(["hidden"]))[("hidden", key)] == inspection.Dormant("auto")
+    held = {name: value for (_, name), value in first.chosen(["hidden"]).items()}
+    assert held[key] == "auto" and persist(model, first)["hidden"] == held
+    assert channel_choices(model, "hidden")[key] == "auto"
     again = bound(model)
     assert not again.stale and again.chosen() == first.chosen()
 

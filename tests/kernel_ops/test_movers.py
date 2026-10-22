@@ -388,13 +388,14 @@ def test_tfc_with_ultra96_s_movers_at_1e6_fps_names_its_input_mover(tfc: ModelWr
     model, report = explored(tfc, 1e6, sizing=True)
     # The movers change no other choice: persisted alike, each MatMul's pumping off on both
     # (the doubled clock is the shell's, admitted by its root, and no kernel reads it off
-    # the platform); 73 values on 8 nodes and 13 tensors, no boundary's mover among them
-    # (placed on the Zynq shell, no choice; absent on ip).
+    # the platform); 69 values on 8 nodes and 13 tensors, no boundary's mover among them
+    # (placed on the Zynq shell, no choice; absent on ip), nor an input adapter (picked by
+    # its steps).
     assert kernel_choices_config(model) == kernel_choices_config(ip_model)
     values = built(model)
     assert built(ip_model) == values
     assert all(values[name].items() >= pumping(name).items() for name in values)
-    assert (len(values), sum(map(len, values.values()))) == (21, 73)
+    assert (len(values), sum(map(len, values.values()))) == (21, 69)
     assert not [name for name, held in values.items() if "mover" in held]
     # The input mover at max(196, 49) + 4 and the output mover at max(10, 5) + 4, the
     # partition at its 196; the budget of 200 is met, nothing relaxed.

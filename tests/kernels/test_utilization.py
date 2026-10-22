@@ -250,15 +250,19 @@ def table(elements: int) -> Any:
     )
 
 
-def buffer(frame_words: int) -> Any:
+def buffer(frame_words: int, ram_style: str) -> Any:
     """An input generator streaming a frame of 32-bit words once, closing each frame (its
-    nest: the frame, once), its style open."""
+    nest: the frame, once), its memory in ``ram_style``: given, its channel's one style."""
     tensor = stage_tensor(32, frame_words)
     arriving = in_order(tensor)
     framed = BeatSequence(arriving.form, markers=(LevelEnd(frame_words),))
     return design_space(
         InputGeneratorKernel(
-            input_tensor=tensor, arriving=arriving, leaving=framed, platform=FULL_DSP48E2
+            input_tensor=tensor,
+            arriving=arriving,
+            leaving=framed,
+            platform=FULL_DSP48E2,
+            ram_style=ram_style,
         )
     )
 
@@ -303,20 +307,18 @@ def ranking(point: Any, kernel: Any) -> tuple[str, ...]:
 
 def test_each_memory_ranks_its_explicit_styles_by_size_then_auto() -> None:
     """Block RAM first from ``BLOCK_FIRST_BITS`` held, LUTRAM first below, UltraRAM after
-    both, and ``auto`` last: a memstream's table (its contents, whatever the folding),
-    an input generator's buffer (a frame, the most it holds) and a transpose's pages, each
-    its kernel's ranking, a view (``ram_preference``) a first valid policy may name. Its
-    domain lists the styles in one order, whatever the size: no domain ranks them."""
+    both, and ``auto`` last: a memstream's table (its contents, whatever the folding) and
+    a transpose's pages, each its kernel's ranking, a view (``ram_preference``) a first
+    valid policy may name (an input generator's buffer is ranked by its channel,
+    ``test_adapters.py``). Its domain lists the styles in one order, whatever the size: no
+    domain ranks them."""
     assert BLOCK_FIRST_BITS == 8192 == 2048 * 4 == 256 * 32 == 2 * 32 * 32 * 4
     assert ranking(table(2047), MemStreamKernel) == LUTRAM_FIRST
     assert ranking(table(2048), MemStreamKernel) == BLOCK_FIRST
-    assert ranking(buffer(255), InputGeneratorKernel) == LUTRAM_FIRST
-    assert ranking(buffer(256), InputGeneratorKernel) == BLOCK_FIRST
     assert ranking(pages(32, 32).member("shuffle"), TransposeKernel) == BLOCK_FIRST
     assert ranking(pages(16, 32).member("shuffle"), TransposeKernel) == LUTRAM_FIRST
     for point, decision in (
         (table(2048), MemStreamKernel.ram_style),
-        (buffer(256), InputGeneratorKernel.ram_style),
         (pages(32, 32).member("shuffle"), TransposeKernel.ram_style),
     ):
         assert cases(point, decision) == LUTRAM_FIRST
@@ -330,7 +332,7 @@ def test_each_memory_ranks_its_explicit_styles_by_size_then_auto() -> None:
     "memory_point",
     [
         lambda: table(16).with_choices(ram_style="auto", pumped_memory=False),
-        lambda: buffer(16).with_choices(ram_style="auto"),
+        lambda: buffer(16, "auto"),
         lambda: transposed(16, 32, 4, ram_style="auto").member("shuffle"),
     ],
     ids=("memstream", "input_gen", "transpose"),

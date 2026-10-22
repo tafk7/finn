@@ -623,7 +623,7 @@ def test_a_held_choice_a_change_would_put_out_of_play_or_derive_again_refuses_th
     explorer, base = seam()
     # The activations' adapter memory: a folding of four lanes a side needs no adapter,
     # so the change puts its stored style out of play, kept; held, the change is refused.
-    style = ("x", "adapter.input_gen.input_gen.ram_style")
+    style = ("x", "adapter_ram_style")
     folding = keyed({"first.simd": 4, "first.pe": 4})
     unheld = explorer.set(base, folding)
     assert isinstance(unheld, Accepted) and not unheld.rederived
@@ -635,7 +635,7 @@ def test_a_held_choice_a_change_would_put_out_of_play_or_derive_again_refuses_th
     assert (key, found.code, found.owner) == (
         style,
         "held",
-        "x.adapter.input_gen.input_gen.ram_style",
+        "x.adapter_ram_style",
     )
     assert found.message == "held to 'distributed', put out of play (dormant) by the change"
     del explorer.held[style]
@@ -739,18 +739,22 @@ def test_a_held_channel_choice_a_rebuild_would_derive_again_refuses_the_change()
 
 
 def test_a_choice_a_rebuild_brings_into_play_is_the_interim_rule_s_not_the_strategy_s() -> None:
-    """A fold that brings a channel's choice into play (an adapter its kernel's narrower
-    folding needs) leaves it to the network's rebuild, the interim channel rule: the
-    strategy sets by its policy only the choices under a selector it reopened."""
+    """A fold that brings a channel's choice into play (the memory of the adapter its
+    kernel's narrower folding needs, which the steps pick) leaves it to the network's
+    rebuild, the interim channel rule: the strategy sets by its policy only the choices
+    under a selector it reopened."""
     explorer = held(Seam(FULL_DSP48E2))
     folding_ = {"first.pe": 4, "first.simd": 4}
     wide = with_defaults(choose(chain.network(), {"first.compute": "packed", **folding_}))
-    assert isinstance(state(wide, "x.adapter"), inspection.Absent)
+    assert wide.member("x").input_chain == "none"
+    assert isinstance(state(wide, "x.adapter_ram_style"), inspection.Absent)
     folded = TargetCycles(48).explore(explorer, wide)
     assert folding(explorer, folded)["first.simd"] == 1
-    assert chosen(explorer, folded)["x.adapter"] == "input_gen"
+    assert folded.member("x").input_chain == "input_gen"
+    style = chosen(explorer, folded)["x.adapter_ram_style"]
     (run,) = explorer.runs
     assert run.by_policy == {} and run.unset == {}
+    assert run.interim == {("x", "adapter_ram_style"): style}
 
 
 def test_a_strategy_reopens_its_scope_and_keeps_what_it_does_not_decide() -> None:

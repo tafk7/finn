@@ -311,8 +311,8 @@ def test_the_cores_do_not_wait_on_the_source():
 def test_the_sources_choices_round_trip_through_another_network():
     point = configured(base(weights=WEIGHTS), style="block")
     saved = point.chosen()
-    # Every choice is stored: the source's and the adapter too, set where the network
-    # builds their channels (the interim channel rule).
+    # Every choice is stored: the source's and the adapter's memory too, set where the
+    # network builds their channels (the interim channel rule).
     assert sorted(f"{owner}.{key}" for owner, key in saved) == [
         "matmul.compute",
         "matmul.compute.packed.compute_pumping",
@@ -322,8 +322,7 @@ def test_the_sources_choices_round_trip_through_another_network():
         "w.source.pumped_memory",
         "w.source.ram_style",
         "w.transport",
-        "x.adapter",
-        "x.adapter.input_gen.input_gen.ram_style",
+        "x.adapter_ram_style",
         "x.transport",
         "y.transport",
     ]

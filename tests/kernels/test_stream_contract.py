@@ -25,7 +25,7 @@ from support.tiled_mvu import MH, MW, NF, PE_T, SF, SIMD_T, R, T
 from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import pack_lanes, stream_through
-from finn.core.space import Rejected, Unresolved, design_space
+from finn.core.space import Rejected, Unresolved, design_space, inspection
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
@@ -261,8 +261,9 @@ def eltwise_with_constant(form=None):
     return with_direct_transports(constant_network(form))
 
 
-def constant_network(form=None):
-    """``eltwise_with_constant``'s network, its transports open."""
+def constant_network(form=None, *, adaptable=False):
+    """``eltwise_with_constant``'s network, its transports open, its constant's channel
+    admitting an adapter where ``adaptable``."""
     form = vector_major((CHANNELS,), PE) if form is None else form
     int4, int5 = DataType["INT4"], DataType["INT5"]
 
@@ -280,7 +281,7 @@ def constant_network(form=None):
             ),
             "c": wire(
                 tensor=c_tensor,
-                adaptable=False,
+                adaptable=adaptable,
                 producer=Interface("rhs", "output_contract"),
                 consumer=Interface("add", "rhs_contract"),
                 platform=FULL_DSP48E2,
@@ -330,6 +331,36 @@ def test_the_delivery_kernel_serves_a_second_consumer_through_the_same_contract(
     ((rule, (form,)),) = trial.refused.items()
     assert (rule, form.code) == (("c", "compatible"), "channel-form")
     assert "another lane axis" in form.message
+
+
+def test_steps_that_refuse_refuse_the_input_adapter_once():
+    # The same lane regroup on a channel that admits adapters: its steps refuse
+    # (channel-plan), so the picker of its input adapter refuses with them, one piece keyed
+    # by the selector, as the guard of the chosen selector it replaces did; and its
+    # adapter's memory and that memory's UltraRAM rule, which the picker guards, one
+    # guard piece each.
+    strided = constant_network(
+        Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),)), adaptable=True
+    )
+    validity = inspection.validity(strided.member("c"))
+    assert validity.status == "refused"
+    pieces = {
+        piece.owner: {(f.code, f.owner) for f in piece.result.findings} for piece in validity.pieces
+    }
+    steps = ("channel-plan", "steps")
+    assert pieces == {
+        "realizable": {steps},
+        "compatible": {steps},
+        **{
+            guarded: {steps, ("guard-refused", guarded)}
+            for guarded in (
+                "adapter",
+                "output_adapter",
+                "adapter_ram_style",
+                "adapter_uram_present",
+            )
+        },
+    }
 
 
 def test_a_pure_lane_permutation_is_realized_as_free_wiring():

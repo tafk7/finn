@@ -44,6 +44,7 @@ from finn.kernels.adapters import Convert, realize
 from finn.kernels.channels import Channel, ChannelFifo, OuterHops
 from finn.kernels.configure import chosen
 from finn.kernels.library import library_module
+from finn.kernels.utilization import memory_preference
 from finn.kernels.vpc import VpcKernel
 
 
@@ -128,35 +129,100 @@ def test_another_lane_axis_regroups_through_the_common_lane_count():
     ]
 
 
-BOTH = {"x.output_adapter": "vpc", "x.adapter": "input_gen"}
-
-
-def test_exactly_one_candidate_a_side_carries_out_its_steps():
-    for source, pe, sides, placed in (
-        (vector_major((ROWS, CHANNELS), 4), 2, {}, True),
-        (columns_first(ROWS, CHANNELS, 4), 4, {"x.adapter": "input_gen"}, False),
-        (columns_first(ROWS, CHANNELS, 4), 2, {"x.adapter": "input_gen"}, True),
+def test_exactly_one_chain_a_side_carries_out_its_steps():
+    for source, pe, chain, placed in (
+        (vector_major((ROWS, CHANNELS), 4), 2, "none", True),
+        (columns_first(ROWS, CHANNELS, 4), 4, "input_gen", False),
+        (columns_first(ROWS, CHANNELS, 4), 2, "input_gen", True),
     ):
         x = adapted(source, pe).member("x")
         # The output side's one chain is placed where its steps convert a width; the input
-        # side's one chain that carries out its steps is its first valid value, set as the
-        # network builds the channel (the interim channel rule).
-        adapters = {key: value for key, value in chosen(x).items() if key.endswith("adapter")}
-        assert {f"x.{key}": value for key, value in adapters.items()} == sides
+        # side's is picked by its steps (``input_chain``, the kinds ``realize`` takes,
+        # joined), ``none`` where nothing happens after the transport.
+        assert x.input_chain == chain
         assert x.output_adapting == placed
-    # Every other candidate refuses its side's steps: possible values, one.
-    (adapter,) = inspection.viable(x, [handle(x, "adapter")])
-    assert adapter.cases == ("input_gen",)
-    assert all(
-        "adapter-plan" in {finding.code for rule in item.broken for finding in rule.result.findings}
-        for item in adapter.values or ()
-        if isinstance(item, inspection.Refused)
+        # Where the picker answers, it places a chain exactly where the channel adapts.
+        assert x.adapter_placed == x.adapting == (chain != "none")
+        # Neither is a choice: no chain is listed, so none is tried.
+        assert not {"adapter", "output_adapter"} & {item.key for item in inspection.decisions(x)}
+        assert ("adapter_ram_style" in chosen(x)) == (chain != "none")
+
+
+def _channel(source, sink, shape, platform=FULL_DSP48E2):
+    """A channel between two kernels' streams, ``source`` produced and ``sink`` consumed
+    (``BeatSequence``s of a ``shape`` tensor), as a network binds it (``Interface``),
+    alone."""
+    return design_space(
+        Channel(
+            tensor=Tensor(shape, ELEMENT),
+            producer=Stream(ELEMENT, source),
+            consumer=Stream(ELEMENT, sink),
+            producer_label="producer.y",
+            consumer_label="consumer.x",
+            producer_width=ELEMENT.bits * source.form.lanes,
+            platform=platform,
+        )
     )
-    # Setting another is refused by the rule it breaks.
-    report = x.try_with_choices({handle(x, "adapter"): "input_gen_vpc"})
+
+
+def test_steps_no_finnlib_chain_carries_out_refuse_the_input_adapter_once():
+    """Steps that exist, which no FinnLib chain carries out (a frame closed every 6 beats
+    and every 4: no input_gen level closes every 4 beats of a nest of 6): the picker
+    refuses with ``adapter-plan`` and the text its chains gave, one piece keyed
+    ``adapter``. The style and its UltraRAM rule, guarded by the picker's answer, are not
+    in play: each one guard piece beside it."""
+    form = vector_major((12,), 1)
+    x = _channel(BeatSequence(form), BeatSequence(form, markers=(LevelEnd(4), LevelEnd(6))), (12,))
+    assert x.steps.input.kinds == (Step.MARKERS,)
+    assert x.adapting
+    validity = inspection.validity(x)
+    assert validity.status == "refused"
+    pieces = {
+        piece.owner: {(f.code, f.owner, f.message) for f in piece.result.findings}
+        for piece in validity.pieces
+    }
+    why = (
+        "adapter-plan",
+        "input_chain",
+        "no FinnLib chain carries out the plan: no input_gen level closes every 4 beats",
+    )
+    (adapter,) = [owner for owner in pieces if owner.split(".")[0] == "adapter"]
+    assert adapter == "adapter"
+    assert pieces == {
+        owner: {why, ("guard-refused", owner, "its guard reads a refused input")}
+        for owner in ("adapter", "adapter_ram_style", "adapter_uram_present")
+    }
+    assert dict(inspection.states(x))["adapter_ram_style"] == inspection.Absent()
+
+
+def test_the_input_adapter_s_one_style_is_ranked_by_its_largest_frame():
+    """A reorder, new lanes, then markers: two input generators, one style, the channel's
+    (``adapter_ram_style``), given to both; ranked by the most bits one of them holds a
+    frame (``adapter_ram_preference``: the picked chain's ``frame_bits``)."""
+    x = _channel(
+        BeatSequence(columns_first(6, 4, 1)),
+        BeatSequence(vector_major((6, 4), 2), markers=(LevelEnd(2),)),
+        (6, 4),
+    )
+    assert x.input_chain == "input_gen_vpc_input_gen"
+    adapter = x.adapter
+    held = (adapter.input_gen.frame_bits, adapter.input_gen_1.frame_bits)
+    assert adapter.frame_bits == max(held)
+    assert x.query(Channel.adapter_ram_preference).value == memory_preference(max(held))
+    assert x.query(Channel.adapter_ram_preference).value[0] == "distributed"
+    styled = x.with_choices(adapter_ram_style="block")
+    assert styled.adapter.input_gen.ram_style == styled.adapter.input_gen_1.ram_style == "block"
+    # Its UltraRAM rule is the channel's: a generator states none of its own.
+    lacking = _channel(
+        BeatSequence(columns_first(6, 4, 1)),
+        BeatSequence(vector_major((6, 4), 2), markers=(LevelEnd(2),)),
+        (6, 4),
+        platform=replace(FULL_DSP48E2, uram=False),
+    )
+    report = lacking.try_with_choices({handle(lacking, "adapter_ram_style"): "ultra"})
     assert not report.accepted
-    assert {finding.code for rule in report.broken for finding in rule.result.findings} == {
-        "adapter-plan"
+    assert {(rule.rule, f.code) for rule in report.broken for f in rule.result.findings} == {
+        ("adapter_uram_present", "uram-absent")
     }
 
 
@@ -314,8 +380,8 @@ def test_a_channel_s_rules_and_its_fifo_read_the_values_its_views_present(
 
 
 def test_a_channel_s_cost_waits_on_no_memory_style():
-    # The adapter's input_gen memory cleared, open: cost does not read it.
-    memory = ("x", "adapter.input_gen.input_gen.ram_style")
+    # The adapter's memory cleared, open: cost does not read it.
+    memory = ("x", "adapter_ram_style")
     point = adapted(columns_first(ROWS, CHANNELS, 4), 4).trial({}, (memory,)).network
     assert memory in point.undecided()
     # Nine beats a frame through the input_gen, which holds its buffer of 4 x 4-bit

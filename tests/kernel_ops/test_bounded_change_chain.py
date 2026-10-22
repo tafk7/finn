@@ -6,7 +6,7 @@ Stage 7's synthetic chain (four MatMuls, each followed by a Thresholding, and th
 channels between them) joined as one Space, kernels first, its choices committed as
 conversion and the cut set them (each kernel's by its default policies, each channel's
 by the interim channel rule). The engine's walk (``support.space_walk``) applies seeded
-changes to it: a kernel's core, its folding, a channel's adapter or depth, a clear, a
+changes to it: a kernel's core, its folding, a channel's memory or depth, a clear, a
 pair of changes, and ones the kernels refuse; each successor is compared with a
 configuration of the same assignments built from nothing. Here a channel's facts read
 its kernel's ``compute``, as the engine's own examples do in
@@ -104,7 +104,7 @@ def whole_space(layers: int) -> Space:
 
 def test_eight_kernels_answer_as_a_recomputation() -> None:
     # Few steps: each recomputes the base and the successor from nothing, ~0.7 s on this
-    # chain. Seed 17 accepts, refuses, clears, pairs and puts a stored choice dormant.
-    report = walk(whole_space(4), seed=17, steps=20, everything=False)
+    # chain. Seed 1 accepts, refuses, clears, pairs and puts a stored choice dormant.
+    report = walk(whole_space(4), seed=1, steps=20, everything=False)
     check(report)
     assert report.tallies.dormant, report.tallies

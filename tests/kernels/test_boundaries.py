@@ -142,8 +142,7 @@ for memory in ("none", "memstream"):
         ("x", "transport"): "direct",
         ("w", "transport"): "direct",
         ("y", "transport"): "direct",
-        ("x", "adapter"): "input_gen",
-        ("x", "adapter.input_gen.input_gen.ram_style"): "auto",
+        ("x", "adapter_ram_style"): "auto",
     }
     if memory == "memstream":
         choices |= {

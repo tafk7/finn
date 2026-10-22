@@ -101,7 +101,7 @@ def test_the_seam_reads_each_member_by_name() -> None:
     """Cost and refusals read the network's members by name, and a change checks the
     members its keys belong to. A kernel's cycles are known from conversion on (its own
     choices set by conversion's policies); a channel's resources wait on its open choices
-    (its transport, its adapter) on a body no cut created."""
+    (its transport, its adapter's memory) on a body no cut created."""
     explorer, network = seam_of(kernel_model())
     cost = explorer.cost(network)
     assert set(cost.waiting) | set(cost.cycles) == set(network.members)
@@ -109,7 +109,7 @@ def test_the_seam_reads_each_member_by_name() -> None:
     # Each finding is owned in its member's space; the member names it.
     assert {(f.code, f.owner) for f in cost.unstated["levels"]} == {
         ("decision-unassigned", "transport"),
-        ("decision-unassigned", "adapter"),
+        ("decision-unassigned", "adapter_ram_style"),
     }
     hidden = explorer.cost(network, ("hidden",))
     assert {*hidden.cycles, *hidden.waiting} == {"hidden"}
@@ -204,7 +204,7 @@ def test_resources_are_a_total_only_once_every_member_states_them() -> None:
     assert cost.used is None and set(cost.resources) == {"first", "activate", "second"}
     assert {(f.code, f.owner) for f in cost.unstated["x"]} == {
         ("decision-unassigned", "transport"),
-        ("decision-unassigned", "adapter"),
+        ("decision-unassigned", "adapter_ram_style"),
     }
     assert "activate" not in cost.unstated
     based = seam.cost(seam_of(cut_model())[1])
@@ -687,7 +687,7 @@ def test_tfc_at_a_million_frames_a_second_is_saved_as_the_57_values_it_is_built_
 ) -> None:
     """TFC's body explored by target_throughput 1e6, then size_fifos, saves the 57 values
     it was built with when exploration left choices open and a completion policy
-    completed them on a copy (``TFC_BUILT``), and the 16 conversion and the cut now store
+    completed them on a copy (``TFC_BUILT``), and the 12 conversion and the cut now store
     beside them, which forcing left unstored (``TFC_STORED``, both): the target
     reopens the kernels' choices, folds and gives the rest back; sizing places no FIFO."""
     model = ModelWrapper(tfc.model.__deepcopy__())
@@ -695,7 +695,7 @@ def test_tfc_at_a_million_frames_a_second_is_saved_as_the_57_values_it_is_built_
     report = explore_kernel_choices(model, SizeFifos()).report
     found = kernel_choices_config(model)
     assert found == TFC_STORED
-    assert sum(map(len, TFC_BUILT.values())) == 57 and sum(map(len, found.values())) == 73
+    assert sum(map(len, TFC_BUILT.values())) == 57 and sum(map(len, found.values())) == 69
     sizing = report["strategy"]
     assert (target["by_policy"], target["unset"], target["rederived"]) == ([], {}, {})
     assert (sizing["reopened"], sizing["changed"], sizing["fifo_bits"]) == (13, {}, 0)

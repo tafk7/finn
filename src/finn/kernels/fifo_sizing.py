@@ -334,9 +334,10 @@ def sides(channel: Channel, neighbours: Neighbours) -> tuple[Pattern, Acceptance
     # A width conversion sending more words than its producer has beats spans them: the
     # producer and its conversion are one source, as slow as the slower of the two.
     supply = Pattern(times, max(producer.beats, times[-1] - times[0] + 1))
-    if not channel.adapting:
+    adapter = channel.adapter
+    if adapter is None:
         return supply, consumer
-    stages = channel.adapter.realization
+    stages = adapter.realization
     if len(stages) != 1 or not isinstance(stages[0].module, Generate):
         kinds = " -> ".join(stage.kind for stage in stages)
         raise NotModelled(f"an input adapter of {kinds}: not modelled")

@@ -22,11 +22,11 @@ a channel,
 ``input_gen`` is a stage of the channel's adapter (``finn.kernels.adapters``), which
 gives it the two sides of its step between the channel's two streams. Its cycles are its ports'
 beats, as every leaf's, and its buffering its buffer, ``BUF_SIZE`` input words.
-Its buffer's ``ram_style`` is its choice: the explicit styles, then ``auto``, which states
-no resources (``finn.kernels.utilization.memory_styles``); its ranking,
-``ram_preference``, a view, orders them by the most the buffer can hold (``frame_bits``, a
-frame); ``ultra`` needs the ``platform``'s
-UltraRAM, a constraint of the kernel (``uram-absent``). The buffer starts empty, so no initial
+Its buffer's ``ram_style`` is given: on a channel, the one memory style its channel holds
+for every input generator of its adapter (``finn.kernels.channels.Channel``:
+``adapter_ram_style``, which the channel ranks by the most a buffer can hold,
+``frame_bits``, a frame, and whose UltraRAM it checks); ``auto`` states no resources
+(``finn.kernels.utilization.memory_styles``). The buffer starts empty, so no initial
 contents are asked of it.
 
 What the buffer does is read from the RTL, not copied:
@@ -56,7 +56,6 @@ from typing import TYPE_CHECKING, ClassVar
 from finn import resources
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.space import (
-    Decision,
     Param,
     Rejected,
     constraint,
@@ -79,9 +78,6 @@ from finn.kernels.utilization import (
     Fit,
     auto_unstated,
     memory,
-    memory_preference,
-    memory_styles,
-    uram_constraint,
 )
 from finn.kernels.values.semantics import INTEGER_VECTOR, IntegerVector
 from finn.platform.capabilities import Fabric, Platform, Resources
@@ -202,6 +198,8 @@ class InputGeneratorKernel(KernelSpace):
     arriving: BeatSequence = Param()
     leaving: BeatSequence = Param()
     platform: Platform = Param()
+    # Its buffer's memory style, given: on a channel, the channel's one adapter style.
+    ram_style: str = Param()
 
     @derived
     def output_tensor(self) -> Tensor:
@@ -262,19 +260,10 @@ class InputGeneratorKernel(KernelSpace):
 
     @derived
     def frame_bits(self) -> int:
-        """The most the buffer can hold: a frame's words. Its order reads no ``BUF_SIZE``,
-        which the RTL elaborates and which may be declined (its statement only)."""
+        """The most the buffer can hold: a frame's words. A ranking of its style reads it
+        (its channel's), not ``BUF_SIZE``, which the RTL elaborates and which may be
+        declined (its statement only)."""
         return self.frame_words * self.input_data_width
-
-    ram_style: str = Decision(domain=memory_styles())
-    uram_present = uram_constraint(platform, ram_style, ("ultra",))
-
-    @view
-    def ram_preference(self) -> tuple[str, ...]:
-        """Its buffer's styles in its preference for a frame's bits (``frame_bits``,
-        ``memory_preference``): the ranking a first valid policy may follow."""
-        bits: int = self.frame_bits
-        return memory_preference(bits)
 
     @view
     def buffer_words(self) -> int | Rejected:

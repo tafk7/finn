@@ -109,9 +109,10 @@ def test_the_kernels_and_the_test_support_answer_as_the_line() -> None:
 def test_stage_7s_chain_of_eight_kernels_answers_as_the_line() -> None:
     whole, _ = chain_space(4)
     # The choices compared: each MatMul's folding is its own, not each core's; each
-    # channel's source's two (absent without a value), and no source, mover or output
-    # adapter selector.
-    assert _answers_as_the_line([whole]) == 182
+    # channel's source's two (absent without a value) and its one adapter memory, and no
+    # source, mover or output adapter selector, nor an input adapter's, which its steps
+    # pick.
+    assert _answers_as_the_line([whole]) == 130
 
 
 def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
@@ -143,13 +144,17 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     space before the change: each MatMul's ``compute.int8_dsp58`` case. The first's is read:
     the list of what the change moved (``_assign._moved``) reads, of each choice
     whose presence may read a choice the change sets, its presence after, and before only
-    where that decides a list: ``x.adapter`` is stored and present after, so whether it
-    comes into play reads its presence before, where its guard reads the first MatMul's
-    views, whose validity there reads that case's (its selector still open). The other
+    where that decides a list: ``x.adapter_ram_style`` is stored and present after, so
+    whether it comes into play reads its presence before, where its guard (the picker of
+    the channel's input adapter, ``input_chain``, reading its steps) reads the first
+    MatMul's views, whose validity there reads that case's (its selector still open). The
+    other
     three's port streams are made, not read: each MatMul's served stream (``x_stream``)
     takes its core's through the selector (an argument of each case's), and a channel
-    reads it. A channel's sides' labels are constants (20 of the constant nodes), and it
-    reads no port's contract. Then ``viable`` of the middle MatMul's choices and one change
+    reads it. A channel's sides' labels are constants (20 of the constant nodes), and so is
+    its platform, an input of its adapter memory's UltraRAM rule, which every channel
+    states (5 more: the channels that place no memory, ``h0``-``h3`` and ``y``); it reads
+    no port's contract. Then ``viable`` of the middle MatMul's choices and one change
     of its ``pe``: what trials resolve more (the channels beside it, ``w2`` and ``h2``, read
     its ports' streams and reach none of their adapters' cases)."""
     monkeypatch.delenv(EAGER, raising=False)
@@ -161,8 +166,8 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     assert structure.counts() == {
         "scopes addressed": 225,
         "scopes in play": 42,
-        "nodes resolved": 1320,
-        "const nodes resolved": 96,
+        "nodes resolved": 1383,
+        "const nodes resolved": 101,
     }
     in_play = set(structure._in_play)
     world, before = state(committed).world, state(point).world
@@ -211,14 +216,14 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     assert structure.counts() == {
         "scopes addressed": 225,
         "scopes in play": 46,
-        "nodes resolved": 1417,
-        "const nodes resolved": 96,
+        "nodes resolved": 1478,
+        "const nodes resolved": 101,
     }
     report = committed.try_with_choices({handles["mm2.pe"]: 2})
     assert report.accepted
     assert structure.counts() == {
         "scopes addressed": 225,
         "scopes in play": 46,
-        "nodes resolved": 1417,
-        "const nodes resolved": 96,
+        "nodes resolved": 1478,
+        "const nodes resolved": 101,
     }

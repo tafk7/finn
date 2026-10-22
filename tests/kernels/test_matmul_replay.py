@@ -77,7 +77,8 @@ def test_the_activation_stream_steps_are_the_replay_and_its_frame():
         (0, 1),
     )
     keys = {dotted(key) for key in point.decisions()}
-    assert {"x.adapter", "x.adapter.input_gen.input_gen.ram_style"} <= keys
+    assert stream.input_chain == "input_gen" and "x.adapter_ram_style" in keys
+    assert "x.adapter" not in keys
     assert "replay" not in keys and not hasattr(MatMulKernel, "replayed")
     # A depthwise row passes once: its one step is the frame marker.
     facts = {**FACTS, "platform": FULL_DSP58, "form": Form.DEPTHWISE}

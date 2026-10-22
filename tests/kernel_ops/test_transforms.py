@@ -188,11 +188,7 @@ def test_the_export_of_the_choices_round_trips_through_configured() -> None:
         },
     )
     config = kernel_choices_config(model)
-    adapted = {
-        "adapter": "input_gen",
-        "adapter.input_gen.input_gen.ram_style": "distributed",
-        "transport": "direct",
-    }
+    adapted = {"adapter_ram_style": "distributed", "transport": "direct"}
     weights = {
         "source.pumped_memory": False,
         "source.ram_style": "distributed",

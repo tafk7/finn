@@ -12,8 +12,8 @@ each sample it
    kernel's own (``<port>_tensor``, its statement), and takes the contract it states,
    ``<port>_contract``. It commits the sample's factors and the pinned ``choices``,
    then the kernel's other open choices by their policies (``Placed``) and every
-   channel's by the cut's policies, as the cut sets them (its transport, its adapter chain
-   and the chain's memories).
+   channel's by the cut's policies, as the cut sets them (its transport and its input
+   adapter's memory; the chain its steps pick).
    The module is named ``finn_<kernel>conformance``;
 2. checks each of the kernel's leaves in the module (the kernel, or
    the children of a kernel with children) against its materialized sources

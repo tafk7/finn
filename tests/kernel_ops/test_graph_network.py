@@ -48,6 +48,7 @@ from finn.core.space import Available, inspection
 from finn.custom_op.kernels import shell
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
+from finn.kernels.channels import Channel
 from finn.kernels.explore import Ranked, SizeFifos
 from finn.kernels.network import dotted
 from finn.toolchain.launcher import host_toolchain
@@ -88,8 +89,8 @@ def test_channel_choices_persist_on_their_tensors() -> None:
     levels, and no node holds a channel's choice."""
     model = kernel_model()
     configure_partition(model)
-    assert "adapter.input_gen.input_gen.ram_style" in channel_choices(model, "x")
-    assert "adapter.input_gen.input_gen.ram_style" in channel_choices(model, "levels")
+    assert "adapter_ram_style" in channel_choices(model, "x")
+    assert "adapter_ram_style" in channel_choices(model, "levels")
     attributes = {attribute.name for node in model.graph.node for attribute in node.attribute}
     assert not any(name.startswith(("x.", "w.", "y.")) for name in attributes)
 
@@ -108,20 +109,23 @@ def test_a_refold_that_converts_widths_keeps_the_input_side_s_memory() -> None:
     ]
 
 
-def test_an_edge_choice_under_a_chain_not_taken_is_kept_out_of_play() -> None:
-    """A memory of a chain the levels edge does not take: set or written past the seam,
-    it is kept out of play (dormant), nothing stale, and the adapter the edge takes
-    applies."""
+def test_an_edge_choice_under_no_input_adapter_is_kept_out_of_play() -> None:
+    """The adapter memory of an edge whose steps place no input adapter (hidden): set or
+    written past the seam, it is kept out of play (dormant), nothing stale; the levels
+    edge's adapter is the chain its steps pick, its memory in play."""
     model = kernel_model()
     configure_partition(model)
-    other = {"adapter.input_gen_vpc.input_gen.ram_style": "auto"}
-    configured(model, {"levels": other})
+    configured(model, {"hidden": {"adapter_ram_style": "auto"}})
     bound = network(model, model.graph.node, name="chain")
     assert not bound.stale
-    key = ("levels", "adapter.input_gen_vpc.input_gen.ram_style")
-    assert dict(bound.states(["levels"]))[key] == inspection.Dormant("auto")
+    key = ("hidden", "adapter_ram_style")
+    assert dict(bound.states(["hidden"]))[key] == inspection.Dormant("auto")
+    assert bound.member("hidden").query(Channel.adapter).value == "none"
     levels = bound.member("levels")
-    assert levels.query(type(levels).adapter).value == "input_gen"
+    assert levels.query(Channel.adapter).value == "input_gen"
+    assert isinstance(
+        dict(bound.states(["levels"]))[("levels", "adapter_ram_style")], inspection.Set
+    )
 
 
 def test_a_lifted_initializers_source_choices_are_out_of_play_in_the_partition() -> None:
@@ -248,7 +252,7 @@ def test_members_are_named_as_the_graph() -> None:
         "second",
         "y",
     )
-    assert ("levels", "adapter.input_gen.input_gen.ram_style") in bound.decisions()
+    assert ("levels", "adapter_ram_style") in bound.decisions()
     assert ("second", "pe") in bound.decisions()
 
 
@@ -427,13 +431,13 @@ def test_persist_clears_what_the_network_does_not_hold() -> None:
     """A stored value the bind drops (outside its domain) is cleared by persisting; every
     owner holds what the network holds, out of play (dormant) included."""
     model = kernel_model()
-    model.set(CHANNEL_KEYS["adapter.input_gen_vpc.input_gen.ram_style"], "auto", tensor="levels")
+    model.set(CHANNEL_KEYS["adapter_ram_style"], "auto", tensor="hidden")
     write_raw(model, "first", "pe", 3)
     bound = network(model, model.graph.node, name="chain")
     assert list(bound.stale) == ["first.pe"]
     persist(model, bound)
     assert "pe" not in kernel_op(model, model.graph.node[0]).choices()
-    assert channel_choices(model, "levels")["adapter.input_gen_vpc.input_gen.ram_style"] == "auto"
+    assert channel_choices(model, "hidden")["adapter_ram_style"] == "auto"
     # Every owner holds what the network holds, by graph name and the key there.
     expected: dict[str, dict[str, object]] = {}
     for (owner, key), value in bound.chosen().items():
