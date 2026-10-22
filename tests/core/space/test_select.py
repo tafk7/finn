@@ -252,6 +252,116 @@ def test_a_chosen_selector_under_a_refused_when_is_one_piece() -> None:
     assert [piece.owner for piece in inspection.validity(point).pieces] == ["enough", "heating"]
 
 
+# Reading 8's second half (SZ111): a refused ``when`` below a selector that is still open
+# leaves its piece unknown, waiting on that selector, never counted and never left out:
+# counted once, at the highest such ``when``, keyed as a refused guard's piece. Each wing
+# holds a selector whose own ``when`` refuses at gate 1: chosen, picked by a derived value
+# (its cases then wait through the picker's guard, a chain of guards above the when), or
+# chosen with a case placed under a second refused ``when``. No case holds a rule, so
+# nothing else waits: the engine answered valid before.
+
+
+class _Coil(Space):
+    kw: int = Param()
+    turns: int = Decision(values=(1, 2))
+
+
+class _Pump(Space):
+    kw: int = Param()
+    speed: int = Decision(values=(1, 2))
+
+
+class _Heated(Space):
+    gate: int = Param()
+
+    @derived
+    def heated(self) -> bool | Rejected:
+        return reject("gate-refused", "gate 1 refuses") if self.gate == 1 else True
+
+
+class ChosenWing(_Heated):
+    heating: _Coil | _Pump = Select(coil=_Coil, pump=_Pump, kw=8, when=_Heated.heated)
+
+
+class PickedWing(_Heated):
+    @derived
+    def pick(self) -> str:
+        return "coil"
+
+    heating: _Coil | _Pump = Select(by=pick, coil=_Coil, pump=_Pump, kw=8, when=_Heated.heated)
+
+
+class NestedWing(_Heated):
+    heating: _Coil | _Pump = Select(
+        coil=_Coil(when=_Heated.heated), pump=_Pump, kw=8, when=_Heated.heated
+    )
+
+
+class House(Space):
+    gate: int = Param()
+    wing: ChosenWing | PickedWing | None = Select(
+        chosen=ChosenWing, picked=PickedWing, none=None, gate=gate
+    )
+
+
+class NestedHouse(Space):
+    gate: int = Param()
+    wing: NestedWing | None = Select(nested=NestedWing, none=None, gate=gate)
+
+
+def test_a_refused_when_below_an_open_selector_leaves_validity_open() -> None:
+    point = design_space(House(gate=1))
+    # one unknown piece per wing's selector, waiting on the wing (it answered valid before)
+    assert _pieces(point) == (
+        "open",
+        (
+            ("wing.chosen.heating", (("decision-unassigned", "wing"),)),
+            ("wing.picked.heating", (("decision-unassigned", "wing"),)),
+        ),
+    )
+    # each case, once chosen, refuses once, in its selector's name
+    assert _pieces(design_space(House(gate=0))) == ("valid", ())
+    for case in ("chosen", "picked"):
+        chosen = bind(point, {House.wing: case}).instance
+        assert _pieces(chosen) == (
+            "refused",
+            (
+                (
+                    f"wing.{case}.heating",
+                    (
+                        ("gate-refused", f"wing.{case}.heated"),
+                        ("guard-refused", f"wing.{case}.heating"),
+                    ),
+                ),
+            ),
+        )
+
+
+def test_two_nested_refused_whens_below_an_open_selector_are_one_unknown_piece() -> None:
+    # ``heating``'s own when and its case ``coil``'s, both refused, the wing open: one
+    # piece, unknown, waiting on the wing, keyed by the outer when's owner
+    point = design_space(NestedHouse(gate=1))
+    assert _pieces(point) == (
+        "open",
+        (("wing.nested.heating", (("decision-unassigned", "wing"),)),),
+    )
+    assert _pieces(design_space(NestedHouse(gate=0))) == ("valid", ())
+    # the wing chosen: one refused guard's piece, at the outer when
+    chosen = bind(point, {NestedHouse.wing: "nested"}).instance
+    assert _pieces(chosen) == (
+        "refused",
+        (
+            (
+                "wing.nested.heating",
+                (
+                    ("gate-refused", "wing.nested.heated"),
+                    ("guard-refused", "wing.nested.heating"),
+                ),
+            ),
+        ),
+    )
+
+
 # -- 3. a Select picked by a derived value -------------------------------------------------
 
 

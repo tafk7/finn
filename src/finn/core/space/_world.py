@@ -607,10 +607,14 @@ class World:
                 # constraint does not apply, and the guard's piece stands for it.
                 inactive = INAPPLICABLE
             # A Space's validity under a guard that waits is still its pieces' AND: each
-            # piece inside reads the same guard first and answers unknown.
-            if inactive is not None and not (
-                node.kind == "validity" and isinstance(inactive, Unresolved)
-            ):
+            # piece inside reads the same guard first and answers unknown. Under a ``when``
+            # refused below a guard that waits it waits whole, on what that guard waits on
+            # (reading 8's second half: ``refused_waiting``).
+            evaluated = node.kind == "validity" and isinstance(inactive, Unresolved)
+            if evaluated:
+                top, reads = self.refused_waiting(node.guard, trace, reads)
+                evaluated = top is None
+            if inactive is not None and not evaluated:
                 return Entry(inactive, reads, tuple(trace), _guard_assessment(node, inactive))
         return _FRAMES[node.kind](self, node, trace, reads)
 
@@ -633,7 +637,17 @@ class World:
             reads |= evaluator.bits.bit(selector)
             value = self.values.get(selector)
             return (None if value is None or value.value == case else False), reads
-        if node.output is None:
+        answer, reads = self.condition(node, trace, reads)
+        return (False if isinstance(answer, Available) and answer.value is False else None), reads
+
+    def condition(
+        self, node: Node, trace: list[tuple[NodeId, QueryResult[object]]], reads: ReadSet
+    ) -> tuple[QueryResult[object] | None, ReadSet]:
+        """A ``when`` guard's own condition, read whatever the guard above it answers
+        (``_holds_here``), or ``None`` for a node that is no such guard (a case's guard
+        reads its selector)."""
+        evaluator = self.evaluator
+        if node.kind != "guard" or node.output is None or node.index in evaluator.reads.cases:
             return None, reads
         condition = evaluator.nodes[node.output]
         if (
@@ -646,8 +660,30 @@ class World:
             entry = self._unguarded(condition)
             trace.extend(entry.trace)
             reads |= entry.reads
-        answer = entry.result
-        return (False if isinstance(answer, Available) and answer.value is False else None), reads
+        return entry.result, reads
+
+    def refused_waiting(
+        self, guard: NodeId, trace: list[tuple[NodeId, QueryResult[object]]], reads: ReadSet
+    ) -> tuple[NodeId | None, ReadSet]:
+        """The highest ``when`` guard in the chain of ``guard`` (which waits) refused through
+        an input below a guard that waits, or ``None``: climbing from ``guard`` while each
+        guard above waits, a ``when`` guard whose own condition, read past the guard above
+        it (``condition``), is refused. What it guards waits, on what the guard above it
+        waits on: refused takes effect once all above it holds (reading 8's second half).
+        Where nothing above waits the guard answers refused, and the refused guard's piece
+        counts (``_guard_refused``)."""
+        nodes = self.evaluator.nodes
+        found: NodeId | None = None
+        index = guard
+        while (outer := nodes[index].guard) is not None:
+            answer, reads = self.condition(nodes[index], trace, reads)
+            if isinstance(answer, Rejected):
+                found = index
+            index = outer
+            above, reads = self.read(trace, index, reads)
+            if not isinstance(above.result, Unresolved):
+                break
+        return found, reads
 
     def _unguarded(self, node: Node) -> Entry:
         """``node`` evaluated here as if its own guard held (its frame alone, kept nowhere):
@@ -960,7 +996,10 @@ def _validity(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
 
     A constraint, a choice or a placed Space whose guard is refused through a refused
     input is one guard piece (``guard-refused``, the input's refusal beside), counted
-    once at the highest refused guard of its chain (``_guard_refused``).
+    once at the highest refused guard of its chain (``_guard_refused``). One below a
+    ``when`` refused through an input under a guard that waits is unknown, waiting on what
+    that guard waits on, counted once at the highest such ``when`` (``_guard_waiting``,
+    reading 8's second half: refused takes effect once all above it holds).
 
     A placed Space's piece is read from its guard first (the guard its placing scope
     places it under, a node of this Space's scope or above): where the guard is false or
@@ -994,6 +1033,18 @@ def _validity(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
             continue
         entry, reads = world.read(trace, index, reads)
         answer = cast(QueryResult[bool], entry.result)
+        if isinstance(answer, Unresolved) and piece.guard is not None:
+            if placed is None:
+                guard, reads = world.read(trace, piece.guard, reads)
+            else:
+                guard = placed  # read above, first
+            if isinstance(guard.result, Unresolved):
+                top, reads = world.refused_waiting(piece.guard, trace, reads)
+                if top is not None:
+                    waiting, reads = _guard_waiting(world, piece, top, trace, reads, guards)
+                    if waiting is not None:
+                        answers[waiting[0]] = waiting[1]
+                    continue
         if isinstance(answer, (Inapplicable, Rejected)) and piece.guard is not None:
             if placed is None:
                 guard, reads = world.read(trace, piece.guard, reads)
@@ -1045,15 +1096,46 @@ def _guard_refused(
     return (key, _guard_piece(owner, cast(Rejected, entry.result))), reads
 
 
+def _guard_waiting(
+    world: World,
+    piece: Node,
+    top: NodeId,
+    trace: _Trace,
+    reads: ReadSet,
+    guards: set[NodeId],
+) -> tuple[tuple[str, QueryResult[bool]] | None, ReadSet]:
+    """The piece of ``piece``, below ``top``, a ``when`` refused through an input below a
+    guard that waits (``World.refused_waiting``): unknown, waiting on what the guard above
+    ``top`` waits on, counted once at ``top`` and keyed as ``_guard_refused`` keys a refused
+    guard's piece (by ``top``'s owner where it is a node and not ``piece``'s own guard);
+    ``None`` where ``top`` is counted already."""
+    if top in guards:
+        return None, reads
+    guards.add(top)
+    nodes = world.evaluator.nodes
+    key = piece.key
+    if top != piece.guard:
+        owner = nodes[top].owner
+        if owner in world.evaluator.linked.keys:
+            key = owner
+    above, reads = world.read(trace, cast(NodeId, nodes[top].guard), reads)
+    return (key, cast(QueryResult[bool], above.result)), reads
+
+
 def _choice_piece(
     world: World, piece: Node, trace: _Trace, reads: ReadSet, guards: set[NodeId]
 ) -> tuple[tuple[str, QueryResult[bool]] | None, ReadSet]:
     """A choice's validity piece by key, or ``None`` where it is no piece: a guard
-    refused through an input (``_guard_refused``), else read from its listed values."""
+    refused through an input (``_guard_refused``), or refused below a guard that waits
+    (``_guard_waiting``); else read from its listed values."""
     if piece.guard is not None:
         guard, reads = world.read(trace, piece.guard, reads)
         if isinstance(guard.result, Rejected):
             return _guard_refused(world, piece, piece.owner, trace, reads, guards)
+        if isinstance(guard.result, Unresolved):
+            top, reads = world.refused_waiting(piece.guard, trace, reads)
+            if top is not None:
+                return _guard_waiting(world, piece, top, trace, reads, guards)
     answer, reads = _listed_piece(world, piece, trace, reads)
     return (None if answer is None else (piece.key, answer)), reads
 
