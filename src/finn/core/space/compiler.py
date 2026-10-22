@@ -42,7 +42,6 @@ from .references import ValueHandle, resolve_decision, resolve_reference
 if TYPE_CHECKING:
     from ._running.per_class import PerClass
     from ._structure import Structure
-    from ._world import Evaluator
 
 _OWNER = "space.compiler"
 
@@ -59,9 +58,7 @@ class Model(Generic[S]):
     resolution and every public question about a design space of it take it. Its
     ``per_class`` record is what the running type reads once per model: the inferred
     reads, the flow order, the presence readers and the model's one session, in which every
-    public question runs (``_running.per_class.PerClass``). Its ``evaluator`` is the world
-    engine's (``_world.Evaluator``), which the running type still reads for the per-class
-    questions until the world engine is deleted."""
+    public question runs (``_running.per_class.PerClass``)."""
 
     space_type: type[S]
     linked: Linked
@@ -69,14 +66,11 @@ class Model(Generic[S]):
     _read: dict[tuple[str, int], object] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
-    evaluator: Evaluator = field(init=False, repr=False, compare=False)
     per_class: PerClass = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         from ._running.per_class import PerClass
-        from ._world import Evaluator
 
-        object.__setattr__(self, "evaluator", Evaluator(cast("Model[Space]", self)))
         object.__setattr__(self, "per_class", PerClass(cast("Model[Space]", self)))
 
     @property

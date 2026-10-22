@@ -11,8 +11,8 @@ A Space object that reads values is one of two things:
   demand, one question of that value asked of the running type (``_running.surface``,
   ``_running.questions``) in the model's one session, under the model's lock;
 - **a receiver**, the ``self`` a ``self`` method runs with: it reads through the method's
-  reader (``_world.MethodReader``). Each read is evaluated where the method runs, recorded,
-  and checked against what the method's source may read.
+  reader (``_running.receiver.MethodReader``). Each read is evaluated where the method
+  runs, recorded, and checked against what the method's source may read.
 
 A read of a design space during an authored call is that call's failure (a method reads
 through its receiver), and so is a driver-only operation.
@@ -21,14 +21,6 @@ A change (``try_with_choices``, ``try_with_facts``, ``bind``) normalizes its req
 (``_running.requests``: every form ``with_choices`` takes, as node ids) and asks the
 running type's change or bind. Where that publishes the receiver's own design space, the
 receiver is returned; a refused change returns the receiver too.
-
-**The world engine, until it is deleted.** ``state`` is the world engine's state of the
-design space a Space object holds (``state_of``: the one it published as that object, else
-one rebuilt from its facts and stored choices, kept on the object), and
-``attach`` places a state of the world engine as a Space object holding its design space
-value. The world engine's bodies of the read questions are kept privately, as
-``_world_<question>``, taking the same Space objects, so that the two engines can be asked
-the same question of the same design space.
 """
 
 # Lazy imports break the declaration/compiled-model/evaluation cycle.
@@ -38,39 +30,32 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
-from . import _state
 from ._configuration import BoundDecision, BoundValue, Space
 from ._failure import check_transformation, current, driver_only, fault
-from ._state import State
-from ._world import MethodReader, World
+from ._running.receiver import MethodReader
 from .compiler import Model
 from .declarations import (
     Constraint,
     Declaration,
-    Param,
     ValueRef,
     View,
     declared_path,
 )
 from .edits import Change, ChangeRequest, ConfigurationResult
 from .errors import ConfigurationError, EvaluationError, RequestError
-from .ir import Choice, Linked, NodeId
+from .ir import NodeId
 from .results import (
     Available,
     ConstraintAssessment,
     DecisionState,
-    Inapplicable,
     QueryResult,
-    Unresolved,
     ViewAssessment,
 )
-from .semantics import snapshot
 
 if TYPE_CHECKING:
     from ._running.evaluate import Session
     from ._running.questions import Report
     from ._running.surface import At
-    from ._running.value import DesignSpace
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
@@ -82,7 +67,7 @@ A = TypeVar("A")
 
 def _reader(point: Space) -> MethodReader | None:
     """The method reader ``point`` reads through, where it is a method's receiver."""
-    found = vars(point).get("_state")
+    found = vars(point).get("_held")
     return found if isinstance(found, MethodReader) else None
 
 
@@ -90,7 +75,7 @@ def held(point: Space) -> At:
     """The design space value ``point`` holds, read at its scope."""
     from ._running.surface import At
 
-    found = vars(point).get("_state")
+    found = vars(point).get("_held")
     if not isinstance(found, At):
         if declared_path(point) is not None:
             raise RequestError(
@@ -118,10 +103,7 @@ def model_of(point: Space) -> Model[Space]:
     """The compiled model a design space or a receiver reads."""
     reader = _reader(point)
     if reader is not None:
-        return reader.world.evaluator.model
-    found = vars(point).get("_state")
-    if isinstance(found, State):  # the world engine's, of a table built by hand
-        return found.model
+        return reader.model
     return held(point).ds.model
 
 
@@ -130,7 +112,7 @@ def place(at: At) -> Space:
     at that scope."""
     space_type = at.ds.model.linked.scopes[at.scope].space_type
     instance = object.__new__(space_type)
-    object.__setattr__(instance, "_state", at)
+    object.__setattr__(instance, "_held", at)
     object.__setattr__(instance, "_scope", at.scope)
     return instance
 
@@ -161,23 +143,6 @@ def opened(model: Model[S], parameters: Mapping[NodeId, object]) -> S:
     compiled = cast(Model[Space], model)
     with compiled.lock:
         return cast(S, place(At(open_facts(compiled, parameters), 0)))
-
-
-def prepare_values(
-    linked: Linked,
-    pending: Mapping[NodeId, object],
-    role: str,
-) -> dict[NodeId, object]:
-    """Recognize every value before any is snapshot, then snapshot each."""
-    return _state.prepare(linked, {index: (value, role) for index, value in pending.items()})
-
-
-def _compiled(point: Space) -> Model[Space]:
-    """The compiled model of a design space (or of a table the world engine holds)."""
-    found = vars(point).get("_state")
-    if isinstance(found, State):
-        return found.model
-    return held(point).ds.model
 
 
 # -- reading a design space -----------------------------------------------------------------
@@ -245,7 +210,7 @@ def decision_state(point: Space, reference: object) -> QueryResult[DecisionState
 
 
 def decision_index(point: Space, reference: object) -> NodeId:
-    return _compiled(point).decision(point._scope, reference)
+    return held(point).ds.model.decision(point._scope, reference)
 
 
 def candidates(point: Space, reference: object) -> QueryResult[tuple[object, ...]] | None:
@@ -268,7 +233,7 @@ def bind_field(point: Space, reference: ValueRef[T] | View[T]) -> BoundValue[T] 
     reader = _reader(point)
     if reader is not None:
         reader._enter()
-        model = reader.world.evaluator.model
+        model = reader.model
     else:
         model = _driver(point).ds.model
     model.resolve(point._scope, reference)
@@ -298,18 +263,6 @@ def child(point: Space, record: Declaration) -> Space:
         return reader.child(point, record)
     at = _driver(point)
     return place(surface.child(at, getattr(record, "instance", record)))
-
-
-def _scope_choice(linked: Linked, scope: int, decision: object) -> Choice:
-    """The Choice of a Decision over nodes in compiled scope ``scope``."""
-    from ._nodes import unwrap
-
-    record = unwrap(decision)
-    choices = linked.scopes[scope].choices
-    try:
-        return linked.choices[choices[record]]
-    except (KeyError, TypeError) as error:
-        raise RequestError("the selector is not part of this compiled scope") from error
 
 
 def selected_candidate(point: Space, decision: Declaration) -> Space | None:
@@ -476,264 +429,3 @@ def bind(point: S, /, *choices: ChangeRequest | Mapping[Any, object]) -> Configu
     saved = [(index, item.value) for index, item in normalized.items()]
     report = ask(at.ds.model, lambda session: questions.bind(at.ds, saved, session))
     return _report(point, at, report)
-
-
-# -- the world engine's state of a design space (until the world engine is deleted) ----------
-
-
-_WORLD = ("the world engine's state", None)
-"""Where a design space object keeps the world engine's state of it, beside what its
-evaluations answered (``DesignSpace.evaluations``): it lives and dies with the object, and
-the world engine tells its states apart by the object, as it does."""
-
-
-def state_of(ds: DesignSpace) -> State:
-    """The world engine's state of the design space object ``ds``: the one it published as
-    that object (``attach``), else one rebuilt from its facts and stored choices
-    (``World.start``), kept on the object."""
-    model = ds.model
-    with model.lock:
-        found = ds.evaluations.get(_WORLD)
-        if found is None:
-            found = ds.evaluations[_WORLD] = State(
-                model, World.start(model.evaluator, ds.facts, ds.stored)
-            )
-        return cast(State, found)
-
-
-def state(point: Space) -> State:
-    """The world engine's state of the design space ``point`` holds (``state_of``); of a
-    table built by hand, the state it holds."""
-    found = vars(point).get("_state")
-    if isinstance(found, State):
-        return found
-    return state_of(held(point).ds)
-
-
-def attach(current: State, scope: int) -> Space:
-    """The Space object of ``scope`` in a state of the world engine, holding its design
-    space value: its facts layer's design space with nothing stored, with the state's
-    stored choices (``with_stored``), ``current`` kept on that new object as its state
-    (on the layer's own design space where nothing is stored, unless it holds one already).
-    A table built by hand has no design space value: its Space object holds the state."""
-    if current.model.structure is None:
-        space_type = current.linked.scopes[scope].space_type
-        instance = object.__new__(space_type)
-        object.__setattr__(instance, "_state", current)
-        object.__setattr__(instance, "_scope", scope)
-        return instance
-    from ._running.surface import At
-    from ._running.value import FactsLayer
-
-    model = current.model
-    with model.lock:
-        ds = FactsLayer.of(model, current.world.facts).bare
-        if current.world.stored:
-            ds = ds.with_stored(current.world.stored)
-        ds.evaluations.setdefault(_WORLD, current)
-    return place(At(ds, scope))
-
-
-def _world_open(model: Model[S], parameters: Mapping[NodeId, object]) -> S:
-    """The world engine's opening of a design space (a table built by hand included)."""
-    driver_only("configuration binding")
-    for index in parameters:
-        if index not in model.linked.parameters:
-            raise RequestError(f"{model.linked.nodes[index].key} is not an exposed parameter")
-    missing = [
-        model.linked.nodes[i].key
-        for i in model.linked.parameters
-        if model.linked.nodes[i].required and i not in parameters
-    ]
-    if missing:
-        raise RequestError(f"missing required parameters: {', '.join(missing)}")
-    frozen = prepare_values(model.linked, parameters, "parameter")
-    return cast(S, attach(_state.bind(cast(Model[Space], model), frozen), 0))
-
-
-def _world_driver(point: Space) -> State:
-    found = state(point)
-    check_transformation()
-    active = current()
-    if active is not None:
-        error = EvaluationError(active.owner, "field read", "cross-configuration access")
-        fault(active, error)
-        raise error
-    return found
-
-
-def _node_scope(linked: Linked, point: Space, reference: object) -> int | None:
-    """For a node reference, the node's scope; None for anything else."""
-    from ._nodes import NodeDecl
-    from .references import descend
-
-    if not isinstance(reference, Space):
-        return None
-    path = declared_path(reference)
-    if path is None:
-        return None
-    *outer, last = path
-    if not isinstance(last, NodeDecl):
-        return None
-    scopes = linked.scopes
-    holder = descend(scopes, point._scope, outer)
-    scope = scopes[holder]
-    if last is scope.record:
-        return holder
-    target = scope.children.get(last)
-    if target is None:
-        raise RequestError("node is not part of this compiled scope")
-    return target
-
-
-def _world_query(point: Space, reference: object) -> QueryResult[object]:
-    driver_only("query inspection")
-    current = state(point)
-    linked = current.linked
-    target = _node_scope(linked, point, reference)
-    if target is not None:
-        presence = linked.scopes[target].guard
-        if presence is not None:
-            answer = current.world.result(presence)
-            if not isinstance(answer, Available) or answer.value is not True:
-                return answer if not isinstance(answer, Available) else Inapplicable()
-        return Available(attach(current, target))
-    index = current.model.resolve(point._scope, reference)
-    return _state.answer(current, index)
-
-
-def _world_present(point: Space, node: object) -> bool:
-    reader = _reader(point)
-    if reader is not None:
-        return reader.present(point, node)
-    current = _world_driver(point)
-    target = _node_scope(current.linked, point, node)
-    if target is None:
-        if isinstance(node, Param):
-            return _world_supplied(current, point, node)
-        raise RequestError("present() takes a node (a child or a selector's case) or a value input")
-    presence = current.linked.scopes[target].guard
-    if presence is None:
-        return True
-    answer = current.world.result(presence)
-    if isinstance(answer, Available):
-        return answer.value is True
-    if isinstance(answer, Inapplicable) or (isinstance(answer, Unresolved) and _unsupplied(answer)):
-        return False
-    return bool(_state.value(current, presence))  # undecided: raises like any value read
-
-
-def _world_supplied(current: State, point: Space, formal: Param[object]) -> bool:
-    applies = _state.source_applies(current, current.model.resolve(point._scope, formal))
-    if isinstance(applies, bool):
-        return applies
-    _state.value(current, applies)  # undecided: raises like any value read
-    raise AssertionError("an undecided presence read halts")
-
-
-def _unsupplied(answer: Unresolved) -> bool:
-    findings = answer.findings
-    return bool(findings) and all(finding.code == "input-unsupplied" for finding in findings)
-
-
-def _world_read_value(point: Space, reference: ValueRef[T] | View[T]) -> T:
-    reader = _reader(point)
-    if reader is not None:
-        return cast(T, reader.read_value(point, reference))
-    current = _world_driver(point)
-    return cast(T, _state.value(current, current.model.resolve(point._scope, reference)))
-
-
-def _world_inspect(
-    point: Space,
-    reference: View[T] | Constraint,
-) -> ViewAssessment[T] | ConstraintAssessment:
-    driver_only("assessment inspection")
-    current = state(point)
-    index = current.model.resolve(point._scope, reference)
-    node = current.linked.nodes[index]
-    if node.kind not in {"view", "constraint"}:
-        raise RequestError(
-            f"{node.key} is not a view or a constraint: inspect() assesses those; "
-            "read or query() any other member"
-        )
-    assessment = current.world.entry(index).assessment
-    assert assessment is not None
-    return cast(
-        ViewAssessment[T] | ConstraintAssessment,
-        _state.copy_assessment(current.linked, index, assessment),
-    )
-
-
-def _world_decision_state(point: Space, reference: object) -> QueryResult[DecisionState[object]]:
-    driver_only("decision state")
-    return _state.decision_state(state(point), decision_index(point, reference))
-
-
-def _world_candidates(point: Space, reference: object) -> QueryResult[tuple[object, ...]] | None:
-    from ._world import candidates as listed
-
-    driver_only("domain enumeration")
-    current = state(point)
-    index = decision_index(point, reference)
-    result = listed(current.world, index)
-    if isinstance(result, Available) and result.value is None:
-        return None
-    if isinstance(result, Available):
-        node = current.linked.nodes[index]
-        assert node.semantics is not None
-        values = cast(tuple[object, ...], result.value)
-        return Available(
-            tuple(
-                snapshot(node.semantics, value, owner=node.owner, role="public value snapshot")
-                for value in values
-            )
-        )
-    return cast(QueryResult[tuple[object, ...]], result)
-
-
-def _world_root(point: Space) -> Space:
-    reader = _reader(point)
-    if reader is not None:
-        return reader.root(point)
-    current = _world_driver(point)
-    return point if point._scope == 0 else attach(current, 0)
-
-
-def _world_child(point: Space, record: Declaration) -> Space:
-    reader = _reader(point)
-    if reader is not None:
-        return reader.child(point, record)
-    current = _world_driver(point)
-    scope = current.linked.scopes[point._scope]
-    child_scope = scope.children.get(record)
-    if child_scope is None:
-        raise RequestError("child node is not part of this compiled scope")
-    return attach(current, child_scope)
-
-
-def _world_selected_candidate(point: Space, decision: Declaration) -> Space | None:
-    reader = _reader(point)
-    if reader is not None:
-        return reader.selected_candidate(point, decision)
-    current = _world_driver(point)
-    choice = _scope_choice(current.linked, point._scope, decision)
-    case = _state.value(current, choice.selector)
-    for key, candidate in choice.cases:
-        if key == case:
-            return None if candidate is None else attach(current, candidate)
-    raise EvaluationError(choice.key, "selection", "selector is not a declared case")
-
-
-def _world_candidate(point: Space, decision: object, case: str) -> Space | None:
-    reader = _reader(point)
-    if reader is not None:
-        return reader.candidate(point, decision, case)
-    current = _world_driver(point)
-    if type(case) is not str:
-        raise RequestError("a case name must be a string")
-    choice = _scope_choice(current.linked, point._scope, decision)
-    for key, index in choice.cases:
-        if key == case:
-            return None if index is None else attach(current, index)
-    raise RequestError(f"{choice.key}: unknown case {case!r}")

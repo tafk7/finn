@@ -9,24 +9,21 @@ asked in the model's one session under its lock (``occurrence.ask``): validity r
 pieces of a Space's validity; ``viable`` tries each listed value of a choice as a change
 would set it, publishing nothing; ``states`` reads each choice's state; explain evaluates
 one query and follows the reads its answers recorded. ``states`` and ``viable`` detach the
-values they hand out, by each choice's semantics. The world engine's bodies are kept,
-privately, as ``_world_<question>``, until it is deleted.
+values they hand out, by each choice's semantics.
 """
 
 # The running type imports this module's types: it is imported inside the bodies here.
 # ruff: noqa: PLC0415
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias, TypeVar, cast, overload
 
-from ._assign import check, placed, tried
 from ._configuration import Space
 from ._failure import driver_only
-from ._state import State, copy_assessment, copy_result, decision_state, presence
+from ._running.per_class import flow_below, scopes_below
 from ._structure import Structure
-from ._world import Entry, World, listed_values
 from .compiler import Model, compile_model
 from .declarations import (
     Constraint,
@@ -37,14 +34,13 @@ from .declarations import (
 from .edits import BrokenRule
 from .errors import RequestError
 from .ir import Linked, NodeId, NodeKind
-from .occurrence import ask, decision_index, held, model_of, state
+from .occurrence import ask, held, model_of
 from .occurrence import candidate as _candidate
 from .references import DecisionHandle, ValueHandle, decision_key
 from .results import (
     Available,
     ConstraintAssessment,
     DecisionState,
-    Inapplicable,
     QueryResult,
     Rejected,
     Unresolved,
@@ -56,7 +52,6 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
-A = TypeVar("A")
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,19 +196,6 @@ def model(subject: Space | Model[S] | type[Space]) -> Model[Space]:
     return _context(subject)[0]
 
 
-def _scope_set(linked: Linked, root: int) -> Collection[int]:
-    """``root`` and every scope below it: a structure's from its scope records (every scope
-    addressed, no node resolved); a table's from its scopes, each allocated after its
-    parent."""
-    if isinstance(linked, Structure):
-        return linked.subtree(root)
-    included = {root}
-    for scope in linked.scopes:
-        if scope.parent in included:
-            included.add(scope.index)
-    return included
-
-
 def _scope_name(linked: Linked, scope: int) -> str:
     if isinstance(linked, Structure):
         return linked.records[scope].name
@@ -269,27 +251,16 @@ def _decision_info(
 
 def decisions(subject: Space | Model[S] | type[Space]) -> tuple[DecisionInfo[object], ...]:
     """Discover all owning decisions below this scope, including inactive cases, in the
-    flow order (``_flow``). Read once per compiled model and scope, from its templates
-    and scope records (``_whole``): no node is resolved."""
+    flow order (``_running.per_class.flow_below``). Read once per compiled model and scope,
+    from its templates and scope records (``_whole``): no node is resolved."""
 
     compiled, scope = _context(subject)
     found = compiled._read.get(("decisions", scope))
     if found is None:
         found = compiled._read[("decisions", scope)] = tuple(
-            _decision_info(compiled.linked, index) for index in _flow(compiled, scope)
+            _decision_info(compiled.linked, index) for index in flow_below(compiled, scope)
         )
     return cast(tuple[DecisionInfo[object], ...], found)
-
-
-def _flow(compiled: Model[Space], scope: int) -> tuple[NodeId, ...]:
-    """The choices below ``scope`` in the flow order: each after every choice its
-    presence, its list or its Space's facts read (a selector before the choices its cases
-    hold), ties in declaration order (``_whole.flow_order``)."""
-    linked = compiled.linked
-    included = _scope_set(linked, scope)
-    return tuple(
-        index for index in compiled.evaluator.flow() if linked.header(index).scope in included
-    )
 
 
 @overload
@@ -357,7 +328,7 @@ def choices(subject: Space | Model[S] | type[Space]) -> tuple[ChoiceInfo, ...]:
     addressed, no node resolved)."""
     compiled, scope = _context(subject)
     linked = compiled.linked
-    included = _scope_set(linked, scope)
+    included = scopes_below(linked, scope)
     return tuple(
         ChoiceInfo(
             choice.key,
@@ -386,48 +357,13 @@ def members(subject: Space | Model[S] | type[Space]) -> tuple[NodeInfo, ...]:
     linked = compiled.linked
     indices = {
         index
-        for current in _scope_set(linked, scope)
+        for current in scopes_below(linked, scope)
         for index in linked.scopes[current].named_members.values()
     }
     return tuple(
         _node_info(linked, index)
         for index in sorted(indices, key=lambda item: linked.header(item).key)
     )
-
-
-def _answered(
-    current: State,
-    question: str,
-    scope: int,
-    answer: Callable[[_Copies], A],
-) -> A:
-    """``answer(copies)``, kept on ``current`` (an immutable configuration) where every
-    value it copied is shared."""
-    key = (question, scope)
-    with current.evaluator.lock:
-        if key in current.answers:
-            return cast(A, current.answers[key])
-        copies = _Copies(current)
-        found = answer(copies)
-        if copies.shared:
-            current.answers[key] = found
-        return found
-
-
-class _Copies:
-    """Decision values detached from a configuration's evaluations (``copy_result``),
-    and whether each copy is the value itself."""
-
-    def __init__(self, current: State) -> None:
-        self.current = current
-        self.shared = True
-
-    def __call__(self, index: NodeId, value: object) -> object:
-        copied = cast(
-            Available[object], copy_result(self.current.linked, index, Available(value))
-        ).value
-        self.shared = self.shared and copied is value
-        return copied
 
 
 @dataclass(frozen=True, slots=True)
@@ -472,64 +408,6 @@ def validity(point: Space) -> Validity:
     driver_only("validity")
     at = held(point)
     return ask(at.ds.model, lambda session: valid(evaluation(at.ds, session), at.scope))
-
-
-def _world_validity(point: Space) -> Validity:
-    """The world engine's ``validity``, kept on its state of the design space."""
-    driver_only("validity")
-    current = state(point)
-    scope = point._scope
-    return _answered(current, "validity", scope, lambda _: _validity_of(current, scope))
-
-
-def _ordered(pieces: list[Piece]) -> tuple[Piece, ...]:
-    return tuple(sorted(pieces, key=lambda piece: piece.owner))
-
-
-def _pieces_in(
-    world: World, index: NodeId, wanted: type[object], answer: QueryResult[bool] | None = None
-) -> list[Piece]:
-    """The pieces of the validity node ``index`` in ``world`` whose answer is a ``wanted``,
-    a placed Space's own pieces in place of its validity (inside a run). ``answer``: the
-    answer its parent's validity holds for it (a guard piece, where its guard is
-    refused)."""
-    linked = world.evaluator.linked
-    found: list[Piece] = []
-    entry = world._get(index)
-    assessment = entry.assessment
-    if not isinstance(assessment, ConstraintAssessment) or not assessment.results:
-        # The Space's presence waits or is refused: its guard's answer stands for it.
-        held = entry.result if answer is None else cast(QueryResult[object], answer)
-        if isinstance(held, (Rejected, Unresolved)) and isinstance(held, wanted):
-            name = linked.scopes[linked.nodes[index].scope].name
-            found.append(Piece(name, held))
-        return found
-    for key, result in assessment.results.items():
-        if isinstance(result, Inapplicable):
-            continue  # a placed Space that is absent (or a piece that does not apply): none
-        piece = linked.keys[key]
-        if linked.header(piece).kind == "validity":
-            found.extend(_pieces_in(world, piece, wanted, result))
-        elif isinstance(result, (Rejected, Unresolved)) and isinstance(result, wanted):
-            found.append(Piece(key, result))
-    return found
-
-
-def _validity_of(current: State, scope: int) -> Validity:
-    """The validity of ``scope``'s Space in a configuration's world (``validity``)."""
-    index = current.linked.scopes[scope].validity
-    assert index is not None, "every scope has a validity node"
-    world = current.world
-
-    def walk() -> Validity:
-        answer = cast(QueryResult[bool], world._get(index).result)
-        if isinstance(answer, Rejected):
-            return Validity("refused", _ordered(_pieces_in(world, index, Rejected)), answer)
-        if isinstance(answer, Unresolved):
-            return Validity("open", _ordered(_pieces_in(world, index, Unresolved)), answer)
-        return Validity("valid", (), answer)
-
-    return world.run(walk)
 
 
 # -- which values are possible --------------------------------------------------------
@@ -617,41 +495,6 @@ def _detached_viable(linked: Linked, index: NodeId, found: Viable) -> Viable:
     return Viable(found.key, values, found.waits)
 
 
-def _world_viable(point: Space, keys: Iterable[object]) -> tuple[Viable, ...]:
-    """The world engine's ``viable``."""
-    driver_only("possible values")
-    current = state(point)
-    indices = [decision_index(point, key) for key in keys]
-    return tuple(_viable(current, index) for index in indices)
-
-
-def _waits(result: object) -> tuple[str, ...]:
-    """What an unresolved answer waits on: its findings' owners (the open choices and the
-    missing facts), by key."""
-    if not isinstance(result, Unresolved):
-        return ()
-    return tuple(sorted({finding.owner for finding in result.findings}))
-
-
-def _viable(current: State, index: NodeId) -> Viable:
-    linked = current.linked
-    node = linked.nodes[index]
-    listed = listed_values(placed(current.world, index), index)
-    if not isinstance(listed, Available) or listed.value is None:
-        return Viable(node.key, None, _waits(listed))
-    copies = _Copies(current)
-    found: list[Possible | Refused] = []
-    for value in cast(tuple[object, ...], listed.value):
-        trial = tried(current, index, value)
-        public = copies(index, value)
-        if trial.accepted:
-            moved = trial.moved
-            found.append(Possible(public, moved.dormant, moved.in_play, moved.opened))
-        else:
-            found.append(Refused(public, trial.broken))
-    return Viable(node.key, tuple(found))
-
-
 # -- every choice's state --------------------------------------------------------------
 
 
@@ -712,7 +555,7 @@ def states(point: Space) -> tuple[tuple[str, ChoiceState], ...]:
         ev = evaluation(at.ds, session)
         return tuple(
             (header(index).key, _detached_state(linked, index, state_of(ev, index)))
-            for index in _flow(model, at.scope)
+            for index in flow_below(model, at.scope)
         )
 
     return ask(model, answer)
@@ -724,95 +567,6 @@ def _detached_state(linked: Linked, index: NodeId, found: ChoiceState) -> Choice
     if isinstance(found, (Set, Waiting, Dormant)):
         return replace(found, value=_detached(linked, index, found.value))
     return found
-
-
-def _world_states(point: Space) -> tuple[tuple[str, ChoiceState], ...]:
-    """The world engine's ``states``."""
-    driver_only("choice states")
-    current = state(point)
-    header = current.linked.header  # a choice's key, resolving nothing of an absent one
-    return tuple(
-        (header(index).key, _state_of(current, index))
-        for index in _flow(current.model, point._scope)
-    )
-
-
-def _state_of(current: State, index: NodeId) -> ChoiceState:
-    world = current.world
-    found, guard = presence(world, index)
-    if index not in world.stored:
-        if found == "absent":
-            return Absent()
-        return Open(_waits(guard) if found == "unknown" else ())
-    value = _Copies(current)(index, world.stored[index])
-    if found == "absent":
-        return Dormant(value)
-    if found == "unknown":
-        # Its presence's waits and its domain's missing facts, never itself.
-        waits = {*_waits(guard), *_waits(check(world, index))}
-        return Waiting(value, tuple(sorted(waits)))
-    read = world.result(index)
-    return Waiting(value, _waits(read)) if isinstance(read, Unresolved) else Set(value)
-
-
-def _evidence(current: State, root: NodeId) -> QueryEvidence[object]:
-    """The evidence of ``root``'s query in a configuration (``explain``): each node it
-    read, through what each of those read, as the entries' traces record it."""
-    linked, world = current.linked, current.world
-    selectors = linked.selector_choices
-
-    def walk() -> tuple[Entry, dict[NodeId, Entry]]:
-        found = world._get(root)
-        pending = [root]
-        visited: dict[NodeId, Entry] = {}
-        while pending:
-            index = pending.pop()
-            if index in visited:
-                continue
-            entry = visited[index] = world._get(index)
-            pending.extend(dependency for dependency, _ in entry.trace)
-        return found, visited
-
-    with current.evaluator.lock:
-        result, visited = world.run(walk)
-        guard_nodes = {
-            linked.nodes[index].guard for index in visited if linked.nodes[index].guard is not None
-        }
-        evidence: list[EvidenceNode] = []
-        for index in sorted(visited, key=lambda item: linked.nodes[item].key):
-            node, entry = linked.nodes[index], visited[index]
-            demanded = tuple(dict.fromkeys(dependency for dependency, _ in entry.trace))
-            aliases = dict.fromkeys(
-                alias for alias, source in (*node.via, *entry.via) if source in demanded
-            )
-            active = True
-            if node.guard is not None:
-                guard = visited[node.guard].result
-                active = isinstance(guard, Available) and guard.value is True
-            presence: Literal["supplied", "omitted"] | None = None
-            if node.kind == "param" and active:
-                presence = "supplied" if index in current.facts else "omitted"
-            evidence.append(
-                EvidenceNode(
-                    _node_info(linked, index),
-                    copy_result(linked, index, entry.result),
-                    tuple(ValueHandle[object](linked, target) for target in demanded),
-                    presence,
-                    decision_state(current, index) if node.kind == "decision" else None,
-                    index in selectors,
-                    index in guard_nodes,
-                    tuple(_node_info(linked, alias) for alias in aliases),
-                )
-            )
-        assessment = (
-            None if result.assessment is None else copy_assessment(linked, root, result.assessment)
-        )
-        return QueryEvidence(
-            _node_info(linked, root),
-            copy_result(linked, root, result.result),
-            tuple(evidence),
-            assessment,
-        )
 
 
 @overload
@@ -838,13 +592,6 @@ def explain(point: Space, reference: object) -> object:
     driver_only("dependency inspection")
     at = held(point)
     return ask(at.ds.model, lambda session: evidence(at, reference, session))
-
-
-def _world_explain(point: Space, reference: object) -> object:
-    """The world engine's ``explain``."""
-    driver_only("dependency inspection")
-    current = state(point)
-    return _evidence(current, current.model.resolve(point._scope, reference))
 
 
 def candidate(point: Space, decision: object, case: str) -> Space | None:

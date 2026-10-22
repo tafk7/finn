@@ -188,7 +188,7 @@ def _check_configuration_mutation(point: Space, name: str) -> None:
     from .occurrence import model_of
 
     driver_only("configuration mutation")
-    current = getattr(point, "_state", None)
+    current = getattr(point, "_held", None)
     scope_index = getattr(point, "_scope", None)
     if current is not None and type(scope_index) is int:
         scope = model_of(point).linked.scopes[scope_index]
@@ -205,7 +205,7 @@ class Space(metaclass=SpaceMeta):
 
     when: _When = _when_field(default=None, kw_only=True)
     # A design space read at a scope (``_running.surface.At``), or a method's reader.
-    _state: ClassVar[object]
+    _held: ClassVar[object]
     _scope: ClassVar[int]
     # A key maps to one view or derived value (a derived value is typed as its value).
     exports: ClassVar[Mapping[ViewKey[Any], object]] = MappingProxyType({})

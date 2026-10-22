@@ -239,7 +239,7 @@ def receiver(reader: MethodReader, scope: int) -> Space:
     """A Space of ``scope``'s class reading through ``reader``: a method's ``self``."""
     space_type = reader.model.linked.scopes[scope].space_type
     made = object.__new__(space_type)
-    object.__setattr__(made, "_state", reader)
+    object.__setattr__(made, "_held", reader)
     object.__setattr__(made, "_scope", scope)
     return made
 

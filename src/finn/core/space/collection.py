@@ -48,7 +48,7 @@ _RESERVED = frozenset(
         "root",
         "try_with_choices",
         "with_choices",
-        "_state",
+        "_held",
         "_scope",
         "exports",
         "when",

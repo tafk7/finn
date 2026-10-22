@@ -5,8 +5,8 @@
 
 Some questions read every choice of a model, the cases not selected included: the
 **flow order** (each choice after every choice its presence, its list or its Space's
-facts read: ``Evaluator.flow``, the order of ``inspection.decisions`` and ``states``,
-and of ``_assign``'s lists), and the **presence readers** (for each choice and fact, the
+facts read: ``PerClass.flow``, the order of ``inspection.decisions`` and ``states``,
+and of a change's lists), and the **presence readers** (for each choice and fact, the
 choices whose presence may read it: what a change may move). Each is answered here from
 templates and the scopes' records (``_structure``): no node is resolved.
 
