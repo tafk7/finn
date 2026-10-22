@@ -16,7 +16,6 @@ import pytest
 from support.refusals import refused
 
 from core.space._choices_support import committed
-from core.space._collapse_support import answers, open_space
 from core.space._possible_support import possible
 from finn.core.space import (
     Available,
@@ -327,19 +326,6 @@ def test_switching_candidates_keeps_a_stale_candidate_choice_dormant() -> None:
         {Unit.compute: "stub", Unit.compute["stub"].rows: 2},  # type: ignore[index]
     )
     assert stub.cycles == 16 and "compute.packed.pe" not in committed(stub)
-
-
-def test_a_choice_answers_the_same_with_and_without_collapse() -> None:
-    for choices in (
-        {},
-        {"compute": "packed", "compute.packed.pe": 2, "compute.packed.simd": 1},
-        {"compute": "stub", "compute.stub.rows": 2},
-    ):
-        collapsed = open_space(Unit(width=8), collapsed=True)
-        plain = open_space(Unit(width=8), collapsed=False)
-        if choices:
-            collapsed, plain = commit(collapsed, dict(choices)), commit(plain, dict(choices))
-        assert answers(collapsed) == answers(plain)
 
 
 # -- a None case ---------------------------------------------------------------------------

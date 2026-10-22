@@ -1,33 +1,30 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Forwarding chains collapse at compilation; scopes, keys, values and diagnostics do not change.
+"""Forwarding chains collapse at compilation; scopes and keys do not change.
 
 A formal bound to a reference, a formal forwarded through composites, and a
 class-body alias are ``alias`` nodes. Collapse points each alias at the end of
 its chain, and points a reader straight at that source when the alias applies
-whenever the reader does. Each test opens the same declaration with and
-without collapse and compares the answer of every node.
+whenever the reader does. The compiled forms are compared with and without collapse;
+a design space is evaluated on its nodes as resolved, never collapsed, and its evidence
+names the formals a read went through.
 """
 
 from __future__ import annotations
 
-from typing import TypeVar, cast
+from typing import TypeVar
 
-from support.space_cores import built
-
-from core.space._collapse_support import answers, counts, open_space
-from core.space._toys_support import House
+from core.space._collapse_support import compiled, open_space
 from finn.core.space import (
     Decision,
     Inapplicable,
     Param,
     Space,
-    composite,
+    Unresolved,
     design_space,
     inspection,
     view,
 )
-from finn.core.space.occurrence import state
 
 
 class Leaf(Space):
@@ -61,37 +58,9 @@ def _choices(point: S, **values: object) -> S:
     return point.with_choices({handles[key]: value for key, value in values.items()})
 
 
-def test_every_node_answers_the_same_with_and_without_collapse() -> None:
-    cases: list[tuple[Space, dict[str, object]]] = [  # declarations and their choices
-        (Outer(width=3), {}),
-        (Outer(width=3), {"enabled": False}),
-        (Outer(width=3), {"enabled": True, "middle.leaf.lanes": 2}),
-        (House(budget=80), {}),
-        (
-            House(budget=80),
-            {
-                "want_garage": True,
-                "heating": "boiler",
-                "hall.finish": 1,
-                "kitchen.finish": 1,
-                "dining.finish": 3,
-                "garage.finish": 1,
-            },
-        ),
-    ]
-    for declaration, choices in cases:
-        collapsed = open_space(declaration, collapsed=True)
-        plain = open_space(declaration, collapsed=False)
-        if choices:  # built directly: the house's second set breaks both its rules
-            collapsed = built(collapsed, choices)
-            plain = built(plain, choices)
-        assert answers(collapsed) == answers(plain), type(declaration).__name__
-
-
 def test_a_chain_collapses_to_its_source_but_keeps_every_scope_and_key() -> None:
-    collapsed = open_space(Outer(width=3), collapsed=True)
-    plain = open_space(Outer(width=3), collapsed=False)
-    linked, before = state(collapsed).linked, state(plain).linked
+    linked = compiled(Outer(width=3), collapsed=True).linked
+    before = compiled(Outer(width=3), collapsed=False).linked
     # The two number their nodes apart: compared by key.
     assert sorted(node.key for node in linked.nodes) == sorted(node.key for node in before.nodes)
     assert sorted(scope.name for scope in linked.scopes) == sorted(
@@ -104,43 +73,16 @@ def test_a_chain_collapses_to_its_source_but_keeps_every_scope_and_key() -> None
     # The alias of a guarded node, read from outside it, keeps its hop.
     reader = linked.keys["outside.width"]
     assert linked.nodes[reader].output == linked.keys["guarded.leaf.width"]
-    assert isinstance(collapsed.outside.query(Leaf.width), type(plain.outside.query(Leaf.width)))
-    off = _choices(collapsed, enabled=False)
+    point = open_space(Outer(width=3))
+    assert isinstance(point.outside.query(Leaf.width), Unresolved)  # while ``enabled`` is open
+    off = _choices(point, enabled=False)
     assert isinstance(off.outside.query(Leaf.width), Inapplicable)
 
 
-def test_evaluation_skips_forwarding_nodes_and_explain_still_names_them() -> None:
-    def read(point: Space) -> object:
-        return cast(Outer, point).middle.leaf.query(Leaf.bits)
-
-    lanes = {"middle.leaf.lanes": 2}
-    before = counts(_choices(open_space(Outer(width=3), collapsed=False), **lanes), read)
-    after = counts(_choices(open_space(Outer(width=3), collapsed=True), **lanes), read)
-    assert after.nodes == before.nodes and after.aliases == before.aliases
-    assert after.aliases_evaluated < before.aliases_evaluated
-    assert after.evaluated < before.evaluated
+def test_explain_names_a_forwarding_formal_a_read_went_through() -> None:
     point = _choices(design_space(Outer(width=3)), **{"middle.leaf.lanes": 2})
     evidence = inspection.explain(point.middle.leaf, Leaf.bits)
     keys = {node.declaration.key for node in evidence.nodes}
     assert "width" in keys and "middle.leaf.width" not in keys
     via = {alias.key for node in evidence.nodes for alias in node.via}
     assert via == {"middle.leaf.width"}
-
-
-def test_a_pipeline_built_as_data_answers_the_same() -> None:
-    class Stage(Space):
-        width_in: int = Param()
-        growth: int = Decision(values=(0, 1))
-
-        @view
-        def width_out(self) -> int:
-            return self.width_in + self.growth
-
-    stages = [Stage(width_in=4), *(Stage() for _ in range(9))]
-    for previous, current in zip(stages, stages[1:]):
-        current.width_in = previous.width_out
-    space_type = composite("Pipeline", {f"s{index}": stage for index, stage in enumerate(stages)})
-    choices = {f"s{index}.growth": 1 for index in range(10)}
-    collapsed = _choices(open_space(space_type(), collapsed=True), **choices)
-    plain = _choices(open_space(space_type(), collapsed=False), **choices)
-    assert answers(collapsed) == answers(plain)
