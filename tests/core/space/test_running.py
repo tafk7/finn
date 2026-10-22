@@ -222,11 +222,14 @@ _COUNTS = re.compile(r"(\d+) (passed|failed|errors?|xfailed|xpassed|skipped|dese
 
 def test_the_reference_hand_cases_pass_under_the_running_type() -> None:
     """Every hand case of the reference harness's seven modules of them, run with
-    ``--space-implementation core.space._running_type:RUNNING``: none fails or passes
+    ``--space-implementation=core.space._running_type:RUNNING``: none fails or passes
     unexpectedly or is skipped, today's engine is never opened or made, exactly the harness's
     tests naming today's engine are deselected, and the expected failures are exactly the
     witnesses of the matrix's rows the running type has not reached (``matrix.ROWS``,
     ``matrix.reached``).
+
+    The option is written ``--space-implementation=MODULE:ATTRIBUTE``, with ``=``, before
+    the test paths: written apart from its value, pytest takes the value for a path.
 
     ``test_reference_walks`` is not run here: it pins today's engine by design (its walks'
     own default, and its tests' "today"), and runs under today's in the gate as ever; the
