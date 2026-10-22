@@ -19,8 +19,6 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
-from .. import _world as W
-from .._state import prepare
 from ..edits import BrokenRule, ChangeOutcome
 from ..inspection import (
     Absent,
@@ -34,9 +32,6 @@ from ..inspection import (
     Validity,
     Viable,
     Waiting,
-    _flow,
-    _ordered,
-    _waits,
 )
 from ..ir import Node, NodeId
 from ..results import (
@@ -48,7 +43,10 @@ from ..results import (
     Unresolved,
 )
 from ..semantics import equal, snapshot
+from .answers import _ordered, _waits, membership_arguments
 from .evaluate import INAPPLICABLE, TRUE, Evaluation, Session, evaluation
+from .facts import prepare
+from .per_class import flow_below as _flow
 from .structure import record
 from .value import DesignSpace, FactsLayer
 
@@ -203,7 +201,7 @@ def pairs(ev: Evaluation) -> dict[PieceId, dict[NodeId, Rejected]]:
 
 
 def _domain_origins(ev: Evaluation, index: NodeId, answer: Rejected) -> dict[NodeId, Rejected]:
-    inputs = [(a.node, ev.result(a.node)) for a in W.membership_arguments(ev.raw[index])]
+    inputs = [(a.node, ev.result(a.node)) for a in membership_arguments(ev.raw[index])]
     if not any(isinstance(result, Inapplicable) for _, result in inputs):
         refused = [node for node, result in inputs if isinstance(result, Rejected)]
         if refused:
@@ -367,7 +365,7 @@ def moved(
     whose presence may read what moved: today's presence readers)."""
     model = after.model
     linked = after.linked
-    candidates = {c for source in sources for c in model.evaluator.presence_readers(source)}
+    candidates = {c for source in sources for c in model.per_class.presence_readers(source)}
     dormant: list[NodeId] = []
     in_play: list[NodeId] = []
     opened: list[NodeId] = []

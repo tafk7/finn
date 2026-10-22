@@ -21,12 +21,12 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
-from .._world import _same_value
 from ..ir import NodeId
+from .answers import _same_value
 from .structure import record
 
 if TYPE_CHECKING:
-    from .. import _world as W
+    from .answers import Called
     from .._configuration import Space
     from .._structure import Structure
     from ..compiler import Model
@@ -95,7 +95,7 @@ class FactsLayer:
     def __init__(self, model: Model[Space], facts: Mapping[NodeId, object]) -> None:
         self.model = model
         self.facts = _frozen(facts)
-        self.outcomes: dict[object, W.Called] = {}
+        self.outcomes: dict[object, Called] = {}
         self._bare: DesignSpace | None = None
         self._hash = hash((model, _part(self.facts)))
 

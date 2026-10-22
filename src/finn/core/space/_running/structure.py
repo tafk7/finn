@@ -92,7 +92,7 @@ class Record:
     def ranks(self, model: Model[Space]) -> Mapping[NodeId, int]:
         """Each choice's position in the flow order (today's, from the templates)."""
         if self._ranks is None:
-            self._ranks = {index: rank for rank, index in enumerate(model.evaluator.flow())}
+            self._ranks = {index: rank for rank, index in enumerate(model.per_class.flow())}
         return self._ranks
 
 

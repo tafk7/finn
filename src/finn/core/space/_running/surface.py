@@ -31,15 +31,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
-from .. import _world as W
 from .._configuration import Space
 from .._nodes import NodeDecl
-from .._state import copy_assessment, copy_result
 from ..declarations import Param, declared_path
 from ..errors import EvaluationError, RequestError
 from ..inspection import EvidenceNode, QueryEvidence, _node_info
 from ..ir import Node, NodeId
-from ..occurrence import _scope_choice
 from ..references import ValueHandle, descend
 from ..results import (
     Available,
@@ -52,8 +49,10 @@ from ..results import (
     require_value,
 )
 from ..semantics import snapshot
+from .answers import _guard_result, copy_assessment, copy_result
 from .evaluate import INAPPLICABLE, Ans, Evaluation, Session, evaluation
 from .questions import presence
+from .receiver import scope_choice as _scope_choice
 from .value import DesignSpace
 
 Assessment = ViewAssessment[object] | ConstraintAssessment
@@ -74,7 +73,7 @@ def _evaluation(at: At, session: Session) -> Evaluation:
 
 def _node_scope(at: At, reference: object) -> int | None:
     """For a node reference (a child or a candidate), the node's scope; ``None`` for
-    anything else (today's ``occurrence._node_scope``)."""
+    anything else."""
     if not isinstance(reference, Space):
         return None
     path = declared_path(reference)
@@ -95,7 +94,7 @@ def _node_scope(at: At, reference: object) -> int | None:
 
 
 def _public(ev: Evaluation, index: NodeId) -> QueryResult[object]:
-    """``index``'s answer, detached by its semantics (today's ``_state.answer``)."""
+    """``index``'s answer, detached by its semantics."""
     return copy_result(ev.linked, index, ev.result(index))
 
 
@@ -162,7 +161,7 @@ def _unsupplied(answer: Unresolved) -> bool:
 def _source_applies(ev: Evaluation, index: NodeId) -> bool | NodeId:
     """Whether a source applies at ``index`` (a value input is supplied), or the node whose
     answer still decides it: the edges a read of the value follows, reading only what
-    decides presence, never a computation (today's ``_state.source_applies``)."""
+    decides presence, never a computation."""
     node = ev.raw[index]
     if node.guard is not None:
         held = ev.result(node.guard)
@@ -209,8 +208,7 @@ def inspect(at: At, reference: object, session: Session) -> Assessment:
 
 def _decision_state(ev: Evaluation, index: NodeId) -> QueryResult[DecisionState[object]]:
     """A Decision's state: committed with its stored value (whatever a read of it
-    answers), unassigned where it is present and open, else as its guard answers
-    (today's ``_state.decision_state``)."""
+    answers), unassigned where it is present and open, else as its guard answers."""
     node = ev.raw[index]
     if node.kind != "decision":
         raise EvaluationError(node.owner, "decision state", "reference is not an owning decision")
@@ -264,7 +262,7 @@ def _candidates(ev: Evaluation, node: Node) -> QueryResult[object]:
     if domain is None or semantics is None:
         raise EvaluationError(node.owner, "domain enumeration", "reference has no domain")
     if node.guard is not None:
-        inactive = W._guard_result(node, ev.result(node.guard))
+        inactive = _guard_result(node, ev.result(node.guard))
         if inactive is not None:
             return inactive
     return ev.membership(node.index).listed(node, [])

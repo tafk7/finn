@@ -10,6 +10,8 @@ made with the model (``compiler.Model``) and held by it for its life.
   templates, each loop in it noted (``flow-loop``);
 - ``presence_readers(source)``: the choices whose presence may read the choice or fact
   ``source``, from its templates;
+- ``flow_below(model, scope)``: the choices below a scope in the flow order;
+  ``scopes_below(linked, scope)``: a scope and every scope below it;
 - ``session()``: the model's one ``evaluate.Session``, made on first use: every public
   question about a design space of the model runs in it, under the model's lock, and its
   node cache (``cache.NodeCache``, made in its default mode) keeps answers for the model's
@@ -21,12 +23,14 @@ A table built by hand has no templates: it answers no question about its whole d
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import TYPE_CHECKING
 
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import note
 
 from .._reads import ModelReads, infer
+from .._structure import Structure
 from ..errors import RequestError
 from ..ir import Linked, NodeId, Questions
 
@@ -100,4 +104,28 @@ class PerClass:
             return self._session
 
 
-__all__ = ["PerClass"]
+def scopes_below(linked: Linked, root: int) -> Collection[int]:
+    """``root`` and every scope below it: a structure's from its scope records (every scope
+    addressed, no node resolved); a table's from its scopes, each allocated after its
+    parent."""
+    if isinstance(linked, Structure):
+        return linked.subtree(root)
+    included = {root}
+    for scope in linked.scopes:
+        if scope.parent in included:
+            included.add(scope.index)
+    return included
+
+
+def flow_below(model: Model[Space], scope: int) -> tuple[NodeId, ...]:
+    """The choices below ``scope`` in the flow order: each after every choice its
+    presence, its list or its Space's facts read (a selector before the choices its cases
+    hold), ties in declaration order (``PerClass.flow``)."""
+    linked = model.linked
+    included = scopes_below(linked, scope)
+    return tuple(
+        index for index in model.per_class.flow() if linked.header(index).scope in included
+    )
+
+
+__all__ = ["PerClass", "flow_below", "scopes_below"]

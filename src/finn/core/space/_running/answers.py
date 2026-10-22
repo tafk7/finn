@@ -15,7 +15,9 @@ space shares, whatever it keeps.
   ``_listed_members`` and ``_first_member`` (membership asked over listed values);
 - equality and detachment by a member's value semantics: ``_same_value``, ``_clone``,
   ``public_value``; ``copy_result`` and ``copy_assessment`` detach a public answer, every
-  value in it copied by its node's semantics.
+  value in it copied by its node's semantics;
+- the parts of an answer about choices: ``_ordered`` (a validity's pieces in key order),
+  ``_waits`` (what an unknown answer waits on, by key).
 
 A node is read for its own fields only (its key, kind, semantics, owner): its header, as
 the compiled model states it (``Linked.header``), serves. ``copy_assessment`` reads one
@@ -54,6 +56,7 @@ from ..semantics import snapshot as snapshot_value
 
 if TYPE_CHECKING:
     from ..domains import Domain
+    from ..inspection import Piece
     from ..semantics import ValueSemantics
 
 Assessment: TypeAlias = ViewAssessment[object] | ConstraintAssessment
@@ -307,6 +310,22 @@ def _first_member(
         )
         for value in values
     )
+
+
+# -- the parts of an answer about choices -------------------------------------------------
+
+
+def _ordered(pieces: list[Piece]) -> tuple[Piece, ...]:
+    """A validity's pieces in key order (by owner)."""
+    return tuple(sorted(pieces, key=lambda piece: piece.owner))
+
+
+def _waits(result: object) -> tuple[str, ...]:
+    """What an unresolved answer waits on: its findings' owners (the open choices and the
+    missing facts), by key."""
+    if not isinstance(result, Unresolved):
+        return ()
+    return tuple(sorted({finding.owner for finding in result.findings}))
 
 
 # -- a public answer, detached -----------------------------------------------------------

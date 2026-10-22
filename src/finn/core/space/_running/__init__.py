@@ -1,9 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""The running type, beside today's engine (private; nothing public reads it yet): a
-design space as an immutable value, and one evaluator answering every question from it,
-with no worlds and no early cutoff; answers are kept across design spaces only by the
-node cache a session may hold.
+"""The running type, the engine the public API answers from (private: ``occurrence`` and
+``inspection`` ask it): a design space as an immutable value, and one evaluator answering
+every question from it, with no worlds and no early cutoff; answers are kept across design
+spaces only by the node cache a session may hold.
 
 - ``structure``: the per-model record (each formal bound by reference and its source,
   each scope's ancestors, the flow order's ranks, the interned facts layers), held weakly
@@ -20,12 +20,20 @@ node cache a session may hold.
   an assessment, a Decision's state and candidates, a bound accessor, the evidence of an
   answer, the configurations below), each in today's public result type;
 - ``cache``: the node cache, the one reuse of answers across design spaces, behind its
-  one contract; on, bounded or dropping, fixed when it is made.
+  one contract; on, bounded or dropping, fixed when it is made;
+- ``per_class``: what a model answers once for every design space of it (a method's
+  inferred reads, the existence guards, the flow order, the presence readers) and the
+  model's one session, in which every public question runs;
+- ``answers``, ``receiver``, ``depth``, ``purity``, ``facts``, ``requests``: how an
+  answer is formed and detached, the method reader, the depth guard, the purity check's
+  switch, the facts' preparation and a design space opened on them, and the public
+  request forms as node ids.
 
-It reads today's per-class compiled form through the model's structure (each node as its
-template resolves it, never collapsed), and today's static questions (a method's inferred
-reads, the existence guards, the flow order, the presence readers).
+It reads the per-class compiled form through the model's structure (each node as its
+template resolves it, never collapsed), and the per-class record (``per_class``).
 
-Single-threaded, as today's engine is: nothing here takes a lock, and a design space, its
-evaluations and a session are used by one thread at a time.
+One run of a model at a time: the public layer asks each question under the model's lock
+(``occurrence.ask``), and the model's node cache is written under the same lock; different
+models run at once. Nothing here takes a lock itself: a design space, its evaluations and
+a session are used by one thread at a time.
 """
