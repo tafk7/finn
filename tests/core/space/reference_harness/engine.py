@@ -1,13 +1,25 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The engine side of the harness: a model description built as an engine Space, and the
-engine asked the model's questions, each answer put in the comparable form (``forms``).
+"""The engine side of the harness: a model description built as an engine Space, and an
+implementation of the engine's public questions asked the model's, each answer put in the
+comparable form (``forms``).
 
-This is the adapter to the engine core. Everything that depends on how the engine is
+This is the adapter to the engine. Everything that depends on how the engine is
 **authored** or **asked** is in this one module, so a change of the engine's API is a port of
-this file alone. The engine answers each question itself, in the model's terms: no legacy
-form, and no answer the adapter computes in the engine's place.
+this file alone. The implementation answers each question itself, in the model's terms: no
+legacy form, and no answer the adapter computes in its place.
+
+- **The implementation.** The description is authored once, as Space classes (today's
+  API: ``composite``, ``design_space``); every implementation reads the same classes.
+  ``Engine.open`` opens the design space with an ``Implementation`` of the class-based
+  oracle's interface (``support.space_oracle``; today's engine, ``today.TODAY``, by
+  default), ``Engine.make`` has it build one from nothing (``Implementation.make``, the
+  walks' cold build), and ``Point`` asks every question of what it opens, an ``Answers``, by key,
+  never of ``inspection`` or the configuration itself. So a prototype or T1's evaluator is
+  compared with the model by naming it (``walks.walk(..., implementation=)``, the CLI's
+  ``--implementation module:attribute``), and a planted fault (``today.Planted``) shows
+  that the comparison is live.
 
 - **Spelling.** A rule of the description is a constraint in the model, and in the engine
   every rule is a ``@constraint`` of the Space that owns it, which its Space's validity
@@ -20,9 +32,10 @@ form, and no answer the adapter computes in the engine's place.
   a ``domain(accepts=, candidates=)``: membership is the model's whole membership, the
   enumeration the listed values. A domain's ``order`` is not built: no compared answer
   reads it.
-- **Questions**, each the engine's own answer:
+- **Questions**, each the implementation's own answer (``Answers``; today's through
+  ``inspection`` and the point's public API):
 
-  - a choice's state is ``inspection.states``' (set, waiting with what it waits on,
+  - a choice's state is ``Answers.states``' (set, waiting with what it waits on,
     dormant, open with what its presence waits on, absent);
   - a change's report: refused, its type checks refused (``ChangeOutcome``, status
     ``"refused"``) as ``assignment`` refusals with their codes, and each ``BrokenRule`` as
@@ -32,13 +45,15 @@ form, and no answer the adapter computes in the engine's place.
     failed check's, as an assignment refusal's), and its ``BrokenRule``s as the rules the
     published design space holds newly false (as a refusal's rules: origin, codes,
     standing). Drops and rules compare as sets;
-  - a bind (``finn.core.space.bind``) of saved choices under a design space's facts, in
-    the same form as an accepted change, read against the facts with nothing stored
-    whatever the receiver stores: what it drops (its old value the saved one), the rules
-    the kept choices break, and what it moves;
-  - possible values are ``inspection.viable``'s: ``Possible`` with what it moves,
+  - a bind (``Answers.bind``; today's ``finn.core.space.bind``) of saved choices under a
+    design space's facts, in the same form as an accepted change, read against the facts
+    with nothing stored whatever the receiver stores: what it drops (its old value the
+    saved one), the rules the kept choices break, and what it moves;
+  - possible values are ``Answers.viable``'s: ``Possible`` with what it moves,
     ``Refused`` with its broken rules; ``None`` where the engine lists nothing;
-  - validity is ``inspection.validity`` (``"valid"``, ``"refused"``, ``"open"``);
+  - validity is ``Answers.validity`` (``"valid"``, ``"refused"``, ``"open"``);
+  - a fact's, a choice's (stored or not), a value's or a rule's answer is
+    ``Answers.query``'s;
   - a definition is refused for a dependency cycle (when building or asked) and for a
     domain whose membership reads a choice (at compile).
 
@@ -47,7 +62,14 @@ keeps the description's path as its key: a choice ``compute.packed.pe`` is the e
 Decision ``compute.packed.pe``. A scope that reads something outside it takes it as a formal
 (``in-<path>``), bound by its parent; a selector's value is read through a derived member
 ``key-<name>`` (``selected``); a child's guard is a derived member ``when-<name>``. Facts
-are the root's optional formals: a missing fact is an unsupplied one.
+are the root's formals (SZ100 (5)): a required fact is ``Param()``, an optional one
+``Param(required=False)``, left unsupplied where the model reads ``None`` (today's engine
+reads it unresolved: T4c's row). A ``Members`` is the
+engine's ``Members(KEY)``, a key of its own, each entry its child's value export of that key
+(``exports = {KEY: derived}``); each entry is in a child or a case placed by the
+``Members``'s scope, one per child. Its value, the engine's ``Located`` entries, is read as
+the model's sorted (entry, value) pairs, ``Located.node`` mapped to the entry's path, in
+its answer and wherever a function reads it.
 """
 
 from __future__ import annotations
@@ -57,6 +79,9 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+from support.space_oracle import Answers, Changed, Implementation
+from support.space_oracle.today import TODAY
+
 from core.space import reference as model
 from core.space.reference.model import same
 from finn.core.space import (
@@ -64,24 +89,25 @@ from finn.core.space import (
     Decision,
     DefinitionError,
     EvaluationError,
+    Located,
+    Members,
     Param,
     QueryResult,
     Rejected,
     Space,
     Unresolved,
+    ViewKey,
     composite,
     constraint,
     derived,
     design_space,
     domain,
-    inspection,
-    occurrence,
+    inspection,  # its answer types alone: every question goes to an Answers
     reject,
     selected,
     view,
 )
-from finn.core.space import bind as space_bind
-from finn.core.space.edits import BrokenRule, ChangeOutcome, ChangeRequest, ConfigurationResult
+from finn.core.space.edits import BrokenRule, ChangeOutcome
 
 from .forms import (
     AnswerForm,
@@ -150,11 +176,17 @@ Rule = Admission | Plain | Requirement | Obligation | ByName
 @dataclass(frozen=True)
 class Spelling:
     """How a case's rules are written in the engine (by rule path; ``Admission`` when
-    absent) and the value types the description does not state (by path; a listed domain's
-    are read from its values, everything else is ``int``)."""
+    absent), the value types the description does not state (by path; a listed domain's
+    are read from its values, everything else is ``int``), and the guarded scopes written
+    as their selector's own guard (``guarded_selectors``)."""
 
     rules: Mapping[str, Rule] = field(default_factory=dict)
     types: Mapping[str, type] = field(default_factory=dict)
+    #: guarded scopes holding one selector and nothing else, each written as that
+    #: selector's own guard: the scope a plain child, its selector a ``Decision(...,
+    #: when=)`` under the scope's ``when``, so the guard and the cases' guards are nodes of
+    #: one Space. A guard piece of the selector names the scope, as the model's does
+    guarded_selectors: frozenset[str] = frozenset()
 
     def rule(self, path: str) -> Rule:
         return self.rules.get(path, Admission())
@@ -197,15 +229,24 @@ def _name(path: str) -> str:
     return path.rsplit(".", 1)[-1]
 
 
+#: the member of a scope spelled as its selector's guard holding that guard
+OWN_GUARD = "own-when"
+#: the engine's code of a guard piece's own finding
+GUARD_REFUSED = "guard-refused"
+
+
 def _input(path: str) -> str:
     """A scope's formal taking ``path`` from outside it."""
     return "in-" + path.replace(".", "-")
 
 
 class _Unchecked(model.Index):
-    """The description's index without the model's definition checks (cycles, a domain
-    reading a choice): a description the model refuses is still built in the engine, to see
-    what the engine answers."""
+    """The description's index without the model's definition checks (a view read in,
+    cycles, a domain reading a choice): a description the model refuses is still built in
+    the engine, to see what the engine answers."""
+
+    def _check_views_read_in(self) -> None:
+        return None
 
     def _check_domains(self) -> None:
         return None
@@ -233,7 +274,36 @@ class _Builder:
                 or index.views[rule.view][1] != index.constraints[path][1]
             ):
                 raise NotTranslatable(f"{path}: an obligation of a view of its own Space")
+        #: a guarded selector's path -> the scope whose guard it carries
+        self.guards: dict[str, str] = {}
+        for path in sorted(spelling.guarded_selectors):
+            info = index.scopes.get(path)
+            if info is None or info.when is None or info.selector is not None:
+                raise NotTranslatable(f"{path}: spelled as a selector's guard, but not a child")
+            held = info.scope
+            if len(held.selectors) != 1 or held != model.Scope(
+                held.name, selectors=held.selectors, when=held.when
+            ):
+                raise NotTranslatable(f"{path}: a selector's guard holds one selector alone")
+            self.guards[f"{path}.{held.selectors[0].name}"] = path
         self.externals = {scope: self._externals(scope) for scope in index.scopes}
+        #: per ``Members``: its export key, and its entries by the child's local name
+        self.keys: dict[str, ViewKey[Any]] = {}
+        self.located: dict[str, dict[str, str]] = {}
+        #: per scope: the export key of each entry it holds
+        self.exported: dict[str, dict[str, str]] = {scope: {} for scope in index.scopes}
+        for path, (members, scope) in sorted(index.members.items()):
+            self.keys[path] = ViewKey(_name(path), int)
+            self.located[path] = {}
+            for entry in members.entries:
+                below = index.derived[entry][1]
+                if index.scopes[below].parent != scope:
+                    raise NotTranslatable(f"{path}: {entry} is not in a child placed by its scope")
+                if path in self.exported[below]:
+                    raise NotTranslatable(f"{path}: two entries in {below}")
+                self.exported[below][path] = entry
+                local = below[len(scope) + 1 :] if scope else below
+                self.located[path][local] = entry
         #: per scope: the declaration of each member it owns, by model path or generated name
         self.declared: dict[str, dict[str, object]] = {scope: {} for scope in index.scopes}
         #: per scope: the node declaration of each child scope and case placed in it
@@ -252,7 +322,8 @@ class _Builder:
 
     def _reads(self, scope: str) -> set[str]:
         """Every read of a node at or below ``scope`` (the guards of the scopes below it
-        included, its own guard not: its parent evaluates that)."""
+        included, its own guard not, as its parent evaluates that, unless its selector
+        carries it)."""
         index = self.index
         found: set[str] = set()
         for path, choice in index.choices.items():
@@ -262,8 +333,12 @@ class _Builder:
             for path, (node, owner) in table.items():
                 if index.within(owner, scope):
                     found.update(node.reads)
+        for path, (members, owner) in index.members.items():
+            if index.within(owner, scope):
+                found.update(members.entries)
         for path, info in index.scopes.items():
-            if path != scope and info.when is not None and index.within(path, scope):
+            own = path == scope and path not in self.spelling.guarded_selectors
+            if not own and info.when is not None and index.within(path, scope):
                 found.update(info.when.reads)
         return found
 
@@ -341,8 +416,10 @@ class _Builder:
         if name.startswith("when-"):
             child = name.removeprefix("when-")
             return self.guard(scope, f"{scope}.{child}" if scope else child)
+        if name == OWN_GUARD:
+            return self.guard(scope, scope)
         if name in index.facts:
-            return Param(required=False)
+            return Param(required=False) if name in index.optional else Param()
         if name in index.choices and index.choices[name].cases is not None:
             # a selector's value, read as its selected key
             return self._selector_key(scope, name)
@@ -352,9 +429,19 @@ class _Builder:
             return self._derived(scope, name)
         if name in index.views:
             return self._view(scope, name)
+        if name in index.members:
+            return Members(self.keys[name])
         if name in index.constraints:
             return self._constraint(scope, name)
         raise NotTranslatable(f"{name}: nothing to declare in {scope or 'the root'}")
+
+    def model_reads(self, read: Mapping[str, Any]) -> dict[str, Any]:
+        """What a function of the description receives: each ``Members``'s ``Located``
+        entries as the model's sorted (entry, value) pairs."""
+        return {
+            path: pairs(self.located[path], value) if path in self.located else value
+            for path, value in read.items()
+        }
 
     def _aliases(self, scope: str, reads: tuple[str, ...]) -> dict[str, Any]:
         return {f"a{position}": self.reference(scope, read) for position, read in enumerate(reads)}
@@ -371,7 +458,8 @@ class _Builder:
         entries: dict[str, type[Space] | Space] = {}
         for case in info.cases:
             entries[case] = self.node(scope, f"{path}.{case}")
-        self.selectors[path] = Decision(entries, required=info.required)
+        guard = {"when": self.member(scope, OWN_GUARD)} if path in self.guards else {}
+        self.selectors[path] = Decision(entries, required=info.required, **guard)
         return self.selectors[path]
 
     def _choice(self, scope: str, path: str) -> object:
@@ -416,7 +504,7 @@ class _Builder:
         node = self.index.derived[path][0]
 
         def body(read: dict[str, Any]) -> object:
-            output = node.compute(read)
+            output = node.compute(self.model_reads(read))
             if isinstance(output, model.Refuse):
                 return reject(output.code, "the derived value refuses")
             return output
@@ -428,7 +516,7 @@ class _Builder:
         node = self.index.views[path][0]
 
         def body(read: dict[str, Any]) -> object:
-            output = node.body(read)
+            output = node.body(self.model_reads(read))
             if isinstance(output, model.Refuse):
                 return reject(output.code, "the view refuses")
             return output
@@ -440,7 +528,9 @@ class _Builder:
         rule = self.index.constraints[path][0]
 
         def body(read: dict[str, Any]) -> bool | Rejected:
-            return True if rule.predicate(read) else reject(rule.code, "the rule refuses")
+            if rule.predicate(self.model_reads(read)):
+                return True
+            return reject(rule.code, "the rule refuses")
 
         if isinstance(self.spelling.rule(path), ByName):
             return constraint(self._by_name(scope, path, rule.reads, body))
@@ -497,7 +587,7 @@ class _Builder:
             if info.when is not None:
                 raise NotTranslatable(f"{below}: a selector's case takes no guard here")
             nodes[below] = space_type()
-        elif info.when is None:
+        elif info.when is None or below in self.spelling.guarded_selectors:
             nodes[below] = space_type()
         else:
             guard = self.member(scope, "when-" + _name(below))
@@ -510,7 +600,7 @@ class _Builder:
         if any(self.index.within(self.owner(read), below) for read in when.reads):
             raise NotTranslatable(f"{below}: its guard reads inside it")
         return derived(**self._aliases(scope, when.reads))(
-            _explicit(when.reads, lambda read: bool(when.test(read)), bool)
+            _explicit(when.reads, lambda read: bool(when.test(self.model_reads(read))), bool)
         )
 
     def space_class(self, scope: str) -> type[Space]:
@@ -521,10 +611,10 @@ class _Builder:
         annotations: dict[str, object] = {}
         mine = [
             path
-            for table in (index.choices, index.derived, index.views, index.constraints)
+            for table in (index.choices, index.derived, index.views, index.members)
             for path in table
             if self.owner(path) == scope
-        ]
+        ] + [path for path in index.constraints if self.owner(path) == scope]
         if scope == "":
             for fact in sorted(index.facts):
                 members[fact] = self.member(scope, fact)
@@ -532,6 +622,8 @@ class _Builder:
         for path in self.externals[scope]:
             members[_input(path)] = self.member(scope, _input(path))
             annotations[_input(path)] = self.value_type(path)
+        if scope in self.spelling.guarded_selectors:
+            members[OWN_GUARD] = self.member(scope, OWN_GUARD)
         for path in mine:
             if path in index.choices and index.choices[path].cases is not None:
                 members[_name(path)] = self.selector(scope, path)
@@ -545,7 +637,7 @@ class _Builder:
             child = index.scopes[path]
             if child.parent == scope and child.selector is None:
                 members[_name(path)] = self.node(scope, path)
-                if child.when is not None:
+                if child.when is not None and path not in self.spelling.guarded_selectors:
                     members["when-" + _name(path)] = self.member(scope, "when-" + _name(path))
         # bind every placed node's formals (assigned after the node, as a class body may)
         for below, placed in self.nodes[scope].items():
@@ -559,7 +651,13 @@ class _Builder:
         if clashes:
             raise NotTranslatable(f"{scope}: names the harness generates: {clashes}")
         name = "Ref_" + (scope.replace(".", "_") or "root")
-        self.classes[scope] = composite(name, members, annotations=annotations)
+        exports = {
+            self.keys[path]: self.member(scope, entry)
+            for path, entry in sorted(self.exported[scope].items())
+        }
+        self.classes[scope] = composite(
+            name, members, annotations=annotations, exports=exports or None
+        )
         return self.classes[scope]
 
 
@@ -576,19 +674,52 @@ class Engine:
     root: type[Space]
     index: model.Index
     aliases: Mapping[str, str]
+    #: per ``Members``: its entries by the child's local name (``Located.node``)
+    located: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    #: a selector spelled with its scope's guard -> that scope, which its guard piece names
+    guards: Mapping[str, str] = field(default_factory=dict)
 
-    def open(self, facts: Mapping[str, object]) -> Point:
-        """The configuration with ``facts`` and nothing committed."""
-        return Point(self, design_space(self.root(**cast(dict[str, Any], facts))))
+    def open(self, facts: Mapping[str, object], implementation: Implementation = TODAY) -> Point:
+        """The configuration with ``facts`` and nothing committed, as ``implementation``
+        answers it (today's engine by default): an optional fact the model reads ``None``
+        left unsupplied. The design space is built by today's API, the common input every
+        implementation opens."""
+        supplied = {name: value for name, value in facts.items() if not self._left_out(name, value)}
+        configuration = design_space(self.root(**cast(dict[str, Any], supplied)))
+        return Point(self, implementation.open(configuration), implementation.name)
+
+    def make(
+        self,
+        facts: Mapping[str, object],
+        stored: Mapping[str, object],
+        implementation: Implementation = TODAY,
+    ) -> Point:
+        """The configuration with ``facts`` (as ``open`` takes them) and exactly the
+        choices ``stored`` (by path, dormant ones included), built from nothing by
+        ``implementation`` (``Implementation.make``): no rule checked, nothing dropped. A
+        walked configuration answers as the one made from its facts and stored choices."""
+        supplied = {name: value for name, value in facts.items() if not self._left_out(name, value)}
+        made = implementation.make(self.root, supplied, dict(stored))
+        return Point(self, made, implementation.name)
+
+    def _left_out(self, name: str, value: object) -> bool:
+        return value is None and name in self.index.optional
 
     def path(self, owner: str) -> str:
         """The model path an engine finding's owner names."""
         return self.aliases.get(owner, owner)
 
     def codes(self, findings: Iterable[Any], only: str | None = None) -> frozenset[Code]:
-        """Findings as codes; ``only``: the findings owned by that node alone."""
+        """Findings as codes; ``only``: the findings owned by that node alone. A guard
+        piece's own finding (``guard-refused``) of a selector spelled with its scope's guard
+        names the scope (``Spelling.guarded_selectors``)."""
         return frozenset(
-            (finding.code, self.path(finding.owner))
+            (
+                finding.code,
+                self.guards.get(finding.owner, finding.owner)
+                if finding.code == GUARD_REFUSED
+                else self.path(finding.owner),
+            )
             for finding in findings
             if only is None or finding.owner == only
         )
@@ -613,6 +744,8 @@ def build(
         root,
         builder.index,
         dict(builder.aliases),
+        builder.located,
+        dict(builder.guards),
     )
 
 
@@ -620,14 +753,17 @@ def definition(
     description: model.Space,
     spelling: Spelling | None = None,
     facts: Mapping[str, object] | None = None,
+    implementation: Implementation = TODAY,
 ) -> DefinitionForm:
     """Whether the engine takes ``description`` as a definition: a dependency cycle reported
-    when building the Space, or when asked (its validity, every rule and every view of the
-    configuration with ``facts``), is ``"cycle"``; a domain whose membership reads a choice,
-    refused at compile, is ``"domain-reads-choice"``; otherwise ``None``."""
+    when building the Space, or when ``implementation`` is asked (its validity, every rule
+    and every view of the configuration with ``facts``), is ``"cycle"``; a domain whose
+    membership reads a choice, refused at compile, is ``"domain-reads-choice"``; otherwise
+    ``None``. (Today's engine has no ``"view-read-in"``: it builds a Space reading a view
+    in, T4b's row.)"""
     try:
         engine = build(description, spelling, unchecked=True)
-        point = engine.open(dict(facts or {}))
+        point = engine.open(dict(facts or {}), implementation)
         point.validity()
         for path in sorted(engine.index.constraints):
             point.rule(path)
@@ -649,42 +785,40 @@ def definition(
 
 @dataclass(frozen=True)
 class Point:
-    """One engine configuration, asked the model's questions."""
+    """One configuration, as an implementation answers it (``answers``), asked the model's
+    questions: every one through the ``Answers`` interface, by key (a description's path is
+    its engine key)."""
 
     engine: Engine
-    point: Space
-
-    # -- handles
-
-    def _decisions(self) -> dict[str, Any]:
-        return {item.key: item.reference for item in inspection.decisions(self.point)}
-
-    def _members(self) -> dict[str, Any]:
-        return {item.key: item.reference for item in inspection.members(self.point)}
+    answers: Answers
+    #: the implementation answering (``Implementation.name``)
+    implementation: str = TODAY.name
 
     def stored(self) -> dict[str, object]:
         """The committed choices, dormant ones included, by path."""
-        current = occurrence.state(self.point)
-        return {current.linked.nodes[index].key: value for index, value in current.stored.items()}
+        return dict(self.answers.stored())
 
     def _query(self, path: str) -> QueryResult[Any]:
         index = self.engine.index
         if path in index.choices and index.choices[path].cases is not None:
+            # a selector's value, read as its selected key
             scope = index.choices[path].scope
-            key = f"{scope}.key-{_name(path)}" if scope else f"key-{_name(path)}"
-            return self.point.query(self._members()[key])
-        if path in index.choices:
-            return self.point.query(self._decisions()[path])
-        return self.point.query(self._members()[path])
+            return self.answers.query(_join(scope, f"key-{_name(path)}"))
+        return self.answers.query(path)
 
     def _paths(self, keys: Iterable[str]) -> frozenset[str]:
         return frozenset(self.engine.path(key) for key in keys)
 
+    def _successor(self, changed: Changed) -> Point | None:
+        if changed.after is None:
+            return None
+        return Point(self.engine, changed.after, self.implementation)
+
     # -- the questions
 
     def state(self, path: str) -> StateForm:
-        """A choice's state (``inspection.states``)."""
-        found = dict(inspection.states(self.point))[path]
+        """A choice's state (``Answers.states``)."""
+        found = dict(self.answers.states())[path]
         if isinstance(found, inspection.Set):
             return StateForm("set", found.value)
         if isinstance(found, inspection.Waiting):
@@ -700,10 +834,9 @@ class Point:
         result = self._query(path)
         engine = self.engine
         if isinstance(result, Available):
-            stored = self.stored()
-            value = stored[path] if path in stored else result.value
-            if path in engine.index.choices and engine.index.choices[path].cases is not None:
-                value = result.value
+            value = result.value
+            if path in engine.located:
+                value = pairs(engine.located[path], result.value)
             return AnswerForm("value", value)
         if isinstance(result, Unresolved):
             return AnswerForm("unresolved", blockers=engine.blockers(result.findings, path))
@@ -713,15 +846,14 @@ class Point:
 
     def rule(self, path: str) -> RuleForm:
         """A rule's answer."""
-        result = self.point.query(self._members()[path])
-        return _rule(self.engine, result)
+        return _rule(self.engine, self.answers.query(path))
 
     def validity(self) -> ValidityForm:
-        """The engine's validity of the configuration (``inspection.validity``): refused
-        with its false pieces' codes, open with what its unknown pieces wait on (each
-        piece's own key aside), or valid."""
+        """The implementation's validity of the configuration (``Answers.validity``):
+        refused with its false pieces' codes, open with what its unknown pieces wait on
+        (each piece's own key aside), or valid."""
         engine = self.engine
-        answer = inspection.validity(self.point)
+        answer = self.answers.validity()
         if answer.status == "refused":
             false = frozenset().union(
                 *(engine.codes(piece.result.findings) for piece in answer.pieces)
@@ -738,10 +870,10 @@ class Point:
         return ValidityForm("valid")
 
     def possible(self, path: str) -> PossibleForm:
-        """A choice's possible values (``inspection.viable``): each listed value possible,
+        """A choice's possible values (``Answers.viable``): each listed value possible,
         with what it moves, or impossible, with each rule it breaks; ``None`` where the
         engine lists nothing."""
-        (found,) = inspection.viable(self.point, [self._decisions()[path]])
+        (found,) = self.answers.viable([path])
         if found.values is None:
             return PossibleForm(None)
         outcomes: list[tuple[object, OutcomeForm]] = []
@@ -756,53 +888,41 @@ class Point:
 
     def change(self, edit: model.Change) -> tuple[ChangeForm, Point | None]:
         """``edit`` applied: its comparable result, and the configuration it publishes."""
-        if edit.unset:
-            raise NotTranslatable("the engine cannot set a fact back to unknown")
-        decisions = self._decisions()
-        commits = {decisions[path]: value for path, value in edit.commit.items()}
-        clears: list[ChangeRequest] = [
-            self.point.field(decisions[path]).clear() for path in edit.clear
-        ]
-        if edit.facts:
-            members = self._members()
-            facts = {members[name]: value for name, value in edit.facts.items()}
-            report = self.point.try_with_facts(facts, commits, *clears)
-        else:
-            report = self.point.try_with_choices(commits, *clears)
-        return self._form(report, self.stored())
+        if edit.unset or any(
+            self.engine._left_out(name, value) for name, value in edit.facts.items()
+        ):
+            raise NotTranslatable("the engine cannot set an optional fact back to unsupplied")
+        before = self.stored()
+        changed = self.answers.change(dict(edit.commit), tuple(edit.clear), dict(edit.facts))
+        return self._form(changed, before)
 
     def bind(self, stored: Mapping[str, object]) -> tuple[ChangeForm, Point]:
-        """``stored`` bound under this design space's facts (``finn.core.space.bind``): the
-        design space of the facts with exactly those choices, never refused. Its report, and
-        the design space it publishes. Its report reads against the facts with nothing
-        stored, whatever this design space stores, as the model's ``bind`` does."""
-        decisions = self._decisions()
-        saved = {decisions[path]: value for path, value in stored.items()}
-        report = space_bind(self.point, saved)
-        form, point = self._form(report, stored)
+        """``stored`` bound under this design space's facts (``Answers.bind``): the design
+        space of the facts with exactly those choices, never refused. Its report, and the
+        design space it publishes. Its report reads against the facts with nothing stored,
+        whatever this design space stores, as the model's ``bind`` does."""
+        form, point = self._form(self.answers.bind(dict(stored)), stored)
         if point is None:
             raise AssertionError(f"the engine refused a bind: {form}")
         return form, point
 
     def bind_outcomes(self, stored: Mapping[str, object]) -> tuple[tuple[str, str, bool], ...]:
-        """Each outcome of ``stored``'s bind (``finn.core.space.bind``), in the saved order:
-        its choice's path, its status and whether it was requested. The model's bind has no
+        """Each outcome of ``stored``'s bind (``Answers.bind``), in the saved order: its
+        choice's path, its status and whether it was requested. The model's bind has no
         statuses; a hand case reads them against what it keeps and drops."""
-        decisions = self._decisions()
-        saved = {decisions[path]: value for path, value in stored.items()}
-        report = space_bind(self.point, saved)
+        report = self.answers.bind(dict(stored)).report
         return tuple(
             (self.engine.path(outcome.owner), outcome.status, outcome.requested)
             for outcome in report.outcomes
         )
 
     def _form(
-        self, report: ConfigurationResult[Space], before: Mapping[str, object]
+        self, changed: Changed, before: Mapping[str, object]
     ) -> tuple[ChangeForm, Point | None]:
-        """A change's or a bind's ``report`` in the comparable form, and what it publishes.
+        """A change's or a bind's report in the comparable form, and what it publishes.
         A dropped value's old value is read from ``before``: the receiver's stored choices,
         or a bind's saved ones."""
-        engine = self.engine
+        engine, report = self.engine, changed.report
         if not report.accepted:
             refusals = _assignments(engine, report.outcomes) | _broken(engine, report.broken)
             return ChangeForm(False, refusals=refusals), None
@@ -814,7 +934,25 @@ class Point:
             dropped=_dropped(engine, report.outcomes, before),
             broken=_broken(engine, report.broken),
         )
-        return form, Point(engine, report.instance)
+        successor = self._successor(changed)
+        if successor is None:
+            raise AssertionError(f"{self.implementation} accepted a change with no successor")
+        return form, successor
+
+
+def _join(scope: str, name: str) -> str:
+    return f"{scope}.{name}" if scope else name
+
+
+def pairs(entries: Mapping[str, str], located: object) -> tuple[tuple[str, object], ...]:
+    """A ``Members``'s ``Located`` entries as the model's sorted (entry, value) pairs, each
+    ``Located.node`` mapped to its entry's path."""
+    found: list[tuple[str, object]] = []
+    for item in cast(tuple[Located[object], ...], located):
+        if item.node is None or item.node not in entries:
+            raise AssertionError(f"a Members entry from an unknown child {item.node!r}")
+        found.append((entries[item.node], item.value))
+    return tuple(sorted(found, key=lambda pair: pair[0]))
 
 
 def _rule(engine: Engine, result: QueryResult[Any]) -> RuleForm:

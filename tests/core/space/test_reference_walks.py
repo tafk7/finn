@@ -9,10 +9,13 @@ model's invariants hold strictly (history-independence and the bind publishing i
 nothing broken, additions moving answers only up the information order, no accepted change
 adding a (false piece, origin) pair, every refusal naming exactly its origins and their
 standing choices), and the engine's own checks hold (its walked configuration against one
-built from nothing). No milestone with rows is pending, so each disagreement with the model
-fails its walk; while a later one is, they are counted, and with its rows taken as removed,
-each fails its walk. Every invariant's checker is
-also shown catching a deliberately wrong answer on a small description.
+built from nothing). Each seed walks twice (DESIGN § 6): the strict run draws neither of the
+rulings' causes the engine has not reached (no view read in, every fact given, no unset),
+and each disagreement fails it; the full run draws both, attributes each disagreement by its
+cause to T4b or T4c (or T4a, whose shape a walk is given by hand) and counts it under that
+pending milestone, and fails on an unattributed one, or on one whose milestone is taken as
+removed. Every invariant's checker is also shown
+catching a deliberately wrong answer on a small description.
 
 The gate runs a fixed set of seeds; ``python -m core.space.reference_harness walks`` (from
 ``tests``) runs more and prints what they met.
@@ -20,6 +23,7 @@ The gate runs a fixed set of seeds; ``python -m core.space.reference_harness wal
 
 from __future__ import annotations
 
+import functools
 import random
 from collections.abc import Callable, Iterable
 from dataclasses import replace
@@ -48,10 +52,12 @@ from core.space.reference import (
     computed,
     listed,
 )
-from core.space.reference_harness import Row, walks
-from core.space.reference_harness.engine import Point
+from core.space.reference_harness import Case, walks
+from core.space.reference_harness.compare import agrees, answer_form, change_form, possible_form
+from core.space.reference_harness.engine import Engine, Point, Spelling, build
 from core.space.reference_harness.forms import (
     AnswerForm,
+    DefinitionForm,
     Form,
     RuleForm,
     StateForm,
@@ -68,11 +74,11 @@ from core.space.reference_harness.walks import (
     counted_pairs,
     differences,
     generate,
-    masking_problems,
     model_forms,
     order_problems,
     pending,
     questions,
+    refused_below,
     table,
     walk,
 )
@@ -81,12 +87,21 @@ SEEDS = range(24)
 STEPS = 30
 
 
+@functools.cache
+def gate_walk(seed: int, strict: bool) -> walks.Tally:
+    """The gate's walk of ``seed``, run once per session (never under a monkeypatch)."""
+    return walk(seed, STEPS, strict=strict)
+
+
+@pytest.mark.parametrize("strict", [True, False], ids=["strict", "full"])
 @pytest.mark.parametrize("seed", SEEDS)
 def test_a_seeded_walk_keeps_the_four_invariants_and_the_engines_own_checks(
-    seed: int,
+    seed: int, strict: bool
 ) -> None:
-    tally = walk(seed, STEPS)
+    tally = gate_walk(seed, strict)
     assert tally.failure is None, tally.failure
+    if strict:
+        assert not tally.by_milestone and not tally.model_only
     # each step is a change of choices (its assignment checked) or a facts step; a batch's
     # choices are checked as a change of choices too
     checks = tally.checks
@@ -99,10 +114,20 @@ def test_a_seeded_walk_keeps_the_four_invariants_and_the_engines_own_checks(
     assert tally.engine_checks["cold"] == tally.engine_checks["bind"] == tally.compared
     assert tally.engine_checks["bind held"] == tally.compared
     assert tally.engine_errors == 0
+    # today's engine, every permanent check run (the cold build through today's ``make``)
+    assert tally.implementation == "today"
+    assert tally.engine_checks["cold change"] == tally.steps - tally.model_only
+
+
+def test_the_full_run_meets_both_causes_and_counts_each_under_its_milestone() -> None:
+    tallies = [gate_walk(seed, False) for seed in SEEDS]
+    counted = sum((tally.by_milestone for tally in tallies), start=type(tallies[0].checks)())
+    assert counted["T4b"] and counted["T4c"], counted
+    assert set(counted) <= {"T4b", "T4c"}
 
 
 def test_the_gates_walks_exercise_every_invariant() -> None:
-    tallies = [walk(seed, STEPS) for seed in range(6)]
+    tallies = [gate_walk(seed, False) for seed in range(6)]
     checks = sum((tally.checks for tally in tallies), start=type(tallies[0].checks)())
     for name in (
         "2 additions",
@@ -121,31 +146,41 @@ def test_the_gates_walks_exercise_every_invariant() -> None:
 
 
 def test_a_walk_is_the_same_for_the_same_seed() -> None:
-    first, second = walk(5, 12), walk(5, 12)
-    assert (first.steps, first.accepted, first.checks, first.by_question) == (
+    first, second = walk(22, 12), walk(22, 12)
+    assert (first.steps, first.accepted, first.checks, first.by_milestone) == (
         second.steps,
         second.accepted,
         second.checks,
-        second.by_question,
+        second.by_milestone,
     )
 
 
-def test_descriptions_hold_two_to_six_choices_and_skip_cycles() -> None:
+def test_descriptions_hold_two_to_six_choices_and_skip_views_read_in() -> None:
     rng = random.Random(7)
     skipped = 0
+    left_out = 0
     for _ in range(40):
         generated, engine = generate(rng)
-        skipped += generated.skipped["cycle"]
+        skipped += generated.skipped["view-read-in"]
+        assert len(generated.read_in) <= generated.skipped["view-read-in"]
         assert 2 <= sum(info.cases is None for info in engine.index.choices.values()) <= 6
         assert generated.text.startswith("facts ")
-    assert skipped  # a rule reading a view of its own Space is drawn now and then, and skipped
+        assert set(engine.index.facts) - set(generated.facts) <= engine.index.optional
+        left_out += len(set(engine.index.facts) - set(generated.facts))
+    # a rule reading a view is drawn now and then (SZ100 (3)), checked against the engine's
+    # definition and skipped; an optional fact is left out now and then (SZ100 (5))
+    assert skipped and left_out
+    for _ in range(40):
+        generated, engine = generate(rng, strict=True)
+        assert not generated.skipped["view-read-in"] and not generated.read_in
+        assert set(generated.facts) == set(engine.index.facts)
 
 
-# -- the engine comparison: counted while a milestone is pending, strict without -------------------
+# -- the engine comparison: attributed by cause in the full run, failing in the strict one -------
 #
-# The engine agrees with the model on every walk, so a disagreement is made here: the engine
-# answers every choice's state as absent (the model's start holds an open choice), and a
-# milestone with one row is put in the matrix while one is pending.
+# Today's engine differs from the model where the rulings reach (T4b, T4c). Elsewhere it
+# agrees, so a disagreement with no cause is made here: the engine answers every choice's
+# state as absent (the model's start holds an open choice).
 
 
 @pytest.fixture
@@ -161,68 +196,277 @@ def engine_disagrees(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(walks, "engine_forms", absent)
 
 
-def pend(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A later milestone, ``lane 9``, with one row: pending."""
-    row = Row("a-row", "lane 9", "the change", "test_reference_cases::test_it")
-    monkeypatch.setattr(walks, "MILESTONES", ("base", "lane 9"))
-    monkeypatch.setattr(walks, "ROWS", (row,))
+def first_line(tally: walks.Tally) -> str:
+    assert tally.failed == "disagreement" and tally.failure is not None
+    assert "description:" in tally.failure and "| engine" in tally.failure
+    return tally.failure.splitlines()[0]
 
 
 @pytest.mark.usefixtures("engine_disagrees")
-def test_disagreements_are_counted_while_a_milestone_has_rows(
+def test_a_disagreement_with_no_cause_fails_the_full_run_and_any_fails_the_strict_run() -> None:
+    # seed 1 declares no optional fact: nothing reaches one left out
+    assert first_line(walk(1, 6)) == "seed 1, step 0: the engine disagrees (state; no cause)"
+    strict = walk(1, 6, strict=True)
+    assert first_line(strict) == "seed 1, step 0: the engine disagrees (state; strict run)"
+
+
+def test_a_view_read_in_is_counted_under_t4b_until_it_is_taken_as_removed() -> None:
+    # seed 0 draws a rule reading a view before its description: the model refuses it as
+    # view-read-in, the engine builds it
+    tally = walk(0, 3)
+    assert tally.failure is None, tally.failure
+    assert (tally.by_milestone["T4b"], tally.by_question["definition"]) == (1, 1)
+    assert first_line(walk(0, 3, without=("T4b",))) == (
+        "seed 0, step 0: the engine disagrees (definition; T4b not pending)"
+    )
+
+
+def test_an_engine_refusing_a_view_read_in_as_the_model_does_is_not_counted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pend(monkeypatch)
-    assert pending() == ("lane 9",)
-    tally = walk(0, 6)
+    # once T4b's engine answers view-read-in, seed 0's drawn description agrees: nothing counted
+    def refusing(*_: object, **__: object) -> DefinitionForm:
+        return DefinitionForm("view-read-in")
+
+    monkeypatch.setattr(walks, "definition", refusing)
+    tally = walk(0, 3)
     assert tally.failure is None, tally.failure
-    assert tally.by_question["state"] > 0 and tally.engine_errors == 0
+    assert (tally.by_milestone["T4b"], tally.by_question["definition"]) == (0, 0)
 
 
-@pytest.mark.usefixtures("engine_disagrees")
+def test_a_question_reaching_an_optional_fact_left_out_is_counted_under_t4c() -> None:
+    # seed 7 leaves its optional f1 out: the engine reads it unresolved, the model None, so
+    # f1's own answer (its subject the fact itself) and a rule reading it disagree, each
+    # counted under T4c
+    tally = walk(7, 3)
+    assert tally.failure is None, tally.failure
+    assert tally.by_milestone == {"T4c": 2}
+    assert tally.by_question == {"answer": 1, "rule": 1}
+    removed = walk(7, 3, without=("T4c",))
+    assert first_line(removed) == "seed 7, step 0: the engine disagrees (answer; T4c not pending)"
+    assert removed.failure is not None and "walk: the answer of f1" in removed.failure
+
+
+# T4a (reading 8): no drawn description holds a guard below a refused guard (nothing is drawn
+# below the guarded scope), so a walk is given one: a chosen selector under a refused when,
+# written as the selector's own guard (the matrix's witness's shape). Today's engine counts a
+# piece for each case's guard beside the selector's.
+
+HEATED = Space(
+    ("gate",),
+    Scope(
+        "",
+        derived=(
+            Derived("heated", ("gate",), lambda r: Refuse("off") if r["gate"] == 1 else True),
+        ),
+        children=(
+            Scope(
+                "plant",
+                when=When(("heated",), lambda r: bool(r["heated"])),
+                selectors=(
+                    Selector(
+                        "heating",
+                        (
+                            Scope("boiler", choices=(Choice("stages", listed(1, 2, 3)),)),
+                            Scope("heat_pump", choices=(Choice("cop", listed(2, 3, 4)),)),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+@pytest.fixture
+def guard_below_a_refused_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every walk draws ``HEATED`` at gate 1, its selector carrying ``plant``'s guard."""
+    spelling = Spelling(types={"heated": bool}, guarded_selectors=frozenset({"plant"}))
+
+    def drawn(*_: object, **__: object) -> tuple[walks.Generated, Engine]:
+        return walks.Generated(HEATED, "HEATED", {"gate": 1}), build(HEATED, spelling)
+
+    monkeypatch.setattr(walks, "generate", drawn)
+
+
+@pytest.mark.usefixtures("guard_below_a_refused_guard")
+def test_a_guard_refused_below_a_refused_guard_is_counted_under_t4a() -> None:
+    # by the model's presence states, the cases are T4a's scopes while plant's guard refuses
+    configuration = Configuration(HEATED, {"gate": 1})
+    found = refused_below(configuration.index, configuration.solve())
+    assert found == {"plant.heating.boiler", "plant.heating.heat_pump"}
+    assert not refused_below(configuration.index, Configuration(HEATED, {"gate": 2}).solve())
+    structure = Structure(configuration.index)
+    assert structure.reaches_scope({"plant.heating.boiler.stages"}, found)
+    assert not structure.reaches_scope({"heated"}, found)
+    # validity, and possible values and changes carrying its findings, differ: each counted
+    tally = walk(0, 20)
+    assert tally.failure is None, tally.failure
+    assert set(tally.by_milestone) == {"T4a"} and tally.by_question["validity"]
+    assert first_line(walk(0, 20, without=("T4a",))) == (
+        "seed 0, step 0: the engine disagrees (validity; T4a not pending)"
+    )
+    assert first_line(walk(0, 20, strict=True)) == (
+        "seed 0, step 0: the engine disagrees (validity; strict run)"
+    )
+
+
+@pytest.mark.usefixtures("guard_below_a_refused_guard")
+def test_the_cause_of_a_question_reaching_a_guard_below_a_refused_guard_is_t4a() -> None:
+    # The walk's own attribution, asked directly: at gate 1 validity (no subject) and an
+    # answer under ``plant`` reach the cases' guards, refused below plant's; ``heated``,
+    # outside ``plant``, reaches none. At gate 2 the guard holds: nothing has a cause.
+    walked = walks._Walk(0, 0, False, pending())
+    refused, holding = Configuration(HEATED, {"gate": 1}), Configuration(HEATED, {"gate": 2})
+    assert walked.cause(None, refused) == "T4a"
+    assert walked.cause("plant.heating.boiler.stages", refused) == "T4a"
+    assert walked.cause("heated", refused) is None
+    for subject in (None, "plant.heating.boiler.stages", "heated"):
+        assert walked.cause(subject, holding) is None
+
+
+@pytest.mark.usefixtures("guard_below_a_refused_guard")
+def test_switching_a_selector_under_a_refused_when_is_attributed_t4a() -> None:
+    # A case stored under the refused guard: switching to the other case adds no pair in the
+    # model (one guard piece, plant's, before and after). Today's engine counts each case's
+    # guard apart, so the switch adds one: it refuses the change, and lists the case as
+    # impossible. Both questions reach the whole description, attributed T4a, as the walk
+    # asks them (a change against its predecessor and the published facts).
+    spelling = Spelling(types={"heated": bool}, guarded_selectors=frozenset({"plant"}))
+    pair = Case("switch", HEATED, spelling).start({"gate": 1}, {"plant.heating": "boiler"})
+    switch = Change(commit={"plant.heating": "heat_pump"})
+    expected = change_form(pair.model, switch, change(pair.model, switch))
+    found, _ = pair.engine.change(switch)
+    assert expected.accepted and not found.accepted
+    viable = possible_form(pair.solution(), "plant.heating")
+    assert not agrees(viable, pair.engine.possible("plant.heating"))
+    walked = walks._Walk(0, 0, False, pending())
+    published = Configuration(HEATED, {"gate": 1})
+    assert walked.cause(None, pair.model, published) == "T4a"  # the change
+    assert walked.cause(None, pair.model) == "T4a"  # the possible values
+
+
+# A refused guard below an unknown one (reading 8's second half): ``s`` open, its case ``a``
+# holding ``g``, present when ``d`` is at least 1, and ``d`` refusing an odd ``f``.
+
+IN_AN_OPEN_CASE = Space(
+    ("f",),
+    Scope(
+        "",
+        derived=(Derived("d", ("f",), lambda r: Refuse("d-odd") if r["f"] % 2 else r["f"]),),
+        selectors=(
+            Selector(
+                "s",
+                (
+                    Scope(
+                        "a",
+                        choices=(Choice("p", listed(1, 2)),),
+                        children=(
+                            Scope(
+                                "g",
+                                when=When(("d",), lambda r: r["d"] >= 1),
+                                choices=(Choice("q", listed(1, 2)),),
+                            ),
+                        ),
+                    ),
+                    Scope("b", choices=(Choice("r", listed(1, 2)),)),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def test_the_cause_of_a_question_reaching_a_refused_guard_under_an_open_selector_is_t4a(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def drawn(*_: object, **__: object) -> tuple[walks.Generated, Engine]:
+        generated = walks.Generated(IN_AN_OPEN_CASE, "IN_AN_OPEN_CASE", {"f": 1})
+        return generated, build(IN_AN_OPEN_CASE)
+
+    monkeypatch.setattr(walks, "generate", drawn)
+    walked = walks._Walk(0, 0, False, pending())
+    open_ = Configuration(IN_AN_OPEN_CASE, {"f": 1})
+    assert refused_below(open_.index, open_.solve()) == {"s.a.g"}
+    # ``s`` open: validity, and a subject under ``g``, reach ``g``'s guard
+    assert walked.cause(None, open_) == "T4a"
+    assert walked.cause("s.a.g.q", open_) == "T4a"
+    # a subject outside ``a`` reaches none
+    for subject in ("s.b.r", "d"):
+        assert walked.cause(subject, open_) is None
+    # ``s`` set to ``b``: ``g`` is absent, nothing has a cause
+    other = Configuration(IN_AN_OPEN_CASE, {"f": 1}, {"s": "b"})
+    assert not refused_below(other.index, other.solve())
+    assert walked.cause(None, other) is None
+
+
+def test_each_facts_answer_is_asked_at_each_configuration() -> None:
+    # A fact's answer is always known (SZ100 (5)): the model answers its value, or None for
+    # an optional one left out (seed 7's f1), and the engine is asked it through ``query``
+    generated, engine = generate(random.Random(7))
+    index = generated.description.validate()
+    assert index.optional and set(index.optional) - set(generated.facts)
+    asked = questions(index)
+    assert {("answer", fact) for fact in index.facts} <= set(asked)
+    configuration = Configuration(generated.description, generated.facts)
+    solution, point = configuration.solve(), engine.open(dict(generated.facts))
+    for fact in sorted(index.facts):
+        expected = generated.facts.get(fact)
+        assert answer_form(solution, fact) == AnswerForm("value", expected)
+        found = point.answer(fact)
+        if fact in generated.facts:
+            assert found == AnswerForm("value", expected)
+        else:  # left out: today's engine reads it unresolved (T4c's row)
+            assert found.kind == "unresolved", found
+
+
 def test_with_no_milestone_pending_every_disagreement_fails_its_walk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(walks, "ROWS", ())
     assert pending() == ()
-    strict = walk(0, 6)
-    pend(monkeypatch)
-    assert pending(("lane 9",)) == ()
-    without = walk(0, 6, without=("lane 9",))
-    for tally in (strict, without):
-        assert tally.failed == "disagreement" and tally.failure is not None
-        first = tally.failure.splitlines()[0]
-        assert first == "seed 0, step 0: the engine disagrees (state)"
-        assert "description:" in tally.failure and "| engine" in tally.failure
+    assert first_line(walk(7, 3)) == (
+        "seed 7, step 0: the engine disagrees (answer; T4c not pending)"
+    )
     with pytest.raises(ValueError, match="no such milestone"):
         pending(("lane 10",))
 
 
-def test_the_summary_names_the_mode_and_the_checks(monkeypatch: pytest.MonkeyPatch) -> None:
-    tallies = [walk(0, 3)]
-    pend(monkeypatch)
+def test_the_summary_names_the_runs_the_milestones_and_the_checks() -> None:
+    tallies = [walk(7, 3), walk(7, 3, strict=True)]
     text = table(tallies)
-    checks = ", ".join(f"{name} {count}" for name, count in sorted(tallies[0].checks.items()))
-    assert (
-        f"invariant checks: {checks}; binds reading refused, reporting rules a clear revealed "
-        "(§ 16.16) 0, or new facts broke (§ 16.24) 0" in text
+    checks = ", ".join(
+        f"{name} {count}"
+        for name, count in sorted((tallies[0].checks + tallies[1].checks).items())
+        if count
     )
-    assert "engine disagreements (counted (pending: lane 9)) by question:" in text
-    assert "excused" not in text
-    assert text.splitlines()[2].startswith("| 0 | 3 |")
-    assert "strict (no milestone with rows pending)" in table(tallies, ("lane 9",))
+    assert (
+        f"invariant checks: {checks}; binds reading refused, reporting rules new facts broke "
+        "(§ 16.24) 0" in text
+    )
+    assert "walks 2 (full 1, strict 1)" in text
+    assert "implementation: today" in text.splitlines()
+    assert (
+        "engine disagreements (full: attributed by cause, counted while pending (T4a, T4b, "
+        "T4c), else failing; strict: every one failing): by milestone T4a 0, T4b 0, T4c 2; by "
+        "question answer 1, rule 1"
+    ) in text
+    assert text.splitlines()[2].startswith("| 7 | full | 3 |")
+    assert text.splitlines()[3].startswith("| 7 | strict | 3 |")
+    removed = ("T4a", "T4b", "T4c")
+    assert "every one failing (no milestone with rows pending)" in table(tallies, removed)
 
 
 def test_a_broken_standing_list_in_the_model_fails_a_walk(monkeypatch: pytest.MonkeyPatch) -> None:
     # The walk end to end: a model naming one standing choice too few fails at the step. The
-    # engine, unbroken, disagrees with it sooner (its possible values name the standing
-    # choices too): counted, under a milestone pending, so the invariant is what fails.
+    # engine, unbroken, would disagree with it sooner (its possible values name the standing
+    # choices too), so the engine's answers are taken as agreeing: the invariant is what fails.
     standing: Callable[..., tuple[str, ...]] = reference.model._standing
     monkeypatch.setattr(reference.model, "_standing", lambda *args: standing(*args)[1:])
-    pend(monkeypatch)
-    tally = walk(11, 3)
+    monkeypatch.setattr(walks, "agrees", lambda *args: True)
+    tally = walk(30, 4)
     assert tally.failed == "4 standing" and tally.failure is not None
-    assert tally.failure.startswith("seed 11, step 3: invariant 4 standing: clearing")
+    assert tally.failure.startswith("seed 30, step 4: invariant 4 standing: clearing")
 
 
 # -- invariant 1: history-independence and the bind ------------------------------------------------
@@ -276,7 +520,7 @@ def test_a_configuration_binds_again_with_nothing_broken() -> None:
     assert bind_problems(walked, broke) == (
         [
             "1 bind: reports [('linked', 'constraint')]; what a walk publishes binds again "
-            "with nothing broken (FN3), but for rules a clear revealed ([])"
+            "with nothing broken (FN3), but for rules new facts broke ([])"
         ],
         frozenset({"linked"}),
     )
@@ -305,7 +549,7 @@ def test_a_walk_never_reaches_a_configuration_whose_bind_is_refused() -> None:
     problems, _ = bind_problems(built, bound)
     assert problems == [
         "1 bind: reports [('d', 'derived')]; what a walk publishes binds again with nothing "
-        "broken (FN3), but for rules a clear revealed ([])"
+        "broken (FN3), but for rules new facts broke ([])"
     ]
 
 
@@ -370,10 +614,10 @@ def test_a_choice_the_step_sets_holds_its_value_and_kept_out_of_play_turns_dorma
     assert below(StateForm("absent"), StateForm("set", 2), (2,)) == "absent, set: set"
 
 
-def views_of_a_space_refused_by_an_addition() -> Space:
+def a_view_of_a_space_refused_by_an_addition() -> Space:
     """The probe of § 16.14: ``g``, in case ``a`` of the open ``s``, is guarded by ``d``,
-    which refuses the fact ``f`` when odd; the root's view ``v`` reads ``f``, and the root's
-    rule ``uses`` reads ``v``."""
+    which refuses the fact ``f`` when odd; the root's view ``v`` reads ``f``. (Its second
+    shape, a root rule reading a child's view, went with views read out: SZ100 (3).)"""
     g = Scope("g", when=When(("d",), lambda r: r["d"] > 0), choices=(Choice("n", listed(1, 2)),))
     return Space(
         ("f",),
@@ -382,38 +626,31 @@ def views_of_a_space_refused_by_an_addition() -> Space:
             selectors=(Selector("s", (Scope("a", children=(g,)), Scope("b"))),),
             derived=(Derived("d", ("f",), lambda r: Refuse("odd") if r["f"] % 2 else r["f"]),),
             views=(View("v", ("f",), lambda r: r["f"]),),
-            children=(
-                Scope(
-                    "k",
-                    views=(View("w", ("f",), lambda r: r["f"]),),
-                    selectors=(Selector("t", (Scope("x", children=(g,)), Scope("y"))),),
-                ),
-            ),
-            constraints=(Constraint("uses", ("k.w",), lambda r: r["k.w"] > 0, "unused"),),
         ),
     )
 
 
 def test_an_addition_that_would_leave_a_space_refused_is_refused() -> None:
-    # § 16.15 removes § 16.14's exception: selecting ``a`` (or ``k``'s ``x``) makes the guard's
-    # piece false through ``d``, over the facts alone: a new pair, refused with nothing
-    # standing. Were it accepted, the root's view ``v`` (or the rule ``uses``, through ``k``'s
-    # view ``w``) would move down the information order, and invariants 2 and 3 name it.
-    start = Configuration(views_of_a_space_refused_by_an_addition(), {"f": 3})
+    # § 16.15 removes § 16.14's exception: selecting ``a`` makes the guard's piece false
+    # through ``d``, over the facts alone: a new pair, refused with nothing standing. Were it
+    # accepted, the root's view ``v`` would move down the information order, and invariants 2
+    # and 3 name it.
+    start = Configuration(a_view_of_a_space_refused_by_an_addition(), {"f": 3})
     structure = Structure(start.index)
     asked = questions(start.index)
     before = model_forms(start.solve(), asked)
-    for selector, case, moved in (("s", "a", ("answer", "v")), ("k.t", "x", ("rule", "uses"))):
-        edit = Change(commit={selector: case})
-        result = change(start, edit)
-        assert isinstance(result, Rejected)
-        assert result.refusals == (RuleRefusal("d", "derived", ODD, ()),)
-        assert check_change(structure, start, edit, result).problems == []
-        published = Configuration(start.space, {"f": 3}, {selector: case})
-        fake = Accepted(published, (), (), (), published.solve().validity())
-        problems = check_change(structure, start, edit, fake).problems
-        assert len(problems) == 1 and problems[0].startswith("3 accepted: ")
-        assert moved in order_problems(before, model_forms(published.solve(), asked), edit.commit)
+    edit = Change(commit={"s": "a"})
+    result = change(start, edit)
+    assert isinstance(result, Rejected)
+    assert result.refusals == (RuleRefusal("d", "derived", ODD, ()),)
+    assert check_change(structure, start, edit, result).problems == []
+    published = Configuration(start.space, {"f": 3}, {"s": "a"})
+    fake = Accepted(published, (), (), (), published.solve().validity())
+    problems = check_change(structure, start, edit, fake).problems
+    assert len(problems) == 1 and problems[0].startswith("3 accepted: ")
+    assert ("answer", "v") in order_problems(
+        before, model_forms(published.solve(), asked), edit.commit
+    )
 
 
 # -- invariants 3 and 4: no pair added; refusals named exactly ------------------------------------
@@ -562,67 +799,29 @@ def test_the_counted_pairs_name_each_false_piece_with_the_origins_it_is_false_th
         assert check_change(structure, base, edit, result).problems == []
 
 
-# -- clears and unsets (§ 16.16): never refused, adding a pair only by masking ---------------------
+# -- clears (§ 16.16): never refused, and adding no pair (SZ100 (3)) -------------------------------
 
 
-def viewed_child() -> Space:
-    """The child ``c`` caps ``x``; its view ``v`` answers ``y``; the root's ``high`` asks
-    ``v`` to be at least 2: while ``c`` is refused, ``high`` is false through ``v`` alone."""
-    child = Scope(
-        "c",
-        choices=(Choice("x", listed(1, 2, 3)), Choice("y", listed(1, 2, 3))),
-        constraints=(Constraint("small", ("c.x",), lambda r: r["c.x"] <= 1, "big"),),
-        views=(View("v", ("c.y",), lambda r: r["c.y"]),),
-    )
-    return Space(
-        (),
-        Scope(
-            "",
-            children=(child,),
-            constraints=(Constraint("high", ("c.v",), lambda r: r["c.v"] >= 2, "low"),),
-        ),
-    )
-
-
-def test_a_clear_revealing_a_masked_rule_is_accepted_and_its_bind_reports_the_rule() -> None:
-    masked = Configuration(viewed_child(), {}, {"c.x": 3, "c.y": 1})
-    edit = Change(clear=("c.x",))
-    result = change(masked, edit)
-    assert isinstance(result, Accepted)
-    checked = check_change(Structure(masked.index), masked, edit, result)
-    assert (checked.problems, checked.revealed, checked.runs["3 clears"]) == ([], {"high"}, 1)
-    # refused, a clear-only change is a problem whatever it adds
-    fake = Rejected((RuleRefusal("high", "constraint", (), ()),), None)
-    assert check_change(Structure(masked.index), masked, edit, fake).problems == [
-        "3 clears: a change made only of clears and unsets is refused (§ 16.16)"
-    ]
-    # its bind reports the revealed rule: expected after the clear, and only then
-    revealed = result.configuration
-    bound = reference.bind(viewed_child(), {}, revealed.stored)
-    assert [item.origin for item in bound.broken] == ["high"]
-    assert bind_problems(revealed, bound, {"high"}) == ([], frozenset({"high"}))
-    assert bind_problems(revealed, bound)[0]
-
-
-def test_a_clear_only_step_adding_a_pair_any_other_way_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # No clear adds such a pair under the model's rules; the checker is shown it by hand. The
-    # sum read no view and no fact, so the pair it adds is no masking revealed, and the walk
-    # fails on the problem (as on every problem check_change returns).
+def test_a_clear_only_step_adding_a_pair_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No clear adds a pair under the model's rules: masking, the one shape that could, went
+    # with views read out. The checker is shown one by hand, and the walk fails on the
+    # problem (as on every problem check_change returns); a clear-only step refused fails too.
     before = Configuration(summed(), {}, {"b": 2, "c": 2})
     edit = Change(clear=("c",))
-    pair: Pair = (("constraint", "sum"), "sum")
-    assert masking_problems(
-        Structure(before.index), before.solve(), edit, {pair: "constraint"}
-    ) == [
-        "3 clears: the clear-only change adds (('constraint', 'sum'), 'sum'), not by revealing a "
-        "rule masked by a view's Space or an unset fact (§ 16.16)"
-    ]
-    monkeypatch.setattr(walks, "added_pairs", lambda *args: {pair: "constraint"})
     result = change(before, edit)
-    problems = check_change(Structure(before.index), before, edit, result).problems
-    assert len(problems) == 1 and problems[0].startswith("3 clears: the clear-only change adds")
+    assert isinstance(result, Accepted)
+    checked = check_change(Structure(before.index), before, edit, result)
+    assert (checked.problems, checked.runs["3 clears"]) == ([], 1)
+    fake = Rejected((RuleRefusal("sum", "constraint", (), ()),), None)
+    assert check_change(Structure(before.index), before, edit, fake).problems == [
+        "3 clears: a change made only of clears and unsets is refused (§ 16.16)"
+    ]
+    pair: Pair = (("constraint", "sum"), "sum")
+    monkeypatch.setattr(walks, "added_pairs", lambda *args: {pair: "constraint"})
+    assert check_change(Structure(before.index), before, edit, result).problems == [
+        "3 clears: the clear-only change adds (false piece, origin) pairs: "
+        "[(('constraint', 'sum'), 'sum')] (no masking: SZ100 (3))"
+    ]
 
 
 # -- facts steps (§ 16.24): never refused, checked against a bind of their result -----------------
@@ -733,8 +932,8 @@ def test_a_design_space_new_facts_left_reading_refused_binds_and_reports_the_rul
     assert bind_problems(walked, bound, broken={"k"}) == ([], frozenset({"k"}))
     assert bind_problems(walked, bound)[0] == [
         "1 bind: reports [('k', 'constraint')]; what a walk publishes binds again with nothing "
-        "broken (FN3), but for rules a clear revealed ([])"
+        "broken (FN3), but for rules new facts broke ([])"
     ]
     assert bind_problems(walked, bound, broken={"other"})[0][0].endswith(
-        "but for rules a clear revealed ([]) or new facts broke (['other'])"
+        "but for rules new facts broke (['other'])"
     )

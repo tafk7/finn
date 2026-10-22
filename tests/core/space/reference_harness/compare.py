@@ -17,6 +17,11 @@ asks compares one answer:
   unavailable read, so it may name fewer of what an answer waits on than the model, never
   one the model does not name.
 
+The engine's side is an implementation of the engine's public questions
+(``support.space_oracle``), today's by default: ``Case.start(..., implementation=)`` names
+another, such as a planted fault (``support.space_oracle.today.Planted``), which a hand
+case must then report by question.
+
 A disagreement raises :class:`Disagreement`, an ``AssertionError`` naming the case, the
 question and both answers. A test may state the answer a ruling on the semantics gives in
 place of the model's (``ruled=``) where the model has not yet been brought to it.
@@ -26,6 +31,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, fields
+
+from support.space_oracle import Implementation
+from support.space_oracle.today import TODAY
 
 from core.space import reference
 from core.space.reference.model import same
@@ -229,7 +237,8 @@ def change_form(
 ) -> ChangeForm:
     """``edit``'s ``result`` on ``configuration``. A dropped value's type check and a rule's
     reasons are read over the facts the change publishes, as membership reads them."""
-    facts = {k: v for k, v in configuration.facts.items() if k not in edit.unset}
+    facts = dict(configuration.facts)
+    facts.update(dict.fromkeys(edit.unset))  # an optional fact unset is None (SZ100 (5))
     facts.update(edit.facts)
     index = configuration.index
     if isinstance(result, reference.Accepted):
@@ -311,12 +320,17 @@ class Case:
         self.engine: Engine = build(description, spelling)
 
     def start(
-        self, facts: Mapping[str, object] | None = None, stored: Mapping[str, object] | None = None
+        self,
+        facts: Mapping[str, object] | None = None,
+        stored: Mapping[str, object] | None = None,
+        implementation: Implementation = TODAY,
     ) -> Pair:
         """The configuration with ``facts``, then ``stored`` committed as one change (a step:
-        it must be accepted on both sides)."""
+        it must be accepted on both sides), the engine's side as ``implementation`` answers
+        it (today's engine by default)."""
         facts = dict(facts or {})
-        pair = Pair(self, reference.Configuration(self.description, facts), self.engine.open(facts))
+        model = reference.Configuration(self.description, facts)
+        pair = Pair(self, model, self.engine.open(facts, implementation))
         return pair.step(reference.Change(commit=stored)) if stored else pair
 
 

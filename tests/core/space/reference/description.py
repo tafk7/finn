@@ -12,43 +12,57 @@ A description is a tree of scopes. Each scope holds:
   whose reads are, through derived values, facts only. A domain may also carry an
   ``order``, a function of other declared reads (choices too) that ranks the listed
   values and checks nothing. A required choice has no safe value; no flow defaults it.
+  No domain reads a view (SZ100 (3)).
 - **selectors**: a choice whose cases are named child scopes; only the selected case
   is present. Its value is the case's name.
 - **derived** values: a function of declared reads, which returns a value or a
   :class:`Refuse` with its code (the derived value then reads refused, and every reader
   of it receives a refused input).
-- **views**: products; a body over declared reads that returns a value or a
-  :class:`Refuse` with its code.
+- **views**: products, read out (SZ100 (3)); a body over declared reads (anything
+  readable: other views too, its own Space's and its children's) that returns a value
+  or a :class:`Refuse` with its code. Nothing else reads a view.
+- **members** (:class:`Members`, SZ100 (6)): a value over named entries, derived values
+  in scopes strictly below the scope declaring it. Its value is the sorted (entry,
+  value) pairs of the entries that answer a value; an entry answering inapplicable is
+  skipped (the model's docstring, "Reads"). Its entries are never views: a restriction
+  of the model, not of the semantics. A ``Members`` over views, read by views alone,
+  would be view-side, views composing by reading views (read-out aggregation, SZ100
+  (3)); the model does not express it.
 - **constraints**: a predicate over declared reads, owned by the scope declaring it,
   with the code it refuses with.
 - **children**: scopes always present with their parent, unless their ``when`` guard
   (a boolean of declared reads) says otherwise. A selector's case may carry a
   ``when`` guard too.
 
-Facts are named at the root (:class:`Space`), and given, or left unknown, with each
-configuration.
+Facts are named at the root (:class:`Space`), each required or optional (SZ100 (5)): a
+configuration gives every required fact, and an optional fact left out reads ``None``.
+A function over an optional fact handles ``None`` itself.
 
 Paths name nodes: a root member's path is its name; a child scope's path is its
 parent's path and its name; a selector's case scope is the selector's path and the
 case's name (``compute.packed``), so a choice in it is ``compute.packed.pe``. Every
-read names an absolute path: a fact, a choice, a selector, a derived value or a view.
-Constraints and scopes are not readable.
+read names an absolute path: a fact, a choice, a selector, a derived value, a view or a
+``Members``. Constraints and scopes are not readable.
 
 Every function receives one mapping, from each declared read's path to its value, and
 reads nothing else.
 
 :meth:`Space.validate` rejects a malformed description (an unknown or unreadable
-read, a duplicate name, a malformed domain or guard), a domain whose membership reads
-anything but facts, or an input whose existence a choice decides other than through the
-choice's own guards (``"domain-reads-choice"``: a relation to another choice is a
-constraint) and a **cycle**. The rule for cycles: the definition's dependencies form a
-graph in which
+read, a duplicate name, a malformed domain or guard), a **view read in** (SZ100 (3),
+``"view-read-in"``: a constraint, a derived value, a ``when`` guard, or a domain's
+membership, computed list or ``order`` reading a view; and, since the model expresses no
+view-side ``Members``, a ``Members`` naming one; checked before the rest), a domain
+whose membership reads anything but facts, or an input whose existence a choice decides
+other than through the choice's own guards (``"domain-reads-choice"``: a relation to
+another choice is a constraint) and a **cycle**. The rule for cycles: the definition's
+dependencies form a graph in which
 
 - a value depends on its scope's presence; a choice's value also on its membership,
   which depends on the functions of the derived values it reads and on the ``when``
   guards over facts that decide whether they exist beyond the choice's own (§ 16.17:
   those guards read facts only, so they close no cycle and are not drawn); a derived
-  value's and a view's on their reads; a view's also on its Space's validity;
+  value's and a view's on their reads; a ``Members``'s on its entries; a view's also on
+  its Space's validity;
 - a constraint depends on its reads and its scope's presence;
 - a scope's presence depends on its parent's, its selector's value and its guard's
   reads;
@@ -57,13 +71,12 @@ graph in which
 - a Space's validity depends on every constraint, listed domain's piece and guard's
   piece in its scope and below.
 
-Any cycle in that graph is an error naming its path. So a constraint reading a view
-of its own Space, or of any Space above it (whose validity counts that constraint),
-directly or through derived values and other views, is a cycle; reading a child's
-view is not. A guard reading a view of its own Space or of a Space above it is a cycle
-too (its piece counts in that validity). A domain's ``order`` is no node of the graph:
-nothing depends on it (validity and refusals never read it), so it cannot close a
-cycle, and it may read any readable path, a view of its own Space included.
+Any cycle in that graph is an error naming its path: derived values reading each other
+in a ring, a guard reading a value of the scope it guards, views reading each other in a
+ring. A view read in closes none any more: only views read views (SZ100 (3)), so a view,
+which depends on its Space's validity, is never below a piece of it. A domain's
+``order`` is no node of the graph: nothing depends on it (validity and refusals never
+read it), so it cannot close a cycle; it reads no view.
 """
 
 from __future__ import annotations
@@ -81,10 +94,10 @@ Order = Callable[[tuple[Any, ...], Reads], Sequence[Any]]
 
 class DefinitionError(Exception):
     """A malformed description. ``kind`` is one of ``"malformed"``, ``"duplicate"``,
-    ``"unknown-read"``, ``"unreadable"``, ``"domain-reads-choice"`` and ``"cycle"``;
-    ``path`` names the nodes involved (for a domain, the choice, the derived values
-    read through, and the read that is not a fact; for a cycle, the nodes around it,
-    the first repeated at the end)."""
+    ``"unknown-read"``, ``"unreadable"``, ``"view-read-in"`` (the reader, then the view),
+    ``"domain-reads-choice"`` and ``"cycle"``; ``path`` names the nodes involved (for a
+    domain, the choice, the derived values read through, and the read that is not a fact;
+    for a cycle, the nodes around it, the first repeated at the end)."""
 
     def __init__(self, kind: str, path: tuple[str, ...], detail: str = "") -> None:
         super().__init__(f"{kind}: {' -> '.join(path)}{': ' + detail if detail else ''}")
@@ -196,6 +209,15 @@ class View:
 
 
 @dataclass(frozen=True)
+class Members:
+    """The entries that answer a value, as sorted (entry, value) pairs: ``entries`` name
+    derived values in scopes strictly below the declaring scope (SZ100 (6))."""
+
+    name: str
+    entries: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Scope:
     name: str
     choices: tuple[Choice, ...] = ()
@@ -205,6 +227,7 @@ class Scope:
     constraints: tuple[Constraint, ...] = ()
     children: tuple[Scope, ...] = ()
     when: When | None = None
+    members: tuple[Members, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -218,11 +241,13 @@ class Selector:
 
 @dataclass(frozen=True)
 class Space:
-    """A description: the facts a configuration gives, and the root scope (whose own
-    name is not part of any path)."""
+    """A description: the facts a configuration gives, the root scope (whose own name is
+    not part of any path), and which facts are optional (SZ100 (5): left out, one reads
+    ``None``); the others are required."""
 
     facts: tuple[str, ...]
     root: Scope
+    optional: tuple[str, ...] = ()
 
     def validate(self) -> Index:
         """The description's index, or :class:`DefinitionError`."""
@@ -273,7 +298,10 @@ class Index:
     derived: dict[str, tuple[Derived, str]] = field(default_factory=dict)
     views: dict[str, tuple[View, str]] = field(default_factory=dict)
     constraints: dict[str, tuple[Constraint, str]] = field(default_factory=dict)
+    members: dict[str, tuple[Members, str]] = field(default_factory=dict)
     facts: frozenset[str] = frozenset()
+    #: the optional facts (SZ100 (5)); the other facts are required
+    optional: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         names: set[str] = set()
@@ -283,10 +311,16 @@ class Index:
                 raise DefinitionError("duplicate", (fact,))
             names.add(fact)
         self.facts = frozenset(self.space.facts)
+        for fact in self.space.optional:
+            if fact not in self.facts:
+                raise DefinitionError("malformed", (fact,), "an optional fact is a fact")
+        self.optional = frozenset(self.space.optional)
         if self.space.root.when is not None:
             raise DefinitionError("malformed", ("",), "the root scope has no guard")
         self._add_scope(self.space.root, "", None, None, None, names)
         self._check_reads()
+        self._check_views_read_in()
+        self._check_members()
         self._check_domains()
         self._check_cycles()
 
@@ -344,6 +378,11 @@ class Index:
             node = join(path, view.name)
             self._claim(node, taken)
             self.views[node] = (view, path)
+        for members in scope.members:
+            self._name_ok(members.name, path)
+            node = join(path, members.name)
+            self._claim(node, taken)
+            self.members[node] = (members, path)
         for constraint in scope.constraints:
             self._name_ok(constraint.name, path)
             node = join(path, constraint.name)
@@ -378,11 +417,48 @@ class Index:
             yield path, derived.reads
         for path, (view, _) in self.views.items():
             yield path, view.reads
+        for path, (members, _) in self.members.items():
+            yield path, members.entries
         for path, (constraint, _) in self.constraints.items():
             yield path, constraint.reads
         for path, scope in self.scopes.items():
             if scope.when is not None:
                 yield path, scope.when.reads
+
+    def _check_views_read_in(self) -> None:
+        """Views are read out (SZ100 (3)): only a view reads a view. A ``Members`` naming a
+        view is refused here too, a restriction of the model: a ``Members`` over views,
+        read by views alone, would be view-side, which the model does not express."""
+
+        for node, reads in self._declared_reads():
+            if node in self.views:
+                continue
+            for read in reads:
+                if read in self.views:
+                    raise DefinitionError(
+                        "view-read-in",
+                        (node, read),
+                        "views are read out: only a view reads a view",
+                    )
+
+    def _check_members(self) -> None:
+        """A ``Members`` entry is a derived value in a scope strictly below the declaring
+        scope (SZ100 (6); the model expresses no ``Members`` over views, refused before as
+        ``view-read-in``), named once."""
+
+        for path, (members, scope) in sorted(self.members.items()):
+            if len(set(members.entries)) != len(members.entries):
+                raise DefinitionError("duplicate", (path,), "an entry is named twice")
+            for entry in members.entries:
+                if entry not in self.derived:
+                    raise DefinitionError(
+                        "malformed", (path, entry), "a Members entry is a derived value"
+                    )
+                below = self.derived[entry][1]
+                if below == scope or not self.within(below, scope):
+                    raise DefinitionError(
+                        "malformed", (path, entry), "a Members entry is in a scope below it"
+                    )
 
     def _check_domains(self) -> None:
         """Membership reads facts only: facts, and derived values reading, through
@@ -432,7 +508,8 @@ class Index:
     # -- queries
 
     def kind(self, path: str) -> str | None:
-        """``"fact"``, ``"choice"``, ``"derived"`` or ``"view"``: what a read can name."""
+        """``"fact"``, ``"choice"``, ``"derived"``, ``"view"`` or ``"members"``: what a
+        read can name."""
 
         if path in self.facts:
             return "fact"
@@ -442,6 +519,8 @@ class Index:
             return "derived"
         if path in self.views:
             return "view"
+        if path in self.members:
+            return "members"
         return None
 
     def scope_of(self, path: str) -> str:
@@ -451,6 +530,8 @@ class Index:
             return self.derived[path][1]
         if path in self.views:
             return self.views[path][1]
+        if path in self.members:
+            return self.members[path][1]
         return self.constraints[path][1]
 
     def within(self, scope: str, ancestor: str) -> bool:
@@ -469,8 +550,8 @@ class Index:
         return sorted(self.choices)
 
     def reads_of(self, path: str) -> tuple[str, ...]:
-        """A constraint's, a derived value's or a view's declared reads; a choice's
-        membership reads."""
+        """A constraint's, a derived value's or a view's declared reads; a ``Members``'s
+        entries; a choice's membership reads."""
 
         if path in self.constraints:
             return self.constraints[path][0].reads
@@ -478,31 +559,23 @@ class Index:
             return self.derived[path][0].reads
         if path in self.views:
             return self.views[path][0].reads
+        if path in self.members:
+            return self.members[path][0].entries
         return self.choices[path].domain.reads
 
-    # -- read closures: what stands in an origin's way, and what decides a scope's existence
+    # -- read closures: what decides a scope's existence
 
     def _followed(self, path: str) -> bool:
         """Whether a closure follows ``path``'s reads: a constraint's (a seed), a
-        derived value's or a view's body; never a choice's membership."""
+        derived value's or a view's body, a ``Members``'s entries; never a choice's
+        membership."""
 
-        return path in self.constraints or path in self.derived or path in self.views
-
-    def through_bodies(self, seeds: Iterable[str]) -> frozenset[str]:
-        """``seeds`` followed through constraints', derived values' and views' bodies
-        (a view's Space's validity not followed): every path met, facts and choices
-        included."""
-
-        found: set[str] = set()
-        stack = list(seeds)
-        while stack:
-            path = stack.pop()
-            if path in found:
-                continue
-            found.add(path)
-            if self._followed(path):
-                stack.extend(self.reads_of(path))
-        return frozenset(found)
+        return (
+            path in self.constraints
+            or path in self.derived
+            or path in self.views
+            or path in self.members
+        )
 
     def presence_seeds(self, scope: str) -> frozenset[str]:
         """The selector and the ``when`` reads of ``scope`` and of every scope above it."""
@@ -519,8 +592,10 @@ class Index:
         return frozenset(seeds)
 
     def dependencies(self, seeds: Iterable[str]) -> frozenset[str]:
-        """``seeds`` followed as :meth:`through_bodies` does, adding the presence seeds
-        of the scope of every node met, to closure."""
+        """``seeds`` followed through constraints', derived values' and views' bodies
+        and ``Members``' entries (their declared reads; a view's Space's validity not
+        followed), adding the presence seeds of the scope of every node met, to
+        closure."""
 
         found: set[str] = set()
         stack = list(seeds)
@@ -607,6 +682,7 @@ class Index:
             + [("value", path) for path in sorted(self.derived)]
             + [("function", path) for path in sorted(self.derived)]
             + [("value", path) for path in sorted(self.views)]
+            + [("value", path) for path in sorted(self.members)]
             + [("constraint", path) for path in sorted(self.constraints)]
             + [("presence", path) for path in sorted(self.scopes)]
             + [("validity", path) for path in sorted(self.scopes)]

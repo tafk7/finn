@@ -4,9 +4,10 @@
 """The engine against the reference model: views, nested scopes and guards, one test per
 question.
 
-Case 9 of the reference cases (views and validity, and a constraint reading a view of its
-own Space, a cycle, in three shapes), and two of how a Space holds cores: selectors nested
-three deep, and a value choice whose case puts a selector no case of which holds in scope.
+Case 9 of the reference cases (views and validity, and a parent's view composing its
+children's views: views are read out, SZ100 (3)), and two of how a Space holds cores:
+selectors nested three deep, and a value choice whose case puts a selector no case of which
+holds in scope.
 """
 
 from __future__ import annotations
@@ -25,7 +26,6 @@ from core.space.reference import (
     listed,
 )
 from core.space.reference_harness import (
-    ByName,
     Case,
     Spelling,
     check_definition,
@@ -64,16 +64,18 @@ def test_a_view_refuses_when_its_space_is_refused() -> None:
 
 
 def test_a_view_answers_while_its_space_is_open() -> None:
-    VIEWED.start({"name": "unit"}).check_answer("title")
+    # ``x`` open: ``under`` waits on it
+    VIEWED.start({"limit": 2, "name": "unit"}).check_answer("title")
 
 
 def test_a_view_of_an_open_choice_waits_on_it() -> None:
     VIEWED.start({"limit": 2, "name": "unit"}).check_answer("doubled")
 
 
-# A constraint reading a view of its own Space closes a loop through the Space's validity:
-# the model refuses the definition. Three shapes: a constraint on a storage view; a rule
-# reading views by name; a parent reading its children's stages through a view of its own.
+# A view composes: the parent's view reads its children's views (SZ100 (3)). Only a view
+# reads a view, so this is a definition on both sides. (The cycles a rule reading a view of
+# its own Space closed went with views read in: the model refuses those as view-read-in, and
+# the matrix's T4b row is witnessed in the reference cases.)
 
 
 def stage(name: str) -> Scope:
@@ -84,86 +86,30 @@ def stage(name: str) -> Scope:
     )
 
 
-STORAGE = Space(
-    (),
-    Scope(
-        "",
-        choices=(Choice("depth", listed(1, 2, 4)),),
-        views=(View("storage", ("depth",), lambda read: 8 * read["depth"]),),
-        constraints=(
-            Constraint("fits", ("storage",), lambda read: read["storage"] <= 16, "too-deep"),
-        ),
-    ),
-)
-TENSORS = ("activation", "weight")
-BY_NAME = Space(
-    (),
-    Scope(
-        "",
-        choices=(Choice("rows", listed(1, 2)), Choice("cols", listed(1, 2))),
-        views=(
-            View("activation", ("rows",), lambda read: 8 * read["rows"]),
-            View("weight", ("cols",), lambda read: 8 * read["cols"]),
-        ),
-        constraints=(
-            Constraint(
-                "carried", TENSORS, lambda read: sum(read[name] for name in TENSORS) <= 24, "wide"
-            ),
-        ),
-    ),
-)
-STAGES = Space(
+CHILDREN = Space(
     (),
     Scope(
         "",
         children=(stage("first"), stage("second")),
         views=(
             View(
-                "stages",
+                "total",
                 ("first.storage", "second.storage"),
-                lambda read: (read["first.storage"], read["second.storage"]),
-            ),
-        ),
-        constraints=(
-            Constraint(
-                "compatible", ("stages",), lambda read: sum(read["stages"]) <= 40, "too-deep"
+                lambda read: read["first.storage"] + read["second.storage"],
             ),
         ),
     ),
 )
 
 
-CHILDREN = Space(
-    (),
-    Scope(
-        "",
-        children=(stage("first"), stage("second")),
-        constraints=(
-            Constraint(
-                "fits",
-                ("first.storage", "second.storage"),
-                lambda read: read["first.storage"] + read["second.storage"] <= 40,
-                "too-deep",
-            ),
-        ),
-    ),
-)
-
-
-def test_a_parent_reading_its_childrens_views_is_not_a_cycle() -> None:
+def test_a_parent_view_composing_its_childrens_views_is_a_definition() -> None:
     check_definition("children's views", CHILDREN)
 
 
-def test_a_constraint_on_a_storage_view_of_its_own_space_is_a_cycle() -> None:
-    check_definition("a constraint on a storage view", STORAGE)
-
-
-def test_a_constraint_reading_views_of_its_own_space_by_name_is_a_cycle() -> None:
-    check_definition("views read by name", BY_NAME, Spelling(rules={"carried": ByName()}))
-
-
-def test_a_parent_reading_its_childrens_stages_through_its_own_view_is_a_cycle() -> None:
-    check_definition("stages through a parent's view", STAGES, Spelling(types={"stages": tuple}))
+def test_a_parent_view_composing_its_childrens_views_answers() -> None:
+    Case("children's views", CHILDREN).start(
+        {}, {"first.depth": 1, "second.depth": 2}
+    ).check_answer("total")
 
 
 # -- nested selectors: a core in a kernel in a kernel ----------------------------------------------
@@ -283,10 +229,6 @@ def test_switching_the_outer_kernel_away_puts_the_inner_choices_dormant() -> Non
 
 def test_a_commit_three_deep_breaking_its_rule_is_refused_naming_it() -> None:
     NESTED.start({**OPEN, "width": 6}, INNER_PACKED).check_change(Change(commit={PE: 4}))
-
-
-def test_validity_waits_on_a_fact_a_rule_three_deep_reads() -> None:
-    NESTED.start({"plain_ok": True, "serial_ok": True}, {**INNER_PACKED, PE: 4}).check_validity()
 
 
 # An inner selector inside a case of an outer one: ``inner`` set to ``y`` while ``outer`` is
