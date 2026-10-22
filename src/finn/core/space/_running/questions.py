@@ -91,7 +91,8 @@ def check(ev: Evaluation, index: NodeId, value: object = _MISSING) -> QueryResul
     if node.domain is None:
         return HOLDS
     held = ev.ds.stored[index] if value is _MISSING else value
-    return cast(QueryResult[bool], ev.membership(index).type_check(node, Available(held), []))
+    reading = ev.membership(index)
+    return cast(QueryResult[bool], ev.run(lambda: reading.type_check(node, Available(held), [])))
 
 
 def _refuses(result: QueryResult[bool]) -> bool:
@@ -531,7 +532,8 @@ def viable(ds: DesignSpace, index: NodeId, session: Session) -> Viable:
     """One choice's listed values, each tried alone as a change would set it."""
     ev = evaluation(ds, session)
     node = ev.raw[index]
-    listed = ev.membership(index).listed(node, [])
+    reading = ev.membership(index)
+    listed = ev.run(lambda: reading.listed(node, []))
     if not isinstance(listed, Available) or listed.value is None:
         return Viable(node.key, None, _waits(listed))
     found: list[Possible | Refused] = []

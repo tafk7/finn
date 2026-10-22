@@ -12,9 +12,13 @@ node cache a session may hold.
   ``DesignSpace`` (a layer with its stored choices), each equal and hashed by value;
 - ``evaluate``: ``Evaluation``, every answer of one design space, memoized within it
   only; each node kind's frame; the receiver a ``self`` method reads through; the depth
-  guard; the ``Session`` (counters, and the seam for a node cache);
+  guard; failure completion; the ``Session`` (each question's run, the counters, and the
+  seam for a node cache);
 - ``questions``: presence, validity, states, pairs and their origins, standing, a change
   of choices or facts, a bind, the possible values;
+- ``surface``: the rest of the public questions (a member's answer and value, presence,
+  an assessment, a Decision's state and candidates, a bound accessor, the evidence of an
+  answer, the configurations below), each in today's public result type;
 - ``cache``: the node cache, the one reuse of answers across design spaces, behind its
   one contract; on, bounded or dropping, fixed when it is made.
 

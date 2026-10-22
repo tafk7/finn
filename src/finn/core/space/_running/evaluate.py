@@ -39,9 +39,21 @@ case to fall back on.
 
 **Depth.** Evaluation recurses on the Python stack up to ``DEPTH`` evaluations in flight
 (today's guard, ``_world.DEPTH``). Past it, ``Deeper`` unwinds to the outermost read
-(``Session.drive``), which evaluates the deep node first, then asks again what it
-abandoned: authored functions are pure, so asking again answers the same. A failure is
-raised, and kept for the rest of its drive (a later drive calls the function again).
+(``Session.run``), which evaluates the deep node first, then asks again what it
+abandoned: authored functions are pure, so asking again answers the same.
+
+**Failures** complete as today's engine completes them (``_failure``'s contract). Each
+question is one **run** (``Session.run``, a driver's demand): its authored calls each run
+in a copy of the context the driver entered with, never in their reader's. An authored
+function raising is its owner's failure, never kept by the memo or a cache. A failure
+travels through the evaluator's own frames as ``Failing`` and is kept for the rest of its
+run (a later run calls the function again); it reaches a reading method through its read
+as ``NativeEvaluationError`` (or as the original cancellation), so the method's
+``finally`` blocks and context managers run and may read. The first failure a call meets
+is its primary, sticky; later ones are its cleanup failures, in the order met; a
+``KeyboardInterrupt``, ``SystemExit`` or ``GeneratorExit`` keeps its identity, and is what
+the run raises, its details attached (``_failure.cancellation_details``). A dependency
+cycle is a failure of the node read again.
 
 **The session** holds the counters, and may hold a node cache (``cache.NodeCache``):
 where it does, each answer carries the choices and facts its evaluation read
@@ -58,8 +70,9 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable, Mapping
+from contextvars import Context, copy_context
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
 
 from .. import _world as W
 from .._collapse import guard_implies
@@ -67,9 +80,14 @@ from .._failure import (
     ACTIVE,
     Call,
     CleanupFailure,
+    Failing,
+    Failure,
+    driver_only,
     exception,
     from_exception,
+    raise_failure,
     remember_exception,
+    remember_failure,
 )
 from ..errors import EvaluationError, ValueUnavailableError
 from ..graph import Located
@@ -93,6 +111,7 @@ from .value import DesignSpace, hashkey
 if TYPE_CHECKING:
     from .._structure import Structure
 
+T = TypeVar("T")
 Trace = tuple[tuple[NodeId, QueryResult[object]], ...]
 Assessment = ViewAssessment[object] | ConstraintAssessment
 TRUE: QueryResult[object] = Available(True)
@@ -136,7 +155,7 @@ class MembershipReadsChoice(EvaluationError):
 
 class Deeper(W.Deeper):
     """The depth guard: ``node`` was demanded in ``ev`` with ``DEPTH`` evaluations in
-    flight. Everything it passes through is abandoned (nothing kept); the drive evaluates
+    flight. Everything it passes through is abandoned (nothing kept); the run evaluates
     the node first, then again what it abandoned. Today's ``Deeper``, so that a method's
     reader passes it through as today's does."""
 
@@ -178,51 +197,69 @@ class Counters:
         self.calls[kind] = self.calls.get(kind, 0) + 1
 
 
+_Key = tuple["Evaluation", NodeId]
+
+
 @dataclass(eq=False)
 class Session:
-    """What evaluations share: their counters, the depth guard's drive (how many
-    evaluations are in flight, what it abandoned, the failures met in it) and, where one
-    is given, a node cache."""
+    """What evaluations share: their counters, the run under way (``run``: the context its
+    authored calls copy, how many evaluations are in flight, what the depth guard
+    abandoned, the failures met in it) and, where one is given, a node cache."""
 
     cache: NodeCache | None = None
     counters: Counters = field(default_factory=Counters)
     depth: int = 0
-    driving: bool = False
+    # the context the run's authored calls copy (``None``: no run under way)
+    context: Context | None = None
     # what each evaluation in flight read, innermost last (where a cache is on)
     stack: list[set[NodeId]] = field(default_factory=list)
-    pending: set[tuple[Evaluation, NodeId]] = field(default_factory=set)
-    failures: dict[tuple[Evaluation, NodeId], Exception] = field(default_factory=dict)
+    # what the depth guard abandoned, to be asked again, oldest first
+    pending: dict[_Key, None] = field(default_factory=dict)
+    failures: dict[_Key, Failure] = field(default_factory=dict)
 
-    def drive(self, ev: Evaluation, index: NodeId) -> Ans:
-        """``index``'s answer in ``ev``, read with nothing in flight: past the depth
-        guard, the deep node is evaluated first, then what it abandoned, again. A failure
-        is raised in what read it (asked again from the drive's stack), and finally here."""
-        stack: list[tuple[Evaluation, NodeId]] = [(ev, index)]
-        self.driving = True
+    @property
+    def driving(self) -> bool:
+        """Whether a run is under way."""
+        return self.context is not None
+
+    def run(self, demand: Callable[[], T]) -> T:
+        """``demand``, a driver's question, as one run (inside a run, a part of it): past
+        the depth guard, the deep node is evaluated from the run's own stack first, then
+        ``demand`` again. A failure is raised as its exception (``_failure.exception``:
+        ``NativeEvaluationError``, or the cancellation it carries), once the readers it
+        reached have run their cleanup; its record goes with the run."""
+        if self.context is not None:
+            return demand()
+        driver_only("evaluation")
+        self.context = copy_context()
+        failure: Failure | None = None
         try:
+            stack: list[_Key] = []
             while True:
-                at, node = stack[-1]
                 try:
-                    found = at._get(node)
+                    if not stack:
+                        return demand()
+                    at, node = stack[-1]
+                    at._get(node)
                 except Deeper as deeper:
                     self.counters.restarts += 1
-                    self.pending.add(stack[-1])
+                    if stack:
+                        self.pending[stack[-1]] = None
                     stack.append((deeper.ev, deeper.node))
                     continue
-                except Exception:
-                    if len(stack) == 1:
+                except Failing:
+                    if not stack:
                         raise
-                    stack.pop()
-                    self.pending.discard(stack[-1])
-                    continue
                 stack.pop()
-                if not stack:
-                    return found
-                self.pending.discard(stack[-1])
+                if stack:
+                    del self.pending[stack[-1]]
+        except Failing as failing:
+            failure = failing.failure
         finally:
-            self.driving = False
+            self.context = None
             self.pending.clear()
             self.failures.clear()
+        raise_failure(failure)
 
 
 def evaluation(
@@ -247,38 +284,63 @@ class _Halted:
     results: tuple[NonValue, ...]
 
 
-def invoke(
+_ABANDONED = object()
+
+
+def _invoke(
     call: Call,
     function: Callable[..., object],
-    arguments: tuple[object, ...] = (),
-    keywords: Mapping[str, object] | None = None,
-) -> _Returned | _Halted:
-    """Run one authored function as the active call: its value, or its halt on a
-    non-value read (sticky, even where it caught the read); its failure raised; abandoned
-    by the depth guard, the guard's ``Deeper`` raised."""
+    arguments: tuple[object, ...],
+    keywords: Mapping[str, object],
+) -> object:
+    """Run one authored function as ``call`` (the active call): its value, its halt, its
+    failure (sticky: one it caught still counts), or abandoned by the depth guard."""
     token = ACTIVE.set(call)
     call.outer = sys.exception()
     try:
         try:
-            value = function(*arguments, **(keywords or {}))
+            value = function(*arguments, **keywords)
         except BaseException as cause:
             if call.abandoned is not None and not isinstance(cause, _CANCELLATIONS):
-                raise call.abandoned from None
+                return _ABANDONED
             failure = remember_exception(call, cause)
             if failure is not None:
-                raise exception(failure) from cause
+                return failure
             if call.blocked:
                 return _Halted(tuple(call.blocked.values()))
-            raise EvaluationError(call.owner, call.role, str(cause)) from cause
+            # A value-unavailable error raised by hand, with no read behind it.
+            error = EvaluationError(call.owner, call.role, str(cause))
+            error.__cause__ = cause
+            return remember_failure(call, Failure(error))
         if call.abandoned is not None:
-            raise call.abandoned
+            return _ABANDONED
         if call.failure is not None:
-            raise exception(call.failure)
+            return call.failure
         if call.blocked:
             return _Halted(tuple(call.blocked.values()))
         return _Returned(value)
     finally:
         ACTIVE.reset(token)
+
+
+def invoke(
+    session: Session,
+    call: Call,
+    function: Callable[..., object],
+    arguments: tuple[object, ...] = (),
+    keywords: Mapping[str, object] | None = None,
+) -> _Returned | _Halted:
+    """Run one authored function as the active call, in a copy of the context its run's
+    driver entered with (a copy of the current one outside a run): its value, or its halt
+    on a non-value read (sticky, even where it caught the read); its failure goes on as
+    ``Failing``; abandoned by the depth guard, the guard's ``Deeper`` is raised."""
+    context = session.context if session.context is not None else copy_context()
+    outcome = context.copy().run(_invoke, call, function, arguments, keywords or {})
+    if outcome is _ABANDONED:
+        raise cast(BaseException, call.abandoned)
+    if isinstance(outcome, Failure):
+        raise Failing(outcome)
+    return cast(_Returned | _Halted, outcome)
 
 
 def answer_key(answer: QueryResult[object]) -> object:
@@ -333,15 +395,15 @@ class Evaluation:
             stack[-1].update(reads)
 
     def get(self, index: NodeId) -> Ans:
-        """``index``'s answer here: its memo's, else evaluated (driven from here where
-        no drive is under way)."""
+        """``index``'s answer here: its memo's, else evaluated (a run of its own where
+        none is under way)."""
         found = self.memo.get(index)
         if found is not None:
             if self.session.cache is not None:
                 self.note(found.reads)
             return found
         if not self.session.driving:
-            return self.session.drive(self, index)
+            return self.session.run(lambda: self._get(index))
         return self._get(index)
 
     def _get(self, index: NodeId) -> Ans:
@@ -351,13 +413,12 @@ class Evaluation:
                 self.note(found.reads)
             return found
         session = self.session
-        kept = session.failures.get((self, index))
+        key = (self, index)
+        kept = session.failures.get(key)
         if kept is not None:
-            raise kept
-        if index in self.active or (self, index) in session.pending:
-            path = [self.raw[item].owner for item in self.active]
-            owner = self.raw[index].owner
-            raise EvaluationError(owner, "dependency cycle", " -> ".join((*path, owner)))
+            raise Failing(kept)
+        if index in self.active or key in session.pending:
+            raise Failing(self._cycle(index))
         cache = session.cache
         if cache is not None:
             found = cache.lookup(self, index)
@@ -377,30 +438,46 @@ class Evaluation:
         outer = sys.exception()
         try:
             found = self._evaluate(index)
+            if cache is not None:
+                read = session.stack.pop()
+                found = replace(found, reads=frozenset(read))
+                cache.keep(self, index, found)
+            # Published inside the evaluation, as today's entry is: interrupted here, it
+            # is the node's failure.
+            self.memo[index] = found
         except Deeper:
             raise
-        except Exception as cause:
-            # Raised as today's driver raises it: the failure's ``NativeEvaluationError``.
+        except Failing as failing:
+            session.failures[key] = failing.failure
+            raise
+        except BaseException as cause:
             node = self.raw[index]
             failure = from_exception(cause, owner=node.owner, role=node.kind, outer=outer)
-            error = exception(failure)
-            if isinstance(error, Exception):
-                session.failures[(self, index)] = error
-            raise error from cause  # one failure: its cause is not a second one
+            session.failures[key] = failure
+            raise Failing(failure) from cause
         finally:
             session.depth -= 1
             del self.active[index]
-            if cache is not None:
-                read = session.stack.pop()
-        if cache is not None and read is not None:
-            found = replace(found, reads=frozenset(read))
-            cache.keep(self, index, found)
+            if cache is not None and read is None:
+                session.stack.pop()
+        if read is not None:
             self.note(read)
-        self.memo[index] = found
         return found
+
+    def _cycle(self, index: NodeId) -> Failure:
+        """A dependency cycle: ``index`` read while it is being evaluated (on the Python
+        stack, or abandoned to the run's own)."""
+        path = [f"{ev.raw[item].owner} ({ev.raw[item].kind})" for ev, item in self.session.pending]
+        path += [f"{self.raw[item].owner} ({self.raw[item].kind})" for item in self.active]
+        owner = self.raw[index].owner
+        return Failure(EvaluationError(owner, "dependency cycle", " -> ".join((*path, owner))))
 
     def result(self, index: NodeId) -> QueryResult[object]:
         return self.get(index).result
+
+    def run(self, demand: Callable[[], T]) -> T:
+        """``demand`` as its session's run (``Session.run``)."""
+        return self.session.run(demand)
 
     def read(self, trace: _Tr, index: NodeId, reader: Node) -> Ans:
         """``reader``'s read of ``index``: its answer, at its source where the formal is
@@ -549,7 +626,11 @@ class Evaluation:
             for argument, answer in zip(node.arguments, answers)
         }
         outcome = invoke(
-            Call(node.owner, node.kind), cast(Callable[..., object], node.function), (), arguments
+            self.session,
+            Call(node.owner, node.kind),
+            cast(Callable[..., object], node.function),
+            (),
+            arguments,
         )
         return W._finished(node, cast(_Returned, outcome).value)
 
@@ -557,7 +638,10 @@ class Evaluation:
         call = Call(node.owner, node.kind)
         receiver = Reader(self, node, call, reader)
         outcome = invoke(
-            call, cast(Callable[..., object], node.function), (W.receiver(receiver, node.scope),)
+            self.session,
+            call,
+            cast(Callable[..., object], node.function),
+            (W.receiver(receiver, node.scope),),
         )
         existence = frozenset(receiver.existence - receiver.valued)
         if isinstance(outcome, _Halted):
@@ -616,6 +700,7 @@ class Evaluation:
         def membership() -> W.Called:
             candidate = W._clone(node, value.value, owner=node.owner, role="domain candidate")
             outcome = invoke(
+                self.session,
                 Call(node.owner, "domain membership"),
                 domain.membership,
                 (candidate, self.domain_values(node, answers)),
@@ -636,6 +721,7 @@ class Evaluation:
 
         def enumerate_() -> W.Called:
             outcome = invoke(
+                self.session,
                 Call(node.owner, "domain enumeration"),
                 domain.enumerate,
                 (self.domain_values(node, answers),),
@@ -656,6 +742,7 @@ class Evaluation:
         listed = self._enumerate(node, answers)
         if isinstance(listed, Available) and domain._finite_values is None:
             kept = invoke(
+                self.session,
                 Call(node.owner, "domain membership"),
                 W._listed_members,
                 (domain, listed.value, self.domain_values(node, answers)),
@@ -703,6 +790,7 @@ class Evaluation:
             if domain._finite_values is not None or not values:
                 return W.Called(Available(bool(values)))
             kept = invoke(
+                self.session,
                 Call(node.owner, "domain membership"),
                 W._first_member,
                 (domain, values, self.domain_values(node, answers)),
@@ -744,14 +832,18 @@ class Reader(W.MethodReader):
         return self.ev.source(index, self.reader)
 
     def _take(self, index: NodeId) -> Any:
+        """``index``'s answer, recorded. A failure met is the call's (its primary, or a
+        cleanup failure) and is raised in the method; the depth guard abandons it."""
         try:
             found = self.ev.get(index)
         except Deeper as deeper:
             self.call.abandoned = deeper
             raise
-        except EvaluationError as error:
-            remember_exception(self.call, error)
-            raise
+        except Failing as failing:
+            # Interrupted here, the failure still reaches the call: it is the context of
+            # what interrupts (``remember_exception`` follows it).
+            remember_failure(self.call, failing.failure)
+            raise exception(failing.failure) from None
         self.trace.append((index, found.result))
         return found
 
