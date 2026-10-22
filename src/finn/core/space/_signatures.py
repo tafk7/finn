@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Self, Union, cast, get_args, get_origin, get_type_hints
 
 from ._configuration import Space
+from ._nodes import selector_value
 from .declarations import (
     CaseRef,
     ChoiceMemberRef,
@@ -144,6 +145,7 @@ def output_semantics(
 
 
 def resolve_source(source: object, effective: EffectiveSpace, owner: str) -> ValueRef[object]:
+    source = selector_value(source)
     if not isinstance(source, (ValueRef, View)):
         raise DefinitionError.broken(
             "dependency-not-value",

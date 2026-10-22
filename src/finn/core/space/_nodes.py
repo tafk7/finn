@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal, NoReturn, cast
 
 from .declarations import (
     MISSING,
+    CaseRef,
     ChoiceMemberRef,
     Const,
     Decision,
@@ -931,6 +932,14 @@ def _check_direct_read(decision: NodeDecision, name: str) -> None:
             )
 
 
+def selector_value(source: object) -> object:
+    """A selector given as a binding's argument reads its value, the case's name: the
+    selector's node, as ``selected()`` resolves it. Anything else unchanged."""
+    if isinstance(source, NodeChoice):
+        return CaseRef(source._space_path)
+    return source
+
+
 def unwrap(value: object) -> object:
     """The record behind a class-body node or choice face; anything else unchanged."""
     if isinstance(value, NodeChoice):
@@ -949,6 +958,7 @@ __all__ = [
     "declare_node",
     "entry_choice",
     "select_choice",
+    "selector_value",
     "fallback",
     "space_formals",
     "space_members",

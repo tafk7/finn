@@ -33,10 +33,12 @@ from finn.core.space import (
     constraint,
     derived,
     design_space,
+    domain,
     inspection,
     reject,
     selected,
     supplied,
+    view,
 )
 from finn.core.space.inspection import Dormant, Open, Set, Waiting
 
@@ -512,3 +514,118 @@ def test_a_derived_selector_takes_no_supplied_guard() -> None:
                 return "fifo"
 
             adapter = Select(by=chain, when=given, fifo=Fifo, width=w)
+
+
+# -- 5. a selector given as a binding's argument reads its case name ----------------------------
+
+
+def _name(case: str) -> str:
+    return case
+
+
+def _is_fifo(case: str) -> bool:
+    return case == "fifo"
+
+
+def _no_reg(case: str) -> bool | Rejected:
+    return reject("no-reg", "reg refused") if case == "reg" else True
+
+
+class ByArgument(Space):
+    x: int = Decision(values=(0, 1, 2))
+
+    @derived
+    def chain(self) -> str:
+        return ("direct", "fifo", "reg")[self.x]
+
+    chosen: Fifo | Reg | None = Select(direct=None, fifo=Fifo, reg=Reg, width=2)
+    picked: Fifo | Reg | None = Select(by=chain, direct=None, fifo=Fifo, reg=Reg, width=2)
+
+    chosen_name: str = derived(case=chosen)(_name)
+    picked_name: str = derived(case=picked)(_name)
+    chosen_view = view(case=chosen)(_name)
+    picked_view = view(case=picked)(_name)
+    chosen_rule = constraint(case=chosen)(_no_reg)
+    picked_rule = constraint(case=picked)(_no_reg)
+    # a guard reading the selector's case through a derived value binding it
+    fifo_chosen: bool = derived(case=chosen)(_is_fifo)
+    fifo_only: int = Decision(values=(1, 2), when=fifo_chosen)
+
+    @derived
+    def body(self) -> str:
+        # in a body the selector is still the selected case's design space
+        return type(self.chosen).__name__
+
+
+def _read(point: Space) -> tuple[object, ...]:
+    # a view of a refused Space is refused: read as its result's kind
+    return tuple(
+        getattr(found, "value", type(found).__name__)
+        for found in map(
+            point.query,
+            (
+                ByArgument.chosen_name,
+                ByArgument.picked_name,
+                ByArgument.chosen_view,
+                ByArgument.picked_view,
+                ByArgument.body,
+            ),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("x", "chosen", "read", "status"),
+    [
+        (0, "direct", ("direct", "direct", "direct", "direct", "NoneType"), "valid"),
+        (1, "fifo", ("fifo", "fifo", "fifo", "fifo", "Fifo"), "open"),
+        (1, "direct", ("direct", "fifo", "direct", "fifo", "NoneType"), "open"),
+        (0, "reg", ("reg", "direct", "Rejected", "Rejected", "Reg"), "refused"),
+    ],
+)
+def test_a_selector_bound_as_an_argument_reads_its_case_name(
+    x: int, chosen: str, read: tuple[object, ...], status: str
+) -> None:
+    point = bind(design_space(ByArgument()), {ByArgument.x: x, ByArgument.chosen: chosen}).instance
+    assert _read(point) == read
+    assert inspection.validity(point).status == status
+    fifo_only = point.query(ByArgument.fifo_only)
+    assert isinstance(fifo_only, Unresolved if chosen == "fifo" else Inapplicable)
+
+
+def test_a_change_of_the_selector_moves_the_bound_value() -> None:
+    point = bind(design_space(ByArgument()), {ByArgument.x: 1, ByArgument.chosen: "fifo"}).instance
+    moved = point.with_choices({ByArgument.x: 0, ByArgument.chosen: "direct"})
+    assert _read(moved) == ("direct", "direct", "direct", "direct", "NoneType")
+    assert isinstance(moved.query(ByArgument.fifo_only), Inapplicable)
+    report = point.try_with_choices({ByArgument.x: 2, ByArgument.chosen: "reg"})
+    assert not report.accepted
+    assert [b.rule for b in report.broken] == ["chosen_rule", "picked_rule"]
+
+
+def test_an_unchosen_selector_leaves_its_bound_value_unresolved() -> None:
+    point = bind(design_space(ByArgument()), {ByArgument.x: 1}).instance
+    assert isinstance(point.query(ByArgument.chosen_name), Unresolved)
+    assert point.picked_name == "fifo"
+
+
+def test_a_domain_reads_a_picked_selector_given_as_its_argument() -> None:
+    def accepts(*, candidate: int, case: str) -> bool:
+        return candidate == (1 if case == "fifo" else 2)
+
+    def candidates(*, case: str) -> tuple[int, ...]:
+        return (1, 2, 3)
+
+    class Sized(Space):
+        n: int = Param()
+
+        @derived
+        def chain(self) -> str:
+            return "fifo" if self.n == 1 else "reg"
+
+        picked = Select(by=chain, fifo=Fifo, reg=Reg, width=n)
+        lanes: int = Decision(domain=domain(accepts=accepts, candidates=candidates, case=picked))
+
+    for n, lanes in ((1, 1), (2, 2)):
+        (item,) = inspection.viable(design_space(Sized(n=n)), [Sized.lanes])
+        assert [value.value for value in item.values or ()] == [lanes]

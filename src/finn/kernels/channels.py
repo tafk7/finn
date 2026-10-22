@@ -64,7 +64,6 @@ from finn.core.space import (
     derived,
     domain,
     reject,
-    selected,
     supplied,
     view,
 )
@@ -320,7 +319,7 @@ class Channel(KernelSpace):
         set_tensor=index_tensor,
         platform=platform,
     )
-    source_label: str = derived(case=selected(source))(_source_label)
+    source_label: str = derived(case=source)(_source_label)
 
     # With several sets, its source's set port, a port of the channel labelled below it
     # (``source.memstream.set``): the index tensor's channel's consumer. A channel without

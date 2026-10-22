@@ -23,6 +23,7 @@ from typing import Any, cast
 from ._bindings import PlacementBinding
 from ._configuration import Space
 from ._names import Names
+from ._nodes import selector_value
 from ._signatures import BoundFunction
 from ._table import MemberTask, ScopeDraft, Table
 from .declarations import (
@@ -198,7 +199,8 @@ class _Lowering:
                 declaration=owner,
             ) from cause
         arguments: list[Argument] = []
-        for name, source in domain.dependencies:
+        for name, given in domain.dependencies:
+            source = selector_value(given)
             if not isinstance(source, ValueRef):
                 raise DefinitionError.broken(
                     "domain-dependency-not-value",
