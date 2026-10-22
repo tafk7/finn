@@ -32,16 +32,21 @@ import gc
 import importlib
 import itertools
 import math
+import os
 import pkgutil
+import re
+import subprocess
 import sys
 import weakref
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from support import running_cases
+from support.running_cases import Rebinding
 from support.running_type import LeavesOneOut, Running
 from support.space_oracle import Implementation, compare, forms, load, toys
 from support.space_oracle.today import TODAY
@@ -59,8 +64,9 @@ from core.space.reference import (
     listed,
 )
 from core.space.reference import Space as Description
-from core.space.reference_harness import Case, Spelling
+from core.space.reference_harness import MILESTONES, ROWS, Case, Spelling
 from core.space.reference_harness import walks as reference_walks
+from core.space.reference_harness.engine import Engine
 from core.space.reference_harness.forms import ValidityForm
 from core.space.test_compose import Spec
 from core.space.test_extensions import ENCODING, Encoding
@@ -145,6 +151,125 @@ def test_the_reference_walks_hold_strictly(seed: int) -> None:
     assert tally.steps == 40 and not tally.by_milestone and tally.engine_errors == 0
     assert tally.engine_checks["cold"] == tally.engine_checks["bind"] == tally.compared
     assert tally.engine_checks["cold change"] == tally.steps
+
+
+# -- the reference harness's hand cases under the running type ---------------------------------
+#
+# ``support.running_cases`` rebinds the harness's default implementation to the running type
+# and expects the ``T4a`` milestone's witnesses to pass. The gate's pytest takes no plugin, so
+# the hand cases run here, in a process of their own. ``test_reference_walks`` is left out:
+# it asks today's engine on purpose (its walks name it, and its hand cases state what today's
+# engine answers where it is attributed ``T4a``). It runs in the gate as it is.
+
+TESTS = Path(__file__).parent.parent.parent
+HAND_CASES = tuple(
+    f"core/space/{path.name}"
+    for path in sorted(Path(__file__).parent.glob("test_reference_*.py"))
+    if path.name != "test_reference_walks.py"
+)
+"""The modules of hand cases run under the running type, each named (from ``tests``)."""
+
+_COUNTS = re.compile(r"(\d+) (passed|failed|errors?|xfailed|xpassed|skipped|deselected)")
+
+
+def test_the_reference_hand_cases_pass_under_the_running_type_with_t4as_witnesses() -> None:
+    """Every hand case of the reference harness, run with ``support.running_cases``: none
+    fails or passes unexpectedly, none is skipped or deselected, and the expected failures
+    are exactly the witnesses of the rows the running type does not implement (the
+    milestones after ``T4a``), each ``T4a`` witness passing."""
+    later = MILESTONES[MILESTONES.index(running_cases.MILESTONE) + 1 :]
+    unimplemented = [row for row in ROWS if row.milestone in later]
+    witnesses = sorted(row.witness for row in ROWS if row.milestone == running_cases.MILESTONE)
+    assert unimplemented and witnesses
+    named = {PurePosixPath(module).stem for module in HAND_CASES}
+    assert {row.witness.partition("::")[0] for row in ROWS} <= named
+    command = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-p",
+        "no:xdist",
+        "-p",
+        "support.running_cases",
+        "-q",
+        *HAND_CASES,
+    ]
+    environment = {key: value for key, value in os.environ.items() if key != "PYTEST_ADDOPTS"}
+    ran = subprocess.run(
+        command,
+        cwd=str(TESTS),
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=900,
+        check=False,
+    )
+    lines = ran.stdout.splitlines()
+    tail = "\n".join([*lines[-40:], *ran.stderr.splitlines()[-20:]])
+    collected = re.search(r"collected (\d+) items", ran.stdout)
+    summary = lines[-1] if lines else ""
+    counts = {kind.rstrip("s"): int(number) for number, kind in _COUNTS.findall(summary)}
+    assert ran.returncode == 0 and collected is not None, tail
+    assert counts.get("failed", 0) == 0 and counts.get("error", 0) == 0, tail
+    assert counts.get("xpassed", 0) == 0, tail
+    assert counts.get("xfailed", 0) == len(unimplemented), tail
+    assert counts.get("passed", 0) == int(collected.group(1)) - len(unimplemented), tail
+    assert "space implementation: running (support.running_type:RUNNING)" in ran.stdout, tail
+    flipped = f"{running_cases.MILESTONE} witnesses expected to pass: {', '.join(witnesses)}"
+    assert flipped in lines, tail
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"targets": (("core.space.reference_harness.engine", "Engine.opened", "implementation"),)},
+        {"targets": (("core.space.reference_harness.engine", "Engine.path", "implementation"),)},
+        {"targets": (("core.space.reference_harness.engin", "Engine.open", "implementation"),)},
+        {"targets": (("core.space.reference_harness.compare", "Case.start", "facts"),)},
+        {"today": "support.space_oracle.today:YESTERDAY"},
+        {"today": "support.running_type:RUNNING"},
+        {"milestone": "T4z"},
+    ],
+    ids=[
+        "missing-function",
+        "no-such-parameter",
+        "missing-module",
+        "another-default",
+        "missing-default",
+        "not-todays",
+        "missing-milestone",
+    ],
+)
+def test_the_hand_case_plugin_refuses_anything_not_where_it_expects_it(
+    change: dict[str, Any],
+) -> None:
+    """Pointed at a name that is missing, or at a default that is not today's engine, or at
+    a milestone the matrix does not hold, the plugin raises a usage error and rebinds
+    nothing."""
+    rebinding = Rebinding(**change)
+    with pytest.raises(pytest.UsageError, match="support.running_cases: "):
+        rebinding.apply()
+    assert Engine.open.__defaults__ == (TODAY,) and not rebinding.saved
+
+
+def test_the_hand_case_plugin_rebinds_each_default_and_restores_it() -> None:
+    rebinding = Rebinding()
+    before = [
+        running_cases._function(module, qualname).__defaults__
+        for module, qualname, _ in running_cases.TARGETS
+    ]
+    rebinding.apply()
+    try:
+        for module, qualname, parameter in running_cases.TARGETS:
+            function = running_cases._function(module, qualname)
+            position = running_cases._position(function, parameter)
+            assert (function.__defaults__ or ())[position] is RUNNING
+    finally:
+        rebinding.restore()
+    assert before == [
+        running_cases._function(module, qualname).__defaults__
+        for module, qualname, _ in running_cases.TARGETS
+    ]
 
 
 # -- a ``when`` read past its guard, through a formal of its scope ----------------------------
