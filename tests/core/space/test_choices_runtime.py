@@ -230,7 +230,7 @@ def test_choice_metadata_and_handles_retain_the_compiled_definition() -> None:
     assert b is not None and b.query(B.value) == Available(2)
     with pytest.raises(ConfigurationError):
         base.with_choices(implementation="renamed")
-    with pytest.raises(RequestError, match="unknown candidate"):
+    with pytest.raises(RequestError, match="unknown case"):
         inspection.candidate(base, Root.implementation, "missing")
 
 

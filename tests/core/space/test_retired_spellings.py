@@ -50,7 +50,7 @@ def test_a_decision_over_nodes_is_refused_pointing_to_select() -> None:
 
 def test_optional_is_refused_pointing_to_a_none_case() -> None:
     retired: Any = {"optional": True}
-    with refused("decision-optional", message=r"None case of a selector, Select\(none=None"):
+    with refused("decision-optional", message=r"None case of a selector: write Select\(none=None"):
         Decision(values=(1, 2), **retired)
     with refused("select-optional", message=r"Select\(none=None, \.\.\.\)"):
         Select(room=Room, hall=Hall, area=2, **retired)
@@ -66,7 +66,7 @@ def test_required_is_refused_pointing_to_a_policy() -> None:
 
 def test_a_named_decision_is_refused_pointing_to_the_class() -> None:
     retired: Any = {"name": "depth"}
-    with refused("decision-named", message="declare it as a class attribute"):
+    with refused("decision-named", message="write it as a class attribute"):
         Decision(values=(1, 2), **retired)
 
 
@@ -81,7 +81,7 @@ def test_an_unknown_keyword_is_a_type_error() -> None:
 
 
 def test_a_decision_given_at_a_call_is_refused_where_it_is_written() -> None:
-    with refused("decision-inline", message=r"Room\.area .*Declare it as a class attribute"):
+    with refused("decision-inline", message=r"Room\.area .*write it as a class attribute"):
 
         class Inline(Space):
             room = Room(area=Decision(values=(1, 2)))

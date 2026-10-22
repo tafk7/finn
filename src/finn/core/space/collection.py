@@ -102,7 +102,7 @@ def _check_choice_annotation(decision: NodeDecision) -> None:
                 raise DefinitionError.broken(
                     "choice-annotation-excludes-none",
                     _OWNER,
-                    f"{label}: candidate {key!r} is None, so the annotation must include None",
+                    f"{label}: case {key!r} is None, so the annotation must include None",
                     declaration=label,
                 )
         elif not any(
@@ -111,7 +111,7 @@ def _check_choice_annotation(decision: NodeDecision) -> None:
             raise DefinitionError.broken(
                 "choice-annotation-excludes-candidate",
                 _OWNER,
-                f"{label}: candidate {key!r} is a {record.space_type.__qualname__} node, which the "
+                f"{label}: case {key!r} is a {record.space_type.__qualname__} node, which the "
                 f"annotation {annotation!r} does not accept",
                 declaration=label,
             )

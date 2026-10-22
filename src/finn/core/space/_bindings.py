@@ -57,7 +57,7 @@ def classify(slot: Slot) -> tuple[BindingKind, object]:
         raise DefinitionError.broken(
             "node-not-value",
             _OWNER,
-            f"{slot.key}: a node or a Decision over nodes is not a value; bind one of its members",
+            f"{slot.key}: a node or a selector is not a value; bind one of its members",
             declaration=slot.key,
         )
     if isinstance(value, Decision) and value.owner is None and not isinstance(value, NodeDecision):

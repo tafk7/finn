@@ -223,9 +223,7 @@ def test_choice_members_are_validated_over_all_cases_before_selection() -> None:
             implementation: Complete | Missing = Select(complete=Complete(), missing=Missing())
             absent = View(implementation.absent)  # type: ignore[union-attr]
 
-    with refused(
-        "direct-read-undeclared", error=DefinitionError, message=r"candidates \['missing'\]"
-    ):
+    with refused("direct-read-undeclared", error=DefinitionError, message=r"cases \['missing'\]"):
 
         class Unqualified(Space):
             implementation: Complete | Missing = Select(complete=Complete(), missing=Missing())

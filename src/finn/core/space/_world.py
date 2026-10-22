@@ -1590,7 +1590,9 @@ class MethodReader:
         if target is None:
             if isinstance(node, Param):
                 return self._supplied(point, node)
-            raise RequestError("present() takes a node (a child or a candidate) or a value input")
+            raise RequestError(
+                "present() takes a node (a child or a selector's case) or a value input"
+            )
         presence = self.world.evaluator.linked.scopes[target].guard
         if presence is None:
             return True
@@ -1678,9 +1680,7 @@ class MethodReader:
         try:
             return linked.choices[linked.scopes[scope].choices[unwrap(decision)]]
         except (KeyError, TypeError) as error:
-            raise RequestError(
-                "the Decision over nodes is not part of this compiled scope"
-            ) from error
+            raise RequestError("the selector is not part of this compiled scope") from error
 
     def selected_candidate(self, point: Space, decision: object) -> Space | None:
         """The receiver of the candidate a Decision over nodes selects, or ``None``."""
@@ -1698,12 +1698,12 @@ class MethodReader:
         """A candidate's receiver, selected or not (``None`` for a case placing nothing)."""
         self._enter()
         if type(case) is not str:
-            raise RequestError("a candidate key must be a string")
+            raise RequestError("a case name must be a string")
         choice = self._choice(point._scope, decision)
         for key, index in choice.cases:
             if key == case:
                 return None if index is None else receiver(self, index)
-        raise RequestError(f"{choice.key}: unknown candidate {case!r}")
+        raise RequestError(f"{choice.key}: unknown case {case!r}")
 
     def root(self, point: Space) -> Space:
         """The root's receiver."""

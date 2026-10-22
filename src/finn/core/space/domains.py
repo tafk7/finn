@@ -271,9 +271,10 @@ def domain(
         raise DefinitionError.broken(
             "domain-order",
             _OWNER,
-            "domain(order=...) is gone: a domain ranks nothing, and candidates are its listed "
-            "order. A ranking is a view of the kernel (ram_preference), named by a compiler's "
-            "policy (FINN's FirstValid(order=Kernel.ram_preference)); ordered= stays",
+            "a domain ranks nothing: its candidates are its listed order. Write a ranking as a "
+            "view of the kernel (ram_preference), named by a compiler's policy (FINN's "
+            "FirstValid(order=Kernel.ram_preference)); ordered=True states an order by "
+            "construction",
         )
     return Domain(tuple(dependencies.items()), accepts, candidates, semantics, ordered=ordered)
 

@@ -181,12 +181,12 @@ def test_a_shared_binding_a_candidate_lacks_is_refused_naming_it() -> None:
             compute: PackedCore | Narrow = Select(packed=PackedCore, narrow=Narrow, width=width)
 
     message = str(raised.value)
-    assert "shared binding 'width' is not declared by candidates ['narrow (Narrow)']" in message
+    assert "shared binding 'width' is not declared by cases ['narrow (Narrow)']" in message
     assert "test_candidate_entries.py" in message
     with refused(
         "shared-binding-invalid",
         error=DefinitionError,
-        message=r"'cycles' is not declared by candidates",
+        message=r"'cycles' is not declared by cases",
     ):
 
         class Behaviour(Space):
@@ -257,7 +257,7 @@ def test_direct_reads_need_a_member_every_candidate_declares_with_one_type() -> 
     with refused(
         "direct-read-undeclared",
         error=DefinitionError,
-        message=r"candidates \['stub'\] do not declare 'pe'",
+        message=r"cases \['stub'\] do not declare 'pe'",
     ) as err:
         Unit.compute.pe  # type: ignore[union-attr]  # noqa: B018
     assert 'compute["packed"].pe' in str(err.error)
@@ -282,7 +282,7 @@ def test_qualified_reads_are_inapplicable_when_another_candidate_is_selected() -
     stub = commit(base, {"compute": "stub", "compute.stub.rows": 1})
     assert isinstance(stub.query(Unit.narrow), Inapplicable)
     assert isinstance(stub.query(Unit.compute["packed"].narrow_weights), Inapplicable)  # type: ignore[index]
-    with refused("candidate-unknown", error=DefinitionError, message="no candidate 'bogus'"):
+    with refused("candidate-unknown", error=DefinitionError, message="no case 'bogus'"):
         Unit.compute["bogus"]  # type: ignore[index]  # noqa: B018
 
 

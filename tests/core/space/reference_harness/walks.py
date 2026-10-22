@@ -272,9 +272,10 @@ class _Draw:
                 )
             return model.listed(*values, member=_not_one), f"listed{values} where value != 1"
         if draw < 0.58:
-            # A plain listed domain where a ranked one was drawn (a domain's order is gone,
-            # SZ103). Its draws are spent as before, its order's read included, so that each
-            # seed draws the description it drew before, less the ranking.
+            # Spent draws: these once drew a ranked domain (a domain's order, gone with
+            # SZ103), its order's read included. They are kept so that each seed draws the
+            # same description as before, less the ranking, and the walks' counts stay
+            # comparable across the change; they go when a later lane moves the baseline.
             values = tuple(sorted(rng.sample(VALUES, rng.randint(2, 3))))
             roots = self.roots()
             if roots:
@@ -303,7 +304,10 @@ class _Draw:
     def choice(self, scope: str, indent: str) -> model.Choice:
         name = self.name("c")
         domain, text = self.domain()
-        self.rng.random()  # spent as when it drew a required choice (gone, SZ103): same seeds
+        # A spent draw: it once made a choice required (gone with SZ103). Kept so that each
+        # seed draws the same description and the counts stay comparable; it goes when a
+        # later lane moves the baseline.
+        self.rng.random()
         self.ints.append(_join(scope, name))
         self.lines.append(f"{indent}choice {name}: {text}")
         return model.Choice(name, domain)
@@ -522,7 +526,10 @@ class _Draw:
         name = "s" if depth == 0 else "t"
         path = _join(scope, name)
         cases = ("a", "b", "c")[: self.rng.choice((2, 2, 3))] if depth == 0 else ("x", "y")
-        self.rng.random()  # spent as when it drew a required selector (gone, SZ103): same seeds
+        # A spent draw: it once made a selector required (gone with SZ103). Kept so that
+        # each seed draws the same description and the counts stay comparable; it goes when
+        # a later lane moves the baseline.
+        self.rng.random()
         self.lines.append(f"{indent}selector {name}")
         self.selectors[path] = cases
         built = tuple(self.case(path, case, depth, indent + "  ") for case in cases)

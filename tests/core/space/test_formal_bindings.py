@@ -116,10 +116,18 @@ def test_a_decision_over_nodes_belongs_to_the_space_class() -> None:
     class Plant(Space):
         heating: Room | None = Select(none=None, room=Room)
 
-    with refused("member-belongs-to-class", error=DefinitionError, message=r"Decision over nodes"):
+    with refused(
+        "member-belongs-to-class",
+        error=DefinitionError,
+        message=r"is a selector: it belongs to the Space class",
+    ):
         Plant(heating="room")  # type: ignore[arg-type]
     plant = Plant()
-    with refused("member-belongs-to-class", error=DefinitionError, message=r"Decision over nodes"):
+    with refused(
+        "member-belongs-to-class",
+        error=DefinitionError,
+        message=r"is a selector: it belongs to the Space class",
+    ):
         plant.heating = "room"  # type: ignore[assignment]
 
 

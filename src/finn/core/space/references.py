@@ -101,7 +101,7 @@ def _choice(
     scope = descend(scopes, scope, path[:-1])
     index = scopes[scope].choices.get(path[-1])
     if index is None:
-        raise RequestError("the Decision over nodes is not part of this compiled scope")
+        raise RequestError("the selector is not part of this compiled scope")
     return choices[index]
 
 
@@ -155,10 +155,10 @@ def resolve_reference(
             # that candidate is selected, so its own node answers the same.
             return found[0][1]
         if not found:
-            raise RequestError(f"no candidate of {choice.key} has a member {reference.member}")
+            raise RequestError(f"no case of {choice.key} has a member {reference.member}")
         raise RequestError(
-            f"{choice.key}.{reference.member} names a member of candidates "
-            f"{[case for case, _ in found]}; reach one candidate through its node handle"
+            f"{choice.key}.{reference.member} names a member of cases "
+            f"{[case for case, _ in found]}; reach one case through its path"
             + ("" if candidate else " (or read it in a declaration, which links a selection)")
         )
     if isinstance(reference, CaseRef):

@@ -532,18 +532,17 @@ Guard: TypeAlias = "ValueRef[bool] | bool | None"
 _RETIRED: Mapping[str, tuple[str, str]] = {
     "optional": (
         "decision-optional",
-        "optional= is gone: a case that places nothing is a None case of a selector, "
-        "Select(none=None, ...)",
+        "a case that places nothing is a None case of a selector: write Select(none=None, ...)",
     ),
     "required": (
         "decision-required",
-        "required= is gone: whether a policy may give a choice a value is the compiler's "
-        "(FINN's Required() policy on the Decision, stated by its KernelOp or the cut)",
+        "a Decision states no policy; a choice no default may set is the compiler's to "
+        "state: write FINN's Required() policy on the Decision, in its KernelOp or the cut",
     ),
     "name": (
         "decision-named",
-        "name= is gone: a Decision belongs to the Space class that declares it; declare it "
-        "as a class attribute, and bind that attribute to each formal it supplies",
+        "a Decision belongs to the Space class that declares it: write it as a class "
+        "attribute, and bind that attribute to each formal it supplies",
     ),
 }
 
@@ -556,8 +555,8 @@ def _refuse_retired(entries: tuple[object, ...], retired: Mapping[str, object]) 
             "decision-over-nodes",
             _OWNER,
             f"Decision{where}: a Decision keeps value domains (values= or domain=); a choice "
-            "among Space classes is a selector, Select(name=Class, other=Class(...), "
-            "shared=...), and optional= is a None case of it, Select(none=None, ...)",
+            "among Space classes is a selector: write Select(name=Class, other=Class(...), "
+            "shared=...), a case that places nothing as None, Select(none=None, ...)",
         )
     for keyword in retired:
         if keyword in _RETIRED:
@@ -637,8 +636,8 @@ class Decision(ValueDecl[T], Generic[T]):
             raise DefinitionError.broken(
                 "node-decision-not-entries",
                 _OWNER,
-                f"Decision{at(source_origin())}: a choice among Space classes is a selector, "
-                "Select(key=Room, other=Room(...)); a case that places nothing is None",
+                f"Decision{at(source_origin())}: a choice among Space classes is a selector: "
+                "write Select(key=Room, other=Room(...)); a case that places nothing is None",
             )
         if (domain is None) == (values is None):
             raise DefinitionError.broken(

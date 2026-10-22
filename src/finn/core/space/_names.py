@@ -124,7 +124,7 @@ class Names:
             raise DefinitionError.broken(
                 "node-decision-not-placed",
                 _OWNER,
-                f"{owner}: the Decision over nodes is not placed here",
+                f"{owner}: the selector is not placed here",
                 declaration=owner,
             )
         choice = self.table.choice_drafts[index]
@@ -146,7 +146,7 @@ class Names:
             raise DefinitionError.broken(
                 "candidate-member-absent",
                 _OWNER,
-                f"{owner}: no candidate of {choice.key} has a member {source.member}",
+                f"{owner}: no case of {choice.key} has a member {source.member}",
                 declaration=owner,
             )
         node = self.table.reserve(
@@ -186,7 +186,7 @@ class Names:
             raise DefinitionError.broken(
                 "node-decision-not-placed",
                 _OWNER,
-                f"{owner}: the Decision over nodes is not placed here",
+                f"{owner}: the selector is not placed here",
                 declaration=owner,
             )
         choice = template.choices[index]
@@ -227,7 +227,7 @@ class Names:
                 raise DefinitionError.broken(
                     "candidate-member-absent",
                     _OWNER,
-                    f"{owner}: no candidate of {choice.key} has a member {member}",
+                    f"{owner}: no case of {choice.key} has a member {member}",
                     declaration=owner,
                 )
             semantics = declared[0]
@@ -292,7 +292,7 @@ class Names:
                 raise DefinitionError.broken(
                     "node-decision-not-placed",
                     _OWNER,
-                    f"{owner}: the Decision over nodes is not placed here",
+                    f"{owner}: the selector is not placed here",
                     declaration=owner,
                 )
             return self.table.choice_drafts[index].selector

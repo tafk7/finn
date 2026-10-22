@@ -116,7 +116,7 @@ class NodeDecision(Decision[str]):
     def describe(self) -> str:
         where = f"{self.owner.__qualname__}.{self.name}" if self.owner is not None else None
         return (
-            f"Decision over {sorted(self.candidates)}"
+            f"selector over cases {sorted(self.candidates)}"
             + (f" placed at {where}" if where else "")
             + at(self.origin)
         )
@@ -277,7 +277,7 @@ def _value_supplier(
         raise DefinitionError.broken(
             "node-not-value",
             _OWNER,
-            f"{label}: a node or a Decision over nodes is not a value; bind one of its members",
+            f"{label}: a node or a selector is not a value; bind one of its members",
             declaration=label,
         )
     # A declaration's owner is set only after the class body ran: a Decision written at
@@ -301,9 +301,9 @@ def inline_decision(label: str) -> DefinitionError:
     return DefinitionError.broken(
         "decision-inline",
         _OWNER,
-        f"{label}: a Decision given to a formal at a call is gone: a Decision belongs to the "
-        "Space class that declares it. Declare it as a class attribute "
-        "(depth: int = Decision(...)), and bind that attribute (Fifo(depth=depth))",
+        f"{label}: a Decision belongs to the Space class that declares it: write it as a "
+        "class attribute (depth: int = Decision(...)), and bind that attribute "
+        "(Fifo(depth=depth))",
         declaration=label,
     )
 
@@ -320,7 +320,7 @@ def _refuse_inline(decision: Decision[object], label: str) -> None:
 
 _KINDS: Mapping[str, str] = {
     "decision": "Decision",
-    "choice": "Decision over nodes",
+    "choice": "selector",
     "node": "child node",
 }
 
@@ -575,7 +575,7 @@ class NodeChoice:
             raise DefinitionError.broken(
                 "candidate-unknown",
                 _OWNER,
-                f"{decision.describe()}: no candidate {case!r}; its candidates are "
+                f"{decision.describe()}: no case {case!r}; its cases are "
                 f"{list(decision.candidates)}",
                 declaration=decision.describe(),
             )
@@ -584,13 +584,13 @@ class NodeChoice:
             raise DefinitionError.broken(
                 "candidate-places-nothing",
                 _OWNER,
-                f"{decision.describe()}: candidate {case!r} places nothing",
+                f"{decision.describe()}: case {case!r} places nothing",
                 declaration=decision.describe(),
             )
         return path_proxy(record.space_type, (*self._space_path[:-1], record))
 
     def __setattr__(self, name: str, value: object) -> None:
-        raise AttributeError("a Decision over nodes is immutable")
+        raise AttributeError("a selector is immutable")
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, NodeChoice):
@@ -601,7 +601,7 @@ class NodeChoice:
         return hash(tuple(map(id, self._space_path)))
 
     def __bool__(self) -> bool:
-        raise TypeError("a Decision over nodes has no truth value")
+        raise TypeError("a selector has no truth value")
 
     def __repr__(self) -> str:
         return f"<{self._space_decision().describe()}>"
@@ -651,15 +651,15 @@ def select_choice(
         raise DefinitionError.broken(
             "select-optional",
             _OWNER,
-            f"Select{where}: optional= is gone: give a case that places nothing, "
+            f"Select{where}: a case that places nothing is a None case: write "
             "Select(none=None, ...)",
         )
     if "required" in members:
         raise DefinitionError.broken(
             "select-required",
             _OWNER,
-            f"Select{where}: required= is gone: whether a policy may give a selector a case "
-            "is the compiler's (FINN's Required() policy on its key)",
+            f"Select{where}: a selector states no policy; a case no default may pick is the "
+            "compiler's to state: write FINN's Required() policy on the selector's key",
         )
     space = _space()
     cases: dict[str, object] = {}
@@ -781,14 +781,14 @@ def _check_shared(
             ):
                 lacking.append(f"{key} ({space_type.__qualname__})")
         if lacking:
-            problems.append(f"shared binding {name!r} is not declared by candidates {lacking}")
+            problems.append(f"shared binding {name!r} is not declared by cases {lacking}")
     if problems:
         raise DefinitionError.broken(
             "shared-binding-invalid",
             _OWNER,
             f"Select{where}: "
             + "; ".join(problems)
-            + ". A shared binding goes to every candidate: write it on the entries that take it",
+            + ". A shared binding goes to every case: write it on the cases that take it",
         )
     for key, record in records.items():
         for name in shared:
@@ -821,8 +821,8 @@ def _check_direct_read(decision: NodeDecision, name: str) -> None:
         raise DefinitionError.broken(
             "direct-read-undeclared",
             _OWNER,
-            f"{decision.describe()}.{name}: a direct read needs a member every candidate "
-            f"declares; candidates {lacking} do not declare {name!r}. Read it qualified, as "
+            f"{decision.describe()}.{name}: a direct read needs a member every case "
+            f"declares; cases {lacking} do not declare {name!r}. Read it qualified, as "
             f'{decision.name or "choice"}["{next(iter(having))}"].{name}',
             declaration=f"{decision.describe()}.{name}",
         )
@@ -845,7 +845,7 @@ def _check_direct_read(decision: NodeDecision, name: str) -> None:
             raise DefinitionError.broken(
                 "direct-read-types-differ",
                 _OWNER,
-                f"{decision.describe()}.{name}: candidates declare {name!r} with different "
+                f"{decision.describe()}.{name}: cases declare {name!r} with different "
                 f"value types ({first_case}: {first.name}, {case}: {semantics.name}); read "
                 "each qualified",
                 declaration=f"{decision.describe()}.{name}",

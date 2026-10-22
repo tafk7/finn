@@ -60,7 +60,7 @@ def test_malformed_candidates_fail_as_definitions() -> None:
     with refused(
         "node-not-value",
         error=DefinitionError,
-        message="a node or a Decision over nodes is not a value",
+        message="a node or a selector is not a value",
     ):
         Holder(held=cast(int, Holder(held=1)))
     with refused("select-no-node", error=DefinitionError):
