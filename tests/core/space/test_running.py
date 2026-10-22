@@ -1,11 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""The running type (``finn.core.space._running``) against today's engine and the reference
-model, through the class-based oracle (``support.space_oracle``), as the implementation
-``core.space._running_type:RUNNING``.
+"""The running type (``finn.core.space._running``) asked directly, with no cache
+(``core.space._running_type:RUNNING``, the public API with no cache) and in the cache's
+modes, against the public API and the reference model, through the class-based oracle
+(``support.space_oracle``).
 
-- **The toys' walks**: each of FINN's toys walked from seeds 0 and 1, 20 steps, the running
-  type against today's engine, with no disagreement.
+- **The toys' walks**: each of FINN's toys walked from seeds 0 and 1, 20 steps, the public
+  API against the public API with no cache, with no disagreement.
 - **The reference walks**: seeds 0-23, 40 steps, strict, with and without selectors picked
   by a derived value, the running type against the reference model, every invariant and
   every permanent check holding.
@@ -15,7 +16,7 @@ model, through the class-based oracle (``support.space_oracle``), as the impleme
   has reached.
 - **Hand cases**: a ``when`` read past its guard through a formal of its scope; a chosen
   selector under a refused ``when``, one piece; a refused ``when`` below a guard that waits,
-  unknown until all above it holds, and two nested ones, one piece (each as today's
+  unknown until all above it holds, and two nested ones, one piece (each as the public API's
   engine answers it, and the model); an answer refused through its scope turning
   inapplicable; a reader beside a formal's scope; a formal read from outside its scope;
   models dropped and their ids reused, the node cache's tables with them; a line deeper
@@ -37,15 +38,15 @@ model, through the class-based oracle (``support.space_oracle``), as the impleme
   class's own or a mixin's giving misses only) and a value class field by field checked on
   sample classes, and nothing else keyed: no value under semantics of its own whose equality
   is not ``==`` (two design spaces differing only in two values ``==`` holds equal and such
-  semantics tell apart answer as today's by that check alone), nor a value class with a
+  semantics tell apart answer as the public API's by that check alone), nor a value class with a
   field annotated so.
 - **Value types** (``finn.core.space.value_type``): a registered class keyed by type and
   ``==``, alone, in a tuple and as a field, apart from what its ``==`` holds equal to it
   (a string), under the default semantics and under semantics declaring
   ``equal=operator.eq``, and nothing before it is registered; the classes its registration
-  covers; a fact of one found again in a second design space, answering as today's.
+  covers; a fact of one found again in a second design space, answering as the public API's.
 - **The facts layer's domain outcomes**, keyed as the cache keys values: a membership
-  candidate under semantics finer than ``==`` gets its own verdict, as today's; with the
+  candidate under semantics finer than ``==`` gets its own verdict, as the public API's; with the
   semantics left out of that key, another candidate's.
 
 The implementations are loaded by name, as ``--implementation`` names them
@@ -75,7 +76,7 @@ from typing import Annotated, Any, cast
 
 import pytest
 from support.space_oracle import Answers, Implementation, compare, forms, load, toys
-from support.space_oracle.today import TODAY
+from support.space_oracle.public import PUBLIC
 
 from core.space._running_shapes import (
     IN_AN_OPEN_CASE,
@@ -104,7 +105,7 @@ from core.space.reference_harness import implementation as harness_implementatio
 from core.space.reference_harness import walks as reference_walks
 from core.space.reference_harness.engine import definition
 from core.space.reference_harness.forms import ValidityForm
-from core.space.reference_harness.implementation import OUTSIDE, Option
+from core.space.reference_harness.implementation import Option
 from finn.core.space import (
     Available,
     Decision,
@@ -131,6 +132,8 @@ from finn.core.space import (
 )
 from finn.core.space._failure import NativeEvaluationError
 from finn.core.space._running import cache as cache_module
+from finn.core.space._running import purity
+from finn.core.space._running.answers import _same_value
 from finn.core.space._running import evaluate, questions, structure
 from finn.core.space._running.cache import (
     PLAIN,
@@ -144,9 +147,8 @@ from finn.core.space._running.evaluate import MembershipReadsChoice, Session
 from finn.core.space._running.value import DesignSpace, FactsLayer, hashkey
 from finn.core.space._structure import Structure
 from finn.core.space._value_types import is_value_type
-from finn.core.space._world import _same_value, check_purity
 from finn.core.space.ir import Node
-from finn.core.space.occurrence import state
+from finn.core.space.occurrence import held
 from finn.core.space.semantics import default_semantics
 
 RUNNING: Implementation = load("core.space._running_type:RUNNING")
@@ -180,8 +182,8 @@ def cached() -> Running:
 
 @pytest.mark.parametrize("seed", [0, 1])
 @pytest.mark.parametrize("toy", sorted(TOYS))
-def test_the_toys_walk_as_today(toy: str, seed: int) -> None:
-    found = compare.walk(TOYS[toy].make, TOYS[toy].facts, seed, 20, TODAY, RUNNING, forms.ALL)
+def test_the_toys_walk_as_the_public_api(toy: str, seed: int) -> None:
+    found = compare.walk(TOYS[toy].make, TOYS[toy].facts, seed, 20, PUBLIC, RUNNING, forms.ALL)
     assert found.lines() == []
     assert found.tally["changes"] > 0 and found.tally["cold builds"] > 0
     asked = found.tally["changes"] + found.tally["binds"]
@@ -193,7 +195,7 @@ def test_the_toys_walk_as_today(toy: str, seed: int) -> None:
 def test_the_reference_walks_hold_strictly(seed: int, by: bool) -> None:
     tally = reference_walks.walk(seed, 40, strict=True, implementation=RUNNING, by=by)
     assert tally.failure is None, tally.failure
-    assert tally.implementation == "running"
+    assert tally.implementation == "public, no cache"
     assert tally.steps == 40 and not tally.by_milestone and tally.engine_errors == 0
     assert tally.engine_checks["cold"] == tally.engine_checks["bind"] == tally.compared
     assert tally.engine_checks["cold change"] == tally.steps
@@ -219,50 +221,22 @@ HAND_CASES = tuple(
 )
 """The modules of hand cases run under the running type, each named (from ``tests``)."""
 
-_HARNESS = "tests/core/space/test_reference_harness.py"
-TODAYS_SELF_TESTS = (
-    *(
-        f"{_HARNESS}::test_a_planted_fault_is_reported_by_its_question_in_a_hand_case[{case}]"
-        for case in (
-            "possible-the possible values of a",
-            "standing-the change commit {'b': 2}",
-            "standing-the possible values of b",
-            "validity-validity",
-            "value-the answer of double",
-        )
-    ),
-    *(
-        f"{_HARNESS}::test_a_planted_fault_is_reported_by_question_in_walks_0_to_3[{question}]"
-        for question in ("possible", "standing", "validity", "value")
-    ),
-    f"{_HARNESS}::test_a_planted_value_on_a_stored_choice_is_seen",
-    *(
-        f"{_HARNESS}::test_history_is_reported_by_the_cold_build_in_walks_0_to_3[{seed}]"
-        for seed in range(4)
-    ),
-    f"{_HARNESS}::test_the_check_against_a_cold_build_runs_for_every_implementation",
-)
-"""The harness's own tests that name today's engine (or a fault planted around it) on
-purpose, deselected by node id (from the worktree's root, as pytest matches
-``--deselect``)."""
-
 _COUNTS = re.compile(r"(\d+) (passed|failed|errors?|xfailed|xpassed|skipped|deselected)")
 
 
 def test_the_reference_hand_cases_pass_under_the_running_type() -> None:
     """Every hand case of the reference harness's seven modules of them, run with
-    ``--space-implementation=core.space._running_type:RUNNING``: none fails or passes
-    unexpectedly or is skipped, today's engine is never opened or made, exactly the harness's
-    tests naming today's engine are deselected, and the expected failures are exactly the
-    witnesses of the matrix's rows the running type has not reached (``matrix.ROWS``,
-    ``matrix.reached``).
+    ``--space-implementation=core.space._running_type:RUNNING`` (the public API with no
+    cache): none fails or passes unexpectedly or is skipped, and the expected failures are
+    exactly the witnesses of the matrix's rows the running type has not reached
+    (``matrix.ROWS``, ``matrix.reached``).
 
     The option is written ``--space-implementation=MODULE:ATTRIBUTE``, with ``=``, before
     the test paths: written apart from its value, pytest takes the value for a path.
 
-    ``test_reference_walks`` is not run here: it pins today's engine by design (its walks'
-    own default, and its tests' "today"), and runs under today's in the gate as ever; the
-    running type's walks are this module's own."""
+    ``test_reference_walks`` is not run here: it pins the public API by design (its walks'
+    own default, and its tests' "public"), and runs under the public API in the gate as
+    ever; the walks with no cache are this module's own."""
     stems = {PurePosixPath(module).stem for module in HAND_CASES}
     unimplemented = sorted(
         row.witness
@@ -280,7 +254,6 @@ def test_the_reference_hand_cases_pass_under_the_running_type() -> None:
         "no:xdist",
         "-q",
         f"--space-implementation={RUNNING_SPEC}",
-        *(f"--deselect={node}" for node in TODAYS_SELF_TESTS),
         *HAND_CASES,
     ]
     environment = {key: value for key, value in os.environ.items() if key != "PYTEST_ADDOPTS"}
@@ -301,20 +274,15 @@ def test_the_reference_hand_cases_pass_under_the_running_type() -> None:
     assert ran.returncode == 0 and collected is not None, tail
     assert counts.get("failed", 0) == 0 and counts.get("error", 0) == 0, tail
     assert counts.get("xpassed", 0) == 0 and counts.get("skipped", 0) == 0, tail
-    deselected = sorted(
-        line.removeprefix("deselected: ") for line in lines if line.startswith("deselected: ")
-    )
-    assert deselected == sorted(TODAYS_SELF_TESTS), tail
-    assert counts.get("deselected", 0) == len(TODAYS_SELF_TESTS), tail
+    assert counts.get("deselected", 0) == 0, tail
     assert counts.get("xfailed", 0) == len(unimplemented), tail
-    expected_passed = int(collected.group(1)) - len(unimplemented) - len(TODAYS_SELF_TESTS)
+    expected_passed = int(collected.group(1)) - len(unimplemented)
     assert counts.get("passed", 0) == expected_passed, tail
-    assert "today's engine opened or made: 0" in lines, tail
-    assert f"space implementation: running ({RUNNING_SPEC})" in ran.stdout, tail
+    assert f"space implementation: public, no cache ({RUNNING_SPEC})" in ran.stdout, tail
 
 
 RUNNING_SPEC = "core.space._running_type:RUNNING"
-"""The running type, as an implementation is named (``support.space_oracle.load``)."""
+"""The public API with no cache, as an implementation is named (``support.space_oracle.load``)."""
 
 TOY = Case("a toy", Description(("wide",), Scope("", choices=(Choice("x", listed(1, 2)),))))
 
@@ -356,7 +324,7 @@ def _default(implementation: Implementation) -> Iterator[None]:
 def test_the_harness_asks_its_default_wherever_a_test_names_none() -> None:
     """``Engine.open``, ``Engine.make``, ``definition`` and ``Case.start`` ask the default
     implementation where they are given none, and the one named where one is."""
-    assert harness_implementation.default() is TODAY
+    assert harness_implementation.default() is PUBLIC
     recording = _Recording()
     with _default(recording):
         assert TOY.engine.open({"wide": 1}).implementation == "recording"
@@ -364,9 +332,9 @@ def test_the_harness_asks_its_default_wherever_a_test_names_none() -> None:
         assert TOY.start({"wide": 1}, {"x": 1}).engine.implementation == "recording"
         assert definition(TOY.description, facts={"wide": 1}).error is None
         assert recording.calls == ["open", "make", "open", "open"]
-        assert TOY.engine.open({"wide": 1}, TODAY).implementation == "today"
-    assert harness_implementation.default() is TODAY
-    assert TOY.start({"wide": 1}).engine.implementation == "today"
+        assert TOY.engine.open({"wide": 1}, PUBLIC).implementation == "public"
+    assert harness_implementation.default() is PUBLIC
+    assert TOY.start({"wide": 1}).engine.implementation == "public"
 
 
 @pytest.mark.parametrize(
@@ -375,49 +343,37 @@ def test_the_harness_asks_its_default_wherever_a_test_names_none() -> None:
     ids=["missing-attribute", "missing-module", "not-registered"],
 )
 def test_the_option_refuses_a_name_that_names_nothing(spec: str) -> None:
-    """A name that loads nothing is a usage error, and the default stays today's engine."""
+    """A name that loads nothing is a usage error, and the default stays the public API."""
     with pytest.raises(pytest.UsageError, match="--space-implementation "):
         Option.start(spec)
-    assert harness_implementation.default() is TODAY
+    assert harness_implementation.default() is PUBLIC
 
 
-def test_the_option_makes_its_implementation_the_default_and_counts_todays() -> None:
-    """Started, the running type is the default and each ``open`` and ``make`` of today's
-    engine is counted by the test it ran in; stopped, both are as before. Named today's, it
-    counts nothing and adds nothing to the summary."""
-    methods = (type(TODAY).open, type(TODAY).make)
+def test_the_option_makes_its_implementation_the_default_until_stopped() -> None:
+    """Started, the public API with no cache is the default, and the report's header names
+    it; stopped, the public API is again. Named ``public``, the public API stays the
+    default."""
     option = Option.start(RUNNING_SPEC)
     try:
-        assert harness_implementation.default() is RUNNING and option.opens is not None
-        assert option.opens.count() == "today's engine opened or made: 0" and not option.failed()
-        with option.running("here"):
-            TODAY.make(Ordered, {}, {"a": 2, "b": 1})
-            TODAY.open(design_space(Ordered()))
-        TODAY.open(design_space(Ordered()))
-        assert option.opens.opened == {"here": 2, OUTSIDE: 1} and option.failed()
-        option.deselected.append("a::test")
-        assert option.summary() == [
-            f"space implementation: running ({RUNNING_SPEC}), the harness's default "
-            "(--space-implementation)",
-            "deselected: a::test",
-            f"today's engine opened or made: 3 ({OUTSIDE}: 1; here: 2)",
-        ]
+        assert harness_implementation.default() is RUNNING
+        assert option.header() == (
+            f"space implementation: public, no cache ({RUNNING_SPEC}), the harness's default "
+            "(--space-implementation)"
+        )
     finally:
         option.stop()
-    assert harness_implementation.default() is TODAY
-    assert (type(TODAY).open, type(TODAY).make) == methods
-    today = Option.start("today")
+    assert harness_implementation.default() is PUBLIC
+    public = Option.start("public")
     try:
-        assert today.opens is None and today.summary() == [] and not today.failed()
-        assert (type(TODAY).open, type(TODAY).make) == methods
+        assert harness_implementation.default() is PUBLIC
     finally:
-        today.stop()
-    assert harness_implementation.default() is TODAY
+        public.stop()
+    assert harness_implementation.default() is PUBLIC
 
 
 def test_a_witness_is_expected_to_fail_for_a_default_short_of_its_milestone() -> None:
     """A row's witness is a strict expected failure for a default that has not reached the
-    row's milestone (today's engine, the running type: neither declares any), and a plain
+    row's milestone (the public API, with and without its cache: neither declares any), and a plain
     test for one that has."""
 
     def witness() -> None: ...
@@ -425,7 +381,7 @@ def test_a_witness_is_expected_to_fail_for_a_default_short_of_its_milestone() ->
     def marks(test: Callable[[], None]) -> list[str]:
         return [mark.name for mark in getattr(test, "pytestmark", [])]
 
-    assert reached(TODAY) == reached(RUNNING) == frozenset()
+    assert reached(PUBLIC) == reached(RUNNING) == frozenset()
     assert reached(_Reaching()) == {"T4b"}
     with pytest.raises(ValueError, match="no later milestones"):
         reached(_Reaching(milestones=frozenset({"T9"})))
@@ -488,14 +444,14 @@ def test_a_when_read_past_its_guard_reads_its_scopes_formal_at_its_source() -> N
     pair.check_validity()
     pair.check_possible("s")
     configuration = design_space(WHEN_THROUGH_FORMAL.engine.root(f0=1))  # type: ignore[call-arg]
-    assert compare.everything(TODAY.open(configuration), RUNNING.open(configuration)).lines() == []
+    assert compare.everything(PUBLIC.open(configuration), RUNNING.open(configuration)).lines() == []
 
 
 # -- a chosen selector under a refused ``when``: one piece ------------------------------------
 #
 # A chosen selector whose ``when`` reads a refused derived value: the selector's piece and
 # each case's would each count the refused guard. It counts once, at the highest refused
-# guard of the chain, in the selector's name, as today's engine counts it. Setting the other
+# guard of the chain, in the selector's name, as the public API counts it. Setting the other
 # case under the refused guard is then possible: it adds no pair. The reference harness
 # spells no selector with a ``when`` of its own; there, the selector sits in a scope the
 # ``when`` places, and the model's one piece is the running type's.
@@ -542,7 +498,7 @@ def test_a_chosen_selector_under_a_refused_when_is_one_piece(case: str | None) -
     if case is not None:
         (viable,) = RUNNING.open(point).viable(["heating"])
         assert all(isinstance(item, inspection.Possible) for item in viable.values or ())
-    assert compare.everything(TODAY.open(point), RUNNING.open(point)).lines() == []
+    assert compare.everything(PUBLIC.open(point), RUNNING.open(point)).lines() == []
 
 
 def test_a_selector_in_a_scope_under_a_refused_when_is_its_scopes_one_piece_as_the_model_says() -> (
@@ -589,7 +545,7 @@ def test_a_selector_in_a_scope_under_a_refused_when_is_its_scopes_one_piece_as_t
 # case ``a`` of the open selector ``s``; or in ``p``, whose ``when`` reads the open choice
 # ``c``), ``g`` waits with it: its piece is unknown, waiting on what that guard waits on, and
 # validity is open. The refusal takes effect once all above it holds: ``s`` bound to ``a``
-# (or ``c`` to 1), ``g``'s guard is one false piece, and setting it is refused. Today's
+# (or ``c`` to 1), ``g``'s guard is one false piece, and setting it is refused. The public API's
 # engine answers the same, as the model does. The same with the refused ``when`` a
 # selector's own (``plant``, written as ``heating``'s guard), in a case of an open
 # selector: there the piece is the selector's.
@@ -685,9 +641,9 @@ def test_a_refused_when_below_a_guard_that_waits_is_unknown_until_all_above_it_h
     pair = case.start(facts, implementation=implementation)
     pair.check_validity()
     assert pair.engine.validity() == ValidityForm("open", blockers=frozenset({waits_on}))
-    today = case.start(facts)  # today's engine, against the model too
-    today.check_validity()
-    assert today.engine.answers.validity() == pair.engine.answers.validity()
+    public = case.start(facts)  # the public API, against the model too
+    public.check_validity()
+    assert public.engine.answers.validity() == pair.engine.answers.validity()
     pair.check_possible(waits_on)
     assert pair.check_change(Change(commit=holding)) is None  # refused on both sides
     bound = pair.check_bind(holding)
@@ -702,7 +658,7 @@ def test_a_refused_when_below_a_guard_that_waits_is_unknown_until_all_above_it_h
 # Two refused ``when``s, one inside the other, in case ``a`` of the open selector ``s``:
 # ``outer``'s reads ``d``, ``inner``'s reads ``e``, both refused for an odd ``f``. They count
 # once, at the highest refused ``when`` of the chain: one piece, unknown, waiting on ``s``,
-# keyed by ``outer``. With ``s`` bound to ``a``, that piece is refused, still one. Today's
+# keyed by ``outer``. With ``s`` bound to ``a``, that piece is refused, still one. The public API's
 # engine answers the same.
 
 
@@ -766,10 +722,10 @@ def test_two_nested_refused_whens_in_a_case_of_an_open_selector_are_one_unknown_
     refused = bound.engine.answers.validity()
     assert refused.status == "refused"
     assert [piece.owner for piece in refused.pieces] == ["s.a.outer"]
-    today = NESTED_IN_AN_OPEN_CASE.start({"f": 1})
-    today.check_validity()
-    assert today.engine.answers.validity() == found
-    assert today.check_bind({"s": "a"}).engine.answers.validity() == refused
+    public = NESTED_IN_AN_OPEN_CASE.start({"f": 1})
+    public.check_validity()
+    assert public.engine.answers.validity() == found
+    assert public.check_bind({"s": "a"}).engine.answers.validity() == refused
 
 
 # -- an answer refused through its scope may turn inapplicable ------------------------------
@@ -810,11 +766,11 @@ REFUSED_THROUGH_SCOPE = Case(
 )
 
 
-@pytest.mark.parametrize("name", ["today", "running"])
+@pytest.mark.parametrize("name", ["public", "uncached"])
 def test_an_answer_refused_through_its_scope_turns_inapplicable_and_the_change_is_accepted(
     name: str,
 ) -> None:
-    implementation = TODAY if name == "today" else RUNNING
+    implementation = PUBLIC if name == "public" else RUNNING
     pair = REFUSED_THROUGH_SCOPE.start({"gate": 1, "n": 3}, implementation=implementation)
     pair.check_answer("h.s.b.d")
     assert isinstance(pair.engine.answers.query("h.s.b.d"), Rejected)
@@ -824,7 +780,7 @@ def test_an_answer_refused_through_its_scope_turns_inapplicable_and_the_change_i
     assert isinstance(after.engine.answers.query("h.s.b.d"), Inapplicable)
     configuration = design_space(REFUSED_THROUGH_SCOPE.engine.root(gate=1, n=3))  # type: ignore[call-arg]
     found, _, _ = compare.change(
-        TODAY.open(configuration), RUNNING.open(configuration), compare.Request({"h.s": "a"})
+        PUBLIC.open(configuration), RUNNING.open(configuration), compare.Request({"h.s": "a"})
     )
     assert found.lines() == []
 
@@ -835,7 +791,7 @@ def test_an_answer_refused_through_its_scope_turns_inapplicable_and_the_change_i
 # it is present wherever ``part`` is. Two readers beside it, under the same guard: ``part``'s
 # constraint ``fits`` and the sibling scope ``part.side``, whose formal is bound to
 # ``leaf.w``. Neither is in ``leaf``, so each reads ``leaf.w`` as a member of ``leaf``: its
-# guard (the reader's own) and then its source. Every answer is today's, standing included.
+# guard (the reader's own) and then its source. Every answer is the public API's, standing included.
 
 
 class Leaf(Space):
@@ -877,15 +833,15 @@ class Sibling(Space):
 
 
 @pytest.mark.parametrize("seed", range(6))
-def test_a_reader_beside_a_formals_scope_answers_as_today(seed: int) -> None:
-    found = compare.walk(lambda: design_space(Sibling()), {}, seed, 20, TODAY, RUNNING, forms.ALL)
+def test_a_reader_beside_a_formals_scope_answers_as_the_public_api(seed: int) -> None:
+    found = compare.walk(lambda: design_space(Sibling()), {}, seed, 20, PUBLIC, RUNNING, forms.ALL)
     assert found.lines() == []
 
 
-def test_a_refusal_through_a_formal_read_beside_its_scope_names_todays_standing_choices() -> None:
+def test_a_refusal_through_a_formal_read_beside_its_scope_names_its_standing_choices() -> None:
     point = bind(design_space(Sibling()), {Sibling.gate: 1}).instance
     found, base, other = compare.change(
-        TODAY.open(point), RUNNING.open(point), compare.Request({"part.y": 1, "part.side.k": 3})
+        PUBLIC.open(point), RUNNING.open(point), compare.Request({"part.y": 1, "part.side.k": 3})
     )
     assert found.lines() == [] and base is not None and other is not None
     for request in (
@@ -920,7 +876,7 @@ def test_a_formal_read_from_outside_its_absent_scope_is_inapplicable(enabled: bo
             assert isinstance(found, Available), key
         else:
             assert isinstance(found, Inapplicable), key
-        assert forms.answer(found) == forms.answer(TODAY.open(point).query(key)), key
+        assert forms.answer(found) == forms.answer(PUBLIC.open(point).query(key)), key
 
 
 # -- models dropped and their ids reused --------------------------------------------------------
@@ -970,12 +926,16 @@ def test_a_dropped_model_takes_its_record_layers_and_tables_with_it_when_its_id_
     for number in range(400):
         space_class = _shape(number)
         configuration = design_space(space_class())
-        model = state(configuration).model
+        model = inspection.model(configuration)
         identity = id(model.linked)
         if identity in dead:
             assert dead[identity]() is None
-            # a new model at a dead one's id: no record and no table until it is first read
-            assert structure._RECORDS.get(model.linked) is None
+            # a new model at a dead one's id: its record only what opening it made (its
+            # facts layer), and no table until it is first read
+            opened = structure._RECORDS.get(model.linked)
+            assert opened is not None and opened._ranks is None
+            assert not opened._bound and not opened._within
+            assert list(opened.layers.values()) == [held(configuration).ds.layer]
             assert cache.models() == 0
             reused = (space_class, configuration)
             break
@@ -989,37 +949,38 @@ def test_a_dropped_model_takes_its_record_layers_and_tables_with_it_when_its_id_
         gc.collect()
     assert reused is not None, "no id was reused in 400 models"
     assert all(layer() is None for layer in layers)
-    assert structure.records() == alive  # every dead model's record gone, the new one unread
+    # every dead model's record gone; the new one's holds what opening it made
+    assert structure.records() == alive + 1
     space_class, configuration = reused
     hits = counters(running).hits
     first = running.make(space_class, {}, {"a": 4, "b": 2, "inner.pe": 4})
     assert (
-        first.validity() == TODAY.make(space_class, {}, {"a": 4, "b": 2, "inner.pe": 4}).validity()
+        first.validity() == PUBLIC.make(space_class, {}, {"a": 4, "b": 2, "inner.pe": 4}).validity()
     )
     assert counters(running).hits == hits  # nothing of a dead model's found
     assert cache.models() == 1
     for stored in ({"a": 2, "b": 1, "inner.pe": 2}, {"a": 1, "b": 4, "inner.pe": 4}):
-        today = forms.space(TODAY.make(space_class, {}, stored))
+        public = forms.space(PUBLIC.make(space_class, {}, stored))
         for implementation in (RUNNING, running):
             made = implementation.make(space_class, {}, stored)
-            assert forms.differences(today, forms.space(made)) == []
+            assert forms.differences(public, forms.space(made)) == []
     for implementation in (RUNNING, running):
-        found = compare.walk(lambda: design_space(space_class()), {}, 0, 12, TODAY, implementation)
+        found = compare.walk(lambda: design_space(space_class()), {}, 0, 12, PUBLIC, implementation)
         assert found.lines() == []
     assert counters(running).hits > hits
 
 
 def test_a_facts_layer_is_interned_while_a_design_space_holds_it() -> None:
     configuration = toys.TOYS["house"].make()
-    model = state(configuration).model
-    facts = dict(state(configuration).world.facts)
+    model = inspection.model(configuration)
+    facts = dict(held(configuration).ds.facts)
     first = FactsLayer.of(model, facts)
     assert FactsLayer.of(model, dict(facts)) is first
-    held = DesignSpace(first, {})
-    assert DesignSpace(FactsLayer.of(model, facts), {}) == held
-    assert hash(DesignSpace(FactsLayer.of(model, facts), {})) == hash(held)
+    kept = DesignSpace(first, {})
+    assert DesignSpace(FactsLayer.of(model, facts), {}) == kept
+    assert hash(DesignSpace(FactsLayer.of(model, facts), {})) == hash(kept)
     probe = weakref.ref(first)
-    del first, held
+    del first, kept, configuration  # the design space it opened holds the layer too
     gc.collect()
     assert probe() is None
 
@@ -1045,13 +1006,13 @@ def _line(depth: int) -> type[Space]:
 LINE = _line(300)
 
 
-def test_a_line_deeper_than_the_stack_allows_answers_as_today_with_the_limit_unchanged() -> None:
+def test_a_line_deeper_than_the_stack_allows_answers_with_the_limit_unchanged() -> None:
     limit = sys.getrecursionlimit()
     configuration = design_space(LINE(value_0=0))  # type: ignore[call-arg]
     running = fresh()
     answers = running.open(configuration)
     assert answers.query("value_300") == Available(300)
-    assert forms.space(answers, []) == forms.space(TODAY.open(configuration), [])
+    assert forms.space(answers, []) == forms.space(PUBLIC.open(configuration), [])
     assert sys.getrecursionlimit() == limit
     assert counters(running).deepest == evaluate.DEPTH and counters(running).restarts > 0
 
@@ -1105,7 +1066,7 @@ def test_a_membership_reading_that_reads_a_decision_is_an_error_naming_both(
         w: int = Decision(values=(4, 6))
         g = Inside(width=w, when=on)
 
-    model = cast(Any, state(design_space(Reads())).model)
+    model = cast(Any, inspection.model(design_space(Reads())))
     ds = DesignSpace(FactsLayer.of(model, {}), {model.linked.keys["w"]: 4})
     ev = evaluate.evaluation(ds, Session())
     with pytest.raises(NativeEvaluationError) as raised:
@@ -1127,7 +1088,7 @@ def test_a_membership_reading_of_a_choice_with_no_guard_that_reads_a_decision_is
         w: int = Decision(values=(4, 6))
         pe: int = Decision(domain=divisors_of(w))
 
-    model = cast(Any, state(design_space(Unguarded())).model)
+    model = cast(Any, inspection.model(design_space(Unguarded())))
     keys = model.linked.keys
     ds = DesignSpace(FactsLayer.of(model, {}), {keys["w"]: 4})
     ev = evaluate.evaluation(ds, Session())
@@ -1146,7 +1107,7 @@ def test_a_membership_reading_of_a_choice_with_no_guard_that_reads_a_decision_is
 # ``sel.a.z``'s domain reads ``sel.a.cap`` in its own case, and ``sel`` is picked by ``pick``,
 # which reads the choice ``x`` (``_running_shapes.PickedByAChoice``). Reading ``z``'s
 # membership as if it existed reads the case's guard, ``z``'s own existence guard, taken as
-# holding: it never reaches ``x``, and every answer is today's. The same read from a choice
+# holding: it never reaches ``x``, and every answer is the public API's. The same read from a choice
 # outside the case (``w`` at the root) reads that guard as any other: it reaches ``x``, which
 # the compile check refuses (``domain-reads-choice``), and, built past it, the membership
 # assertion names ``w`` and ``x``.
@@ -1155,7 +1116,7 @@ def test_a_membership_reading_of_a_choice_with_no_guard_that_reads_a_decision_is
 @pytest.mark.parametrize("f", [1, 2])
 def test_a_choice_in_a_case_picked_by_a_choice_reads_its_cases_guard_as_holding(f: int) -> None:
     point = design_space(PickedByAChoice(f=f))
-    model = cast(Any, state(point).model)
+    model = cast(Any, inspection.model(point))
     keys = model.linked.keys
     ds = DesignSpace(FactsLayer.of(model, {keys["f"]: f}), {})
     ev = evaluate.evaluation(ds, Session())
@@ -1173,7 +1134,7 @@ def test_a_choice_in_a_case_picked_by_a_choice_reads_its_cases_guard_as_holding(
         {PickedByAChoice.x: 0, z: 2},
     ):
         bound = bind(point, stored).instance
-        assert compare.everything(TODAY.open(bound), RUNNING.open(bound)).lines() == []
+        assert compare.everything(PUBLIC.open(bound), RUNNING.open(bound)).lines() == []
 
 
 def test_a_choice_outside_the_case_reading_its_value_reads_the_picker_and_is_an_error(
@@ -1197,7 +1158,7 @@ def test_a_choice_outside_the_case_reading_its_value_reads_the_picker_and_is_an_
         design_space(outside()(f=2))  # type: ignore[call-arg]
     assert [finding.code for finding in refused.value.findings] == ["domain-reads-choice"]
     monkeypatch.setattr(_compose, "check_domains", lambda template: None)
-    model = cast(Any, state(design_space(outside()(f=2))).model)  # type: ignore[call-arg]
+    model = cast(Any, inspection.model(design_space(outside()(f=2))))  # type: ignore[call-arg]
     keys = model.linked.keys
     ds = DesignSpace(FactsLayer.of(model, {keys["f"]: 2}), {keys["x"]: 0})
     ev = evaluate.evaluation(ds, Session())
@@ -1216,7 +1177,7 @@ def test_a_choice_outside_the_case_reading_its_value_reads_the_picker_and_is_an_
 # ``direct``, given as the argument of derived values, views, constraints and a guard's
 # derived value. The argument reads the case's name, ``"direct"`` for the ``None`` case, as
 # lowering resolves it: the running type follows with no frame of its own, and answers every
-# question as today's.
+# question as the public API's.
 
 
 @pytest.mark.parametrize(
@@ -1230,7 +1191,7 @@ def test_a_choice_outside_the_case_reading_its_value_reads_the_picker_and_is_an_
         (2, "stage", ("stage", "stage")),
     ],
 )
-def test_a_selector_given_as_a_bindings_argument_reads_its_case_name_as_today(
+def test_a_selector_given_as_a_bindings_argument_reads_its_case_name_as_the_public_api(
     x: int | None, chosen: str | None, names: tuple[str | None, str | None]
 ) -> None:
     stored: dict[object, object] = {}
@@ -1244,14 +1205,14 @@ def test_a_selector_given_as_a_bindings_argument_reads_its_case_name_as_today(
         getattr(answers.query(key), "value", None) for key in ("chosen_name", "picked_name")
     )
     assert found == names
-    assert compare.everything(TODAY.open(point), answers).lines() == []
+    assert compare.everything(PUBLIC.open(point), answers).lines() == []
 
 
 # -- the node cache: a dropping cache, a width bound, and caches wrong on purpose -----------------
 #
 # The contract lets the cache drop any entry at any time: a miss changes nothing but the
 # work. ``RUNNING_DROPPING`` drops half its hits and half its keeps, at random (seeded), and
-# must answer as today's engine does; so must ``RUNNING_NARROW``, which keeps no answer read
+# must answer as the public API does; so must ``RUNNING_NARROW``, which keeps no answer read
 # from more than one choice or fact. ``RUNNING_PLANTED`` keys each answer without the last
 # read of its read set, and ``RUNNING_PLANTED_WIDTH`` applies its width bound to the key
 # rather than to whether an answer is kept: the comparison must catch both, or the cache's
@@ -1262,12 +1223,12 @@ def test_a_selector_given_as_a_bindings_argument_reads_its_case_name_as_today(
 
 @pytest.mark.parametrize("seed", [0, 1])
 @pytest.mark.parametrize("toy", sorted(TOYS))
-def test_the_toys_walk_as_today_with_a_cache_dropping_entries_at_random(
+def test_the_toys_walk_as_the_public_api_with_a_cache_dropping_entries_at_random(
     toy: str, seed: int
 ) -> None:
     before = counters(RUNNING_DROPPING).hits
     found = compare.walk(
-        TOYS[toy].make, TOYS[toy].facts, seed, 20, TODAY, RUNNING_DROPPING, forms.ALL
+        TOYS[toy].make, TOYS[toy].facts, seed, 20, PUBLIC, RUNNING_DROPPING, forms.ALL
     )
     assert found.lines() == []
     assert found.tally["changes"] > 0 and found.tally["cold builds"] > 0
@@ -1276,10 +1237,12 @@ def test_the_toys_walk_as_today_with_a_cache_dropping_entries_at_random(
 
 @pytest.mark.parametrize("seed", [0, 1])
 @pytest.mark.parametrize("toy", sorted(TOYS))
-def test_the_toys_walk_as_today_with_a_cache_keeping_no_wide_answer(toy: str, seed: int) -> None:
+def test_the_toys_walk_as_the_public_api_with_a_cache_keeping_no_wide_answer(
+    toy: str, seed: int
+) -> None:
     hits, wide = counters(RUNNING_NARROW).hits, counters(RUNNING_NARROW).too_wide
     found = compare.walk(
-        TOYS[toy].make, TOYS[toy].facts, seed, 20, TODAY, RUNNING_NARROW, forms.ALL
+        TOYS[toy].make, TOYS[toy].facts, seed, 20, PUBLIC, RUNNING_NARROW, forms.ALL
     )
     assert found.lines() == []
     assert found.tally["changes"] > 0 and found.tally["cold builds"] > 0
@@ -1304,11 +1267,11 @@ class Summed(Space):
 def test_a_member_wider_than_the_width_is_never_kept_and_is_evaluated_at_each_lookup() -> None:
     """``total`` reads ``a`` and ``b``, ``twice`` reads ``a``: under a width of one, each of
     three equal design spaces evaluates ``total`` again, nothing kept for it and nothing
-    hashed at its keep, and finds ``twice`` kept; each answers as today's."""
+    hashed at its keep, and finds ``twice`` kept; each answers as the public API's."""
     running = Running(NodeCache(wide=1), "running, cached, width 1")
     cache = cast(NodeCache, running.cache)
     found = counters(running)
-    today = TODAY.make(Summed, {}, {"a": 1, "b": 2})
+    public = PUBLIC.make(Summed, {}, {"a": 1, "b": 2})
     for round_ in range(3):
         answers = running.make(Summed, {}, {"a": 1, "b": 2})
         derived_ = found.by_kind.get("derived", 0)
@@ -1317,7 +1280,7 @@ def test_a_member_wider_than_the_width_is_never_kept_and_is_evaluated_at_each_lo
         assert found.too_wide == round_ + 1
         assert answers.query("twice") == Available(2)
         assert found.by_kind["derived"] == derived_ + (2 if round_ == 0 else 1)
-        assert compare.everything(today, answers).lines() == []
+        assert compare.everything(public, answers).lines() == []
     ds = cast(Any, answers).ds
     total, twice = ds.node("total"), ds.node("twice")
     (table,) = cache._tables.values()
@@ -1349,18 +1312,18 @@ class Ordered(Space):
 @pytest.mark.usefixtures("purity_unchecked")
 def test_a_cache_leaving_a_read_out_of_its_key_answers_otherwise_and_is_caught() -> None:
     """``ordered`` reads ``a`` and ``b``; the planted cache keys it by ``a`` alone. Asked at
-    (2, 3), then at (2, 1), it answers the second as the first: valid where today's
-    engine refuses. A cache keyed by both answers the second as today's."""
+    (2, 3), then at (2, 1), it answers the second as the first: valid where the public API's
+    engine refuses. A cache keyed by both answers the second as the public API's."""
     planted, honest = Running(LeavesOneOut(), "planted"), cached()
     for implementation in (planted, honest):
         first = implementation.make(Ordered, {}, {"a": 2, "b": 3})
         assert first.validity().status == "valid"
-    today = TODAY.make(Ordered, {}, {"a": 2, "b": 1})
-    assert today.validity().status == "refused"
-    assert honest.make(Ordered, {}, {"a": 2, "b": 1}).validity() == today.validity()
+    public = PUBLIC.make(Ordered, {}, {"a": 2, "b": 1})
+    assert public.validity().status == "refused"
+    assert honest.make(Ordered, {}, {"a": 2, "b": 1}).validity() == public.validity()
     wrong = planted.make(Ordered, {}, {"a": 2, "b": 1})
     assert wrong.validity().status == "valid"
-    found = compare.everything(today, wrong)
+    found = compare.everything(public, wrong)
     assert {difference.kind for difference in found.disagreements} >= {"members", "validity"}
     assert counters(planted).hits > 0
 
@@ -1391,7 +1354,7 @@ def test_a_hit_leaves_the_evaluation_as_evaluating_would() -> None:
 @pytest.mark.usefixtures("purity_unchecked")
 def test_a_walk_catches_the_planted_cache() -> None:
     house = TOYS["house"]
-    found = compare.walk(house.make, house.facts, 0, 5, TODAY, RUNNING_PLANTED)
+    found = compare.walk(house.make, house.facts, 0, 5, PUBLIC, RUNNING_PLANTED)
     assert found.disagreements
     assert {"members", "validity"} <= set(found.by_kind), found.by_kind
 
@@ -1401,17 +1364,17 @@ def test_a_width_bound_applied_to_the_key_answers_otherwise_and_is_caught() -> N
     """``ordered`` reads ``a`` and ``b``; a cache applying a width of one to its key, rather
     than to whether it keeps the answer, keys it by ``a`` alone. Asked at (2, 3), then at
     (2, 1), it answers the second as the first, and the comparison finds it; a cache of the
-    same width keeping no answer read from both answers the second as today's."""
+    same width keeping no answer read from both answers the second as the public API's."""
     planted = Running(KeysFirstReads(wide=1), "planted: a width applied to the key")
     honest = Running(NodeCache(wide=1), "running, cached, width 1")
     for implementation in (planted, honest):
         first = implementation.make(Ordered, {}, {"a": 2, "b": 3})
         assert first.validity().status == "valid"
-    today = TODAY.make(Ordered, {}, {"a": 2, "b": 1})
-    assert honest.make(Ordered, {}, {"a": 2, "b": 1}).validity() == today.validity()
+    public = PUBLIC.make(Ordered, {}, {"a": 2, "b": 1})
+    assert honest.make(Ordered, {}, {"a": 2, "b": 1}).validity() == public.validity()
     wrong = planted.make(Ordered, {}, {"a": 2, "b": 1})
     assert wrong.validity().status == "valid"
-    found = compare.everything(today, wrong)
+    found = compare.everything(public, wrong)
     assert {difference.kind for difference in found.disagreements} >= {"members", "validity"}
     assert counters(planted).hits > 0 and counters(planted).too_wide == 0
 
@@ -1430,15 +1393,15 @@ def test_the_purity_check_catches_a_width_bound_applied_to_the_key() -> None:
 @pytest.mark.usefixtures("purity_unchecked")
 def test_a_walk_catches_a_width_bound_applied_to_the_key() -> None:
     house = TOYS["house"]
-    found = compare.walk(house.make, house.facts, 0, 5, TODAY, RUNNING_PLANTED_WIDTH)
+    found = compare.walk(house.make, house.facts, 0, 5, PUBLIC, RUNNING_PLANTED_WIDTH)
     assert found.disagreements
 
 
 # -- the purity check over the cache and the depth guard ------------------------------------------
 #
 # The node cache and the depth guard's restart rest on purity: an authored function answers
-# from what it reads alone. The purity check (``evaluate.Session.verifying``: today's switch,
-# ``_world.check_purity``, which this package's conftest turns on, or a session made with
+# from what it reads alone. The purity check (``evaluate.Session.verifying``: the process's
+# switch, ``purity.check_purity``, which this package's conftest turns on, or a session made with
 # ``verify``) evaluates a cache hit anyway, and a node the depth guard abandoned again once it
 # completes, and compares: an impure function is its ``EvaluationError``. A planted impure
 # function is caught with the check on, and answers silently with it off.
@@ -1460,20 +1423,20 @@ class Stamped(Space):
         return width + next(STAMPS) % 2
 
 
-SWITCHES = ("off", "the session's", "today's")
+SWITCHES = ("off", "the session's", "the process's")
 
 
 @contextmanager
 def switched(switch: str) -> Iterator[Running]:
     """A cached running type with the purity check as ``switch`` says: off, on by its
-    session's ``verify``, or on by today's switch alone."""
-    previous = check_purity(switch == "today's")
+    session's ``verify``, or on by the process's switch alone."""
+    previous = purity.check_purity(switch == "the process's")
     try:
         yield Running(
             NodeCache(), f"running, cached, check {switch}", verify=switch == "the session's"
         )
     finally:
-        check_purity(previous)
+        purity.check_purity(previous)
 
 
 @pytest.mark.parametrize("switch", SWITCHES)
@@ -1530,10 +1493,12 @@ def test_the_purity_check_evaluates_a_node_the_depth_guard_abandoned_again(switc
 
 @pytest.mark.parametrize("seed", [0, 1])
 @pytest.mark.parametrize("toy", sorted(TOYS))
-def test_the_toys_walk_as_today_with_the_purity_check_over_the_cache(toy: str, seed: int) -> None:
+def test_the_toys_walk_as_the_public_api_with_the_purity_check_over_the_cache(
+    toy: str, seed: int
+) -> None:
     before = counters(RUNNING_VERIFIED).hits
     found = compare.walk(
-        TOYS[toy].make, TOYS[toy].facts, seed, 20, TODAY, RUNNING_VERIFIED, forms.ALL
+        TOYS[toy].make, TOYS[toy].facts, seed, 20, PUBLIC, RUNNING_VERIFIED, forms.ALL
     )
     assert found.lines() == []
     assert found.tally["changes"] > 0 and found.tally["cold builds"] > 0
@@ -1561,7 +1526,7 @@ def test_the_reference_walks_hold_strictly_with_the_purity_check_over_the_cache(
 # whose choice or fact has semantics comparing by ``==`` (``cache.trusted``: the default
 # ones, or semantics declaring ``equal=operator.eq``), and among those the plain types
 # (``cache.PLAIN``), each listed here with the value
-# semantics in force and its ``==`` and hash checked against them (``_world._same_value``):
+# semantics in force and its ``==`` and hash checked against them (``answers._same_value``):
 # values equal by the semantics are ``==`` and hash alike, and values the semantics tell
 # apart are not ``==``, so their keys differ. An enum member is keyed by its type and its
 # name (``cache.enum_key``), whatever its class overrides or mixes in: an equal key is the
@@ -2026,7 +1991,7 @@ def test_an_enum_overriding_equality_or_hash_gives_misses_only(name: str) -> Non
 def test_an_enum_fact_is_found_again_whatever_its_class_mixes_in() -> None:
     """A fact holding a ``Mode`` member is keyed, and what read it found again in a second
     design space; so is one holding a ``Mixed`` member (an ``int`` mixed in). Both answer as
-    today's engine."""
+    the public API."""
 
     class Paced(Space):
         mode: Mode = Param()
@@ -2048,15 +2013,15 @@ def test_an_enum_fact_is_found_again_whatever_its_class_mixes_in() -> None:
             made = running.make(shape, {"mode": fact}, {})
             made.query(answer)
         assert counters(running).hits > 0, shape
-        today = TODAY.make(shape, {"mode": fact}, {})
-        assert compare.everything(today, made).lines() == [], shape
+        public = PUBLIC.make(shape, {"mode": fact}, {})
+        assert compare.everything(public, made).lines() == [], shape
 
 
 @pytest.mark.usefixtures("purity_unchecked")
 def test_a_value_of_a_type_not_keyed_keeps_nothing_and_a_value_class_is_found_again() -> None:
     """A fact holding a ``HandWritten`` (a frozen dataclass with its own ``==``: no key)
     keeps nothing for what read it, every lookup there a miss; a fact holding a value class
-    is keyed, and found again. Both answer as today's engine."""
+    is keyed, and found again. Both answer as the public API."""
 
     class Holds(Space):
         rate = Param(semantics=default_semantics(HandWritten))
@@ -2085,15 +2050,15 @@ def test_a_value_of_a_type_not_keyed_keeps_nothing_and_a_value_class_is_found_ag
         assert (made.query("total"), made.query("double")) == (Available(6), Available(8))
     assert counters(running).hits == 1  # ``double`` alone, the second time
     assert cache.answers() == 2  # ``n`` and ``double``: nothing that read ``rate``
-    today = TODAY.make(Holds, {"rate": value, "n": 4}, {})
-    assert compare.everything(today, made).lines() == []
+    public = PUBLIC.make(Holds, {"rate": value, "n": 4}, {})
+    assert compare.everything(public, made).lines() == []
     hits = counters(running).hits
     for _ in range(2):
         found = running.make(Specified, {"spec": Spec(True, 3)}, {})
         assert found.query("lanes") == Available(6)
     assert counters(running).hits == hits + 1  # ``lanes``, the second time
     assert (
-        compare.everything(TODAY.make(Specified, {"spec": Spec(True, 3)}, {}), found).lines() == []
+        compare.everything(PUBLIC.make(Specified, {"spec": Spec(True, 3)}, {}), found).lines() == []
     )
 
 
@@ -2246,10 +2211,10 @@ def test_semantics_comparing_by_eq_are_trusted_for_the_types_the_cache_keys() ->
 
 
 @pytest.mark.usefixtures("register", "purity_unchecked")
-def test_a_fact_of_a_value_type_is_found_again_and_answers_as_todays() -> None:
+def test_a_fact_of_a_value_type_is_found_again_and_answers_as_the_public_apis() -> None:
     """A fact holding a ``Name`` under ``NAME`` is keyed once ``Name`` is registered, and
     what read it is found again in a second design space; a name of another text is a
-    miss. Each answers as today's engine."""
+    miss. Each answers as the public API."""
     value_type(Name)
 
     class Greeting(Space):
@@ -2263,8 +2228,8 @@ def test_a_fact_of_a_value_type_is_found_again_and_answers_as_todays() -> None:
     for text, length in (("ab", 2), ("ab", 2), ("abc", 3)):
         made = running.make(Greeting, {"name": Name(text)}, {})
         assert made.query("length") == Available(length)
-        today = TODAY.make(Greeting, {"name": Name(text)}, {})
-        assert compare.everything(today, made).lines() == [], text
+        public = PUBLIC.make(Greeting, {"name": Name(text)}, {})
+        assert compare.everything(public, made).lines() == [], text
     found = counters(running)
     assert found.hits > 0 and found.calls["derived"] == 2  # ``length`` once a text
 
@@ -2277,7 +2242,7 @@ def test_a_fact_of_a_value_type_is_found_again_and_answers_as_todays() -> None:
 # (``cache.trusted``). With that check taken out, the second design space takes the first's
 # note. A ``Labelled``, a value class whose field is annotated with ``WIDTH``, is not keyed
 # either (``cache.value_class``). Its own semantics are the default ones, its ``==`` their
-# equality: two labels differing in the note alone are one value, to today's engine as to
+# equality: two labels differing in the note alone are one value, to the public API as to
 # the running type, and a function that answers by that note is impure (the purity check
 # says so). So no answer depends on the field check: it is checked on the key alone.
 
@@ -2301,13 +2266,13 @@ def _notes(
     implementation: Implementation, shape: type[Space], fact: str, values: tuple[object, ...]
 ) -> tuple[list[object], list[str]]:
     """Each value's design space, made by ``implementation`` one after the other: its note,
-    and what tells it apart from today's."""
+    and what tells it apart from the public API's."""
     notes: list[object] = []
     lines: list[str] = []
     for value in values:
         made = implementation.make(shape, {fact: value}, {})
         notes.append(made.query("note"))
-        lines += compare.everything(TODAY.make(shape, {fact: value}, {}), made).lines()
+        lines += compare.everything(PUBLIC.make(shape, {fact: value}, {}), made).lines()
     return notes, lines
 
 
@@ -2377,7 +2342,7 @@ def test_without_the_semantics_check_the_cache_answers_with_another_design_space
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The same shape with ``cache.trusted`` taken out (every semantics trusted): the second
-    design space hits the first's note, and answers unlike today's."""
+    design space hits the first's note, and answers unlike the public API's."""
     monkeypatch.setattr(cache_module, "trusted", lambda semantics: True)
     running = cached()
     notes, lines = _notes(running, Noted, "width", NOTED)
@@ -2408,7 +2373,7 @@ def test_a_value_class_with_a_field_of_semantics_of_its_own_is_not_keyed(
 # and the inputs' answers, each keyed as the cache keys values (``cache.key``, under its
 # member's semantics): a candidate under semantics of its own has no key, and its verdict is
 # not kept. So two candidates ``==`` holds equal and ``WIDTH`` tells apart get their own
-# verdicts, as today's. With the semantics left out of that key (by type and ``==``), the
+# verdicts, as the public API's. With the semantics left out of that key (by type and ``==``), the
 # second takes the first's.
 
 
@@ -2418,18 +2383,29 @@ class Approved(Space):
     )
 
 
-def _verdicts(implementation: Implementation) -> tuple[list[bool], list[str]]:
+def _expected() -> list[object]:
+    """Each of ``NOTED`` set on ``Approved`` with nothing stored, by the public API with no
+    cache: its report's form."""
+    return [
+        forms.report(PUBLIC.make(Approved, {}, {}).change({"width": value}, []).report)
+        for value in NOTED
+    ]
+
+
+def _verdicts(
+    implementation: Implementation, expected: list[object] | None = None
+) -> tuple[list[bool], list[str]]:
     """Each of ``NOTED`` set on ``Approved`` with nothing stored, one after the other by
     ``implementation`` (one facts layer): whether the change is accepted, and what tells its
-    report apart from today's."""
+    report apart from ``expected`` (the public API with no cache's, ``_expected``)."""
+    expected = _expected() if expected is None else expected
     accepted: list[bool] = []
     lines: list[str] = []
-    for value in NOTED:
+    for value, form in zip(NOTED, expected):
         made = implementation.make(Approved, {}, {}).change({"width": value}, [])
-        held = TODAY.make(Approved, {}, {}).change({"width": value}, [])
         accepted.append(made.report.accepted)
-        if forms.report(made.report) != forms.report(held.report):
-            lines.append(f"{value}: today {held.report!r}, running {made.report!r}")
+        if forms.report(made.report) != form:
+            lines.append(f"{value}: expected {form!r}, found {made.report!r}")
     return accepted, lines
 
 
@@ -2443,6 +2419,10 @@ def test_a_candidate_under_semantics_finer_than_eq_gets_its_own_domain_verdict()
 def test_without_the_semantics_in_its_key_a_candidate_takes_anothers_domain_verdict(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The reports expected are made first, with the semantics in the key: the facts layer
+    the plant reads is the same model's (its domain outcomes shared by every design space
+    of those facts)."""
+    expected = _expected()
     monkeypatch.setattr(evaluate, "value_key", lambda value, semantics: hashkey(value))
-    accepted, lines = _verdicts(fresh())
+    accepted, lines = _verdicts(fresh(), expected)
     assert accepted == [True, True] and len(lines) == 1
