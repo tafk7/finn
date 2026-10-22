@@ -588,8 +588,8 @@ class Decision(ValueDecl[T], Generic[T]):
     A Decision belongs to the Space class that declares it, as a class attribute,
     and is supplied to a formal by binding that attribute
     (``depth: int = Decision(...)``, then ``buffer = Fifo(depth=depth)``). No body
-    supplies it a value, a key or another Decision. A choice is committed on a
-    configuration (``with_choices``); a narrower one is a subclass's.
+    supplies it a value, a key or another Decision. A choice is set on a design space
+    (``with_choices``); a narrower one is a subclass's.
 
     Retired spellings, each refused with its replacement: entries
     (``Decision({...})``: ``Select``), ``optional=`` (a ``None`` case of a ``Select``),
