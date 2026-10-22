@@ -40,6 +40,7 @@ from .ir import Linked
 from .references import ValueHandle, resolve_decision, resolve_reference
 
 if TYPE_CHECKING:
+    from ._running.per_class import PerClass
     from ._structure import Structure
     from ._world import Evaluator
 
@@ -57,7 +58,10 @@ class Model(Generic[S]):
     Decisions below a scope) is kept with it (``_read``). ``lock`` is the model's one lock:
     resolution and every configuration's evaluation take it. Its ``evaluator`` is what
     every configuration of it shares: what each ``self`` method may read, inferred from its
-    source as its nodes are read, the memo of authored functions (``_world.Evaluator``)."""
+    source as its nodes are read, the memo of authored functions (``_world.Evaluator``).
+    Its ``per_class`` record, made beside it, is what the running type reads once per
+    model: the inferred reads, the flow order, the presence readers and the model's one
+    session (``_running.per_class.PerClass``)."""
 
     space_type: type[S]
     linked: Linked
@@ -66,11 +70,14 @@ class Model(Generic[S]):
         default_factory=dict, init=False, repr=False, compare=False
     )
     evaluator: Evaluator = field(init=False, repr=False, compare=False)
+    per_class: PerClass = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        from ._running.per_class import PerClass
         from ._world import Evaluator
 
         object.__setattr__(self, "evaluator", Evaluator(cast("Model[Space]", self)))
+        object.__setattr__(self, "per_class", PerClass(cast("Model[Space]", self)))
 
     @property
     def structure(self) -> Structure | None:
