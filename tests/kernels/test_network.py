@@ -86,7 +86,7 @@ def test_a_channel_waits_with_its_choices_until_its_contracts_are_known() -> Non
     with pytest.raises(NetworkError, match="x is not bound"):
         network.member("x")
     folded = choose(network, FOLDING)
-    assert folded.unbound("x") is None and folded.member("x").consumer.label == (
+    assert folded.unbound("x") is None and folded.member("x").consumer_label == (
         "first.compute.packed.x"
     )
 
@@ -288,7 +288,7 @@ def test_each_member_sits_under_its_node_in_the_module() -> None:
     renamed = Network(chain.members(), stored=stored, nodes={"first": "mm_first"})
     module = built(renamed, chain.STEM)
     assert "mm_first.compute.packed" in labels(module)
-    assert renamed.member("x").consumer.label == "mm_first.compute.packed.x"
+    assert renamed.member("x").consumer_label == "mm_first.compute.packed.x"
     with pytest.raises(NetworkError, match="members share a node in the module: x: x, first"):
         Network(chain.members(), nodes={"first": "x"})
 

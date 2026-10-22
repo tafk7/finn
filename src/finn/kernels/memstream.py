@@ -60,6 +60,7 @@ from finn.dataflow.datatypes import (
     ordinary_integer_bounds,
     qonnx_datatype_width,
 )
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
     BeatSequence,
@@ -330,6 +331,8 @@ class MemStreamKernel(KernelSpace):
         sequence=output_sequence,
     )
     if TYPE_CHECKING:  # members its ports lower to, which its channel reads
+        output_stream: ClassVar[Stream]
+        output_data_width: ClassVar[int]
         output_contract: ClassVar[PortContract]
 
     @derived

@@ -17,8 +17,8 @@ and checked here together:
 - physical: packing of the lanes into the transport word, lane zero lowest;
 - protocol: the ready/valid (or AXIS) pins, marker pins and clock/reset names.
 
-``compatibility`` compares a producing and a consuming side's sequences, markers
-and pins; their elements are the channel's ``well_formed``
+``compatibility`` compares a producing and a consuming side's streams: their
+sequences and markers; their elements are the channel's ``well_formed``
 (``finn.dataflow.streams.misfit``: the producer's values fit the tensor's element,
 and the tensor's fit the consumer's). A logical
 mismatch is the channel's to repair: the steps between its two streams
@@ -45,6 +45,7 @@ from finn.dataflow.datatypes import (
 )
 from finn.dataflow.schedule import Pace
 from finn.dataflow.steps import Hop, Step, Unrealizable, Unrepeatable, presented, steps
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import (
     Adaptation,
@@ -325,34 +326,25 @@ def marker_bit(key: str) -> tuple[str, int | None]:
     return (match[1], int(match[2])) if match else (key, None)
 
 
-def compatibility(
-    source: StreamContract, sink: StreamContract, *, source_is_top: bool, sink_is_top: bool
-) -> tuple[Mismatch, ...]:
-    """Every reason ``source`` may not drive ``sink``; empty when they connect.
+def compatibility(source: Stream, sink: Stream) -> tuple[Mismatch, ...]:
+    """Every reason stream ``source`` may not drive stream ``sink`` directly; empty when
+    they connect.
 
-    The logical rules are those of the steps between the two streams
+    The rules are those of the steps between the two streams
     (``finn.dataflow.steps.steps``): a single pass feeding a cyclic consumer is
     ``channel-repetition``; a sequence step they need, or a mismatch no chain repairs,
-    ``channel-form``; a marker they must make, ``channel-marker``. The pins are checked here.
+    ``channel-form``; a marker the sink requires that they must make, ``channel-marker``.
 
     Elements are not compared: a channel's ``well_formed`` holds each side against
     its tensor's element, and every stage between carries that element.
-
-    ``*_is_top`` marks a side on the composed module's own boundary, whose
-    endpoint direction is seen from outside (a top input is a source inside).
     """
     found: list[Mismatch] = []
 
     def refuse(code: str, message: str) -> None:
         found.append(Mismatch(code, message))
 
-    produces = Endpoint.TARGET if source_is_top else Endpoint.INITIATOR
-    consumes = Endpoint.INITIATOR if sink_is_top else Endpoint.TARGET
-    if source.transport.endpoint is not produces or sink.transport.endpoint is not consumes:
-        refuse("channel-direction", "the source must produce and the sink consume")
-
-    # The logical part is the steps between the two streams: a step they name is an
-    # adapter this connection lacks, and what no step repairs is refused as they say.
+    # The steps between the two streams: a step they name is an adapter this connection
+    # lacks, and what no step repairs is refused as they say.
     hops: tuple[Hop, ...] = ()
     try:
         hops = steps(source.sequence, sink.sequence).hops
@@ -369,30 +361,12 @@ def compatibility(
     for hop in hops:
         if hop.step is Step.MARKERS:
             synthesized = set(hop.sink.markers) - set(hop.source.markers)
-            for signal, rule in sink.rules.items():
+            for rule in sink.sequence.markers:
                 if rule in synthesized:
                     refuse(
                         "channel-marker",
-                        f"{signal} requires a marker every {rule.beats} beats; {lost}",
+                        f"the sink requires a marker every {rule.beats} beats; {lost}",
                     )
-
-    if source_is_top:
-        consumed = {
-            marker_bit(offered)[0]
-            for offered, _ in marker_pairs(source, sink)
-            if offered is not None
-        }
-        unused = [m.signal for m in source.transport.markers if m.signal not in consumed]
-        if unused:
-            refuse(
-                "channel-top-marker",
-                f"top input markers {unused} would be left unconsumed",
-            )
-    if sink_is_top and sink.transport.markers:
-        ruled = {marker_bit(key)[0] for key in sink.rules}
-        missing = [m.signal for m in sink.transport.markers if m.signal not in ruled]
-        if missing:
-            refuse("channel-top-marker", f"top output markers {missing} lack rules")
     return tuple(found)
 
 

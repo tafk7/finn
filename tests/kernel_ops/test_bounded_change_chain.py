@@ -22,6 +22,7 @@ from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
+from support.one_space import channel_facts
 from support.space_walk import check, walk
 
 from finn.core.space import Space, composite, design_space
@@ -29,7 +30,6 @@ from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import in_shell, make_cut_choices
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
-from finn.kernels.network import Fact, Interface
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 
@@ -96,14 +96,7 @@ def whole_space(layers: int) -> Space:
         declared[node.name] = facts.space_type(**cast("dict[str, Any]", dict(facts.arguments)))
     channels: dict[str, object] = {}
     for name in net.channels:
-        given: dict[str, Any] = {}
-        for fact, value in net.wiring(name).facts.items():
-            if isinstance(value, Interface):
-                value = getattr(declared[value.member], value.view)
-            elif isinstance(value, Fact):
-                value = getattr(declared[value.member], value.name)
-            given[fact] = value
-        channels[name] = Channel(**given)
+        channels[name] = Channel(**channel_facts(net, name, declared))
     whole = composite(f"chain_{2 * layers}", {**declared, **channels})
     stored = {f"{owner}.{key}": value for (owner, key), value in net.chosen().items()}
     return commit(design_space(whole()), stored)

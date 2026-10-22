@@ -41,8 +41,8 @@ def test_fifo_states_its_word_geometry_once_its_ram_style_is_chosen() -> None:
     with pytest.raises(ValueUnavailableError):
         _ = library_module(base)
     # Its word is its input port's: one lane of the tensor's INT13 a beat.
-    assert base.field(FifoKernel.word_bits).get() == 13
-    assert base.field(FifoKernel.word_bits).query() == Available(13)
+    assert base.field(FifoKernel.input_data_width).get() == 13
+    assert base.field(FifoKernel.input_data_width).query() == Available(13)
     assert decided(base.field(FifoKernel.ram_style).state).status == "unassigned"
     chosen = base.with_choices(ram_style="auto")
     requirements = library_module(chosen)

@@ -90,7 +90,7 @@ def fifo() -> dict[str, Any]:
     def storing(lanes: int, depth: int, ram_style: str) -> dict[str, object]:
         same = BeatSequence(vector_major(STAGED, lanes))
         return {
-            "word_bits": 4 * lanes,
+            "input_data_width": 4 * lanes,
             "depth": depth,
             "ram_style": ram_style,
             "arriving": same,
@@ -139,7 +139,7 @@ def input_gen() -> dict[str, Any]:
         module = stage.module
         assert isinstance(module, Generate)
         return {
-            "word_bits": 4 * source.lanes,
+            "input_data_width": 4 * source.lanes,
             "frame_words": module.frame,
             "dims": module.dims,
             "strides": module.coefs,

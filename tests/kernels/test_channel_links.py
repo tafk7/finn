@@ -20,8 +20,9 @@ from support.helpers import (
     with_direct_transports,
 )
 
-from finn.core.space import Available, Rejected, Space, view
+from finn.core.space import Available, Rejected, Space, derived, view
 from finn.dataflow.datatypes import ordinary_integer_bounds
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import vector_major
 from finn.kernels.artifacts.abi import Endpoint
@@ -30,6 +31,7 @@ from finn.kernels.base import PORT_CONTRACT, PortContract
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.network import Interface, Network, wire
+from finn.kernels.port import STREAM
 from finn.kernels.transport import AxisBeat, StreamContract
 
 INT3, INT8 = DataType["INT3"], DataType["INT8"]
@@ -155,15 +157,25 @@ def test_a_boundary_no_port_names_is_refused() -> None:
     assert not isinstance(choose(placing(), FOLDING).member("w").sides, Rejected)
 
 
+def reading() -> StreamContract:
+    """What ``Reader`` states at its port."""
+    beat = AxisBeat("s_axis", INT3, 4, endpoint=Endpoint.TARGET)
+    transport = beat.native(clock="ap_clk", reset="ap_rst_n")
+    return StreamContract(transport, ScalarEncoding(INT3), vector_major((3, 4), 4))
+
+
 class Reader(Space):
-    """A consumer that presents its contract itself, not through a kernel's port."""
+    """A consumer that presents its stream and contract itself, not through a kernel's
+    port."""
+
+    @derived(semantics=STREAM)
+    def port_stream(self) -> Stream:
+        contract = reading()
+        return Stream(contract.element, contract.sequence)
 
     @view(semantics=PORT_CONTRACT)
     def port_contract(self) -> PortContract:
-        beat = AxisBeat("s_axis", INT3, 4, endpoint=Endpoint.TARGET)
-        transport = beat.native(clock="ap_clk", reset="ap_rst_n")
-        contract = StreamContract(transport, ScalarEncoding(INT3), vector_major((3, 4), 4))
-        return PortContract("", contract)
+        return PortContract("", reading())
 
 
 def test_a_contract_that_is_no_kernels_port_has_no_netlist() -> None:
@@ -180,7 +192,7 @@ def test_a_contract_that_is_no_kernels_port_has_no_netlist() -> None:
     )
     point = with_direct_transports(bare)
     edge = point.member("edge")
-    assert edge.consumer.label == "reader"
+    assert edge.consumer_label == "reader"
     # The channel's own netlist has no hop to the reader; the network's refuses it.
     assert edge.query(Channel.netlist).value == Fragment()
     refused = point.netlist()

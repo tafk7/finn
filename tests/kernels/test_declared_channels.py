@@ -18,9 +18,11 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
+    derived,
     inspection,
     view,
 )
+from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
@@ -28,6 +30,7 @@ from finn.kernels.base import NETLIST, PORT_CONTRACT, KernelSpace, PortContract
 from finn.kernels.channels import Channel, boundary_contract
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
+from finn.kernels.port import STREAM
 from finn.kernels.transport import AxisBeat, StreamContract
 
 INT4 = ScalarEncoding(DataType["INT4"])
@@ -127,14 +130,17 @@ def test_a_channel_waits_for_its_own_sides_only():
     assert isinstance(point.member("first").query(Channel.netlist), Available)
     assert isinstance(point.member("second").query(Channel.netlist), Available)
     assert isinstance(module_of(point, "constants"), Unresolved)
-    # A channel takes its ports' contracts as facts, each labelled from the network.
+    # A channel takes its ports' streams as facts, each with its port's label from the
+    # network, and its producing port's word width; the fact a stream is bound to is its side.
     first = point.member("first")
-    producer = first.producer
-    assert producer.label == "first_source.output"
-    assert producer.contract.transport.endpoint is Endpoint.INITIATOR  # the source produces
+    produced = point.member("first_source")
+    assert first.producer == produced.output_stream
+    assert first.producer_label == "first_source.output"
+    assert first.producer_width == produced.output_data_width == 8
     sides = first.sides
     assert (sides.source_owner, sides.sink_owner) == ("first_source.output", None)
-    assert sides.sink.transport.name == "out0_V"
+    assert first.boundary.transport.name == "out0_V"
+    assert sides.sink == Stream(first.boundary.element, first.boundary.sequence)
 
 
 def test_boundary_ports_are_axis_and_byte_aligned():
@@ -145,16 +151,27 @@ def test_boundary_ports_are_axis_and_byte_aligned():
     assert contract.payload_bits == 12
 
 
+def replaying() -> StreamContract:
+    """What a consumer reading each two-beat group of its input three times, framed,
+    states at its port."""
+    beat = AxisBeat("s_axis", DataType["INT4"], 2, endpoint=Endpoint.TARGET, last=True)
+    transport = beat.native(clock="ap_clk", reset="ap_rst_n")
+    form = vector_major((2, 4), 2).replayed(3, inner_beats=2)
+    return StreamContract(transport, INT4, form, markers=(("s_axis_tlast", LevelEnd(2)),))
+
+
 class Replaying(Space):
-    """A consumer reading each two-beat group of its input three times, framed."""
+    """A consumer reading each two-beat group of its input three times, framed: its port's
+    stream and its contract."""
+
+    @derived(semantics=STREAM)
+    def port_stream(self) -> Stream:
+        contract = replaying()
+        return Stream(contract.element, contract.sequence)
 
     @view(semantics=PORT_CONTRACT)
     def port_contract(self) -> PortContract:
-        beat = AxisBeat("s_axis", DataType["INT4"], 2, endpoint=Endpoint.TARGET, last=True)
-        transport = beat.native(clock="ap_clk", reset="ap_rst_n")
-        form = vector_major((2, 4), 2).replayed(3, inner_beats=2)
-        contract = StreamContract(transport, INT4, form, markers=(("s_axis_tlast", LevelEnd(2)),))
-        return PortContract("port", contract)
+        return PortContract("port", replaying())
 
 
 def test_a_boundary_presents_its_free_side_without_the_replay_the_receiver_realizes():
@@ -169,52 +186,30 @@ def test_a_boundary_presents_its_free_side_without_the_replay_the_receiver_reali
             "reader": Replaying(),
         }
     )
-    sides = receiver.member("edge").sides
+    edge = receiver.member("edge")
+    sides = edge.sides
     assert sides.source_owner is None and sides.sink_owner == "reader.port"
     # Each row once, no marker: the replay and the frame are the receiver's to realize.
-    assert sides.source.form == vector_major((2, 4), 2)
-    assert sides.source.transport.name == "in0_V" and not sides.source.rules
-    assert sides.sink.form == vector_major((2, 4), 2).replayed(3, inner_beats=2)
-
-
-def test_two_producers_on_one_channel_are_refused_by_the_channel():
-    clash = Network(
-        {
-            # b's contract given as the consumer is a producer's all the same.
-            "shared": wire(
-                tensor=VECTOR,
-                port="out0_V",
-                producer=Interface("a", "output_contract"),
-                consumer=Interface("b", "output_contract"),
-                platform=FULL_DSP48E2,
-            ),
-            "a": source((1, 2, 3, 4), VECTOR),
-            "b": source((1, 2, 3, 4), VECTOR),
-        }
-    )
-    refused = clash.member("shared").query(Channel.netlist)
-    assert isinstance(refused, Rejected)
-    # The origin, and beside it each guard that reads it (guard-refused).
-    assert {f.code for f in refused.findings} == {"channel-users", "guard-refused"}
-    (users,) = [f for f in refused.findings if f.code == "channel-users"]
-    assert "a.output, b.output" in users.message
+    assert sides.source == Stream(INT4, BeatSequence(vector_major((2, 4), 2)))
+    assert edge.boundary.transport.name == "in0_V" and not edge.boundary.rules
+    assert sides.sink.sequence.form == vector_major((2, 4), 2).replayed(3, inner_beats=2)
 
 
 def test_an_adapter_under_a_refused_guard_is_one_piece():
     # A selector whose ``when`` is refused counts once, at the highest refused guard of its
     # chain: one piece keyed by the selector, none for its cases. A correction: the engine
-    # gave one piece more per case, against the reference model's reading 8.
+    # gave one piece more per case, against the reference model's reading 8. A channel with
+    # a known value given a producer too has two producers (channel-users).
     clash = Network(
         {
             "shared": wire(
                 tensor=VECTOR,
                 port="out0_V",
+                contents=(1, 2, 3, 4),
                 producer=Interface("a", "output_contract"),
-                consumer=Interface("b", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
             "a": source((1, 2, 3, 4), VECTOR),
-            "b": source((1, 2, 3, 4), VECTOR),
         }
     )
     validity = inspection.validity(clash.member("shared"))

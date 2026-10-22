@@ -583,7 +583,7 @@ def place(
     tensor = inputs[name]
     lanes = _value(
         design_member(plain, name).query(Channel.sides), space_type, sample
-    ).sink.form.lanes
+    ).sink.sequence.form.lanes
     assert values is not None, "the adapter sample streams the first input's values"
     contents = _nested(values[name].tolist())
     innermost = tensor.shape[-1]
@@ -671,16 +671,16 @@ def _check_rtl(
 def _contracts(
     point: Any, space_type: type[KernelSpace], sample: Sample, names: Sequence[str]
 ) -> dict[str, StreamContract]:
-    """The contract the kernel presents on each channel."""
+    """The contract the kernel presents on each channel: its port beside the channel, as
+    the network reads it (``Network.neighbours``)."""
     found: dict[str, StreamContract] = {}
     for name in names:
-        sides = _value(design_member(point, name).query(Channel.sides), space_type, sample)
         owner = f"{KERNEL}.{_user(point, name)}"
-        if sides.sink_owner == owner:
-            found[name] = sides.sink
-        else:
-            assert sides.source_owner == owner, f"{name} is not {owner}'s: {sides}"
-            found[name] = sides.source
+        beside = point.neighbours(name)
+        ports = [each for each in (beside.producer, beside.consumer) if each is not None]
+        (port,) = [each for each in ports if each.label == owner] or [None]
+        assert port is not None, f"{name} is not {owner}'s: {beside}"
+        found[name] = port.contract
     return found
 
 
@@ -710,8 +710,9 @@ def _check_model(
                 f"{schedule.beat_count} less {dropped} dropped"
             )
         if name != fed:
-            sides = _value(design_member(point, name).query(Channel.sides), space_type, sample)
-            boundary = sides.source if sides.source_owner is None else sides.sink
+            boundary = _value(
+                design_member(point, name).query(Channel.boundary), space_type, sample
+            )
             presented = unreplayed(form) if name in inputs else form
             assert boundary.form == presented, (
                 f"{where}: {name}'s boundary presents {boundary.form}"

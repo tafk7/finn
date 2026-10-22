@@ -46,7 +46,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, PortContract
 from finn.kernels.library import LibraryModule
-from finn.kernels.port import data_width, native_stream
+from finn.kernels.port import native_stream
 from finn.kernels.utilization import RESOURCES_SEMANTICS, lutram, memory, uram_constraint
 from finn.platform.capabilities import Fabric, Platform, Resources
 
@@ -240,17 +240,13 @@ class FifoKernel(KernelSpace):
     output = native_stream("output", Endpoint.INITIATOR, output_tensor, leaving)
     if TYPE_CHECKING:  # members its ports lower to, which it and its channel read
         input_stream: ClassVar[Stream]
+        input_data_width: ClassVar[int]
         input_contract: ClassVar[PortContract]
         output_contract: ClassVar[PortContract]
 
-    @derived
-    def word_bits(self) -> int | Rejected:
-        """DATA_WIDTH: its input port's word."""
-        return data_width(FifoKernel.input, self.input_stream)
-
     @constraint
     def geometry_supported(self) -> bool | Rejected:
-        if not _geometry_supported(self.word_bits, self.depth):
+        if not _geometry_supported(self.input_data_width, self.depth):
             return reject(*_GEOMETRY)
         return True
 
@@ -263,15 +259,15 @@ class FifoKernel(KernelSpace):
     def rtl_ram_style(self) -> str:
         """The RAM_STYLE the RTL is given: ``ram_style``, except an ``auto`` the RTL would
         resolve to UltraRAM the platform lacks, which is block RAM."""
-        return _given(self.depth, self.word_bits, self.ram_style, self.platform.uram)
+        return _given(self.depth, self.input_data_width, self.ram_style, self.platform.uram)
 
     @derived
     def planned_storage(self) -> FifoStorage | Rejected:
         """The storage the native RTL selects (``fifo_storage``), of a geometry it takes:
         refused, as ``geometry_supported`` is, for one it does not."""
-        if not _geometry_supported(self.word_bits, self.depth):
+        if not _geometry_supported(self.input_data_width, self.depth):
             return reject(*_GEOMETRY)
-        found = fifo_storage(self.depth, self.word_bits, self.rtl_ram_style)
+        found = fifo_storage(self.depth, self.input_data_width, self.rtl_ram_style)
         if found is None:
             return reject("fifo-capacity", "native memory size overflows unsigned int")
         return found
@@ -289,18 +285,18 @@ class FifoKernel(KernelSpace):
     @view(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources:
         return fifo_resources(
-            self.depth, self.word_bits, self.rtl_ram_style, fabric=self.platform.fabric
+            self.depth, self.input_data_width, self.rtl_ram_style, fabric=self.platform.fabric
         )
 
     @view
     def held_bits(self) -> int:
         """What it holds: its depth of words."""
-        return self.depth * self.word_bits
+        return self.depth * self.input_data_width
 
     @view
     def parameters(self) -> dict[str, int | str]:
         return {
-            "DATA_WIDTH": self.word_bits,
+            "DATA_WIDTH": self.input_data_width,
             "DEPTH": self.depth,
             "RAM_STYLE": f'"{self.rtl_ram_style}"',
         }

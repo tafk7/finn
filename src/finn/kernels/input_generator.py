@@ -73,7 +73,7 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.rtl import Declined, evaluate
 from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
 from finn.kernels.library import LibraryModule
-from finn.kernels.port import LoopEnds, data_width, native_stream
+from finn.kernels.port import LoopEnds, native_stream
 from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
     Fit,
@@ -232,11 +232,7 @@ class InputGeneratorKernel(KernelSpace):
     output = native_stream("output", Endpoint.INITIATOR, output_tensor, presenting, loop_ends)
     if TYPE_CHECKING:  # members its ports lower to, which it reads
         input_stream: ClassVar[Stream]
-
-    @derived
-    def word_bits(self) -> int | Rejected:
-        """DATA_WIDTH: its input port's word."""
-        return data_width(InputGeneratorKernel.input, self.input_stream)
+        input_data_width: ClassVar[int]
 
     @derived
     def frame_words(self) -> int:
@@ -258,7 +254,7 @@ class InputGeneratorKernel(KernelSpace):
         """The nest's arithmetic fits the RTL's native widths (a nest from two sequences
         is otherwise one it walks: positive extents and strides within its frame)."""
         values = (self.frame_words, *self.dims, *self.strides)
-        if self.word_bits > 0xFFFFFFFF or any(value > 0x7FFFFFFF for value in values):
+        if self.input_data_width > 0xFFFFFFFF or any(value > 0x7FFFFFFF for value in values):
             return reject(
                 "input-generator-range", "loop arithmetic must fit native signed 32-bit increments"
             )
@@ -268,7 +264,7 @@ class InputGeneratorKernel(KernelSpace):
     def frame_bits(self) -> int:
         """The most the buffer can hold: a frame's words. Its order reads no ``BUF_SIZE``,
         which the RTL elaborates and which may be declined (its statement only)."""
-        return self.frame_words * self.word_bits
+        return self.frame_words * self.input_data_width
 
     ram_style: str = Decision(domain=memory_styles())
     uram_present = uram_constraint(platform, ram_style, ("ultra",))
@@ -292,7 +288,7 @@ class InputGeneratorKernel(KernelSpace):
     def held_bits(self) -> int:
         """What it holds: its buffer, ``BUF_SIZE`` input words, not one frame."""
         words: int = self.buffer_words
-        return words * self.word_bits
+        return words * self.input_data_width
 
     @view(semantics=RESOURCES_SEMANTICS)
     def resource_use(self) -> Resources | Rejected:
@@ -300,7 +296,7 @@ class InputGeneratorKernel(KernelSpace):
             return auto_unstated("the input_gen buffer")
         return input_gen_resources(
             buf_size=self.buffer_words,
-            data_width=self.word_bits,
+            data_width=self.input_data_width,
             d=len(self.dims),
             ram_style=self.ram_style,
             fabric=self.platform.fabric,
@@ -311,7 +307,7 @@ class InputGeneratorKernel(KernelSpace):
         return {
             "COEFS": _vector(self.strides),
             "D": len(self.dims),
-            "DATA_WIDTH": self.word_bits,
+            "DATA_WIDTH": self.input_data_width,
             "DIMS": _vector(self.dims),
             "FM_SIZE": self.frame_words,
             "RAM_STYLE": f'"{self.ram_style}"',

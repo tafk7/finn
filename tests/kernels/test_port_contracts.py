@@ -159,7 +159,7 @@ def test_every_port_presents_what_the_schedule_derives():
     assert y.form == vector_major((ROWS, OUTPUTS), PE)
     assert [rule.beats for rule in x.markers] == [REDUCTION // SIMD]
     # Each port's contract is labelled after the port, from the root.
-    assert point.member("r").producer.label == "compute.y"
+    assert point.member("r").producer_label == "compute.y"
     # The cyclic weights and the results connect as derived.
     assert isinstance(point.member("w_s").query(Channel.netlist), Available)
     assert isinstance(point.member("r").query(Channel.netlist), Available)
@@ -305,7 +305,7 @@ def test_eltwise_broadcasts_a_channel_vector_once_per_pixel():
     # pass repeated, which a boundary presents as it is.
     repeated = vector_major((4,), 2).repeated(3)
     assert point.member("add").rhs_stream.sequence.form == repeated
-    assert point.member("rhs").sides.source.form == repeated
+    assert point.member("rhs").sides.source.sequence.form == repeated
     assert all(
         stream.steps.kinds == ()
         for stream in (point.member("lhs"), point.member("rhs"), point.member("out"))

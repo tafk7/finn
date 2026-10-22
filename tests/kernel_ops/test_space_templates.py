@@ -140,10 +140,12 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     where that decides a list: ``x.adapter`` is stored and present after, so whether it
     comes into play reads its presence before, where its guard reads the first MatMul's
     views, whose validity there reads that case's (its selector still open). The other
-    three's port contracts are made, not read: each MatMul's served contract
-    (``x_contract``) takes its core's through the selector (an argument of each case's), and
-    a channel reads it. Then ``viable`` of the middle MatMul's choices and one change of its
-    ``pe``: what trials resolve more."""
+    three's port streams are made, not read: each MatMul's served stream (``x_stream``)
+    takes its core's through the selector (an argument of each case's), and a channel
+    reads it. A channel's sides' labels are constants (20 of the constant nodes), and it
+    reads no port's contract. Then ``viable`` of the middle MatMul's choices and one change
+    of its ``pe``: what trials resolve more (the channels beside it, ``w2`` and ``h2``, read
+    its ports' streams and reach none of their adapters' cases)."""
     monkeypatch.delenv(EAGER, raising=False)
     whole, stored = chain_space(4)
     point = design_space(whole())
@@ -153,8 +155,8 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     assert structure.counts() == {
         "scopes addressed": 216,
         "scopes in play": 55,
-        "nodes resolved": 1476,
-        "const nodes resolved": 76,
+        "nodes resolved": 1428,
+        "const nodes resolved": 96,
     }
     in_play = set(structure._in_play)
     world, before = state(committed).world, state(point).world
@@ -189,9 +191,9 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     assert {
         node.key.rsplit(".", 1)[-1] for node in structure._raw.values() if node.scope in made
     } == {
-        "x_contract",
-        "w_contract",
-        "y_contract",
+        "x_stream",
+        "w_stream",
+        "y_stream",
     }
     for index in read_for_the_report:
         guard = structure.guard_of(structure.records[index])
@@ -202,15 +204,15 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     inspection.viable(committed, [handles[key] for key in middle])
     assert structure.counts() == {
         "scopes addressed": 216,
-        "scopes in play": 66,
-        "nodes resolved": 1554,
-        "const nodes resolved": 76,
+        "scopes in play": 59,
+        "nodes resolved": 1491,
+        "const nodes resolved": 96,
     }
     report = committed.try_with_choices({handles["mm2.pe"]: 2})
     assert report.accepted
     assert structure.counts() == {
         "scopes addressed": 216,
-        "scopes in play": 66,
-        "nodes resolved": 1554,
-        "const nodes resolved": 76,
+        "scopes in play": 59,
+        "nodes resolved": 1491,
+        "const nodes resolved": 96,
     }

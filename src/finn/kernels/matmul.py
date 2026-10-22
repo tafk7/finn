@@ -38,7 +38,7 @@ core's (``finn.kernels.port.served``): ``x_stream`` is the selected core's strea
 (``finn.kernels.base.PortContract``). Each channel, its adapter, its FIFO and its source
 are its network's: the network (a test harness's, or the graph's, a KernelOp's alone or
 a partition's) declares each channel, gives it the tensor MatMul's port reads or
-writes, and gives it MatMul's port contracts. MatMul's own view of each tensor
+writes, and gives it MatMul's ports' streams, labels and widths. MatMul's own view of each tensor
 (``activation_tensor``, ``weight_tensor``, and its results, ``y_tensor``) reads only its
 facts and ``realization``, never a port; ``carried`` refuses a given input tensor that is
 not what MatMul requires of it (the activations' element count and last axis, the

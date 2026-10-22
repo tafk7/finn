@@ -227,7 +227,7 @@ def links(body: ModelWrapper, point: Configured, tensors: Collection[str]) -> tu
             if isinstance(hops, Rejected) or hops.producer is None:
                 raise ValueError(f"{tensor}: no hop from its producer's port: {hops}")
             end = hops.producer.source.under(point.node(tensor))
-            form, bits = produced.form, produced.element.bits
+            form, bits = produced.sequence.form, produced.element.bits
             low, _ = ordinary_integer_bounds(produced.element.dtype)
             tap = Tap(end, form.beats, form.lanes * bits)
             found.append(Tapped(tensor, f"link_{len(found)}", tap, form, bits, low < 0))

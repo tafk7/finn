@@ -159,8 +159,8 @@ def run(case: Case, evidence: Path) -> None:
     forms: dict[str, Traversal] = {}
     for name in PORTS:
         sides = point.member(name).query(Channel.sides).value
-        assert sides.source.form == sides.sink.form, (case.function, name, sides)
-        forms[name] = sides.source.form
+        assert sides.source.sequence.form == sides.sink.sequence.form, (case.function, name, sides)
+        forms[name] = sides.source.sequence.form
     assert forms["output"].lanes == case.pe, (case.function, forms["output"])
     x = values(case.function)
     lanes = x.view(np.uint32).astype(np.int64)
