@@ -25,9 +25,9 @@ from support.one_space import chain_space
 import finn.custom_op
 import finn.kernels
 from finn.core.space import Space, design_space, inspection
+from finn.core.space._running.evaluate import evaluation
 from finn.core.space._structure import EAGER, expand
 from finn.core.space._template import link_template
-from finn.core.space._running.evaluate import evaluation
 from finn.core.space.occurrence import ask, held
 from finn.core.space.results import Available, QueryResult, Unresolved
 from finn.kernels.configure import commit
