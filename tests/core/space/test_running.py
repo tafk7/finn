@@ -52,10 +52,12 @@ The implementations are loaded by name, as ``--implementation`` names them
 from __future__ import annotations
 
 import gc
+import importlib
 import itertools
 import math
 import operator
 import os
+import pkgutil
 import re
 import subprocess
 import sys
@@ -2211,6 +2213,54 @@ def test_values_equal_but_told_apart_by_their_semantics_never_share_an_answer() 
     _notes(running, Noted, "width", NOTED)
     tables = cast(NodeCache, running.cache)._tables.values()
     assert all(not read for table in tables for sets in table.values() for read in sets)
+
+
+def engine_semantics() -> list[ValueSemantics[Any]]:
+    """Every value semantics a module of the engine holds (``finn.core.space`` and the
+    modules below it), each once."""
+    package = importlib.import_module("finn.core.space")
+    modules = [package.__name__]
+    modules += [found.name for found in pkgutil.walk_packages(package.__path__, "finn.core.space.")]
+    found: dict[int, ValueSemantics[Any]] = {}
+    for name in modules:
+        for value in vars(importlib.import_module(name)).values():
+            if isinstance(value, ValueSemantics):
+                found.setdefault(id(value), value)
+    return list(found.values())
+
+
+def test_values_equal_answers_on_the_engines_samples_as_their_equal_did_on_the_values_given() -> (
+    None
+):
+    """``values_equal`` compares each side's snapshot (``freeze``); before, it compared the
+    values as given. No answer moves: none of these semantics' ``equal`` changed, and each
+    snapshot keeps its value's equality.
+
+    The pairs: every value semantics a module of the engine holds, and those of the samples
+    above (``VALUE_TYPES``, ``UNHASHABLE``, ``WIDTH``: the default ones of each type, and
+    ``PAIR``, ``ENCODING``, ``BAG``, ``GRID``, ``WIDTH`` of their own), each over every
+    ordered pair of the samples (``NOTED``'s too) it recognizes: equal as its ``equal``
+    holds the two as given. Each sample it does not recognize, beside one it does, either
+    way round: unequal, as before."""
+    semantics = engine_semantics()
+    assert {default_semantics(bool).name, "Located"} <= {found.name for found in semantics}
+    semantics += [found for found, _ in VALUE_TYPES.values()]
+    semantics += [found for found, _ in UNHASHABLE.values()] + [WIDTH]
+    pool = [
+        value for _, values in (*VALUE_TYPES.values(), *UNHASHABLE.values()) for value in values
+    ]
+    pool += NOTED
+    pairs = 0
+    for found in semantics:
+        known = [value for value in pool if found.accepts(value)]
+        for left, right in itertools.product(known, repeat=2):
+            given = bool(found.equal(left, right))
+            assert found.values_equal(left, right) is given, (found.name, left, right)
+            pairs += 1
+        for value in (value for value in pool if known and not found.accepts(value)):
+            assert not found.values_equal(value, known[0]), (found.name, value)
+            assert not found.values_equal(known[0], value), (found.name, value)
+    assert pairs > 500
 
 
 @pytest.mark.usefixtures("purity_unchecked")

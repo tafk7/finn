@@ -70,11 +70,17 @@ class ValueSemantics(Generic[T]):
             return frozen
 
     def values_equal(self, left: object, right: object) -> bool:
+        """Whether ``left`` and ``right`` are both values of this type, equal after each
+        side's snapshot: a value is compared as it is stored (``freeze``), as the engine
+        compares the values it holds. Where the snapshot is the value itself, none is
+        taken."""
         from ._failure import transformation  # noqa: PLC0415 - semantics/evaluation
 
         with transformation("value equality"):
             if not self.accepts(left) or not self.accepts(right):
                 return False
+            if self.snapshot is not _itself:
+                left, right = self.freeze(left), self.freeze(right)
             return bool(self.equal(cast(T, left), cast(T, right)))
 
     def is_compatible_with(self, other: ValueSemantics[object]) -> bool:

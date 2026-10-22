@@ -37,9 +37,9 @@ miss, never a wrong answer.
 
 **What it costs.** An answer that read a value with no key is never kept: it is evaluated
 again in every design space that asks it. Every value FINN's kernels hold is keyed: the
-enums (``Form``, a beat sequence's repetition, a plan's steps, a transport's endpoint and
+enums (``Form``, a beat sequence's repetition, a channel's steps, a transport's endpoint and
 marker kinds, and the platform's DSP block and fabric, which mix in ``str``), the QONNX
-datatypes, alone and inside a ``Tensor``, a stream contract and a port contract, and the
+datatypes, alone and inside a ``Tensor``, a port's stream and a stream contract, and the
 integer tensors. Stage 7's chain, made one Space by ``support.one_space``, holds no root
 facts (its kernels' facts are constants of its class) and stores only str, int and bool
 choices.
@@ -53,9 +53,11 @@ import dataclasses
 import importlib
 import inspect
 import itertools
+import operator
 import pickle
 import pkgutil
 import random
+from array import array
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from enum import Enum
@@ -65,6 +67,7 @@ from types import SimpleNamespace
 from typing import Any, Literal, cast
 
 import numpy as np
+import numpy.typing as npt
 import pytest
 from qonnx.core.datatype import (
     BipolarType,
@@ -77,10 +80,8 @@ from qonnx.core.datatype import (
 from support.chain import chain
 from support.helpers import full_platform, in_order, stage_tensor
 
-import finn
 import finn.kernels
-from finn.core.graph.facts import integer_tensor
-from finn.core.space import Space, ValueSemantics
+from finn.core.space import Space, ValueSemantics, ViewKey
 from finn.core.space._running.cache import PLAIN, enum_key, key, trusted, value_class
 from finn.core.space._structure import Structure
 from finn.core.space._value_types import is_value_type, registered
@@ -91,16 +92,19 @@ from finn.core.space.occurrence import state
 from finn.core.space.semantics import default_semantics
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import Form, Window
-from finn.dataflow.plan import Hop, Plan, Step
+from finn.dataflow.steps import Hop, Step, Steps
+from finn.dataflow.streams import Stream
 from finn.dataflow.traversal import Repetition
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import PortContract
+from finn.kernels.channels import boundary_contract
 from finn.kernels.movers import MoverOffer
 from finn.kernels.transport import MarkerKind
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
     QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensorValue,
+    integer_bytes,
+    integer_digest,
 )
 from finn.platform.capabilities import DspBlock, Fabric
 
@@ -128,9 +132,9 @@ VERDICTS: dict[str, Verdict] = {
     ),
     "Traversal": Verdict("always", "a value class of int tuples and loops (value classes of ints)"),
     "Window": Verdict("always", "a value class of int pairs"),
-    "Plan": Verdict(
+    "Steps": Verdict(
         "always",
-        "a value class: the direct plan (no hops), and hops of a step and beat sequences, "
+        "a value class: no steps (no hops), and hops of a step and beat sequences, "
         "enum members keyed by type and name",
     ),
     "BeatSequence": Verdict(
@@ -150,7 +154,10 @@ VERDICTS: dict[str, Verdict] = {
         "a value class holding its element's QONNX datatype, a value type, and enums (the "
         "transport's endpoint and marker kinds and its repetition)",
     ),
-    "PortContract": Verdict("always", "a value class holding a stream contract"),
+    "Stream": Verdict(
+        "always",
+        "a value class holding its element's QONNX datatype, a value type, and a beat sequence",
+    ),
     "QONNXDataType": Verdict(
         "always", "semantics comparing by ==: a value type, the one instance of its name"
     ),
@@ -193,6 +200,17 @@ def declared() -> dict[str, dict[str, Node]]:
     return found
 
 
+def of_array(values: npt.NDArray[Any]) -> IntegerTensorValue:
+    """The integer tensor of an array of integers, stated as a producer holding the array
+    states it (a KernelOp's initializer): its shape, range and digest read from the
+    array, its integers loaded only when first read."""
+    shape = tuple(int(extent) for extent in values.shape)
+    stored = array("q")
+    stored.frombytes(values.astype("=i8").tobytes())
+    digest = integer_digest(shape, integer_bytes(stored))
+    return IntegerTensorValue(shape, (int(values.min()), int(values.max())), digest, lambda: stored)
+
+
 def made() -> dict[str, tuple[object, ...]]:
     """Values of the types the Chain holds none of, or one value of: made here."""
     eight, four = stage_tensor(8), stage_tensor(8, words=4)
@@ -215,13 +233,17 @@ def made() -> dict[str, tuple[object, ...]]:
         ),
         "Traversal": (in_order(eight).form, in_order(four).form, in_order(stage_tensor(8)).form),
         "BeatSequence": (in_order(eight), in_order(four), in_order(stage_tensor(8))),
-        "Plan": (Plan(), Plan(()), Plan((Hop(Step.WIDTH, in_order(eight), in_order(four)),))),
+        "Steps": (
+            Steps(),
+            Steps(()),
+            Steps((Hop(Step.WIDTH, in_order(eight), in_order(four)),)),
+        ),
         "Form": (Form.DENSE, Form.DEPTHWISE),
         "Platform": (full_platform(DspBlock.DSP58),),
         "QONNXDataType": (DataType["INT8"], DataType["UINT2"]),
         "integer tensor": (
             IntegerTensorValue.of(((1, 2), (3, 4))),
-            integer_tensor(np.array([[1, 2], [3, 4]], dtype=np.float32)),
+            of_array(np.array([[1, 2], [3, 4]], dtype=np.float32)),
             IntegerTensorValue.of(((1, 2), (3, 5))),
         ),
     }
@@ -230,8 +252,9 @@ def made() -> dict[str, tuple[object, ...]]:
 @cache
 def samples() -> dict[str, list[object]]:
     """Each name's samples: the configured Chain's facts and stored choices (each read
-    with its member's semantics), a copy of its first port contract, the stream contracts
-    its port contracts hold, and the values ``made`` here."""
+    with its member's semantics), a copy of its first stream, the stream contracts its
+    streams make as a channel's free side (a mover's side), and the values ``made``
+    here."""
     found: dict[str, list[object]] = {}
     network = chain()
     for name in network.members:
@@ -242,9 +265,13 @@ def samples() -> dict[str, list[object]]:
                 semantics = linked.raw_nodes[index].semantics
                 assert semantics is not None
                 found.setdefault(semantics.name, []).append(value)
-    contracts = cast(list[PortContract], found.get("PortContract", []))
-    contracts.append(dataclasses.replace(contracts[0]))  # an equal one, another object
-    found["StreamContract"] = [contract.contract for contract in contracts]
+    streams = cast(list[Stream], found.get("Stream", []))
+    streams.append(dataclasses.replace(streams[0]))  # an equal one, another object
+    found["StreamContract"] = [
+        boundary_contract("stream", stream.element, stream.sequence, endpoint)
+        for stream in streams
+        for endpoint in Endpoint
+    ]
     for name, more in made().items():
         found.setdefault(name, []).extend(more)
     return found
@@ -287,7 +314,7 @@ def test_every_value_type_the_kernels_declare_has_a_verdict() -> None:
     assert {"MatMulKernel.weights_dtype", "Channel.tensor"} <= {
         member for members in names.values() for member in members
     }
-    for name in ("BeatSequence", "Plan", "QONNXDataType", "integer tensor", "Tensor"):
+    for name in ("BeatSequence", "Steps", "QONNXDataType", "integer tensor", "Tensor"):
         assert names[name], name
 
 
@@ -439,7 +466,7 @@ def datatype_samples() -> tuple[object, ...]:
 
 def tensor_samples() -> tuple[object, ...]:
     """Integer tensors, equal ones made several ways: from nested tuples, flat, an
-    initializer's array of floats or of int8 (its integers loaded when first read), a
+    array of floats or of int8 (its integers loaded when first read, ``of_array``), a
     pickle; a vector, integers beyond 64 bits, and tensors differing in one integer or
     in shape only."""
     square = IntegerTensorValue.of(((1, -2), (3, 4)))
@@ -447,13 +474,13 @@ def tensor_samples() -> tuple[object, ...]:
     return (
         square,
         IntegerTensorValue.flat((2, 2), [1, -2, 3, 4]),
-        integer_tensor(np.array([[1, -2], [3, 4]], dtype=np.float32)),
-        integer_tensor(np.array([[1, -2], [3, 4]], dtype=np.int8)),
+        of_array(np.array([[1, -2], [3, 4]], dtype=np.float32)),
+        of_array(np.array([[1, -2], [3, 4]], dtype=np.int8)),
         pickle.loads(pickle.dumps(square)),
         IntegerTensorValue.flat((4,), [1, -2, 3, 4]),
         IntegerTensorValue.of(((1, -2), (3, 5))),
         IntegerTensorValue.of((7,)),
-        integer_tensor(np.array([7], dtype=np.int64)),
+        of_array(np.array([7], dtype=np.int64)),
         wide,
         IntegerTensorValue.flat((2, 2), [2**70, -1, 0, -(2**65)]),
     )
@@ -480,7 +507,7 @@ def registrations() -> set[tuple[str, str]]:
     """Each call or class decorator in FINN's source naming the engine's ``value_type``
     (imported from ``SPACE``, under any name, or read from the module): its file (below
     ``finn``) and its argument, as written."""
-    root = Path(finn.__file__).parent
+    root = Path(finn.kernels.__file__).parents[1]
     found: set[tuple[str, str]] = set()
     for path in sorted(root.rglob("*.py")):
         text = path.read_text()
@@ -616,3 +643,109 @@ def test_finns_value_semantics_compare_by_eq_and_are_trusted() -> None:
     tensor = IntegerTensorValue.of(((1, 2),))
     assert key(tensor, INTEGER_TENSOR) == (IntegerTensorValue, tensor)
     assert key(DataType["UINT2"], QONNX_DATATYPE_VALUE_SEMANTICS) == (IntType, DataType["UINT2"])
+
+
+# -- values_equal, as it answered before FINN's semantics compared by == -----------------
+#
+# ``ValueSemantics.values_equal`` compares each side's snapshot (``freeze``). Before FINN's
+# datatype and integer-tensor semantics declared ``equal=operator.eq`` (for the register
+# above), it compared the values as given, and those two semantics compared by identity and
+# by the integer tensor made of each side (``BEFORE``). Every other semantics' ``equal`` is
+# as it was.
+
+BEFORE: dict[str, Callable[[Any, Any], bool]] = {
+    "QONNXDataType": lambda left, right: left is right,
+    "integer tensor": lambda left, right: left is right or tensor_of(left) == tensor_of(right),
+}
+"""The ``equal`` of each semantics that now compares by ``operator.eq``, as it was before."""
+
+
+def tensor_of(value: object) -> IntegerTensorValue:
+    """An integer tensor value, or the value of nested int tuples."""
+    return value if type(value) is IntegerTensorValue else IntegerTensorValue.of(value)
+
+
+RAW: tuple[object, ...] = (
+    ((1, 2), (3, 4)),
+    ((1, 2), (3, 5)),
+    ((1, -2), (3, 4)),
+    ((1, 2),),
+    (7,),
+    ((2**70, -1), (0, -(2**65))),
+    "INT8",
+    "UINT2",
+    None,
+)
+"""Values as a caller gives them, unsnapshotted: integer tensors as nested int tuples (equal
+to samples, and not), datatypes by their names, and ``None``."""
+
+
+def finn_semantics() -> list[ValueSemantics[Any]]:
+    """Every value semantics in FINN's kernels and the engine: each a module of
+    ``finn.kernels`` or ``finn.core.space`` holds (itself, or as a ``ViewKey``'s), and each
+    node of a kernel's Space class holds; one of each kind (semantics alike in name, type,
+    recognition, equality and snapshot are one)."""
+    held: list[object] = []
+    for package in ("finn.core.space", "finn.kernels"):
+        root = importlib.import_module(package)
+        below = pkgutil.walk_packages(root.__path__, f"{package}.")
+        for name in (package, *(found.name for found in below)):
+            held += vars(importlib.import_module(name)).values()
+    for kind in kernel_space_classes():
+        linked = cast(Structure, compile_model(kind).linked)
+        held += [linked.raw_nodes[index].semantics for index in linked.all_nodes()]
+    found: dict[tuple[object, ...], ValueSemantics[Any]] = {}
+    for value in held:
+        semantics = value.semantics if isinstance(value, ViewKey) else value
+        if isinstance(semantics, ValueSemantics):
+            parts = (semantics.recognizes, semantics.equal, semantics.snapshot)
+            alike = (
+                semantics.name,
+                semantics.type_token,
+                *(getattr(part, "__code__", part) for part in parts),
+            )
+            found.setdefault(alike, semantics)
+    return list(found.values())
+
+
+def test_the_semantics_comparing_by_eq_are_those_listed_before() -> None:
+    """Every other semantics' ``equal`` is the one it had before."""
+    by_eq = {semantics.name for semantics in finn_semantics() if semantics.equal is operator.eq}
+    assert by_eq == set(BEFORE)
+
+
+def test_values_equal_answers_as_before_on_finns_samples() -> None:
+    """Every value semantics in FINN's kernels and the engine (``finn_semantics``), over
+    every ordered pair of the values it recognizes among the samples (``samples``, the
+    register's integer tensors and the unsnapshotted ``RAW``): ``values_equal`` answers as
+    its ``equal`` before (``BEFORE``, else its own) did on the two as given. Each value it
+    does not recognize, beside one it does, either way round: unequal, as before."""
+    pool = [value for values in samples().values() for value in values]
+    pool += [*tensor_samples(), *RAW]
+    pairs: dict[str, int] = {}
+    for semantics in finn_semantics():
+        before = BEFORE.get(semantics.name, semantics.equal)
+        known = [value for value in pool if semantics.accepts(value)]
+        for left, right in itertools.product(known, repeat=2):
+            given = bool(before(left, right))
+            assert semantics.values_equal(left, right) is given, (semantics.name, left, right)
+            pairs[semantics.name] = pairs.get(semantics.name, 0) + 1
+        for value in (value for value in pool if known and not semantics.accepts(value)):
+            assert not semantics.values_equal(value, known[0]), (semantics.name, value)
+            assert not semantics.values_equal(known[0], value), (semantics.name, value)
+    assert set(VERDICTS) | {"integer vector"} <= set(pairs)
+
+
+def test_values_equal_compares_each_sides_snapshot() -> None:
+    """An integer tensor's value is equal to the same integers given as nested tuples,
+    either way round, and unequal to other integers; a datatype is equal to itself
+    resolved again, and unequal to its name, which is no datatype (``accepts``)."""
+    weights = ((1, -2, 3), (4, 5, -6))
+    value = INTEGER_TENSOR.freeze(weights)
+    assert INTEGER_TENSOR.values_equal(value, weights)
+    assert INTEGER_TENSOR.values_equal(weights, value)
+    assert not INTEGER_TENSOR.values_equal(value, ((1, -2, 3), (4, 5, -7)))
+    int8, datatypes = DataType["INT8"], QONNX_DATATYPE_VALUE_SEMANTICS
+    assert datatypes.values_equal(int8, resolve_datatype("INT8", canonical=True))
+    assert not datatypes.accepts("INT8")
+    assert not datatypes.values_equal(int8, "INT8")
