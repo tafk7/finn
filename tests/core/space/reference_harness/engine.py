@@ -176,11 +176,17 @@ Rule = Admission | Plain | Requirement | Obligation | ByName
 @dataclass(frozen=True)
 class Spelling:
     """How a case's rules are written in the engine (by rule path; ``Admission`` when
-    absent) and the value types the description does not state (by path; a listed domain's
-    are read from its values, everything else is ``int``)."""
+    absent), the value types the description does not state (by path; a listed domain's
+    are read from its values, everything else is ``int``), and the guarded scopes written
+    as their selector's own guard (``guarded_selectors``)."""
 
     rules: Mapping[str, Rule] = field(default_factory=dict)
     types: Mapping[str, type] = field(default_factory=dict)
+    #: guarded scopes holding one selector and nothing else, each written as that
+    #: selector's own guard: the scope a plain child, its selector a ``Decision(...,
+    #: when=)`` under the scope's ``when``, so the guard and the cases' guards are nodes of
+    #: one Space. A guard piece of the selector names the scope, as the model's does
+    guarded_selectors: frozenset[str] = frozenset()
 
     def rule(self, path: str) -> Rule:
         return self.rules.get(path, Admission())
@@ -223,6 +229,12 @@ def _name(path: str) -> str:
     return path.rsplit(".", 1)[-1]
 
 
+#: the member of a scope spelled as its selector's guard holding that guard
+OWN_GUARD = "own-when"
+#: the engine's code of a guard piece's own finding
+GUARD_REFUSED = "guard-refused"
+
+
 def _input(path: str) -> str:
     """A scope's formal taking ``path`` from outside it."""
     return "in-" + path.replace(".", "-")
@@ -262,6 +274,18 @@ class _Builder:
                 or index.views[rule.view][1] != index.constraints[path][1]
             ):
                 raise NotTranslatable(f"{path}: an obligation of a view of its own Space")
+        #: a guarded selector's path -> the scope whose guard it carries
+        self.guards: dict[str, str] = {}
+        for path in sorted(spelling.guarded_selectors):
+            info = index.scopes.get(path)
+            if info is None or info.when is None or info.selector is not None:
+                raise NotTranslatable(f"{path}: spelled as a selector's guard, but not a child")
+            held = info.scope
+            if len(held.selectors) != 1 or held != model.Scope(
+                held.name, selectors=held.selectors, when=held.when
+            ):
+                raise NotTranslatable(f"{path}: a selector's guard holds one selector alone")
+            self.guards[f"{path}.{held.selectors[0].name}"] = path
         self.externals = {scope: self._externals(scope) for scope in index.scopes}
         #: per ``Members``: its export key, and its entries by the child's local name
         self.keys: dict[str, ViewKey[Any]] = {}
@@ -298,7 +322,8 @@ class _Builder:
 
     def _reads(self, scope: str) -> set[str]:
         """Every read of a node at or below ``scope`` (the guards of the scopes below it
-        included, its own guard not: its parent evaluates that)."""
+        included, its own guard not, as its parent evaluates that, unless its selector
+        carries it)."""
         index = self.index
         found: set[str] = set()
         for path, choice in index.choices.items():
@@ -312,7 +337,8 @@ class _Builder:
             if index.within(owner, scope):
                 found.update(members.entries)
         for path, info in index.scopes.items():
-            if path != scope and info.when is not None and index.within(path, scope):
+            own = path == scope and path not in self.spelling.guarded_selectors
+            if not own and info.when is not None and index.within(path, scope):
                 found.update(info.when.reads)
         return found
 
@@ -390,6 +416,8 @@ class _Builder:
         if name.startswith("when-"):
             child = name.removeprefix("when-")
             return self.guard(scope, f"{scope}.{child}" if scope else child)
+        if name == OWN_GUARD:
+            return self.guard(scope, scope)
         if name in index.facts:
             return Param(required=False) if name in index.optional else Param()
         if name in index.choices and index.choices[name].cases is not None:
@@ -430,7 +458,8 @@ class _Builder:
         entries: dict[str, type[Space] | Space] = {}
         for case in info.cases:
             entries[case] = self.node(scope, f"{path}.{case}")
-        self.selectors[path] = Decision(entries, required=info.required)
+        guard = {"when": self.member(scope, OWN_GUARD)} if path in self.guards else {}
+        self.selectors[path] = Decision(entries, required=info.required, **guard)
         return self.selectors[path]
 
     def _choice(self, scope: str, path: str) -> object:
@@ -558,7 +587,7 @@ class _Builder:
             if info.when is not None:
                 raise NotTranslatable(f"{below}: a selector's case takes no guard here")
             nodes[below] = space_type()
-        elif info.when is None:
+        elif info.when is None or below in self.spelling.guarded_selectors:
             nodes[below] = space_type()
         else:
             guard = self.member(scope, "when-" + _name(below))
@@ -593,6 +622,8 @@ class _Builder:
         for path in self.externals[scope]:
             members[_input(path)] = self.member(scope, _input(path))
             annotations[_input(path)] = self.value_type(path)
+        if scope in self.spelling.guarded_selectors:
+            members[OWN_GUARD] = self.member(scope, OWN_GUARD)
         for path in mine:
             if path in index.choices and index.choices[path].cases is not None:
                 members[_name(path)] = self.selector(scope, path)
@@ -606,7 +637,7 @@ class _Builder:
             child = index.scopes[path]
             if child.parent == scope and child.selector is None:
                 members[_name(path)] = self.node(scope, path)
-                if child.when is not None:
+                if child.when is not None and path not in self.spelling.guarded_selectors:
                     members["when-" + _name(path)] = self.member(scope, "when-" + _name(path))
         # bind every placed node's formals (assigned after the node, as a class body may)
         for below, placed in self.nodes[scope].items():
@@ -645,6 +676,8 @@ class Engine:
     aliases: Mapping[str, str]
     #: per ``Members``: its entries by the child's local name (``Located.node``)
     located: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    #: a selector spelled with its scope's guard -> that scope, which its guard piece names
+    guards: Mapping[str, str] = field(default_factory=dict)
 
     def open(self, facts: Mapping[str, object], implementation: Implementation = TODAY) -> Point:
         """The configuration with ``facts`` and nothing committed, as ``implementation``
@@ -677,9 +710,16 @@ class Engine:
         return self.aliases.get(owner, owner)
 
     def codes(self, findings: Iterable[Any], only: str | None = None) -> frozenset[Code]:
-        """Findings as codes; ``only``: the findings owned by that node alone."""
+        """Findings as codes; ``only``: the findings owned by that node alone. A guard
+        piece's own finding (``guard-refused``) of a selector spelled with its scope's guard
+        names the scope (``Spelling.guarded_selectors``)."""
         return frozenset(
-            (finding.code, self.path(finding.owner))
+            (
+                finding.code,
+                self.guards.get(finding.owner, finding.owner)
+                if finding.code == GUARD_REFUSED
+                else self.path(finding.owner),
+            )
             for finding in findings
             if only is None or finding.owner == only
         )
@@ -705,6 +745,7 @@ def build(
         builder.index,
         dict(builder.aliases),
         builder.located,
+        dict(builder.guards),
     )
 
 
