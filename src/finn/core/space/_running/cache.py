@@ -8,10 +8,10 @@ authored functions answer from what they read alone). The cache keeps, per membe
 compiled Space class, the sets of choices and facts the member was found to read, and for
 each set the answer by those values. A design space asks the cache before it evaluates a
 member: for each kept set it takes its own values of that set and looks them up by hash. A
-hit is the answer; a miss is an evaluation, kept after. Values match by type and ``==``.
-The cache belongs to no design space, only grows, and may drop any entry at any time: a
-miss changes nothing but the work. So a design space answers the same with it as without
-it.
+hit is the answer; a miss is an evaluation, kept after. Values match by type and ``==``,
+and only where their choice's or fact's value semantics are the default ones. The cache
+belongs to no design space, only grows, and may drop any entry at any time: a miss changes
+nothing but the work. So a design space answers the same with it as without it.
 
 **What it keeps.** Its tables are per model, held weakly by the model's structure (the
 object the model's record is keyed by, ``structure.record``), so a model's tables go with
@@ -21,8 +21,8 @@ evaluation: a membership reading, made with its choice's existence guards taken 
 holding (none for a choice with no guard), is a member of its own. Each member keeps its
 read sets (the choices and facts its evaluation read, by node, sorted), and each read set
 the answers (``evaluate.Ans``, with their trace and their read set) by the values read:
-each value by ``key`` (type and ``==``; a tuple or frozen set item by item, a value class
-field by field), a choice or fact not given as such.
+each value by ``key`` (type and ``==`` under the default semantics; a tuple or frozen set
+item by item, a value class field by field), a choice or fact not given as such.
 
 **Modes**, fixed when the cache is made (there is no global):
 
@@ -37,15 +37,26 @@ With no cache, a session evaluates every member (``evaluate.Session(cache=None)`
 the purity check (the session's, ``evaluate.Session.verifying``), any of these verifies: a
 hit is evaluated anyway and compared with what was kept, by the member's value semantics.
 
-**Values it keys** (``key``), by type and ``==``: the plain types (``PLAIN``) and the
-classes in ``CHECKED``, each checked by the value-type test (``==`` and hash against the
-value semantics); tuples and frozen sets of keyed values, item by item; and an instance of
-a value class (``value_class``: a frozen dataclass whose ``==`` and hash are the ones
-``dataclasses`` generates), field by field, each field's value keyed in turn. Item by item
-and field by field, the key tells types apart (``True`` is not ``1``): it is never coarser
-than ``==``, so a hit is never a value ``==`` tells apart. A value of any other type is
-never hashed: it has no key, and nothing is kept for an answer whose read set holds one,
-so a lookup there is a miss. An unhashable value has no key either.
+**Values it keys** (``key``): a value of a choice or fact whose value semantics are the
+default ones (``plain``: recognition by exact type, equality by ``==``, a default snapshot),
+by type and ``==``: the plain types (``PLAIN``) and the classes in ``CHECKED``, each checked
+by the value-type test (``==`` and hash against the value semantics); tuples and frozen sets
+of keyed values, item by item; and an instance of a value class (``value_class``: a frozen
+dataclass whose ``==`` and hash are the ones ``dataclasses`` generates, and none of whose
+compared fields is annotated with value semantics of its own), field by field, each field's
+value keyed in turn. Item by item and field by field, the key tells types apart (``True``
+is not ``1``): it is never coarser than ``==``, so a hit is never a value ``==`` tells
+apart, nor, under the default semantics, a value the semantics tell apart. A value of a
+choice or fact with semantics of its own (``ValueSemantics(...)``, ``immutable_nominal``),
+which may tell apart values ``==`` holds equal, is never hashed, whatever its type; nor is a
+value of any other type: it has no key, and nothing is kept for an answer whose read set
+holds one, so a lookup there is a miss. An unhashable value has no key either.
+
+The check is made where the semantics are: a value's semantics are its choice's or fact's
+(``Param(semantics=...)``, an annotation's), not its type's, and one class may be held by
+one member under the default semantics and by another under its own. So ``key`` is given
+the semantics of the choice or fact read (the node's, as ``_world._same_value`` reads it),
+and ``value_class`` checks what a class itself declares: its fields' annotations.
 
 **Counters**, on the session's (``evaluate.Counters``): lookups, hits, values hashed (at
 lookup and at keep), the members holding a read set, the read sets kept, and the most read
@@ -60,9 +71,10 @@ import dataclasses
 import random
 import weakref
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, cast, get_args, get_type_hints
 
 from ..ir import NodeId
+from ..semantics import ValueSemantics, default_semantics
 from .value import hashkey
 
 if TYPE_CHECKING:
@@ -72,7 +84,8 @@ PLAIN: tuple[type, ...] = (type(None), bool, int, float, complex, str, bytes)
 """The plain types the cache keys, each checked by the value-type test."""
 
 CHECKED: tuple[type, ...] = (PurePosixPath,)
-"""The other classes the cache keys by ``==``, each checked by the value-type test."""
+"""The other classes the cache keys by ``==`` (under the default semantics), each checked by
+the value-type test."""
 
 _NOT_GIVEN = ("not given",)
 
@@ -93,33 +106,92 @@ def _generated(method: object) -> bool:
     return code is not None and code.co_filename == _GENERATED
 
 
+_DEFAULT = default_semantics(object)
+_DEFAULT_SNAPSHOTS = tuple(default_semantics(kind).snapshot for kind in (int, tuple, object))
+
+
+def _code(function: object) -> object:
+    return getattr(function, "__code__", None)
+
+
+def plain(semantics: ValueSemantics[Any] | None) -> bool:
+    """Whether ``semantics`` are the default ones (``semantics.default_semantics``):
+    recognition by exact type, equality by ``==`` and a snapshot that keeps it. Semantics of
+    a value's own (``ValueSemantics(...)``, ``immutable_nominal``) or none (equal by
+    identity alone) are not, whatever their functions compute: the cache cannot read a
+    function's equality, so it keys none of their values."""
+    return (
+        semantics is not None
+        and _code(semantics.recognizes) is _code(_DEFAULT.recognizes)
+        and _code(semantics.equal) is _code(_DEFAULT.equal)
+        and any(semantics.snapshot is snapshot for snapshot in _DEFAULT_SNAPSHOTS)
+    )
+
+
+def _own_semantics(annotation: object) -> bool:
+    """Whether ``annotation`` names value semantics other than the default ones, at any
+    depth (``Annotated[tuple[int, int], PAIR]``, as a projection reads it)."""
+    if isinstance(annotation, ValueSemantics):
+        return not plain(annotation)
+    return any(_own_semantics(part) for part in get_args(annotation))
+
+
+_VALUE_CLASSES: weakref.WeakKeyDictionary[type, bool] = weakref.WeakKeyDictionary()
+"""``value_class``'s answer by class, made once."""
+
+
 def value_class(kind: type) -> bool:
     """Whether the cache keys ``kind``'s instances field by field: a frozen dataclass
     (declared so itself, not by a base) whose ``__eq__`` and ``__hash__`` are the ones
-    ``dataclasses`` generates, comparing the fields' values with ``==``. A hand-written
-    ``__eq__`` or hash, an ``eq=False`` dataclass (equal by identity) or a mutable one is
+    ``dataclasses`` generates, comparing the fields' values with ``==``, and none of whose
+    compared fields is annotated with value semantics of its own (``_own_semantics``). A
+    hand-written ``__eq__`` or hash, an ``eq=False`` dataclass (equal by identity), a
+    mutable one, a field with semantics of its own or annotations that do not resolve is
     not."""
+    found = _VALUE_CLASSES.get(kind)
+    if found is None:
+        found = _VALUE_CLASSES[kind] = _value_class(kind)
+    return found
+
+
+def _value_class(kind: type) -> bool:
     params = kind.__dict__.get("__dataclass_params__")
     if params is None or not (params.frozen and params.eq):
         return False
-    return _generated(kind.__dict__.get("__eq__")) and _generated(kind.__dict__.get("__hash__"))
+    if not (_generated(kind.__dict__.get("__eq__")) and _generated(kind.__dict__.get("__hash__"))):
+        return False
+    try:
+        hints = get_type_hints(kind, include_extras=True)
+    except Exception:  # noqa: BLE001 - unresolvable annotations: not keyed, a miss
+        return False
+    return not any(
+        _own_semantics(hints.get(item.name))
+        for item in dataclasses.fields(cast(Any, kind))
+        if item.compare
+    )
 
 
-def key(value: object) -> object:
-    """``value`` as the cache keys it, by type and ``==`` (see the module docstring); a
-    tuple or a frozen set item by item, a value class field by field; ``None`` where it
-    is unhashable or holds a type not keyed."""
+def key(value: object, semantics: ValueSemantics[Any] | None) -> object:
+    """``value``, the value of a choice or fact with ``semantics``, as the cache keys it,
+    by type and ``==`` (see the module docstring); ``None`` where the semantics are not the
+    default ones (``plain``), or the value is unhashable or holds a type not keyed."""
+    return _key(value) if plain(semantics) else None
+
+
+def _key(value: object) -> object:
+    """``value`` by type and ``==``: a tuple or a frozen set item by item, a value class
+    field by field; ``None`` where it is unhashable or holds a type not keyed."""
     kind = type(value)
     if kind in PLAIN or kind in CHECKED:
         return hashkey(value)
     if kind is tuple or kind is frozenset:
-        parts = [key(item) for item in value]  # type: ignore[attr-defined]
+        parts = [_key(item) for item in value]  # type: ignore[attr-defined]
         if any(part is None for part in parts):
             return None
         return (kind, tuple(parts) if kind is tuple else frozenset(parts))
     if value_class(kind):
         fields = [
-            key(getattr(value, item.name))
+            _key(getattr(value, item.name))
             for item in dataclasses.fields(cast(Any, kind))
             if item.compare
         ]
@@ -178,9 +250,9 @@ class NodeCache:
         return bool(self.drop) and self._random.random() < self.drop
 
     def _values(self, ev: Evaluation, read: ReadSet) -> tuple[object, ...] | None:
-        """``ev``'s values of ``read``, each keyed (``key``); ``None`` where one has no
-        key."""
-        facts, stored = ev.ds.facts, ev.ds.stored
+        """``ev``'s values of ``read``, each keyed (``key``) by its choice's or fact's
+        semantics; ``None`` where one has no key."""
+        facts, stored, nodes = ev.ds.facts, ev.ds.stored, ev.raw
         ev.counters.hashed += len(read)
         parts: list[object] = []
         for index in read:
@@ -190,7 +262,7 @@ class NodeCache:
             if value is _NOT_GIVEN:
                 parts.append(_NOT_GIVEN)
                 continue
-            part = key(value)
+            part = key(value, nodes[index].semantics)
             if part is None:
                 return None
             parts.append(part)
@@ -247,4 +319,4 @@ class NodeCache:
         answers[values] = found
 
 
-__all__ = ["CHECKED", "PLAIN", "NodeCache", "key", "value_class"]
+__all__ = ["CHECKED", "PLAIN", "NodeCache", "key", "plain", "value_class"]
