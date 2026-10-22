@@ -43,6 +43,7 @@ from support.running_type import LeavesOneOut, Running
 from support.space_oracle import Implementation, compare, forms, load, toys
 from support.space_oracle.today import TODAY
 
+from core.space._toys_support import House
 from core.space.reference import (
     Change,
     Choice,
@@ -583,6 +584,25 @@ def test_without_the_depth_guard_the_line_overflows_the_stack(
         fresh().open(configuration).query("value_300")
 
 
+def test_with_a_cache_the_depth_guard_keeps_nothing_for_an_abandoned_node() -> None:
+    """Every answer the cache kept on the line reads ``value_0`` alone: no node abandoned by
+    the depth guard was kept with the reads it had made so far. The line answers anew for
+    another ``value_0``, and from the cache for the first again."""
+    running = cached()
+    cache = cast(NodeCache, running.cache)
+    first = running.open(design_space(LINE(value_0=0)))  # type: ignore[call-arg]
+    assert first.query("value_300") == Available(300)
+    assert counters(running).restarts > 0
+    origin = cast(Any, first).ds.node("value_0")
+    tables = list(cache._tables.values())
+    read_sets = {read for table in tables for sets in table.values() for read in sets}
+    assert read_sets == {(origin,)}
+    assert running.open(design_space(LINE(value_0=1))).query("value_300") == Available(301)  # type: ignore[call-arg]
+    evaluated = counters(running).evaluated
+    assert running.open(design_space(LINE(value_0=0))).query("value_300") == Available(300)  # type: ignore[call-arg]
+    assert counters(running).evaluated == evaluated
+
+
 # -- the membership assertion ---------------------------------------------------------------------
 
 
@@ -660,6 +680,28 @@ def test_a_cache_leaving_a_read_out_of_its_key_answers_otherwise_and_is_caught()
     found = compare.everything(today, wrong)
     assert {difference.kind for difference in found.disagreements} >= {"members", "validity"}
     assert counters(planted).hits > 0
+
+
+def test_a_hit_leaves_the_evaluation_as_evaluating_would() -> None:
+    """Every node of a house, asked of a design space equal to one evaluated before with
+    the same cache, is a hit; each answer is the one evaluating gives (its result, trace,
+    assessment and read set), and it is in the evaluation's memo."""
+    stored = {"kitchen.finish": 2, "want_garage": True}
+    warm, cold = cached(), cached()
+    before = cast(Any, warm.make(House, {"budget": 100}, stored)).ds
+    nodes = sorted(set(cast(Structure, before.model.linked).keys.values()))
+    for index in nodes:
+        evaluate.evaluation(before, warm.session).get(index)
+    again = cast(Any, warm.make(House, {"budget": 100}, stored)).ds
+    other = cast(Any, cold.make(House, {"budget": 100}, stored)).ds
+    assert again == before and again is not before
+    hit, evaluated = evaluate.evaluation(again, warm.session), counters(warm).evaluated
+    made = evaluate.evaluation(other, cold.session)
+    for index in nodes:
+        assert hit.get(index) == made.get(index), index
+        assert index in hit.memo
+    assert counters(warm).evaluated == evaluated  # every one a hit
+    assert counters(cold).evaluated > 0
 
 
 def test_a_walk_catches_the_planted_cache() -> None:
