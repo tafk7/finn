@@ -836,8 +836,9 @@ def test_an_optional_fact_given_reads_its_value() -> None:
 # ``heating``, of two cases. Under the refused guard the model counts one guard piece, owned by
 # ``plant``: the cases under it add nothing. Written as the selector's own guard
 # (``Decision(..., when=)``, ``Spelling.guarded_selectors``), the guard and the cases' guards
-# are nodes of one Space, and today's engine counts a piece for each, 1 + 2, until T4a; written
-# as a guarded child, the cases are another Space's, and it counts one.
+# are nodes of one Space, and the engine counts the piece at the highest refused guard of its
+# chain, one (it counted 1 + 2 before T4a); written as a guarded child, the cases are another
+# Space's, and it counts one.
 
 
 def heated(read: Mapping[str, Any]) -> object:
@@ -876,7 +877,6 @@ GUARDED_CHILD = Case(
 )
 
 
-@expected("guard-counted-once")
 def test_a_chosen_selector_under_a_refused_when_is_one_piece() -> None:
     GUARDED_SELECTOR.start({"gate": 1}).check_validity()
 
@@ -900,7 +900,7 @@ def test_a_chosen_selector_under_a_when_that_holds_is_set_as_any_selector() -> N
 # A refused guard below an unknown one: ``s`` is open, its case ``a`` holds ``g``, present when
 # ``d`` is at least 1, and ``d`` refuses an odd ``f``, read by nothing else. The model leaves
 # ``g``'s piece unknown while ``a``'s presence is (reading 8): validity is open, waiting on
-# ``s``. Today's engine answers valid.
+# ``s``. So does the engine (it answered valid before T4a, SZ111).
 
 
 def even(read: Mapping[str, Any]) -> object:
@@ -938,7 +938,6 @@ IN_AN_OPEN_CASE = Case(
 )
 
 
-@expected("guard-unknown-under-unknown")
 def test_a_refused_when_in_a_case_of_an_open_selector_leaves_validity_open() -> None:
     IN_AN_OPEN_CASE.start({"f": 1}).check_validity()
 
