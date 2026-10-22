@@ -3,7 +3,7 @@
 
 """A channel's streams traverse its tensor: each stream its shape, the elements in order.
 
-The plan between the streams is ``test_plan``'s; a channel's refusals
+The steps between the streams are ``test_steps``'; a channel's refusals
 (``channel-tensor``, ``channel-plan``) are ``tests/kernels``'.
 """
 

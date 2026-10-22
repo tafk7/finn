@@ -4,7 +4,7 @@
 """A sliding window is a channel's adapter: one ``input_gen`` reading the image's frame.
 
 A consumer presenting a window of its image (``oh + kh``) is fed by a channel
-whose plan is a reorder (``finn.dataflow.traversal``), so its adapter is the
+whose one step is a reorder (``finn.dataflow.traversal``), so its adapter is the
 ``input_gen`` candidate, with ``FM_SIZE`` the image, ``DIMS`` the window's loops
 and ``COEFS`` their steps through the image. The review's probe, a flat 3 x 3
 window over a 4 x 4 map, is that module. Under XSim the realized module carries
@@ -26,8 +26,8 @@ from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import simulate
 from finn.core.space import design_space
-from finn.dataflow.plan import Step, plan
 from finn.dataflow.schedule import Index, Schedule
+from finn.dataflow.steps import Step, steps
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Traversal, vector_major
 from finn.harness.toolchain import finnlib_root
@@ -80,11 +80,11 @@ CASES: dict[str, Callable[[], tuple[Traversal, Traversal]]] = {
 
 def adapter(source: Traversal, sink: Traversal) -> Stage:
     """The channel's adapter for ``source`` to ``sink``: its one stage."""
-    found = plan(BeatSequence(source), BeatSequence(sink))
-    assert found.steps == (Step.REORDER,)
+    found = steps(BeatSequence(source), BeatSequence(sink))
+    assert found.kinds == (Step.REORDER,)
     candidate = design_space(
         ADAPTERS["input_gen"](
-            tensor=Tensor(source.shape, ELEMENT), plan=found, platform=FULL_DSP48E2
+            tensor=Tensor(source.shape, ELEMENT), steps=found, platform=FULL_DSP48E2
         )
     )
     (stage,) = commit(candidate, {"input_gen.ram_style": "auto"}).stages

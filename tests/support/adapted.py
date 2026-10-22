@@ -3,7 +3,7 @@
 
 """Networks whose channels are adapted: a cyclic producer feeding a thresholding
 (``adapted``, its module ``finn_adapted``), and ``inner_shuffle`` between two boundary
-channels (``transposed``, ``finn_transposed``). ``test_adapters`` checks their plans and
+channels (``transposed``, ``finn_transposed``). ``test_adapters`` checks their steps and
 adapters; the adapter XSI sweep simulates them."""
 
 from __future__ import annotations

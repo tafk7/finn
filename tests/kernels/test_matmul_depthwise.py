@@ -31,7 +31,7 @@ from support.helpers import (
 
 from finn.core.space import Available, Unresolved, inspection
 from finn.dataflow.gemm import Form
-from finn.dataflow.plan import Step
+from finn.dataflow.steps import Step
 from finn.dataflow.traversal import Traversal
 from finn.kernels.matmul import MatMulKernel
 
@@ -80,7 +80,7 @@ def test_depthwise_rows_pass_once_with_a_frame_per_window():
     configured = point()
     x = configured.member("x")
     # Nothing is replayed: the channel only closes each window's frame.
-    assert x.plan.steps == (Step.MARKERS,)
+    assert x.steps.kinds == (Step.MARKERS,)
     boundary = x.sides.source
     # Rows, then channel folds, then window folds; lane s * PE + p is window
     # position s of channel p.
@@ -115,7 +115,7 @@ def test_depthwise_rows_pass_once_with_a_frame_per_window():
 
 def test_a_dense_form_replays_each_row_per_output_fold():
     dense = point(form=Form.DENSE)
-    assert dense.member("x").plan.steps == (Step.REORDER, Step.MARKERS)
+    assert dense.member("x").steps.kinds == (Step.REORDER, Step.MARKERS)
     compute = parameters(built(dense, "matmul"), "matmul.compute.int8_dsp58")
     assert compute["ACTIVATION_BROADCASTING"] == 1
 

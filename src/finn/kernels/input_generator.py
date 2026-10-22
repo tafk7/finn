@@ -20,7 +20,7 @@ their orders (``classify``), or, for the same order, frames as long as the wides
 ``leaving`` requires, split or grouped until it closes each of ``leaving``'s markers. On
 a channel,
 ``input_gen`` is a stage of the channel's adapter (``finn.kernels.adapters``), which
-gives it the two sides of its step of the channel's plan. Its cycles are its ports'
+gives it the two sides of its step between the channel's two streams. Its cycles are its ports'
 beats, as every leaf's, and its buffering its buffer, ``BUF_SIZE`` input words.
 Its buffer's ``ram_style`` is its choice: the explicit styles, then ``auto``, which states
 no resources (``finn.kernels.utilization.memory_styles``); its ranking,
@@ -64,7 +64,7 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.dataflow.plan import Unrealizable
+from finn.dataflow.steps import Unrealizable
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import Adaptation, BeatSequence, LevelEnd, classify

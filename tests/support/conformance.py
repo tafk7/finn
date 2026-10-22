@@ -108,7 +108,7 @@ from finn.core.space import (
     inspection,
 )
 from finn.dataflow.datatypes import DatatypeError, ordinary_integer_bounds
-from finn.dataflow.plan import Step
+from finn.dataflow.steps import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
     BeatSequence,
@@ -595,8 +595,8 @@ def place(
             _defaulted(_committed(space_type, sample.factors, inputs, outputs, choices, facts, fed))
         )
         stream = design_member(point, name)
-        found = stream.query(Channel.plan)
-        if isinstance(found, Available) and Step.WIDTH in found.value.steps:
+        found = stream.query(Channel.steps)
+        if isinstance(found, Available) and Step.WIDTH in found.value.kinds:
             return point
     raise AssertionError(
         f"{space_type.__name__} [{sample.label}]: no lane count of {tensor.shape} other than "

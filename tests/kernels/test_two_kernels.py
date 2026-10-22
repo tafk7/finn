@@ -1,14 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Two dot-product layers joined by one channel that plans and adapts between them.
+"""Two dot-product layers joined by one channel that derives the steps between them and
+adapts.
 
 The first layer produces its results PE = 4 lanes a beat, each row once; the
 second reads them as activations, SIMD = 2 lanes a beat, each row once per
 output fold, framed by reduction. Neither kernel knows the other: each
 presents its own traversal of the hidden tensor, derived from its own schedule
 over its own folding factors, and the channel between them takes both contracts.
-The channel between them plans a width conversion, a replay and the frame, and
+The channel between them derives a width conversion, a replay and the frame, and
 its adapter places a ``vpc`` and an ``input_gen``. The network's module computes
 ``(x @ W1) @ W2`` in XSim, weights stored ``(k, n)``; a channel that admits no
 adapter refuses it.
@@ -37,7 +38,7 @@ from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.rtlsim_pacing import FREE, STALLED
 from finn.core.space import design_space
 from finn.dataflow.datatypes import ordinary_integer_bounds
-from finn.dataflow.plan import Step
+from finn.dataflow.steps import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, period
 from finn.kernels.base import BUFFERING
@@ -162,10 +163,10 @@ def layered(*, adaptable: bool = True) -> Network:
     return with_channel_defaults(with_direct_transports(network))
 
 
-def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input_gen():
+def test_the_hidden_stream_steps_are_width_replay_and_frame_placing_vpc_and_input_gen():
     point = layered()
     hidden = point.member("h")
-    assert hidden.plan.steps == (Step.WIDTH, Step.REORDER, Step.MARKERS)
+    assert hidden.steps.kinds == (Step.WIDTH, Step.REORDER, Step.MARKERS)
     stages = hidden.stages
     # The width conversion before the transport, the replay and frame after it.
     assert [stage.label for stage in stages] == [
@@ -173,7 +174,7 @@ def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input
         "adapter.input_gen.input_gen",
     ]
     # The first layer's activations need only their frame closed.
-    assert point.member("x").plan.steps == (Step.MARKERS,)
+    assert point.member("x").steps.kinds == (Step.MARKERS,)
     assert {
         "first",
         "second",

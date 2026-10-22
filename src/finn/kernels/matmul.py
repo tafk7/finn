@@ -86,8 +86,8 @@ which its ``y`` port writes.
   the facts, the tensors and the folding, and each derives every port's beat sequence
   from its schedule.
 - Where the weights come from is the weight channel's ``source``, not MatMul's.
-- The activation channel's plan replays each dense row and frames each
-  reduction; the channel's adapter carries that out.
+- The steps between the activation channel's two streams replay each dense row and
+  frame each reduction; the channel's adapter carries that out.
 
 It binds no module of its own: its netlist (``finn.kernels.base.KernelSpace``) merges its
 children's.

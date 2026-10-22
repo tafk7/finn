@@ -1,14 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Channel adapters: the hardware a channel places to carry out its plan.
+"""Channel adapters: the hardware a channel places to carry out the steps between its
+two streams.
 
 A channel compares what its source presents with what its sink requires and
-derives a plan (``finn.dataflow.plan``): reorders, width conversions and marker
-synthesis, split at the channel's transport. Each side of the transport has its
-adapter selector, which chooses the hardware that carries out that side of the
-plan. Each candidate is a fixed chain of FinnLib modules and refuses every plan
-that chain does not realize, so at most one candidate survives a side:
+derives the steps between them (``finn.dataflow.steps``): reorders, width conversions
+and marker synthesis, split at the channel's transport. Each side of the transport has
+its adapter selector, which chooses the hardware that carries out that side's steps.
+Each candidate is a fixed chain of FinnLib modules and refuses all steps that chain
+does not realize, so at most one candidate survives a side:
 
 - the output side, before the transport (``OUTPUT_ADAPTERS``): ``vpc``, a width
   conversion;
@@ -17,11 +18,11 @@ that chain does not realize, so at most one candidate survives a side:
   ``input_gen_vpc_input_gen``, a reorder, new lanes, then markers (a ``vpc``
   carries none).
 
-These are every shape a side of a plan can take (``OUTPUT_CHAINS``,
-``INPUT_CHAINS``), so every realizable plan has exactly one candidate a side;
+These are every shape a side's steps can take (``OUTPUT_CHAINS``,
+``INPUT_CHAINS``), so all realizable steps have exactly one candidate a side;
 each is keyed by its modules, joined (``input_gen_vpc``).
 
-``realize`` maps a plan onto modules. A reorder becomes an ``input_gen`` whose
+``realize`` maps the steps onto modules. A reorder becomes an ``input_gen`` whose
 frame, ``DIMS`` and ``COEFS`` are ``classify``'s; the marker step that follows
 it merges into the same module, whose ``olst[d]`` bits close the levels
 ``DIMS[d:]``, split or grouped until every required level is one of them
@@ -65,7 +66,7 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.dataflow.plan import Hop, Plan, Step, Unrealizable
+from finn.dataflow.steps import Hop, Step, Steps, Unrealizable
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.module import Leaf
@@ -100,7 +101,7 @@ class Stage:
     label: str
 
 
-# -- realizing a plan --------------------------------------------------------------------
+# -- realizing the steps -----------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -134,10 +135,10 @@ def _generated(hop: Hop, marked: Hop | None) -> RealizedStage:
     return RealizedStage(generated(arriving, leaving), arriving, leaving)
 
 
-def realize(plan: Plan) -> tuple[RealizedStage, ...]:
-    """The FinnLib modules that carry out ``plan``, in order."""
+def realize(steps: Steps) -> tuple[RealizedStage, ...]:
+    """The FinnLib modules that carry out ``steps``, in order."""
     stages: list[RealizedStage] = []
-    hops = list(plan.hops)
+    hops = list(steps.hops)
     index = 0
     while index < len(hops):
         hop = hops[index]
@@ -180,7 +181,8 @@ def _side(name: str, side: str) -> BeatSequence:
 
 
 class StreamAdapter(KernelSpace):
-    """A fixed chain of FinnLib modules carrying out a channel's plan, or refusing it.
+    """A fixed chain of FinnLib modules carrying out the steps between a channel's two
+    streams, or refusing them.
 
     Each candidate places its modules as kernel children named by stage
     (``input_gen``, ``vpc``, then ``input_gen_1``), each given the channel's tensor and
@@ -194,13 +196,13 @@ class StreamAdapter(KernelSpace):
     modules: ClassVar[tuple[str, ...]] = ()
 
     tensor: Tensor = Param()
-    plan: Plan = Param()
+    steps: Steps = Param()
     platform: Platform = Param()
 
     @derived
     def realization(self) -> tuple[RealizedStage, ...] | Rejected:
         try:
-            return realize(self.plan)
+            return realize(self.steps)
         except Unrealizable as error:
             return reject("adapter-plan", f"no FinnLib chain carries out the plan: {error}")
 
@@ -210,7 +212,7 @@ class StreamAdapter(KernelSpace):
         if kinds != self.modules:
             return reject(
                 "adapter-plan",
-                f"{' -> '.join(self.modules)} does not carry out {self.plan.describe()}, "
+                f"{' -> '.join(self.modules)} does not carry out {self.steps.describe()}, "
                 f"which takes {' -> '.join(kinds)}",
             )
         return True
@@ -280,14 +282,14 @@ def _vpc(name: str) -> VpcKernel:
 
 
 OUTPUT_CHAINS: tuple[tuple[str, ...], ...] = (("vpc",),)
-"""Every chain the output side of a plan can take: its width conversion."""
+"""Every chain the output side's steps can take: its width conversion."""
 
 INPUT_CHAINS: tuple[tuple[str, ...], ...] = (
     ("input_gen",),
     ("input_gen", "vpc"),
     ("input_gen", "vpc", "input_gen"),
 )
-"""Every chain the input side of a plan can take: a reorder or markers first."""
+"""Every chain the input side's steps can take: a reorder or markers first."""
 
 
 def _chain(modules: tuple[str, ...]) -> type[StreamAdapter]:

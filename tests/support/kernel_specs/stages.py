@@ -20,7 +20,7 @@ from dataclasses import replace
 from typing import Any
 
 from finn.core.space import view
-from finn.dataflow.plan import plan
+from finn.dataflow.steps import steps
 from finn.dataflow.traversal import BeatSequence, Traversal, vector_major
 from finn.kernels.adapters import Convert, RealizedStage, realize
 from finn.kernels.artifacts.abi import Direction, Endpoint, Pin, Signal
@@ -75,7 +75,7 @@ STAGED = (4, 6)
 
 def realized(source: Traversal, sink: Traversal) -> RealizedStage:
     """The one stage a channel's adapter realizes between ``source`` and ``sink``."""
-    (stage,) = realize(plan(BeatSequence(source), BeatSequence(sink)))
+    (stage,) = realize(steps(BeatSequence(source), BeatSequence(sink)))
     return stage
 
 

@@ -10,7 +10,7 @@ import pytest
 from support.helpers import FULL_DSP48E2, generator, nested, stage_tensor
 
 from finn.core.space import Rejected, design_space
-from finn.dataflow.plan import Unrealizable
+from finn.dataflow.steps import Unrealizable
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.input_generator import Generate, InputGeneratorKernel, generated

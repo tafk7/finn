@@ -1,16 +1,16 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A channel plans what its sides need and its adapters carry the plan out.
+"""A channel derives the steps between its sides and its adapters carry them out.
 
 A cyclic producer presents a tensor in any order; thresholding consumes it
-PE channels a beat, channels innermost. The channel between them derives its
-plan from the two presentations, split at its transport, and exactly one
-adapter candidate a side carries it out: nothing for the same order, a ``vpc``
+PE channels a beat, channels innermost. The channel between them derives the
+steps from the two presentations, split at its transport, and exactly one
+adapter candidate a side carries them out: nothing for the same order, a ``vpc``
 before the transport for other lanes, an ``input_gen`` after it for another
 beat order, and both: each side's set first valid as the network builds the channel (the
 interim channel rule). A FIFO sits between the two sides. A channel that admits no adapter
-refuses a non-empty plan. FinnLib's ``inner_shuffle`` is not a candidate; a
+refuses any step. FinnLib's ``inner_shuffle`` is not a candidate; a
 kernel with children places it explicitly (``TransposeKernel``, ``test_transpose.py``).
 """
 
@@ -36,7 +36,7 @@ from support.helpers import (
 )
 
 from finn.core.space import Rejected, design_space, inspection
-from finn.dataflow.plan import Step, plan
+from finn.dataflow.steps import Step, steps
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, Traversal, vector_major
 from finn.kernels.adapters import Convert, realize
@@ -60,7 +60,7 @@ def stage_parameters(point):
 
 def test_the_same_order_connects_directly():
     point = adapted(vector_major((ROWS, CHANNELS), 4), 4)
-    assert not point.member("x").plan and not point.member("x").adapting
+    assert not point.member("x").steps and not point.member("x").adapting
     assert point.member("x").stages == ()
     assert labels(built(point, "adapted")) == ["producer", "activate"]
 
@@ -68,7 +68,7 @@ def test_the_same_order_connects_directly():
 @pytest.mark.parametrize("before,after,vector", [(2, 3, 6), (4, 2, 4), (3, 12, 12), (6, 4, 12)])
 def test_other_lanes_are_a_vpc(before, after, vector):
     point = adapted(vector_major((ROWS, CHANNELS), before), after)
-    assert point.member("x").plan.steps == (Step.WIDTH,)
+    assert point.member("x").steps.kinds == (Step.WIDTH,)
     ((name, vpc),) = stage_parameters(point)
     assert name == "vpc" and (vpc["PI"], vpc["PO"], vpc["N"]) == (before, after, vector)
     # The stage sits below the channel, at its place in the root's netlist.
@@ -80,9 +80,9 @@ def test_a_vpc_converts_whole_vectors_that_span_rows():
     stream is whole lcm vectors, wherever rows end: 4 lanes into a transpose taking 3
     of its (6, 4) matrices' flat order converts vectors of 12, three rows each."""
     consumer = transposed(6, 4, 3).member("shuffle").input_stream.sequence
-    steps = plan(BeatSequence(vector_major((2, 6, 4), 4)), consumer)
-    assert steps.steps == (Step.WIDTH,)
-    (stage,) = realize(steps)
+    found = steps(BeatSequence(vector_major((2, 6, 4), 4)), consumer)
+    assert found.kinds == (Step.WIDTH,)
+    (stage,) = realize(found)
     assert stage.module == Convert(4, 3)
     vpc = VpcKernel(
         input_tensor=Tensor((2, 6, 4), ELEMENT), arriving=stage.source, leaving=stage.sink
@@ -92,7 +92,7 @@ def test_a_vpc_converts_whole_vectors_that_span_rows():
 
 def test_another_beat_order_is_an_input_gen():
     point = adapted(columns_first(ROWS, CHANNELS, 4), 4)
-    assert point.member("x").plan.steps == (Step.REORDER,)
+    assert point.member("x").steps.kinds == (Step.REORDER,)
     ((name, generator),) = stage_parameters(point)
     # Per frame of every beat, each row's channel folds in order.
     assert name == "input_gen"
@@ -105,7 +105,7 @@ def test_another_beat_order_is_an_input_gen():
 
 def test_lanes_and_order_together_are_a_chain():
     point = adapted(columns_first(ROWS, CHANNELS, 4), 2)
-    assert point.member("x").plan.steps == (Step.WIDTH, Step.REORDER)
+    assert point.member("x").steps.kinds == (Step.WIDTH, Step.REORDER)
     assert [name for name, _ in stage_parameters(point)] == ["vpc", "input_gen"]
     # The width conversion before the transport, the reorder after it.
     assert labels(built(point, "adapted"))[:2] == [
@@ -118,7 +118,7 @@ def test_another_lane_axis_regroups_through_the_common_lane_count():
     # Three rows of one channel a beat: the lanes run along the rows.
     rows_as_lanes = Traversal.over((ROWS, CHANNELS), ((1, CHANNELS, 1),), ((0, ROWS, 1),))
     point = adapted(rows_as_lanes, 2)
-    assert point.member("x").plan.steps == (Step.WIDTH, Step.REORDER, Step.WIDTH)
+    assert point.member("x").steps.kinds == (Step.WIDTH, Step.REORDER, Step.WIDTH)
     # The first vpc before the transport; the reorder and its vpc after it.
     assert [stage.label for stage in point.member("x").stages] == [
         "output_adapter.vpc.vpc",
@@ -130,7 +130,7 @@ def test_another_lane_axis_regroups_through_the_common_lane_count():
 BOTH = {"x.output_adapter": "vpc", "x.adapter": "input_gen"}
 
 
-def test_exactly_one_candidate_a_side_carries_out_each_plan():
+def test_exactly_one_candidate_a_side_carries_out_its_steps():
     for source, pe, sides in (
         (vector_major((ROWS, CHANNELS), 4), 2, {"x.output_adapter": "vpc"}),
         (columns_first(ROWS, CHANNELS, 4), 4, {"x.adapter": "input_gen"}),
@@ -141,11 +141,11 @@ def test_exactly_one_candidate_a_side_carries_out_each_plan():
         ),
     ):
         x = adapted(source, pe).member("x")
-        # The one chain a side that carries out its plan is its first valid value, set as
+        # The one chain a side that carries out its steps is its first valid value, set as
         # the network builds the channel (the interim channel rule).
         adapters = {key: value for key, value in chosen(x).items() if key.endswith("adapter")}
         assert {f"x.{key}": value for key, value in adapters.items()} == sides
-    # Every other candidate refuses its side's plan: possible values, one.
+    # Every other candidate refuses its side's steps: possible values, one.
     (adapter,) = inspection.viable(x, [handle(x, "adapter")])
     assert adapter.cases == ("input_gen",)
     assert all(
@@ -161,12 +161,12 @@ def test_exactly_one_candidate_a_side_carries_out_each_plan():
     }
 
 
-def test_a_stream_admitting_no_adapter_refuses_its_plan():
+def test_a_stream_admitting_no_adapter_refuses_its_steps():
     point = adapted(vector_major((ROWS, CHANNELS), 4), 2, adaptable=False)
     refused = point.member("x").query(Channel.netlist)
     assert isinstance(refused, Rejected)
-    plan = [finding for finding in refused.findings if finding.code == "channel-plan"]
-    assert plan and "width_conversion" in plan[0].message
+    refusals = [finding for finding in refused.findings if finding.code == "channel-plan"]
+    assert refusals and "width_conversion" in refusals[0].message
     # Its adapter Decision does not apply, and the network leaves a channel refused on its
     # own facts as it is: its transport stays open.
     assert not point.member("x").adapting
@@ -256,7 +256,7 @@ def test_a_fifo_in_a_memory_the_platform_lacks_is_refused_by_its_rule():
             [],
             ("valid", []),
         ),
-        # The channel's own rule: a plan, and no adapter admitted.
+        # The channel's own rule: steps, and no adapter admitted.
         (
             lambda: adapted(vector_major((ROWS, CHANNELS), 4), 2, adaptable=False).member("x"),
             "refused",

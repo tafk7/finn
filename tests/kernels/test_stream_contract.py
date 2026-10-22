@@ -106,8 +106,9 @@ def test_equal_contracts_connect_and_cyclic_sources_repeat_into_consumer_passes(
 
 
 def test_mismatches_name_the_adapter_that_would_repair_them():
-    """The logical part is the channel's plan (``finn.dataflow.plan``): its steps name the
-    adapter, and what no chain repairs is refused as the plan says."""
+    """The logical part is the steps between the channel's two streams
+    (``finn.dataflow.steps``): they name the adapter, and what no chain repairs is
+    refused as they say."""
     wider = compatibility(
         contract(vector_major((4,), 2), Endpoint.INITIATOR),
         contract(vector_major((4,), 4), Endpoint.TARGET),
@@ -165,7 +166,7 @@ def test_repetition_direction_and_marker_rules_are_checked():
 
 
 def test_a_marker_after_an_adapter_is_one_the_adapter_must_make():
-    """A sequence step invalidates the markers before it (``finn.dataflow.plan``): a
+    """A sequence step invalidates the markers before it (``finn.dataflow.steps``): a
     consumer's marker past a width conversion is refused as one none survives."""
     last = (StreamMarker("s_m", MarkerKind.LAST),)
     produced = StreamContract(
@@ -326,8 +327,8 @@ def test_the_delivery_kernel_serves_a_second_consumer_through_the_same_contract(
     strided = constant_network(Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),)))
     refused = strided.member("c").query(Channel.netlist)
     assert isinstance(refused, Rejected)
-    (plan,) = [finding for finding in refused.findings if finding.code == "channel-plan"]
-    assert "another lane axis" in plan.message
+    (refusal,) = [finding for finding in refused.findings if finding.code == "channel-plan"]
+    assert "another lane axis" in refusal.message
     trial = strided.trial(keyed({"c.transport": "direct"}))
     assert not trial.accepted
     ((rule, (form,)),) = trial.refused.items()

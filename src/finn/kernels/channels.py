@@ -11,14 +11,14 @@ the ``PortContract`` a member presents for one of its ports (a kernel's ``x_cont
 labelled from the network (``Interface``: ``matmul.compute.packed.x``), or absent: the
 network's boundary. The channel's tensor is never derived from a port.
 
-Each side's stream must traverse the tensor (``channel-tensor``), and the plan between
-their beat sequences (``finn.dataflow.plan``) must be one a chain of FinnLib modules
+Each side's stream must traverse the tensor (``channel-tensor``), and the steps between
+their beat sequences (``finn.dataflow.steps``) must be ones a chain of FinnLib modules
 carries out (``channel-plan``). A channel runs, in order:
 
     source -> output adapter -> transport -> input adapter -> consumer
 
-The plan splits at the transport: its output side (width conversions) is the
-``output_adapter`` selector, its input side (a reorder, replay included, and markers) the
+The steps split at the transport: their output side (width conversions) is the
+``output_adapter`` selector, their input side (a reorder, replay included, and markers) the
 ``adapter`` selector, each over fixed chains (``finn.kernels.adapters``). The
 ``transport`` selector is ``direct`` or ``fifo``; the FIFO owns its ``depth`` (the cut's
 policy requires it: an exploration sizes it, ``finn.kernels.cut``) and its ``ram_style``,
@@ -68,7 +68,8 @@ from finn.core.space import (
     view,
 )
 from finn.dataflow.datatypes import QONNXDataType
-from finn.dataflow.plan import Plan, Unrealizable, plan
+from finn.dataflow.steps import Steps, Unrealizable
+from finn.dataflow.steps import steps as between
 from finn.dataflow.streams import Stream, Streams, misfit
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Traversal, period, unreplayed
@@ -423,35 +424,35 @@ class Channel(KernelSpace):
         return True if why is None else reject("channel-tensor", why)
 
     @derived
-    def plan(self) -> Plan | Rejected:
+    def steps(self) -> Steps | Rejected:
         """What must happen between the source's beat sequence and the sink's."""
         streams = self.streams
         try:
-            return plan(streams.source.sequence, streams.sink.sequence)
+            return between(streams.source.sequence, streams.sink.sequence)
         except Unrealizable as error:
             return reject("channel-plan", f"no adapter can join the streams: {error}")
 
     @derived
-    def output_plan(self) -> Plan:
-        """The plan's side before the transport (``Plan.output``)."""
-        return self.plan.output
+    def output_steps(self) -> Steps:
+        """The steps before the transport (``Steps.output``)."""
+        return self.steps.output
 
     @derived
-    def input_plan(self) -> Plan:
-        """The plan's side after the transport (``Plan.input``)."""
-        return self.plan.input
+    def input_steps(self) -> Steps:
+        """The steps after the transport (``Steps.input``)."""
+        return self.steps.input
 
     @derived
     def output_adapting(self) -> bool:
-        return self.adaptable and bool(self.output_plan)
+        return self.adaptable and bool(self.output_steps)
 
     @derived
     def adapting(self) -> bool:
-        return self.adaptable and bool(self.input_plan)
+        return self.adaptable and bool(self.input_steps)
 
     @constraint
     def realizable(self) -> bool | Rejected:
-        found = self.plan
+        found = self.steps
         if found and not self.adaptable:
             return reject(
                 "channel-plan",
@@ -463,7 +464,7 @@ class Channel(KernelSpace):
         **OUTPUT_ADAPTERS,
         when=output_adapting,
         tensor=tensor,
-        plan=output_plan,
+        steps=output_steps,
         platform=platform,
     )
     output_adapter_stages = View(output_adapter.stages)
@@ -471,7 +472,7 @@ class Channel(KernelSpace):
     @derived
     def output_adapted(self) -> tuple[Stage, ...]:
         """The output adapter's stages (its ``stages``), in order, labelled below the
-        channel; none when the plan converts no width before the transport."""
+        channel; none when the steps convert no width before the transport."""
         if not self.output_adapting:
             return ()
         stages: tuple[Stage, ...] = self.output_adapter.stages
@@ -500,7 +501,7 @@ class Channel(KernelSpace):
     transport_stages = View(transport.stages)
 
     adapter: StreamAdapter = Select(
-        **ADAPTERS, when=adapting, tensor=tensor, plan=input_plan, platform=platform
+        **ADAPTERS, when=adapting, tensor=tensor, steps=input_steps, platform=platform
     )
     adapter_stages = View(adapter.stages)
 

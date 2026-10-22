@@ -332,7 +332,7 @@ def test_the_core_is_one_possible_case_and_is_given_the_folding():
     point = choose(
         point, {"x.transport": "direct", "w.transport": "direct", "y.transport": "direct"}
     )
-    # The activation channel's adapter applies once its plan is known, which the
+    # The activation channel's adapter applies once its steps are known, which the
     # folding decides; the channel is the network's.
     point = choose(
         point,

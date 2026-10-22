@@ -1,9 +1,9 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Every realized plan moves the data right, checked against the modules' own semantics.
+"""All realized steps move the data right, checked against the modules' own semantics.
 
-``plan`` names the steps between two beat sequences and ``realize`` maps them
+``steps`` names the steps between two beat sequences and ``realize`` maps them
 onto FinnLib modules. The reference here is independent of both: it models
 ``input_gen`` and ``vpc`` from their RTL headers alone (per frame of
 ``FM_SIZE`` words, the word at ``f * FM_SIZE + sum(COEFS[k] * i_k)`` over
@@ -25,8 +25,8 @@ from math import prod
 
 import pytest
 
-from finn.dataflow.plan import Unrealizable, plan
 from finn.dataflow.schedule import Index, Schedule
+from finn.dataflow.steps import Unrealizable, steps
 from finn.dataflow.traversal import (
     BeatSequence,
     LevelEnd,
@@ -77,7 +77,7 @@ def convert(beats: Beats, module: Convert) -> Beats:
 def check(source: BeatSequence, sink: BeatSequence) -> tuple[str, ...]:
     """Run the realized chain on the source's positions; return its module kinds, both
     sides of the transport."""
-    found = plan(source, sink)
+    found = steps(source, sink)
     stages = realize(found)
     beats: Beats = list(found.hops[0].source.form.positions()) if found else []
     marks: list[tuple[bool, ...]] = []
@@ -99,7 +99,7 @@ def check(source: BeatSequence, sink: BeatSequence) -> tuple[str, ...]:
             depth = levels.index(rule)
             asserted = [mark[depth] for mark in marks]
             assert asserted == [rule.asserted(beat) for beat in range(len(beats))]
-    # Each side of the transport is one candidate's chain, and together they are the plan's.
+    # Each side of the transport is one candidate's chain, and together they are all the steps'.
     sides = realize(found.output), realize(found.input)
     assert (*sides[0], *sides[1]) == stages
     for side, chains in zip(sides, (OUTPUT_CHAINS, INPUT_CHAINS)):
@@ -134,7 +134,7 @@ def framed(rng: random.Random, form: Traversal) -> tuple[LevelEnd, ...]:
     return (LevelEnd(prod(loop.extent for loop in form.beat_loops[depth:])),)
 
 
-def test_known_plans_realize_as_their_candidates():
+def test_known_steps_realize_as_their_candidates():
     rows = vector_major((3, 8), 2)
     replayed = BeatSequence(rows.replayed(2, inner_beats=4), markers=(LevelEnd(4),))
     assert check(BeatSequence(rows), replayed) == ("input_gen",)
@@ -162,7 +162,7 @@ def test_known_plans_realize_as_their_candidates():
 
 
 @pytest.mark.parametrize("seed", range(4))
-def test_random_plans_move_every_element_to_its_place(seed):
+def test_random_steps_move_every_element_to_its_place(seed):
     rng = random.Random(seed)
     realized = refused = 0
     for _ in range(150):
