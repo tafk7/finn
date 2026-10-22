@@ -39,12 +39,12 @@ from __future__ import annotations
 import ast
 import inspect
 import textwrap
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import CodeType, MappingProxyType
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
-from .ir import Argument, Linked, LinkedModel, NodeId
+from .ir import Argument, Linked, LinkedModel, Node, NodeId
 
 if TYPE_CHECKING:
     from ._structure import ScopeRecord, Structure
@@ -904,8 +904,16 @@ class _Mapping:
 
 
 def _sources(linked: Linked, index: NodeId, found: set[NodeId]) -> None:
-    """What decides whether a value input is supplied at ``index`` (``present``)."""
-    nodes = linked.nodes
+    """What decides whether a value input is supplied at ``index`` (``present``): the
+    guards and selectors on the way to its source, every alias on the way walked as
+    resolved, so each one's guard is named. A method's reader reads them so, an alias
+    collapse goes past (its guard implied by its reader's) included: a structure's nodes
+    as resolved (``raw_nodes``); a table's, its edges and the aliases collapse took them
+    past (``Node.via``), which are the same."""
+    if isinstance(linked, LinkedModel):
+        nodes: Sequence[Node] = linked.nodes
+    else:
+        nodes = cast("Structure", linked).raw_nodes
     pending, seen = [index], set()
     while pending:
         current = pending.pop()
@@ -919,13 +927,22 @@ def _sources(linked: Linked, index: NodeId, found: set[NodeId]) -> None:
             found.add(current)
         elif node.kind in ("alias", "guard", "view") and node.output is not None:
             pending.append(node.output)
+            pending.extend(alias for alias, source in node.via if source == node.output)
         elif node.kind == "select" and node.selector is not None:
             found.add(node.selector)
-            pending.extend(target for _, target in node.alternatives)
+            pending.extend(_followed(node))
         elif node.kind == "present":
-            pending.extend(target for _, target in node.alternatives)
+            pending.extend(_followed(node))
     if index in linked.selector_choices:
         found.add(index)
+
+
+def _followed(node: Node) -> list[NodeId]:
+    """A selection's or a ``present`` node's alternatives, and each alias collapse took
+    one of them past (a table's)."""
+    targets = [target for _, target in node.alternatives]
+    ends = set(targets)
+    return [*targets, *(alias for alias, source in node.via if source in ends)]
 
 
 class _Lazy(Mapping[NodeId, Any]):
