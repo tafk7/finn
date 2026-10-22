@@ -275,7 +275,7 @@ class _Lowering:
         if binding is not None and binding.kind in {"literal", "reference"}:
             changes = self.supplied(task, node, binding, written)
         else:
-            changes = self.declared(task, scope, node, written)
+            changes = self.declared(task, scope, node)
         self.table.nodes[node.index] = replace(node, **changes)
 
     def supplied(
@@ -285,32 +285,18 @@ class _Lowering:
         changes: dict[str, Any] = {}
         if binding.kind == "literal":
             changes["value"] = binding.supplier
-        elif type(binding.supplier) is int and task.index in self.table.editable_aliases:
-            changes["output"] = binding.supplier
         else:
             changes["output"] = self.names.reference(written, binding.supplier, owner=node.key)
         return changes
 
-    def declared(
-        self, task: MemberTask, scope: ScopeDraft, node: Node, written: int
-    ) -> dict[str, Any]:
-        """A Space class's own member, or a fresh Decision supplied for it: guard and payload."""
+    def declared(self, task: MemberTask, scope: ScopeDraft, node: Node) -> dict[str, Any]:
+        """A Space class's own member: guard and payload."""
         declaration = task.declaration
-        binding = task.binding
         source_scope = scope.index
         condition: ValueRef[bool] | None = scope.effective.guards.get(declaration)
-        guard_scope = scope
-        outer = scope.guard
-        if binding is not None and binding.kind == "local-decision":
-            declaration = cast(Decision[object], binding.supplier)
-            source_scope = written
-            condition = declaration.when
-            if task.owner_scope is not None:
-                guard_scope = self.table.drafts[task.owner_scope]
-            outer = guard_scope.guard
         guard = self.table.guarded(
             source_scope,
-            outer,
+            scope.guard,
             condition,
             node.key + ".$guard",
             owner=node.key,

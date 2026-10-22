@@ -161,8 +161,6 @@ class MemberTask:
     name: str
     declaration: Declaration
     binding: PlacementBinding | None
-    # Where the owning scope of a named shared decision was inferred to be.
-    owner_scope: int | None = None
 
 
 @dataclass(frozen=True)
@@ -207,8 +205,6 @@ class Table:
     # Lowering -> checks: integer expressions, and each callback argument's target.
     expression_tasks: list[ExpressionTask] = field(default_factory=list)
     argument_checks: list[tuple[BoundArgument, int, str]] = field(default_factory=list)
-    # Formals supplied by a named shared Decision.
-    editable_aliases: set[int] = field(default_factory=set)
     # The node standing for the guard the own scope is placed under, each import's
     # target, the Decision over nodes each node exists only where it applies (and the
     # one whose nodes are being made), the named shared Decisions in order, and each

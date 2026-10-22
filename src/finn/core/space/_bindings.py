@@ -17,7 +17,7 @@ from .errors import DefinitionError
 
 _OWNER = "space.bindings"
 
-BindingKind = Literal["literal", "reference", "local-decision"]
+BindingKind = Literal["literal", "reference"]
 
 
 @dataclass(frozen=True, slots=True)

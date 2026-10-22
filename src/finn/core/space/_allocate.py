@@ -8,11 +8,11 @@ The own scope is the Space class's, its formals its template's ``param`` nodes, 
 guard a node standing for wherever it is placed. A child node and a Decision over
 nodes' candidates each place a stub, linked from its class's template (linked first):
 a stub holds the bindings this body writes for the child's formals (a literal or a
-default as a value, no node; a reference or a fresh Decision as a node) and nothing of
-the child's own. Each member gets its node and the task that lowers it. A named shared
-Decision then gets one owning node, in the own scope or a stub. The own scope's
-validity node lists its constraints, its Decisions and formals (each a piece where it
-is bound to a fresh Decision, decided where placed) and each stub's validity.
+default as a value, no node; a reference as a node) and nothing of the child's own. A
+Decision given at a call is refused (``_bindings.classify``): a Decision is its class's.
+Each member gets its node and the task that lowers it. The own scope's validity node
+lists its constraints, its Decisions and formals (a formal's piece is decided where
+placed, by its binding) and each stub's validity.
 Afterwards scope identities and membership maps are fixed (``Table.scopes``); later
 phases replace node payloads only.
 """
@@ -542,9 +542,9 @@ class _Allocation:
     def validity_pieces(self) -> None:
         """The own scope's validity pieces: its constraints, its Decisions (each a piece
         only where its domain lists no value, or its guard is refused) and its formals
-        (each a piece where it is bound to a fresh Decision, decided where the template is
-        placed), in node order, then each stub's validity (its child's, imported), in
-        placement order: a child node, or a candidate of a Decision over nodes."""
+        (decided by their binding where the template is placed), in node order, then each
+        stub's validity (its child's, imported), in placement order: a child node, or a
+        selector's case."""
         nodes, drafts = self.table.nodes, self.table.drafts
         candidates = {"constraint", "decision", "param"}
         own: dict[int, list[int]] = {draft.index: [] for draft in drafts}

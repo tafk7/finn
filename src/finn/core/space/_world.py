@@ -2078,7 +2078,7 @@ def _enumerate(
 
 def candidates(world: World, node: NodeId) -> QueryResult[object]:
     """A choice's candidates in ``world`` (``Available(None)``: membership only), from a
-    driver: its listed values, in its domain's order."""
+    driver: its listed values, in their listed order."""
     spec = world.evaluator.nodes[node]
     return _drive(world.evaluator, lambda: _candidates(world, spec))
 

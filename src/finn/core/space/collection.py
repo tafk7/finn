@@ -238,25 +238,15 @@ def _collect_semantics(
 
 
 def _collect_guards(effective: EffectiveSpace) -> Mapping[Declaration, ValueRef[bool]]:
-    """Guards authored in this body: members, their candidates and fresh decisions."""
+    """Guards authored in this body: members and their cases."""
     members, space_type = effective.members, effective.space_type
     guard_candidates: list[tuple[str, Declaration]] = list(members.items())
     for name, declaration in members.items():
-        children: tuple[tuple[str, NodeDecl], ...] = ()
-        if isinstance(declaration, NodeDecl):
-            children = ((name, declaration),)
-        elif isinstance(declaration, NodeDecision):
-            children = tuple(
+        if isinstance(declaration, NodeDecision):
+            guard_candidates.extend(
                 (f"{name}.{case}", record)
                 for case, record in declaration.candidates.items()
                 if record is not None
-            )
-            guard_candidates.extend(children)
-        for placement_name, record in children:
-            guard_candidates.extend(
-                (f"{placement_name}.{parameter}", supplier)
-                for parameter, supplier in record.bindings.items()
-                if isinstance(supplier, Decision) and supplier.owner is None
             )
     guards: dict[Declaration, ValueRef[bool]] = {}
     for name, declaration in guard_candidates:
