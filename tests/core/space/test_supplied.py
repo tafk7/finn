@@ -17,11 +17,11 @@ import pytest
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
     Available,
-    Decision,
     EvaluationError,
     Inapplicable,
     Param,
     Rejected,
+    Select,
     Space,
     Unresolved,
     ValueUnavailableError,
@@ -59,7 +59,7 @@ SOURCES: dict[str, type[Space] | Space] = {"memory": Memory, "fetch": Fetcher}
 class Edge(Space):
     contents: int = Param(required=False)
     valued = supplied(contents)
-    source: Memory | Fetcher = Decision(SOURCES, when=valued, contents=contents)
+    source: Memory | Fetcher = Select(**SOURCES, when=valued, contents=contents)
     words = View(source.words)
 
 

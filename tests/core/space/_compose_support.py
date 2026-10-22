@@ -4,13 +4,14 @@
 line's over one table (``test_compose``).
 
 ``composite_space(seed)`` draws a Space of three levels: each places up to two children and
-a Decision over nodes of up to two candidates (sometimes guarded by ``supplied`` of a
-formal, or by a choice), binds each child's formals to a literal, a formal, a choice, a
-fresh Decision (sometimes with a ``when``), a named shared Decision or a sibling's member,
-or leaves one unsupplied, and sometimes binds a child's formal back to one of its own
-members (a walk up re-enters it). Each Space has a derived value ``x`` (explicit or a
-``self`` method, sometimes guarded by a choice), a Decision ``p`` whose domain reads a
-formal, ``x``, a child's ``x`` or a selection, and sometimes a presence test and a view.
+a selector of up to two cases (sometimes guarded by ``supplied`` of a formal, or by a
+choice), binds each child's formals to a literal, a formal, a choice, a Decision of its own
+declared for that binding (sometimes with a ``when``), one Decision it shares among its
+children (``shared``) or a sibling's member, or leaves one unsupplied, and sometimes binds a
+child's formal back to one of its own members (a walk up re-enters it). Each Space has a
+derived value ``x`` (explicit or a ``self`` method, sometimes guarded by a choice), a
+Decision ``p`` whose domain reads a formal, ``x``, a child's ``x`` or a selection, and
+sometimes a presence test and a view.
 Most domains read facts; many read a choice, some through a slot, some through a guard."""
 
 from __future__ import annotations
@@ -18,7 +19,17 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from finn.core.space import Decision, Derived, Param, Space, View, composite, divisors_of, supplied
+from finn.core.space import (
+    Decision,
+    Derived,
+    Param,
+    Select,
+    Space,
+    View,
+    composite,
+    divisors_of,
+    supplied,
+)
 from finn.core.space.errors import DefinitionError
 
 
@@ -80,7 +91,6 @@ class _Draw:
         rng = self.rng
         members: dict[str, Any] = {"a": Param(), "b": Param(required=False)}
         annotations: dict[str, object] = {"a": int, "b": int}
-        shared = Decision(values=(2, 4), name=f"shared{level}")
         if self.maybe(0.5):
             members["valued"] = supplied(members["b"])
         if self.maybe(0.6):
@@ -93,7 +103,7 @@ class _Draw:
         if level > 0:
             for child in ("c0", "c1"):
                 if self.maybe(0.8):
-                    members[child] = self.place(level - 1, members, children, shared)
+                    members[child] = self.place(level - 1, members, children, annotations)
                     children.append(child)
                     if self.unbound and self.maybe(0.5):
                         self.bind_back(members[child])
@@ -104,13 +114,14 @@ class _Draw:
                 elif "flag" in members and self.maybe(0.4):
                     guard = members["flag"]
                 cases = {
-                    case: self.place(level - 1, members, children, shared, candidate=True)
+                    case: self.place(level - 1, members, children, annotations, candidate=True)
                     for case in ("u", "v")
                     if self.maybe(0.85)
                 }
                 if cases:
                     extra: dict[str, Any] = {} if guard is None else {"when": guard}
-                    members["ch"] = Decision(cases, optional=self.maybe(0.3), **extra)
+                    none: dict[str, Any] = {"none": None} if self.maybe(0.3) else {}
+                    members["ch"] = Select(**none, **cases, **extra)
         sources = ["a", "a", "b"] + (["d"] if "d" in members and self.maybe(0.3) else [])
         sources += [f"{child}.x" for child in children]
         if "ch" in members and self.maybe(0.5):
@@ -148,7 +159,7 @@ class _Draw:
         level: int,
         members: dict[str, Any],
         children: list[str],
-        shared: Any,
+        annotations: dict[str, object],
         *,
         candidate: bool = False,
     ) -> Space:
@@ -167,9 +178,13 @@ class _Draw:
                 fresh: dict[str, Any] = (
                     {"when": members["flag"]} if "flag" in members and self.maybe(0.5) else {}
                 )
-                bindings[formal] = Decision(values=(2, 4), **fresh)
+                name = f"given{len(members)}_{formal}"
+                members[name], annotations[name] = Decision(values=(2, 4), **fresh), int
+                bindings[formal] = members[name]
             elif form == "named" and not candidate:
-                bindings[formal] = shared
+                if "shared" not in members:
+                    members["shared"], annotations["shared"] = Decision(values=(2, 4)), int
+                bindings[formal] = members["shared"]
             elif form == "sibling" and children:
                 bindings[formal] = getattr(members[self.rng.choice(children)], "x")
             elif not (form == "none" and formal == "b"):

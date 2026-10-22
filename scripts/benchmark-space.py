@@ -364,9 +364,9 @@ def narrow_query(api, branches: int) -> dict[str, object]:
     source = api.Param(semantics=api.default_semantics(int))
     members = {"source": source}
     for index in range(branches):
-        # The structural choice is a Decision over nodes; ``choice.physical`` is
-        # the selected candidate's member by name (replaces the accepted export).
-        choice = api.Decision({"selected": Selected(value=source), "inactive": Inactive()})
+        # The structural choice is a selector; ``choice.physical`` is the selected
+        # case's member by name (replaces the accepted export).
+        choice = api.Select(selected=Selected(value=source), inactive=Inactive())
         members[f"branch{index}"] = choice
         members[f"output{index}"] = api.View(choice.physical)
     space_type = api.composite("NarrowQuery", members)
@@ -407,12 +407,12 @@ def wide_choice(api, alternatives: int, trials: int = 30) -> dict[str, object]:
             work["leaf"] += 1
             return 1
 
-    choice = api.Decision({f"case{index}": Leaf() for index in range(alternatives)})
+    choice = api.Select(**{f"case{index}": Leaf() for index in range(alternatives)})
     space_type = api.composite(
         "WideChoice", {"implementation": choice, "physical": api.View(choice.physical)}
     )
     model = compile_model(api, space_type)
-    # A Decision over nodes always has a selector, even with one candidate.
+    # A selector always has its node, even with one case.
     selector = api.inspection.choices(model)[0].selector
     output = space_type.physical
     measurements = []

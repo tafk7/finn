@@ -31,6 +31,7 @@ from finn.core.space import (
     Members,
     Param,
     Rejected,
+    Select,
     Space,
     Unresolved,
     View,
@@ -341,11 +342,10 @@ class Tuned(Space):
 
 
 class WithChoice(Space):
-    """The structural choice: a Decision over nodes, read through ``choice.physical``."""
+    """The structural choice: a selector, read through ``choice.physical``."""
 
     base: int = Param(required=False)
-    tuned = Tuned(base=base)
-    choice: Fixed | Tuned = Decision({"fixed": Fixed(width=8), "tuned": tuned})
+    choice: Fixed | Tuned = Select(fixed=Fixed(width=8), tuned=Tuned(base=base))
     physical = View(choice.physical)
 
 
@@ -377,7 +377,12 @@ def test_a_structural_choice_reduces_to_primitives(
 ) -> None:
     start = design_space(space_type(base=4))
     physical = space_type.physical
-    extra = space_type.tuned.extra
+    # The tuned node's choice: a case's path, or the primitive node's.
+    extra = (
+        WithChoice.choice["tuned"].extra  # type: ignore[index]
+        if space_type is WithChoice
+        else WithPrimitives.tuned.extra
+    )
     assert isinstance(start.query(physical), Unresolved)
     tuned = start.with_choices({space_type.choice: "tuned", extra: 2})
     assert tuned.query(physical) == Available(6)
@@ -387,7 +392,8 @@ def test_a_structural_choice_reduces_to_primitives(
     assert isinstance(dormant.query(extra), Inapplicable)
     stored = committed(dormant)
     assert [stored[key] for key in stored if key.endswith("tuned.extra")] == [2]
-    fixed = tuned.with_choices({space_type.choice: "fixed"}, tuned.tuned.field(Tuned.extra).clear())
+    tuned_node = cast(Tuned, tuned.choice if isinstance(tuned, WithChoice) else tuned.tuned)
+    fixed = tuned.with_choices({space_type.choice: "fixed"}, tuned_node.field(Tuned.extra).clear())
     assert fixed.query(physical) == Available(8)
     assert isinstance(fixed.query(extra), Inapplicable)
     replayed = replay(design_space(space_type(base=4)), committed(tuned))
@@ -398,7 +404,8 @@ def test_candidates_are_ordinary_nodes_with_declaration_path_keys() -> None:
     keys = {item.key for item in inspection.decisions(WithChoice)}
     assert keys == {"choice", "choice.tuned.extra"}
     start = design_space(WithChoice(base=4))
-    point = start.with_choices(choice="tuned").with_choices({WithChoice.tuned.extra: 1})
+    extra = WithChoice.choice["tuned"].extra  # type: ignore[index]
+    point = start.with_choices(choice="tuned").with_choices({extra: 1})
     assert point.physical == 5
     selected = point.choice
     assert isinstance(selected, Tuned) and selected.extra == 1

@@ -78,10 +78,10 @@ from finn.core.space import (
     default_semantics,
     derived,
     reject,
-    selected,
     supplied,
     view,
 )
+from finn.core.space._nodes import selected
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Access, Affine, Index, Pace, Refused, Schedule, plain_index
 from finn.dataflow.streams import Stream

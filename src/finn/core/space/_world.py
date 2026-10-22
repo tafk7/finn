@@ -1785,21 +1785,11 @@ def _call_method(world: World, node: Node) -> tuple[Called, MethodReader]:
 
 
 def membership_arguments(node: Node) -> tuple[Argument, ...]:
-    """A Decision's domain inputs its membership and enumeration read (an order's own
-    inputs aside)."""
+    """A Decision's domain inputs its membership and enumeration read."""
     domain = node.domain
     if domain is None:
         return ()
     named = set(domain.membership_inputs)
-    return tuple(argument for argument in node.domain_arguments if argument.name in named)
-
-
-def order_arguments(node: Node) -> tuple[Argument, ...]:
-    """A Decision's domain inputs its order reads."""
-    domain = node.domain
-    if domain is None:
-        return ()
-    named = set(domain.order_inputs)
     return tuple(argument for argument in node.domain_arguments if argument.name in named)
 
 
@@ -1907,7 +1897,6 @@ _DOMAIN_KINDS = {
     "listing": "domain listing",
     "lists a value": "domain listing",
     "enumeration": "domain enumeration",
-    "order": "domain order",
 }
 
 
@@ -2046,10 +2035,9 @@ def type_check(world: World, node: NodeId, value: Available[object]) -> QueryRes
 
 def _candidates(world: World, node: Node) -> QueryResult[object]:
     """A choice's candidates: its listed values (its domain's enumeration, each value its
-    membership accepts), ranked by its order where it has one (``Available(None)``:
-    membership only), under its guard: inapplicable where the choice is absent, the
-    guard's answer while it waits or is refused; the order's inputs' non-value while one
-    of them is not a value (memoized on the inputs' answers)."""
+    membership accepts), in their listed order (``Available(None)``: membership only),
+    under its guard: inapplicable where the choice is absent, the guard's answer while it
+    waits or is refused (memoized on the inputs' answers)."""
     domain, semantics = node.domain, node.semantics
     if domain is None or semantics is None:
         raise EvaluationError(node.owner, "domain enumeration", "reference has no domain")
@@ -2063,41 +2051,7 @@ def _candidates(world: World, node: Node) -> QueryResult[object]:
     if domain.candidates is None:
         return Available(None)
     called_on = _inputs(membership_arguments(node), answers)
-    listed = _memoized(world, node, "listing", called_on, lambda: _list(world, node, answers))
-    if domain.order is None or not isinstance(listed, Available):
-        return listed
-    return _ranked(world, node, answers, listed)
-
-
-def _ranked(
-    world: World,
-    node: Node,
-    inputs: tuple[QueryResult[object], ...],
-    listed: Available[object],
-) -> QueryResult[object]:
-    """Listed values (found from the membership inputs' answers ``inputs``) as the
-    domain's order ranks them, over the order's own inputs (memoized on both inputs'
-    answers)."""
-    domain, semantics = node.domain, node.semantics
-    assert domain is not None and semantics is not None
-    arguments = order_arguments(node)
-    answers = tuple(world._get(argument.node).result for argument in arguments)
-    blocked = _blocked([answer for answer in answers if not isinstance(answer, Available)])
-    if blocked is not None:
-        return blocked
-
-    def rank() -> QueryResult[object]:
-        ranked = _authored(
-            world,
-            Call(node.owner, "domain order"),
-            domain.rank,
-            (listed.value, _domain_values(world, node, answers, arguments)),
-            {"semantics": semantics, "owner": node.owner},
-        )
-        return Available(cast(_Returned, ranked).value)
-
-    called_on = (*_inputs(membership_arguments(node), inputs), *_inputs(arguments, answers))
-    return _memoized(world, node, "order", called_on, rank)
+    return _memoized(world, node, "listing", called_on, lambda: _list(world, node, answers))
 
 
 def _enumerate(
@@ -2158,7 +2112,6 @@ __all__ = [
     "check_purity",
     "listed_values",
     "membership_arguments",
-    "order_arguments",
     "public_value",
     "receiver",
     "type_check",

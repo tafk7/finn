@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """``Select``: a selector, chosen or picked by a derived value (``by=``).
 
-A chosen ``Select`` is a Decision over nodes spelled apart: the same nodes, keys, guards and
-answers, shown by building one Space both ways and comparing every answer by key. A picked
+A chosen ``Select`` stores the case's name under its key, and its cases are guarded by the
+selector naming them. A picked
 ``Select(by=d)`` has no key and is never a choice: its value is a derived node reading
 ``d`` (refused ``select-no-case`` where ``d`` names no case), its cases are guarded by that
 value being known and naming them, and a refused picker refuses its Space once, in the
@@ -18,7 +18,6 @@ from typing import Any
 import pytest
 from support.refusals import refused
 
-from core.space._collapse_support import answers
 from finn.core.space import (
     Decision,
     Inapplicable,
@@ -36,11 +35,15 @@ from finn.core.space import (
     domain,
     inspection,
     reject,
-    selected,
     supplied,
     view,
 )
 from finn.core.space.inspection import Dormant, Open, Set, Waiting
+
+
+def _name(case: str) -> str:
+    return case
+
 
 # -- the cases ------------------------------------------------------------------------------
 
@@ -69,35 +72,7 @@ class HeatPump(Space):
         return self.cop * self.kw
 
 
-# -- 1. a chosen Select is a Decision over nodes --------------------------------------------
-
-
-class ByDecision(Space):
-    load: int = Decision(values=(8, 16, 24))
-    gate: int = Decision(values=(0, 1, 2))
-
-    @derived
-    def heated(self) -> bool | Rejected:
-        if self.gate == 2:
-            return reject("gate-refused", "gate 2 refuses")
-        return self.gate == 0
-
-    # ``when=`` is typed a bool, and ``heated`` may refuse
-    heating = Decision(
-        {"boiler": Boiler, "heat_pump": HeatPump},  # type: ignore[dict-item]
-        kw=load,
-        optional=True,
-        when=heated,
-    )
-    heat = View(heating.output)
-    kind = View(selected(heating))
-
-    @constraint
-    def enough(self) -> bool | Rejected:
-        found = self.heating
-        if found is not None and found.output < 24:
-            return reject("too-little", "less than 24 kW")
-        return True
+# -- 1. a chosen Select --------------------------------------------
 
 
 class BySelect(Space):
@@ -112,7 +87,7 @@ class BySelect(Space):
 
     heating = Select(none=None, boiler=Boiler, heat_pump=HeatPump, kw=load, when=heated)
     heat = View(heating.output)
-    kind = View(selected(heating))
+    kind = view(case=heating)(_name)
 
     @constraint
     def enough(self) -> bool | Rejected:
@@ -120,22 +95,6 @@ class BySelect(Space):
         if found is not None and found.output < 24:
             return reject("too-little", "less than 24 kW")
         return True
-
-
-CHOSEN: tuple[Mapping[str, object], ...] = (
-    {},
-    {"load": 8},
-    {"load": 8, "gate": 0},
-    {"load": 8, "gate": 0, "heating": "boiler"},
-    {"load": 8, "gate": 0, "heating": "boiler", "heating.boiler.stages": 3},
-    {"load": 24, "gate": 0, "heating": "boiler", "heating.boiler.stages": 3},
-    {"load": 16, "gate": 0, "heating": "heat_pump", "heating.boiler.stages": 2},
-    {"load": 16, "gate": 0, "heating": "heat_pump", "heating.heat_pump.cop": 2},
-    {"load": 16, "gate": 1, "heating": "heat_pump", "heating.heat_pump.cop": 2},
-    {"load": 16, "gate": 2, "heating": "boiler", "heating.boiler.stages": 1},
-    {"load": 16, "heating": "none"},
-    {"heating": "boiler", "heating.boiler.stages": 2},
-)
 
 
 def _bound(space: type[Space], choices: Mapping[str, object]) -> Any:
@@ -155,67 +114,15 @@ def _pieces(point: Space) -> tuple[object, ...]:
     )
 
 
-def _viable(point: Space) -> tuple[object, ...]:
-    references = [item.reference for item in inspection.decisions(point)]
-    return tuple(
-        (
-            item.key,
-            item.waits,
-            None
-            if item.values is None
-            else tuple(
-                (type(value).__name__, value.value, getattr(value, "dormant", None))
-                + (getattr(value, "in_play", None), getattr(value, "opened", None))
-                + (tuple((b.rule, b.standing) for b in getattr(value, "broken", ())),)
-                for value in item.values
-            ),
-        )
-        for item in inspection.viable(point, references)
-    )
-
-
-def _report(point: Space, change: Mapping[str, object]) -> tuple[object, ...]:
-    owned = {item.key: item.reference for item in inspection.decisions(point)}
-    report = point.try_with_choices({owned[key]: value for key, value in change.items()})
-    return (
-        report.accepted,
-        report.dormant,
-        report.in_play,
-        report.opened,
-        tuple((b.rule, b.standing) for b in report.broken),
-        tuple((o.owner, o.status) for o in report.outcomes),
-    )
-
-
-def test_a_chosen_select_has_the_decisions_nodes_keys_and_lists() -> None:
-    by_decision, by_select = design_space(ByDecision()), design_space(BySelect())
-    assert [(n.key, n.kind) for n in inspection.members(by_select)] == [
-        (n.key, n.kind) for n in inspection.members(by_decision)
-    ]
-    assert [(d.key, d.ordered, d.required) for d in inspection.decisions(by_select)] == [
-        (d.key, d.ordered, d.required) for d in inspection.decisions(by_decision)
-    ]
-    (chosen,) = (c for c in inspection.choices(by_select) if c.key == "heating")
+def test_a_chosen_select_lists_its_cases_and_has_a_key() -> None:
+    point = design_space(BySelect())
+    assert "heating" in [d.key for d in inspection.decisions(point)]
+    (chosen,) = (c for c in inspection.choices(point) if c.key == "heating")
     assert [case.name for case in chosen.cases] == ["none", "boiler", "heat_pump"]
     assert chosen.selector is not None
 
 
-@pytest.mark.parametrize(
-    "choices", CHOSEN, ids=lambda c: ",".join(f"{k}={v}" for k, v in c.items())
-)
-def test_a_chosen_select_answers_as_the_decision_over_nodes_by_key(
-    choices: Mapping[str, object],
-) -> None:
-    by_decision, by_select = _bound(ByDecision, choices), _bound(BySelect, choices)
-    assert answers(by_select) == answers(by_decision)
-    assert inspection.states(by_select) == inspection.states(by_decision)
-    assert _pieces(by_select) == _pieces(by_decision)
-    assert _viable(by_select) == _viable(by_decision)
-    for change in ({"heating": "heat_pump"}, {"gate": 2}, {"load": 24, "heating": "boiler"}):
-        assert _report(by_select, change) == _report(by_decision, change)
-
-
-def test_a_chosen_select_reads_its_cases_as_a_decision_over_nodes() -> None:
+def test_a_chosen_select_reads_its_cases() -> None:
     point = _bound(BySelect, {"load": 16, "gate": 0, "heating": "heat_pump"})
     point = point.with_choices({BySelect.heating["heat_pump"].cop: 2})
     assert point.kind == "heat_pump" and point.heat == 32
@@ -444,10 +351,10 @@ def test_a_picker_naming_a_case_places_it_and_leaves_the_others_dormant() -> Non
 def test_a_waiting_picker_leaves_its_cases_waiting_and_only_their_rules_unknown() -> None:
     point = _channel({Channel.y: 2, Channel.adapter["fifo"].depth: 4})  # type: ignore[index]
     assert dict(inspection.states(point)) == {
-        "x": Open((), False),
+        "x": Open(()),
         "y": Set(2),
         "adapter.fifo.depth": Waiting(4, ("x",)),
-        "adapter.reg.stages": Open(("x",), False),
+        "adapter.reg.stages": Open(("x",)),
     }
     assert _pieces(point) == (
         "open",
@@ -575,7 +482,7 @@ def test_a_none_case_places_nothing() -> None:
 
         adapter: Fifo | None = Select(by=chain, direct=None, fifo=Fifo, width=2)
         stages = View(adapter.stages)  # type: ignore[union-attr]
-        kind = View(selected(adapter))
+        kind = view(case=adapter)(_name)
 
     point = bind(design_space(Holder()), {Holder.x: 0}).instance
     assert point.adapter is None and point.kind == "direct"
@@ -627,10 +534,6 @@ def test_a_derived_selector_takes_no_supplied_guard() -> None:
 
 
 # -- 5. a selector given as a binding's argument reads its case name ----------------------------
-
-
-def _name(case: str) -> str:
-    return case
 
 
 def _is_fifo(case: str) -> bool:

@@ -27,6 +27,7 @@ from finn.core.space import (
     Decision,
     DefinitionError,
     Rejected,
+    Select,
     Unresolved,
     constraint,
     design_space,
@@ -408,8 +409,8 @@ def test_matmul_honors_its_cores_rules_not_just_its_raw_module(monkeypatch):
     class RestrictedMatMul(MatMulKernel):
         # A compute Decision whose one candidate is the restricted core, on the
         # tensors MatMulKernel is given, which RestrictedMatMul inherits.
-        compute = Decision(
-            {"packed": RestrictedDotp},
+        compute = Select(
+            packed=RestrictedDotp,
             form=MatMulKernel.datapath,
             platform=MatMulKernel.platform,
             reshape_activations=MatMulKernel.dense_view,

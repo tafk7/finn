@@ -295,7 +295,6 @@ def line_decisions(linked: LinkedModel, flow: tuple[NodeId, ...], scope: int) ->
                 () if choice is None else tuple(name for name, _ in choice.cases),
                 linked.scopes[node.scope].space_type,
                 choice is None and node.domain is not None and node.domain.ordered,
-                node.required_choice,
                 node.domain is not None and node.domain.candidates is not None,
             )
         )
@@ -378,7 +377,6 @@ def _decision_fields(item: DecisionInfo[object]) -> object:
         item.cases,
         item.space_type,
         item.ordered,
-        item.required,
         item.listed,
     )
 
@@ -525,7 +523,6 @@ def differences(space_type: type[Space], *, scopes: bool = True) -> Compared:
                 node.source_owner,
                 node.origin,
                 node.domain,
-                node.required_choice,
                 node.guard,
             ),
             (
@@ -536,7 +533,6 @@ def differences(space_type: type[Space], *, scopes: bool = True) -> Compared:
                 head.source_owner,
                 head.origin,
                 head.domain,
-                head.required_choice,
                 head.guard,
             ),
         )

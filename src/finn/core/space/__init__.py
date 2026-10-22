@@ -20,7 +20,6 @@ from .declarations import (
     constraint,
     derived,
     required,
-    selected,
     supplied,
     view,
 )
@@ -63,7 +62,6 @@ __all__ = [
     "Decision",
     "Select",
     "required",
-    "selected",
     "supplied",
     "Derived",
     "Constraint",

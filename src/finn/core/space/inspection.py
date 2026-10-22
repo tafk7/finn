@@ -70,10 +70,9 @@ class DecisionInfo(Generic[T]):
 
     ``space_type`` is the Space class whose scope declares it (a candidate's, for a
     choice nested under a Decision over nodes); ``ordered``, whether its domain
-    states an order of its cases (``Domain.ordered``); ``required``: the Decision
-    has no safe value (``Decision(required=True)``): no policy gives it one, a strategy
-    sets it; ``listed``: its domain lists its values (false: it is known by membership
-    only, as a FIFO's depth).
+    states an order of its cases (``Domain.ordered``); ``listed``: its domain lists its
+    values (false: it is known by membership only, as a FIFO's depth). Whether a policy
+    gives it a value is the compiler's, never the engine's.
     """
 
     reference: DecisionHandle[T]
@@ -84,7 +83,6 @@ class DecisionInfo(Generic[T]):
     cases: tuple[str, ...] = ()
     space_type: type[Space] | None = None
     ordered: bool = False
-    required: bool = False
     listed: bool = True
 
 
@@ -256,7 +254,6 @@ def _decision_info(
         () if choice is None else tuple(name for name, _ in choice.cases),
         _scope_type(linked, node.scope),
         choice is None and node.domain is not None and node.domain.ordered,
-        node.required_choice,
         node.domain is not None and node.domain.candidates is not None,
     )
 
@@ -630,11 +627,9 @@ class Dormant:
 @dataclass(frozen=True, slots=True)
 class Open:
     """Unset, in a scope that is present (``waits`` empty) or whose presence is unknown
-    (``waits``: what that presence waits on, by key). ``required``: no policy gives it a
-    value."""
+    (``waits``: what that presence waits on, by key)."""
 
     waits: tuple[str, ...] = ()
-    required: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -664,8 +659,7 @@ def _state_of(current: State, index: NodeId) -> ChoiceState:
     if index not in world.stored:
         if found == "absent":
             return Absent()
-        required = current.linked.header(index).required_choice
-        return Open(_waits(guard) if found == "unknown" else (), required)
+        return Open(_waits(guard) if found == "unknown" else ())
     value = _Copies(current)(index, world.stored[index])
     if found == "absent":
         return Dormant(value)

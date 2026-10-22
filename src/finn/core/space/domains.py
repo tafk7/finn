@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Decision membership, optional enumeration and an optional order, over declared inputs.
+"""Decision membership and optional enumeration, over declared inputs.
 
 A domain states a Decision's values and nothing else: its membership and its
 enumeration read facts only (the root's facts, values that read only facts, formals
@@ -15,12 +15,10 @@ membership or enumeration reaches a choice is a ``DefinitionError``
 under the guards deciding whether the choice itself exists reads as a fact.
 
 Each of the domain's callables takes the inputs its signature names, of those the domain
-declares: ``accepts(*, candidate, ...)``, ``candidates(*, ...)`` and ``order(values,
-*, ...)``. A domain's **order** ranks its listed values and checks nothing: it may
-read other values (a choice, the size a memory holds), and while one it reads is open the
-ranking waits. It returns a permutation of the values it is given, which is checked. The
-ranking is information for a policy (conversion's first valid value, a strategy); validity
-and refusals never read it.
+declares: ``accepts(*, candidate, ...)`` and ``candidates(*, ...)``. Its listed values are
+answered in the order its enumeration lists them. A domain ranks nothing: a ranking of a
+kernel's values (by the size a memory holds) is a view of the kernel, which a compiler's
+policy names (FINN's ``FirstValid(order=...)``); ``domain(order=...)`` is refused.
 
 A domain is **ordered** when its cases have an order by construction, which its
 enumeration follows: the divisors of an extent ascending, an integer range. A
@@ -83,17 +81,15 @@ def _named(
 
 @dataclass(frozen=True, slots=True)
 class Domain(Generic[T]):
-    """A membership callback, an optional enumeration and an optional order over declared
-    inputs.
+    """A membership callback and an optional enumeration over declared inputs.
 
     Dependency objects are author declarations until compilation links them.
     Neither constructing nor binding a domain invokes its callbacks. Enumeration
     is advisory: every assignment goes through membership independently.
     ``ordered`` states that the cases have an order by construction, which the
-    enumeration follows. ``order(values, *, ...)`` ranks the listed values and may
-    read other values. Each callable receives the inputs its signature names: the
+    enumeration follows. Each callable receives the inputs its signature names: the
     membership's inputs (``membership_inputs``) are those ``accepts`` and
-    ``candidates`` name, the order's (``order_inputs``) those ``order`` names.
+    ``candidates`` name.
     """
 
     dependencies: tuple[tuple[str, object], ...]
@@ -102,10 +98,8 @@ class Domain(Generic[T]):
     value_semantics: ValueSemantics[T] | None = None
     _finite_values: tuple[T, ...] | None = None
     ordered: bool = False
-    order: Callable[..., Iterable[T]] | None = None
     _accepts_inputs: tuple[str, ...] = field(default=(), init=False, repr=False, compare=False)
     _candidates_inputs: tuple[str, ...] = field(default=(), init=False, repr=False, compare=False)
-    _order_inputs: tuple[str, ...] = field(default=(), init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         names = tuple(name for name, _ in self.dependencies)
@@ -128,26 +122,13 @@ class Domain(Generic[T]):
             raise DefinitionError.broken(
                 "domain-enumeration-not-callable", _OWNER, "domain enumeration must be callable"
             )
-        if self.order is not None and not callable(self.order):
-            raise DefinitionError.broken(
-                "domain-order-not-callable", _OWNER, "a domain's order must be callable"
-            )
-        if self.order is not None and self.candidates is None:
-            raise DefinitionError.broken(
-                "domain-order-unlisted",
-                _OWNER,
-                "a domain known by membership only lists nothing to order",
-            )
         callables: tuple[tuple[str, Callable[..., object] | None, tuple[str, ...]], ...] = (
             ("_accepts_inputs", self.accepts, ("candidate",)),
             ("_candidates_inputs", self.candidates, ()),
-            ("_order_inputs", self.order, ()),
         )
         for attribute, function, skip in callables:
             if function is None:
                 continue
-            if attribute == "_order_inputs":
-                skip = _first_parameter(function)  # the values it ranks
             object.__setattr__(self, attribute, _named(function, names, skip))
 
     @property
@@ -155,11 +136,6 @@ class Domain(Generic[T]):
         """The inputs membership and enumeration read (by name, in declaration order)."""
         named = {*self._accepts_inputs, *self._candidates_inputs}
         return tuple(name for name, _ in self.dependencies if name in named)
-
-    @property
-    def order_inputs(self) -> tuple[str, ...]:
-        """The inputs the order reads (by name, in declaration order)."""
-        return tuple(name for name, _ in self.dependencies if name in self._order_inputs)
 
     def signatures(self) -> tuple[tuple[str, Callable[..., object], tuple[str, ...]], ...]:
         """Each callable, by role, with the inputs its signature names (compilation checks
@@ -169,8 +145,6 @@ class Domain(Generic[T]):
         ]
         if self.candidates is not None:
             found.append(("enumeration", self.candidates, self._candidates_inputs))
-        if self.order is not None:
-            found.append(("order", self.order, self._order_inputs))
         return tuple(found)
 
     def with_semantics(self, semantics: ValueSemantics[T]) -> Domain[T]:
@@ -185,7 +159,7 @@ class Domain(Generic[T]):
                 _OWNER,
                 "domain and decision have incompatible value semantics",
             )
-        if self._finite_values is not None and self.order is None:
+        if self._finite_values is not None:
             return finite(self._finite_values, semantics, ordered=self.ordered)
         return replace(self, value_semantics=semantics)
 
@@ -249,54 +223,6 @@ class Domain(Generic[T]):
         except Exception as cause:
             raise EvaluationError(owner, "domain enumeration", str(cause)) from cause
 
-    def rank(
-        self,
-        values: tuple[T, ...],
-        dependency_values: Mapping[str, object],
-        *,
-        semantics: ValueSemantics[T],
-        owner: str,
-    ) -> tuple[T, ...]:
-        """``values`` (its listed values) as its order ranks them, checked to be a permutation
-        of them by the values' semantics; ``values`` themselves where it has no order."""
-        if self.order is None:
-            return values
-        try:
-            inputs = {name: dependency_values[name] for name in self._order_inputs}
-            ranked = tuple(semantics.freeze(value) for value in self.order(values, **inputs))
-        except (EvaluationError, ValueUnavailableError):
-            raise
-        except Exception as cause:
-            raise EvaluationError(owner, "domain order", str(cause)) from cause
-        rest = list(values)
-        for value in ranked:
-            found = next(
-                (i for i, held in enumerate(rest) if semantics.values_equal(held, value)), None
-            )
-            if found is None:
-                rest = [value]  # a value it was not given, or one given twice
-                break
-            del rest[found]
-        if rest:
-            raise EvaluationError(
-                owner, "domain order", "the order is not a permutation of the values it ranks"
-            )
-        return ranked
-
-
-def _first_parameter(function: Callable[..., object]) -> tuple[str, ...]:
-    """The name of ``function``'s first positional parameter (an order's values)."""
-    try:
-        parameters = list(inspect.signature(function).parameters.values())
-    except (TypeError, ValueError):
-        return ()
-    if parameters and parameters[0].kind in (
-        parameters[0].POSITIONAL_ONLY,
-        parameters[0].POSITIONAL_OR_KEYWORD,
-    ):
-        return (parameters[0].name,)
-    return ()
-
 
 def finite(
     values: Iterable[T], semantics: ValueSemantics[T] | None = None, *, ordered: bool = False
@@ -335,16 +261,21 @@ def domain(
     candidates: Callable[..., Iterable[T] | QueryResult[Iterable[T]]] | None = None,
     semantics: ValueSemantics[T] | None = None,
     ordered: bool = False,
-    order: Callable[..., Iterable[T]] | None = None,
     **dependencies: object,
 ) -> Domain[T]:
     """A domain over ``dependencies``, each callable taking those its signature names;
     ``ordered`` when its cases have an order by construction (an integer range), which
-    ``candidates`` follows; ``order(values, *, ...)`` ranks the listed values,
-    reading what it names (other choices among them)."""
-    return Domain(
-        tuple(dependencies.items()), accepts, candidates, semantics, ordered=ordered, order=order
-    )
+    ``candidates`` follows. ``order=`` is refused (``domain-order``): a domain ranks
+    nothing."""
+    if "order" in dependencies:
+        raise DefinitionError.broken(
+            "domain-order",
+            _OWNER,
+            "domain(order=...) is gone: a domain ranks nothing, and candidates are its listed "
+            "order. A ranking is a view of the kernel (ram_preference), named by a compiler's "
+            "policy (FINN's FirstValid(order=Kernel.ram_preference)); ordered= stays",
+        )
+    return Domain(tuple(dependencies.items()), accepts, candidates, semantics, ordered=ordered)
 
 
 def divisors_of(extent: object) -> Domain[int]:

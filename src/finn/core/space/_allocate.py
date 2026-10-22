@@ -58,7 +58,6 @@ from .declarations import (
     Param,
     Supplied,
     View,
-    at,
 )
 from .domains import Domain, finite
 from .errors import DefinitionError
@@ -107,7 +106,6 @@ def _known(*, picked: object) -> bool:
 _BINDING_KINDS: Mapping[str, NodeKind] = {
     "literal": "const",
     "reference": "alias",
-    "local-decision": "decision",
 }
 
 
@@ -140,10 +138,6 @@ def _declared_kind(declaration: Declaration) -> NodeKind | None:
 class _Allocation:
     def __init__(self, table: Table) -> None:
         self.table = table
-        self.member_positions: dict[int, int] = {}
-        # Named Decisions that are not class attributes, by authoring scope: their uses.
-        self.named: dict[tuple[int, int], list[int]] = {}
-        self.named_declarations: dict[tuple[int, int], Decision[object]] = {}
         # Required formals nothing supplies, reported together after allocation.
         self.missing: list[str] = []
 
@@ -304,9 +298,6 @@ class _Allocation:
             stub.bindings[member_name] = Binding(cast(BindingForm, binding.kind), node=node)
         else:
             draft.named_members[member_name] = node
-        if binding is not None and binding.kind == "local-decision":
-            self.local_decision(draft, node, binding)
-        self.member_positions[node] = len(self.table.members)
         self.table.members.append(MemberTask(node, draft.index, member_name, declaration, binding))
 
     def unsupplied(
@@ -326,23 +317,6 @@ class _Allocation:
         if default is MISSING or default is UNSUPPLIED:
             return None, "present"  # no alternatives: unsupplied
         return PlacementBinding(default, "literal"), "const"
-
-    def local_decision(self, draft: ScopeDraft, node: int, binding: PlacementBinding) -> None:
-        """An inline Decision: one use keys it at the formal; a shared one needs a name."""
-        decision = cast(Decision[object], binding.supplier)
-        if decision.name is None:
-            if len(decision.sites) > 1:
-                raise DefinitionError.broken(
-                    "shared-decision-unnamed",
-                    _OWNER,
-                    f"Decision{at(decision.origin)} supplies {len(decision.sites)} formals "
-                    f"({', '.join(decision.sites)}): a shared decision must be named. Make it "
-                    'a class attribute, or pass Decision(..., name="...")',
-                )
-            return
-        identity = (draft.source_scope, id(decision))
-        self.named.setdefault(identity, []).append(node)
-        self.named_declarations[identity] = decision
 
     def place(
         self,
@@ -408,7 +382,6 @@ class _Allocation:
             self.table.nodes[selector] = replace(
                 self.table.nodes[selector],
                 domain=cast(Domain[object], finite(decision.candidates, STRING)),
-                required_choice=decision.required,
             )
             cases_guard, argument = guard, "selected"
         else:
@@ -561,7 +534,6 @@ class _Allocation:
                     self.choice(scope, name, cast(NodeDecision, declaration))
         if self.missing:
             raise DefinitionError.broken("formal-unsupplied", _OWNER, "; ".join(self.missing))
-        self.own_named_decisions()
         self.validity_pieces()
         # All occurrence identities and membership maps are now stable. Later
         # phases replace node payloads, never scope identities.
@@ -588,106 +560,3 @@ class _Allocation:
                 continue
             index = cast(int, draft.validity)
             nodes[index] = replace(nodes[index], constraints=tuple(own[draft.index]))
-
-    def own_named_decisions(self) -> None:
-        """A named Decision that is not a class attribute is one decision.
-
-        It is owned by the lowest scope containing every node it supplies, so
-        it applies whenever that scope does, and it is keyed by that scope and
-        its name. Every formal it supplies becomes an alias of it that keeps its
-        own node's guard, and through which the decision may be edited.
-        """
-
-        for identity, uses in self.named.items():
-            decision = self.named_declarations[identity]
-            owner = self.lowest_common_scope([self.table.nodes[use].scope for use in uses])
-            draft = self.table.drafts[owner]
-            name = cast(str, decision.name)
-            key = member_key(draft.name, name)
-            taken = name in draft.named_members or name in draft.named_children
-            if draft.stub is not None:
-                # Owned at a child: its own members and named Decisions are its template's.
-                template = draft.stub.template
-                taken = taken or name in draft.effective.members or name in template.named_members
-            if taken:
-                raise DefinitionError.broken(
-                    "shared-decision-name-taken",
-                    _OWNER,
-                    f"{key}: the shared Decision{at(decision.origin)} is named like a member "
-                    f"of {draft.effective.space_type.__qualname__}; choose another name",
-                    declaration=key,
-                )
-            first = self.table.nodes[uses[0]]
-            self.table.applying = self.applying(uses, owner, key, identity)
-            node = self.table.reserve(
-                owner,
-                key,
-                "decision",
-                first.semantics,
-                guard=draft.guard,
-                origin=decision.origin,
-            )
-            self.table.applying = None
-            self.table.named.append(node)
-            task = self.table.members[self.member_positions[first.index]]
-            self.member_positions[node] = len(self.table.members)
-            self.table.members.append(replace(task, index=node, owner_scope=owner))
-            draft.members[decision] = node
-            draft.named_members[name] = node
-            for use in uses:
-                position = self.member_positions[use]
-                previous = cast(PlacementBinding, self.table.members[position].binding)
-                self.table.members[position] = replace(
-                    self.table.members[position],
-                    binding=replace(previous, supplier=node, kind="reference"),
-                )
-                self.table.nodes[use] = replace(self.table.nodes[use], kind="alias")
-                self.table.editable_aliases.add(use)
-                stub = self.table.drafts[self.table.nodes[use].scope].stub
-                if stub is not None:
-                    member = self.table.members[position].name
-                    stub.bindings[member] = Binding("named", node=use)
-
-    def applying(
-        self, uses: list[int], owner: int, key: str, identity: tuple[int, int]
-    ) -> int | None:
-        """The Decision over nodes a named shared Decision exists only where it applies,
-        where its every use is in that choice's candidates. Where only some
-        are, the Decision is owned by the same scope wherever the choice applies or not;
-        a placement-dependent owner is refused."""
-        requires = {self.table.requires.get(use) for use in uses}
-        if len(requires) == 1:
-            return requires.pop()
-        always = [use for use in uses if self.table.requires.get(use) is None]
-        if always and owner == self.lowest_common_scope(
-            [self.table.nodes[use].scope for use in always]
-        ):
-            return None
-        decision = self.named_declarations[identity]
-        common = self.table.drafts[owner]
-        raise DefinitionError.broken(
-            "template-owner-per-placement",
-            _OWNER,
-            f"{key}: the shared Decision{at(decision.origin)} is used in the candidates of a "
-            "Decision over nodes that may never apply (guarded by supplied()) and elsewhere, "
-            "so the scope owning it would depend on the placement; declare the shared "
-            "Decision in the scope common to all its uses (a Decision member of "
-            f"{common.effective.space_type.__qualname__})",
-            declaration=key,
-        )
-
-    def lowest_common_scope(self, scopes: list[int]) -> int:
-        def ancestry(scope: int) -> list[int]:
-            chain = [scope]
-            while (parent := self.table.drafts[chain[-1]].parent) is not None:
-                chain.append(parent)
-            return chain[::-1]
-
-        chains = [ancestry(scope) for scope in scopes]
-        common = chains[0][0]
-        for level in range(min(len(chain) for chain in chains)):
-            candidates = {chain[level] for chain in chains}
-            if len(candidates) != 1:
-                break
-            common = chains[0][level]
-        return common

@@ -86,7 +86,6 @@ class NodeDecl(Declaration):
         self.instance: object = None
         self.placement: str | None = None
         self.candidate_of: NodeDecision | None = None
-        self.aliases: list[str] = []
         self.frozen: str | None = None
 
     @property
@@ -111,8 +110,6 @@ class NodeDecision(Decision[str]):
 
     candidates: Mapping[str, NodeDecl | None]
     proxy: NodeChoice
-    # Declared with candidate entries: a direct read needs a member every candidate has.
-    strict: bool
     # ``Select(by=...)``: the derived value that picks the case (no key, never a choice).
     by: object = None
 
@@ -139,17 +136,22 @@ def _refuse_placement(record: NodeDecl, where: str) -> NoReturn:
 def place_in_class(record: NodeDecl, owner: type[object], name: str) -> None:
     where = f"{owner.__qualname__}.{name}"
     if record.candidate_of is not None:
-        # A class attribute may name a candidate of a Decision in the same body.
-        # It is a handle, not a second placement; collection checks the owner.
-        record.aliases.append(where)
-        return
+        decision = record.candidate_of
+        raise DefinitionError.broken(
+            "select-case-handle",
+            _OWNER,
+            f"{where}: names case {record.name!r} of a selector{at(decision.origin)}, a node "
+            "placed twice. A case's path names it: read the case's members as "
+            f'<selector>["{record.name}"].<member>, and its name by binding the selector',
+            declaration=where,
+        )
     if record.placement is not None:
         _refuse_placement(record, where)
     record.owner, record.name, record.placement = owner, name, where
 
 
 def place_as_candidate(record: NodeDecl, decision: NodeDecision, key: str) -> None:
-    where = f"candidate {key!r} of a Decision{at(decision.origin)}"
+    where = f"case {key!r} of a selector{at(decision.origin)}"
     if record.placement is not None or record.candidate_of is not None:
         _refuse_placement(record, where)
     record.name, record.placement, record.candidate_of = key, where, decision
@@ -201,10 +203,9 @@ def slot_kind(declaration: Declaration) -> SlotKind:
     return "behaviour"
 
 
-def space_members(space_type: type[Space]) -> tuple[dict[str, Declaration], set[str]]:
-    """Every named member of ``space_type`` (most-derived last), and its candidate handles."""
+def space_members(space_type: type[Space]) -> dict[str, Declaration]:
+    """Every named member of ``space_type`` (most-derived last)."""
     members: dict[str, Declaration] = {}
-    handles: set[str] = set()
     for base in reversed(space_type.__mro__):
         for name, value in vars(base).items():
             declaration = slot_declaration(value)
@@ -212,18 +213,13 @@ def space_members(space_type: type[Space]) -> tuple[dict[str, Declaration], set[
                 if name in members and not name.startswith("__"):
                     members.pop(name)
                 continue
-            if isinstance(declaration, NodeDecl) and declaration.candidate_of is not None:
-                handles.add(name)
-                members.pop(name, None)
-                continue
-            handles.discard(name)
             members[name] = declaration
-    return members, handles
+    return members
 
 
 def space_formals(space_type: type[Space]) -> dict[str, Param[object]]:
     """Every formal of ``space_type`` by name."""
-    members, _ = space_members(space_type)
+    members = space_members(space_type)
     return {
         name: cast(Param[object], member)
         for name, member in members.items()
@@ -284,19 +280,42 @@ def _value_supplier(
             f"{label}: a node or a Decision over nodes is not a value; bind one of its members",
             declaration=label,
         )
-    # A declaration's owner is set only after the class body ran, so a
-    # sibling member and a fresh inline Decision are told apart when linking.
+    # A declaration's owner is set only after the class body ran: a Decision written at
+    # the call is told from a sibling member by the class body's namespace, and where
+    # that cannot be read, when linking (``_bindings.classify``).
     if isinstance(value, (ValueRef, View)):
+        if isinstance(value, Decision) and not isinstance(value, NodeDecision):
+            _refuse_inline(cast(Decision[object], value), label)
         if isinstance(value, (Param, Decision)) and not isinstance(value, NodeDecision):
             try:  # a sibling in the class body: its annotation is already known
                 cast(Param[object], value).resolve()
             except DefinitionError:
                 pass
         _check_reference(semantics, value, label)
-        if isinstance(value, Decision) and not isinstance(value, NodeDecision):
-            cast(Decision[object], value).sites.append(label)
         return value
     return _freeze_literal(semantics, name, label, value)
+
+
+def inline_decision(label: str) -> DefinitionError:
+    """The refusal of a Decision given at a call, or by assignment, rather than declared."""
+    return DefinitionError.broken(
+        "decision-inline",
+        _OWNER,
+        f"{label}: a Decision given to a formal at a call is gone: a Decision belongs to the "
+        "Space class that declares it. Declare it as a class attribute "
+        "(depth: int = Decision(...)), and bind that attribute (Fifo(depth=depth))",
+        declaration=label,
+    )
+
+
+def _refuse_inline(decision: Decision[object], label: str) -> None:
+    """Refuse a Decision written at the call: in the class body where it was made, it is
+    no member yet (a sibling is). Outside a class body, linking refuses it."""
+    if decision.owner is not None:
+        return
+    body = getattr(decision, "_body", None)
+    if body is not None and not any(item is decision for item in body[1].values()):
+        raise inline_decision(label)
 
 
 _KINDS: Mapping[str, str] = {
@@ -394,7 +413,7 @@ def declare_node(space_type: type[Space], keywords: Mapping[str, object]) -> Spa
         raise error
     keywords = dict(keywords)
     when = guard(keywords.pop("when", None))
-    members, handles = space_members(space_type)
+    members = space_members(space_type)
     unknown = sorted(keywords.keys() - members.keys())
     if unknown:
         raise DefinitionError.broken(
@@ -439,14 +458,7 @@ def assign(instance: object, name: str, value: object) -> None:
             declaration=label,
         )
     record = path[0]
-    members, handles = space_members(record.space_type)
-    if name in handles:
-        raise DefinitionError.broken(
-            "assignment-names-candidate",
-            _OWNER,
-            f"{label}: {name} names a candidate of a Decision; it belongs to the Space class",
-            declaration=label,
-        )
+    members = space_members(record.space_type)
     if name not in members:
         raise DefinitionError.broken(
             "assignment-member-absent",
@@ -553,9 +565,7 @@ class NodeChoice:
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
             raise AttributeError(name)
-        decision = self._space_decision()
-        if getattr(decision, "strict", False):
-            _check_direct_read(decision, name)
+        _check_direct_read(self._space_decision(), name)
         return ChoiceMemberRef(self._space_path, name)
 
     def __getitem__(self, case: str) -> Any:
@@ -598,129 +608,27 @@ class NodeChoice:
 
 
 def node_choice(values: Mapping[object, object], *, when: ValueRef[bool] | None) -> NodeChoice:
-    if not values:
-        raise DefinitionError.broken(
-            "node-decision-no-candidate",
-            _OWNER,
-            "a Decision over nodes requires at least one candidate",
-        )
+    """A selector's record over its cases (``select_choice`` checked them: names, nodes,
+    one that places something)."""
     from .declarations import class_body
 
     decision = Declaration.__new__(NodeDecision)
     object.__setattr__(decision, "_body", class_body())
-    decision.strict = False
-    decision.required = False
     candidates: dict[str, NodeDecl | None] = {}
     for key, value in values.items():
-        local_name(cast(str, key), "candidate key")
-        if value is None:
-            candidates[cast(str, key)] = None
-            continue
-        record = node_record(value)
-        if record is None:
-            raise DefinitionError.broken(
-                "candidate-not-node",
-                _OWNER,
-                f"candidate {key!r}{at(decision.origin)}: expected a node declaration or None",
-            )
-        place_as_candidate(record, decision, cast(str, key))
+        record = None if value is None else cast(NodeDecl, node_record(value))
+        if record is not None:
+            place_as_candidate(record, decision, cast(str, key))
         candidates[cast(str, key)] = record
-    if all(record is None for record in candidates.values()):
-        raise DefinitionError.broken(
-            "node-decision-no-node",
-            _OWNER,
-            f"a Decision over nodes{at(decision.origin)} needs a node candidate",
-        )
     decision.candidates = MappingProxyType(candidates)
     string = cast("ValueSemantics[str]", STRING)
     decision.semantics = decision.explicit = string
     decision.resolved = True
     decision.when = when
     decision.domain = finite(tuple(candidates), string)
-    decision.sites = []
     proxy = NodeChoice((decision,))
     decision.proxy = proxy
     return proxy
-
-
-NONE_CASE = "none"
-
-
-def entry_choice(
-    entries: object,
-    shared: Mapping[str, object],
-    *,
-    optional: object,
-    required: bool = False,
-    when: ValueRef[bool] | None,
-) -> NodeChoice:
-    """``Decision({"a": A, "b": B(own=...)}, shared=..., optional=...)``: a Decision over nodes.
-
-    Each entry becomes a candidate node: a Space class is called with no bindings,
-    a call keeps its own. Every shared binding is supplied to every candidate,
-    each of which must declare it, and none of which may bind it already.
-    ``optional=True`` adds a ``None`` candidate keyed ``"none"``, first.
-    """
-    origin = source_origin()
-    where = at(origin)
-    if not isinstance(entries, Mapping):
-        raise DefinitionError.broken(
-            "candidate-entries-invalid",
-            _OWNER,
-            f"Decision{where}: candidate entries map keys to Space classes or calls on them",
-        )
-    if not entries:
-        raise DefinitionError.broken(
-            "node-decision-no-candidate",
-            _OWNER,
-            f"Decision{where}: a Decision over nodes needs at least one candidate",
-        )
-    if type(optional) is not bool:
-        raise DefinitionError.broken(
-            "optional-not-bool", _OWNER, f"Decision{where}: optional= is True or False"
-        )
-    space = _space()
-    space_types: dict[str, type[Space]] = {}
-    records: dict[str, NodeDecl] = {}
-    for key, entry in entries.items():
-        local_name(key, "candidate key")
-        if optional and key == NONE_CASE:
-            raise DefinitionError.broken(
-                "candidate-key-reserved",
-                _OWNER,
-                f"Decision{where}: {key!r} is the key of the None candidate",
-            )
-        if isinstance(entry, type) and issubclass(entry, space):
-            error = unfinished(entry, f" (candidate {key!r} of a Decision{where})")
-            if error is not None:
-                raise error
-            space_types[key] = entry
-            continue
-        record = node_record(entry)
-        if record is None:
-            raise DefinitionError.broken(
-                "candidate-not-space",
-                _OWNER,
-                f"Decision{where}: candidate {key!r} must be a Space class or a call on one",
-            )
-        space_types[key], records[key] = record.space_type, record
-    _check_shared(space_types, records, shared, where)
-    values: dict[object, object] = {NONE_CASE: None} if optional else {}
-    for key, space_type in space_types.items():
-        node = records[key].instance if key in records else space_type()
-        record = cast(NodeDecl, node_record(node))
-        members, _ = space_members(space_type)
-        for name, value in shared.items():
-            label = f"{space_type.__qualname__}.{name} (shared binding of candidate {key!r}{where})"
-            record.settings[name] = (
-                check_supplier(space_type, name, members[name], value, label),
-                origin,
-            )
-        values[key] = node
-    choice = node_choice(values, when=when)
-    choice._space_decision().strict = True
-    choice._space_decision().required = required
-    return choice
 
 
 def select_choice(
@@ -739,6 +647,20 @@ def select_choice(
     """
     origin = source_origin()
     where = at(origin)
+    if "optional" in members:
+        raise DefinitionError.broken(
+            "select-optional",
+            _OWNER,
+            f"Select{where}: optional= is gone: give a case that places nothing, "
+            "Select(none=None, ...)",
+        )
+    if "required" in members:
+        raise DefinitionError.broken(
+            "select-required",
+            _OWNER,
+            f"Select{where}: required= is gone: whether a policy may give a selector a case "
+            "is the compiler's (FINN's Required() policy on its key)",
+        )
     space = _space()
     cases: dict[str, object] = {}
     shared: dict[str, object] = {}
@@ -805,7 +727,7 @@ def select_choice(
         space_type = space_types[key]
         node = records[key].instance if key in records else space_type()
         record = cast(NodeDecl, node_record(node))
-        found, _ = space_members(space_type)
+        found = space_members(space_type)
         for name, value in shared.items():
             label = f"{space_type.__qualname__}.{name} (shared binding of case {key!r}{where})"
             record.settings[name] = (
@@ -814,9 +736,7 @@ def select_choice(
             )
         values[key] = node
     choice = node_choice(values, when=when)
-    decision = choice._space_decision()
-    decision.strict = True
-    decision.by = by
+    choice._space_decision().by = by
     return choice
 
 
@@ -831,7 +751,7 @@ def _check_case_named_like_a_formal(
             continue
         others = [space_type for case, space_type in space_types.items() if case != key]
         if others and all(
-            isinstance(space_members(space_type)[0].get(key), Param) for space_type in others
+            isinstance(space_members(space_type).get(key), Param) for space_type in others
         ):
             raise DefinitionError.broken(
                 "select-binding-class",
@@ -854,7 +774,7 @@ def _check_shared(
     for name in shared:
         lacking = []
         for key, space_type in space_types.items():
-            member = space_members(space_type)[0].get(name)
+            member = space_members(space_type).get(name)
             # A formal is never behaviour; its annotation may not resolve yet (a forward).
             if member is None or (
                 not isinstance(member, Param) and slot_kind(member) == "behaviour"
@@ -866,7 +786,7 @@ def _check_shared(
         raise DefinitionError.broken(
             "shared-binding-invalid",
             _OWNER,
-            f"Decision{where}: "
+            f"Select{where}: "
             + "; ".join(problems)
             + ". A shared binding goes to every candidate: write it on the entries that take it",
         )
@@ -877,7 +797,7 @@ def _check_shared(
                 raise DefinitionError.broken(
                     "shared-binding-repeated",
                     _OWNER,
-                    f"Decision{where}: candidate {key!r} already binds {name} (at {earlier[1]}), "
+                    f"Select{where}: case {key!r} already binds {name} (at {earlier[1]}), "
                     "and the shared bindings bind it again; a body sets a member once: remove "
                     "it from the entry or from the shared bindings",
                 )
@@ -890,7 +810,7 @@ def _check_direct_read(decision: NodeDecision, name: str) -> None:
     for case, record in decision.candidates.items():
         if record is None:
             continue  # reading through the None candidate is inapplicable, not a lack
-        member = space_members(record.space_type)[0].get(name)
+        member = space_members(record.space_type).get(name)
         if member is None:
             lacking.append(case)
         else:
@@ -934,10 +854,21 @@ def _check_direct_read(decision: NodeDecision, name: str) -> None:
 
 def selector_value(source: object) -> object:
     """A selector given as a binding's argument reads its value, the case's name: the
-    selector's node, as ``selected()`` resolves it. Anything else unchanged."""
+    selector's node. Anything else unchanged."""
     if isinstance(source, NodeChoice):
         return CaseRef(source._space_path)
     return source
+
+
+def selected(selector: object) -> str:
+    """A selector's value, the case's name, as a reference: internal, for a member built
+    over a child that may be a selector or not (a port's ``served``), which a binding to the
+    selector cannot tell apart. Every other reader binds the selector itself."""
+    if not isinstance(selector, NodeChoice):
+        raise DefinitionError.broken(
+            "selected-not-selector", _OWNER, "selected() reads a selector's case name"
+        )
+    return cast(str, CaseRef(selector._space_path))
 
 
 def unwrap(value: object) -> object:
@@ -949,17 +880,17 @@ def unwrap(value: object) -> object:
 
 
 __all__ = [
-    "NONE_CASE",
     "NodeChoice",
     "NodeDecision",
     "NodeDecl",
     "assign",
     "check_supplier",
     "declare_node",
-    "entry_choice",
     "select_choice",
     "selector_value",
+    "selected",
     "fallback",
+    "inline_decision",
     "space_formals",
     "space_members",
     "is_required",

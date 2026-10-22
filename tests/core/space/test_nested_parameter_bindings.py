@@ -1,11 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Nested formals are supplied where their node is declared; a fresh Decision owns its choice.
+"""Nested formals are supplied where their node is declared; a Decision is its class's.
 
 A reusable Space class exposes its child's formals as its own and binds them by
 name (``port = Port(dtype=dtype, lanes=lanes)``); whoever places it supplies
-them. A fresh inline ``Decision`` at a node call owns its choice.
+them. A Decision bound into a child is declared on the class that binds it, which
+owns the choice.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ from core.space._choices_support import committed
 from finn.core.space import (
     Available,
     BoundDecision,
-    Const,
     Decision,
     Inapplicable,
     Param,
@@ -80,107 +80,56 @@ def test_outer_params_and_decisions_supply_interface_slots_without_new_choices()
     )
 
 
-def test_fresh_nested_decision_uses_outer_domain_and_guard_sources() -> None:
+def test_a_decision_bound_into_a_child_reads_the_enclosing_class_for_its_domain_and_guard() -> None:
     class Parent(Space):
         extent: int = Param()
         enabled: bool = Param()
-        # A fresh Decision at the call of a node: its domain and guard read the
-        # enclosing Space class.
-        kernel = Port(dtype="INT4", lanes=Decision(domain=divisors_of(extent), when=enabled))
+        # Declared on the enclosing class, which owns the choice; bound into the child.
+        lanes: int = Decision(domain=divisors_of(extent), when=enabled)
+        kernel = Port(dtype="INT4", lanes=lanes)
 
         @derived(lanes=kernel.lanes)
         def folded(*, lanes: int) -> int:
             return lanes * 2
 
     base = design_space(Parent(extent=12, enabled=True))
-    field = base.kernel.field(Port.lanes)
-    assert isinstance(field, BoundDecision)  # the fresh Decision is owned here
+    field = base.field(Parent.lanes)
+    assert isinstance(field, BoundDecision)
     assert field.candidates() == Available((1, 2, 3, 4, 6, 12))
-    chosen = base.with_choices({Parent.kernel.lanes: 3})
+    chosen = base.with_choices({Parent.lanes: 3})
     assert chosen.folded == 6
     assert chosen.kernel.lanes == 3
-    assert [item.key for item in inspection.decisions(chosen)] == ["kernel.lanes"]
+    assert [item.key for item in inspection.decisions(chosen)] == ["lanes"]
     with pytest.raises(ConfigurationError):
-        base.with_choices({Parent.kernel.lanes: 5})
+        base.with_choices({Parent.lanes: 5})
     inactive = design_space(Parent(extent=12, enabled=False))
-    inactive_field = inactive.kernel.field(Port.lanes)
+    inactive_field = inactive.field(Parent.lanes)
     assert isinstance(inactive_field, BoundDecision)
     assert isinstance(inactive_field.state, Inapplicable)
     assert isinstance(inactive.kernel.query(Port.lanes), Inapplicable)
 
 
-def test_repeated_placements_keep_fresh_choices_independent() -> None:
-    class Pair(Space):
-        first = Port(dtype="INT4", lanes=Decision(values=(1, 2)))
-        second = Port(dtype="INT8", lanes=Decision(values=(2, 4)))
-
-    base = design_space(Pair())
-    chosen = base.with_choices({Pair.first.lanes: 2})
-    assert chosen.first.physical == ("INT4", 2)
-    assert isinstance(chosen.second.query(Port.lanes), Unresolved)
-    assert isinstance(base.first.query(Port.lanes), Unresolved)
-    keys = [item.key for item in inspection.decisions(base)]
-    assert keys == ["first.lanes", "second.lanes"]
-
-
-def test_an_unnamed_decision_shared_by_two_nodes_is_a_definition_error() -> None:
-    lanes: int = Decision(values=(1, 2, 4))  # unnamed: bound at calls, never a class attribute
-
-    class Shared(Space):
-        first = Port(dtype="INT4", lanes=lanes)
-        second = Port(dtype="INT8", lanes=lanes)
-
-    with refused(
-        "shared-decision-unnamed", error=DefinitionError, message="a shared decision must be named"
-    ) as caught:
-        design_space(Shared())
-    assert "Port.lanes" in str(caught.error) and 'name="..."' in str(caught.error)
-
-
-def test_a_named_decision_shared_by_two_nodes_is_one_decision_of_their_common_scope() -> None:
-    lanes: int = Decision(values=(1, 2, 4), name="lanes")
-
+def test_a_decision_bound_into_two_nodes_is_one_decision_of_its_class() -> None:
     class Shared(Space):
         use_first: bool = Decision(values=(False, True))
+        lanes: int = Decision(values=(1, 2, 4))
         first = Port(dtype="INT4", lanes=lanes, when=use_first)
         second = Port(dtype="INT8", lanes=lanes)
 
     (info,) = [item for item in inspection.decisions(Shared) if item.key != "use_first"]
-    # Owned by the lowest scope containing both uses, keyed by that scope and its name.
     assert (info.key, info.scope) == ("lanes", "")
     base = design_space(Shared())
-    # Either use edits the one decision; it applies whenever its owner does.
-    point = base.with_choices({Shared.second.lanes: 4}, use_first=False)
+    point = base.with_choices(lanes=4, use_first=False)
     assert point.second.physical == ("INT8", 4)
     assert isinstance(point.first.query(Port.lanes), Inapplicable)
     assert point.query(info.reference) == Available(4)
-    both = point.with_choices({Shared.first.lanes: 2}, use_first=True)
+    both = point.with_choices(lanes=2, use_first=True)
     assert both.first.physical == ("INT4", 2)
     assert both.second.physical == ("INT8", 2)
-    assert both.with_choices(lanes=1).second.physical == ("INT8", 1)
+    # A formal a member supplies is no choice of its own.
+    with pytest.raises(RequestError, match="not independently editable"):
+        both.with_choices({Shared.second.lanes: 1})
     assert committed(both) == {"lanes": 2, "use_first": True}
-
-
-def test_a_decision_name_is_checked_where_it_becomes_a_key() -> None:
-    # A class attribute takes its attribute name; a different name= is refused.
-    with refused(
-        "decision-misnamed",
-        error=DefinitionError,
-        message="a class attribute takes its attribute name",
-    ):
-        composite("Renamed", {"lanes": Decision(values=(1,), name="other")})
-    # A named shared decision is a member of its owner: it may not shadow one.
-    lanes: int = Decision(values=(1, 2), name="width")
-
-    class Clash(Space):
-        width = Const(4)
-        first = Port(dtype="INT4", lanes=lanes)
-        second = Port(dtype="INT8", lanes=lanes)
-
-    with refused(
-        "shared-decision-name-taken", error=DefinitionError, message="is named like a member"
-    ):
-        design_space(Clash())
 
 
 def test_unbound_exposure_is_a_formal_declared_on_the_enclosing_space_class() -> None:

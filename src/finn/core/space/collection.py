@@ -10,7 +10,7 @@ from types import MappingProxyType, UnionType
 from typing import Union, cast, get_args, get_origin
 
 from ._configuration import Space
-from ._nodes import NodeDecision, NodeDecl, node_record, slot_declaration
+from ._nodes import NodeDecision, NodeDecl, slot_declaration
 from ._signatures import (
     BoundFunction,
     bind_function,
@@ -29,7 +29,6 @@ from .declarations import (
     ValueRef,
     View,
     ViewKey,
-    at,
     class_namespace,
     declared_annotation,
     describe_formal,
@@ -141,19 +140,6 @@ def _collect_members(
                         f"{base.__qualname__}.{name}: reserved configuration name",
                         declaration=f"{base.__qualname__}.{name}",
                     )
-                record = node_record(value)
-                if record is not None and record.candidate_of is not None:
-                    # A handle naming a candidate of a Decision in this body.
-                    decision = record.candidate_of
-                    if decision.owner is not base:
-                        raise DefinitionError.broken(
-                            "candidate-member-foreign",
-                            _OWNER,
-                            f"{base.__qualname__}.{name}: names a candidate of a Decision "
-                            f"that is not declared in {base.__qualname__}{at(record.origin)}",
-                            declaration=f"{base.__qualname__}.{name}",
-                        )
-                    continue
                 if declaration.owner is not base or declaration.name != name:
                     raise DefinitionError.broken(
                         "declaration-unbound",

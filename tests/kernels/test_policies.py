@@ -20,6 +20,7 @@ from finn.core.space import (
     DefinitionError,
     Param,
     Rejected,
+    Select,
     Space,
     constraint,
     design_space,
@@ -67,7 +68,7 @@ class Wide(Space):
 
 class Toy(Space):
     width: int = Param()
-    core: Narrow | Wide = Decision({"narrow": Narrow, "wide": Wide}, width=width)
+    core: Narrow | Wide = Select(narrow=Narrow, wide=Wide, width=width)
     depth: int = Decision(domain=domain(accepts=lambda *, candidate: candidate > 0))
     style: str = Decision(values=("small", "large"))
 
@@ -323,10 +324,8 @@ def test_the_cut_states_a_channel_s_policies() -> None:
 
 
 def test_no_kernel_states_a_policy_but_a_ranking_it_reads_out() -> None:
-    """A kernel holds hardware knowledge only: the three memories' rankings are views, no
-    domain ranks a value, and a kernel has no policies of its own."""
+    """A kernel holds hardware knowledge only: the three memories' rankings are views (a
+    domain ranks nothing), and a kernel has no policies of its own."""
     for kernel in (MemStreamKernel, InputGeneratorKernel, TransposeKernel):
         assert not hasattr(kernel, "defaults") and not hasattr(kernel, "policies")
-        declared: Any = kernel.ram_style
-        assert declared.domain.order is None
         assert callable(cast(Any, kernel.ram_preference).function)

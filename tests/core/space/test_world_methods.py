@@ -25,6 +25,7 @@ from finn.core.space import (
     Decision,
     EvaluationError,
     Param,
+    Select,
     Space,
     Unresolved,
     _failure,
@@ -66,7 +67,7 @@ class Outer(Space):
     enabled: bool = Decision(values=(False, True))
     leaf = Leaf(width=width)
     guarded = Leaf(width=width, when=enabled)
-    mode: Leaf | Wide = Decision({"leaf": Leaf(width=width), "wide": Wide(width=width)})
+    mode: Leaf | Wide = Select(leaf=Leaf(width=width), wide=Wide(width=width))
 
     @derived
     def through_child(self) -> int:

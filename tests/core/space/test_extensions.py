@@ -134,22 +134,16 @@ def stream_of(node: Space) -> StreamValue:
     return cast(StreamValue, getattr(node, "stream"))
 
 
-def test_stream_shape_places_independent_choices_and_keeps_narrow_fields_available() -> None:
+def test_stream_shape_takes_the_pairs_choices_and_keeps_narrow_fields_available() -> None:
     class Pair(Space):
         limit: int = Param(required=False)
-        # The formals the children take are declared here.
+        # The formals the children take, and the choices bound to them, are declared here.
         left_dtype: Encoding = Param(semantics=ENCODING)
         right_dtype: Encoding = Param(semantics=ENCODING)
-        left = stream_shape(
-            dtype=left_dtype,
-            lanes=Decision(values=(1, 2, 4)),
-            maximum_bits=limit,
-        )
-        right = stream_shape(
-            dtype=right_dtype,
-            lanes=Decision(values=(1, 2, 4)),
-            maximum_bits=limit,
-        )
+        left_lanes: int = Decision(values=(1, 2, 4))
+        right_lanes: int = Decision(values=(1, 2, 4))
+        left = stream_shape(dtype=left_dtype, lanes=left_lanes, maximum_bits=limit)
+        right = stream_shape(dtype=right_dtype, lanes=right_lanes, maximum_bits=limit)
 
         @constraint(a=left.bits, b=right.bits)
         def balanced(*, a: int, b: int) -> bool:
@@ -158,7 +152,7 @@ def test_stream_shape_places_independent_choices_and_keeps_narrow_fields_availab
     # The bundle's own members stay inside its Space class.
     assert "maximum_bits" not in vars(Pair) and "minimum_lanes" not in vars(Pair)
     missing = design_space(Pair(left_dtype=Encoding(3), right_dtype=Encoding(6)))
-    first = missing.with_choices({Pair.left.lanes: 2})
+    first = missing.with_choices({Pair.left_lanes: 2})
     assert first.left.bits == 6
     assert first.right.element_bits == 6
     # The pair's constraint reads the right lanes: one lane alone balances the left's 6
@@ -171,7 +165,7 @@ def test_stream_shape_places_independent_choices_and_keeps_narrow_fields_availab
     assert isinstance(missing.left.query(StreamShape.lanes), Unresolved)
 
     admitted = design_space(Pair(left_dtype=Encoding(3), right_dtype=Encoding(6), limit=4))
-    selected = admitted.with_choices({Pair.left.lanes: 2, Pair.right.lanes: 1})
+    selected = admitted.with_choices({Pair.left_lanes: 2, Pair.right_lanes: 1})
     assert selected.left.bits == selected.right.bits == 6
     assert selected.inspect(Pair.balanced).verdict is True
     assert selected.query(stream_of(Pair.left)) == Available(StreamValue(Encoding(3), 2, 6))

@@ -26,6 +26,7 @@ from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
     Decision,
     QueryResult,
+    Select,
     Space,
     Unresolved,
     design_space,
@@ -192,7 +193,7 @@ def _accepted(*outcomes: tuple[str, str, str], broken: tuple[Any, ...] = ()) -> 
     return {"accepted": True, "outcomes": list(outcomes), "broken": list(broken)}
 
 
-OPEN: forms.Form = {"state": "open", "waits": [], "required": False}
+OPEN: forms.Form = {"state": "open", "waits": []}
 LEAF = "outer.middle.leaf"
 
 #: per path: the toy, the keys asked, today's answers at the start, and each change with
@@ -713,11 +714,11 @@ class Leaf(Space):
 class Inner(Space):
     on: bool = Decision(values=(False, True))
     leaf = Leaf(when=on)
-    pick: Leaf = Decision({"a": Leaf(), "b": Leaf()})
+    pick: Leaf = Select(a=Leaf(), b=Leaf())
 
 
 class Outer(Space):
-    slot: Inner | Leaf = Decision({"inner": Inner(), "leaf": Leaf()})
+    slot: Inner | Leaf = Select(inner=Inner(), leaf=Leaf())
     held = Inner()
 
 

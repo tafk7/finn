@@ -194,7 +194,7 @@ def state(found: inspection.ChoiceState) -> Form:
     if isinstance(found, inspection.Dormant):
         return {"state": "dormant", "value": value(found.value)}
     if isinstance(found, inspection.Open):
-        return {"state": "open", "waits": list(found.waits), "required": found.required}
+        return {"state": "open", "waits": list(found.waits)}
     if isinstance(found, inspection.Absent):
         return {"state": "absent"}
     raise TypeError(f"not a choice state: {found!r}")

@@ -213,15 +213,12 @@ class _Lowering:
         for role, function, named in domain.signatures():
             # Each callable takes the declared inputs its signature names.
             values = dict.fromkeys(named)
-            positional: tuple[object, ...] = ()
             if role == "membership":
                 values["candidate"] = None
-            elif role == "order":
-                positional = (None,)  # the values it ranks
             try:
                 if not set(named) <= declared:
                     raise TypeError(f"names {', '.join(sorted(set(named) - declared))}")
-                inspect.signature(function).bind(*positional, **values)
+                inspect.signature(function).bind(**values)
             except (TypeError, ValueError) as cause:
                 raise DefinitionError.broken(
                     "domain-signature-incompatible",
@@ -343,7 +340,6 @@ class _Lowering:
             changes["domain"], changes["domain_arguments"] = self.domain(
                 source_scope, declaration, node.semantics, owner=node.key
             )
-            changes["required_choice"] = declaration.required
             return changes
         if isinstance(declaration, Expr):
             self.names.expression(scope.index, declaration, owner=node.key, index=node.index)

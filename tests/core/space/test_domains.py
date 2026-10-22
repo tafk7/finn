@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any, cast
 
 import pytest
 from support.refusals import refused
@@ -12,9 +11,8 @@ from support.refusals import refused
 from finn.core.space import (
     Decision,
     Param,
+    Select,
     Space,
-    Unresolved,
-    constraint,
     derived,
     design_space,
     inspection,
@@ -139,70 +137,20 @@ def test_domain_rejects_conflicting_dependency_names_and_semantics() -> None:
         allowed.with_semantics(integers)
 
 
-# -- a domain's order apart from its membership -----------------------------------------
-
-
-class Buffer(Space):
-    """A memory whose style's order reads the depth chosen beside it: membership reads
-    nothing, so the styles are a type over the facts; the ranking moves with the depth."""
-
-    depth: int = Decision(values=(4, 16))
-    style: str = Decision(
-        domain=domain(
-            accepts=lambda *, candidate: candidate in ("block", "lut", "ultra"),
-            candidates=lambda: ("ultra", "lut", "block"),
-            order=lambda values, *, size: tuple(
-                sorted(values, key=("block" if size >= 8 else "lut", "lut", "block", "ultra").index)
-            ),
-            semantics=default_semantics(str),
-            size=depth,
-        )
-    )
-
-    @constraint
-    def ultra_deep(self) -> bool:
-        return self.style != "ultra" or self.depth >= 16
+# -- a domain's inputs ---------------------------------------------------------------------
 
 
 def test_each_callable_takes_the_inputs_its_signature_names() -> None:
-    style = cast(Any, Buffer.__dict__["style"]).domain
-    assert style.membership_inputs == () and style.order_inputs == ("size",)
+    styles = domain(
+        accepts=lambda *, candidate: candidate in ("block", "lut"),
+        candidates=lambda: ("lut", "block"),
+        semantics=default_semantics(str),
+    )
+    assert styles.membership_inputs == ()
     assert divisors_of(object()).membership_inputs == ("extent",)
-    assert style.membership("lut", {}, semantics=default_semantics(str), owner="style") == (
+    assert styles.membership("lut", {}, semantics=default_semantics(str), owner="style") == (
         Available(True)
     )
-
-
-def test_a_domains_order_ranks_its_values_and_waits_on_what_it_reads() -> None:
-    base = design_space(Buffer())
-    # The ranking waits on the open depth; the membership does not.
-    assert isinstance(base.field(Buffer.style).candidates(), Unresolved)
-    assert base.with_choices(style="lut").style == "lut"
-    shallow, deep = base.with_choices(depth=4), base.with_choices(depth=16)
-    assert shallow.field(Buffer.style).candidates() == Available(("lut", "block", "ultra"))
-    assert deep.field(Buffer.style).candidates() == Available(("block", "lut", "ultra"))
-    # Possible values are answered in the domain's list order, whatever the ranking.
-    (style,) = inspection.viable(shallow, [Buffer.style])
-    assert style.cases == ("lut", "block") and listed(style) == ("ultra", "lut", "block")
-
-
-def listed(item: Any) -> tuple[object, ...]:
-    return tuple(value.value for value in item.values)
-
-
-def test_an_order_that_is_no_permutation_of_its_values_fails_the_domain() -> None:
-    class Short(Space):
-        style: str = Decision(
-            domain=domain(
-                accepts=lambda *, candidate: True,
-                candidates=lambda: ("a", "b"),
-                order=lambda values: ("a",),
-                semantics=default_semantics(str),
-            )
-        )
-
-    with pytest.raises(EvaluationError, match="not a permutation"):
-        design_space(Short()).field(Short.style).candidates()
 
 
 def test_a_declared_input_no_callable_reads_is_a_definition_error() -> None:
@@ -214,8 +162,6 @@ def test_a_declared_input_no_callable_reads_is_a_definition_error() -> None:
 
     with refused("domain-signature-incompatible", error=DefinitionError, message="none"):
         design_space(Unread(extent=4))
-    with pytest.raises(DefinitionError, match="domain-order-unlisted|membership only"):
-        domain(accepts=lambda *, candidate: True, order=lambda values: values)
 
 
 # -- a domain's membership reads facts only, checked when the model is made --------------
@@ -277,9 +223,7 @@ class Core(Space):
 
     channels: int = Param()
     enabled: bool = Decision(values=(False, True))
-    form: Window | Whole = Decision(
-        {"window": Window(channels=channels), "whole": Whole}, when=enabled
-    )
+    form: Window | Whole = Select(window=Window(channels=channels), whole=Whole, when=enabled)
 
 
 def test_a_domain_input_under_the_choices_own_existence_guards_is_a_fact() -> None:

@@ -83,9 +83,8 @@ class BoundDecision(BoundValue[T], Generic[T]):
 
     def candidates(self) -> QueryResult[tuple[T, ...]] | None:
         """The choice's listed values (its domain's enumeration, each value its membership
-        accepts), ranked by its domain's order where it has one (``None``: known by
-        membership only), under its guard: unresolved while a value the order reads is
-        open."""
+        accepts), in their listed order (``None``: known by membership only), under its
+        guard."""
         from .occurrence import candidates
 
         return cast(QueryResult[tuple[T, ...]] | None, candidates(self.instance, self.reference))

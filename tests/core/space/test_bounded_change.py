@@ -28,6 +28,7 @@ from finn.core.space import (
     DecisionState,
     Inapplicable,
     Param,
+    Select,
     Space,
     Unresolved,
     derived,
@@ -210,7 +211,7 @@ class Selected(Space):
     """``mode`` selects the core; the cores read the root's ``limit``, a fact."""
 
     limit: int = Param()
-    mode: Sized | Plain = Decision({"sized": Sized, "plain": Plain}, limit=limit)
+    mode: Sized | Plain = Select(sized=Sized, plain=Plain, limit=limit)
 
 
 def test_a_choice_whose_selector_settles_to_another_case_goes_dormant_and_comes_back() -> None:

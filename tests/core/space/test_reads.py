@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import cast
 
-from finn.core.space import Decision, Param, Space, constraint, derived, view
+from finn.core.space import Decision, Param, Select, Space, constraint, derived, view
 from finn.core.space._reads import ModelReads, existence_guards, infer, summary
 from finn.core.space.compiler import compile_model
 from finn.core.space.ir import Linked
@@ -49,7 +49,7 @@ class Outer(Space):
     enabled: bool = Decision(values=(False, True))
     leaf = Leaf(width=width)
     guarded = Leaf(width=width, when=enabled)
-    mode: Leaf | Wide = Decision({"leaf": Leaf(width=width), "wide": Wide(width=width)})
+    mode: Leaf | Wide = Select(leaf=Leaf(width=width), wide=Wide(width=width))
 
     @derived
     def direct(self) -> int:
@@ -232,7 +232,7 @@ def test_dynamic_methods_and_declared_reads() -> None:
 class Aliased(Space):
     width: int = Param()
     leaf = Leaf(width=width)
-    mode: Leaf | Wide = Decision({"leaf": Leaf(width=width), "wide": Wide(width=width)})
+    mode: Leaf | Wide = Select(leaf=Leaf(width=width), wide=Wide(width=width))
 
     @derived
     def through_a_local(self) -> int:

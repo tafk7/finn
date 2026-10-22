@@ -19,6 +19,7 @@ from finn.core.space import (
     Param,
     QueryResult,
     RequestError,
+    Select,
     Space,
     ValueSemantics,
     View,
@@ -446,31 +447,25 @@ def test_binding_forms_and_local_edit_ownership() -> None:
         supplied: int = Decision(values=(1, 2))
         literal = Child(size=4)
         alias = Child(size=supplied)
-        local = Child(size=Decision(values=(4, 8)))
 
-    # How each supply links: a literal is a constant, a reference an alias, a
-    # fresh Decision a decision.
+    # How each supply links: a literal is a constant, a reference an alias.
     linked = compile_model(Parent).linked
     kinds = [
         linked.nodes[compile_model(Parent).resolve(0, node.size)].kind
-        for node in (Parent.literal, Parent.alias, Parent.local)
+        for node in (Parent.literal, Parent.alias)
     ]
-    assert kinds == ["const", "alias", "decision"]
+    assert kinds == ["const", "alias"]
     root = compile_model(Child).linked
     assert root.nodes[root.keys["size"]].kind == "param"
     model = compile_model(Parent)
-    local = model.decision(0, Parent.local.size)
-    assert model.linked.nodes[local].kind == "decision"
-    assert model.linked.nodes[local].key == "local.size"
     assert model.linked.nodes[model.decision(0, Parent.alias.internal)].kind == "decision"
     for node in (Parent.literal, Parent.alias):
         with pytest.raises(RequestError, match="not an owned Decision"):
             model.decision(0, node.size)
 
-    # A formal is read like any member, and only an owned fresh Decision is
-    # editable through it.
+    # A formal is read like any member, and is never edited through it: its supplier is.
     point = design_space(Parent())
-    assert point.with_choices({Parent.local.size: 8}).local.size == 8
+    assert point.with_choices(supplied=2).alias.size == 2
     with pytest.raises(RequestError, match="not an owned Decision"):
         point.with_choices({Parent.alias.size: 1})
 
@@ -544,7 +539,7 @@ def test_guards_are_collected_separately_and_respect_inherited_overrides() -> No
         physical = View(result, when=enabled)
         child = Child(value=1, when=enabled)
         # A singleton structural choice is an ordinary Decision over nodes.
-        implementation: Child = Decision({"only": Child(value=1)}, when=enabled)
+        implementation: Child = Select(only=Child(value=1), when=enabled)
 
     class OverrideGuard(Guarded):
         enabled: bool = Param()
@@ -567,19 +562,15 @@ def test_guards_are_collected_separately_and_respect_inherited_overrides() -> No
     assert "when" not in record_of(Guarded.child).bindings
 
 
-def test_guards_on_fresh_local_choices_and_alternatives_use_the_placement_scope() -> None:
+def test_guards_on_cases_use_the_placement_scope() -> None:
     class Child(Space):
         value: int = Param()
 
     class Parent(Space):
         enabled: bool = Param()
-        child = Child(value=Decision(values=(1,), when=enabled))
-        choice: Child = Decision({"one": Child(value=1, when=enabled)})
+        choice: Child = Select(one=Child(value=1, when=enabled))
 
     effective = collect_space(Parent)
-    decision = record_of(Parent.child).bindings["value"]
-    assert isinstance(decision, Decision)
-    assert effective.guards[decision] is decl(Parent.enabled)
     candidate = decision_record(Parent.choice).candidates["one"]
     assert candidate is not None
     assert effective.guards[candidate] is decl(Parent.enabled)

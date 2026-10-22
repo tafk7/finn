@@ -19,6 +19,7 @@ from finn.core.space import (
     Inapplicable,
     Param,
     Rejected,
+    Select,
     Space,
     Unresolved,
     View,
@@ -71,9 +72,7 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
         weights = Interface(width=4)
         optional = Interface(width=16, when=enabled)
         # The structural choice is a Decision over nodes.
-        implementation: Interface | Refused = Decision(
-            {"normal": Interface(width=32), "refused": Refused()}
-        )
+        implementation: Interface | Refused = Select(normal=Interface(width=32), refused=Refused())
 
         @derived(activation=activation.width, weights=weights.width)
         def narrow(*, activation: int, weights: int) -> int:
@@ -111,7 +110,7 @@ def test_composite_keeps_narrow_fields_available_and_reuses_accepted_children() 
     assert isinstance(base.inspect(Composite.physical).accepted_result, Unresolved)
 
 
-def test_local_decision_domain_uses_parent_suppliers_and_exposure_is_explicit() -> None:
+def test_a_decision_of_the_class_reads_its_suppliers_and_exposure_is_explicit() -> None:
     class Child(Space):
         value: int = Param()
         physical = View(value)
@@ -119,20 +118,21 @@ def test_local_decision_domain_uses_parent_suppliers_and_exposure_is_explicit() 
     class Root(Space):
         extent: int = Param()
         # The formal is declared on the enclosing Space class and bound to the
-        # child by name.
+        # child by name; so is the Decision bound to the other child.
         exposed_value: int = Param(required=False)
-        owned = Child(value=Decision(domain=divisors_of(extent)))
+        value: int = Decision(domain=divisors_of(extent))
+        owned = Child(value=value)
         exposed = Child(value=exposed_value)
 
     base = design_space(Root(extent=12))
-    owned = base.owned.field(Child.value)
-    assert isinstance(owned, BoundDecision)  # a fresh inline Decision is owned
+    owned = base.field(Root.value)
+    assert isinstance(owned, BoundDecision)
     assert owned.candidates() == Available((1, 2, 3, 4, 6, 12))
-    chosen = base.with_choices({Root.owned.value: 3})
+    chosen = base.with_choices({Root.value: 3})
     assert chosen.owned.physical == 3
     assert isinstance(chosen.exposed.query(Child.value), Unresolved)
     with pytest.raises(ConfigurationError):
-        base.with_choices({Root.owned.value: 5})
+        base.with_choices({Root.value: 5})
     supplied = design_space(Root(extent=12, exposed_value=7))
     assert supplied.exposed.value == 7
 
@@ -220,9 +220,7 @@ def test_choice_members_are_validated_over_all_cases_before_selection() -> None:
     with pytest.raises(AttributeError, match="absent"):
 
         class Nowhere(Space):
-            implementation: Complete | Missing = Decision(
-                {"complete": Complete(), "missing": Missing()}
-            )
+            implementation: Complete | Missing = Select(complete=Complete(), missing=Missing())
             absent = View(implementation.absent)  # type: ignore[union-attr]
 
     with refused(
@@ -230,15 +228,11 @@ def test_choice_members_are_validated_over_all_cases_before_selection() -> None:
     ):
 
         class Unqualified(Space):
-            implementation: Complete | Missing = Decision(
-                {"complete": Complete(), "missing": Missing()}
-            )
+            implementation: Complete | Missing = Select(complete=Complete(), missing=Missing())
             physical = View(cast(Complete, implementation).physical)
 
     class Partial(Space):
-        implementation: Complete | Missing = Decision(
-            {"complete": Complete(), "missing": Missing()}
-        )
+        implementation: Complete | Missing = Select(complete=Complete(), missing=Missing())
         physical = View(implementation["complete"].physical)  # type: ignore[index]
 
     base = design_space(Partial())
@@ -278,7 +272,7 @@ def test_false_choice_guard_does_not_demand_selector_or_case_condition() -> None
     class Root(Space):
         disabled = Const(False)
         unknown: bool = Decision(values=(False, True))
-        choice: Leaf = Decision({"a": Leaf(when=unknown), "b": Leaf()}, when=disabled)
+        choice: Leaf = Select(a=Leaf(when=unknown), b=Leaf(), when=disabled)
 
     point = design_space(Root())
     assert isinstance(point.query(Root.choice), Inapplicable)
