@@ -30,6 +30,7 @@ from abc import ABC, abstractmethod
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.custom_op.registry import getCustomOp
+from qonnx.util.basic import get_by_name
 
 np_default_dtype = np.float32
 
@@ -230,7 +231,11 @@ class QuantActBaseHandler(ABC):
         # behind the MultiThreshold nodes.
         bias_scalar = adder_bias.shape == (1,) or len(adder_bias.shape) == 0
         scale_scalar = mul_scale.shape == (1,) or len(mul_scale.shape) == 0
-        if scale_scalar and bias_scalar and self._q_node.op_type == "BipolarQuant":
+        bipolar = self._q_node.op_type == "BipolarQuant"
+        # A BipolarQuant with scale 1 becomes FINN's bipolar MultiThreshold, whose
+        # out_scale 2 and out_bias -1 give -1 and +1. Any other scale takes the Add
+        # and Mul below.
+        if bipolar and scale_scalar and bias_scalar and np.atleast_1d(mul_scale)[0] == 2.0:
             # Get Quant parameters
             mul_scale = np.atleast_1d(mul_scale)
             adder_bias = np.atleast_1d(adder_bias)
@@ -248,8 +253,10 @@ class QuantActBaseHandler(ABC):
             # Set the output data type
             mt_inst.set_nodeattr("out_dtype", out_dtype)
         else:
-            # Set datatype
-            mt_inst.set_nodeattr("out_dtype", out_dtype)
+            # Set datatype. Without out_scale and out_bias, the MultiThreshold outputs
+            # its count of thresholds reached: 0 or 1 for a BipolarQuant's one
+            # threshold, so BINARY, not the quantizer's BIPOLAR.
+            mt_inst.set_nodeattr("out_dtype", "BINARY" if bipolar else out_dtype)
 
             # Insertion parameters
             up_stream_node = mt_node
@@ -352,6 +359,10 @@ class QuantReluHandler(QuantActBaseHandler):
     """Class for converting a quantized relu operation expressed in the QONNX
     dialect to the FINN ONNX dialect."""
 
+    # Defaults of the ONNX Selu operator's attributes
+    selu_default_alpha = 1.67326319217681884765625
+    selu_default_gamma = 1.05070102214813232421875
+
     @classmethod
     def valid_predecessor_op_types(self):
         return [
@@ -386,8 +397,34 @@ class QuantReluHandler(QuantActBaseHandler):
                     "is a constant; FINN does not convert it. Brevitas exports a 1-bit "
                     "QuantReLU this way; use bit_width >= 2 or a signed 1-bit quantizer."
                 )
+            self._selu_attributes(act_node)
         else:
             raise RuntimeError("Got an unexpected quantizer node type")
+
+    def _selu_attributes(self, act_node):
+        """Return the Selu node's alpha and gamma, refusing values for which Selu is
+        not increasing or does not keep the sign of its input: thresholds on its input
+        rely on both. ONNX Runtime computes (gamma * alpha) * (exp(x) - 1) for x <= 0
+        in float32, so the product must stay finite, and nonzero when multiplied by the
+        smallest nonzero exp(x) - 1, -2**-24."""
+        alpha = get_by_name(act_node.attribute, "alpha")
+        alpha = self.selu_default_alpha if alpha is None else alpha.f
+        gamma = get_by_name(act_node.attribute, "gamma")
+        gamma = self.selu_default_gamma if gamma is None else gamma.f
+        product = np.float32(gamma) * np.float32(alpha)
+        if not (
+            alpha > 0
+            and gamma > 0
+            and np.isfinite(product)
+            and product * np.float32(2.0**-24) > 0
+        ):
+            raise ValueError(
+                f"Selu node {act_node.name!r} has alpha={alpha} and gamma={gamma}; FINN "
+                "converts a Selu before a quantizer only for alpha > 0 and gamma > 0 (with "
+                "a float32 product that neither overflows nor underflows), where Selu is "
+                "increasing and keeps the sign of its input."
+            )
+        return alpha, gamma
 
     def _calculate_act_bias(self):
         # No bias allowed for Relu activations, see: https://github.com/Xilinx/
@@ -450,6 +487,14 @@ class QuantReluHandler(QuantActBaseHandler):
                 for t in range(num_thresholds):
                     thresholds[c][t] = min_threshold[c] + step[c] * t
 
+        elif self._q_node.op_type == "BipolarQuant":
+            # After a Selu: +scale where Selu(x) >= 0. In float32 exp(x) rounds to 1 for
+            # -2**-25 <= x < 0 (1 - 2**-25 is the midpoint between 1 - 2**-24 and 1, and
+            # rounds to even), so Selu(x) is 0 there and the one threshold is -2**-25,
+            # not 0. ONNX Runtime, which executes Selu for FINN and QONNX, agrees for
+            # every float32 x.
+            thresholds = np.full((1, 1), -(2.0**-25), dtype=np.float64)
+
         elif act_node.op_type == "Selu":
             q_inst = getCustomOp(self._q_node)
             narrow = q_inst.get_nodeattr("narrow")
@@ -504,8 +549,10 @@ class QuantReluHandler(QuantActBaseHandler):
         # Calculate scale, see: https://github.com/Xilinx/brevitas/blob/
         # a5bfd6dc5e030f0047ac1ee47932b60e8e873e17/src/brevitas/export/
         # onnx/finn/handler/act.py#L40
-        scale = quant_scale
-        return scale
+        if self._q_node.op_type == "BipolarQuant":
+            # The MultiThreshold's 0 and 1, less the bias 0.5, times this: -scale and scale.
+            return quant_scale * np.float32(2)
+        return quant_scale
 
     def _remove_activation_node(self, multi_threshold_node):
         # Find the activation node
