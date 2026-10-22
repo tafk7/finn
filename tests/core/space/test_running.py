@@ -30,12 +30,12 @@ model, through the class-based oracle (``support.space_oracle``), as the impleme
   impure function caught with it on and not with it off, and the toys' and the reference
   walks with it on, with no disagreement and no impure function; a cache wrong on purpose
   (a read left out of each key) caught; each type the cache keys by ``==`` checked against
-  its value semantics, the rules keying an enum member (its class keeping ``Enum``'s ``==``
-  and hash) and a value class field by field checked on sample classes, and nothing else
-  keyed: no enum with an ``==`` or hash of its own or a mixin's, no value under semantics of
-  its own (two design spaces differing only in two values ``==`` holds equal and such
-  semantics tell apart answer as today's by that check alone), nor a value class with a
-  field annotated so.
+  its value semantics, the rules keying an enum member by type and name (an ``==`` or hash
+  of its class's own or a mixin's giving misses only) and a value class field by field
+  checked on sample classes, and nothing else keyed: no value under semantics of its own
+  (two design spaces differing only in two values ``==`` holds equal and such semantics
+  tell apart answer as today's by that check alone), nor a value class with a field
+  annotated so.
 - **The facts layer's domain outcomes**, keyed as the cache keys values: a membership
   candidate under semantics finer than ``==`` gets its own verdict, as today's; with the
   semantics left out of that key, another candidate's.
@@ -57,7 +57,7 @@ import weakref
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, Flag, auto
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Annotated, Any, cast
@@ -123,7 +123,7 @@ from finn.core.space._running.cache import (
     CHECKED,
     PLAIN,
     NodeCache,
-    enum_class,
+    enum_key,
     plain,
     value_class,
 )
@@ -1444,10 +1444,11 @@ def test_the_reference_walks_hold_strictly_with_the_purity_check_over_the_cache(
 # (``cache.PLAIN``) and the classes in ``cache.CHECKED``, each listed here with the value
 # semantics in force and its ``==`` and hash checked against them (``_world._same_value``):
 # values equal by the semantics are ``==`` and hash alike, and values the semantics tell
-# apart are not ``==``, so their keys differ. An enum member is keyed by its type and the
-# member where its class keeps ``Enum``'s own ``==`` (identity) and hash, as its MRO
-# resolves them (``cache.enum_class``): an enum with an ``==`` or a hash of its own, or a
-# mixin's (``Mixed``, an ``int`` enum), has no key. Tuples and frozen sets of keyed values are
+# apart are not ``==``, so their keys differ. An enum member is keyed by its type and its
+# name (``cache.enum_key``), whatever its class overrides or mixes in: an equal key is the
+# same member, so an ``==`` or a hash of its own (``OwnEq``, ``OwnHash``) or a mixin's
+# (``Mixed``, an ``int`` enum) gives misses only (a combination of flags, not found by its
+# name, has no key). Tuples and frozen sets of keyed values are
 # keyed item by item; a value class (``cache.value_class``: a frozen dataclass whose ``==``
 # and hash are the generated ones) field by field, each field's value keyed in turn (an
 # enum member included: ``Moded``). The rules are checked on this module's own sample
@@ -1633,29 +1634,34 @@ class Moded:
 
 
 class OwnEq(Enum):
-    """An ``==`` of its own (every member equal to its value): not keyed."""
+    """An ``==`` of its own, holding every member equal to every other: keyed by type and
+    name, so two members it holds equal keep different keys."""
 
     A = 1
     B = 2
 
     def __eq__(self, other: object) -> bool:
-        return other is self or other == self.value
+        return isinstance(other, OwnEq)
 
     __hash__ = Enum.__hash__
 
 
+_HASHES = itertools.count()
+
+
 class OwnHash(Enum):
-    """A hash of its own: not keyed."""
+    """A hash of its own, another at each call: keyed by name, which does not read it."""
 
     A = 1
     B = 2
 
     def __hash__(self) -> int:
-        return hash(self.value)
+        return next(_HASHES)
 
 
 class Mixed(int, Enum):
-    """An ``int`` mixed in: ``==`` and hash are ``int``'s (``Mixed.ONE == 1``), not keyed."""
+    """An ``int`` mixed in: ``==`` and hash are ``int``'s (``Mixed.ONE == 1``); keyed by
+    type and name, apart from the ``int``."""
 
     ONE = 1
     TWO = 2
@@ -1663,9 +1669,18 @@ class Mixed(int, Enum):
 
 @dataclass(frozen=True)
 class HoldsMixed:
-    """A value class holding a member of an enum not keyed: no key."""
+    """A value class holding a member of an enum mixing in ``int``: equal to one holding
+    the ``int`` itself, and keyed apart from it."""
 
     mode: Mixed
+
+
+class Lanes(Flag):
+    """A flag: each member keyed by type and name, a combination (not found by its name)
+    not keyed."""
+
+    EAST = auto()
+    WEST = auto()
 
 
 VALUE_TYPES: dict[str, tuple[ValueSemantics[Any], tuple[object, ...]]] = {
@@ -1738,12 +1753,13 @@ NOT_VALUE_CLASSES: dict[str, tuple[type, object]] = {
 }
 """Classes the rule does not key, each with a value."""
 
-NOT_KEYED_ENUMS: dict[str, tuple[type[Enum], Enum]] = {
-    "an == of its own": (OwnEq, OwnEq.A),
-    "a hash of its own": (OwnHash, OwnHash.A),
-    "a mixin's == and hash": (Mixed, Mixed.ONE),
+OVERRIDING_ENUMS: dict[str, type[Enum]] = {
+    "an == of its own": OwnEq,
+    "a hash of its own": OwnHash,
+    "a mixin's == and hash": Mixed,
 }
-"""Enums the rule does not key, one override of each kind, each with a member."""
+"""Enums overriding ``Enum``'s ``==`` or hash, one override of each kind: keyed all the
+same, misses only."""
 
 UNHASHABLE: dict[str, tuple[ValueSemantics[Any], tuple[object, ...]]] = {
     "list": (default_semantics(list), ([], [1], [1, 2])),
@@ -1845,30 +1861,52 @@ def test_the_cache_keys_the_types_this_test_checks_and_value_classes_by_their_ru
         assert plain_key((1, value)) is None, name
     assert value_class(HoldsList) and plain_key(HoldsList([1])) is None
     assert plain_key((1, "a", frozenset({2.0}), Spec(True, 2))) is not None
-    assert enum_class(Mode) and plain_key((Mode.SLOW, Moded(Mode.FAST, 1))) is not None
+    assert plain_key((Mode.SLOW, Moded(Mode.FAST, 1))) is not None
+    assert plain_key(Mode.FAST) == plain_key(Mode.QUICK) == enum_key(Mode.FAST) == (Mode, "FAST")
+    assert plain_key(Lanes.EAST) == (Lanes, "EAST") != plain_key(Lanes.WEST)
+    assert plain_key(Lanes.EAST | Lanes.WEST) is None
+    assert plain_key((1, Lanes.EAST | Lanes.WEST)) is None
 
 
-@pytest.mark.parametrize("name", sorted(NOT_KEYED_ENUMS))
-def test_an_enum_overriding_equality_or_hash_is_not_keyed(name: str) -> None:
-    """An enum is keyed by its class's rule, not by a list: one with an ``==`` of its own, a
-    hash of its own, or a mixin's (``int``'s), has no key, alone, in a tuple or in a value
-    class. Each differs from ``Enum``'s as the rule reads it: ``==`` past identity, or a hash
-    not by name."""
-    kind, member = NOT_KEYED_ENUMS[name]
-    assert issubclass(kind, Enum) and not enum_class(kind)
-    assert plain_key(member) is None and plain_key((1, member)) is None
+@pytest.mark.parametrize("name", sorted(OVERRIDING_ENUMS))
+def test_an_enum_overriding_equality_or_hash_gives_misses_only(name: str) -> None:
+    """An enum with an ``==`` of its own, a hash of its own, or a mixin's (``int``'s) is
+    keyed as any other, by type and name, alone, in a tuple and in a value class. Its
+    override only gives misses: two members (or values) it holds equal keep different
+    keys, and no member is keyed equal to another. The key does not read the member's
+    hash: one another at each call keys alike each time."""
+    kind = OVERRIDING_ENUMS[name]
     assert kind.__eq__ is not Enum.__eq__ or kind.__hash__ is not Enum.__hash__
-    if kind is Mixed:
+    member = _member(default_semantics(kind))
+    members = list(kind)
+    assert len(members) >= 2, kind
+    for left, right in itertools.product(members, repeat=2):
+        found = plain_key(left)
+        assert found == (kind, left.name) and hash(found) == hash(plain_key(left)), left
+        assert plain_key((1, left)) == plain_key((1, left)) is not None, left
+        if left is not right:
+            assert found != plain_key(right), (left, right)
+            assert plain_key((1, left)) != plain_key((1, right)), (left, right)
+    if kind is OwnEq:  # two members the override holds equal: a miss
+        assert OwnEq.A == OwnEq.B and _same_value(member, OwnEq.A, OwnEq.B)
+    if kind is OwnHash:  # a hash read would differ each time; the key's does not
+        assert hash(OwnHash.A) != hash(OwnHash.A)
+    if kind is Mixed:  # equal to the int, by the int's ``==`` and hash: a miss
+        one = cast(Mixed, 1)
         assert cast(int, Mixed.ONE) == 1 and hash(Mixed.ONE) == hash(1)
-        assert value_class(HoldsMixed) and plain_key(HoldsMixed(Mixed.ONE)) is None
-    assert enum_class(Mode) and plain_key(Mode.FAST) == plain_key(Mode.QUICK) is not None
+        assert plain_key(Mixed.ONE) != plain_key(1)
+        assert value_class(HoldsMixed) and HoldsMixed(Mixed.ONE) == HoldsMixed(one)
+        assert _same_value(
+            _member(default_semantics(HoldsMixed)), HoldsMixed(Mixed.ONE), HoldsMixed(one)
+        )
+        assert plain_key(HoldsMixed(Mixed.ONE)) != plain_key(HoldsMixed(one)) is not None
 
 
 @pytest.mark.usefixtures("purity_unchecked")
-def test_an_enum_fact_is_found_again_and_one_not_keyed_keeps_nothing() -> None:
+def test_an_enum_fact_is_found_again_whatever_its_class_mixes_in() -> None:
     """A fact holding a ``Mode`` member is keyed, and what read it found again in a second
-    design space; one holding a ``Mixed`` member keeps nothing for what read it. Both answer
-    as today's engine."""
+    design space; so is one holding a ``Mixed`` member (an ``int`` mixed in). Both answer as
+    today's engine."""
 
     class Paced(Space):
         mode: Mode = Param()
@@ -1884,15 +1922,12 @@ def test_an_enum_fact_is_found_again_and_one_not_keyed_keeps_nothing() -> None:
         def double(self) -> int:
             return int(self.mode) * 2
 
-    for shape, fact, answer, kept in (
-        (Paced, Mode.QUICK, "fast", True),
-        (Counting, Mixed.TWO, "double", False),
-    ):
+    for shape, fact, answer in ((Paced, Mode.QUICK, "fast"), (Counting, Mixed.TWO, "double")):
         running = cached()
         for _ in range(2):
             made = running.make(shape, {"mode": fact}, {})
             made.query(answer)
-        assert (counters(running).hits > 0) is kept, shape
+        assert counters(running).hits > 0, shape
         today = TODAY.make(shape, {"mode": fact}, {})
         assert compare.everything(today, made).lines() == [], shape
 
