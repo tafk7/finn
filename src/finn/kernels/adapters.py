@@ -6,7 +6,7 @@
 A channel compares what its source presents with what its sink requires and
 derives a plan (``finn.dataflow.plan``): reorders, width conversions and marker
 synthesis, split at the channel's transport. Each side of the transport has its
-adapter Decision, which chooses the hardware that carries out that side of the
+adapter selector, which chooses the hardware that carries out that side of the
 plan. Each candidate is a fixed chain of FinnLib modules and refuses every plan
 that chain does not realize, so at most one candidate survives a side:
 
@@ -91,7 +91,7 @@ class Stage:
 
     ``module`` is its leaf, placed at ``label``: the node path of its kernel
     below whatever places it (``input_gen.input_gen`` below an adapter
-    Decision; ``adapter.input_gen.input_gen`` below the channel).
+    selector; ``adapter.input_gen.input_gen`` below the channel).
     """
 
     module: Leaf
@@ -161,7 +161,7 @@ def _stage_name(kinds: Sequence[str], index: int) -> str:
     return kind if not earlier else f"{kind}_{earlier}"
 
 
-# -- the candidates of a channel's adapter Decision --------------------------------------
+# -- the cases of a channel's adapter selector -------------------------------------------
 
 
 def _side(name: str, side: str) -> BeatSequence:
@@ -235,7 +235,7 @@ class StreamAdapter(KernelSpace):
     @declared_reads("realization")
     def stages(self) -> tuple[Stage, ...]:
         """Each child's module and its ports' contracts, labelled below the adapter
-        Decision: its candidate (the chain), then the stage. Each chain declares what its
+        selector: its case (the chain), then the stage. Each chain declares what its
         own stages read (``_chain``); this base places no stage."""
         return self._stages()
 
@@ -312,12 +312,12 @@ def _chain(modules: tuple[str, ...]) -> type[StreamAdapter]:
 OUTPUT_ADAPTERS: dict[str, type[StreamAdapter]] = {
     "_".join(chain): _chain(chain) for chain in OUTPUT_CHAINS
 }
-"""The candidates of a channel's ``output_adapter`` Decision, by key."""
+"""The cases of a channel's ``output_adapter`` selector, by key."""
 
 ADAPTERS: dict[str, type[StreamAdapter]] = {
     "_".join(chain): _chain(chain) for chain in INPUT_CHAINS
 }
-"""The candidates of a channel's ``adapter`` Decision (the input side), by key."""
+"""The cases of a channel's ``adapter`` selector (the input side), by key."""
 
 
 __all__ = [

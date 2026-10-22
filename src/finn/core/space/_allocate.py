@@ -8,11 +8,11 @@ The own scope is the Space class's, its formals its template's ``param`` nodes, 
 guard a node standing for wherever it is placed. A child node and a Decision over
 nodes' candidates each place a stub, linked from its class's template (linked first):
 a stub holds the bindings this body writes for the child's formals (a literal or a
-default as a value, no node; a reference or a fresh Decision as a node) and nothing of
-the child's own. Each member gets its node and the task that lowers it. A named shared
-Decision then gets one owning node, in the own scope or a stub. The own scope's
-validity node lists its constraints, its Decisions and formals (each a piece where it
-is bound to a fresh Decision, decided where placed) and each stub's validity.
+default as a value, no node; a reference as a node) and nothing of the child's own. A
+Decision given at a call is refused (``_bindings.classify``): a Decision is its class's.
+Each member gets its node and the task that lowers it. The own scope's validity node
+lists its constraints, its Decisions and formals (a formal's piece is decided where
+placed, by its binding) and each stub's validity.
 Afterwards scope identities and membership maps are fixed (``Table.scopes``); later
 phases replace node payloads only.
 """
@@ -32,6 +32,7 @@ from ._nodes import (
     missing_formal,
 )
 from ._ordering import dependency_order
+from ._signatures import resolve_source
 from ._table import (
     UNSUPPLIED_BINDING,
     Binding,
@@ -58,12 +59,12 @@ from .declarations import (
     Param,
     Supplied,
     View,
-    at,
 )
 from .domains import Domain, finite
 from .errors import DefinitionError
 from .expressions import Expr
 from .ir import Argument, NodeKind
+from .results import reject
 from .semantics import BOOL, STRING, ValueSemantics
 
 if TYPE_CHECKING:
@@ -72,17 +73,39 @@ if TYPE_CHECKING:
 _OWNER = "space.allocate"
 
 
-def _matches(expected: str) -> Callable[..., object]:
-    def matches(*, selected: str) -> bool:
+def _names_case(expected: str, argument: str) -> Callable[..., object]:
+    """A case guard: the selector's value names ``expected``. A chosen selector's reads
+    the decision as ``selected``; a derived selector's reads its value as ``picked``."""
+
+    def selected(*, selected: str) -> bool:
         return selected == expected
 
-    return matches
+    def picked(*, picked: str) -> bool:
+        return picked == expected
+
+    return selected if argument == "selected" else picked
+
+
+def _picks(cases: tuple[str, ...]) -> Callable[..., object]:
+    """``Select(by=d)``'s value: ``d``'s, where it names a case; else refused at the
+    selector, ``select-no-case`` (a picker never answers "nothing": a ``None`` case does)."""
+
+    def pick(*, value: object) -> object:
+        if type(value) is str and value in cases:
+            return value
+        return reject("select-no-case", f"{value!r} names no case of {list(cases)}")
+
+    return pick
+
+
+def _known(*, picked: object) -> bool:
+    """A derived selector's guard: its value is known (it holds wherever it is read)."""
+    return True
 
 
 _BINDING_KINDS: Mapping[str, NodeKind] = {
     "literal": "const",
     "reference": "alias",
-    "local-decision": "decision",
 }
 
 
@@ -115,10 +138,6 @@ def _declared_kind(declaration: Declaration) -> NodeKind | None:
 class _Allocation:
     def __init__(self, table: Table) -> None:
         self.table = table
-        self.member_positions: dict[int, int] = {}
-        # Named Decisions that are not class attributes, by authoring scope: their uses.
-        self.named: dict[tuple[int, int], list[int]] = {}
-        self.named_declarations: dict[tuple[int, int], Decision[object]] = {}
         # Required formals nothing supplies, reported together after allocation.
         self.missing: list[str] = []
 
@@ -279,9 +298,6 @@ class _Allocation:
             stub.bindings[member_name] = Binding(cast(BindingForm, binding.kind), node=node)
         else:
             draft.named_members[member_name] = node
-        if binding is not None and binding.kind == "local-decision":
-            self.local_decision(draft, node, binding)
-        self.member_positions[node] = len(self.table.members)
         self.table.members.append(MemberTask(node, draft.index, member_name, declaration, binding))
 
     def unsupplied(
@@ -301,23 +317,6 @@ class _Allocation:
         if default is MISSING or default is UNSUPPLIED:
             return None, "present"  # no alternatives: unsupplied
         return PlacementBinding(default, "literal"), "const"
-
-    def local_decision(self, draft: ScopeDraft, node: int, binding: PlacementBinding) -> None:
-        """An inline Decision: one use keys it at the formal; a shared one needs a name."""
-        decision = cast(Decision[object], binding.supplier)
-        if decision.name is None:
-            if len(decision.sites) > 1:
-                raise DefinitionError.broken(
-                    "shared-decision-unnamed",
-                    _OWNER,
-                    f"Decision{at(decision.origin)} supplies {len(decision.sites)} formals "
-                    f"({', '.join(decision.sites)}): a shared decision must be named. Make it "
-                    'a class attribute, or pass Decision(..., name="...")',
-                )
-            return
-        identity = (draft.source_scope, id(decision))
-        self.named.setdefault(identity, []).append(node)
-        self.named_declarations[identity] = decision
 
     def place(
         self,
@@ -356,7 +355,17 @@ class _Allocation:
         scope.named_children[name] = child
 
     def choice(self, scope: ScopeDraft, name: str, decision: NodeDecision) -> None:
-        """A Decision over nodes: its selector, and a guarded scope per candidate."""
+        """A selector: its value, and a guarded scope per case.
+
+        Chosen (a Decision over nodes, ``Select`` without ``by=``), its value is the
+        decision ``<key>`` and each case's scope is placed under ``<key>.<case>.$selected``,
+        the decision naming the case. Picked (``Select(by=d)``), it has no key: its value
+        ``<key>`` is a derived node reading ``d``, refused ``select-no-case`` where ``d``
+        names no case; a guard ``<key>.$known`` holds wherever that value is known (refused
+        where it refuses); and each case guard reads the value inside that guard, by an
+        argument named ``picked`` so it is never taken for a chosen selector's case guard
+        (``_reads.case_guards``). A refused picker is one piece, in the selector's name:
+        a piece is counted at the highest refused guard of its chain (``_world``)."""
         key = member_key(scope.name, name)
         guard = self.table.guarded(
             scope.index,
@@ -365,14 +374,34 @@ class _Allocation:
             key + ".$guard",
             owner=key,
         )
-        selector = self.table.reserve(
-            scope.index, key, "decision", STRING, guard=guard, origin=decision.origin
-        )
-        self.table.nodes[selector] = replace(
-            self.table.nodes[selector],
-            domain=cast(Domain[object], finite(decision.candidates, STRING)),
-            required_choice=decision.required,
-        )
+        cases_guard: int | None
+        if decision.by is None:
+            selector = self.table.reserve(
+                scope.index, key, "decision", STRING, guard=guard, origin=decision.origin
+            )
+            self.table.nodes[selector] = replace(
+                self.table.nodes[selector],
+                domain=cast(Domain[object], finite(decision.candidates, STRING)),
+            )
+            cases_guard, argument = guard, "selected"
+        else:
+            selector = self.table.reserve(
+                scope.index, key, "derived", STRING, guard=guard, origin=decision.origin
+            )
+            self.table.nodes[selector] = replace(
+                self.table.nodes[selector], function=_picks(tuple(decision.candidates))
+            )
+            by = resolve_source(decision.by, scope.effective, f"{key} by=")
+            self.table.picks.append((selector, scope.index, by))
+            cases_guard = self.table.reserve(
+                scope.index, key + ".$known", "derived", BOOL, guard=guard, source_owner=key
+            )
+            self.table.nodes[cases_guard] = replace(
+                self.table.nodes[cases_guard],
+                function=_known,
+                arguments=(Argument("picked", selector),),
+            )
+            argument = "picked"
         scope.named_members[name] = selector
         choice = ChoiceDraft(len(self.table.choice_drafts), scope.index, key, guard, selector)
         self.table.choice_drafts.append(choice)
@@ -380,7 +409,7 @@ class _Allocation:
             scope.choices[alias] = choice.index
             scope.members[alias] = selector
         condition = scope.effective.guards.get(decision)
-        if isinstance(condition, Supplied):
+        if isinstance(condition, Supplied) and decision.by is None:
             # Guarded by the supply of a formal: whether it applies is decided where the
             # template is placed (it never does where the formal is unsupplied); its
             # candidates are compiled, and what exists only where it applies is marked.
@@ -398,13 +427,13 @@ class _Allocation:
                 case_key + ".$selected",
                 "derived",
                 BOOL,
-                guard=guard,
+                guard=cases_guard,
                 source_owner=case_key,
             )
             self.table.nodes[case_guard] = replace(
                 self.table.nodes[case_guard],
-                function=_matches(case),
-                arguments=(Argument("selected", selector),),
+                function=_names_case(case, argument),
+                arguments=(Argument(argument, selector),),
             )
             case_guard = cast(
                 int,
@@ -505,7 +534,6 @@ class _Allocation:
                     self.choice(scope, name, cast(NodeDecision, declaration))
         if self.missing:
             raise DefinitionError.broken("formal-unsupplied", _OWNER, "; ".join(self.missing))
-        self.own_named_decisions()
         self.validity_pieces()
         # All occurrence identities and membership maps are now stable. Later
         # phases replace node payloads, never scope identities.
@@ -514,9 +542,9 @@ class _Allocation:
     def validity_pieces(self) -> None:
         """The own scope's validity pieces: its constraints, its Decisions (each a piece
         only where its domain lists no value, or its guard is refused) and its formals
-        (each a piece where it is bound to a fresh Decision, decided where the template is
-        placed), in node order, then each stub's validity (its child's, imported), in
-        placement order: a child node, or a candidate of a Decision over nodes."""
+        (decided by their binding where the template is placed), in node order, then each
+        stub's validity (its child's, imported), in placement order: a child node, or a
+        selector's case."""
         nodes, drafts = self.table.nodes, self.table.drafts
         candidates = {"constraint", "decision", "param"}
         own: dict[int, list[int]] = {draft.index: [] for draft in drafts}
@@ -532,106 +560,3 @@ class _Allocation:
                 continue
             index = cast(int, draft.validity)
             nodes[index] = replace(nodes[index], constraints=tuple(own[draft.index]))
-
-    def own_named_decisions(self) -> None:
-        """A named Decision that is not a class attribute is one decision.
-
-        It is owned by the lowest scope containing every node it supplies, so
-        it applies whenever that scope does, and it is keyed by that scope and
-        its name. Every formal it supplies becomes an alias of it that keeps its
-        own node's guard, and through which the decision may be edited.
-        """
-
-        for identity, uses in self.named.items():
-            decision = self.named_declarations[identity]
-            owner = self.lowest_common_scope([self.table.nodes[use].scope for use in uses])
-            draft = self.table.drafts[owner]
-            name = cast(str, decision.name)
-            key = member_key(draft.name, name)
-            taken = name in draft.named_members or name in draft.named_children
-            if draft.stub is not None:
-                # Owned at a child: its own members and named Decisions are its template's.
-                template = draft.stub.template
-                taken = taken or name in draft.effective.members or name in template.named_members
-            if taken:
-                raise DefinitionError.broken(
-                    "shared-decision-name-taken",
-                    _OWNER,
-                    f"{key}: the shared Decision{at(decision.origin)} is named like a member "
-                    f"of {draft.effective.space_type.__qualname__}; choose another name",
-                    declaration=key,
-                )
-            first = self.table.nodes[uses[0]]
-            self.table.applying = self.applying(uses, owner, key, identity)
-            node = self.table.reserve(
-                owner,
-                key,
-                "decision",
-                first.semantics,
-                guard=draft.guard,
-                origin=decision.origin,
-            )
-            self.table.applying = None
-            self.table.named.append(node)
-            task = self.table.members[self.member_positions[first.index]]
-            self.member_positions[node] = len(self.table.members)
-            self.table.members.append(replace(task, index=node, owner_scope=owner))
-            draft.members[decision] = node
-            draft.named_members[name] = node
-            for use in uses:
-                position = self.member_positions[use]
-                previous = cast(PlacementBinding, self.table.members[position].binding)
-                self.table.members[position] = replace(
-                    self.table.members[position],
-                    binding=replace(previous, supplier=node, kind="reference"),
-                )
-                self.table.nodes[use] = replace(self.table.nodes[use], kind="alias")
-                self.table.editable_aliases.add(use)
-                stub = self.table.drafts[self.table.nodes[use].scope].stub
-                if stub is not None:
-                    member = self.table.members[position].name
-                    stub.bindings[member] = Binding("named", node=use)
-
-    def applying(
-        self, uses: list[int], owner: int, key: str, identity: tuple[int, int]
-    ) -> int | None:
-        """The Decision over nodes a named shared Decision exists only where it applies,
-        where its every use is in that choice's candidates. Where only some
-        are, the Decision is owned by the same scope wherever the choice applies or not;
-        a placement-dependent owner is refused."""
-        requires = {self.table.requires.get(use) for use in uses}
-        if len(requires) == 1:
-            return requires.pop()
-        always = [use for use in uses if self.table.requires.get(use) is None]
-        if always and owner == self.lowest_common_scope(
-            [self.table.nodes[use].scope for use in always]
-        ):
-            return None
-        decision = self.named_declarations[identity]
-        common = self.table.drafts[owner]
-        raise DefinitionError.broken(
-            "template-owner-per-placement",
-            _OWNER,
-            f"{key}: the shared Decision{at(decision.origin)} is used in the candidates of a "
-            "Decision over nodes that may never apply (guarded by supplied()) and elsewhere, "
-            "so the scope owning it would depend on the placement; declare the shared "
-            "Decision in the scope common to all its uses (a Decision member of "
-            f"{common.effective.space_type.__qualname__})",
-            declaration=key,
-        )
-
-    def lowest_common_scope(self, scopes: list[int]) -> int:
-        def ancestry(scope: int) -> list[int]:
-            chain = [scope]
-            while (parent := self.table.drafts[chain[-1]].parent) is not None:
-                chain.append(parent)
-            return chain[::-1]
-
-        chains = [ancestry(scope) for scope in scopes]
-        common = chains[0][0]
-        for level in range(min(len(chain) for chain in chains)):
-            candidates = {chain[level] for chain in chains}
-            if len(candidates) != 1:
-                break
-            common = chains[0][level]
-        return common

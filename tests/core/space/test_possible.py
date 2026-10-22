@@ -25,6 +25,7 @@ from finn.core.space import (
     Decision,
     Param,
     Rejected,
+    Select,
     Space,
     Unresolved,
     constraint,
@@ -45,7 +46,7 @@ def unassigned(answer: object) -> bool:
 
 class Unit(Space):
     width: int = Param()
-    compute: Packed | Stub = Decision(CORES, width=width)
+    compute: Packed | Stub = Select(**CORES, width=width)
 
 
 def test_one_possible_case_is_not_filled_in() -> None:
@@ -113,7 +114,7 @@ def test_a_validity_waiting_on_an_open_choice_does_not_refuse() -> None:
     class Root(Space):
         width: int = Param()
         entries: dict[str, type[Space] | Space] = {"waiting": Waiting, "stub": Stub}
-        compute: Waiting | Stub = Decision(entries, width=width)
+        compute: Waiting | Stub = Select(**entries, width=width)
 
     point = design_space(Root(width=7))  # odd: stub refuses; waiting waits on its pe
     candidate = inspection.candidate(point, Root.compute, "waiting")
@@ -139,7 +140,7 @@ def test_a_validity_refused_beside_a_piece_waiting_refuses() -> None:
     class Root(Space):
         width: int = Param()
         entries: dict[str, type[Space] | Space] = {"both": Both, "stub": Stub}
-        compute: Both | Stub = Decision(entries, width=width)
+        compute: Both | Stub = Select(**entries, width=width)
 
     point = design_space(Root(width=8))  # even: the stub core takes it; both always refuses
     assert unassigned(point.query(Root.compute))
@@ -234,7 +235,7 @@ class Hop(Space):
         return isinstance(self.compute, Stub)
 
     burst: int = Decision(values=(1, 2))
-    compute: Limited | Stub = Decision(entries, width=width)
+    compute: Limited | Stub = Select(**entries, width=width)
 
     @constraint
     def bursts(self) -> bool | Rejected:
@@ -313,7 +314,7 @@ def test_a_values_trial_keeps_what_the_value_does_not_reach() -> None:
 
         # Read first, on the configuration itself: the constraint on ``wide`` reads ``width``.
         wide: bool = Decision(values=(False, True))
-        compute: Packed | Stub = Decision(CORES, width=width)
+        compute: Packed | Stub = Select(**CORES, width=width)
 
         @constraint
         def lanes_present(self) -> bool | Rejected:

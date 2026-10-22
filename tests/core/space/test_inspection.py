@@ -18,9 +18,9 @@ from finn.core.space import (
     BoundDecision,
     Const,
     Decision,
-    Domain,
     Inapplicable,
     Param,
+    Select,
     Space,
     Unresolved,
     View,
@@ -97,7 +97,7 @@ def test_discovery_reports_owning_decisions_and_author_names_for_selectors() -> 
     class Root(Space):
         source: int = Decision(values=(2, 4))
         child = Child(supplied=source)
-        implementation: Child = Decision({"a": Child(supplied=1), "b": Child(supplied=2)})
+        implementation: Child = Select(a=Child(supplied=1), b=Child(supplied=2))
 
     point = design_space(Root())
     decisions = inspection.decisions(point)
@@ -209,8 +209,8 @@ def test_singleton_choice_metadata_exposes_an_ordinary_editable_selector() -> No
         value = Const(1)
 
     class Root(Space):
-        implementation: Child = Decision({"only": Child()})
-        optional: Child | None = Decision({"some": Child()}, optional=True)
+        implementation: Child = Select(only=Child())
+        optional: Child | None = Select(none=None, some=Child())
 
     info = {item.key: item for item in inspection.decisions(Root)}["implementation"]
     assert (info.key, info.selector, info.cases) == ("implementation", True, ("only",))
@@ -272,12 +272,12 @@ class Wide(Space):
 
 class Deep(Space):
     depth: int = Decision(values=(1, 2))
-    mode: Wide | Bare = Decision({"wide": Wide(), "bare": Bare()})
+    mode: Wide | Bare = Select(wide=Wide(), bare=Bare())
 
 
 class Top(Space):
     first: int = Decision(values=(1, 2))
-    outer: Deep | Bare = Decision({"deep": Deep(), "bare": Bare()})
+    outer: Deep | Bare = Select(deep=Deep(), bare=Bare())
 
 
 def keys_of(subject: Space | type[Space]) -> tuple[list[str], list[str]]:
@@ -294,32 +294,23 @@ def test_an_enclosing_selector_comes_before_the_choices_in_its_cases() -> None:
     assert keys_of(Top) == (order, order)
 
 
-def preferred_first(values: tuple[int, ...], *, preferred: int) -> list[int]:
-    return sorted(values, key=lambda value: value != preferred)
-
-
-def ranked_by(preferred: object) -> Domain[int]:
-    """Values 1 and 2, ranked with ``preferred`` first: an order reads a choice."""
-    return domain(
-        accepts=lambda *, candidate: candidate in (1, 2),
-        candidates=lambda: (1, 2),
-        order=preferred_first,
-        preferred=preferred,
-    )
-
-
 class Source(Space):
     b: int = Decision(values=(1, 2))
 
 
 class Listed(Space):
     source = Source()
-    a: int = Decision(domain=ranked_by(source.b))
+
+    @derived
+    def wide(self) -> bool:
+        return self.source.b > 1
+
+    a: int = Decision(values=(1, 2), when=wide)
 
 
-def test_a_choice_whose_list_reads_another_choice_comes_after_it() -> None:
+def test_a_choice_whose_presence_reads_another_choice_comes_after_it() -> None:
     # ``a`` is declared first (a Space's own choices before those of the Spaces it
-    # places); its list's order reads ``source.b``, so it comes after it.
+    # places); its presence reads ``source.b``, so it comes after it.
     assert [item.key for item in inspection.decisions(Listed)] == ["source.b", "a"]
     assert keys_of(Listed) == (["source.b", "a"], ["source.b", "a"])
 
@@ -335,13 +326,18 @@ class Looped(Space):
         return self.a
 
     fed = Fed(u=through_a)
-    a: int = Decision(domain=ranked_by(fed.b))
+
+    @derived
+    def wide(self) -> bool:
+        return self.fed.b > 1
+
+    a: int = Decision(values=(1, 2), when=wide)
 
 
 def test_choices_reading_one_another_are_taken_in_declaration_order_and_noted(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    # ``a``'s list reads ``fed.b``, whose Space's facts read ``a``: a loop.
+    # ``a``'s presence reads ``fed.b``, whose Space's facts read ``a``: a loop.
     with caplog.at_level(logging.WARNING, logger="finn.core.reporting.manifest"):
         assert keys_of(Looped) == (["a", "fed.b"], ["a", "fed.b"])
     (record,) = [r for r in caplog.records if getattr(r, FINDING).code == "flow-loop"]

@@ -177,7 +177,7 @@ def present(point: Space, node: object) -> bool:
     if target is None:
         if isinstance(node, Param):
             return _supplied(current, point, node)
-        raise RequestError("present() takes a node (a child or a candidate) or a value input")
+        raise RequestError("present() takes a node (a child or a selector's case) or a value input")
     presence = current.linked.scopes[target].guard
     if presence is None:
         return True
@@ -254,8 +254,7 @@ def decision_index(point: Space, reference: object) -> NodeId:
 
 def candidates(point: Space, reference: object) -> QueryResult[tuple[object, ...]] | None:
     """A choice's listed values (its domain's enumeration, each value its membership
-    accepts), ranked by its domain's order where it has one (None: known by membership
-    only), under its guard."""
+    accepts), in their listed order (None: known by membership only), under its guard."""
     from ._world import candidates as listed
 
     driver_only("domain enumeration")
@@ -328,7 +327,7 @@ def _scope_choice(linked: Linked, scope: int, decision: object) -> Choice:
     try:
         return linked.choices[choices[record]]
     except (KeyError, TypeError) as error:
-        raise RequestError("the Decision over nodes is not part of this compiled scope") from error
+        raise RequestError("the selector is not part of this compiled scope") from error
 
 
 def selected_candidate(point: Space, decision: Declaration) -> Space | None:
@@ -352,9 +351,9 @@ def candidate(point: Space, decision: object, case: str) -> Space | None:
         return reader.candidate(point, decision, case)
     current = _driver(point)
     if type(case) is not str:
-        raise RequestError("a candidate key must be a string")
+        raise RequestError("a case name must be a string")
     choice = _scope_choice(current.linked, point._scope, decision)
     for key, index in choice.cases:
         if key == case:
             return None if index is None else attach(current, index)
-    raise RequestError(f"{choice.key}: unknown candidate {case!r}")
+    raise RequestError(f"{choice.key}: unknown case {case!r}")

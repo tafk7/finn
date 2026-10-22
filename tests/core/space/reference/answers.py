@@ -204,7 +204,6 @@ class Open:
     what its presence waits on, empty when present."""
 
     waits: tuple[str, ...] = ()
-    required: bool = False
 
 
 @dataclass(frozen=True)

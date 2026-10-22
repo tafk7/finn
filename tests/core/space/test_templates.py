@@ -26,6 +26,7 @@ from core.space._toys_support import Boiler, HeatPump, House, Room, Thermostat
 from finn.core.space import (
     Decision,
     Param,
+    Select,
     Space,
     View,
     _template,
@@ -69,23 +70,20 @@ class Pair(Space):
         return self.first + self.second
 
 
-# Named shared Decisions: bound at calls, never class attributes.
-_WIDTH: int = Decision(values=(1, 2, 4), name="width")
-_DEPTH: int = Decision(values=(2, 3), name="depth")
+class BoundIntoChildren(Space):
+    """Decisions of the class bound into its children's formals: one bound twice into one
+    child, one into two children. Each is the class's own, keyed by its name."""
 
-
-class OwnedAtChild(Space):
-    """A named shared Decision whose uses are one child's (the child owns it), and one
-    whose uses are two children's (the parent owns it)."""
-
-    pair = Pair(first=_WIDTH, second=_WIDTH)
-    other = Pair(first=1, second=_DEPTH)
-    again = Pair(first=_DEPTH, second=4)
+    width: int = Decision(values=(1, 2, 4))
+    depth: int = Decision(values=(2, 3))
+    pair = Pair(first=width, second=width)
+    other = Pair(first=1, second=depth)
+    again = Pair(first=depth, second=4)
 
 
 class Heater(Space):
-    heating: Boiler | HeatPump = Decision({"boiler": Boiler(kw=24), "heat_pump": HeatPump(kw=8)})
-    pump: HeatPump | None = Decision({"heat_pump": HeatPump(kw=4)}, optional=True)
+    heating: Boiler | HeatPump = Select(boiler=Boiler(kw=24), heat_pump=HeatPump(kw=8))
+    pump: HeatPump | None = Select(none=None, heat_pump=HeatPump(kw=4))
 
 
 class ReadsThroughAChild(Space):
@@ -99,7 +97,7 @@ class ReadsThroughAChild(Space):
 
 
 class ReadsItself(Space):
-    pump: HeatPump | None = Decision({"heat_pump": HeatPump(kw=4)}, optional=True)
+    pump: HeatPump | None = Select(none=None, heat_pump=HeatPump(kw=4))
     cop = View(pump.cop)  # type: ignore[union-attr]
 
 
@@ -138,13 +136,9 @@ class Edge(Space):
 
     contents: int = Param(required=False)
     valued = supplied(contents)
-    source: Memory | Fetcher = Decision(
-        {"memory": Memory, "fetch": Fetcher}, when=valued, contents=contents
-    )
+    source: Memory | Fetcher = Select(memory=Memory, fetch=Fetcher, when=valued, contents=contents)
     words = View(source.words)
-    cache: Fetcher | None = Decision(
-        {"fetch": Fetcher}, optional=True, when=valued, contents=contents
-    )
+    cache: Fetcher | None = Select(none=None, fetch=Fetcher, when=valued, contents=contents)
     cache_lanes = View(cache.lanes)  # type: ignore[union-attr]
 
 
@@ -168,30 +162,39 @@ class Stream(Space):
         return self.contents * self.lanes
 
 
-_SPLIT: int = Decision(values=(1, 4), name="split")
+class WideStream(Space):
+    """A stream whose lanes are its own choice, which exists only while ``wide``."""
+
+    contents: int = Param()
+    wide: bool = Param()
+    lanes: int = Decision(values=(1, 2), when=wide)
+
+    @view
+    def words(self) -> int:
+        return self.contents * self.lanes
 
 
 class Guarded(Space):
-    """What exists only where a supplied-guarded choice applies: a case's guard, a
-    candidate's formal bound to a fresh Decision with a ``when`` and one bound to an
-    expression, and a named shared Decision only its candidates use."""
+    """What exists only where a supplied-guarded choice applies: a case's guard, a case's
+    own choice with a ``when``, and a case's formal bound to an expression; and a Decision
+    of the class its cases share, which exists wherever the class does."""
 
     contents: int = Param(required=False)
     wide: bool = Decision(values=(False, True))
+    split: int = Decision(values=(1, 4))
     valued = supplied(contents)
-    source: Stream | None = Decision(
-        {
-            "fetch": Stream(lanes=Decision(values=(1, 2), when=wide), when=wide),
-            "plus": Stream(lanes=contents + 1),
-        },
-        optional=True,
+    source: WideStream | Stream | None = Select(
+        none=None,
+        fetch=WideStream(wide=wide, when=wide),
+        plus=Stream(lanes=contents + 1),
         when=valued,
         contents=contents,
     )
     words = View(source.words)  # type: ignore[union-attr]
-    pair: Stream | None = Decision(
-        {"left": Stream(lanes=_SPLIT), "right": Stream(lanes=_SPLIT)},
-        optional=True,
+    pair: Stream | None = Select(
+        none=None,
+        left=Stream(lanes=split),
+        right=Stream(lanes=split),
         when=valued,
         contents=contents,
     )
@@ -203,10 +206,11 @@ class GuardedOnceAndNot(Space):
 
 
 class GuardedDecision(Space):
-    """A formal bound to a fresh Decision with a ``when``."""
+    """A formal bound to a Decision of the class with a ``when``."""
 
     big: bool = Decision(values=(False, True))
-    room = Room(area=Decision(values=(10, 20), when=big))
+    area: int = Decision(values=(10, 20), when=big)
+    room = Room(area=area)
     hall = Room(area=12, when=big)
 
 
@@ -233,7 +237,7 @@ class Outer(Space):
 
 class Packed(Space):
     lanes: int = Param()
-    packed: Boiler | None = Decision({"compute": Boiler(kw=lanes)}, optional=True)
+    packed: Boiler | None = Select(none=None, compute=Boiler(kw=lanes))
 
 
 class Plain(Space):
@@ -243,12 +247,12 @@ class Plain(Space):
 class Dotted(Space):
     """Cases named so that a scope's name holds a choice's: ``compute.packed.packed.compute``."""
 
-    compute: Packed | Plain = Decision({"packed": Packed, "plain": Plain}, lanes=2)
+    compute: Packed | Plain = Select(packed=Packed, plain=Plain, lanes=2)
     kw = View(compute["packed"].packed.kw)  # type: ignore[index]
 
 
 EDGE_CASES = (
-    OwnedAtChild,
+    BoundIntoChildren,
     ReadsThroughAChild,
     ReadsLater,
     SuppliedOnceAndNot,
@@ -264,12 +268,11 @@ def test_an_edge_case_resolves_as_it_expands(space_type: type[Space]) -> None:
     assert_expands([space_type])
 
 
-def test_a_named_decision_used_only_by_one_child_is_its_own() -> None:
-    template = link_template(OwnedAtChild)
-    assert {template.nodes[index].key for index in template.contributed} == {"pair.width"}
-    assert template.nodes[template.keys["depth"]].scope == 0
-    linked = expand(OwnedAtChild)
-    assert linked.scopes[linked.nodes[linked.keys["pair.width"]].scope].name == "pair"
+def test_a_decision_bound_into_children_is_the_class_own() -> None:
+    template = link_template(BoundIntoChildren)
+    assert {template.nodes[index].key for index in template.contributed} == set()
+    linked = expand(BoundIntoChildren)
+    assert linked.nodes[linked.keys["width"]].scope == 0
     assert linked.nodes[linked.keys["depth"]].scope == 0
 
 
@@ -323,17 +326,17 @@ def test_a_class_placed_many_times_is_compiled_once(monkeypatch: pytest.MonkeyPa
 
 
 def test_a_template_counts_its_own_nodes_by_kind() -> None:
-    template = link_template(OwnedAtChild)
+    template = link_template(BoundIntoChildren)
     assert template.counts() == {
         "guard": 1,
         "validity": 1,
         "decision": 2,
-        # Each formal bound to a named shared Decision: its use, an editable alias.
+        # Each formal bound to one of the class's Decisions: an alias of it.
         "alias": 4,
         "import": 3,
     }
     # The literals 1 and 4 are values on their stubs, not nodes.
-    assert link_template(OwnedAtChild).scopes[2].bindings["first"].value == 1
+    assert link_template(BoundIntoChildren).scopes[2].bindings["first"].value == 1
     assert len(link_template(Room).nodes) == len(link_template(Room).keys)
 
 
@@ -445,8 +448,8 @@ def test_a_change_names_a_node_of_an_addressed_scope(
 def test_an_identity_standing_for_a_decision_is_refused_beside_its_own(
     monkeypatch: pytest.MonkeyPatch, permuted: bool
 ) -> None:
-    """A choice has one identity. An id that stands for a decision (a formal's binding to
-    a fresh Decision, an import of a child's Decision) is refused wherever an identity is
+    """A choice has one identity. An id that stands for a decision (an import of a child's
+    Decision) is refused wherever an identity is
     keyed by: a change naming it, alone or beside the decision's own id, is a
     ``RequestError`` (never followed into the decision, so never two changes of one
     choice, nor one choice stored under two ids), in a bind as in a change; and no handle
@@ -458,7 +461,6 @@ def test_an_identity_standing_for_a_decision_is_refused_beside_its_own(
         monkeypatch.delenv(PERMUTE, raising=False)
 
     class Standing(Space):  # a class of its own: its model is made under this mode
-        room = Room(area=Decision(values=(10, 20)))
         fetcher = Fetcher(contents=4)
         lanes = View(fetcher.lanes)
 
@@ -473,8 +475,8 @@ def test_an_identity_standing_for_a_decision_is_refused_beside_its_own(
         index, own = structure._id(root, node), structure.ident(root, node)
         if own is not None and own != index and structure.nodes[own].kind == "decision":
             standing[structure.nodes[own].key] = index
-    assert set(standing) == {"room.area", "fetcher.lanes"}
-    for key, value in (("room.area", 20), ("fetcher.lanes", 2)):
+    assert set(standing) == {"fetcher.lanes"}
+    for key, value in (("fetcher.lanes", 2),):
         change = point.field(handles[key]).change(value)
         assert point.try_with_choices(change).accepted
         assert model.decision(change.scope, handles[key]) == change.node

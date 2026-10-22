@@ -16,6 +16,7 @@ from finn.core.space import (
     Inapplicable,
     Param,
     Rejected,
+    Select,
     Space,
     Unresolved,
     View,
@@ -55,7 +56,7 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
     # selected candidate's member by name.
     class Root(Space):
         size: int = Param()
-        implementation: Good | Bad = Decision({"good": Good(size=size), "bad": Bad()})
+        implementation: Good | Bad = Select(good=Good(size=size), bad=Bad())
         physical = View(implementation.physical)
 
     output = Root.physical

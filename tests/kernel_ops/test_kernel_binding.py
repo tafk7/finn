@@ -7,7 +7,8 @@ A KernelOp binds its kernel class from its facts, by value: its formals, its inp
 tensors at the graph's rank and the values of the initializers it holds. One binding per
 node: its outputs are the kernel's statement, not a fact, so there is no second binding
 for them. Its choice attributes are its kernel class's decision keys, set at conversion by
-each choice's default policy on the kernel alone, with no channel (``KernelOp.defaulted``).
+each choice's policy, the op's (``KernelOp.policies``), on the kernel alone, with no
+channel (``KernelOp.defaulted``).
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.members import (
     VERIFY,
@@ -47,6 +49,8 @@ from finn.kernels.members import (
     verification_counts,
     write_counts,
 )
+from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.policies import Defaulted, Fixed, stated
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.kernels import InferKernelTensors
@@ -111,7 +115,7 @@ def test_one_binding_per_node_serves_its_outputs_and_its_point() -> None:
     # (first valid) take the packed core.
     assert dict(inspection.states(point))["compute"] == inspection.Open()
     defaulted: Any = op.defaulted()
-    assert type(defaulted.compute).__name__ == "PackedDotpKernel"
+    assert type(defaulted.point.compute).__name__ == "PackedDotpKernel"
 
 
 def test_a_held_initializer_is_given_as_contents_never_as_a_tensor() -> None:
@@ -175,26 +179,29 @@ def test_a_graph_tensor_that_disagrees_with_the_facts_is_refused() -> None:
 
 def test_conversion_sets_each_choice_in_play_by_its_policy_on_the_kernel_alone() -> None:
     """Conversion's answer is the node's kernel, nothing else (no channel): each choice in
-    play, in declaration order, at its first valid value, the selector's case first, then
-    the choices of that case alone; those under the case not selected stay absent."""
+    play, in declaration order, at its first valid value: the folding first (MatMul's),
+    then the selector's case, then the choices of that case alone; those under the case not
+    selected stay absent."""
     model = matmul_model()
     op = kernel_op(model, model.graph.node[0])
-    point = op.defaulted()
+    done = op.defaulted()
+    assert isinstance(done, Defaulted) and done.fallbacks == ()
+    point = done.point
     assert isinstance(point, MatMulKernel)
     assert dict(inspection.states(point)) == {
+        "pe": inspection.Set(1),
+        "simd": inspection.Set(1),
         "compute": inspection.Set("packed"),
-        "compute.packed.pe": inspection.Set(1),
-        "compute.packed.simd": inspection.Set(1),
         "compute.packed.compute_pumping": inspection.Set(False),
         "compute.packed.reducer": inspection.Set("tree"),
-        "compute.int8_dsp58.pe": inspection.Absent(),
-        "compute.int8_dsp58.simd": inspection.Absent(),
         "compute.int8_dsp58.compute_pumping": inspection.Absent(),
         "realization": inspection.Absent(),  # a dense MatMul has none
     }
     assert inspection.validity(point).status == "valid"
     thresholding = thresholding_model()
-    activate = kernel_op(thresholding, thresholding.graph.node[0]).defaulted()
+    activated = kernel_op(thresholding, thresholding.graph.node[0]).defaulted()
+    assert isinstance(activated, Defaulted)
+    activate = activated.point
     assert isinstance(activate, ThresholdingAxiKernel)
     assert {key: state for key, state in inspection.states(activate)} == {
         "pe": inspection.Set(1),
@@ -229,6 +236,47 @@ def test_a_choice_no_value_can_be_set_for_keeps_the_node_on_the_host() -> None:
     assert {"dotp-activation-width", "dotp-target"} <= {cause.code for cause in finding.causes}
 
 
+@pytest.mark.parametrize("op", [Conv, MatMul, Thresholding], ids=lambda op: op.__name__)
+def test_every_op_states_its_policies_and_none_states_one_yet(op: type[KernelOp]) -> None:
+    """Every op's policies are well formed, checked when its class was made. None states
+    one yet: each choice is first valid, in listed order, as conversion took it before
+    policies left the engine."""
+    assert dict(op.policies) == {}
+    assert stated(op.__qualname__, op.kernel, op.policies) == {}
+
+
+def test_an_op_s_policy_is_set_at_conversion_wherever_its_class_is_placed() -> None:
+    """A policy keyed by a class-level Decision applies to every placement of that class
+    below the op's kernel: the packed core's reducer, fixed, under MatMul's ``compute``."""
+
+    class Compressing(MatMul):
+        policies = {PackedDotpKernel.reducer: Fixed("compressor")}
+
+    model = matmul_model()
+    node = model.graph.node[0]
+    found = Compressing(node)
+    found.attach_model(model)
+    done = found.defaulted()
+    assert isinstance(done, Defaulted)
+    assert dict(inspection.states(done.point))["compute.packed.reducer"] == (
+        inspection.Set("compressor")
+    )
+
+
+def test_an_op_s_policies_are_checked_when_its_class_is_made() -> None:
+    """A Decision its kernel never reaches is refused where the class is made, and so is a
+    value no policy (``default-policy-undeclared``, ``default-policy-invalid``)."""
+    with refused("default-policy-undeclared", error=DefinitionError, message="MemStreamKernel"):
+
+        class Stored(MatMul):
+            policies = {MemStreamKernel.ram_style: Fixed("block")}
+
+    with refused("default-policy-invalid", error=DefinitionError, message="Fixed"):
+
+        class Unfixed(Thresholding):
+            policies = {ThresholdingAxiKernel.ram_style: "auto"}  # type: ignore[dict-item]
+
+
 def facts(weights: tuple[tuple[int, ...], ...] = STORED, **changed: object) -> Facts:
     x_tensor = Tensor((3, len(weights)), ScalarEncoding(INT3))
     arguments: dict[str, object] = {
@@ -259,7 +307,7 @@ def test_the_member_cache_keys_a_member_by_its_class_and_arguments_by_value() ->
 
 def test_a_key_tells_values_apart_by_their_exact_type() -> None:
     """1, 1.0 and True are equal in Python and three values to the engine."""
-    keys = {key(facts(), {"compute.packed.pe": value}, {}, ()) for value in (1, 1.0, True)}
+    keys = {key(facts(), {"pe": value}, {}, ()) for value in (1, 1.0, True)}
     assert len(keys) == 3
     assert typed((1, (True,))) != typed((1, (1,)))
     assert key(facts(), {}, {}, ()) == key(facts(), {}, {}, ())

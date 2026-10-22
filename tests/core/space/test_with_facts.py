@@ -40,6 +40,7 @@ from finn.core.space import (
     Param,
     Rejected,
     RequestError,
+    Select,
     Space,
     Unresolved,
     ValueHandle,
@@ -326,7 +327,7 @@ class Head(Space):
     """A unit over the support's two cores, given its width."""
 
     width: int = Param()
-    compute: CorePacked | CoreStub = Decision(CORES, width=width)
+    compute: CorePacked | CoreStub = Select(**CORES, width=width)
 
 
 class Front(Space):
@@ -429,12 +430,12 @@ class Holder(Space):
     """A selector with one case, whose validity reads the choice committed under it."""
 
     width: int = Param()
-    compute: Lanes = Decision({"core": Lanes}, width=width)
+    compute: Lanes = Select(core=Lanes, width=width)
 
 
 class Narrow(Space):
     width: int = Param()
-    compute: Tight = Decision({"core": Tight}, width=width)
+    compute: Tight = Select(core=Tight, width=width)
 
 
 def test_a_choice_failing_its_domain_under_new_facts_is_dropped_by_its_domain() -> None:
@@ -513,7 +514,7 @@ class Gate(Space):
     core's choice."""
 
     width: int = Param()
-    compute: Closed = Decision({"closed": Closed}, width=width)
+    compute: Closed = Select(closed=Closed, width=width)
     other: int = Decision(values=(1, 2))
 
 
@@ -557,7 +558,7 @@ class Either(Space):
     """A selector whose two cases are both viable up to width 8, so it stays open."""
 
     width: int = Param()
-    compute: Spread | Closed = Decision(SPREAD_OR_CLOSED, width=width)
+    compute: Spread | Closed = Select(**SPREAD_OR_CLOSED, width=width)
 
 
 def test_a_choice_under_an_open_selector_is_refused_by_its_own_check_or_waits() -> None:

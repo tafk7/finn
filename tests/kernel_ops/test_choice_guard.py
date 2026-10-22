@@ -25,11 +25,13 @@ from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.thresholding import Thresholding
 
 FOLDING: dict[str, int | str] = {
-    "compute.packed.pe": 2,
-    "compute.packed.simd": 2,
+    "pe": 2,
+    "simd": 2,
     "compute.packed.reducer": "tree",
 }
 """An integer key and a string one."""
+PUMPING = "compute.int8_dsp58.compute_pumping"
+"""A choice of the INT8 core's own, under its case."""
 
 
 def matmul(model: ModelWrapper) -> MatMul:
@@ -53,7 +55,8 @@ def test_a_key_never_stored_is_absent_and_its_value_in_effect_is_read_from_the_p
     selected, and the value in effect is the point's. A node made by hand stores only what
     was set on it (conversion's policies never ran on it): a Thresholding's
     ``use_axilite``, never set, is open, and nothing sets it in its place; a MatMul's
-    ``compute`` set to ``packed`` leaves ``compute.int8_dsp58.pe`` out of play."""
+    ``compute`` set to ``packed`` leaves ``compute.int8_dsp58.compute_pumping`` out of
+    play."""
     model = configured(
         thresholding_model(),
         {"activate": {"pe": 2, "ram_style": "distributed", "block_stages": 1}},
@@ -72,15 +75,15 @@ def test_a_key_never_stored_is_absent_and_its_value_in_effect_is_read_from_the_p
     assert dict(inspection.states(found.point()))["use_axilite"] == inspection.Open()
 
     op = matmul(configured(matmul_model(), {"first": {"compute": "packed", **FOLDING}}))
-    assert op.choices()["compute"] == "packed" and "compute.int8_dsp58.pe" not in op.choices()
+    assert op.choices()["compute"] == "packed" and PUMPING not in op.choices()
     with refused(
         "choice-absent",
         owner=MatMul.op_type,
         error=KernelOpError,
         node="first",
-        keys=("compute.int8_dsp58.pe",),
+        keys=(PUMPING,),
     ):
-        op.get_nodeattr("compute.int8_dsp58.pe")
+        op.get_nodeattr(PUMPING)
     assert type(op.point().compute).__name__ == "PackedDotpKernel"  # type: ignore[attr-defined]
 
 
@@ -110,9 +113,9 @@ def test_setting_an_absent_choice_is_refused_and_leaves_the_node() -> None:
         owner=MatMul.op_type,
         error=KernelOpError,
         node="first",
-        keys=("compute.packed.pe",),
+        keys=("pe",),
     ):
-        matmul(model).set_nodeattr("compute.packed.pe", 2)
+        matmul(model).set_nodeattr("pe", 2)
     assert model.graph.node[0].SerializeToString() == before
 
 

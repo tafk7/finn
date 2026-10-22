@@ -24,6 +24,7 @@ from finn.core.space import (
     Inapplicable,
     Param,
     Rejected,
+    Select,
     Space,
     constraint,
     derived,
@@ -58,7 +59,7 @@ def _blank() -> Space:
 
     class Kernel(Space):
         width: int = Param()
-        compute: Fast | Slow = Decision({"fast": Fast(width=width), "slow": Slow()})
+        compute: Fast | Slow = Select(fast=Fast(width=width), slow=Slow())
 
     return design_space(Kernel(width=2))
 
@@ -76,7 +77,7 @@ class Gated(Space):
 
 
 class GatedKernel(Space):
-    compute: Gated | Slow = Decision({"gated": Gated(), "slow": Slow()})
+    compute: Gated | Slow = Select(gated=Gated(), slow=Slow())
 
 
 @pytest.fixture(autouse=True)

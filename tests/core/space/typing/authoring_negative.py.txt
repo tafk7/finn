@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from finn.core.space import Decision, Param, Space, View, constraint, derived, view, ValueSemantics, QueryResult, Available, design_space
+from finn.core.space import Decision, Param, Select, Space, View, constraint, derived, view, ValueSemantics, QueryResult, Available, design_space
 
 class Child(Space):
     width: int = Param()
@@ -38,9 +38,9 @@ class Parent(Space):
     unknown = Child(width=1, depth=2)  # E
     wrong_reference = Child(width=child.label)  # E
     wrong_guard = Child(width=1, when=child.width)  # E
-    heating: Boiler | HeatPump = Decision({"boiler": Boiler(kw=1), "heat_pump": HeatPump(kw=2)})
+    heating: Boiler | HeatPump = Select(boiler=Boiler(kw=1), heat_pump=HeatPump(kw=2))
     not_on_every_candidate = Child(width=heating.cop)  # E
-    joined: Boiler | HeatPump = Decision({"boiler": Boiler(kw=1), "heat_pump": HeatPump(kw=2)})
+    joined: Boiler | HeatPump = Select(boiler=Boiler(kw=1), heat_pump=HeatPump(kw=2))
     joined_member = Child(width=joined.kw)  # not an error: the annotation types the choice
     from_view = Child(width=child.physical)  # not an error: a view reference is its value
     view_called = Child(width=child.physical())  # E
@@ -104,3 +104,11 @@ class Kernel(Space):
 
 class Overrides(Space):
     unannotated_ok = Child(width=Param())  # not a mypy error: refused at runtime (inline Param)
+
+class Retired(Space):
+    """The retired spellings of a Decision: no overload takes them."""
+
+    entries: Boiler | HeatPump = Decision({"boiler": Boiler(kw=1)})  # E
+    required: int = Decision(values=(1, 2), required=True)  # E
+    named: int = Decision(values=(1, 2), name="other")  # E
+    optional: Boiler | None = Decision(values=(1, 2), optional=True)  # E

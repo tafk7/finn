@@ -364,9 +364,9 @@ def narrow_query(api, branches: int) -> dict[str, object]:
     source = api.Param(semantics=api.default_semantics(int))
     members = {"source": source}
     for index in range(branches):
-        # The structural choice is a Decision over nodes; ``choice.physical`` is
-        # the selected candidate's member by name (replaces the accepted export).
-        choice = api.Decision({"selected": Selected(value=source), "inactive": Inactive()})
+        # The structural choice is a selector; ``choice.physical`` is the selected
+        # case's member by name (replaces the accepted export).
+        choice = api.Select(selected=Selected(value=source), inactive=Inactive())
         members[f"branch{index}"] = choice
         members[f"output{index}"] = api.View(choice.physical)
     space_type = api.composite("NarrowQuery", members)
@@ -407,12 +407,12 @@ def wide_choice(api, alternatives: int, trials: int = 30) -> dict[str, object]:
             work["leaf"] += 1
             return 1
 
-    choice = api.Decision({f"case{index}": Leaf() for index in range(alternatives)})
+    choice = api.Select(**{f"case{index}": Leaf() for index in range(alternatives)})
     space_type = api.composite(
         "WideChoice", {"implementation": choice, "physical": api.View(choice.physical)}
     )
     model = compile_model(api, space_type)
-    # A Decision over nodes always has a selector, even with one candidate.
+    # A selector always has its node, even with one case.
     selector = api.inspection.choices(model)[0].selector
     output = space_type.physical
     measurements = []
@@ -719,14 +719,15 @@ def kernel_fixtures(api):
                 # What a parent states from the operation's facts: N and K.
                 columns=4,
                 widest_reduction=4,
+                # Its folding, which its role (MatMul) holds and gives it.
+                pe=2,
+                simd=2,
                 result_range=(-128, 127),  # int8's: the core's accumulator is INT8
                 platform=platform,
             ),
             lambda point, index: commit(
                 point,
                 {
-                    "pe": 2,
-                    "simd": 2,
                     "reducer": "tree",
                     "compute_pumping": bool(index % 2),
                 },
@@ -744,8 +745,8 @@ def kernel_fixtures(api):
                 point,
                 {
                     "compute": "packed",
-                    "compute.packed.pe": (1, 2)[index % 2],
-                    "compute.packed.simd": 2,
+                    "pe": (1, 2)[index % 2],
+                    "simd": 2,
                     "compute.packed.compute_pumping": False,
                     "compute.packed.reducer": "tree",
                 },

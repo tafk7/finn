@@ -28,9 +28,10 @@ an index with several.
 ``ram_style`` and ``pumped_memory`` are its choices. A pumped memory runs at
 ``ap_clk2x`` on half-width words and doubles the depth; its 2x clock pin is
 driven by role, and tied low when unpumped. The style's cases are the explicit
-ones, ordered by the bits the table holds (``table_bits``, which no folding moves,
-so the style is chosen before, with or after the folding), then ``auto``, which
-states no resources (``finn.kernels.utilization.memory_styles``). ``ultra`` needs
+ones, then ``auto``, which states no resources
+(``finn.kernels.utilization.memory_styles``); its ranking, ``ram_preference``, a view,
+orders them by the bits the table holds (``table_bits``, which no folding moves, so the
+style may be chosen before, with or after the folding). ``ultra`` needs
 UltraRAM of the ``platform`` that takes initial contents, two constraints of the kernel
 (``uram-absent``, ``uram-init``; on Zynq UltraScale+ an initialized UltraRAM is built as
 block RAM). A pumped memory takes the
@@ -78,6 +79,7 @@ from finn.kernels.utilization import (
     Fit,
     auto_unstated,
     memory,
+    memory_preference,
     memory_styles,
     uram_constraint,
     uram_init_constraint,
@@ -143,9 +145,17 @@ class MemStreamKernel(KernelSpace):
             return reject("memstream-values", "contents must be an integer tensor")
         return prod(shape) * qonnx_datatype_width(self.dtype)
 
-    ram_style: str = Decision(domain=memory_styles(table_bits))
+    ram_style: str = Decision(domain=memory_styles())
     uram_present = uram_constraint(platform, ram_style, ("ultra",))
     uram_init_taken = uram_init_constraint(platform, ram_style, ("ultra",))
+
+    @view
+    def ram_preference(self) -> tuple[str, ...]:
+        """Its memory's styles in its preference for the bits its table holds
+        (``memory_preference``): the ranking a first valid policy may follow."""
+        bits: int = self.table_bits
+        return memory_preference(bits)
+
     # A pumped memory takes a doubled clock, which the shell admits.
     pumped_memory: bool = Decision(values=(False, True))
 

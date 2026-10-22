@@ -133,7 +133,7 @@ def test_an_open_required_choice_refuses_packaging_and_is_named() -> None:
         "choices-open",
         error=KernelOpError,
         node="sdp_1",
-        keys=("levels.transport.fifo.buffer.depth",),
+        keys=("levels.transport.fifo.depth",),
         message=r"\(required: run step_size_fifos or step_placeholder_choices\)",
     ):
         configured_network(model, "sdp_1")

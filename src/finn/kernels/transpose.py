@@ -34,6 +34,7 @@ from finn.kernels.utilization import (
     RESOURCES_SEMANTICS,
     auto_unstated,
     memory,
+    memory_preference,
     memory_styles,
     uram_constraint,
 )
@@ -85,9 +86,10 @@ class TransposeKernel(KernelSpace):
     case runs stalled (and a ``vpc`` feeds its adapter sample), so it checks the
     guard.
 
-    The pages' ``ram_style`` is its choice: the explicit styles, ordered by the bits both
-    pages hold (``pages_bits``), then ``auto``, which states no resources
-    (``finn.kernels.utilization.memory_styles``); ``ultra`` needs the ``platform``'s
+    The pages' ``ram_style`` is its choice: the explicit styles, then ``auto``, which
+    states no resources (``finn.kernels.utilization.memory_styles``); its ranking,
+    ``ram_preference``, a view, orders them by the bits both pages hold (``pages_bits``);
+    whatever places the kernel states its policy. ``ultra`` needs the ``platform``'s
     UltraRAM, a constraint of the kernel (``uram-absent``; the pages start empty, so no
     initial contents are asked of it). The RTL's own limit is a constraint too: it counts
     its banks' two pages, ``2 I J`` elements, in 32 bits. A port reading fewer than two
@@ -115,8 +117,16 @@ class TransposeKernel(KernelSpace):
         """The bits both pages hold: ``2 I J`` elements."""
         return 2 * self.rows * self.cols * self.input_tensor.element.bits
 
-    ram_style: str = Decision(domain=memory_styles(pages_bits))
+    ram_style: str = Decision(domain=memory_styles())
     uram_present = uram_constraint(platform, ram_style, ("ultra",))
+
+    @view
+    def ram_preference(self) -> tuple[str, ...]:
+        """Its pages' styles in its preference for the bits both pages hold
+        (``pages_bits``, ``memory_preference``): the ranking a first valid policy may
+        follow."""
+        bits: int = self.pages_bits
+        return memory_preference(bits)
 
     simd: int = Decision(domain=divisors_of(rows))
 

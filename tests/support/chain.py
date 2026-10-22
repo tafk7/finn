@@ -155,8 +155,8 @@ def configure_chain(chain: Network, **choices: object) -> Network:
     for layer, stream in LAYERS:
         folding |= {
             f"{layer}.compute": "packed",
-            f"{layer}.compute.packed.pe": PE,
-            f"{layer}.compute.packed.simd": SIMD,
+            f"{layer}.pe": PE,
+            f"{layer}.simd": SIMD,
             f"{layer}.compute.packed.compute_pumping": False,
             f"{layer}.compute.packed.reducer": "tree",
         }

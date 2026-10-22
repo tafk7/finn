@@ -8,8 +8,9 @@ between boundary channels over sampled folding factors (``support.conformance``)
 dotp on both cores (packed; INT8, dense and depthwise), thresholding, eltwise
 with a broadcast operand, transpose, memstream with an identity reference, the
 channel stages (fifo, vpc and input_gen) and MatMul, a kernel with children.
-Every folding factor is a Decision (dotp's and MatMul's PE and SIMD sampled;
-thresholding's and eltwise's PE and transpose's SIMD given as configurations);
+MatMul's PE and SIMD, its Decisions, are sampled; a dot-product core's, given to it
+by its role, and thresholding's and eltwise's PE and transpose's SIMD are given as
+configurations;
 memstream's ``form``, a fact of its consumer, is given.
 
 A channel stage presents on its ports the beat sequences the channel's adapter
@@ -64,8 +65,8 @@ from support.conformance import (
     samples,
 )
 from support.kernel_specs import conformance_cases
-from support.kernel_specs.dotp import dotp
 from support.kernel_specs.eltwise import eltwise
+from support.kernel_specs.matmul import matmul
 from support.kernel_specs.memstream import memstream
 from support.kernel_specs.thresholding import CHANNELS, PIXELS, THRESHOLDS, tensor, thresholding
 from support.xsim import requires_xsim
@@ -76,12 +77,10 @@ from finn.dataflow.traversal import offsets, pack, vector_major
 from finn.harness.orders import decode
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import KernelSpace
-from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.platform.capabilities import DspBlock
 
 # -- the loop-order proof: thresholding on a schedule ---------------------------------------
 
@@ -193,7 +192,7 @@ CASES = {
 
 
 def test_sampled_folding_factors_are_smallest_interior_largest_then_an_adapter() -> None:
-    case = dotp(PackedDotpKernel, DspBlock.DSP48E2, 4, reducer="tree")
+    case = matmul()
     del case["reference"]
     chosen = samples(**case)
     assert [(sample.label, dict(sample.factors), sample.adapter) for sample in chosen] == [

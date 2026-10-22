@@ -706,7 +706,7 @@ from finn.kernels.explore import Hold
 from finn.transformation.kernels import explore_partition
 
 def step_my_choices(model, cfg):
-    explore_partition(model, Hold({"MatMul_0": {"compute.packed.simd": 8},
+    explore_partition(model, Hold({"MatMul_0": {"simd": 8},
                                    "MatMul_0_param0": {"source.memstream.ram_style": "block"}}))
     return model
 ```
@@ -749,7 +749,7 @@ resource than the part has is a warning naming that resource, never a refusal.
 `step_verify_partition` writes its check's record, `report/step_verify_partition.json`
 (`fifos_judged`, and `fifo_check`: the bottleneck period, the channels checked, those
 the model does not read, and the warnings), and every value to `report/kernel_choices.json`,
-by graph name (`{"MatMul_0_param0": {"transport": "direct"}, "MatMul_0": {"compute.packed.pe": 16}}`:
+by graph name (`{"MatMul_0_param0": {"transport": "direct"}, "MatMul_0": {"pe": 16}}`:
 a kernel's choices under its node, a channel's under the tensor it carries, in graph
 order: each node's input channels, the node, its output channels), a log FINN never
 reads, which makes two builds easy to compare.

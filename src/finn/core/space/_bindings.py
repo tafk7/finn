@@ -11,13 +11,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from ._nodes import NodeDecision, NodeDecl
+from ._nodes import NodeDecision, NodeDecl, inline_decision
 from .declarations import Const, Decision, Param, ValueRef, View
 from .errors import DefinitionError
 
 _OWNER = "space.bindings"
 
-BindingKind = Literal["literal", "reference", "local-decision"]
+BindingKind = Literal["literal", "reference"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,8 +41,8 @@ class Slot:
 def classify(slot: Slot) -> tuple[BindingKind, object]:
     """How a value formal is supplied: its binding kind and supplier.
 
-    A literal (or an inline ``Const``) is a constant, a fresh Decision opens a
-    choice keyed at the formal, and anything else forwards a reference.
+    A literal (or an inline ``Const``) is a constant, and anything else forwards a
+    reference. A Decision that is no class attribute (given at the call) is refused.
     """
     value = slot.supplier
     if isinstance(value, Param) and value.owner is None:
@@ -57,11 +57,11 @@ def classify(slot: Slot) -> tuple[BindingKind, object]:
         raise DefinitionError.broken(
             "node-not-value",
             _OWNER,
-            f"{slot.key}: a node or a Decision over nodes is not a value; bind one of its members",
+            f"{slot.key}: a node or a selector is not a value; bind one of its members",
             declaration=slot.key,
         )
     if isinstance(value, Decision) and value.owner is None and not isinstance(value, NodeDecision):
-        return "local-decision", value
+        raise inline_decision(slot.key)
     if isinstance(value, Const) and value.owner is None:
         return "literal", value.value
     if isinstance(value, (ValueRef, View)):

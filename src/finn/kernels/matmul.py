@@ -31,8 +31,8 @@ operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
 
 ``MatMulKernel`` is a kernel with children: the compute cores, which read the
 tensors it is given, ``x_tensor`` (the activations) and ``w_tensor`` (the weights),
-and N and the widest K (``widest_reduction``), stated from its facts alone for their
-folding factors' domains, and present its ports (``x``, ``w``, ``y``) as the selected
+its folding factors (``pe``, ``simd``), and N and the widest K (``widest_reduction``),
+stated from its facts alone, and present its ports (``x``, ``w``, ``y``) as the selected
 core's (``finn.kernels.port.served``): ``x_stream`` is the selected core's stream, and
 ``x_contract`` its contract, labelled ``compute.<core>.x``
 (``finn.kernels.base.PortContract``). Each channel, its adapter, its FIFO and its source
@@ -76,9 +76,14 @@ graph with the type, so the next kernel reads it. Each core derives its accumula
 from the range (the core's ``result_range``) and states its results' tensor over it,
 which its ``y`` port writes.
 
-- ``compute`` is a Decision over the dot-product cores. They share the facts
-  and tensors. Each core owns its folding factors (``compute.<core>.pe``,
-  ``.simd``, ``.compute_pumping``) and derives every port's beat sequence
+- ``pe`` and ``simd``, its folding factors, are MatMul's, the role's: declared before
+  ``compute``, over the divisors of N and of the widest SIMD extent
+  (``widest_simd_extent``), from its facts alone. Every core takes them (a switch of
+  cores keeps them), and states what it requires of them as its rules. A core's own
+  choices stay its own: pumping (``compute.<core>.compute_pumping``) and the packed
+  core's reducer.
+- ``compute`` is a selector over the dot-product cores (``Select``). They share
+  the facts, the tensors and the folding, and each derives every port's beat sequence
   from its schedule.
 - Where the weights come from is the weight channel's ``source``, not MatMul's.
 - The activation channel's plan replays each dense row and frames each
@@ -98,11 +103,12 @@ from finn.core.space import (
     Decision,
     Param,
     Rejected,
+    Select,
     View,
     constraint,
     derived,
+    divisors_of,
     reject,
-    selected,
     supplied,
 )
 from finn.dataflow.datatypes import (
@@ -198,7 +204,7 @@ def block_diagonal(weights: IntegerTensor) -> IntegerTensorValue:
 
 
 class MatMulKernel(KernelSpace):
-    """Operation facts, and the kernels and Decisions over kernels on its tensors."""
+    """Operation facts, and the kernels and selectors over kernels on its tensors."""
 
     id = "finn.matmul"
 
@@ -326,9 +332,17 @@ class MatMulKernel(KernelSpace):
     @derived
     def widest_reduction(self) -> int:
         """The widest K a datapath of the operation reads, from its facts alone: the window
-        times the channels when depthwise (a dense realization reads that), else K. The
-        cores' SIMD domains read it, which read no choice."""
+        times the channels when depthwise (a dense realization reads that), else K. SIMD's
+        domain reads it (``widest_simd_extent``), which reads no choice."""
         return self.k * self.n if self.depthwise else self.k
+
+    @derived
+    def widest_simd_extent(self) -> int:
+        """The widest extent SIMD may divide, from facts alone: a window's channels (the
+        activations' last axis), else the widest reduction. The datapath's extent, a core's
+        ``simd_extent``, divides it."""
+        found: int = self.x_tensor.shape[-1] if self.windowed else self.widest_reduction
+        return found
 
     @derived
     def datapath_k(self) -> int:
@@ -512,11 +526,17 @@ class MatMulKernel(KernelSpace):
                 )
         return True
 
-    # The compute cores. Each refuses what its core cannot build and owns its
-    # folding factors; ``packed`` names the entry.
-    packed = PackedDotpKernel()
-    compute: PackedDotpKernel | Int8Dsp58DotpKernel = Decision(
-        {"packed": packed, "int8_dsp58": Int8Dsp58DotpKernel},
+    # Its folding factors, the role's: declared before ``compute``, so that conversion
+    # folds first and then picks the core. Their domains read facts only; a core's limit
+    # on them is a rule of the core's (``simd_fits``, ``pumping_has_lanes``), since a
+    # core's domain cannot read its parent's choice.
+    pe: int = Decision(domain=divisors_of(n))
+    simd: int = Decision(domain=divisors_of(widest_simd_extent))
+
+    # The compute cores, given the folding. Each refuses what its core cannot build.
+    compute: PackedDotpKernel | Int8Dsp58DotpKernel = Select(
+        packed=PackedDotpKernel,
+        int8_dsp58=Int8Dsp58DotpKernel,
         form=datapath,
         reshape_activations=dense_view,
         window=window,
@@ -526,8 +546,9 @@ class MatMulKernel(KernelSpace):
         w_tensor=carried_weights,
         columns=n,
         widest_reduction=widest_reduction,
+        pe=pe,
+        simd=simd,
     )
-    compute_case = selected(compute)
 
     # Its ports: the selected core's activations, weights and results.
     x = served(compute, "x")

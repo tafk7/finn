@@ -20,6 +20,7 @@ from finn.core.space import (
     Members,
     Param,
     Rejected,
+    Select,
     Space,
     ViewKey,
     composite,
@@ -113,12 +114,20 @@ def test_a_decision_or_a_child_node_belongs_to_the_space_class(what: str, supply
 
 def test_a_decision_over_nodes_belongs_to_the_space_class() -> None:
     class Plant(Space):
-        heating: Room | None = Decision({"room": Room}, optional=True)
+        heating: Room | None = Select(none=None, room=Room)
 
-    with refused("member-belongs-to-class", error=DefinitionError, message=r"Decision over nodes"):
+    with refused(
+        "member-belongs-to-class",
+        error=DefinitionError,
+        message=r"is a selector: it belongs to the Space class",
+    ):
         Plant(heating="room")  # type: ignore[arg-type]
     plant = Plant()
-    with refused("member-belongs-to-class", error=DefinitionError, message=r"Decision over nodes"):
+    with refused(
+        "member-belongs-to-class",
+        error=DefinitionError,
+        message=r"is a selector: it belongs to the Space class",
+    ):
         plant.heating = "room"  # type: ignore[assignment]
 
 

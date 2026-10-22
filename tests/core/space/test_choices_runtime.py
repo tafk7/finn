@@ -19,6 +19,7 @@ from finn.core.space import (
     Inapplicable,
     Param,
     Rejected,
+    Select,
     Space,
     Unresolved,
     View,
@@ -126,9 +127,7 @@ def test_selected_view_preserves_direct_refusal_and_skips_other_alternatives() -
     class Root(Space):
         # A Decision over nodes; ``implementation.physical`` reads the selected
         # candidate's member by name.
-        implementation: Refused | Explodes = Decision(
-            {"refused": Refused(), "explodes": Explodes()}
-        )
+        implementation: Refused | Explodes = Select(refused=Refused(), explodes=Explodes())
         accepted = View(implementation.physical)
         physical = View(accepted)
 
@@ -160,7 +159,7 @@ def test_singleton_choice_is_open_and_respects_its_outer_guard() -> None:
 
     class Root(Space):
         enabled: bool = Param()
-        implementation: Only = Decision({"only": Only()}, when=enabled)
+        implementation: Only = Select(only=Only(), when=enabled)
         accepted = View(implementation.physical)
 
     active = design_space(Root(enabled=True))
@@ -187,7 +186,7 @@ def test_nested_choice_selection_retains_its_owning_scope() -> None:
         value = Const(2)
 
     class Example(Space):
-        implementation: A | B = Decision({"a": A(), "b": B()})
+        implementation: A | B = Select(a=A(), b=B())
 
     class Root(Space):
         first = Example()
@@ -216,7 +215,7 @@ def test_choice_metadata_and_handles_retain_the_compiled_definition() -> None:
         value = Const(2)
 
     class Root(Space):
-        implementation: A | B = Decision({"a": A(), "b": B()})
+        implementation: A | B = Select(a=A(), b=B())
 
     base = design_space(Root())
     (saved,) = inspection.choices(base)
@@ -224,14 +223,14 @@ def test_choice_metadata_and_handles_retain_the_compiled_definition() -> None:
     with pytest.raises(AttributeError, match="immutable"):
         setattr(Root.implementation, "candidates", {"renamed": A()})
     with refused("structure-finalized", error=DefinitionError):
-        Root.implementation = Decision({"renamed": A()})
+        Root.implementation = Select(renamed=A())
     assert [case.name for case in saved.cases] == ["a", "b"]
     chosen = base.with_choices({saved.selector: "b"})
     b = inspection.candidate(chosen, Root.implementation, "b")
     assert b is not None and b.query(B.value) == Available(2)
     with pytest.raises(ConfigurationError):
         base.with_choices(implementation="renamed")
-    with pytest.raises(RequestError, match="unknown candidate"):
+    with pytest.raises(RequestError, match="unknown case"):
         inspection.candidate(base, Root.implementation, "missing")
 
 
@@ -247,7 +246,7 @@ def test_function_view_failure_names_its_authored_owner() -> None:
     assert isinstance(raised.value.__cause__, ZeroDivisionError)
 
 
-def test_exposed_inputs_local_decisions_and_supplier_aliases_keep_distinct_rights() -> None:
+def test_exposed_inputs_and_supplier_aliases_keep_distinct_rights() -> None:
     class Child(Space):
         width: int = Param()
         physical = View(width)
@@ -257,7 +256,6 @@ def test_exposed_inputs_local_decisions_and_supplier_aliases_keep_distinct_right
         # The formal is declared here and bound to the child by name.
         exposed_width: int = Param()
         aliased = Child(width=supplier)
-        local = Child(width=Decision(values=(3, 6)))
         exposed = Child(width=exposed_width)
 
     base = design_space(Root(exposed_width=9))
@@ -268,11 +266,7 @@ def test_exposed_inputs_local_decisions_and_supplier_aliases_keep_distinct_right
         inspection.decision_handle(chosen.aliased, Child.width)
     with pytest.raises(RequestError, match="not independently editable"):
         chosen.with_choices({Root.aliased.width: 2})
-    local = chosen.with_choices({Root.local.width: 6})
-    assert local.local.width == 6
-    assert local.aliased.width == 4
-    assert isinstance(chosen.local.query(Child.width), Unresolved)
-    assert isinstance(chosen.local.field(Child.width), BoundDecision)
+    assert isinstance(chosen.field(Root.supplier), BoundDecision)
 
 
 def test_wide_selected_outputs_keep_frozen_case_order_and_exact_targets() -> None:
@@ -289,7 +283,7 @@ def test_wide_selected_outputs_keep_frozen_case_order_and_exact_targets() -> Non
         exports = {PHYSICAL: physical}
 
     class Root(Space):
-        implementation: Leaf = Decision({f"case{index}": Leaf(value=index) for index in range(128)})
+        implementation: Leaf = Select(**{f"case{index}": Leaf(value=index) for index in range(128)})
         physical = View(implementation.physical)
 
     model = inspection.model(Root)

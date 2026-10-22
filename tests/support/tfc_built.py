@@ -26,8 +26,8 @@ def set_folding() -> dict[str, dict[str, int]]:
         elif family == "MVAU":
             index = sum(name.startswith("MatMul") for name in folding)
             folding[f"MatMul_{index}"] = {
-                "compute.packed.pe": layer["PE"],
-                "compute.packed.simd": layer["SIMD"],
+                "pe": layer["PE"],
+                "simd": layer["SIMD"],
             }
     return folding
 

@@ -78,12 +78,12 @@ placed = Network({
         w_tensor=W2,
         columns=2,
         widest_reduction=2,
+        pe=2,
+        simd=2,
         platform=PLATFORM,
     ),
 })
 point = placed.with_choices({
-    ("compute", "pe"): 2,
-    ("compute", "simd"): 2,
     ("compute", "compute_pumping"): False,
     ("compute", "reducer"): "tree",
 }).member("compute")
@@ -133,8 +133,8 @@ for memory in ("none", "memstream"):
     })
     network = network.with_choices({
         ("matmul", "compute"): "packed",
-        ("matmul", "compute.packed.pe"): 2,
-        ("matmul", "compute.packed.simd"): 2,
+        ("matmul", "pe"): 2,
+        ("matmul", "simd"): 2,
         ("matmul", "compute.packed.compute_pumping"): False,
         ("matmul", "compute.packed.reducer"): "tree",
     })

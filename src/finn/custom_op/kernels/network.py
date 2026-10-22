@@ -100,6 +100,7 @@ from finn.kernels.members import Configured, Facts, current, observed, uncached
 from finn.kernels.members import typed as key_part
 from finn.kernels.movers import MoverOffer
 from finn.kernels.network import Fact, Interface, Key, Network, NetworkError, Wire, dotted, wire
+from finn.kernels.policies import Owner
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
 
@@ -154,8 +155,8 @@ def _described(bound: Network, stored: Mapping[Key, object]) -> dict[str, tuple[
 
 
 def stale_text(key: str, found: Iterable[Finding]) -> str:
-    """A stale choice as a line, its key (dotted, ``first.compute.packed.pe``) named once:
-    ``first.compute.packed.pe = 3: not one of 1, 2, 4 (domain-membership)``, the value
+    """A stale choice as a line, its key (dotted, ``first.pe``) named once:
+    ``first.pe = 3: not one of 1, 2, 4 (domain-membership)``, the value
     where the findings hold it, each finding's message and its code (a message that is its
     code, its code only)."""
     findings = tuple(found)
@@ -199,8 +200,11 @@ class Partition(Network):
         stored: Mapping[Key, object],
         stray: Mapping[str, tuple[Finding, ...]],
         whole: bool,
+        owners: Mapping[str, Owner] | None = None,
     ) -> None:
-        super().__init__(members, stored=stored, nodes={each: member(each) for each in members})
+        super().__init__(
+            members, stored=stored, nodes={each: member(each) for each in members}, owners=owners
+        )
         self.name, self.boundary, self.whole = name, boundary, whole
         self.movers = tuple(tensor for tensor, _ in boundary) if movers else ()
         self.stale = _described(self, stored) | dict(stray)
@@ -628,6 +632,7 @@ def _bound(
             stored=stored,
             stray=stray,
             whole=whole,
+            owners={node.name: type(op) for node, op in zip(nodes, ops)},
         )
     except NetworkError as error:
         message = f"{name}: {error}"

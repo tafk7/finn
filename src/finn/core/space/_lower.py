@@ -23,6 +23,7 @@ from typing import Any, cast
 from ._bindings import PlacementBinding
 from ._configuration import Space
 from ._names import Names
+from ._nodes import selector_value
 from ._signatures import BoundFunction
 from ._table import MemberTask, ScopeDraft, Table
 from .declarations import (
@@ -98,6 +99,11 @@ class _Lowering:
                     guard_task.source_scope, guard_task.condition, owner=node.owner
                 ),
             )
+        for selector, source_scope, by in self.table.picks:
+            self.table.applying = requires.get(selector)
+            node = self.table.nodes[selector]
+            target = self.names.reference(source_scope, by, owner=node.owner)
+            self.table.nodes[selector] = replace(node, arguments=(Argument("value", target),))
         self.link_expressions()
         self.table.applying = None
 
@@ -193,7 +199,8 @@ class _Lowering:
                 declaration=owner,
             ) from cause
         arguments: list[Argument] = []
-        for name, source in domain.dependencies:
+        for name, given in domain.dependencies:
+            source = selector_value(given)
             if not isinstance(source, ValueRef):
                 raise DefinitionError.broken(
                     "domain-dependency-not-value",
@@ -206,15 +213,12 @@ class _Lowering:
         for role, function, named in domain.signatures():
             # Each callable takes the declared inputs its signature names.
             values = dict.fromkeys(named)
-            positional: tuple[object, ...] = ()
             if role == "membership":
                 values["candidate"] = None
-            elif role == "order":
-                positional = (None,)  # the values it ranks
             try:
                 if not set(named) <= declared:
                     raise TypeError(f"names {', '.join(sorted(set(named) - declared))}")
-                inspect.signature(function).bind(*positional, **values)
+                inspect.signature(function).bind(**values)
             except (TypeError, ValueError) as cause:
                 raise DefinitionError.broken(
                     "domain-signature-incompatible",
@@ -271,7 +275,7 @@ class _Lowering:
         if binding is not None and binding.kind in {"literal", "reference"}:
             changes = self.supplied(task, node, binding, written)
         else:
-            changes = self.declared(task, scope, node, written)
+            changes = self.declared(task, scope, node)
         self.table.nodes[node.index] = replace(node, **changes)
 
     def supplied(
@@ -281,32 +285,18 @@ class _Lowering:
         changes: dict[str, Any] = {}
         if binding.kind == "literal":
             changes["value"] = binding.supplier
-        elif type(binding.supplier) is int and task.index in self.table.editable_aliases:
-            changes["output"] = binding.supplier
         else:
             changes["output"] = self.names.reference(written, binding.supplier, owner=node.key)
         return changes
 
-    def declared(
-        self, task: MemberTask, scope: ScopeDraft, node: Node, written: int
-    ) -> dict[str, Any]:
-        """A Space class's own member, or a fresh Decision supplied for it: guard and payload."""
+    def declared(self, task: MemberTask, scope: ScopeDraft, node: Node) -> dict[str, Any]:
+        """A Space class's own member: guard and payload."""
         declaration = task.declaration
-        binding = task.binding
         source_scope = scope.index
         condition: ValueRef[bool] | None = scope.effective.guards.get(declaration)
-        guard_scope = scope
-        outer = scope.guard
-        if binding is not None and binding.kind == "local-decision":
-            declaration = cast(Decision[object], binding.supplier)
-            source_scope = written
-            condition = declaration.when
-            if task.owner_scope is not None:
-                guard_scope = self.table.drafts[task.owner_scope]
-            outer = guard_scope.guard
         guard = self.table.guarded(
             source_scope,
-            outer,
+            scope.guard,
             condition,
             node.key + ".$guard",
             owner=node.key,
@@ -336,7 +326,6 @@ class _Lowering:
             changes["domain"], changes["domain_arguments"] = self.domain(
                 source_scope, declaration, node.semantics, owner=node.key
             )
-            changes["required_choice"] = declaration.required
             return changes
         if isinstance(declaration, Expr):
             self.names.expression(scope.index, declaration, owner=node.key, index=node.index)

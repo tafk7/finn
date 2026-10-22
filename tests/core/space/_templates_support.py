@@ -42,7 +42,6 @@ def _stable(value: object) -> object:
             None if value.value_semantics is None else value.value_semantics.name,
             _stable(value._finite_values),
             value.ordered,
-            _name(value.order),
         )
     return re.sub(r" at 0x[0-9a-f]+", "", repr(value))
 
@@ -72,7 +71,6 @@ def canonical(model: Linked) -> dict[str, object]:
             _stable(node.value),
             _stable(node.domain),
             node.required,
-            node.required_choice,
             _name(node.function),
             node.call_style,
             scopes[node.scope].name,

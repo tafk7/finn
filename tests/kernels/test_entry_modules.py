@@ -44,8 +44,8 @@ point = matmul_point(
 )
 point = choose(point, {
     "matmul.compute": "packed",
-    "matmul.compute.packed.pe": 2,
-    "matmul.compute.packed.simd": 2,
+    "matmul.pe": 2,
+    "matmul.simd": 2,
     "matmul.compute.packed.compute_pumping": False,
     "matmul.compute.packed.reducer": "tree",
 })

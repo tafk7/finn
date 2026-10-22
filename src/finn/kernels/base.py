@@ -7,8 +7,9 @@ A kernel is a Space whose choices configure hardware. **``KernelSpace``** is the
 of kernels: a kernel binds a module of the library or places kernels and channels (its
 members), never both (``module-places-kernels``). A kernel states its ``id`` (a nonempty
 string), its facts and choices, the constraints by which it refuses what it cannot build,
-and its declarations (below). It may state ``defaults`` for its choices (``finn.kernels.defaults``)
-and its ``clock_domain``, on which its ports and its module run (``clocking``).
+and its declarations (below). It may state its ``clock_domain``, on which its ports and its
+module run (``clocking``). It states no policy for its choices: those are the compiler's
+(``finn.kernels.policies``); a ranking it knows is a view a policy may name.
 
 **Its four answers**, each a view written once in the base (``_netlist``, ``_cycles``,
 ``_buffering``, ``_resources``) and made for each class when it is made, reading its
@@ -100,7 +101,6 @@ from finn.kernels.artifacts.abi import Clocking
 from finn.kernels.artifacts.module import BusExport, Fragment, Link, merge
 from finn.kernels.control import CONTROL, ControlBus, presented
 from finn.kernels.declaration import KernelDeclaration, Product, declarations, declared_reads
-from finn.kernels.defaults import Fixed, stated_defaults
 from finn.kernels.library import LibraryModule
 from finn.kernels.transport import StreamContract
 from finn.kernels.utilization import RESOURCES_SEMANTICS, total
@@ -328,10 +328,7 @@ def _made(member: object) -> bool:
 
 class KernelSpace(Space):
     """A kernel: the design space of its hardware, binding a library module or placing
-    kernels, never both (the module docstring). ``id`` names it, a nonempty string;
-    ``defaults`` fixes the default of a choice it declares, by its key
-    (``finn.kernels.defaults``): every other choice is first valid, but a required one,
-    which has none.
+    kernels, never both (the module docstring). ``id`` names it, a nonempty string.
 
     Its four answers are views, each written once here (``_netlist``, ``_cycles``,
     ``_buffering``, ``_resources``) and made for each class when it is made, reading the
@@ -340,7 +337,6 @@ class KernelSpace(Space):
     over their exports, which only these views read."""
 
     id: ClassVar[str] = ""
-    defaults: ClassVar[Mapping[str, Fixed]] = {}
 
     # -- what it reaches of its members: their answers, read by its views only ------------
 
@@ -358,8 +354,6 @@ class KernelSpace(Space):
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         _lower(cls)
-        if "defaults" in vars(cls):
-            stated_defaults(cls, cls.defaults)
         if type(cls.id) is not str or not cls.id:
             raise DefinitionError.broken(
                 "kernel-id-invalid",

@@ -295,17 +295,31 @@ def cases(point: Any, decision: Any) -> tuple[str, ...]:
     return tuple(found.value)
 
 
-def test_each_memory_offers_its_explicit_styles_by_size_then_auto() -> None:
+def ranking(point: Any, kernel: Any) -> tuple[str, ...]:
+    found = point.query(kernel.ram_preference)
+    assert isinstance(found, Available), found
+    return tuple(found.value)
+
+
+def test_each_memory_ranks_its_explicit_styles_by_size_then_auto() -> None:
     """Block RAM first from ``BLOCK_FIRST_BITS`` held, LUTRAM first below, UltraRAM after
     both, and ``auto`` last: a memstream's table (its contents, whatever the folding),
-    an input generator's buffer (a frame, the most it holds) and a transpose's pages."""
+    an input generator's buffer (a frame, the most it holds) and a transpose's pages, each
+    its kernel's ranking, a view (``ram_preference``) a first valid policy may name. Its
+    domain lists the styles in one order, whatever the size: no domain ranks them."""
     assert BLOCK_FIRST_BITS == 8192 == 2048 * 4 == 256 * 32 == 2 * 32 * 32 * 4
-    assert cases(table(2047), MemStreamKernel.ram_style) == LUTRAM_FIRST
-    assert cases(table(2048), MemStreamKernel.ram_style) == BLOCK_FIRST
-    assert cases(buffer(255), InputGeneratorKernel.ram_style) == LUTRAM_FIRST
-    assert cases(buffer(256), InputGeneratorKernel.ram_style) == BLOCK_FIRST
-    assert cases(pages(32, 32).member("shuffle"), TransposeKernel.ram_style) == BLOCK_FIRST
-    assert cases(pages(16, 32).member("shuffle"), TransposeKernel.ram_style) == LUTRAM_FIRST
+    assert ranking(table(2047), MemStreamKernel) == LUTRAM_FIRST
+    assert ranking(table(2048), MemStreamKernel) == BLOCK_FIRST
+    assert ranking(buffer(255), InputGeneratorKernel) == LUTRAM_FIRST
+    assert ranking(buffer(256), InputGeneratorKernel) == BLOCK_FIRST
+    assert ranking(pages(32, 32).member("shuffle"), TransposeKernel) == BLOCK_FIRST
+    assert ranking(pages(16, 32).member("shuffle"), TransposeKernel) == LUTRAM_FIRST
+    for point, decision in (
+        (table(2048), MemStreamKernel.ram_style),
+        (buffer(256), InputGeneratorKernel.ram_style),
+        (pages(32, 32).member("shuffle"), TransposeKernel.ram_style),
+    ):
+        assert cases(point, decision) == LUTRAM_FIRST
     # The thresholds' stages left above the UltraRAM ones: distributed first.
     assert threshold_base().with_choices(ultra_stages=0).field(
         ThresholdingAxiKernel.ram_style

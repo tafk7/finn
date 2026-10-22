@@ -25,6 +25,7 @@ from finn.core.space import (
     Members,
     Param,
     Rejected,
+    Select,
     Space,
     Unresolved,
     ValueSemantics,
@@ -327,7 +328,7 @@ class Assembly(Space):
     first = Part(area=4)
     second = Part(area=first.area)
     optional = Part(area=6, when=extra)
-    kind: Part = Decision({"small": Part(area=2), "large": Part(area=3)})
+    kind: Part = Select(small=Part(area=2), large=Part(area=3))
     picked = Part(area=kind.area)
     costs = Members(COST)
 

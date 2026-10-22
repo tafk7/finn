@@ -30,8 +30,7 @@ legacy form, and no answer the adapter computes in its place.
   explicitly; ``ByName`` is a ``@constraint`` method reading its inputs by attribute name,
   ``getattr(self, name)``. A view carries no rule. A domain with a membership predicate is
   a ``domain(accepts=, candidates=)``: membership is the model's whole membership, the
-  enumeration the listed values. A domain's ``order`` is not built: no compared answer
-  reads it.
+  enumeration the listed values.
 - **Questions**, each the implementation's own answer (``Answers``; today's through
   ``inspection`` and the point's public API):
 
@@ -60,8 +59,12 @@ legacy form, and no answer the adapter computes in its place.
 The description becomes one Space class per scope, built with ``composite``. Every member
 keeps the description's path as its key: a choice ``compute.packed.pe`` is the engine's
 Decision ``compute.packed.pe``. A scope that reads something outside it takes it as a formal
-(``in-<path>``), bound by its parent; a selector's value is read through a derived member
-``key-<name>`` (``selected``); a child's guard is a derived member ``when-<name>``. Facts
+(``in-<path>``), bound by its parent; a chosen selector is a ``Select`` of its cases, its
+value read through a derived member ``key-<name>`` that binds the selector (a binding to a
+selector reads its case's name); a selector picked by a derived value (the model's reading
+17) is ``Select(by=...)``, a case whose scope holds nothing a ``None`` case, its value read
+by binding the selector itself (a binding to a selector reads its case's name); a child's
+guard is a derived member ``when-<name>``. Facts
 are the root's formals (SZ100 (5)): a required fact is ``Param()``, an optional one
 ``Param(required=False)``, left unsupplied where the model reads ``None`` (today's engine
 reads it unresolved: T4c's row). A ``Members`` is the
@@ -94,6 +97,7 @@ from finn.core.space import (
     Param,
     QueryResult,
     Rejected,
+    Select,
     Space,
     Unresolved,
     ViewKey,
@@ -104,7 +108,6 @@ from finn.core.space import (
     domain,
     inspection,  # its answer types alone: every question goes to an Answers
     reject,
-    selected,
     view,
 )
 from finn.core.space.edits import BrokenRule, ChangeOutcome
@@ -183,7 +186,7 @@ class Spelling:
     rules: Mapping[str, Rule] = field(default_factory=dict)
     types: Mapping[str, type] = field(default_factory=dict)
     #: guarded scopes holding one selector and nothing else, each written as that
-    #: selector's own guard: the scope a plain child, its selector a ``Decision(...,
+    #: selector's own guard: the scope a plain child, its selector a ``Select(...,
     #: when=)`` under the scope's ``when``, so the guard and the cases' guards are nodes of
     #: one Space. A guard piece of the selector names the scope, as the model's does
     guarded_selectors: frozenset[str] = frozenset()
@@ -229,6 +232,19 @@ def _name(path: str) -> str:
     return path.rsplit(".", 1)[-1]
 
 
+def _empty(scope: model.Scope) -> bool:
+    """Whether a case's scope holds nothing: the case places nothing."""
+    return not (
+        scope.choices
+        or scope.selectors
+        or scope.derived
+        or scope.views
+        or scope.constraints
+        or scope.children
+        or scope.members
+    )
+
+
 #: the member of a scope spelled as its selector's guard holding that guard
 OWN_GUARD = "own-when"
 #: the engine's code of a guard piece's own finding
@@ -262,6 +278,8 @@ class _Builder:
         self.index = _Unchecked(space) if unchecked else space.validate()
         self.spelling = spelling
         index = self.index
+        #: the paths a derived selector is picked by (a case's name, a ``str``)
+        self.picking = {by for _, by, _ in index.pickers.values()}
         for path, rule in spelling.rules.items():
             if path not in index.constraints:
                 raise NotTranslatable(f"{path}: spelled, but not a rule of the description")
@@ -356,6 +374,8 @@ class _Builder:
     def value_type(self, path: str) -> object:
         if path in self.spelling.types:
             return self.spelling.types[path]
+        if path in self.index.pickers or (path in self.picking and path in self.index.derived):
+            return str  # a case's name: a derived selector's value, or what picks one
         info = self.index.choices.get(path)
         if info is not None:
             if info.cases is not None:
@@ -383,7 +403,9 @@ class _Builder:
         node = self.node(scope, chain[0])
         for below in chain[1:]:
             info = self.index.scopes[below]
-            if info.selector is None:
+            if info.picker is not None:
+                node = getattr(node, _name(info.picker))[info.case]
+            elif info.selector is None:
                 node = getattr(node, _name(below))
             else:
                 node = getattr(node, _name(info.selector))[info.case]
@@ -418,6 +440,8 @@ class _Builder:
             return self.guard(scope, f"{scope}.{child}" if scope else child)
         if name == OWN_GUARD:
             return self.guard(scope, scope)
+        if name in index.pickers:
+            return self.picked(scope, name)
         if name in index.facts:
             return Param(required=False) if name in index.optional else Param()
         if name in index.choices and index.choices[name].cases is not None:
@@ -448,7 +472,7 @@ class _Builder:
 
     def _selector_key(self, scope: str, path: str) -> object:
         decision = self.selector(scope, path)
-        return derived(a0=selected(decision))(_explicit(("key",), lambda read: read["key"], str))
+        return derived(a0=decision)(_explicit(("key",), lambda read: read["key"], str))
 
     def selector(self, scope: str, path: str) -> Any:
         if path in self.selectors:
@@ -459,7 +483,24 @@ class _Builder:
         for case in info.cases:
             entries[case] = self.node(scope, f"{path}.{case}")
         guard = {"when": self.member(scope, OWN_GUARD)} if path in self.guards else {}
-        self.selectors[path] = Decision(entries, required=info.required, **guard)
+        self.selectors[path] = Select(**entries, **guard)
+        return self.selectors[path]
+
+    def picked(self, scope: str, path: str) -> Any:
+        """A selector picked by a derived value, ``Select(by=...)``: each case a node, or
+        ``None`` where its scope holds nothing (a case that places nothing)."""
+        if path in self.selectors:
+            return self.selectors[path]
+        _, by, cases = self.index.pickers[path]
+        entries: dict[str, object] = {}
+        for case in cases:
+            below = f"{path}.{case}"
+            entries[case] = (
+                None if _empty(self.index.scopes[below].scope) else self.node(scope, below)
+            )
+        if all(entry is None for entry in entries.values()):
+            raise NotTranslatable(f"{path}: Select needs a case that places something")
+        self.selectors[path] = Select(by=self.reference(scope, by), **entries)
         return self.selectors[path]
 
     def _choice(self, scope: str, path: str) -> object:
@@ -467,7 +508,7 @@ class _Builder:
         domain_ = info.domain
         simple = domain_.values is not None and domain_.member is None and not domain_.reads
         if simple and domain_.values:
-            return Decision(values=domain_.values, required=info.required)
+            return Decision(values=domain_.values)
         reads = domain_.reads
         names = [f"a{position}" for position in range(len(reads))]
 
@@ -497,7 +538,7 @@ class _Builder:
             candidates=candidates if domain_.listed else None,
             **dict(zip(names, (self.reference(scope, read) for read in reads), strict=True)),
         )
-        return Decision(domain=built, required=info.required)
+        return Decision(domain=built)
 
     def _derived(self, scope: str, path: str) -> object:
         """A derived value; one whose function refuses rejects with the refusal's code."""
@@ -625,6 +666,10 @@ class _Builder:
         if scope in self.spelling.guarded_selectors:
             members[OWN_GUARD] = self.member(scope, OWN_GUARD)
         for path in mine:
+            if path in index.pickers:
+                members[_name(path)] = self.member(scope, path)
+                annotations[_name(path)] = object | None  # a case may place nothing
+                continue
             if path in index.choices and index.choices[path].cases is not None:
                 members[_name(path)] = self.selector(scope, path)
                 members["key-" + _name(path)] = self.member(scope, path)
@@ -635,7 +680,7 @@ class _Builder:
                 annotations[_name(path)] = self.value_type(path)
         for path in sorted(index.scopes):
             child = index.scopes[path]
-            if child.parent == scope and child.selector is None:
+            if child.parent == scope and child.selector is None and child.picker is None:
                 members[_name(path)] = self.node(scope, path)
                 if child.when is not None and path not in self.spelling.guarded_selectors:
                     members["when-" + _name(path)] = self.member(scope, "when-" + _name(path))

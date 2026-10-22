@@ -10,7 +10,7 @@ from types import MappingProxyType, UnionType
 from typing import Union, cast, get_args, get_origin
 
 from ._configuration import Space
-from ._nodes import NodeDecision, NodeDecl, node_record, slot_declaration
+from ._nodes import NodeDecision, NodeDecl, slot_declaration
 from ._signatures import (
     BoundFunction,
     bind_function,
@@ -29,7 +29,6 @@ from .declarations import (
     ValueRef,
     View,
     ViewKey,
-    at,
     class_namespace,
     declared_annotation,
     describe_formal,
@@ -103,7 +102,7 @@ def _check_choice_annotation(decision: NodeDecision) -> None:
                 raise DefinitionError.broken(
                     "choice-annotation-excludes-none",
                     _OWNER,
-                    f"{label}: candidate {key!r} is None, so the annotation must include None",
+                    f"{label}: case {key!r} is None, so the annotation must include None",
                     declaration=label,
                 )
         elif not any(
@@ -112,7 +111,7 @@ def _check_choice_annotation(decision: NodeDecision) -> None:
             raise DefinitionError.broken(
                 "choice-annotation-excludes-candidate",
                 _OWNER,
-                f"{label}: candidate {key!r} is a {record.space_type.__qualname__} node, which the "
+                f"{label}: case {key!r} is a {record.space_type.__qualname__} node, which the "
                 f"annotation {annotation!r} does not accept",
                 declaration=label,
             )
@@ -141,19 +140,6 @@ def _collect_members(
                         f"{base.__qualname__}.{name}: reserved configuration name",
                         declaration=f"{base.__qualname__}.{name}",
                     )
-                record = node_record(value)
-                if record is not None and record.candidate_of is not None:
-                    # A handle naming a candidate of a Decision in this body.
-                    decision = record.candidate_of
-                    if decision.owner is not base:
-                        raise DefinitionError.broken(
-                            "candidate-member-foreign",
-                            _OWNER,
-                            f"{base.__qualname__}.{name}: names a candidate of a Decision "
-                            f"that is not declared in {base.__qualname__}{at(record.origin)}",
-                            declaration=f"{base.__qualname__}.{name}",
-                        )
-                    continue
                 if declaration.owner is not base or declaration.name != name:
                     raise DefinitionError.broken(
                         "declaration-unbound",
@@ -252,25 +238,15 @@ def _collect_semantics(
 
 
 def _collect_guards(effective: EffectiveSpace) -> Mapping[Declaration, ValueRef[bool]]:
-    """Guards authored in this body: members, their candidates and fresh decisions."""
+    """Guards authored in this body: members and their cases."""
     members, space_type = effective.members, effective.space_type
     guard_candidates: list[tuple[str, Declaration]] = list(members.items())
     for name, declaration in members.items():
-        children: tuple[tuple[str, NodeDecl], ...] = ()
-        if isinstance(declaration, NodeDecl):
-            children = ((name, declaration),)
-        elif isinstance(declaration, NodeDecision):
-            children = tuple(
+        if isinstance(declaration, NodeDecision):
+            guard_candidates.extend(
                 (f"{name}.{case}", record)
                 for case, record in declaration.candidates.items()
                 if record is not None
-            )
-            guard_candidates.extend(children)
-        for placement_name, record in children:
-            guard_candidates.extend(
-                (f"{placement_name}.{parameter}", supplier)
-                for parameter, supplier in record.bindings.items()
-                if isinstance(supplier, Decision) and supplier.owner is None
             )
     guards: dict[Declaration, ValueRef[bool]] = {}
     for name, declaration in guard_candidates:

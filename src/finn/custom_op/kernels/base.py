@@ -22,10 +22,10 @@ Both are kept by the facts, by value, in the build's member cache
 
 Conversion asks two questions of a node. Does the op's pattern cover it? ``match`` reads
 only the graph's structure (op types, connections, attributes), never a datatype or a
-value, and never changes the model. Will a kernel build it? ``defaulted`` applies its
-kernel's default policies once, on the kernel alone (``finn.kernels.defaults``): refused
-where its facts alone refuse it, or where a choice in play can be given no value, its
-fixed one or a first valid one. Conversion builds no channel: the channels are a
+value, and never changes the model. Will a kernel build it? ``defaulted`` applies the
+op's policies (``policies``, ``finn.kernels.policies``) once, on the kernel alone:
+refused where its facts alone refuse it, or where a choice in play can be given no value,
+its fixed one or a first valid one. Conversion builds no channel: the channels are a
 partition's, made at the cut. A missing shape or datatype raises ``FactUnstated``, and
 the node stays on the host; anything else wrong with the facts is an error
 (``KernelOpError``). Conversion stores the kernel's choices only, and writes nothing on a
@@ -38,7 +38,7 @@ The test harness checks this (``finn.harness.reference``); builds do not.
 
 A node's attributes are its semantic attributes, which are part of the operation
 (Thresholding's ``bias``), and its kernel's choices, named by the kernel's own decision
-keys (``compute.packed.pe``), each set by its default policy at conversion (a required
+keys (``pe``), each set by the op's policy at conversion (a required
 one is left open, for a strategy to set). A channel's
 choices are stored on its tensor instead, and only in a partition's body (``CHANNEL``).
 Only the compiler writes a choice (``persist``): ``get_nodeattr`` of a choice answers what
@@ -49,7 +49,7 @@ the node stores or refuses it as absent, and ``set_nodeattr`` of one is refused.
 - *Writes*, all through ``persist`` (``network.persist``, which writes past the guard) and,
   for conversion, ``network.persist_kernel``: conversion writes the node's kernel as its
   policies leave it (``defaulted``), only the node's choices. The cut persists the body's
-  choices, the channels' by the interim channel rule (``shell.make_cut_choices``). Every
+  choices, the channels' by the cut's policies (``shell.make_cut_choices``). Every
   strategy persists the network it returns (``explore_kernel_choices``). A user sets a
   choice by ``Hold`` in a step after the cut, which the strategies apply: no one writes an
   attribute.
@@ -93,6 +93,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, TypeGuard, cast
 
 import numpy.typing as npt
@@ -110,8 +111,8 @@ from finn.dataflow.tensor import Tensor
 from finn.kernels.base import KernelSpace
 from finn.kernels.configure import describe
 from finn.kernels.configure import refusal as refusal_of
-from finn.kernels.defaults import defaulted
 from finn.kernels.members import Facts, configured, reasons
+from finn.kernels.policies import Defaulted, Policy, defaulted, stated
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.target import Target
 
@@ -248,7 +249,13 @@ class KernelOp(CustomOp):
     - ``parameters``, the ports whose value may be an initializer the node holds
       (MatMul's weights), each wired with its contents and the kernel's views;
     - ``semantic``, its semantic attributes;
-    - ``anchor``, the ``(domain, op_type)`` its pattern starts from, and ``match``.
+    - ``anchor``, the ``(domain, op_type)`` its pattern starts from, and ``match``;
+    - ``policies``, its kernel's choices' policies (``finn.kernels.policies``): class-level
+      Decision references (``MemStreamKernel.ram_style``) to ``Fixed``, ``FirstValid`` or
+      ``Required``, each applying to every placement of that class below its kernel;
+      checked when the class is made (``stated``). Empty by default: a choice it does not
+      list is first valid, in listed order. Two ops of one kernel class (MatMul and Conv)
+      that state one state it once, on a shared base.
 
     Its choice attributes are its kernel class's decision keys (``schema``); a network
     binds its kernel by its facts and wires its channels by its ``wiring``.
@@ -264,11 +271,15 @@ class KernelOp(CustomOp):
     parameters: ClassVar[tuple[str, ...]] = ()
     semantic: ClassVar[dict[str, tuple[str, bool, object]]] = {}
     anchor: ClassVar[tuple[str, str]]
+    policies: ClassVar[Mapping[object, Policy]] = MappingProxyType({})
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
+        kernel = getattr(cls, "kernel", None)
+        if kernel is not None and ("kernel" in cls.__dict__ or "policies" in cls.__dict__):
+            cls.policies = stated(cls.__qualname__, kernel, cls.policies)
         if "kernel" not in cls.__dict__:
-            return  # an abstract base
+            return  # an abstract base, or one changing only its policies
         version = cls.__dict__.get("op_version")
         if type(version) is not int or version < 1:
             raise TypeError(f"{cls.__qualname__} must state a positive int op_version")
@@ -580,15 +591,15 @@ class KernelOp(CustomOp):
         valid or open."""
         return refusal_of(inspection.validity(point))
 
-    def defaulted(self) -> KernelSpace | tuple[Finding, ...]:
+    def defaulted(self) -> Defaulted[KernelSpace] | tuple[Finding, ...]:
         """Conversion's answer (the module docstring): the node's kernel bound to its facts
-        with its default policies applied once (``finn.kernels.defaults.defaulted``), every
-        choice in play given its fixed or first valid value, a required one left open;
-        else why not: its kernel's refusal on its facts alone, or a choice no value can be
-        set for (``choice-no-valid-value``, owned by its key, each value's refusal among its
+        with the op's policies applied once (``finn.kernels.policies.defaulted``), every
+        choice in play given its fixed or first valid value, a required one left open, and
+        each ranking a policy could not read named (``Defaulted.fallbacks``); else why not:
+        its kernel's refusal on its facts alone, or a choice no value can be set for
+        (``choice-no-valid-value``, owned by its key, each value's refusal among its
         causes). Conversion writes the point it gets here on the node (``persist_kernel``)."""
-        found: KernelSpace | tuple[Finding, ...] = defaulted(self.bound())
-        return found
+        return defaulted(self.bound(), type(self))
 
     def verify_node(self) -> list[str]:
         """Why the node's stored choices are refused, or each of ``refusals`` of its

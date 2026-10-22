@@ -18,17 +18,18 @@ carries out (``channel-plan``). A channel runs, in order:
     source -> output adapter -> transport -> input adapter -> consumer
 
 The plan splits at the transport: its output side (width conversions) is the
-``output_adapter`` Decision, its input side (a reorder, replay included, and markers) the
-``adapter`` Decision, each over fixed chains (``finn.kernels.adapters``). The
-``transport`` Decision is ``direct`` or ``fifo``; the FIFO owns its ``depth`` (required:
-an exploration sizes it) and its ``ram_style``, and carries data words only
-(``fifo-markers``). Its keys are the channel's, by its name (``("x", "transport")``).
+``output_adapter`` selector, its input side (a reorder, replay included, and markers) the
+``adapter`` selector, each over fixed chains (``finn.kernels.adapters``). The
+``transport`` selector is ``direct`` or ``fifo``; the FIFO owns its ``depth`` (the cut's
+policy requires it: an exploration sizes it, ``finn.kernels.cut``) and its ``ram_style``,
+and carries data words only (``fifo-markers``). Its keys are the channel's, by its name
+(``("x", "transport")``).
 
 A channel with a port on one side only is a boundary: its ``port`` names the module's
 AXIS port (``in0_V``), refused where absent (``channel-boundary``). The boundary presents
 what its inner side presents, by one rule: an input without the replay or window its
 receiver realizes (``unreplayed``), an output as produced, neither with markers. Where a
-shell offers movers (``mover_offer``, ``finn.kernels.movers``), the ``mover`` Decision places one
+shell offers movers (``mover_offer``, ``finn.kernels.movers``), the ``mover`` selector places one
 on that free side; it binds no RTL in the module and exports its contract (``MOVER``) for
 the shell's budget check and resources.
 
@@ -56,13 +57,13 @@ from finn.core.space import (
     Decision,
     Param,
     Rejected,
+    Select,
     Space,
     View,
     constraint,
     derived,
     domain,
     reject,
-    selected,
     supplied,
     view,
 )
@@ -150,6 +151,11 @@ def wired(
     )
 
 
+def _source_label(case: str) -> str:
+    """A channel's source's label, ``source.<case>``: its producer's owner."""
+    return f"source.{case}"
+
+
 class _Direct(Space):
     """No stage: the hop across the transport connects directly. It places nothing, so
     it exports nothing its channel sums."""
@@ -175,6 +181,11 @@ class ChannelFifo(KernelSpace):
     tensor: Tensor = Param()
     arriving: BeatSequence = Param()
     platform: Platform = Param()
+    # Known by membership only: the cut's policy is required (finn.kernels.cut), and a
+    # FIFO is chosen by sizing it (SizeFifos).
+    depth: int = Decision(
+        domain=domain(accepts=lambda *, candidate: 2 <= candidate < 2**32, ordered=True),
+    )
 
     @derived
     def carried(self) -> BeatSequence:
@@ -186,11 +197,7 @@ class ChannelFifo(KernelSpace):
     buffer = FifoKernel(
         input_tensor=tensor,
         arriving=carried,
-        # Required: no policy gives a depth; a FIFO is chosen by sizing it (SizeFifos).
-        depth=Decision(
-            domain=domain(accepts=lambda *, candidate: 2 <= candidate < 2**32, ordered=True),
-            required=True,
-        ),
+        depth=depth,
         platform=platform,
     )
 
@@ -302,8 +309,8 @@ class Channel(KernelSpace):
     def source_dtype(self) -> QONNXDataType:
         return self.tensor.element.dtype
 
-    source: MemStreamKernel = Decision(
-        SOURCES,
+    source: MemStreamKernel = Select(
+        **SOURCES,
         when=valued,
         dtype=source_dtype,
         form=source_form,
@@ -312,11 +319,7 @@ class Channel(KernelSpace):
         set_tensor=index_tensor,
         platform=platform,
     )
-    source_case = selected(source)
-
-    @derived
-    def source_label(self) -> str:
-        return f"source.{self.source_case}"
+    source_label: str = derived(case=source)(_source_label)
 
     # With several sets, its source's set port, a port of the channel labelled below it
     # (``source.memstream.set``): the index tensor's channel's consumer. A channel without
@@ -390,7 +393,7 @@ class Channel(KernelSpace):
             "channel-mover", "a mover sits on a boundary's free side, and both sides have a port"
         )
 
-    mover: IodmaMover = Decision(MOVERS, when=offered, offers=mover_offer, side=free_side)
+    mover: IodmaMover = Select(**MOVERS, when=offered, offers=mover_offer, side=free_side)
     mover_contract = View(mover.contract)
 
     @derived
@@ -456,8 +459,8 @@ class Channel(KernelSpace):
             )
         return True
 
-    output_adapter: StreamAdapter = Decision(
-        OUTPUT_ADAPTERS,
+    output_adapter: StreamAdapter = Select(
+        **OUTPUT_ADAPTERS,
         when=output_adapting,
         tensor=tensor,
         plan=output_plan,
@@ -490,16 +493,14 @@ class Channel(KernelSpace):
         output = adapted[-1].output if adapted else None
         return self.sides.source.sequence if output is None else output.sequence
 
-    transport: _Direct | ChannelFifo = Decision(
-        {
-            "direct": _Direct,
-            "fifo": ChannelFifo(tensor=tensor, arriving=arriving, platform=platform),
-        }
+    transport: _Direct | ChannelFifo = Select(
+        direct=_Direct,
+        fifo=ChannelFifo(tensor=tensor, arriving=arriving, platform=platform),
     )
     transport_stages = View(transport.stages)
 
-    adapter: StreamAdapter = Decision(
-        ADAPTERS, when=adapting, tensor=tensor, plan=input_plan, platform=platform
+    adapter: StreamAdapter = Select(
+        **ADAPTERS, when=adapting, tensor=tensor, plan=input_plan, platform=platform
     )
     adapter_stages = View(adapter.stages)
 

@@ -28,7 +28,7 @@ from support.helpers import (
     dotp_extents,
     exact_result_dtype,
     labels,
-    with_adapter_memories,
+    with_channel_defaults,
     with_direct_transports,
 )
 from support.xsim import requires_xsim
@@ -62,22 +62,24 @@ STEM = "layered"
 """The two layers' module's stem: ``finn_layered``."""
 
 
-def _layer(result: DataType, x_tensor: Tensor, w_tensor: Tensor, y_tensor: Tensor) -> Any:
+def _layer(
+    result: DataType, x_tensor: Tensor, w_tensor: Tensor, y_tensor: Tensor, pe: int, simd: int
+) -> Any:
+    """A layer's core, given its folding (its role's choices)."""
     return PackedDotpKernel(
         result_range=ordinary_integer_bounds(result),
         x_tensor=x_tensor,
         w_tensor=w_tensor,
         **dotp_extents(w_tensor),
+        pe=pe,
+        simd=simd,
         platform=FULL_DSP48E2,
     )
 
 
-def _period(layer: Any, pe: int, simd: int) -> Traversal:
+def _period(layer: Any) -> Traversal:
     """One pass of a layer's weights, in the order it reads them at its folding."""
-    folded = commit(
-        design_space(layer),
-        {"pe": pe, "simd": simd, "compute_pumping": False, "reducer": "tree"},
-    )
+    folded = commit(design_space(layer), {"compute_pumping": False, "reducer": "tree"})
     return period(folded.w_stream.sequence.form)
 
 
@@ -92,7 +94,7 @@ def layered(*, adaptable: bool = True) -> Network:
         "second": (Y, h_tensor, w2_tensor, y_tensor, PE2, SIMD2),
     }
     # One pass of each layer's weights, in the order that layer reads them.
-    periods = {name: _period(_layer(*facts[:4]), *facts[4:]) for name, facts in layers.items()}
+    periods = {name: _period(_layer(*facts)) for name, facts in layers.items()}
     network = Network(
         {
             "x": wire(
@@ -126,8 +128,8 @@ def layered(*, adaptable: bool = True) -> Network:
                 port="out0_V",
                 producer=Interface("second", "y_contract"),
             ),
-            "first": _layer(*layers["first"][:4]),
-            "second": _layer(*layers["second"][:4]),
+            "first": _layer(*layers["first"]),
+            "second": _layer(*layers["second"]),
             "rom1": MemStreamKernel(
                 platform=FULL_DSP48E2,
                 dtype=W,
@@ -149,19 +151,15 @@ def layered(*, adaptable: bool = True) -> Network:
             "rom1.pumped_memory": False,
             "rom2.ram_style": "auto",
             "rom2.pumped_memory": False,
-            "first.pe": PE1,
-            "first.simd": SIMD1,
             "first.compute_pumping": False,
             "first.reducer": "tree",
-            "second.pe": PE2,
-            "second.simd": SIMD2,
             "second.compute_pumping": False,
             "second.reducer": "tree",
         },
     )
-    # The network sets each channel's adapters as it builds it (the interim channel
-    # rule); their memories and the transports are set here.
-    return with_adapter_memories(with_direct_transports(network))
+    # The layers are given their folding, so no change brings their channels new facts:
+    # the transports are set here, and each channel's other choices as the cut sets them.
+    return with_channel_defaults(with_direct_transports(network))
 
 
 def test_the_hidden_stream_plans_width_replay_and_frame_and_places_vpc_and_input_gen():

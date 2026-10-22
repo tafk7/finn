@@ -607,10 +607,14 @@ class World:
                 # constraint does not apply, and the guard's piece stands for it.
                 inactive = INAPPLICABLE
             # A Space's validity under a guard that waits is still its pieces' AND: each
-            # piece inside reads the same guard first and answers unknown.
-            if inactive is not None and not (
-                node.kind == "validity" and isinstance(inactive, Unresolved)
-            ):
+            # piece inside reads the same guard first and answers unknown. Under a ``when``
+            # refused below a guard that waits it waits whole, on what that guard waits on
+            # (reading 8's second half: ``refused_waiting``).
+            evaluated = node.kind == "validity" and isinstance(inactive, Unresolved)
+            if evaluated:
+                top, reads = self.refused_waiting(node.guard, trace, reads)
+                evaluated = top is None
+            if inactive is not None and not evaluated:
                 return Entry(inactive, reads, tuple(trace), _guard_assessment(node, inactive))
         return _FRAMES[node.kind](self, node, trace, reads)
 
@@ -633,7 +637,17 @@ class World:
             reads |= evaluator.bits.bit(selector)
             value = self.values.get(selector)
             return (None if value is None or value.value == case else False), reads
-        if node.output is None:
+        answer, reads = self.condition(node, trace, reads)
+        return (False if isinstance(answer, Available) and answer.value is False else None), reads
+
+    def condition(
+        self, node: Node, trace: list[tuple[NodeId, QueryResult[object]]], reads: ReadSet
+    ) -> tuple[QueryResult[object] | None, ReadSet]:
+        """A ``when`` guard's own condition, read whatever the guard above it answers
+        (``_holds_here``), or ``None`` for a node that is no such guard (a case's guard
+        reads its selector)."""
+        evaluator = self.evaluator
+        if node.kind != "guard" or node.output is None or node.index in evaluator.reads.cases:
             return None, reads
         condition = evaluator.nodes[node.output]
         if (
@@ -646,8 +660,30 @@ class World:
             entry = self._unguarded(condition)
             trace.extend(entry.trace)
             reads |= entry.reads
-        answer = entry.result
-        return (False if isinstance(answer, Available) and answer.value is False else None), reads
+        return entry.result, reads
+
+    def refused_waiting(
+        self, guard: NodeId, trace: list[tuple[NodeId, QueryResult[object]]], reads: ReadSet
+    ) -> tuple[NodeId | None, ReadSet]:
+        """The highest ``when`` guard in the chain of ``guard`` (which waits) refused through
+        an input below a guard that waits, or ``None``: climbing from ``guard`` while each
+        guard above waits, a ``when`` guard whose own condition, read past the guard above
+        it (``condition``), is refused. What it guards waits, on what the guard above it
+        waits on: refused takes effect once all above it holds (reading 8's second half).
+        Where nothing above waits the guard answers refused, and the refused guard's piece
+        counts (``_guard_refused``)."""
+        nodes = self.evaluator.nodes
+        found: NodeId | None = None
+        index = guard
+        while (outer := nodes[index].guard) is not None:
+            answer, reads = self.condition(nodes[index], trace, reads)
+            if isinstance(answer, Rejected):
+                found = index
+            index = outer
+            above, reads = self.read(trace, index, reads)
+            if not isinstance(above.result, Unresolved):
+                break
+        return found, reads
 
     def _unguarded(self, node: Node) -> Entry:
         """``node`` evaluated here as if its own guard held (its frame alone, kept nowhere):
@@ -959,8 +995,11 @@ def _validity(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
       known (unknown). A stored value's type check is no piece.
 
     A constraint, a choice or a placed Space whose guard is refused through a refused
-    input is one guard piece (``guard-refused``, the input's refusal beside), once per
-    guard node.
+    input is one guard piece (``guard-refused``, the input's refusal beside), counted
+    once at the highest refused guard of its chain (``_guard_refused``). One below a
+    ``when`` refused through an input under a guard that waits is unknown, waiting on what
+    that guard waits on, counted once at the highest such ``when`` (``_guard_waiting``,
+    reading 8's second half: refused takes effect once all above it holds).
 
     A placed Space's piece is read from its guard first (the guard its placing scope
     places it under, a node of this Space's scope or above): where the guard is false or
@@ -990,46 +1029,128 @@ def _validity(world: World, node: Node, trace: _Trace, reads: ReadSet) -> Entry:
         if piece.kind == "decision":
             found, reads = _choice_piece(world, piece, trace, reads, guards)
             if found is not None:
-                answers[piece.key] = found
+                answers[found[0]] = found[1]
             continue
         entry, reads = world.read(trace, index, reads)
         answer = cast(QueryResult[bool], entry.result)
+        if isinstance(answer, Unresolved) and piece.guard is not None:
+            if placed is None:
+                guard, reads = world.read(trace, piece.guard, reads)
+            else:
+                guard = placed  # read above, first
+            if isinstance(guard.result, Unresolved):
+                top, reads = world.refused_waiting(piece.guard, trace, reads)
+                if top is not None:
+                    waiting, reads = _guard_waiting(world, piece, top, trace, reads, guards)
+                    if waiting is not None:
+                        answers[waiting[0]] = waiting[1]
+                    continue
         if isinstance(answer, (Inapplicable, Rejected)) and piece.guard is not None:
             if placed is None:
                 guard, reads = world.read(trace, piece.guard, reads)
             else:
                 guard = placed  # read above, first
             if isinstance(guard.result, Rejected):
-                if piece.guard in guards:
-                    continue
-                guards.add(piece.guard)
-                owner = (
-                    world.evaluator.linked.scopes[piece.scope].name
-                    if piece.kind == "validity"
-                    else piece.owner
-                )
-                answer = _guard_piece(owner, guard.result)
+                if piece.kind == "validity":
+                    owner = linked.scopes[piece.scope].name
+                else:
+                    owner = piece.owner
+                counted, reads = _guard_refused(world, piece, owner, trace, reads, guards)
+                if counted is not None:
+                    answers[counted[0]] = counted[1]
+                continue
         answers[piece.key] = answer
     assessment = assess_constraints(answers)
     return Entry(cast(QueryResult[object], assessment.result), reads, tuple(trace), assessment)
 
 
+def _guard_refused(
+    world: World,
+    piece: Node,
+    owner: str,
+    trace: _Trace,
+    reads: ReadSet,
+    guards: set[NodeId],
+) -> tuple[tuple[str, QueryResult[bool]] | None, ReadSet]:
+    """The guard piece of ``piece``, whose guard is refused through an input: counted
+    once, at the highest refused guard of its chain (reading 8: "at the highest such
+    guard, scopes under it add nothing"), or ``None`` where that guard is counted
+    already. Counted at a guard above its own, it is that guard's owner's, keyed by it
+    where the owner is a node (a selector: its cases' pieces are its one piece)."""
+    nodes = world.evaluator.nodes
+    top = cast(NodeId, piece.guard)
+    entry, reads = world.read(trace, top, reads)
+    while (outer := nodes[top].guard) is not None:
+        above, reads = world.read(trace, outer, reads)
+        if not isinstance(above.result, Rejected):
+            break
+        top, entry = outer, above
+    if top in guards:
+        return None, reads
+    guards.add(top)
+    key = piece.key
+    if top != piece.guard:
+        owner = nodes[top].owner
+        if owner in world.evaluator.linked.keys:
+            key = owner
+    return (key, _guard_piece(owner, cast(Rejected, entry.result))), reads
+
+
+def _guard_waiting(
+    world: World,
+    piece: Node,
+    top: NodeId,
+    trace: _Trace,
+    reads: ReadSet,
+    guards: set[NodeId],
+) -> tuple[tuple[str, QueryResult[bool]] | None, ReadSet]:
+    """The piece of ``piece``, below ``top``, a ``when`` refused through an input below a
+    guard that waits (``World.refused_waiting``): unknown, waiting on what the guard above
+    ``top`` waits on, counted once at ``top`` and keyed as ``_guard_refused`` keys a refused
+    guard's piece (by ``top``'s owner where it is a node and not ``piece``'s own guard);
+    ``None`` where ``top`` is counted already."""
+    if top in guards:
+        return None, reads
+    guards.add(top)
+    nodes = world.evaluator.nodes
+    key = piece.key
+    if top != piece.guard:
+        owner = nodes[top].owner
+        if owner in world.evaluator.linked.keys:
+            key = owner
+    above, reads = world.read(trace, cast(NodeId, nodes[top].guard), reads)
+    return (key, cast(QueryResult[bool], above.result)), reads
+
+
 def _choice_piece(
     world: World, piece: Node, trace: _Trace, reads: ReadSet, guards: set[NodeId]
+) -> tuple[tuple[str, QueryResult[bool]] | None, ReadSet]:
+    """A choice's validity piece by key, or ``None`` where it is no piece: a guard
+    refused through an input (``_guard_refused``), or refused below a guard that waits
+    (``_guard_waiting``); else read from its listed values."""
+    if piece.guard is not None:
+        guard, reads = world.read(trace, piece.guard, reads)
+        if isinstance(guard.result, Rejected):
+            return _guard_refused(world, piece, piece.owner, trace, reads, guards)
+        if isinstance(guard.result, Unresolved):
+            top, reads = world.refused_waiting(piece.guard, trace, reads)
+            if top is not None:
+                return _guard_waiting(world, piece, top, trace, reads, guards)
+    answer, reads = _listed_piece(world, piece, trace, reads)
+    return (None if answer is None else (piece.key, answer)), reads
+
+
+def _listed_piece(
+    world: World, piece: Node, trace: _Trace, reads: ReadSet
 ) -> tuple[QueryResult[bool] | None, ReadSet]:
-    """A choice's validity piece, read from its guard and its listed values (never from
-    its stored value), or ``None`` where it is no piece. A domain that lists nothing
-    (membership only) is never a piece: its inputs are not read, so neither their wait
-    nor their refusal makes it one."""
+    """A choice's validity piece where its guard is not refused, read from its guard and
+    its listed values (never from its stored value), or ``None`` where it is no piece. A
+    domain that lists nothing (membership only) is never a piece: its inputs are not read,
+    so neither their wait nor their refusal makes it one."""
     waiting: Unresolved | None = None
     if piece.guard is not None:
         guard, reads = world.read(trace, piece.guard, reads)
         answer = guard.result
-        if isinstance(answer, Rejected):
-            if piece.guard in guards:
-                return None, reads
-            guards.add(piece.guard)
-            return _guard_piece(piece.owner, answer), reads
         if isinstance(answer, Unresolved):
             waiting = answer
         elif _guard_result(piece, answer) is not None:
@@ -1469,7 +1590,9 @@ class MethodReader:
         if target is None:
             if isinstance(node, Param):
                 return self._supplied(point, node)
-            raise RequestError("present() takes a node (a child or a candidate) or a value input")
+            raise RequestError(
+                "present() takes a node (a child or a selector's case) or a value input"
+            )
         presence = self.world.evaluator.linked.scopes[target].guard
         if presence is None:
             return True
@@ -1557,9 +1680,7 @@ class MethodReader:
         try:
             return linked.choices[linked.scopes[scope].choices[unwrap(decision)]]
         except (KeyError, TypeError) as error:
-            raise RequestError(
-                "the Decision over nodes is not part of this compiled scope"
-            ) from error
+            raise RequestError("the selector is not part of this compiled scope") from error
 
     def selected_candidate(self, point: Space, decision: object) -> Space | None:
         """The receiver of the candidate a Decision over nodes selects, or ``None``."""
@@ -1577,12 +1698,12 @@ class MethodReader:
         """A candidate's receiver, selected or not (``None`` for a case placing nothing)."""
         self._enter()
         if type(case) is not str:
-            raise RequestError("a candidate key must be a string")
+            raise RequestError("a case name must be a string")
         choice = self._choice(point._scope, decision)
         for key, index in choice.cases:
             if key == case:
                 return None if index is None else receiver(self, index)
-        raise RequestError(f"{choice.key}: unknown candidate {case!r}")
+        raise RequestError(f"{choice.key}: unknown case {case!r}")
 
     def root(self, point: Space) -> Space:
         """The root's receiver."""
@@ -1664,21 +1785,11 @@ def _call_method(world: World, node: Node) -> tuple[Called, MethodReader]:
 
 
 def membership_arguments(node: Node) -> tuple[Argument, ...]:
-    """A Decision's domain inputs its membership and enumeration read (an order's own
-    inputs aside)."""
+    """A Decision's domain inputs its membership and enumeration read."""
     domain = node.domain
     if domain is None:
         return ()
     named = set(domain.membership_inputs)
-    return tuple(argument for argument in node.domain_arguments if argument.name in named)
-
-
-def order_arguments(node: Node) -> tuple[Argument, ...]:
-    """A Decision's domain inputs its order reads."""
-    domain = node.domain
-    if domain is None:
-        return ()
-    named = set(domain.order_inputs)
     return tuple(argument for argument in node.domain_arguments if argument.name in named)
 
 
@@ -1786,7 +1897,6 @@ _DOMAIN_KINDS = {
     "listing": "domain listing",
     "lists a value": "domain listing",
     "enumeration": "domain enumeration",
-    "order": "domain order",
 }
 
 
@@ -1925,10 +2035,9 @@ def type_check(world: World, node: NodeId, value: Available[object]) -> QueryRes
 
 def _candidates(world: World, node: Node) -> QueryResult[object]:
     """A choice's candidates: its listed values (its domain's enumeration, each value its
-    membership accepts), ranked by its order where it has one (``Available(None)``:
-    membership only), under its guard: inapplicable where the choice is absent, the
-    guard's answer while it waits or is refused; the order's inputs' non-value while one
-    of them is not a value (memoized on the inputs' answers)."""
+    membership accepts), in their listed order (``Available(None)``: membership only),
+    under its guard: inapplicable where the choice is absent, the guard's answer while it
+    waits or is refused (memoized on the inputs' answers)."""
     domain, semantics = node.domain, node.semantics
     if domain is None or semantics is None:
         raise EvaluationError(node.owner, "domain enumeration", "reference has no domain")
@@ -1942,41 +2051,7 @@ def _candidates(world: World, node: Node) -> QueryResult[object]:
     if domain.candidates is None:
         return Available(None)
     called_on = _inputs(membership_arguments(node), answers)
-    listed = _memoized(world, node, "listing", called_on, lambda: _list(world, node, answers))
-    if domain.order is None or not isinstance(listed, Available):
-        return listed
-    return _ranked(world, node, answers, listed)
-
-
-def _ranked(
-    world: World,
-    node: Node,
-    inputs: tuple[QueryResult[object], ...],
-    listed: Available[object],
-) -> QueryResult[object]:
-    """Listed values (found from the membership inputs' answers ``inputs``) as the
-    domain's order ranks them, over the order's own inputs (memoized on both inputs'
-    answers)."""
-    domain, semantics = node.domain, node.semantics
-    assert domain is not None and semantics is not None
-    arguments = order_arguments(node)
-    answers = tuple(world._get(argument.node).result for argument in arguments)
-    blocked = _blocked([answer for answer in answers if not isinstance(answer, Available)])
-    if blocked is not None:
-        return blocked
-
-    def rank() -> QueryResult[object]:
-        ranked = _authored(
-            world,
-            Call(node.owner, "domain order"),
-            domain.rank,
-            (listed.value, _domain_values(world, node, answers, arguments)),
-            {"semantics": semantics, "owner": node.owner},
-        )
-        return Available(cast(_Returned, ranked).value)
-
-    called_on = (*_inputs(membership_arguments(node), inputs), *_inputs(arguments, answers))
-    return _memoized(world, node, "order", called_on, rank)
+    return _memoized(world, node, "listing", called_on, lambda: _list(world, node, answers))
 
 
 def _enumerate(
@@ -2003,7 +2078,7 @@ def _enumerate(
 
 def candidates(world: World, node: NodeId) -> QueryResult[object]:
     """A choice's candidates in ``world`` (``Available(None)``: membership only), from a
-    driver: its listed values, in its domain's order."""
+    driver: its listed values, in their listed order."""
     spec = world.evaluator.nodes[node]
     return _drive(world.evaluator, lambda: _candidates(world, spec))
 
@@ -2037,7 +2112,6 @@ __all__ = [
     "check_purity",
     "listed_values",
     "membership_arguments",
-    "order_arguments",
     "public_value",
     "receiver",
     "type_check",

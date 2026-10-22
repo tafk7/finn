@@ -13,8 +13,8 @@ not. At every step (each change tried, accepted or refused):
 **steps of choices**:
 
 1. *History-independence.* The walked configuration answers every question (each choice's
-   state, each value's answer, each rule, validity, each listed choice's possible values
-   and ranking) as ``Configuration(space, facts, stored)`` built from nothing; and the
+   state, each value's answer, each rule, validity, each listed choice's possible values)
+   as ``Configuration(space, facts, stored)`` built from nothing; and the
    bind of its own choices from nothing, ``bind(space, facts, stored)``, publishes it,
    dropping nothing and reporting no rule broken, for every configuration the walk reaches
    by accepted changes of choices that set (FN3: what a step publishes binds again with
@@ -25,8 +25,10 @@ not. At every step (each change tried, accepted or refused):
    facts step left reading refused binds again, reads refused and reports them; that is
    counted as expected.
 2. *Additions move answers only up the information order* (:func:`below`, the order
-   defined in one place) over a step that only sets choices nothing was stored for, with no
-   exception: no accepted addition leaves a Space newly refused (§ 16.15 removes § 16.14's).
+   defined in one place) over a step that only sets choices nothing was stored for: no
+   accepted addition leaves a Space newly refused (§ 16.15 removes § 16.14's). One move is
+   up by the model's reading 26: an answer refused through its scope's presence may become
+   inapplicable, its scope found absent (:func:`refused_then_absent`); nothing wider.
 3. *No accepted change of choices adds a (false piece, origin) pair* (§ 16.15): every pair
    counted in the published configuration is counted in the one before it. A change of
    choices setting no new value (§ 16.18: its commits repeat stored values), only clearing,
@@ -76,8 +78,7 @@ independence, which T1 claims by construction and its cache could break), so non
 skipped.
 
 **Two runs, and attribution by cause** (DESIGN § 6). The model holds rulings the engine has
-not reached (SZ100 (3), (5)), and its reading 8, each a pending milestone of the matrix with
-one row.
+not reached (SZ100 (3), (5)), each a pending milestone of the matrix with one row.
 
 - The **strict** run (``strict=True``, ``--strict``) draws neither cause: no view in a
   rule's pool, every fact given at the start, no unset. Every disagreement fails the walk.
@@ -88,14 +89,8 @@ one row.
   as a cycle, see :func:`generate`); T4c, a question
   whose subject reaches an optional fact left out (:meth:`Structure.reach`; a fact's own
   answer, ``None`` in the model and unresolved in today's engine, reaches the fact itself;
-  validity, possible values, a change, a bind and refinement reach the whole description);
-  T4a, a question whose subject reaches a scope whose guard reads a refused input while a
-  guard above it is refused too, or unknown, by the model's presence states (:func:`refused_below`,
-  :meth:`Structure.reaches_scope`; validity reaches everything below, and so does every
-  answer or change carrying its findings). Neither run draws a guard below a refused one
-  (nothing is drawn below the guarded scope ``g``); a refused ``g`` in an open selector's
-  case is drawn, seldom. The witnesses are hand cases. One
-  attributed to a pending milestone (:func:`pending`) is **counted, not failed**, tallied
+  validity, possible values, a change, a bind and refinement reach the whole description).
+  One attributed to a pending milestone (:func:`pending`) is **counted, not failed**, tallied
   by question and by milestone; one with no cause fails the walk, and so does one whose
   milestone is not pending (``--without``: its rows taken as removed). Refinement on the engine
 side (its answers over an addition, in the same order) is a disagreement like any other
@@ -107,6 +102,12 @@ start, an optional one now and then left out, reading ``None``. An optional fact
 to ``None``) is the model's alone: the engine cannot set an optional formal back to
 unsupplied, so such a step is checked against the model's invariants and never sent to the
 engine (``Point.change`` would raise ``NotTranslatable``).
+
+**Derived selectors** (``by``, the CLI's ``--by``): the descriptions also hold selectors
+picked by a derived value (the model's reading 17, the engine's ``Select(by=...)``): one in
+the root, now and then one in case ``a`` of ``s``, now and then a chosen selector in a case
+of the root's, and cases that place nothing. Without ``by`` the generator draws exactly what
+it drew before (the same seeds, the same descriptions).
 
 A failure prints the seed, the step, the description, the steps so far and the answers
 involved. ``python -m core.space.reference_harness walks`` (from ``tests``) prints a line
@@ -128,7 +129,6 @@ from support.space_oracle import Implementation
 from support.space_oracle.today import TODAY
 
 from core.space import reference as model
-from core.space.reference.description import Order
 from core.space.reference.model import same
 
 from .compare import (
@@ -197,7 +197,7 @@ class _Draw:
     """One description drawn from ``rng``, and its text.
 
     Membership reads facts only: facts, and ``h``, a derived value over facts that refuses
-    on some. A listed domain may carry an ``order`` reading a choice. The root holds two to
+    on some. The root holds two to
     six value choices in all, a selector whose cases hold choices (sometimes one level
     deeper), a derived value ``d`` over facts and root choices (sometimes refusing), a
     ``when``-guarded scope ``g`` (its guard sometimes reading ``d``; in the root, or in the
@@ -210,11 +210,22 @@ class _Draw:
 
     ``strict``: no view in a rule's pool, so nothing reads a view in (SZ100 (3)); otherwise
     a root rule now and then reads ``g``'s view or the root's own, which the model refuses
-    as ``view-read-in``."""
+    as ``view-read-in``.
 
-    def __init__(self, rng: random.Random, strict: bool = False) -> None:
+    ``by``: selectors picked by a derived value too (reading 17). A selector ``p`` in the
+    root, picked by ``k``, and now and then (or instead) a selector ``q`` in case ``a`` of
+    ``s``, picked by ``s.a.j``; each picker names a case from a sum of one or two reads
+    (facts, root choices), and now and then refuses on an odd sum or names no case
+    (``zz``). Their cases hold choices and a rule, or (never the first) nothing; a case of
+    ``p`` now and then holds a chosen selector ``t``. Without ``by`` no draw is spent on
+    them."""
+
+    def __init__(self, rng: random.Random, strict: bool = False, by: bool = False) -> None:
         self.rng = rng
         self.strict = strict
+        self.by = by
+        #: the case of ``s`` the derived selector ``q`` sits in, or ``None``
+        self.by_in: str | None = None
         self.names = itertools.count()
         self.facts = tuple(f"f{index}" for index in range(rng.randint(1, 2)))
         #: the optional facts (SZ100 (5)): left out, one reads None, and every function
@@ -261,15 +272,14 @@ class _Draw:
                 )
             return model.listed(*values, member=_not_one), f"listed{values} where value != 1"
         if draw < 0.58:
-            # an order reading a choice: it ranks, and checks nothing
+            # Spent draws: these once drew a ranked domain (a domain's order, gone with
+            # SZ103), its order's read included. They are kept so that each seed draws the
+            # same description as before, less the ranking, and the walks' counts stay
+            # comparable across the change; they go when a later lane moves the baseline.
             values = tuple(sorted(rng.sample(VALUES, rng.randint(2, 3))))
             roots = self.roots()
             if roots:
-                read = rng.choice(roots)
-                return (
-                    model.listed(*values, order=_reversed_past(read), order_reads=(read,)),
-                    f"listed{values}, reversed while {read} >= 2",
-                )
+                rng.choice(roots)
             return model.listed(*values), f"listed{values}"
         if draw < 0.72:
             fact = self.fact()
@@ -294,10 +304,13 @@ class _Draw:
     def choice(self, scope: str, indent: str) -> model.Choice:
         name = self.name("c")
         domain, text = self.domain()
-        required = self.rng.random() < 0.1
+        # A spent draw: it once made a choice required (gone with SZ103). Kept so that each
+        # seed draws the same description and the counts stay comparable; it goes when a
+        # later lane moves the baseline.
+        self.rng.random()
         self.ints.append(_join(scope, name))
-        self.lines.append(f"{indent}choice {name}: {text}" + (" (required)" if required else ""))
-        return model.Choice(name, domain, required)
+        self.lines.append(f"{indent}choice {name}: {text}")
+        return model.Choice(name, domain)
 
     def relation(self, reads: Sequence[str]) -> _Fn:
         """A predicate over two or three integer reads."""
@@ -442,6 +455,9 @@ class _Draw:
             rule = self.constraint(pool, inner)
             constraints = (rule,) if rule else ()
         children = (self.guarded(path, inner),) if path == self.guard_in else ()
+        if path == self.by_in:
+            picker, picked = self.picked(path, "q", ("m", "n"), inner, [*self.facts, *self.roots()])
+            derived, selectors = (*derived, picker), (*selectors, picked)
         return model.Scope(
             case,
             choices=choices,
@@ -451,15 +467,73 @@ class _Draw:
             children=children,
         )
 
+    # -- selectors picked by a derived value (``by``)
+
+    def picker(
+        self, name: str, cases: tuple[str, ...], readable: Sequence[str], indent: str
+    ) -> model.Derived:
+        """A derived value naming one of ``cases`` from a sum of one or two reads: now and
+        then refusing on an odd sum, or naming no case."""
+        rng = self.rng
+        reads = tuple(rng.sample(list(readable), min(len(readable), rng.randint(1, 2))))
+        draw = rng.random()
+        if draw < 0.2:
+            shape, text = "odd", "refused 'k-odd' when odd, else the (sum // 2)-th case"
+        elif draw < 0.35:
+            shape, text = "none-of", f"the sum-th of the cases and {NO_CASE!r}"
+        else:
+            shape, text = "plain", "the sum-th case"
+        self.lines.append(f"{indent}derived {name}: {' + '.join(reads)}, {text} of {cases}")
+        return model.Derived(name, reads, _picks(reads, cases, shape))
+
+    def by_case(self, selector: str, case: str, depth: int, indent: str) -> model.Scope:
+        """A case of a derived selector: now and then nothing (never the first case: a
+        selector places something in one case at least), else choices, a rule, and (in the
+        root's selector) now and then a chosen selector ``t``."""
+        path = _join(selector, case)
+        if case not in ("u", "m") and self.rng.random() < 0.35:
+            self.lines.append(f"{indent}case {case}: nothing")
+            return model.nothing(case)
+        self.lines.append(f"{indent}case {case}:")
+        inner = indent + "  "
+        choices = tuple(self.choice(path, inner) for _ in range(self.rng.choice((1, 1, 2))))
+        selectors: tuple[model.Selector, ...] = ()
+        if depth == 0 and self.rng.random() < 0.3:
+            selectors = (self.selector(path, depth + 1, inner),)
+        constraints: tuple[model.Constraint, ...] = ()
+        if self.rng.random() < 0.6:
+            rule = self.constraint(
+                [*self.facts, *self.roots()], inner, needs=_join(path, choices[0].name)
+            )
+            constraints = (rule,) if rule else ()
+        return model.Scope(case, choices=choices, selectors=selectors, constraints=constraints)
+
+    def picked(
+        self, scope: str, name: str, cases: tuple[str, ...], indent: str, readable: Sequence[str]
+    ) -> tuple[model.Derived, model.Selector]:
+        """A derived selector ``name`` of ``scope`` and its picker (``k`` in the root, ``j``
+        below it)."""
+        key = "j" if scope else "k"
+        picker = self.picker(key, cases, readable, indent)
+        self.lines.append(f"{indent}selector {name} by {key}")
+        depth = 1 if scope else 0
+        built = tuple(
+            self.by_case(_join(scope, name), case, depth, indent + "  ") for case in cases
+        )
+        return picker, model.Selector(name, built, by=_join(scope, key))
+
     def selector(self, scope: str, depth: int, indent: str) -> model.Selector:
         name = "s" if depth == 0 else "t"
         path = _join(scope, name)
         cases = ("a", "b", "c")[: self.rng.choice((2, 2, 3))] if depth == 0 else ("x", "y")
-        required = self.rng.random() < 0.1
-        self.lines.append(f"{indent}selector {name}" + (" (required)" if required else ""))
+        # A spent draw: it once made a selector required (gone with SZ103). Kept so that
+        # each seed draws the same description and the counts stay comparable; it goes when
+        # a later lane moves the baseline.
+        self.rng.random()
+        self.lines.append(f"{indent}selector {name}")
         self.selectors[path] = cases
         built = tuple(self.case(path, case, depth, indent + "  ") for case in cases)
-        return model.Selector(name, built, required)
+        return model.Selector(name, built)
 
     def guarded(self, scope: str, indent: str) -> model.Scope:
         """``g``, guarded by a ``when``: in the root, or now and then in a case of ``s`` (so
@@ -512,9 +586,20 @@ class _Draw:
         guarded = rng.random() < 0.5
         if has_selector and guarded and rng.random() < 0.4:
             self.guard_in = "s.a"
+        if self.by and has_selector and rng.random() < 0.35:
+            self.by_in = "s.a"
         selectors = (self.selector("", 0, indent),) if has_selector else ()
+        if self.by and (self.by_in is None or rng.random() < 0.3):
+            cases = ("u", "v", "w")[: rng.choice((2, 2, 3))]
+            picker, picked = self.picked("", "p", cases, indent, [*self.facts, *self.roots()])
+            derived, selectors = (*derived, picker), (*selectors, picked)
         children = (self.guarded("", indent),) if guarded and self.guard_in is None else ()
-        readable = [*self.facts, *self.roots(), *(item.name for item in derived)]
+        # a picker answers a case's name: nothing else reads it
+        readable = [
+            *self.facts,
+            *self.roots(),
+            *(item.name for item in derived if item.name == "d"),
+        ]
         views: tuple[model.View, ...] = ()
         if rng.random() < 0.6:
             reads = tuple(rng.sample(readable, min(len(readable), rng.randint(1, 2))))
@@ -589,10 +674,6 @@ def _dividing(read: str) -> Callable[[model.Reads], tuple[int, ...]]:
 
 def _above(read: str) -> Callable[[model.Reads], tuple[int, ...]]:
     return lambda r: tuple(v for v in VALUES if r[read] is None or v > r[read])
-
-
-def _reversed_past(read: str) -> Order:
-    return lambda values, r: tuple(reversed(values)) if r[read] >= 2 else values
 
 
 def _sum_at_most(reads: tuple[str, ...], k: int) -> Callable[[model.Reads], bool]:
@@ -672,12 +753,30 @@ def _members_len(members: str, k: int) -> Callable[[model.Reads], bool]:
     return lambda r: bool(len(r[members]) <= k)
 
 
+def _picks(reads: tuple[str, ...], cases: tuple[str, ...], shape: str) -> Callable[..., object]:
+    """A picker's function: the case its reads' sum names (refusing on an odd one, or naming
+    no case, by ``shape``)."""
+
+    def body(r: model.Reads) -> object:
+        total = _sum(r, reads)
+        if shape == "odd":
+            return model.Refuse("k-odd") if total % 2 else cases[(total // 2) % len(cases)]
+        if shape == "none-of":
+            return (*cases, NO_CASE)[total % (len(cases) + 1)]
+        return cases[total % len(cases)]
+
+    return body
+
+
 def _join(scope: str, name: str) -> str:
     return f"{scope}.{name}" if scope else name
 
 
 def generate(
-    rng: random.Random, strict: bool = False, implementation: Implementation = TODAY
+    rng: random.Random,
+    strict: bool = False,
+    implementation: Implementation = TODAY,
+    by: bool = False,
 ) -> tuple[Generated, Engine]:
     """A description and its engine, drawn until one has two to six value choices, is a
     definition (``validate``: cycles and other definition errors are skipped) and the engine
@@ -691,11 +790,12 @@ def generate(
     ``view-read-in``: it builds such a description, or, for a rule on a view of its own
     Space, refuses it as a dependency cycle, a definition error of another kind. The cycle
     case is T4b's too (agreed in review): under the ruling it is ``view-read-in``, and T4b
-    is the change that makes the engine answer so."""
+    is the change that makes the engine answer so. ``by``: derived selectors too
+    (:class:`_Draw`)."""
     skipped: Counter[str] = Counter()
     read_in: list[tuple[str, DefinitionForm]] = []
     while True:
-        draw = _Draw(rng, strict)
+        draw = _Draw(rng, strict, by)
         description = draw.space()
         if not 2 <= len(draw.ints) <= 6:
             continue
@@ -727,8 +827,8 @@ def generate(
 
 # --- the questions --------------------------------------------------------------------------------
 
-#: a question: what is asked ("state", "answer", "rule", "validity", "possible", "ordered")
-#: and of which path; "ordered" (a listed domain's ranking) is the model's alone
+#: a question: what is asked ("state", "answer", "rule", "validity", "possible") and of
+#: which path
 Question = tuple[str, str]
 
 #: the kinds of question both sides answer, and the walk's own: a change, and the engine's
@@ -740,7 +840,7 @@ def questions(index: model.Index) -> list[Question]:
     """What both sides are asked at each configuration: each choice's state; each fact's,
     choice's, derived value's, view's and ``Members``'s answer (a fact's is always known,
     SZ100 (5): its value, or ``None`` for an optional one left out); each rule; validity;
-    each listed choice's possible values, and the model's ranking of them."""
+    each listed choice's possible values."""
     found: list[Question] = [("state", path) for path in sorted(index.choices)]
     found += [
         ("answer", path)
@@ -752,20 +852,7 @@ def questions(index: model.Index) -> list[Question]:
     found.append(("validity", ""))
     listed = sorted(path for path, info in index.choices.items() if info.domain.listed)
     found += [("possible", path) for path in listed]
-    found += [("ordered", path) for path in listed if index.choices[path].cases is None]
     return found
-
-
-def ordered_form(solution: model.Solution, path: str) -> AnswerForm:
-    """A listed domain's ranking as an answer (the model's alone: the engine builds no order)."""
-    answer = solution.ordered(path)
-    if isinstance(answer, model.Known):
-        return AnswerForm("value", answer.value)
-    if isinstance(answer, model.Unresolved):
-        return AnswerForm("unresolved", blockers=frozenset(answer.waits))
-    if isinstance(answer, model.Refused):
-        return AnswerForm("refused")
-    return AnswerForm("inapplicable")
 
 
 def model_forms(
@@ -783,11 +870,8 @@ def model_forms(
             forms[question] = rule_form(solution, path)
         elif what == "validity":
             forms[question] = validity_form(solution)
-        elif what == "possible":
-            if possible:
-                forms[question] = possible_form(solution, path)
-        else:
-            forms[question] = ordered_form(solution, path)
+        elif what == "possible" and possible:
+            forms[question] = possible_form(solution, path)
     return forms
 
 
@@ -810,8 +894,9 @@ def engine_forms(point: Point, asked: Iterable[Question]) -> dict[Question, Form
 
 def ask(question: Question) -> str:
     what, path = question
-    labels = {"possible": "the possible values of", "ordered": "the ranking of"}
-    return "validity" if what == "validity" else f"{labels.get(what, f'the {what} of')} {path}"
+    if what == "validity":
+        return "validity"
+    return f"the possible values of {path}" if what == "possible" else f"the {what} of {path}"
 
 
 def _equal(left: Form, right: Form) -> bool:
@@ -907,20 +992,53 @@ def _state_below(before: StateForm, after: StateForm, setting: tuple[object] | N
 
 
 def order_problems(
-    before: Mapping[Question, Form], after: Mapping[Question, Form], committed: Mapping[str, object]
+    before: Mapping[Question, Form],
+    after: Mapping[Question, Form],
+    committed: Mapping[str, object],
+    out: Collection[str] = frozenset(),
 ) -> dict[Question, str]:
     """Over an addition committing ``committed``: the answers that moved down the order
-    (:func:`below`)."""
+    (:func:`below`). ``out``: the nodes refused through their scope's presence before and
+    found absent after (:func:`refused_then_absent`), whose answer may move from refused to
+    inapplicable (the model's reading 26); no other move is excused."""
     found: dict[Question, str] = {}
     for question, old in before.items():
         if question not in after or question[0] == "possible":
             continue
         what, path = question
+        new = after[question]
+        if (
+            what == "answer"
+            and path in out
+            and isinstance(old, AnswerForm)
+            and isinstance(new, AnswerForm)
+            and (old.kind, new.kind) == ("refused", "inapplicable")
+        ):
+            continue  # reading 26: refused through presence, then absent, is a move up
         setting = (committed[path],) if what == "state" and path in committed else None
-        move = below(old, after[question], setting)
+        move = below(old, new, setting)
         if move is not None:
             found[question] = move
     return found
+
+
+def refused_then_absent(before: model.Solution, after: model.Solution) -> frozenset[str]:
+    """The readable nodes (choices, derived values, views, ``Members``) whose scope's presence
+    is refused in ``before`` and absent in ``after`` (the model's reading 26): presence is
+    Kleene's AND with absent dominating refused, so a scope out of play through a refused
+    guard above can still be found absent when another part of its path is decided, and an
+    answer refused through that presence becomes inapplicable. Read from the model's
+    presence states alone."""
+    index = before.index
+    found: set[str] = set()
+    for path in (*index.choices, *index.derived, *index.views, *index.members):
+        scope = index.scope_of(path)
+        if (
+            before.presence(scope) is model.Presence.REFUSED
+            and after.presence(scope) is model.Presence.ABSENT
+        ):
+            found.add(path)
+    return frozenset(found)
 
 
 # --- the counted pairs and what stands in the way, written again (invariants 1, 3 and 4) ---------
@@ -933,8 +1051,8 @@ class Structure:
     - The **body reads** of a node: its declared reads, followed through derived values'
       and views' bodies and ``Members``' entries (a ``Members`` reads its entries; never a
       view's Space's validity).
-    - The **presence reads** of a scope: the selector and the ``when`` reads of it and of
-      every scope above it.
+    - The **presence reads** of a scope: the selector (chosen, or the derived selector a case
+      is of: reading 17) and the ``when`` reads of it and of every scope above it.
     - The **closure** of a node: the closure of the node under body reads and the presence
       reads of the scope of every node met (a fact has no scope): what it reads, and what
       decides whether it and what it reads exist.
@@ -981,6 +1099,8 @@ class Structure:
             info = self.index.scopes[current]
             if info.selector is not None:
                 found.add(info.selector)
+            if info.picker is not None:
+                found.add(info.picker)
             if info.when is not None:
                 found.update(info.when.reads)
             current = info.parent
@@ -1032,58 +1152,18 @@ class Structure:
                 for name, info_ in index.scopes.items():
                     if info_.when is not None and index.within(name, scope):
                         stack.extend(info_.when.reads)
+                stack.extend(
+                    name
+                    for name, (owner, _, _) in index.pickers.items()
+                    if index.within(owner, scope)
+                )
         return frozenset(found)
-
-    def reaches_scope(self, seeds: Iterable[str], scopes: Collection[str]) -> bool:
-        """Whether an answer about ``seeds`` can depend on a node at or below one of
-        ``scopes``: a node :meth:`reach` finds lies there, or is a view whose Space holds
-        one (a view reads its Space's validity)."""
-        index = self.index
-        for path in self.reach(seeds):
-            if path in index.facts:
-                continue
-            owner = self.scope(path)
-            if any(index.within(owner, scope) for scope in scopes):
-                return True
-            if path in index.views and any(index.within(scope, owner) for scope in scopes):
-                return True
-        return False
 
     def over_facts(self, path: str) -> bool:
         """Whether a derived value reads, through derived values, facts alone."""
         return all(
             read in self.index.facts or read in self.index.derived for read in self.bodies(path)
         )
-
-
-def refused_below(index: model.Index, solution: model.Solution) -> frozenset[str]:
-    """T4a's cause in one design space (reading 8), from the description and the model's
-    presence states alone: each scope with a guard (its ``when``, or its case of a
-    selector) that reads a refused input, below a guard that is refused too (its parent's
-    presence refused, and it not absent) or unknown (its presence unknown: a selector or a
-    parent above it open). The model counts the highest refused guard of a chain alone, and
-    none below an unknown one; an engine counting a piece per refused guard node, or
-    reading a refused guard under an unknown one otherwise than unknown, differs at each of
-    these, and validity reaches them, with every answer carrying its findings."""
-    found: set[str] = set()
-    for path, info in index.scopes.items():
-        if info.parent is None:
-            continue
-        presence = solution.presence(path)
-        if presence is model.Presence.UNKNOWN:
-            reads = info.when.reads if info.when is not None else ()
-        elif (
-            presence is model.Presence.REFUSED
-            and solution.presence(info.parent) is model.Presence.REFUSED
-        ):
-            reads = ((info.selector,) if info.selector is not None else ()) + (
-                info.when.reads if info.when is not None else ()
-            )
-        else:
-            continue
-        if any(isinstance(solution.read(read), model.Refused) for read in reads):
-            found.add(path)
-    return frozenset(found)
 
 
 def _known(answers: Mapping[str, model.Answer]) -> dict[str, Any] | None:
@@ -1203,7 +1283,9 @@ def counted_pairs(structure: Structure, solution: model.Solution) -> dict[Pair, 
     guard's piece through its ``when``'s refused reads; a listed domain's through its
     membership's, over the facts), through derived values, views, and nodes refused through
     a guard (to that guard's refused reads), to the nodes false on their own values; a
-    constraint or a listed domain false on its own values is its own origin."""
+    constraint or a listed domain false on its own values is its own origin. A derived
+    selector refusing (reading 17) is followed as the derived value it is: from its own
+    piece, and from each node refused through its cases' presence."""
     index = solution.index
     facts = model.FactsOnly(index, solution.configuration.facts)
 
@@ -1223,6 +1305,10 @@ def counted_pairs(structure: Structure, solution: model.Solution) -> dict[Pair, 
                 if parent is None or solution.presence(parent) is not model.Presence.REFUSED:
                     break
                 top = parent
+            picker = index.scopes[top].picker
+            if picker is not None:
+                follow(picker, found)  # a case of a derived selector refusing (reading 17)
+                return
             when = index.scopes[top].when
             assert when is not None, top
             for read in when.reads:
@@ -1265,6 +1351,8 @@ def counted_pairs(structure: Structure, solution: model.Solution) -> dict[Pair, 
                 found[piece.subject] = "empty-domain"
             for read in index.choices[piece.subject].domain.reads:
                 follow_facts(read, found)
+        elif piece.subject in index.pickers:
+            follow(piece.subject, found)  # a derived selector refusing: its own piece
         else:
             when = index.scopes[piece.subject].when
             assert when is not None
@@ -1666,6 +1754,8 @@ class Tally:
     rebound: int = 0
     #: the run: strict (no cause drawn, every disagreement fails) or full
     strict: bool = False
+    #: whether the descriptions hold selectors picked by a derived value (``by``)
+    by: bool = False
     #: disagreements with the engine attributed to a pending milestone and counted, by
     #: question and by milestone (DESIGN § 6)
     by_question: Counter[str] = field(default_factory=Counter)
@@ -1709,6 +1799,7 @@ class _Walk:
         strict: bool,
         waiting: tuple[str, ...],
         implementation: Implementation = TODAY,
+        by: bool = False,
     ) -> None:
         self.rng = random.Random(seed)
         self.steps = steps
@@ -1716,13 +1807,17 @@ class _Walk:
         #: the milestones whose disagreements are counted, the others failing
         self.waiting = waiting
         self.implementation = implementation
-        self.generated, self.engine = generate(self.rng, strict, implementation)
+        self.generated, self.engine = generate(self.rng, strict, implementation, by)
         self.index = self.generated.description.validate()
         self.structure = Structure(self.index)
         self.asked = questions(self.index)
         self.engine_asked = [q for q in self.asked if q[0] in ENGINE_QUESTIONS]
         self.tally = Tally(
-            seed, skipped=self.generated.skipped, strict=strict, implementation=implementation.name
+            seed,
+            skipped=self.generated.skipped,
+            strict=strict,
+            by=by,
+            implementation=implementation.name,
         )
         self.step = 0
         self.history: list[str] = []
@@ -1777,31 +1872,21 @@ class _Walk:
 
     def cause(self, subject: str | None, *configurations: model.Configuration) -> str | None:
         """The cause a disagreement is attributed to, from the description and the model's
-        configurations alone, never the engine's answers (DESIGN § 6). In one of
-        ``configurations``, the question's subject reaches (:meth:`Structure.reach`; a
-        ``None`` subject, validity, possible values, a change or a bind, reaches the whole
-        description):
-
-        - T4c, an optional fact left out (``None``);
-        - T4a, a scope whose guard is refused below another refused guard, or below an
-          unknown one (:func:`refused_below`, reading 8).
-
-        Where both reach, the first pending one; else none."""
-        found: list[str] = []
+        configurations alone, never the engine's answers (DESIGN § 6): T4c when its
+        question's subject reaches an optional fact left out (``None``) in one of
+        ``configurations`` (:meth:`Structure.reach`; a ``None`` subject, validity, possible
+        values, a change or a bind, reaches the whole description); else none."""
         left_out = {
             name
             for configuration in configurations
             for name in self.index.optional
             if configuration.facts[name] is None
         }
-        if left_out and (subject is None or left_out & self.structure.reach({subject})):
-            found.append("T4c")
-        below = frozenset().union(
-            *(refused_below(self.index, configuration.solve()) for configuration in configurations)
-        )
-        if below and (subject is None or self.structure.reaches_scope({subject}, below)):
-            found.append("T4a")
-        return next((item for item in found if item in self.waiting), found[0] if found else None)
+        if not left_out:
+            return None
+        if subject is None or left_out & self.structure.reach({subject}):
+            return "T4c"
+        return None
 
     def on_engine(self, call: Callable[[], T]) -> T:
         try:
@@ -1830,9 +1915,16 @@ class _Walk:
         self.invariant("1 bind", problems)
         self.tally.binds_broken += bool(reported & self.broken)
 
-    def additions(self, before: _State, forms: Mapping[Question, Form], edit: model.Change) -> None:
-        """Invariant 2."""
-        found = order_problems(before.forms, forms, edit.commit)
+    def additions(
+        self,
+        before: _State,
+        solution: model.Solution,
+        forms: Mapping[Question, Form],
+        edit: model.Change,
+    ) -> None:
+        """Invariant 2, with reading 26's one move (:func:`refused_then_absent`)."""
+        out = refused_then_absent(before.solution, solution)
+        found = order_problems(before.forms, forms, edit.commit, out)
         self.invariant(
             "2 additions",
             [
@@ -1942,16 +2034,18 @@ class _Walk:
     def engine_refinement(
         self,
         before: _State,
-        after: model.Configuration,
+        after: model.Solution,
         forms: Mapping[Question, Form],
         engine: Mapping[Question, Form],
         edit: model.Change,
     ) -> None:
-        """The engine's answers over an addition it took itself, in the same order: a move
-        down where the model's answer does not move is a disagreement like any other."""
+        """The engine's answers over an addition it took itself, in the same order (reading
+        26's one move excused as the model's presence states show it): a move down is a
+        disagreement like any other."""
         self.tally.engine_checks["refinement"] += 1
-        found = order_problems(before.engine, engine, edit.commit)
-        cause = self.cause(None, before.configuration, after)
+        out = refused_then_absent(before.solution, after)
+        found = order_problems(before.engine, engine, edit.commit, out)
+        cause = self.cause(None, before.configuration, after.configuration)
         for question, move in sorted(found.items()):
             # shown by the answers that disagree: after the step, or else before it
             pair = (forms[question], engine[question])
@@ -2158,7 +2252,7 @@ class _Walk:
         forms = model_forms(solution, self.asked)
         self.history_independence(result.configuration, forms)
         if addition:
-            self.additions(state, forms, edit)
+            self.additions(state, solution, forms, edit)
         point = successor
         if point is None:
             # the engine refused what the model accepted (a disagreement, counted while a
@@ -2169,7 +2263,7 @@ class _Walk:
         self.compare(result.configuration, forms, engine_forms_)
         self.engine_bind(result.configuration, point)
         if addition and successor is not None:
-            self.engine_refinement(state, result.configuration, forms, engine_forms_, edit)
+            self.engine_refinement(state, solution, forms, engine_forms_, edit)
         return _State(result.configuration, solution, forms, point, engine_forms_)
 
 
@@ -2191,6 +2285,7 @@ def walk(
     without: Iterable[str] = (),
     strict: bool = False,
     implementation: Implementation = TODAY,
+    by: bool = False,
 ) -> Tally:
     """One seeded walk of ``steps`` changes (DESIGN § 6). ``strict``: the generator draws
     neither cause (no view read in, every fact given, no unset) and every disagreement fails
@@ -2199,9 +2294,10 @@ def walk(
     optional fact left out), and counted under that pending milestone; an unattributed one,
     or one whose milestone is not pending (``without``: its rows taken as removed), fails
     the walk. ``implementation`` is the one compared with the model (today's engine by
-    default), asked through ``support.space_oracle``'s interface. It never raises: a
+    default), asked through ``support.space_oracle``'s interface. ``by``: the descriptions
+    hold selectors picked by a derived value too (:class:`_Draw`). It never raises: a
     failure is in ``Tally.failure``."""
-    return _Walk(seed, steps, strict, pending(without), implementation).run()
+    return _Walk(seed, steps, strict, pending(without), implementation, by).run()
 
 
 # --- the summary ----------------------------------------------------------------------------------
@@ -2262,6 +2358,7 @@ def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
     lines += [
         "",
         f"implementation: {', '.join(sorted(implementations)) or '-'}",
+        "derived selectors: " + ("drawn" if any(tally.by for tally in tallies) else "not drawn"),
         f"walks {len(tallies)} ({_counts(runs)}), failed {sum(failed.values())} "
         f"({_counts(failed)}); steps {summed('steps')}, accepted {summed('accepted')}, the "
         f"model's alone {summed('model_only')}; {seconds:.1f} s, "
@@ -2306,6 +2403,7 @@ __all__ = [
     "order_problems",
     "pending",
     "questions",
+    "refused_then_absent",
     "seeds",
     "table",
     "walk",

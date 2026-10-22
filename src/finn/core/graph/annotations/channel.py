@@ -59,7 +59,7 @@ CHANNEL_KEYS: dict[str, Key[Any]] = {
     item.key: _channel_key(item) for item in inspection.decisions(Channel)
 }
 """``CHANNEL``'s keys by name: ``Channel``'s decision keys (``transport``,
-``transport.fifo.buffer.depth``, ``source.memstream.ram_style``, ...)."""
+``transport.fifo.depth``, ``source.memstream.ram_style``, ...)."""
 
 
 def refuse_outside_body(model: ModelWrapper, tensors: Iterable[str]) -> None:

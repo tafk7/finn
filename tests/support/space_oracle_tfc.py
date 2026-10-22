@@ -42,8 +42,8 @@ from support.space_oracle.targets import Station, _middle, _partition
 from support.tfc import LANES, cut, streamlined
 
 PINS: Mapping[str, Mapping[str, object]] = {
-    "MatMul_0": {"compute.packed.pe": 4, "compute.packed.simd": 49},
-    "MatMul_2": {"compute.packed.pe": 2},
+    "MatMul_0": {"pe": 4, "simd": 49},
+    "MatMul_2": {"pe": 2},
 }
 """The holds of ``pinned_then_target``, by node and key."""
 

@@ -97,7 +97,7 @@ def test_channel_choices_persist_on_their_tensors() -> None:
 def test_a_refold_that_converts_widths_keeps_the_input_side_s_memory() -> None:
     model = kernel_model()
     configure_partition(model)
-    configured(model, {model.graph.node[2].name: {"compute.packed.simd": 4}})
+    configured(model, {model.graph.node[2].name: {"simd": 4}})
     bound = network(model, model.graph.node, name="chain")
     # The levels edge now converts widths before its transport; its replay after it is
     # the same input_gen, whose memory choice still applies.
@@ -250,7 +250,7 @@ def test_members_are_named_as_the_graph() -> None:
         "y",
     )
     assert ("levels", "adapter.input_gen.input_gen.ram_style") in bound.decisions()
-    assert ("second", "compute.packed.pe") in bound.decisions()
+    assert ("second", "pe") in bound.decisions()
 
 
 def test_a_choice_in_the_network_persists_on_the_weights_tensor() -> None:
@@ -271,7 +271,7 @@ def test_an_explored_network_persists_and_replays_as_itself() -> None:
     explored = explore_kernel_choices(model, SizeFifos())
     made = {dotted(key): value for key, value in explored.network.chosen().items()}
     assert {"x.transport", "y.transport", "levels.transport"} <= set(made)
-    assert "first.compute.packed.pe" in made
+    assert "first.pe" in made
     rebuilt = network(model, model.graph.node)
     assert not rebuilt.stale
     assert {dotted(key): value for key, value in rebuilt.chosen().items()} == made
@@ -366,18 +366,18 @@ def test_a_kernel_choice_the_network_refuses_is_dropped_named_and_cleared_by_per
     bind, which drops it as stale with why; the rest is bound, and persisting the network
     clears the stale attribute."""
     model = kernel_model()
-    write_raw(model, "first", "compute.packed.simd", 2)
-    write_raw(model, "first", "compute.packed.pe", 3)
+    write_raw(model, "first", "simd", 2)
+    write_raw(model, "first", "pe", 3)
     bound = network(model, model.graph.node, name="chain")
-    assert list(bound.stale) == ["first.compute.packed.pe"]
+    assert list(bound.stale) == ["first.pe"]
     # Its own domain refuses 3: nothing else stands beside it.
-    assert {(f.code, f.owner) for f in bound.stale["first.compute.packed.pe"]} == {
-        ("domain-membership", "compute.packed.pe"),
+    assert {(f.code, f.owner) for f in bound.stale["first.pe"]} == {
+        ("domain-membership", "pe"),
     }
     assert bound.member("first").compute.simd == 2
     # Its pe is open again; once chosen, the node holds the new value, nothing stale.
-    persist(model, choose(bound, {"first.compute.packed.pe": 2}))
-    assert kernel_op(model, model.graph.node[0]).choices()["compute.packed.pe"] == 2
+    persist(model, choose(bound, {"first.pe": 2}))
+    assert kernel_op(model, model.graph.node[0]).choices()["pe"] == 2
     assert not network(model, model.graph.node, name="chain").stale
 
 
@@ -387,16 +387,16 @@ def test_a_stale_choice_keeps_the_kernel_s_finding_naming_its_value_and_candidat
     the values the decision could take now (its possible values), its message naming
     them."""
     model = kernel_model()
-    write_raw(model, "first", "compute.packed.simd", 2)
-    write_raw(model, "first", "compute.packed.pe", 3)
+    write_raw(model, "first", "simd", 2)
+    write_raw(model, "first", "pe", 3)
     bound = network(model, model.graph.node, name="chain")
     ((key, findings),) = bound.stale.items()
-    assert key == "first.compute.packed.pe"
+    assert key == "first.pe"
     assert {(f.kind, f.code, f.owner) for f in findings} == {
-        (FindingKind.REJECTION, "domain-membership", "compute.packed.pe"),
+        (FindingKind.REJECTION, "domain-membership", "pe"),
     }
     (found,) = findings
-    ((_, viable),) = bound.viable([("first", "compute.packed.pe")])
+    ((_, viable),) = bound.viable([("first", "pe")])
     assert 3 not in viable.cases
     assert dict(found.details) == {"value": 3, "candidates": viable.cases}
     assert found.message == "not one of " + ", ".join(map(str, viable.cases))
@@ -406,21 +406,21 @@ def test_a_stale_choice_is_refused_naming_its_key_once() -> None:
     """The refusal of the shell's network prints the key once, with the value stored and the
     values it could take, and carries the kernel's findings as its causes."""
     model = kernel_model()
-    write_raw(model, "first", "compute.packed.simd", 2)
-    write_raw(model, "first", "compute.packed.pe", 3)
+    write_raw(model, "first", "simd", 2)
+    write_raw(model, "first", "pe", 3)
     with refused(
         "choices-stale",
         error=KernelOpError,
         owner="configured_network",
         node="label",
-        keys=("first.compute.packed.pe",),
+        keys=("first.pe",),
     ) as stale:
         shell.configured_network(model, "label")
-    assert str(stale.error).count("compute.packed.pe") == 1
-    assert "first.compute.packed.pe = 3: " in str(stale.error)
+    assert str(stale.error).count("pe") == 1
+    assert "first.pe = 3: " in str(stale.error)
     assert "not one of 1, 2, 4 (domain-membership)" in str(stale.error)
     assert {(cause.code, cause.owner) for cause in stale.finding.causes} == {
-        ("domain-membership", "compute.packed.pe"),
+        ("domain-membership", "pe"),
     }
 
 
@@ -429,11 +429,11 @@ def test_persist_clears_what_the_network_does_not_hold() -> None:
     owner holds what the network holds, out of play (dormant) included."""
     model = kernel_model()
     model.set(CHANNEL_KEYS["adapter.input_gen_vpc.input_gen.ram_style"], "auto", tensor="levels")
-    write_raw(model, "first", "compute.packed.pe", 3)
+    write_raw(model, "first", "pe", 3)
     bound = network(model, model.graph.node, name="chain")
-    assert list(bound.stale) == ["first.compute.packed.pe"]
+    assert list(bound.stale) == ["first.pe"]
     persist(model, bound)
-    assert "compute.packed.pe" not in kernel_op(model, model.graph.node[0]).choices()
+    assert "pe" not in kernel_op(model, model.graph.node[0]).choices()
     assert channel_choices(model, "levels")["adapter.input_gen_vpc.input_gen.ram_style"] == "auto"
     # Every owner holds what the network holds, by graph name and the key there.
     expected: dict[str, dict[str, object]] = {}
@@ -450,7 +450,7 @@ def test_persist_checks_every_value_before_it_writes_any(
     model = kernel_model()
     bound = configure_partition(model)
     held = kernel_choices_config(model)
-    changed = choose(bound, {"second.compute.packed.pe": 1})
+    changed = choose(bound, {"second.pe": 1})
     checked = graph_network._encoded
 
     def refuse_y(tensor: str, values: Any) -> None:

@@ -6,7 +6,7 @@ key, and compared with another on real Space classes.
 An ``Implementation`` opens the design space today's API built (``design_space``,
 ``commit``, a change's instance): the common input, since every implementation reads the
 same compiled classes. What it opens (``Answers``) is asked the public questions by key,
-the declaration paths (``mm2.compute.packed.pe``), and answers them in today's public
+the declaration paths (``mm2.pe``), and answers them in today's public
 result types (``QueryResult``, ``inspection.Validity``, the states' ``ChoiceState``s,
 ``inspection.Viable``, a change's ``ConfigurationResult``). No node id, handle or world
 crosses this interface.

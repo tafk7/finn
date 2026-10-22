@@ -5,7 +5,7 @@
 
 Each compute core is its own kernel: ``PackedDotpKernel`` (FinnLib ``dotp``, lanes packed
 into DSP48E1, DSP48E2 or DSP58 slices) and ``Int8Dsp58DotpKernel`` (``dotp_8sx9_dsp58``,
-the INT8 mode of DSP58). A parent chooses between them with a Decision over kernels.
+the INT8 mode of DSP58). A parent chooses between them with a selector over kernels (``Select``).
 ``DotpAxiKernel`` is their shared declaration, which cannot be placed: each core states
 its ``sources``, ``resource_use``, ``accumulator``, the ``activations`` it takes,
 ``narrow_weights``, its ``reducer`` and its constraints (``core_supported``,
@@ -31,11 +31,15 @@ N)``, a densely realized depthwise operation. PE and SIMD fold ``n`` and ``k``, 
 pixels and window positions, ``(oh, ow, n, kh, kw, c)``; the core sees the beats of a
 dense form of ``K = KH * KW * C``, the window being the activation channel's.
 
-PE's and SIMD's domains read facts only: N (``columns``) and the widest K any datapath
-of the operation reads (``widest_reduction``), which the parent states from its own
-facts, and a window's channels. SIMD's fit to the K of the datapath it takes is a rule
-(``simd_fits``), and so is the statement's fit to the tensors (``extents_stated``: N is
-the weights' last axis, and the datapath's K divides the widest K).
+PE and SIMD are given (``pe``, ``simd``): the role that places a core holds them, so a
+switch of cores keeps them (MatMul declares them over N and the widest SIMD extent). A
+core states what it requires of them as rules over the given values, never as a domain
+(a core's domain cannot read its parent's choice): SIMD's fit to the K of the datapath it
+takes (``simd_fits``), and pumping's need of lanes (``pumping_has_lanes``). The parent
+also states N (``columns``) and the widest K any datapath of the operation reads
+(``widest_reduction``), from its own facts; their fit to the tensors is a rule
+(``extents_stated``: N is the weights' last axis, and the datapath's K divides the widest
+K).
 
 The results' range, ``result_range``, is its parent's statement (MatMul's); each core
 derives its accumulator (``ACCU_WIDTH``) and ``y_tensor``'s encoding from it. The range
@@ -58,7 +62,6 @@ from finn.core.space import (
     Rejected,
     constraint,
     derived,
-    divisors_of,
     reject,
     required,
     view,
@@ -184,13 +187,15 @@ class DotpAxiKernel(KernelSpace):
     x_tensor: Tensor = Param(required=False)
     w_tensor: Tensor = Param(required=False)
     # The extents PE and SIMD may divide, which its parent states from the operation's
-    # own facts. The form, the activations' view and the weights above are the
-    # datapath's, which may follow a choice of its parent's (MatMul's realization), so
-    # a folding factor's domain does not read them. N is the same in every datapath;
-    # the widest reduction is the widest datapath's K: K * N for a depthwise operation,
-    # which a dense realization reads, else K.
+    # own facts (``extents_stated``). N is the same in every datapath; the widest
+    # reduction is the widest datapath's K: K * N for a depthwise operation, which a
+    # dense realization reads, else K.
     columns: int = Param()
     widest_reduction: int = Param()
+    # Its folding factors, given: the role's choices (MatMul's), which a switch of cores
+    # keeps. What a core requires of them is a rule over the given values.
+    pe: int = Param()
+    simd: int = Param()
 
     @derived
     def windowed(self) -> bool:
@@ -250,19 +255,7 @@ class DotpAxiKernel(KernelSpace):
         """The datapath's extent SIMD divides: K, or a window's channels."""
         return self.channels if self.windowed else self.reduction
 
-    @derived
-    def widest_simd_extent(self) -> int:
-        """The widest extent SIMD may divide, from facts alone: a window's channels (the
-        activations' last axis), else the widest reduction. ``simd_extent``, the
-        datapath's, divides it."""
-        found: int = self.x_tensor.shape[-1] if self.windowed else self.widest_reduction
-        return found
-
-    # Each folding factor's domain reads facts only; SIMD's fit to the datapath it
-    # takes is a rule (``simd_fits``).
-    pe: int = Decision(domain=divisors_of(columns))
-    simd: int = Decision(domain=divisors_of(widest_simd_extent))
-
+    # SIMD's fit to the datapath it takes is a rule over the given SIMD.
     @constraint
     def simd_fits(self) -> bool | Rejected:
         if self.simd_extent % self.simd:
@@ -274,10 +267,10 @@ class DotpAxiKernel(KernelSpace):
 
     @constraint
     def extents_stated(self) -> bool | Rejected:
-        # The extents the folding factors' domains read are the parent's statement: N is
-        # the weights' last axis, and the datapath's K (a window's taps times its
-        # channels) divides the widest K (a K stated too small would drop SIMD values
-        # that fit the datapath).
+        # The extents the parent states, which its folding's domains read: N is the
+        # weights' last axis, and the datapath's K (a window's taps times its channels)
+        # divides the widest K (a K stated too small would drop SIMD values that fit the
+        # datapath).
         extents = self.extents
         reduction = prod(extents[index] for index in self.reduced)
         if self.columns != extents[n] or self.widest_reduction % reduction:

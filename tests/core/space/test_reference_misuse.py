@@ -18,6 +18,7 @@ from finn.core.space import (
     Decision,
     Param,
     ReferenceUseError,
+    Select,
     Space,
     ViewKey,
     design_space,
@@ -117,10 +118,10 @@ def test_misuse_in_a_class_body_names_the_node_by_its_declaration() -> None:
             if kitchen.area:
                 bigger = Room(area=20)
 
-    with pytest.raises(ReferenceUseError, match=r"Decision over \['boiler'\].*\.kw"):
+    with pytest.raises(ReferenceUseError, match=r"selector over cases \['boiler'\].*\.kw"):
 
         class Heated(Space):
-            heating: Boiler = Decision({"boiler": Boiler(kw=3)})
+            heating: Boiler = Select(boiler=Boiler(kw=3))
             size = max(heating.kw, 10)
 
 

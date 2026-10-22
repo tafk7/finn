@@ -323,7 +323,7 @@ def test_a_fifo_too_small_for_its_stream_is_refused_at_verification(
     node, body, _ = partition_body(parent)
     fifo = {
         "transport": "fifo",
-        "transport.fifo.buffer.depth": 8,
+        "transport.fifo.depth": 8,
         "transport.fifo.buffer.ram_style": "auto",
     }
     configured(body, {"levels": fifo})
@@ -335,15 +335,15 @@ def test_a_fifo_too_small_for_its_stream_is_refused_at_verification(
     assert (finding.kind, finding.code, finding.owner) == (
         FindingKind.REJECTION,
         "fifo-stale",
-        "levels.transport.fifo.buffer.depth",
+        "levels.transport.fifo.depth",
     )
     assert str(refused.value).startswith(
         f"{node.name}: FIFOs too small for their streams, refused at verification (run "
-        "step_size_fifos): levels: levels.transport.fifo.buffer.depth: fifo-stale: depth 8 "
+        "step_size_fifos): levels: levels.transport.fifo.depth: fifo-stale: depth 8 "
         "(8 words) no longer keeps its producer"
     )
     assert body.get(OUTPUT_VERIFIED) is None
-    body.set(HELD, {"levels": ["transport.fifo.buffer.depth"]})
+    body.set(HELD, {"levels": ["transport.fifo.depth"]})
     _, check = verify_partition(body, node.name)
     assert [(f.kind, f.code) for f in check.findings] == [
         (FindingKind.LIMITATION, "fifo-held-stale")
@@ -408,7 +408,7 @@ def test_packaging_and_the_integration_refuse_a_design_not_verified_as_it_is(
     _, body, body_file = partition_body(parent)
     fifo = {
         "transport": "fifo",
-        "transport.fifo.buffer.depth": 32,
+        "transport.fifo.depth": 32,
         "transport.fifo.buffer.ram_style": "auto",
     }
     configured(body, {"levels": fifo})
@@ -443,7 +443,7 @@ def test_the_testbench_refuses_a_design_not_verified_as_it_is(tmp_path: Path) ->
     verified(body, node.name)
     fifo = {
         "transport": "fifo",
-        "transport.fifo.buffer.depth": 32,
+        "transport.fifo.depth": 32,
         "transport.fifo.buffer.ram_style": "auto",
     }
     configured(body, {"levels": fifo})

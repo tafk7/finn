@@ -67,10 +67,8 @@ class Node:
     function: Callable[..., object] | None = None
     call_style: Literal["explicit", "self"] = "explicit"
     value: object = None
+    # A formal's: something must supply it.
     required: bool = True
-    # A Decision no default policy may set (``Decision(required=True)``); ``required``
-    # above is a formal's, that something must supply it.
-    required_choice: bool = False
     domain: Domain[object] | None = None
     domain_arguments: tuple[Argument, ...] = ()
     output: NodeId | None = None
@@ -246,9 +244,6 @@ class NodeHeader(Protocol):
 
     @property
     def domain(self) -> Domain[object] | None: ...
-
-    @property
-    def required_choice(self) -> bool: ...
 
     @property
     def guard(self) -> NodeId | None: ...

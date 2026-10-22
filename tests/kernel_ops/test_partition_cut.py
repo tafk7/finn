@@ -431,9 +431,9 @@ TFC_NODE_DEFAULTS: dict[str, dict[str, object]] = {
     "MatMul": {
         "compute": "packed",
         "compute.packed.compute_pumping": 0,
-        "compute.packed.pe": 1,
+        "pe": 1,
         "compute.packed.reducer": "tree",
-        "compute.packed.simd": 1,
+        "simd": 1,
     },
 }
 

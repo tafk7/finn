@@ -33,6 +33,7 @@ from finn.core.space import (
     Members,
     Param,
     QueryResult,
+    Select,
     Space,
     ValueHandle,
     ValueSemantics,
@@ -43,7 +44,6 @@ from finn.core.space import (
     derived,
     design_space,
     inspection,
-    selected,
     view,
 )
 
@@ -83,6 +83,10 @@ class Thermostat(Space):
     kw: int = Param()
 
 
+def _case_name(case: str) -> str:
+    return case
+
+
 class House(Space):
     budget: int = Param()
     want_garage: bool = Decision(values=(False, True))
@@ -90,13 +94,12 @@ class House(Space):
     kitchen = Room(area=12)
     dining = Room(area=budget, label="dining")
     garage = Room(area=kitchen.area, when=want_garage)
-    heat_pump = HeatPump(kw=8)
-    heating: Boiler | HeatPump = Decision({"boiler": Boiler(kw=24), "heat_pump": heat_pump})
-    maybe: Boiler | None = Decision({"boiler": Boiler(kw=3)}, optional=True)
+    heating: Boiler | HeatPump = Select(boiler=Boiler(kw=24), heat_pump=HeatPump(kw=8))
+    maybe: Boiler | None = Select(none=None, boiler=Boiler(kw=3))
     thermostat = Thermostat(kw=heating.kw)
     hall.area = kitchen.area  # typed by the annotation: an int reference
     costs = Members(COST)
-    which = selected(heating)
+    which: str = derived(case=heating)(_case_name)  # a binding reads the case's name
 
     # References in a class body are typed as the values they stand for.
     assert_type(kitchen, Room)
@@ -105,7 +108,6 @@ class House(Space):
     assert_type(heating, Boiler | HeatPump)
     assert_type(heating.kw, int)
     assert_type(maybe, Boiler | None)
-    assert_type(heat_pump.cop, int)
 
     @constraint
     def matched(self) -> bool:
@@ -126,7 +128,7 @@ class House(Space):
 
 
 class Graph(Space):
-    shared: int = Decision(values=(1, 2), name="shared")
+    shared: int = Decision(values=(1, 2))
     assert_type(shared, int)
 
 

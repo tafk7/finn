@@ -30,6 +30,7 @@ from finn.core.space import (
     Derived,
     Inapplicable,
     Param,
+    Select,
     Space,
     View,
     derived,
@@ -68,7 +69,7 @@ class Placing(Space):
     domain reads facts only."""
 
     channels: int = Param()
-    compute: Core | Other = Decision({"core": Core(width=channels), "other": Other(lanes=channels)})
+    compute: Core | Other = Select(core=Core(width=channels), other=Other(lanes=channels))
 
 
 class Realized(Space):
@@ -83,7 +84,7 @@ class Realized(Space):
     def datapath(self) -> int:
         return 2 * self.channels if self.realization == "dense" else self.channels
 
-    compute: Core | Other = Decision({"core": Core(width=datapath), "other": Other(lanes=channels)})
+    compute: Core | Other = Select(core=Core(width=datapath), other=Other(lanes=channels))
 
 
 def test_a_cores_domain_reading_a_formal_bound_under_its_case_compiles() -> None:
@@ -116,7 +117,7 @@ class Leaf(Space):
 
 class Holder(Space):
     g: int = Param()
-    sel: Leaf | Other = Decision({"leaf": Leaf(f=g), "other": Other(lanes=g)})
+    sel: Leaf | Other = Select(leaf=Leaf(f=g), other=Other(lanes=g))
 
 
 class Reenters(Space):
@@ -282,9 +283,7 @@ class Fetcher(Space):
 class Direct(Space):
     contents: int = Param(required=False)
     valued = supplied(contents)
-    source: Memory | Fetcher = Decision(
-        {"memory": Memory, "fetch": Fetcher}, when=valued, contents=contents
-    )
+    source: Memory | Fetcher = Select(memory=Memory, fetch=Fetcher, when=valued, contents=contents)
     memory_words = View(cast(Any, source)["memory"].words)
 
 
@@ -326,8 +325,8 @@ class SharedGuard(Space):
     contents: int = Param(required=False)
     spec: Spec = Param()
     valued = supplied(contents)
-    source: Lanes | None = Decision(
-        {"a": Lanes(lanes=2, when=spec.enabled)}, optional=True, when=valued, contents=contents
+    source: Lanes | None = Select(
+        none=None, a=Lanes(lanes=2, when=spec.enabled), when=valued, contents=contents
     )
 
     @derived(when=spec.enabled)
@@ -341,8 +340,8 @@ class SharedOperand(Space):
     contents: int = Param(required=False)
     spec: Spec = Param()
     valued = supplied(contents)
-    source: Lanes | None = Decision(
-        {"a": Lanes(lanes=spec.lanes)}, optional=True, when=valued, contents=contents
+    source: Lanes | None = Select(
+        none=None, a=Lanes(lanes=spec.lanes), when=valued, contents=contents
     )
     total = View(spec.lanes + 1)
 
@@ -386,7 +385,7 @@ class Untyped(Space):
     """``width`` declares no type: it is read through a choice of its own."""
 
     contents: int = Param()
-    inner: Leafy | None = Decision({"leaf": Leafy}, optional=True, contents=contents)
+    inner: Leafy | None = Select(none=None, leaf=Leafy, contents=contents)
     width = View(inner.width)  # type: ignore[union-attr]
 
 
@@ -401,7 +400,7 @@ class Typed(Space):
 class Through(Space):
     contents: int = Param(required=False)
     valued = supplied(contents)
-    source: Untyped | Typed = Decision({"u": Untyped, "t": Typed}, when=valued, contents=contents)
+    source: Untyped | Typed = Select(u=Untyped, t=Typed, when=valued, contents=contents)
     width = View(source.width)
 
 
@@ -427,42 +426,6 @@ def test_a_selections_type_where_its_choice_never_applies_is_never_observed() ->
     assert off.semantics is on.semantics is not None
 
 
-# -- the refusals templates make -----------------------------------------------------------
-
-
-_SPLIT: int = Decision(values=(1, 4), name="split")
-
-
-class Stream(Space):
-    contents: int = Param()
-    lanes: int = Param()
-
-
-class OwnerPerPlacement(Space):
-    """``split`` is used by a candidate of a choice that may never apply and by ``plain``:
-    its owner would be the candidate's scope where the choice applies, the root's where it
-    does not."""
-
-    contents: int = Param(required=False)
-    valued = supplied(contents)
-    source: Stream | None = Decision(
-        {"fetch": Stream(lanes=_SPLIT)}, optional=True, when=valued, contents=contents
-    )
-    plain = Stream(contents=1, lanes=_SPLIT)
-
-
-def test_a_shared_decision_whose_owner_depends_on_the_placement_is_refused() -> None:
-    # A break: the line accepted it (no class in FINN or its tests does this).
-    with refused(
-        "template-owner-per-placement",
-        error=DefinitionError,
-        owner="space.allocate",
-        message=r"^split: .* declare the shared Decision in the scope common to all its uses "
-        r"\(a Decision member of OwnerPerPlacement\)$",
-    ):
-        compile_model(OwnerPerPlacement)
-
-
 # -- a selection's owner ------------------------------------------------------------------------
 
 
@@ -486,7 +449,7 @@ class Owned(Space):
     """``unit.ok`` is read by ``first``'s guard and by ``second``: ``second`` is lowered
     first (members before guards), ``first`` is declared first."""
 
-    unit: Pump | None = Decision({"pump": Pump(ok=True)}, optional=True)
+    unit: Pump | None = Select(none=None, pump=Pump(ok=True))
 
     @derived(when=cast(Any, unit).ok)
     def first(self) -> int:
@@ -494,7 +457,7 @@ class Owned(Space):
 
     second = View(cast(Any, unit).ok)
     # Read through a choice its candidates share: the choice owns it.
-    heat: Pump | Boiler = Decision({"pump": Pump(ok=True), "boiler": Boiler(ok=False)})
+    heat: Pump | Boiler = Select(pump=Pump(ok=True), boiler=Boiler(ok=False))
     seen = View(heat.cop)
 
 
