@@ -24,19 +24,32 @@ What it takes from the compiled model rather than answering: the member list (ea
 scope's named members), the scope list (the model's scope records) and the keys. These
 are the structure's, shared by every implementation of the same class.
 
-One ``Session`` per implementation object: its counters cover everything it answered
-(``RUNNING.session.counters``: evaluations, calls by kind, the most evaluations in flight).
+One ``Session`` per implementation object, holding its node cache where it has one
+(``Running(cache=...)``): one cache is shared by every design space it opens or makes in a
+process, and its counters cover everything it answered (``RUNNING.session.counters``:
+evaluations, calls by kind, the most evaluations in flight, and the cache's lookups, hits
+and values hashed). The named implementations, each loadable as ``support.running_type:NAME``:
+
+- ``RUNNING``: no cache;
+- ``RUNNING_CACHED``: the cache on, unbounded;
+- ``RUNNING_BOUNDED``: at most one read set kept per member;
+- ``RUNNING_DROPPING``: half the entries dropped at random, at lookup and at keep (seed 0);
+- ``RUNNING_PLANTED``: a cache wrong on purpose (``LeavesOneOut``): each answer is kept
+  with the last read of its read set (by node) left out of its key, so a design space
+  differing from the one evaluated in that read alone takes its answer. The walks and the
+  toys must catch it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 from finn.core.space import QueryResult, RequestError, Space, inspection
 from finn.core.space._running import questions as Q
-from finn.core.space._running.evaluate import Session, evaluation
+from finn.core.space._running.cache import NodeCache
+from finn.core.space._running.evaluate import Ans, Evaluation, Session, evaluation
 from finn.core.space._running.value import DesignSpace, FactsLayer
 from finn.core.space._structure import Structure
 from finn.core.space.edits import ConfigurationResult
@@ -133,13 +146,19 @@ class RunningAnswers:
 
 @dataclass(frozen=True, eq=False)
 class Running:
-    """The running type, through ``_running``, with no cache: its one ``session``."""
+    """The running type, through ``_running``: its one ``session``, holding ``cache``
+    (none by default), named ``label``."""
 
-    session: Session = field(default_factory=Session)
+    cache: NodeCache | None = None
+    label: str = "running"
+    session: Session = field(init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "session", Session(cache=self.cache))
 
     @property
     def name(self) -> str:
-        return "running"
+        return self.label
 
     def open(self, configuration: Space) -> Answers:
         """The design space value of today's root configuration: its model, facts and
@@ -191,6 +210,31 @@ class Running:
         return RunningAnswers(DesignSpace(layer, values), self.session)
 
 
-RUNNING = Running()
+class LeavesOneOut(NodeCache):
+    """A node cache wrong on purpose: each answer is kept with the last read of its read
+    set (by node) left out, so its key misses that read (``RUNNING_PLANTED``)."""
 
-__all__ = ["RUNNING", "Running", "RunningAnswers"]
+    __slots__ = ()
+
+    def keep(self, ev: Evaluation, index: NodeId, found: Ans) -> None:
+        if found.reads:
+            found = replace(found, reads=found.reads - {max(found.reads)})
+        super().keep(ev, index, found)
+
+
+RUNNING = Running()
+RUNNING_CACHED = Running(NodeCache(), "running, cached")
+RUNNING_BOUNDED = Running(NodeCache(bound=1), "running, cached, bounded 1")
+RUNNING_DROPPING = Running(NodeCache(drop=0.5, seed=0), "running, cached, dropping 0.5")
+RUNNING_PLANTED = Running(LeavesOneOut(), "running, cached, planted: a read left out")
+
+__all__ = [
+    "RUNNING",
+    "RUNNING_BOUNDED",
+    "RUNNING_CACHED",
+    "RUNNING_DROPPING",
+    "RUNNING_PLANTED",
+    "LeavesOneOut",
+    "Running",
+    "RunningAnswers",
+]

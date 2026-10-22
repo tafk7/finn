@@ -1,12 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Every answer of one design space value, by node, memoized within it only.
+"""Every answer of one design space value, by node, memoized within it.
 
 An ``Evaluation`` is one design space's answers: a node's answer is its frame's (one per
 node kind), each node evaluated once and kept in the evaluation's memo, which dies with
-the design space. Nothing is kept from another design space: no worlds, no entries taken
-from a parent, no early cutoff. Every node is read as the model's structure resolves it
-(``raw_nodes``): no collapsed node is read anywhere.
+the design space. Nothing is taken from another design space but by the session's node
+cache, where it holds one: no worlds, no entries taken from a parent, no early cutoff.
+Every node is read as the model's structure resolves it (``raw_nodes``): no collapsed node
+is read anywhere.
 
 **Reading a node** (``Evaluation.read``) names its reader: the node being evaluated, or,
 for a ``when``'s condition read past its guard, that guard. A formal bound by reference
@@ -36,9 +37,13 @@ fall back on.
 abandoned: authored functions are pure, so asking again answers the same. A failure is
 raised, and kept for the rest of its drive (a later drive calls the function again).
 
-**The session** holds the counters, and may hold a node cache (``NodeCache``): where it
-does, each answer carries the choices and facts its evaluation read (``Ans.reads``), the
-key a cache keeps it by.
+**The session** holds the counters, and may hold a node cache (``cache.NodeCache``):
+where it does, each answer carries the choices and facts its evaluation read
+(``Ans.reads``), the key a cache keeps it by. Every node's evaluation asks the cache
+first; a hit is taken as the answer, into the memo, its read set noted as read, exactly as
+the evaluation would have left them. A miss is evaluated, and its answer kept, with its
+read set, after. A membership reading asks under its guards taken as holding. A node
+abandoned by the depth guard, or failing, keeps nothing.
 
 Single-threaded: an evaluation, its session and the model's record take no lock.
 """
@@ -147,13 +152,21 @@ class NodeCache(Protocol):
 @dataclass
 class Counters:
     """Work done: nodes evaluated, by kind; authored calls by kind; the most evaluations
-    in flight at once; the depth guard's restarts."""
+    in flight at once; the depth guard's restarts. Where a node cache is on: its lookups
+    and hits, the values it hashed, the members it kept a read set for, the read sets it
+    kept, and the most read sets one member held at once (``cache.NodeCache``)."""
 
     evaluated: int = 0
     by_kind: dict[str, int] = field(default_factory=dict)
     calls: dict[str, int] = field(default_factory=dict)
     deepest: int = 0
     restarts: int = 0
+    lookups: int = 0
+    hits: int = 0
+    hashed: int = 0
+    members: int = 0
+    sets: int = 0
+    most_sets: int = 0
 
     def call(self, kind: str) -> None:
         self.calls[kind] = self.calls.get(kind, 0) + 1

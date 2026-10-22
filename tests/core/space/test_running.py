@@ -11,22 +11,35 @@ model, through the class-based oracle (``support.space_oracle``), as the impleme
 - **Hand cases**: a ``when`` read past its guard through a formal of its scope; a chosen
   selector under a refused ``when``, one piece; an answer refused through its scope turning
   inapplicable; a reader beside a formal's scope; a formal read from outside its scope;
-  models dropped and their ids reused; a line deeper than the recursion limit allows
-  without the depth guard; a membership reading that reads a decision.
+  models dropped and their ids reused, the node cache's tables with them; a line deeper
+  than the recursion limit allows without the depth guard; a membership reading that reads
+  a decision.
+- **The node cache** (``_running.cache``): the toys walked with a cache dropping half its
+  entries at random, with no disagreement; a cache wrong on purpose (a read left out of
+  each key) caught; every value type a choice or a fact holds in the engine's tests, the
+  toys and the reference harness, its ``==`` and hash checked against its value semantics.
 
-The implementation is loaded by name, as ``--implementation`` names it: it is a support
-module of no layer.
+The implementations are loaded by name, as ``--implementation`` names them: they are a
+support module of no layer.
 """
 
 from __future__ import annotations
 
 import gc
+import importlib
+import itertools
+import math
+import pkgutil
 import sys
 import weakref
 from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import PurePosixPath
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from support.running_type import LeavesOneOut, Running
 from support.space_oracle import Implementation, compare, forms, load, toys
 from support.space_oracle.today import TODAY
 
@@ -44,13 +57,21 @@ from core.space.reference import (
 from core.space.reference import Space as Description
 from core.space.reference_harness import Case
 from core.space.reference_harness import walks as reference_walks
+from core.space.test_compose import Spec
+from core.space.test_extensions import ENCODING, Encoding
+from core.space.test_possible import Capabilities
+from core.space.test_public_snapshots import BAG, Bag
+from core.space.test_value_inputs import PAIR
+from core.space.test_world import GRID, Grid
 from finn.core.space import (
     Available,
     Decision,
+    DefinitionError,
     Inapplicable,
     Param,
     Rejected,
     Space,
+    ValueSemantics,
     _compose,
     bind,
     constraint,
@@ -63,11 +84,20 @@ from finn.core.space import (
 )
 from finn.core.space._failure import NativeEvaluationError
 from finn.core.space._running import evaluate, questions, structure
+from finn.core.space._running.cache import UNCHECKED, NodeCache
+from finn.core.space._running.cache import key as cache_key
 from finn.core.space._running.evaluate import MembershipReadsChoice, Session
 from finn.core.space._running.value import DesignSpace, FactsLayer
+from finn.core.space._structure import Structure
+from finn.core.space._world import _same_value
+from finn.core.space.compiler import compile_model
+from finn.core.space.ir import Node
 from finn.core.space.occurrence import state
+from finn.core.space.semantics import default_semantics
 
 RUNNING: Implementation = load("support.running_type:RUNNING")
+RUNNING_DROPPING: Implementation = load("support.running_type:RUNNING_DROPPING")
+RUNNING_PLANTED: Implementation = load("support.running_type:RUNNING_PLANTED")
 
 TOYS = toys.TOYS
 
@@ -80,6 +110,11 @@ def fresh() -> Implementation:
 
 def counters(implementation: Implementation) -> evaluate.Counters:
     return cast(Session, cast(Any, implementation).session).counters
+
+
+def cached() -> Running:
+    """The running type with a node cache and a session of their own."""
+    return Running(NodeCache(), "running, cached")
 
 
 # -- the walks ------------------------------------------------------------------------------
@@ -439,9 +474,14 @@ def _shape(number: int) -> type[Space]:
     return Even
 
 
-def test_a_dropped_model_takes_its_record_and_layers_with_it_when_its_id_is_reused() -> None:
+def test_a_dropped_model_takes_its_record_layers_and_tables_with_it_when_its_id_is_reused() -> None:
+    """Each model is asked by the running type with no cache and with a node cache of its
+    own; once dropped, its record, its facts layers and its cache tables are gone, and the
+    new model at its id starts with none of them."""
     gc.collect()
     alive = structure.records()
+    running = cached()
+    cache = cast(NodeCache, running.cache)
     dead: dict[int, weakref.ref[Any]] = {}
     layers: list[weakref.ref[FactsLayer]] = []
     reused = None
@@ -452,13 +492,16 @@ def test_a_dropped_model_takes_its_record_and_layers_with_it_when_its_id_is_reus
         identity = id(model.linked)
         if identity in dead:
             assert dead[identity]() is None
-            # a new model at a dead one's id: no record until it is first read
+            # a new model at a dead one's id: no record and no table until it is first read
             assert structure._RECORDS.get(model.linked) is None
+            assert cache.models() == 0
             reused = (space_class, configuration)
             break
-        answers = RUNNING.make(space_class, {}, {"a": 2, "b": 1, "inner.pe": 2})
-        assert answers.validity().status in ("valid", "refused")
-        layers.append(weakref.ref(cast(Any, answers).ds.layer))
+        for implementation in (RUNNING, running):
+            answers = implementation.make(space_class, {}, {"a": 2, "b": 1, "inner.pe": 2})
+            assert answers.validity().status in ("valid", "refused")
+            layers.append(weakref.ref(cast(Any, answers).ds.layer))
+        assert cache.models() == 1
         dead[identity] = weakref.ref(model.linked)
         del space_class, configuration, model, answers
         gc.collect()
@@ -466,12 +509,22 @@ def test_a_dropped_model_takes_its_record_and_layers_with_it_when_its_id_is_reus
     assert all(layer() is None for layer in layers)
     assert structure.records() == alive  # every dead model's record gone, the new one unread
     space_class, configuration = reused
+    hits = counters(running).hits
+    first = running.make(space_class, {}, {"a": 4, "b": 2, "inner.pe": 4})
+    assert (
+        first.validity() == TODAY.make(space_class, {}, {"a": 4, "b": 2, "inner.pe": 4}).validity()
+    )
+    assert counters(running).hits == hits  # nothing of a dead model's found
+    assert cache.models() == 1
     for stored in ({"a": 2, "b": 1, "inner.pe": 2}, {"a": 1, "b": 4, "inner.pe": 4}):
-        made = RUNNING.make(space_class, {}, stored)
-        today = TODAY.make(space_class, {}, stored)
-        assert forms.differences(forms.space(today), forms.space(made)) == []
-    found = compare.walk(lambda: design_space(space_class()), {}, 0, 12, TODAY, RUNNING)
-    assert found.lines() == []
+        today = forms.space(TODAY.make(space_class, {}, stored))
+        for implementation in (RUNNING, running):
+            made = implementation.make(space_class, {}, stored)
+            assert forms.differences(today, forms.space(made)) == []
+    for implementation in (RUNNING, running):
+        found = compare.walk(lambda: design_space(space_class()), {}, 0, 12, TODAY, implementation)
+        assert found.lines() == []
+    assert counters(running).hits > hits
 
 
 def test_a_facts_layer_is_interned_while_a_design_space_holds_it() -> None:
@@ -558,3 +611,267 @@ def test_a_membership_reading_that_reads_a_decision_is_an_error_naming_both(
     error = raised.value.primary
     assert isinstance(error, MembershipReadsChoice)
     assert (error.choice, error.decision) == ("g.pe", "w")
+
+
+# -- the node cache: a dropping cache, and a cache wrong on purpose -------------------------------
+#
+# The contract lets the cache drop any entry at any time: a miss changes nothing but the
+# work. ``RUNNING_DROPPING`` drops half its hits and half its keeps, at random (seeded), and
+# must answer as today's engine does. ``RUNNING_PLANTED`` keys each answer without the last
+# read of its read set: the comparison must catch it, or the cache's proofs have no teeth.
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+@pytest.mark.parametrize("toy", sorted(TOYS))
+def test_the_toys_walk_as_today_with_a_cache_dropping_entries_at_random(
+    toy: str, seed: int
+) -> None:
+    before = counters(RUNNING_DROPPING).hits
+    found = compare.walk(
+        TOYS[toy].make, TOYS[toy].facts, seed, 20, TODAY, RUNNING_DROPPING, forms.ALL
+    )
+    assert found.lines() == []
+    assert found.tally["changes"] > 0 and found.tally["cold builds"] > 0
+    assert counters(RUNNING_DROPPING).hits > before
+
+
+class Ordered(Space):
+    a: int = Decision(values=(1, 2, 3))
+    b: int = Decision(values=(1, 2, 3))
+
+    @constraint
+    def ordered(self) -> bool | Rejected:
+        return True if self.a <= self.b else reject("unordered", "a past b")
+
+
+def test_a_cache_leaving_a_read_out_of_its_key_answers_otherwise_and_is_caught() -> None:
+    """``ordered`` reads ``a`` and ``b``; the planted cache keys it by ``a`` alone. Asked at
+    (2, 3), then at (2, 1), it answers the second as the first: valid where today's
+    engine refuses. A cache keyed by both answers the second as today's."""
+    planted, honest = Running(LeavesOneOut(), "planted"), cached()
+    for implementation in (planted, honest):
+        first = implementation.make(Ordered, {}, {"a": 2, "b": 3})
+        assert first.validity().status == "valid"
+    today = TODAY.make(Ordered, {}, {"a": 2, "b": 1})
+    assert today.validity().status == "refused"
+    assert honest.make(Ordered, {}, {"a": 2, "b": 1}).validity() == today.validity()
+    wrong = planted.make(Ordered, {}, {"a": 2, "b": 1})
+    assert wrong.validity().status == "valid"
+    found = compare.everything(today, wrong)
+    assert {difference.kind for difference in found.disagreements} >= {"members", "validity"}
+    assert counters(planted).hits > 0
+
+
+def test_a_walk_catches_the_planted_cache() -> None:
+    house = TOYS["house"]
+    found = compare.walk(house.make, house.facts, 0, 5, TODAY, RUNNING_PLANTED)
+    assert found.disagreements
+    assert {"members", "validity"} <= set(found.by_kind), found.by_kind
+
+
+# -- the value types a choice or a fact holds ------------------------------------------------------
+#
+# The cache matches values by type and ``==`` (``cache.key``): where a type's ``==`` is
+# coarser than its value semantics, the cache is wrong, not slow. Each type a choice or a
+# fact holds in the engine's tests, the toys and the reference harness is listed here, with
+# the value semantics in force, and its ``==`` and hash are checked against them
+# (``_world._same_value``): values equal by the semantics are ``==`` and hash alike, and
+# values the semantics tell apart are not ``==``, so their keys differ. An unhashable type
+# has no key: nothing that read it is kept. A type this test cannot reach to check (one
+# declared inside a test function, or in a module a test writes) is listed in
+# ``cache.UNCHECKED``, and the cache never keys it. FINN's own value types come later.
+#
+# Where found: the module-level Space classes of ``tests/core/space`` and of the toys
+# (``test_every_choice_and_fact_type_is_listed`` reads them); the reference harness's
+# builder (``reference_harness.engine``: ``bool``, ``int``, ``str`` by a choice's values,
+# ``int`` otherwise, ``bool``, ``str`` and ``tuple`` by a case's spelling); and, declared
+# inside test functions, ``list`` under several semantics (unhashable), ``int`` and
+# ``tuple`` under semantics whose equality is ``==``, and the two ``Rate`` classes (listed
+# unchecked). ``support.value_classes`` names the immutable atoms a frozen value class may
+# hold: each is listed too.
+
+NAN, OTHER_NAN = float("nan"), float("nan")
+
+VALUE_TYPES: dict[str, tuple[ValueSemantics[Any], tuple[object, ...]]] = {
+    "None": (default_semantics(type(None)), (None,)),
+    "bool": (default_semantics(bool), (False, True)),
+    "int": (default_semantics(int), (0, 1, 2, -1, 10**20)),
+    "float": (default_semantics(float), (0.0, -0.0, 1.0, 0.1, math.inf, NAN, OTHER_NAN)),
+    "complex": (default_semantics(complex), (0j, complex(-0.0, 0.0), 1 + 2j)),
+    "str": (default_semantics(str), ("", "a", "A", "a ")),
+    "bytes": (default_semantics(bytes), (b"", b"a")),
+    "path": (default_semantics(PurePosixPath), (PurePosixPath("a"), PurePosixPath("a/b"))),
+    "tuple": (
+        default_semantics(tuple),
+        ((), (1,), (True,), (1.0,), (0.0,), (-0.0,), (1, 2), (2, 1), ((1,),), ("a",)),
+    ),
+    "frozenset": (
+        default_semantics(frozenset),
+        (frozenset(), frozenset({1}), frozenset({True}), frozenset({1, 2})),
+    ),
+    "pair (test_value_inputs.PAIR)": (PAIR, ((1, 2), (2, 1), (1, 1), (True, 2))),
+    "Encoding (test_extensions.ENCODING)": (
+        ENCODING,
+        (Encoding(8), Encoding(8, False), Encoding(16), Encoding(8, cast(bool, 1))),
+    ),
+    "Spec (test_compose)": (
+        default_semantics(Spec),
+        (Spec(True, 1), Spec(False, 1), Spec(True, 2), Spec(cast(bool, 1), 1)),
+    ),
+    "Capabilities (test_possible)": (
+        default_semantics(Capabilities),
+        (Capabilities(), Capabilities(False), Capabilities(True, 2)),
+    ),
+}
+"""Each hashable value type by name: its value semantics, and values to compare."""
+
+UNHASHABLE: dict[str, tuple[ValueSemantics[Any], tuple[object, ...]]] = {
+    "list": (default_semantics(list), ([], [1], [1, 2])),
+    "Bag (test_public_snapshots.BAG)": (BAG, (Bag([1]), Bag([1, 2]))),
+    "Grid (test_world.GRID)": (GRID, (Grid((1,)), Grid((1, 2)))),
+}
+"""Each unhashable value type by name: never keyed."""
+
+HARNESS = (bool, int, str, tuple)
+"""The value types the reference harness's builder gives a choice or a fact."""
+
+
+def _member(semantics: ValueSemantics[Any]) -> Node:
+    """A member holding values of ``semantics``, as ``_same_value`` reads it."""
+    return cast(Node, SimpleNamespace(semantics=semantics, owner="value"))
+
+
+@pytest.mark.parametrize("name", sorted(VALUE_TYPES))
+def test_a_value_types_equality_and_hash_agree_with_its_semantics(name: str) -> None:
+    semantics, values = VALUE_TYPES[name]
+    member = _member(semantics)
+    assert all(semantics.accepts(value) for value in values)
+    for left, right in itertools.product(values, repeat=2):
+        same = _same_value(member, left, right)
+        if left is not right:  # a value is its own (a NaN is not ``==`` to itself)
+            assert (left == right) is same, (left, right)
+        if same:
+            assert hash(left) == hash(right), (left, right)
+        else:
+            assert cache_key(left) != cache_key(right), (left, right)
+        if cache_key(left) == cache_key(right):
+            assert same, (left, right)  # a hit is never a value the semantics tell apart
+
+
+@pytest.mark.parametrize("name", sorted(UNHASHABLE))
+def test_an_unhashable_value_type_is_never_keyed(name: str) -> None:
+    semantics, values = UNHASHABLE[name]
+    assert all(semantics.accepts(value) for value in values)
+    assert all(cache_key(value) is None for value in values)
+    assert cache_key((1, values[0])) is None
+
+
+def test_true_and_1_and_the_two_zeros_are_keyed_as_their_semantics_say() -> None:
+    """``True`` and ``1``: no member holds both (each type recognizes its own), and their
+    keys differ. Inside a tuple the semantics hold them equal, and the key still tells them
+    apart: a miss, never a wrong hit. ``-0.0`` and ``0.0`` are equal by the semantics, and
+    keyed alike, alone and inside a tuple."""
+    boolean, integer, pair = (
+        VALUE_TYPES["bool"][0],
+        VALUE_TYPES["int"][0],
+        VALUE_TYPES["tuple"][0],
+    )
+    assert not boolean.accepts(1) and not integer.accepts(True)
+    assert cache_key(True) != cache_key(1) and cache_key(False) != cache_key(0)
+    assert _same_value(_member(pair), (True,), (1,)) and cache_key((True,)) != cache_key((1,))
+    assert _same_value(_member(pair), ((1, True),), ((1, 1),))
+    assert cache_key(((1, True),)) != cache_key(((1, 1),))
+    real = VALUE_TYPES["float"][0]
+    assert _same_value(_member(real), -0.0, 0.0) and cache_key(-0.0) == cache_key(0.0)
+    assert _same_value(_member(pair), (-0.0, 1), (0.0, 1)) and cache_key((-0.0, 1)) == cache_key(
+        (0.0, 1)
+    )
+    assert not _same_value(_member(real), NAN, OTHER_NAN) and cache_key(NAN) != cache_key(OTHER_NAN)
+
+
+def _stand_in(module: str, qualname: str) -> type:
+    """A frozen value class named as ``module.qualname`` (``heads``: an int)."""
+    made = type(qualname, (), {"__annotations__": {"heads": int}, "__qualname__": qualname})
+    made.__module__ = module
+    return cast(type, dataclass(frozen=True)(made))
+
+
+def test_a_value_of_a_type_listed_unchecked_is_never_keyed() -> None:
+    """A stand-in for ``toy_forward.Rate`` (listed in ``cache.UNCHECKED``) has no key, alone
+    or inside a tuple or a frozen set; a design space whose fact holds one keeps nothing for
+    what read it, and still answers as today's engine."""
+    assert "toy_forward.Rate" in UNCHECKED
+    held = _stand_in("toy_forward", "Rate")
+    value = held(3)
+    assert (
+        cache_key(value) is None
+        and cache_key((1, value)) is None
+        and cache_key(frozenset({value})) is None
+    )
+    assert cache_key(_stand_in("toy_forward", "Other")(3)) is not None
+
+    class Holds(Space):
+        rate = Param(semantics=default_semantics(held))  # type: ignore[var-annotated]
+        n: int = Param()
+
+        @derived
+        def total(self) -> int:
+            return cast(int, cast(Any, self.rate).heads) * 2
+
+        @derived
+        def double(self) -> int:
+            return self.n * 2
+
+    running = cached()
+    cache = cast(NodeCache, running.cache)
+    for _ in range(2):
+        made = running.make(Holds, {"rate": value, "n": 4}, {})
+        assert (made.query("total"), made.query("double")) == (Available(6), Available(8))
+    assert counters(running).hits == 1  # ``double`` alone, the second time
+    assert cache.answers() == 2  # ``n`` and ``double``: nothing that read ``rate``
+    today = TODAY.make(Holds, {"rate": value, "n": 4}, {})
+    assert compare.everything(today, made).lines() == []
+
+
+def _space_classes() -> list[type[Space]]:
+    """The module-level Space classes of ``tests/core/space`` and of the toys."""
+    package = importlib.import_module("core.space")
+    names = [
+        f"core.space.{info.name}"
+        for info in pkgutil.iter_modules(package.__path__)
+        if info.name.startswith(("test_", "_"))
+    ]
+    names += ["support.space_oracle.toys", "support.space_cores", "support.space_pipeline"]
+    found: dict[type[Space], None] = {}
+    for name in names:
+        for value in vars(importlib.import_module(name)).values():
+            if isinstance(value, type) and issubclass(value, Space) and value is not Space:
+                found[value] = None
+    return list(found)
+
+
+def test_every_choice_and_fact_type_is_listed() -> None:
+    """Every choice's and fact's value type in the module-level Space classes is listed
+    above (checked or unhashable) or unchecked; so are the harness's."""
+    listed = {
+        semantics.type_token for semantics, _ in (*VALUE_TYPES.values(), *UNHASHABLE.values())
+    }
+    found: dict[object, str] = {}
+    for space_class in _space_classes():
+        try:
+            model = compile_model(space_class)
+        except DefinitionError:
+            continue  # a refused definition holds no value
+        for node in cast(Structure, model.linked).raw_nodes:
+            if node.kind in ("param", "decision") and node.semantics is not None:
+                found.setdefault(node.semantics.type_token, space_class.__qualname__)
+    unknown = {
+        token: where
+        for token, where in found.items()
+        if token not in listed
+        and f"{getattr(token, '__module__', '')}.{getattr(token, '__qualname__', '')}"
+        not in UNCHECKED
+    }
+    assert unknown == {}
+    assert {bool, int, str} <= set(found)
+    assert set(HARNESS) <= listed
