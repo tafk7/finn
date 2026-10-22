@@ -143,6 +143,7 @@ def load(spec: str) -> Implementation:
 
 # Registered last: each adapter reads the interface above.
 from core.space._running_type import RUNNING  # noqa: E402
+
 from support.space_oracle.public import PUBLIC  # noqa: E402
 
 IMPLEMENTATIONS: dict[str, Implementation] = {PUBLIC.name: PUBLIC, RUNNING.name: RUNNING}

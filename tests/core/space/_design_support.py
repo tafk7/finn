@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from core.space._evaluation_support import open_evaluation
 from finn.core.space import Inapplicable, Rejected, Space, Unresolved, design_space, inspection
 from finn.core.space._running import questions
 from finn.core.space._running.evaluate import Session, evaluation
@@ -17,8 +18,6 @@ from finn.core.space._running.value import DesignSpace
 from finn.core.space.ir import NodeId
 from finn.core.space.occurrence import held
 from finn.core.space.results import QueryResult
-
-from core.space._evaluation_support import open_evaluation
 
 
 def start(declaration: Space) -> DesignSpace:

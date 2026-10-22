@@ -85,10 +85,9 @@ def presence(ev: Evaluation, index: NodeId) -> tuple[Presence, QueryResult[objec
 
 def placed(ev: Evaluation, index: NodeId) -> Evaluation:
     """Where the choice ``index``'s values are checked and listed: its membership reading
-    (as if it existed), its guard read here first, as today's engine reads it to place the
-    check. The reading answers the same whatever the guard answers (a domain reads facts
-    only); a failure in the guard, a dependency cycle through the choice among them, is met
-    there first, as today's meets it."""
+    (as if it existed), its guard read here first, to place the check. The reading answers
+    the same whatever the guard answers (a domain reads facts only); a failure in the
+    guard, a dependency cycle through the choice among them, is met there first."""
     guard = ev.raw[index].guard
     if guard is not None:
         ev.result(guard)

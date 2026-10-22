@@ -184,6 +184,7 @@ class Public:
         with the model's session. No rule is checked; each stored value must pass its type
         check there (a ``ValueError`` names one that does not)."""
         from core.space._running_type import Running, RunningAnswers  # noqa: PLC0415
+
         from finn.core.space._running import questions  # noqa: PLC0415
         from finn.core.space._running.evaluate import evaluation  # noqa: PLC0415
 

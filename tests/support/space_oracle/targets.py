@@ -6,9 +6,9 @@ stations: a design space, opened by the public API, and the change made on it.
 - ``toys``: FINN's own toy Spaces (``toys.TOYS``: the house, the pipeline, a chain of
   stages, the boundary of a formal read from outside its scope, and the three shapes of
   an optional fact left out), each opened and changed once;
-- ``chain-4``, ``chain-8``, ``chain-64``: stage 7's chain of 4, 8 or 64 kernels (``support.one_space``),
-  configured with what conversion and the cut stored (``commit``), then the middle
-  MatMul's ``pe`` set to 2;
+- ``chain-4``, ``chain-8``, ``chain-64``: stage 7's chain of 4, 8 or 64 kernels
+  (``support.one_space``), configured with what conversion and the cut stored
+  (``commit``), then the middle MatMul's ``pe`` set to 2;
 - ``tfc``: TFC's partition after the cut and after each of seven strategy sequences, in
   ``tfc_target`` (it reads FINN's builder), joined to these by the tool's entry.
 

@@ -28,10 +28,10 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
+from core.space._evaluation_support import source_line
 from core.space._running_shapes import ByArgument, PickedByAChoice
 from core.space._running_type import Running
 from core.space._toys_support import Boiler, House
-from core.space._evaluation_support import source_line
 from finn.core.space import (
     Available,
     Const,
@@ -63,8 +63,8 @@ from finn.core.space._failure import NativeEvaluationError, cancellation_details
 from finn.core.space._running import evaluate
 from finn.core.space._running import surface as S
 from finn.core.space._running.evaluate import Evaluation, Session
-from finn.core.space._running.value import DesignSpace
 from finn.core.space._running.facts import prepare_values
+from finn.core.space._running.value import DesignSpace
 from finn.core.space._structure import PERMUTE
 from finn.core.space.occurrence import held
 from finn.core.space.references import ValueHandle

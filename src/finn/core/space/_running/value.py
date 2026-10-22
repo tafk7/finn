@@ -26,10 +26,10 @@ from .answers import _same_value
 from .structure import record
 
 if TYPE_CHECKING:
-    from .answers import Called
     from .._configuration import Space
     from .._structure import Structure
     from ..compiler import Model
+    from .answers import Called
 
 
 def _frozen(mapping: Mapping[NodeId, object]) -> Mapping[NodeId, object]:

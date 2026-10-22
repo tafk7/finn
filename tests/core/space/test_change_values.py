@@ -15,7 +15,6 @@ domain.
 
 from __future__ import annotations
 
-
 from core.space._design_support import change, codes, key, published, read, start, validity
 from finn.core.space import (
     Available,

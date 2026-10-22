@@ -132,9 +132,8 @@ from finn.core.space import (
 )
 from finn.core.space._failure import NativeEvaluationError
 from finn.core.space._running import cache as cache_module
-from finn.core.space._running import purity
+from finn.core.space._running import evaluate, purity, questions, structure
 from finn.core.space._running.answers import _same_value
-from finn.core.space._running import evaluate, questions, structure
 from finn.core.space._running.cache import (
     PLAIN,
     NodeCache,

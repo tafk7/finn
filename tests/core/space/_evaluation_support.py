@@ -17,13 +17,12 @@ import inspect as _inspect
 from collections.abc import Callable, Mapping
 from typing import cast
 
+from core.space._running_type import Running, RunningAnswers
 from finn.core.space import Space, design_space
 from finn.core.space._running.evaluate import Ans, Evaluation, evaluation
 from finn.core.space.ir import NodeId
 from finn.core.space.occurrence import held
 from finn.core.space.results import QueryResult
-
-from core.space._running_type import Running, RunningAnswers
 
 
 def open_evaluation(declaration: Space, choices: Mapping[str, object] | None = None) -> Evaluation:

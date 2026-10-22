@@ -15,7 +15,6 @@ from typing import Any
 import pytest
 
 from finn.core.reporting.findings import Finding, FindingKind
-from finn.core.space._running.answers import _present
 from finn.core.space import (
     Available,
     EvaluationError,
@@ -34,6 +33,7 @@ from finn.core.space import (
     supplied,
     view,
 )
+from finn.core.space._running.answers import _present
 from finn.core.space.ir import Node
 
 

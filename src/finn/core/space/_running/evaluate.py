@@ -42,7 +42,7 @@ case to fall back on.
 (``Session.run``), which evaluates the deep node first, then asks again what it
 abandoned: authored functions are pure, so asking again answers the same.
 
-**Failures** complete as today's engine completes them (``_failure``'s contract). Each
+**Failures** complete by ``_failure``'s contract. Each
 question is one **run** (``Session.run``, a driver's demand): its authored calls each run
 in a copy of the context the driver entered with, never in their reader's. An authored
 function raising is its owner's failure, never kept by the memo or a cache. A failure
