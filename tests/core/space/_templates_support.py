@@ -6,10 +6,9 @@ its eager form ``expand(C)``, in a canonical form by key, independent of numberi
 Space classes a set of modules defines.
 
 Both are built from templates. That they are the line's one table of every placement
-(``6d02612cc``'s ``link_space``) is checked against the line's digests of each class's
-canonical form, kept in the design corpus (the lane's record, ``line/structure.json``),
-with the probe that made them; the selections' owners apart, which a rule now fixes
-(``_structure``)."""
+(``6d02612cc``'s ``link_space``) was checked, when templates replaced it, against digests of
+each class's canonical form taken from that table; the selections' owners apart, which a
+rule now fixes (``_structure``)."""
 
 from __future__ import annotations
 

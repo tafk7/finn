@@ -6,8 +6,9 @@ nodes resolved when read; and the eager expansion, ``expand(C)``: every node of 
 space in one table, from templates.
 
 A structure fully resolved, in either numbering, equals ``expand(C)`` in a canonical form
-by key (``_templates_support``); that both are the line's one table of every placement is
-checked against the line's digests in the design corpus. Here the engine's corpus: every
+by key (``_templates_support``); that both are the line's one table of every placement was
+checked, when templates replaced it, against digests taken from that table. Here the
+engine's corpus: every
 Space class the space tests and the engine's support modules define, and the classes
 below for the edge cases. The kernels, the rest of the test support, the Chain's members
 and stage 7's chain are the kernel tree's (``kernel_ops/test_space_templates``): this tree

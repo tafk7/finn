@@ -22,6 +22,13 @@ counted and waited as the model does: its witnesses are plain tests.
 A later milestone joins ``MILESTONES`` with its rows; while it has rows the walks count
 their disagreements, and fail on each once none has.
 
+**By implementation.** A row's expected failure holds for an implementation that has not
+reached its milestone. An implementation declares the later milestones it has reached as
+``milestones`` (``Reaching``; none where it declares none, as today's engine), and
+``expected`` marks a witness for the harness's default (``implementation.default``, a
+session's ``--space-implementation``): a plain test where the default has reached the row's
+milestone.
+
 ``python -m core.space.reference_harness`` (from ``tests``) prints the matrix as a markdown
 table.
 """
@@ -32,11 +39,13 @@ import ast
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar
+from typing import Protocol, TypeVar
 
 import pytest
+from support.space_oracle import Implementation
 
 from .compare import Disagreement
+from .implementation import default
 
 #: in order: the line as it is, then each later milestone with rows to remove
 MILESTONES: tuple[str, ...] = ("base", "T4b", "T4c")
@@ -77,16 +86,37 @@ ROWS: tuple[Row, ...] = (
 
 BY_ID = {row.id: row for row in ROWS}
 
+
+class Reaching(Implementation, Protocol):
+    """An implementation declaring the later milestones it has reached."""
+
+    @property
+    def milestones(self) -> frozenset[str]: ...
+
+
+def reached(implementation: Implementation) -> frozenset[str]:
+    """The later milestones ``implementation`` declares it has reached (its ``milestones``;
+    none where it declares none). A milestone not in ``MILESTONES[1:]`` is an error."""
+    found = frozenset(getattr(implementation, "milestones", frozenset()))
+    unknown = sorted(found - set(MILESTONES[1:]))
+    if unknown:
+        raise ValueError(f"{implementation.name}: no later milestones {unknown}")
+    return found
+
+
 #: a test function, returned marked as it was given
 F = TypeVar("F", bound=Callable[..., object])
 
 
 def expected(row_id: str) -> Callable[[F], F]:
     """Mark a test as the witness of the row ``row_id``: a strict expected failure raising
-    ``Disagreement``, its reason the row's milestone and change."""
+    ``Disagreement``, its reason the row's milestone and change; a plain test where the
+    harness's default implementation has reached the row's milestone (``reached``)."""
     row = BY_ID[row_id]
 
     def mark(test: F) -> F:
+        if row.milestone in reached(default()):
+            return test
         reason = f"{row.milestone}: {row.change}" + (f" ({row.note})" if row.note else "")
         marked: F = pytest.mark.xfail(strict=True, raises=Disagreement, reason=reason)(test)
         return marked

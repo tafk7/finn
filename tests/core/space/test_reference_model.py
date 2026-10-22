@@ -5,8 +5,9 @@
 
 Each test is one rule on a small synthetic Space; the expected answers are written
 out, not computed. The model is the oracle the engine's tests compare against, so
-these tests are what the oracle is held to. "§" cites the semantics note
-(``records/space-semantics-defaults-2026-10-18/NOTE.md`` in the design corpus).
+these tests are what the oracle is held to. A "§" labels a rule by the number its author
+gave it in the semantics the model follows (the model's readings, ``reference.model``);
+each test states and checks its rule here.
 """
 
 from __future__ import annotations

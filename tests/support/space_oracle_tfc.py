@@ -56,9 +56,9 @@ SEQUENCES: Mapping[str, Callable[[], list[Explorer]]] = {
     "pinned_then_target": lambda: [Hold(PINS), TargetThroughput(3_000_000)],
     "defaults": lambda: [TargetThroughput(1_000_000), Defaults()],
 }
-"""TFC's seven strategy sequences (the identity probes', corpus
-``records/bounded-change-2026-10-16/probes/identity/strategies2.py``), each explored on the
-cut's body, one strategy after another; ``defaults`` is the probes' ``rebaseline``,
+"""TFC's seven strategy sequences, with the lanes, throughput targets, budget and pins an
+earlier probe explored TFC with to compare what two checkouts choose, each explored on the
+cut's body, one strategy after another; ``defaults`` is that probe's ``rebaseline``,
 whose strategy is now ``Defaults``."""
 
 

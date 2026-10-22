@@ -6,6 +6,7 @@ from . import inspection
 from ._assign import bind
 from ._configuration import BoundDecision, BoundValue, Space
 from ._failure import NativeEvaluationError
+from ._value_types import value_type
 from .compiler import Model, design_space
 from .declarations import (
     Const,
@@ -84,6 +85,7 @@ __all__ = [
     "divisors_of",
     "ValueSemantics",
     "default_semantics",
+    "value_type",
     # Results and assessments
     "QueryResult",
     "Available",

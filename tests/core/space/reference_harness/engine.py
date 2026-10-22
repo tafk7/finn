@@ -13,13 +13,15 @@ legacy form, and no answer the adapter computes in its place.
 - **The implementation.** The description is authored once, as Space classes (today's
   API: ``composite``, ``design_space``); every implementation reads the same classes.
   ``Engine.open`` opens the design space with an ``Implementation`` of the class-based
-  oracle's interface (``support.space_oracle``; today's engine, ``today.TODAY``, by
-  default), ``Engine.make`` has it build one from nothing (``Implementation.make``, the
+  oracle's interface (``support.space_oracle``; by default the harness's,
+  ``implementation.default``: today's engine, ``today.TODAY``, unless a session names
+  another), ``Engine.make`` has it build one from nothing (``Implementation.make``, the
   walks' cold build), and ``Point`` asks every question of what it opens, an ``Answers``, by key,
   never of ``inspection`` or the configuration itself. So a prototype or T1's evaluator is
   compared with the model by naming it (``walks.walk(..., implementation=)``, the CLI's
-  ``--implementation module:attribute``), and a planted fault (``today.Planted``) shows
-  that the comparison is live.
+  ``--implementation module:attribute``) or by making it the default (pytest's
+  ``--space-implementation module:attribute``), and a planted fault (``today.Planted``)
+  shows that the comparison is live.
 
 - **Spelling.** A rule of the description is a constraint in the model, and in the engine
   every rule is a ``@constraint`` of the Space that owns it, which its Space's validity
@@ -83,7 +85,6 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 
 from support.space_oracle import Answers, Changed, Implementation
-from support.space_oracle.today import TODAY
 
 from core.space import reference as model
 from core.space.reference.model import same
@@ -125,6 +126,7 @@ from .forms import (
     StateForm,
     ValidityForm,
 )
+from .implementation import chosen
 
 
 class NotTranslatable(Exception):
@@ -724,26 +726,31 @@ class Engine:
     #: a selector spelled with its scope's guard -> that scope, which its guard piece names
     guards: Mapping[str, str] = field(default_factory=dict)
 
-    def open(self, facts: Mapping[str, object], implementation: Implementation = TODAY) -> Point:
+    def open(
+        self, facts: Mapping[str, object], implementation: Implementation | None = None
+    ) -> Point:
         """The configuration with ``facts`` and nothing committed, as ``implementation``
-        answers it (today's engine by default): an optional fact the model reads ``None``
-        left unsupplied. The design space is built by today's API, the common input every
-        implementation opens."""
+        answers it (the harness's default by default, ``implementation.default``): an
+        optional fact the model reads ``None`` left unsupplied. The design space is built by
+        today's API, the common input every implementation opens."""
         supplied = {name: value for name, value in facts.items() if not self._left_out(name, value)}
         configuration = design_space(self.root(**cast(dict[str, Any], supplied)))
+        implementation = chosen(implementation)
         return Point(self, implementation.open(configuration), implementation.name)
 
     def make(
         self,
         facts: Mapping[str, object],
         stored: Mapping[str, object],
-        implementation: Implementation = TODAY,
+        implementation: Implementation | None = None,
     ) -> Point:
         """The configuration with ``facts`` (as ``open`` takes them) and exactly the
         choices ``stored`` (by path, dormant ones included), built from nothing by
-        ``implementation`` (``Implementation.make``): no rule checked, nothing dropped. A
-        walked configuration answers as the one made from its facts and stored choices."""
+        ``implementation`` (``Implementation.make``; the harness's default by default): no
+        rule checked, nothing dropped. A walked configuration answers as the one made from its
+        facts and stored choices."""
         supplied = {name: value for name, value in facts.items() if not self._left_out(name, value)}
+        implementation = chosen(implementation)
         made = implementation.make(self.root, supplied, dict(stored))
         return Point(self, made, implementation.name)
 
@@ -798,14 +805,14 @@ def definition(
     description: model.Space,
     spelling: Spelling | None = None,
     facts: Mapping[str, object] | None = None,
-    implementation: Implementation = TODAY,
+    implementation: Implementation | None = None,
 ) -> DefinitionForm:
     """Whether the engine takes ``description`` as a definition: a dependency cycle reported
-    when building the Space, or when ``implementation`` is asked (its validity, every rule
-    and every view of the configuration with ``facts``), is ``"cycle"``; a domain whose
-    membership reads a choice, refused at compile, is ``"domain-reads-choice"``; otherwise
-    ``None``. (Today's engine has no ``"view-read-in"``: it builds a Space reading a view
-    in, T4b's row.)"""
+    when building the Space, or when ``implementation`` is asked (the harness's default by
+    default; its validity, every rule and every view of the configuration with ``facts``),
+    is ``"cycle"``; a domain whose membership reads a choice, refused at compile, is
+    ``"domain-reads-choice"``; otherwise ``None``. (Today's engine has no ``"view-read-in"``:
+    it builds a Space reading a view in, T4b's row.)"""
     try:
         engine = build(description, spelling, unchecked=True)
         point = engine.open(dict(facts or {}), implementation)
@@ -837,7 +844,7 @@ class Point:
     engine: Engine
     answers: Answers
     #: the implementation answering (``Implementation.name``)
-    implementation: str = TODAY.name
+    implementation: str
 
     def stored(self) -> dict[str, object]:
         """The committed choices, dormant ones included, by path."""

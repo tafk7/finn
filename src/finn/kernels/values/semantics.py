@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+import operator
 import sys
 from array import array
 from collections.abc import Callable, Sequence
@@ -16,7 +17,7 @@ from typing import cast
 import numpy as np
 import numpy.typing as npt
 
-from finn.core.space import ValueSemantics
+from finn.core.space import ValueSemantics, value_type
 from finn.dataflow.datatypes import (
     QONNX_DATATYPE_TOKEN,
     QONNXDataType,
@@ -28,8 +29,9 @@ QONNX_DATATYPE_VALUE_SEMANTICS: ValueSemantics[QONNXDataType] = ValueSemantics(
     type_token=QONNX_DATATYPE_TOKEN,
     name="QONNXDataType",
     recognizes=is_qonnx_datatype,
-    # One instance per canonical name: two datatypes are equal when they are the same.
-    equal=lambda left, right: left is right,
+    # One instance per canonical name: two datatypes are equal when they are the same, so
+    # exactly when ``==`` (by canonical name) holds them equal.
+    equal=operator.eq,
     snapshot=canonical_qonnx_datatype,
 )
 
@@ -318,9 +320,18 @@ INTEGER_TENSOR: ValueSemantics[IntegerTensor] = ValueSemantics(
     IntegerTensor,
     "integer tensor",
     _recognized,
-    lambda left, right: left is right or _value(left) == _value(right),
+    # A stored integer tensor is its value (the snapshot): equal by ``==``, its digest.
+    operator.eq,
     _snapshot,
 )
+
+# The value types FINN's values hold, registered here and nowhere else: each class's ``==``
+# and hash are its semantics, equal instances cannot be told apart, and none changes. A
+# QONNX datatype is the one instance of its canonical name, equal to another by that name
+# (it is also equal to the name itself, a string: the engine's keys tell the two apart);
+# an integer tensor is equal to another by its digest, of its shape and integers.
+value_type(QONNXDataType)
+value_type(IntegerTensorValue)
 
 
 __all__ = [
