@@ -61,7 +61,9 @@ declaration inside the member's space; the network names the member beside them.
 **The module.** A network is emitted as one ``Composed`` module (``module``): each
 member's netlist under its node (its name, unless the network is given another,
 ``nodes``: a graph's names with ``\\W`` as ``_``), in the order the network was declared
-(its instance order, which the text follows), with every boundary channel's AXIS bus
+(its instance order, which the text follows), a channel's with its hops to the ports beside
+it, which the network wires from the contracts it read (``hops``,
+``finn.kernels.channels.outer_hops``), with every boundary channel's AXIS bus
 (``finn.kernels.artifacts.top.compose``), made of its ``netlist`` (the merged fragment and
 the boundary buses), which a shell counts without building the top
 (``finn.platform.shells.bus_counts``). A kernel's ``netlist`` view merges its members'
@@ -92,11 +94,11 @@ from finn.core.space import (
     reject,
 )
 from finn.kernels.artifacts import ArtifactError
-from finn.kernels.artifacts.abi import Bus
+from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed, Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose
 from finn.kernels.base import BOUNDARY, NETLIST, PortContract, merged
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, Neighbours, OuterHops, outer_hops
 from finn.kernels.configure import chosen, refusal
 from finn.kernels.control import CONTROL, Control
 from finn.kernels.control import presented as presented_buses
@@ -720,6 +722,26 @@ class Network:
             raise NetworkError(f"{name} is no bound channel of the network")
         return dict(found)
 
+    def neighbours(self, name: str) -> Neighbours:
+        """The ports beside channel ``name``, as the network read them to bind it (each
+        ``Interface``'s contract, labelled): the producing kernel's and the consuming
+        kernel's, by their transports' endpoints, as the channel tells its sides; a
+        ``NetworkError`` where it is not bound. FIFO sizing reads their paces
+        (``finn.kernels.fifo_sizing``), and the network its hops to them (``hops``)."""
+        facts = self.facts(name)
+        found: dict[bool, PortContract] = {}
+        for fact, value in self._wires[name].facts.items():
+            port = facts.get(fact)
+            if isinstance(value, Interface) and isinstance(port, PortContract):
+                found[port.contract.transport.endpoint is Endpoint.INITIATOR] = port
+        return Neighbours(found.get(True), found.get(False))
+
+    def hops(self, name: str) -> OuterHops | Rejected:
+        """Channel ``name``'s hops to the ports beside it (``outer_hops``, from
+        ``neighbours``), of a channel whose netlist is answered; a ``NetworkError`` where
+        it is not bound."""
+        return outer_hops(self.member(name), self.neighbours(name))
+
     def unbound(self, name: str) -> Unbound | None:
         """Why channel ``name`` is not bound, or None where it is."""
         return self._unbound.get(name)
@@ -1037,16 +1059,24 @@ class Network:
 
     def netlist(self) -> QueryResult[tuple[Fragment, tuple[Bus, ...]]]:
         """What its top is made of: each member's netlist under its node, in the order
-        declared, merged with each control bus its kernels present (``CONTROL``, at the
-        port each was given), and each boundary channel's AXIS bus; or why not, every
-        member's refusal (or, where none refuses, what they wait on), each finding naming
-        its member (``located``), or the merge's own (``kernel-netlist``)."""
+        declared, a channel's with its hops to the ports beside it around its own links
+        (``hops``: the producer's first, the consumer's last), merged with each control bus
+        its kernels present (``CONTROL``, at the port each was given), and each boundary
+        channel's AXIS bus; or why not, every member's refusal (or, where none refuses,
+        what they wait on; a channel's hops' own, ``channel-port`` or ``channel-link``),
+        each finding naming its member (``located``), or the merge's own
+        (``kernel-netlist``)."""
         netlists: list[tuple[str, Fragment]] = []
         boundary: list[Bus] = []
         controls: list[tuple[str, Control]] = []
         failed: list[tuple[str, QueryResult[object]]] = []
         for name in self._order:
             netlist = self.query(name, NETLIST)
+            if name in self._wires and isinstance(netlist, Available):
+                hops = self.hops(name)
+                netlist = (
+                    hops if isinstance(hops, Rejected) else Available(hops.around(netlist.value))
+                )
             if isinstance(netlist, Available):
                 netlists.append((self._nodes[name], netlist.value))
             else:

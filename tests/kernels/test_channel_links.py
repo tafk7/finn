@@ -3,8 +3,10 @@
 
 """A channel's netlist: its stages below it, and each checked hop resolved into wires.
 
-A link's end belongs to the kernel whose port it is, beside the channel
-(``^compute``); a stage sits at its label below the channel
+A channel wires the hops between its own ends; its network wires the hops to the ports
+beside it (``Network.hops``) and places them around the channel's links, in the network's
+netlist. A link's end belongs to the kernel whose port it is, beside the channel
+(``^compute``, ``compute`` in the network); a stage sits at its label below the channel
 (``adapter.input_gen.input_gen``, ``transport.fifo.buffer``); a link's end on the
 boundary is the root's own pins (``None``).
 """
@@ -18,12 +20,12 @@ from support.helpers import (
     with_direct_transports,
 )
 
-from finn.core.space import Rejected, Space, view
+from finn.core.space import Available, Rejected, Space, view
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import vector_major
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.artifacts.module import Leaf
+from finn.kernels.artifacts.module import Fragment, Leaf
 from finn.kernels.base import PORT_CONTRACT, PortContract
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import PackedDotpKernel
@@ -84,23 +86,43 @@ def placed(**transport: object) -> Network:
     return with_channel_defaults(with_direct_transports(choose(folded, transport)))
 
 
+def links(point: Network) -> list[tuple[str | None, str | None]]:
+    """The ends of each link of ``point``'s netlist, in order."""
+    found = point.netlist()
+    assert isinstance(found, Available)
+    fragment, _ = found.value
+    return [(link.source.instance, link.sink.instance) for link in fragment.links]
+
+
 def test_an_adapted_channel_places_its_stage_and_wires_each_hop() -> None:
     point = placed(**{"w.transport": "direct"})
     fragment = point.member("x").netlist
     ((label, leaf),) = fragment.instances
     assert label == "adapter.input_gen.input_gen"
     assert isinstance(leaf, Leaf) and leaf.name == "input_gen"
-    into, out = fragment.links
+    # Its own hop, from its boundary to its stage; the hop to compute's port is the
+    # network's, placed after it.
+    (into,) = fragment.links
     assert (into.source.instance, into.sink.instance) == (None, label)
     assert (into.source.data, into.sink.data) == ("in0_V_tdata", "idat")
+    hops = point.hops("x")
+    assert not isinstance(hops, Rejected) and hops.producer is None and hops.consumer
+    out = hops.consumer
     assert (out.source.instance, out.sink.instance) == (label, "^compute")
     assert out.sink.data == "s_axis_input_tdata" and out.lanes == (0, 1) and out.lane_bits == 3
     # The frame marker: the input_gen's olst bit closing each reduction drives TLAST.
     assert out.markers == (("olst", 1, "s_axis_input_tlast", None),)
-    # A direct channel is one hop, and only a boundary channel presents a bus.
-    (direct,) = point.member("y").netlist.links
-    assert (direct.source.instance, direct.sink.instance) == ("^compute", None)
+    # A direct channel is one hop, the network's, and only a boundary channel presents
+    # a bus. The network's netlist: each channel's hops in the order the stream runs.
+    assert point.member("y").netlist.links == ()
     assert [bus.name for bus in point.member("y").boundary_bus] == ["out0_V"]
+    staged = f"x.{label}"
+    assert links(point) == [
+        (None, staged),
+        (staged, "compute"),
+        (None, "compute"),
+        ("compute", None),
+    ]
 
 
 def test_a_buffered_channel_places_its_fifo_below_its_transport() -> None:
@@ -115,7 +137,10 @@ def test_a_buffered_channel_places_its_fifo_below_its_transport() -> None:
     assert [label for label, _ in fragment.instances] == ["transport.fifo.buffer"]
     assert [(item.source.instance, item.sink.instance) for item in fragment.links] == [
         (None, "transport.fifo.buffer"),
-        ("transport.fifo.buffer", "^compute"),
+    ]
+    assert links(point)[2:4] == [
+        (None, "w.transport.fifo.buffer"),
+        ("w.transport.fifo.buffer", "compute"),
     ]
 
 
@@ -153,8 +178,13 @@ def test_a_contract_that_is_no_kernels_port_has_no_netlist() -> None:
             "reader": Reader(),
         }
     )
-    edge = with_direct_transports(bare).member("edge")
+    point = with_direct_transports(bare)
+    edge = point.member("edge")
     assert edge.consumer.label == "reader"
-    refused = edge.query(Channel.netlist)
+    # The channel's own netlist has no hop to the reader; the network's refuses it.
+    assert edge.query(Channel.netlist).value == Fragment()
+    refused = point.netlist()
     assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"channel-port"}
+    assert [(item.code, item.message, dict(item.details)) for item in refused.findings] == [
+        ("channel-port", "reader presents a contract, but is no kernel's port", {"tensor": "edge"})
+    ]

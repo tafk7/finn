@@ -100,7 +100,7 @@ from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import FINDING, RECORDS, write_report
 from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.artifacts.module import module_name
-from finn.kernels.channels import Channel
+from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.explore import Hold, Ranked, TargetThroughput
 from finn.kernels.fifo_sizing import Sized
 from finn.platform.refusal import TargetRefused
@@ -441,7 +441,7 @@ def _levels_need(period: int) -> int:
     return 16 if period <= 6 else 5
 
 
-def _levels_sized(channel: Channel, period: int, **options: Any) -> Sized:
+def _levels_sized(channel: Channel, neighbours: Neighbours, period: int, **options: Any) -> Sized:
     """A double of the per-channel sizing, by ``_levels_need``."""
     if _is_levels(channel):
         need = _levels_need(period)
@@ -449,7 +449,7 @@ def _levels_sized(channel: Channel, period: int, **options: Any) -> Sized:
     return Sized(0, "direct absorbs it", 8, 0)
 
 
-def _levels_holds(channel: Channel, period: int, words: int) -> bool:
+def _levels_holds(channel: Channel, neighbours: Neighbours, period: int, words: int) -> bool:
     """A double of the seam's check, by ``_levels_need``."""
     return not _is_levels(channel) or words >= _levels_need(period)
 
@@ -505,7 +505,7 @@ def test_a_fifo_a_users_folding_step_leaves_too_small_is_refused_at_verification
         )
 
 
-def _holds_nothing(channel: Channel, period: int, words: int) -> bool:
+def _holds_nothing(channel: Channel, neighbours: Neighbours, period: int, words: int) -> bool:
     """A double of the seam's check under which no transport keeps its stream."""
     return False
 

@@ -32,7 +32,8 @@ within that, and ``least_depth`` is the least depth that does, by bisection. A k
 pipeline latency is a constant shift of a side's times, and the acceptance follows the
 supply's data, so they do not change the depth.
 
-``size`` reads a channel's sides from their contracts and gives its ``Sized``: a
+``size`` reads a channel's sides, its producer's and its consumer's paces from the
+contracts of the ports beside it (its network's ``neighbours``), and gives its ``Sized``: a
 depth (``0``: direct) and why. The least depth counts the words the FIFO must
 hold; the DEPTH proposed is the least whose native storage holds them
 (``least_depth_holding``: FinnLib's FIFO is a shift register of five words up to
@@ -63,11 +64,11 @@ from itertools import accumulate
 from math import ceil
 
 from finn.kernels.adapters import Convert
-from finn.kernels.channels import Channel
+from finn.kernels.base import PortContract
+from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.fifo import least_depth_holding
 from finn.kernels.input_generator import Generate, NestBuffer, nest_buffer
 from finn.kernels.movers import MoverContract
-from finn.kernels.transport import StreamContract
 
 
 @dataclass(frozen=True)
@@ -290,8 +291,11 @@ class NotModelled(ValueError):
     """A channel whose sides the model does not read, and why."""
 
 
-def _pattern(contract: StreamContract, side: str) -> Pattern:
-    pace = contract.pace
+def _pattern(port: PortContract | None, side: str) -> Pattern:
+    """The pace the port beside the channel on ``side`` states with its contract."""
+    if port is None:
+        raise ValueError(f"the channel's {side} is a port, and none is given beside it")
+    pace = port.contract.pace
     if pace is None:
         raise NotModelled(f"the {side} presents a given sequence, which no schedule paces")
     return Pattern(pace.times, pace.span)
@@ -305,14 +309,20 @@ def _free(channel: Channel) -> Pattern:
     return Pattern(contract.times, contract.cycles)
 
 
-def sides(channel: Channel) -> tuple[Pattern, Acceptance]:
+def sides(channel: Channel, neighbours: Neighbours) -> tuple[Pattern, Acceptance]:
     """A channel's supply at its transport and its input side's acceptance, from the
-    paces its sides state; ``NotModelled`` naming why the model does not read them."""
+    paces the ports beside it state (``neighbours``, as its network reads them); a
+    boundary side's from its mover; ``NotModelled`` naming why the model does not read
+    them."""
     if channel.valued:
         raise NotModelled("a memory source: paced by its consumer")
     found = channel.sides
-    producer = _free(channel) if found.source_owner is None else _pattern(found.source, "producer")
-    consumer = _free(channel) if found.sink_owner is None else _pattern(found.sink, "consumer")
+    producer = (
+        _free(channel) if found.source_owner is None else _pattern(neighbours.producer, "producer")
+    )
+    consumer = (
+        _free(channel) if found.sink_owner is None else _pattern(neighbours.consumer, "consumer")
+    )
     times = producer.times
     if channel.output_adapting:
         stages = channel.output_adapter.realization
@@ -352,14 +362,21 @@ class Sized:
         return self.depth * self.word_bits
 
 
-def size(channel: Channel, period: int, *, margin: int = 0, ram_style: str = "auto") -> Sized:
-    """``channel``'s FIFO at the bottleneck ``period``: the least DEPTH whose storage
-    holds the least words plus ``margin`` (``least_depth_holding``: a FIFO of two words
-    or more), or direct where none is needed, none helps, or the sides are not
-    modelled."""
+def size(
+    channel: Channel,
+    neighbours: Neighbours,
+    period: int,
+    *,
+    margin: int = 0,
+    ram_style: str = "auto",
+) -> Sized:
+    """``channel``'s FIFO at the bottleneck ``period``, between the ports beside it
+    (``neighbours``): the least DEPTH whose storage holds the least words plus ``margin``
+    (``least_depth_holding``: a FIFO of two words or more), or direct where none is
+    needed, none helps, or the sides are not modelled."""
     word_bits = channel.arriving.form.lanes * channel.tensor.element.bits
     try:
-        supply, accept = sides(channel)
+        supply, accept = sides(channel, neighbours)
     except NotModelled as error:
         return Sized(0, str(error), word_bits)
     least = least_depth(supply, accept, period)
@@ -371,12 +388,13 @@ def size(channel: Channel, period: int, *, margin: int = 0, ram_style: str = "au
     return Sized(depth, f"least {least} words", word_bits, least)
 
 
-def holds(channel: Channel, period: int, words: int) -> bool:
+def holds(channel: Channel, neighbours: Neighbours, period: int, words: int) -> bool:
     """Whether ``channel``'s transport, a FIFO of ``words`` words (its storage's capacity;
-    0: direct), keeps its producer within its idle time at the bottleneck ``period``
-    (``keeps``, one simulation of its sides): the test ``size`` sizes it by, at the words it
-    holds. ``NotModelled`` where the model does not read its sides (``sides``)."""
-    supply, accept = sides(channel)
+    0: direct), between the ports beside it (``neighbours``), keeps its producer within
+    its idle time at the bottleneck ``period`` (``keeps``, one simulation of its sides):
+    the test ``size`` sizes it by, at the words it holds. ``NotModelled`` where the model
+    does not read its sides (``sides``)."""
+    supply, accept = sides(channel, neighbours)
     return keeps(supply, accept, period, words)
 
 

@@ -42,8 +42,11 @@ consumes.
 As a kernel with children (a ``KernelSpace`` binding no module), its members are its
 source, its adapters' stages, its FIFO (``ChannelFifo``) and its mover, in the order the
 stream runs through them. Its answers are the base's views over theirs, but for two it
-states itself, calling the base's: its netlist adds its hops (``NETLIST``), and a channel
-of wires takes no cycles of its own (0). It exports its boundary's AXIS bus
+states itself, calling the base's: its netlist adds the hops between its own ends (its
+source, its stages, its boundary; ``NETLIST``), and a channel of wires takes no cycles of
+its own (0). Its hops to the ports beside it need those ports' contracts, which its
+network holds: the network wires them (``outer_hops``, from the ports it read,
+``Neighbours``) and places them around the channel's netlist. It exports its boundary's AXIS bus
 (``BOUNDARY``) and its mover's contract (``MOVER``: ``placed_mover``, from the mover's own
 derived ``contract``). It is no module of its own.
 """
@@ -150,6 +153,93 @@ def wired(
         lane_permutation(produced, consumed),
         tuple(markers),
     )
+
+
+@dataclass(frozen=True)
+class Neighbours:
+    """The ports beside a channel, as its network reads them to bind it (each
+    ``Interface``'s contract, labelled from the network: ``matmul.compute.packed.x``): the
+    producing kernel's and the consuming kernel's, each None where that side is the
+    channel's own, its source (a known value) or its boundary."""
+
+    producer: PortContract | None = None
+    consumer: PortContract | None = None
+
+
+@dataclass(frozen=True)
+class OuterHops:
+    """A channel's hops to the ports beside it (``outer_hops``), each None where that side
+    is its own: ``producer`` from the producing kernel's port (to the channel's first
+    stage, or to its consumer where it has none), ``consumer`` to the consuming kernel's
+    port (from its last stage, or from its source or boundary where it has none). Its
+    other hops, both ends its own, are its netlist's."""
+
+    producer: Link | None = None
+    consumer: Link | None = None
+
+    def around(self, fragment: Fragment) -> Fragment:
+        """``fragment``, the channel's netlist, with these hops around its links: the
+        producer's first, the consumer's last, in the order the stream runs."""
+        before = () if self.producer is None else (self.producer,)
+        after = () if self.consumer is None else (self.consumer,)
+        return Fragment(fragment.instances, (*before, *fragment.links, *after), fragment.exports)
+
+
+_End = tuple[str | None, StreamContract]
+"""One end of a hop: its owner, relative to the channel (``None``: the module's own pins),
+and the contract it presents."""
+
+
+def _kernel_of(port: PortContract) -> str | Rejected:
+    """The node of the kernel whose port ``port`` is, beside the channel: the node above
+    its label (``matmul.compute.packed.x``, at any depth below the network:
+    ``^matmul.compute.packed``)."""
+    kernel = port.label.rpartition(".")[0]
+    if not kernel:
+        return reject("channel-port", f"{port.label} presents a contract, but is no kernel's port")
+    return "^" + kernel
+
+
+def outer_hops(channel: Channel, neighbours: Neighbours) -> OuterHops | Rejected:
+    """``channel``'s hops to the ports beside it (``neighbours``, as its network reads
+    them), as wires (``wired``), of a channel whose netlist is answered.
+
+    A port belongs to its kernel beside the channel (``_kernel_of``); a stage and the
+    source sit below the channel at their labels; a boundary side is the module's own
+    pins (``None``). Refused where a port is no kernel's (``channel-port``), or where a
+    hop's wires do not form (``channel-link``).
+    """
+    owners: list[str | None] = []
+    for port in (neighbours.producer, neighbours.consumer):
+        node = None if port is None else _kernel_of(port)
+        if isinstance(node, Rejected):
+            return node
+        owners.append(node)
+    producing: _End | None = None
+    if neighbours.producer is not None:
+        producing = (owners[0], neighbours.producer.contract)
+    consuming: _End | None = None
+    if neighbours.consumer is not None:
+        consuming = (owners[1], neighbours.consumer.contract)
+    stages: tuple[Stage, ...] = channel.stages
+    sides = channel.sides
+    # What each port meets of the channel: its first stage or its last, or, with none,
+    # the other side: the other port, or the channel's own source or boundary.
+    if stages:
+        into: _End = (stages[0].label, stages[0].input)
+        out_of: _End = (stages[-1].label, stages[-1].output)
+    else:
+        into = consuming or (sides.sink_owner, sides.sink)
+        out_of = producing or (sides.source_owner, sides.source)
+    try:
+        produced = None if producing is None else wired(*producing, *into)
+        consumed = None
+        # A channel of no stage between two ports is one hop, the producer's.
+        if consuming is not None and (stages or producing is None):
+            consumed = wired(*out_of, *consuming)
+    except ArtifactError as error:
+        return reject("channel-link", str(error))
+    return OuterHops(produced, consumed)
 
 
 def _source_label(case: str) -> str:
@@ -513,7 +603,8 @@ class Channel(KernelSpace):
         transported = tuple(replace(stage, label=f"transport.{stage.label}") for stage in transport)
         return (*self.output_adapted, *transported, *self.adapted)
 
-    # The stages, the product its holder reads; ``compatible`` and ``hops`` read the value.
+    # The stages, the product its holder reads (its netlist, and its network's
+    # ``outer_hops``); ``compatible`` reads the value.
     stages = View(staged)
 
     @constraint
@@ -544,50 +635,47 @@ class Channel(KernelSpace):
                 )
         return _refusal(found)
 
-    @derived
-    def hops(self) -> tuple[Link, ...] | Rejected:
-        """Each hop, source through every stage to sink, as wires.
+    # -- its answers: the base's, with its own hops, and none of a channel of wires' cycles --
 
-        A side belongs to its kernel beside the channel: its label is a
-        kernel's port (``matmul.compute.packed.x``, at any depth below the
-        network), its kernel the node above it (``^matmul.compute.packed``).
-        A stage and the source sit below the channel at their labels; a
-        boundary side is the module's own pins (``None``).
-        """
+    @view(semantics=NETLIST_SEMANTICS)
+    @declared_reads(
+        "netlists",
+        "controls",
+        "sides",
+        "valued",
+        "source_label",
+        "source.output_contract",
+        "stages",
+    )
+    def netlist(self) -> Fragment | Rejected:
+        """Its members' netlists under their nodes, in the order the stream runs through
+        them (its source, its output adapter's stages, its FIFO, its input adapter's
+        stages), and its own hops, as wires (``wired``): each hop both of whose ends are
+        its own (its source, below it at its label; its stages, at theirs; its boundary,
+        the module's own pins), from its children's contracts (its ``stages`` and its
+        source's). Its hops to the ports beside it are its network's (``outer_hops``); a
+        channel of wires between two kernels places nothing."""
         sides = self.sides
-        owners: list[str | None] = []
-        for side, node in enumerate((sides.source_owner, sides.sink_owner)):
-            if side == 0 and self.valued:
-                owners.append(node)  # the source, below the channel at its label
-                continue
-            kernel = None if node is None else node.rpartition(".")[0]
-            if kernel == "":
-                return reject(
-                    "channel-port", f"{node} presents a contract, but is no kernel's port"
-                )
-            owners.append(None if kernel is None else "^" + kernel)
+        current: _End | None = None
+        if self.valued:
+            offered: PortContract = self.source.output_contract
+            current = (self.source_label, offered.contract)
+        elif sides.source_owner is None:
+            current = (None, sides.source)
+        stages: tuple[Stage, ...] = self.stages
         links: list[Link] = []
-        owner, current = owners[0], sides.source
         try:
-            for stage in self.staged:
-                links.append(wired(owner, current, stage.label, stage.input))
-                owner, current = stage.label, stage.output
-            links.append(wired(owner, current, owners[1], sides.sink))
+            for stage in stages:
+                if current is not None:
+                    links.append(wired(*current, stage.label, stage.input))
+                current = (stage.label, stage.output)
+            if current is not None and sides.sink_owner is None:
+                links.append(wired(*current, None, sides.sink))
         except ArtifactError as error:
             # A hop that does not connect (another element, say) is refused by the
             # channel's constraints; its wires do not exist.
             return reject("channel-link", str(error))
-        return tuple(links)
-
-    # -- its answers: the base's, with its hops, and none of a channel of wires' cycles ----
-
-    @view(semantics=NETLIST_SEMANTICS)
-    @declared_reads("netlists", "controls", "hops")
-    def netlist(self) -> Fragment | Rejected:
-        """Its members' netlists under their nodes, in the order the stream runs through
-        them (its source, its output adapter's stages, its FIFO, its input adapter's
-        stages), and its hops; a channel of wires places none."""
-        return KernelSpace._netlist(self, self.hops)
+        return KernelSpace._netlist(self, tuple(links))
 
     @view
     @declared_reads("member_cycles")
@@ -627,6 +715,9 @@ __all__ = [
     "Channel",
     "ChannelFifo",
     "ChannelSides",
+    "Neighbours",
+    "OuterHops",
     "boundary_contract",
+    "outer_hops",
     "wired",
 ]

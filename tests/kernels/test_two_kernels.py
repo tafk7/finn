@@ -185,10 +185,17 @@ def test_the_hidden_stream_steps_are_width_replay_and_frame_placing_vpc_and_inpu
     # The sides belong to the layers' ports; the instances are the layers'.
     sides = hidden.sides
     assert (sides.source_owner, sides.sink_owner) == ("first.y", "second.x")
+    # Its own hop, between its stages; the network's, to the layers' ports, around it.
     assert [(link.source.instance, link.sink.instance) for link in hidden.netlist.links] == [
-        ("^first", "output_adapter.vpc.vpc"),
         ("output_adapter.vpc.vpc", "adapter.input_gen.input_gen"),
-        ("adapter.input_gen.input_gen", "^second"),
+    ]
+    fragment, _ = point.netlist().value
+    ends = [(link.source.instance, link.sink.instance) for link in fragment.links]
+    start = ends.index(("first", "h.output_adapter.vpc.vpc"))
+    assert ends[start : start + 3] == [
+        ("first", "h.output_adapter.vpc.vpc"),
+        ("h.output_adapter.vpc.vpc", "h.adapter.input_gen.input_gen"),
+        ("h.adapter.input_gen.input_gen", "second"),
     ]
     vpc = dict(stages[0].module.parameters)
     assert (vpc["PI"], vpc["PO"]) == (PE1, SIMD2)

@@ -94,7 +94,7 @@ from finn.core.space import (
     inspection,
 )
 from finn.kernels.base import BUFFERING, CYCLES, RESOURCES
-from finn.kernels.channels import ChannelFifo
+from finn.kernels.channels import ChannelFifo, Neighbours
 from finn.kernels.configure import refusal
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import FRAMES, NotModelled, Sized, holds, size
@@ -121,7 +121,8 @@ class Composition(Protocol):
     ``finn.custom_op.kernels.shell.in_shell``, in its shell). Its members by name, ranked,
     its channels among them, and per member its point, its exports, its Decisions, every
     choice's state, the possible values of those asked, what is open and stored, its
-    validity, and a change (``trial``); its own statement of what it uses, where it makes
+    validity, and a change (``trial``); per channel the ports beside it (``neighbours``,
+    whose paces FIFO sizing reads); its own statement of what it uses, where it makes
     one (``own_resources``); and the owner of each member's policies (``owner``)."""
 
     @property
@@ -131,6 +132,8 @@ class Composition(Protocol):
     def channels(self) -> tuple[str, ...]: ...
 
     def member(self, name: str) -> Any: ...
+
+    def neighbours(self, name: str) -> Neighbours: ...
 
     def owner(self, name: str) -> Owner: ...
 
@@ -819,7 +822,7 @@ class Seam:
             if words is None:
                 continue
             try:
-                kept = holds(network.member(owner), period, words)
+                kept = holds(network.member(owner), network.neighbours(owner), period, words)
             except NotModelled as error:
                 not_modelled[owner] = str(error)
                 continue
@@ -2246,6 +2249,7 @@ class SizeFifos:
         for transport in transports:
             sized = size(
                 network.member(transport.channel),
+                network.neighbours(transport.channel),
                 bottleneck.cycles,
                 margin=self.margin,
                 ram_style=self._style(seam, transport, prior),

@@ -35,12 +35,12 @@ from support.helpers import (
     labels,
 )
 
-from finn.core.space import Rejected, design_space, inspection
+from finn.core.space import Available, Rejected, design_space, inspection
 from finn.dataflow.steps import Step, steps
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, Traversal, vector_major
 from finn.kernels.adapters import Convert, realize
-from finn.kernels.channels import Channel, ChannelFifo
+from finn.kernels.channels import Channel, ChannelFifo, OuterHops
 from finn.kernels.configure import chosen
 from finn.kernels.library import library_module
 from finn.kernels.vpc import VpcKernel
@@ -246,26 +246,26 @@ def test_a_fifo_in_a_memory_the_platform_lacks_is_refused_by_its_rule():
 @pytest.mark.parametrize(
     ("channel", "status", "pieces", "candidate"),
     (
-        (lambda: adapted(columns_first(ROWS, CHANNELS, 4), 2).member("x"), "valid", [], None),
+        (lambda: adapted(columns_first(ROWS, CHANNELS, 4), 2), "valid", [], None),
         (
             lambda: choose(
                 adapted(columns_first(ROWS, CHANNELS, 4), 2),
                 {**FIFO, "x.transport.fifo.buffer.ram_style": "auto"},
-            ).member("x"),
+            ),
             "valid",
             [],
             ("valid", []),
         ),
         # The channel's own rule: steps, and no adapter admitted.
         (
-            lambda: adapted(vector_major((ROWS, CHANNELS), 4), 2, adaptable=False).member("x"),
+            lambda: adapted(vector_major((ROWS, CHANNELS), 4), 2, adaptable=False),
             "refused",
             [("realizable", {"channel-plan"})],
             None,
         ),
         # The FIFO's memory open: its stage, a module, waits on it.
         (
-            lambda: choose(adapted(columns_first(ROWS, CHANNELS, 4), 2), FIFO).member("x"),
+            lambda: choose(adapted(columns_first(ROWS, CHANNELS, 4), 2), FIFO),
             "open",
             [
                 ("compatible", WAITING),
@@ -285,17 +285,22 @@ def test_a_fifo_in_a_memory_the_platform_lacks_is_refused_by_its_rule():
 def test_a_channel_s_rules_and_its_fifo_read_the_values_its_views_present(
     channel, status, pieces, candidate
 ):
-    """``compatible`` and ``hops`` read the stages as a value (``staged``: its children's
-    ``stages``), not the channel's ``stages`` view, and the FIFO candidate reads what
-    arrives through its formal, after the output adapter's stages: valid, refused and
-    open each answer, with no dependency cycle."""
-    point = channel()
+    """``compatible`` reads the stages as a value (``staged``: its children's ``stages``),
+    not the channel's ``stages`` view, which its netlist and its network's hops to the
+    ports beside it read; and the FIFO candidate reads what arrives through its formal,
+    after the output adapter's stages: valid, refused and open each answer, with no
+    dependency cycle."""
+    network = channel()
+    point = network.member("x")
     assert validity_of(point) == (status, pieces)
     if candidate is not None:
         assert validity_of(point.transport) == candidate
     if status == "valid":
         assert point.stages == point.staged
-        assert point.query(Channel.hops).value
+        assert point.query(Channel.netlist).value.links
+        hops = network.hops("x")
+        assert isinstance(hops, OuterHops) and (hops.producer or hops.consumer)
+        assert isinstance(network.netlist(), Available)
 
 
 def test_a_channel_s_cost_waits_on_no_memory_style():

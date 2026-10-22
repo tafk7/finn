@@ -18,7 +18,8 @@ declarations by the names their lowering fixes:
 - ``netlist``: its library module at the empty label (``finn.kernels.library``), its
   members' netlists under their nodes, and the control buses its members present
   (``merged``). A kernel with neither a module nor a member is refused (``kernel-module``).
-  A channel states its own, adding its hops (``finn.kernels.channels``).
+  A channel states its own, adding the hops between its own ends; its network adds its
+  hops to the ports beside it (``finn.kernels.channels``).
 - ``cycles``: the most beats any of its declarations carries a frame, or any of its
   members takes, one beat a cycle at best; refused where there is none (``kernel-cycles``).
   A channel of wires takes none of its own (0).

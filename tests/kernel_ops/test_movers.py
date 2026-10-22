@@ -336,13 +336,14 @@ def test_a_row_offering_an_unknown_or_repeated_kind_is_refused() -> None:
 def test_sizing_reads_a_free_side_its_mover_paces() -> None:
     bound = cut_network()
     x = bound.member("x").mover_contract
-    supply, _ = sides(bound.member("x"))
+    supply, _ = sides(bound.member("x"), bound.neighbours("x"))
     assert supply == Pattern(x.times, x.cycles)
     y = bound.member("y").mover_contract
-    _, accept = sides(bound.member("y"))
+    _, accept = sides(bound.member("y"), bound.neighbours("y"))
     assert accept == Pattern(y.times, y.cycles)
+    chain = chain_network(TARGET)
     with pytest.raises(NotModelled, match="a boundary: not modelled"):
-        sides(chain_network(TARGET).member("x"))
+        sides(chain.member("x"), chain.neighbours("x"))
 
 
 # -- on TFC_W2A2 ---------------------------------------------------------------------------

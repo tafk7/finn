@@ -500,7 +500,7 @@ def test_a_held_key_whose_owner_is_no_member_of_the_bound_network_is_refused() -
         explore_kernel_choices(model)
 
 
-def _levels_short(channel: Any, period: int, words: int) -> bool:
+def _levels_short(channel: Any, neighbours: Any, period: int, words: int) -> bool:
     """A double of the seam's check (the Chain needs no FIFO at any folding): ``levels``
     (activate's output) needs more words than its transport holds; every other channel's
     holds."""
