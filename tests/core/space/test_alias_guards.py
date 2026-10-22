@@ -7,9 +7,9 @@ Collapse takes the first alias straight to the chain's source, past the middle o
 guard holds whenever the first one's does). A method's reader walks the chain as resolved,
 each alias in turn, and reads each one's guard to know whether a source applies. What the
 method may read (``_reads``) is found on the same chain as resolved, so it names the middle
-alias's guard as well: today's engine and the running type (``_running``) answer alike, and
-neither fails the read check. (Found on the collapsed chain, it did not: the running type
-failed here, ``read-undeclared`` on ``mid.$guard``, where today's answered.)
+alias's guard as well, and the read check passes: the public API and the public API with no
+cache answer alike. (Found on the collapsed chain, it did not: the running type failed
+here, ``read-undeclared`` on ``mid.$guard``.)
 
 - ``mid`` is placed under ``Top.placed`` (``mid.$guard``); in it, ``inner`` under
   ``entered`` (``mid.inner.$guard``, under ``mid.$guard``) and ``leaf`` under ``lit``
@@ -26,12 +26,12 @@ from typing import Any, cast
 
 import pytest
 from support.space_oracle import Implementation, compare, forms, load
-from support.space_oracle.today import TODAY
+from support.space_oracle.public import PUBLIC
 
 from finn.core.space import Decision, Param, Space, bind, derived, design_space
 from finn.core.space._reads import infer
 from finn.core.space._structure import Structure, expand
-from finn.core.space.occurrence import state
+from finn.core.space.occurrence import held
 
 RUNNING: Implementation = load("core.space._running_type:RUNNING")
 
@@ -88,7 +88,7 @@ def _asked(implementation: Implementation, point: Space) -> forms.Form:
 
 
 def test_the_chain_is_collapsed_past_the_middle_alias_under_its_own_implied_guard() -> None:
-    linked = cast(Structure, state(design_space(Top())).model.linked)
+    linked = cast(Structure, held(design_space(Top())).ds.model.linked)
     keys = linked.keys
     first, middle, end = keys["mid.inner.x"], keys["mid.b"], keys["mid.leaf.v"]
     raw = linked.raw_nodes
@@ -100,10 +100,10 @@ def test_the_chain_is_collapsed_past_the_middle_alias_under_its_own_implied_guar
 
 
 def test_what_present_may_read_names_every_guard_on_the_chain_as_resolved() -> None:
-    model = state(design_space(Top())).model
+    model = held(design_space(Top())).ds.model
     linked = model.linked
     keys = linked.keys
-    allowed = model.evaluator.reads.methods[keys["mid.inner.has"]]
+    allowed = model.per_class.reads.methods[keys["mid.inner.has"]]
     assert allowed is not None
     found = sorted(linked.header(index).key for index in allowed)
     assert found == ["mid.$guard", "mid.inner.$guard", "mid.leaf.$guard"]
@@ -122,16 +122,16 @@ def test_a_table_names_the_same_guards_through_the_aliases_collapse_went_past() 
     ("pick", "expected"),
     [(1, {"kind": "value", "value": True}), (0, {"kind": "value", "value": False})],
 )
-def test_present_through_the_chain_answers_alike_in_both_engines(
+def test_present_through_the_chain_answers_alike_with_and_without_the_cache(
     pick: int, expected: dict[str, Any]
 ) -> None:
     point = _point({Top.on: 1, Top.mid.gate: 1, Top.mid.pick: pick})
-    today, running = _asked(TODAY, point), _asked(RUNNING, point)
-    assert (today, running) == (expected, expected), f"today: {today}; running: {running}"
-    assert compare.everything(TODAY.open(point), RUNNING.open(point)).lines() == []
+    public, uncached = _asked(PUBLIC, point), _asked(RUNNING, point)
+    assert (public, uncached) == (expected, expected), f"public: {public}; no cache: {uncached}"
+    assert compare.everything(PUBLIC.open(point), RUNNING.open(point)).lines() == []
 
 
 @pytest.mark.parametrize("seed", range(4))
-def test_a_walk_over_the_chain_answers_alike_in_both_engines(seed: int) -> None:
-    found = compare.walk(lambda: design_space(Top()), {}, seed, 20, TODAY, RUNNING, forms.ALL)
+def test_a_walk_over_the_chain_answers_alike_with_and_without_the_cache(seed: int) -> None:
+    found = compare.walk(lambda: design_space(Top()), {}, seed, 20, PUBLIC, RUNNING, forms.ALL)
     assert found.lines() == []

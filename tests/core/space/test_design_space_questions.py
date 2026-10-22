@@ -1,15 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Reads of a configuration's state on its world: answers, presence of a value input,
-validity and its pieces, and the evidence of a query from the entries' traces."""
+"""What a design space answers, read by the running type: answers, presence of a value
+input, validity and its pieces, and the evidence of a query from the answers' traces."""
 
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
 
-from core.space._state_support import change, codes, key, start
+from core.space._design_support import built, change, codes, published, start, validity
 from finn.core.space import (
     Available,
     Decision,
@@ -28,9 +26,30 @@ from finn.core.space import (
     reject,
     supplied,
 )
-from finn.core.space._state import State, answer, prepare, source_applies, value
-from finn.core.space._world import World
-from finn.core.space.inspection import _evidence, _validity_of
+from finn.core.space._running import surface
+from finn.core.space._running.evaluate import Session, evaluation
+from finn.core.space._running.surface import At
+from finn.core.space._running.value import DesignSpace
+from finn.core.space.ir import NodeId
+from finn.core.space.references import ValueHandle
+from finn.core.space.results import QueryResult
+
+
+def _handle(ds: DesignSpace, index: NodeId) -> ValueHandle[object]:
+    return ValueHandle[object](ds.model.linked, index)
+
+
+def answer(ds: DesignSpace, index: NodeId) -> QueryResult[object]:
+    """``index``'s public answer, detached."""
+    return surface.query(At(ds, 0), _handle(ds, index), Session())
+
+
+def value(ds: DesignSpace, index: NodeId) -> object:
+    return surface.value(At(ds, 0), _handle(ds, index), Session())
+
+
+def source_applies(ds: DesignSpace, index: NodeId) -> bool | NodeId:
+    return surface._source_applies(evaluation(ds, Session()), index)
 
 
 class Leaf(Space):
@@ -58,10 +77,10 @@ class Root(Space):
 
 def test_validity_is_valid_refused_or_open_naming_its_pieces() -> None:
     base = start(Root(extent=8))
-    validity = _validity_of(base, 0)
+    found = validity(base)
     # ``fits`` waits on ``width``; the leaf's ``even`` waits under the open ``mode``.
-    assert validity.status == "open"
-    assert [piece.owner for piece in validity.pieces] == ["fits", "mode.leaf.even"]
+    assert found.status == "open"
+    assert [piece.owner for piece in found.pieces] == ["fits", "mode.leaf.even"]
     choices = {"width": 16, "mode": "leaf", "mode.leaf.lanes": 1}
     report = change(base, choices)  # breaks both rules on the values it names
     assert [(rule.rule, rule.standing) for rule in report.broken] == [
@@ -69,13 +88,12 @@ def test_validity_is_valid_refused_or_open_naming_its_pieces() -> None:
         ("mode.leaf.even", ()),
     ]
     # Built directly, the same choices read refused, naming both.
-    stored = prepare(base.linked, {key(base, k): (v, "choice") for k, v in choices.items()})
-    point = State(base.model, World.start(base.evaluator, base.world.facts, stored))
-    refused = _validity_of(point, 0)
+    point = built(Root(extent=8), choices)
+    refused = validity(point)
     assert refused.status == "refused"
     assert [piece.owner for piece in refused.pieces] == ["fits", "mode.leaf.even"]
-    valid = cast(State, change(point, {"width": 8, "mode": "wide"}).state)
-    assert _validity_of(valid, 0).status == "valid"
+    valid = published(change(point, {"width": 8, "mode": "wide"}))
+    assert validity(valid).status == "valid"
 
 
 class Empty(Space):
@@ -84,9 +102,9 @@ class Empty(Space):
 
 
 def test_a_present_choice_whose_domain_lists_no_value_is_a_false_piece() -> None:
-    validity = _validity_of(start(Empty(extent=0)), 0)
-    assert validity.status == "refused"
-    (piece,) = validity.pieces
+    found = validity(start(Empty(extent=0)))
+    assert found.status == "refused"
+    (piece,) = found.pieces
     assert piece.owner == "lanes" and codes(piece.result) == [("domain-empty", "lanes")]
 
 
@@ -139,8 +157,8 @@ def test_a_domain_that_lists_no_values_is_never_a_piece(declaration: Space) -> N
     """Membership alone lists nothing: whatever its inputs answer (a missing fact, a
     refusal on the facts, an input that does not apply), the choice adds no piece, and an
     open choice with no rule reading it leaves the configuration valid."""
-    validity = _validity_of(start(declaration), 0)
-    assert (validity.status, validity.pieces) == ("valid", ())
+    found = validity(start(declaration))
+    assert (found.status, found.pieces) == ("valid", ())
 
 
 class Refusing(Space):
@@ -154,9 +172,9 @@ class Refusing(Space):
 
 
 def test_a_guard_refused_through_its_input_is_one_guard_piece() -> None:
-    validity = _validity_of(start(Refusing(w=7)), 0)
-    assert validity.status == "refused"
-    (piece,) = validity.pieces
+    found = validity(start(Refusing(w=7)))
+    assert found.status == "refused"
+    (piece,) = found.pieces
     assert piece.owner == "child"
     assert codes(piece.result) == [("guard-refused", "child"), ("bad-width", "odd")]
 
@@ -175,7 +193,7 @@ class Fed(Space):
 
 def test_answers_values_and_whether_an_input_is_supplied() -> None:
     point = start(Fed(depth=3))
-    keys = point.linked.keys
+    keys = point.model.linked.keys
     assert answer(point, keys["doubled"]) == Available(6)
     assert value(point, keys["doubled"]) == 6
     with pytest.raises(ValueUnavailableError):
@@ -186,14 +204,13 @@ def test_answers_values_and_whether_an_input_is_supplied() -> None:
     assert isinstance(answer(open_, keys["gated"]), Unresolved)
 
 
-def test_the_evidence_of_a_query_is_what_its_entries_read() -> None:
+def test_the_evidence_of_a_query_is_what_its_answers_read() -> None:
     point = start(Fed(depth=3))
-    keys = point.linked.keys
-    evidence = _evidence(point, keys["doubled"])
+    keys = point.model.linked.keys
+    evidence = surface.explain(At(point, 0), _handle(point, keys["doubled"]), Session())
     assert evidence.result == Available(6)
     by_key = {item.declaration.key: item for item in evidence.nodes}
     assert set(by_key) == {"doubled", "depth"}
-    assert [handle._resolve(point.linked) for handle in by_key["doubled"].dependencies] == [
-        keys["depth"]
-    ]
+    linked = point.model.linked
+    assert [handle._resolve(linked) for handle in by_key["doubled"].dependencies] == [keys["depth"]]
     assert by_key["depth"].input_presence == "supplied"

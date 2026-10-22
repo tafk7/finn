@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.space._running.answers import _present
 from finn.core.space import (
     Available,
     EvaluationError,
@@ -26,7 +27,6 @@ from finn.core.space import (
     Unresolved,
     ValueUnavailableError,
     View,
-    _world,
     derived,
     design_space,
     inspection,
@@ -233,13 +233,13 @@ def test_two_known_present_sources_refuse_at_once_whatever_else_waits() -> None:
     # value, so two that answer refuse even beside one that waits.
     node = Node(0, 0, "width", "present")
     waiting = Unresolved((Finding(FindingKind.BLOCKER, "decision-unassigned", "s", "open"),))
-    two = _world._present(node, [Available(4), waiting, Available(4)])
+    two = _present(node, [Available(4), waiting, Available(4)])
     assert isinstance(two, Rejected)
     assert {finding.code for finding in two.findings} == {"multiple-suppliers"}
     # One known source beside one that waits still waits; one alone supplies the value.
-    assert _world._present(node, [Available(4), waiting]) == waiting
-    assert _world._present(node, [Available(4), Inapplicable()]) == Available(4)
+    assert _present(node, [Available(4), waiting]) == waiting
+    assert _present(node, [Available(4), Inapplicable()]) == Available(4)
     refused = reject("bad", "refused", owner="source")
-    both = _world._present(node, [Available(4), Available(4), refused])
+    both = _present(node, [Available(4), Available(4), refused])
     assert isinstance(both, Rejected)
     assert {finding.code for finding in both.findings} == {"multiple-suppliers", "bad"}

@@ -763,7 +763,7 @@ def test_a_choice_read_beside_members_stands_though_it_decides_an_entrys_existen
 # -- 7. views are read out (SZ100 (3)) ------------------------------------------------------------
 #
 # A stage presents its storage as a view; the parent's rule reads it. Only a view reads a
-# view, so the model refuses the definition (``view-read-in``); today's engine builds it
+# view, so the model refuses the definition (``view-read-in``); the public API builds it
 # and answers, until T4b.
 
 
@@ -800,7 +800,7 @@ def test_a_rule_reading_a_view_is_no_definition() -> None:
 # -- 8. an optional fact left out is None (SZ100 (5)) ---------------------------------------------
 #
 # ``width`` is optional: left out, it reads None, a known value, and ``lanes`` lists 1 and 2
-# then. Today's engine reads an unsupplied optional param as unresolved, until T4c.
+# then. The public API reads an unsupplied optional param as unresolved, until T4c.
 
 OPTIONAL = Case(
     "an optional fact left out",

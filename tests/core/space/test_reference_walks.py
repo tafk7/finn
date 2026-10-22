@@ -113,8 +113,8 @@ def test_a_seeded_walk_keeps_the_four_invariants_and_the_engines_own_checks(
     assert tally.engine_checks["cold"] == tally.engine_checks["bind"] == tally.compared
     assert tally.engine_checks["bind held"] == tally.compared
     assert tally.engine_errors == 0
-    # today's engine, every permanent check run (the cold build through today's ``make``)
-    assert tally.implementation == "today"
+    # the public API, every permanent check run (the cold build through the public API's ``make``)
+    assert tally.implementation == "public"
     assert tally.engine_checks["cold change"] == tally.steps - tally.model_only
 
 
@@ -177,7 +177,7 @@ def test_descriptions_hold_two_to_six_choices_and_skip_views_read_in() -> None:
 
 # -- the engine comparison: attributed by cause in the full run, failing in the strict one -------
 #
-# Today's engine differs from the model where the rulings reach (T4b, T4c). Elsewhere it
+# The public API differs from the model where the rulings reach (T4b, T4c). Elsewhere it
 # agrees, so a disagreement with no cause is made here: the engine answers every choice's
 # state as absent (the model's start holds an open choice).
 
@@ -409,7 +409,7 @@ def test_each_facts_answer_is_asked_at_each_configuration() -> None:
         found = point.answer(fact)
         if fact in generated.facts:
             assert found == AnswerForm("value", expected)
-        else:  # left out: today's engine reads it unresolved (T4c's row)
+        else:  # left out: the public API reads it unresolved (T4c's row)
             assert found.kind == "unresolved", found
 
 
@@ -438,7 +438,7 @@ def test_the_summary_names_the_runs_the_milestones_and_the_checks() -> None:
         "(§ 16.24) 0" in text
     )
     assert "walks 2 (full 1, strict 1)" in text
-    assert "implementation: today" in text.splitlines()
+    assert "implementation: public" in text.splitlines()
     assert (
         "engine disagreements (full: attributed by cause, counted while pending (T4b, T4c), "
         "else failing; strict: every one failing): by milestone T4b 0, T4c 2; by "

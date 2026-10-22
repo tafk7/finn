@@ -1,11 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 """The class-based oracle (``support.space_oracle``) on FINN's own toys: seeded walks of
-every registered implementation against today's, the planted faults each reported by key,
-and the forms' rendering.
+every registered implementation against the public API, the planted faults each reported
+by key, and the forms' rendering.
 
-With today's alone registered the walks compare today's with itself: what they show is
-that the oracle runs over the toys' changes and compares what it says it compares. The
+The walks compare the public API with itself and with the public API with no cache: what
+they show is that the oracle runs over the toys' changes and compares what it says it
+compares, and that the cache changes no answer. The
 planted faults show that it would report a difference: each alters one thing, and
 ``compare`` and ``forms.differences`` (what ``diff`` runs) name it by key.
 """
@@ -19,7 +20,7 @@ from typing import Any
 
 import pytest
 from support.space_oracle import IMPLEMENTATIONS, Answers, compare, forms, toys
-from support.space_oracle.today import FAULTS, TODAY, Fault, Historied, Planted, TodayAnswers
+from support.space_oracle.public import FAULTS, PUBLIC, Fault, Historied, Planted, PublicAnswers
 from support.space_walk import fresh
 
 from finn.core.reporting.findings import Finding, FindingKind
@@ -44,8 +45,12 @@ STEPS = 20
 @pytest.mark.parametrize("seed", [0, 1])
 @pytest.mark.parametrize("toy", sorted(TOYS))
 @pytest.mark.parametrize("name", sorted(IMPLEMENTATIONS))
-def test_every_implementation_walks_the_toys_as_today(name: str, toy: str, seed: int) -> None:
-    found = compare.walk(TOYS[toy].make, TOYS[toy].facts, seed, STEPS, TODAY, IMPLEMENTATIONS[name])
+def test_every_implementation_walks_the_toys_as_the_public_api(
+    name: str, toy: str, seed: int
+) -> None:
+    found = compare.walk(
+        TOYS[toy].make, TOYS[toy].facts, seed, STEPS, PUBLIC, IMPLEMENTATIONS[name]
+    )
     assert found.lines() == []
     # It compared what it says: every design space reached, every change's report.
     assert found.tally["changes"] > 0
@@ -60,7 +65,7 @@ def test_the_boundary_walks_open_and_close_its_guard(seed: int) -> None:
     """The walks of the boundary set ``enabled`` both ways: ``outside.width`` is asked with
     the scope it reads absent and present."""
     boundary = TOYS["boundary"]
-    found = compare.walk(boundary.make, boundary.facts, seed, STEPS, TODAY, TODAY)
+    found = compare.walk(boundary.make, boundary.facts, seed, STEPS, PUBLIC, PUBLIC)
     assert found.lines() == []
     asked = " / ".join(found.requests)
     assert "enabled=False" in asked and "enabled=True" in asked, found.requests
@@ -86,19 +91,20 @@ BOUNDARY: list[tuple[compare.Request, forms.Form]] = [
         },
     ),
 ]
-"""Today's answer for ``outside.width`` after each change, in turn: inapplicable while the
-scope it reads (``guarded``) is absent, the source's value while it is present, waiting
+"""The public API's answer for ``outside.width`` after each change, in turn: inapplicable
+while the scope it reads (``guarded``) is absent, the source's value while it is present, waiting
 on ``enabled`` once cleared."""
 
 
 @pytest.mark.parametrize("name", sorted(IMPLEMENTATIONS))
-def test_a_formal_read_from_outside_an_absent_scope_answers_as_today(name: str) -> None:
+def test_a_formal_read_from_outside_an_absent_scope_answers_as_the_public_api(name: str) -> None:
     """The boundary of S1 (``toys.Boundary``): ``outside.width`` reads ``guarded.leaf.width``
-    from outside ``guarded``. With ``enabled`` false, today's answer is inapplicable
-    (``core.space.test_collapse``; PROPOSAL § 4.2's "within its scope"), pinned here through
-    the oracle's forms, and every registered implementation answers as today's."""
+    from outside ``guarded``. With ``enabled`` false, the public API's answer is
+    inapplicable (``core.space.test_collapse``: a formal bound by reference answers within
+    its scope), pinned here through the oracle's forms, and every registered implementation
+    answers as the public API does."""
     configuration = TOYS["boundary"].make()
-    base, other = TODAY.open(configuration), IMPLEMENTATIONS[name].open(configuration)
+    base, other = PUBLIC.open(configuration), IMPLEMENTATIONS[name].open(configuration)
     for request, expected in BOUNDARY:
         found, base_after, other_after = compare.change(base, other, request)
         assert found.lines() == [], request
@@ -109,11 +115,10 @@ def test_a_formal_read_from_outside_an_absent_scope_answers_as_today(name: str) 
 
 # -- the missing-fact shapes (``toys.WaitingMembership``, ``AcceptedWaiting``, ``ThreeDeep``) -----
 #
-# The reference model reads an optional fact left out as ``None`` (SZ100 (5)), so these
-# shapes left it (T4c's row). Today's engine reads it unresolved until T4c, and T1 must
-# answer as today's does: they are pinned here, through the oracle's forms, for every
-# registered implementation. Each opens with its optional fact left out and gives it in a
-# facts change.
+# The reference model reads an optional fact left out as ``None``, so these shapes left it
+# (T4c's row). The public API reads it unresolved until T4c: they are pinned here, through
+# the oracle's forms, for every registered implementation. Each opens with its optional
+# fact left out and gives it in a facts change.
 
 MISSING_FACTS = ("waiting-membership", "accepted-waiting", "three-deep")
 
@@ -124,9 +129,9 @@ def test_the_missing_fact_toys_walk_from_the_fact_left_out_to_the_fact_given(
     toy: str, seed: int
 ) -> None:
     (fact,) = TOYS[toy].facts
-    # left out at the start: today's engine reads it unresolved
-    assert forms.answer(TODAY.open(TOYS[toy].make()).query(fact)) == _missing(fact)
-    found = compare.walk(TOYS[toy].make, TOYS[toy].facts, seed, STEPS, TODAY, TODAY)
+    # left out at the start: the public API reads it unresolved
+    assert forms.answer(PUBLIC.open(TOYS[toy].make()).query(fact)) == _missing(fact)
+    found = compare.walk(TOYS[toy].make, TOYS[toy].facts, seed, STEPS, PUBLIC, PUBLIC)
     assert found.lines() == []
     assert found.tally["steps giving facts"], found.requests
     assert any(request.startswith(f"{fact}=") for request in found.requests), found.requests
@@ -196,8 +201,8 @@ def _accepted(*outcomes: tuple[str, str, str], broken: tuple[Any, ...] = ()) -> 
 OPEN: forms.Form = {"state": "open", "waits": []}
 LEAF = "outer.middle.leaf"
 
-#: per path: the toy, the keys asked, today's answers at the start, and each change with
-#: its report and today's answers after it
+#: per path: the toy, the keys asked, the public API's answers at the start, and each change
+#: with its report and the public API's answers after it
 MissingFactPath = tuple[
     str,
     tuple[str, ...],
@@ -365,7 +370,8 @@ MISSING_FACT_PATHS: list[MissingFactPath] = [
         ],
     ),
 ]
-"""Today's answers on the missing-fact shapes, along each path from the fact left out."""
+"""The public API's answers on the missing-fact shapes, along each path from the fact left
+out."""
 
 
 @pytest.mark.parametrize("name", sorted(IMPLEMENTATIONS))
@@ -374,13 +380,13 @@ MISSING_FACT_PATHS: list[MissingFactPath] = [
     MISSING_FACT_PATHS,
     ids=[f"{toy}-{steps[-1][0]}" for toy, _, _, steps in MISSING_FACT_PATHS],
 )
-def test_a_missing_fact_answers_as_today(name: str, path: MissingFactPath) -> None:
-    """Today's answers pinned through the oracle's forms, and every registered
-    implementation answering as today's (its reports, and everything at each design
-    space)."""
+def test_a_missing_fact_answers_as_the_public_api(name: str, path: MissingFactPath) -> None:
+    """The public API's answers pinned through the oracle's forms, and every registered
+    implementation answering as the public API does (its reports, and everything at each
+    design space)."""
     toy, keys, start, steps = path
     configuration = TOYS[toy].make()
-    base, other = TODAY.open(configuration), IMPLEMENTATIONS[name].open(configuration)
+    base, other = PUBLIC.open(configuration), IMPLEMENTATIONS[name].open(configuration)
     assert compare.everything(base, other).lines() == []
     assert _asked(base, keys) == start
     for request, report, expected in steps:
@@ -417,7 +423,7 @@ EXPECTED: dict[Fault, str] = {
 @pytest.mark.parametrize("fault", FAULTS)
 def test_compare_reports_each_planted_fault_by_key(fault: Fault) -> None:
     point = _house(kitchen=1)
-    found = compare.everything(TODAY.open(point), Planted(TODAY, fault).open(point))
+    found = compare.everything(PUBLIC.open(point), Planted(PUBLIC, fault).open(point))
     paths = [difference.path for difference in found.disagreements]
     assert paths and all(path.startswith(EXPECTED[fault]) for path in paths), paths
 
@@ -426,13 +432,13 @@ def test_compare_reports_each_planted_fault_by_key(fault: Fault) -> None:
 def test_diff_reports_each_planted_fault_by_key(fault: Fault) -> None:
     """``diff`` compares two dumps' forms with ``forms.differences``."""
     point = _house(kitchen=1)
-    base = forms.space(TODAY.open(point))
-    other = forms.space(Planted(TODAY, fault).open(point))
+    base = forms.space(PUBLIC.open(point))
+    other = forms.space(Planted(PUBLIC, fault).open(point))
     found = forms.differences({"house": {"space": base}}, {"house": {"space": other}})
     assert found and all(
         difference.path.startswith(f"house/space/{EXPECTED[fault]}") for difference in found
     )
-    assert forms.differences(base, forms.space(TODAY.open(point))) == []
+    assert forms.differences(base, forms.space(PUBLIC.open(point))) == []
 
 
 def test_a_planted_standing_choice_is_reported_in_a_change() -> None:
@@ -441,7 +447,7 @@ def test_a_planted_standing_choice_is_reported_in_a_change() -> None:
     point = _house(kitchen=1)
     request = compare.Request({"dining.finish": 2})
     found, after, _ = compare.change(
-        TODAY.open(point), Planted(TODAY, "standing").open(point), request
+        PUBLIC.open(point), Planted(PUBLIC, "standing").open(point), request
     )
     assert after is None  # refused, on both
     assert [str(difference) for difference in found.disagreements] == [
@@ -452,7 +458,7 @@ def test_a_planted_standing_choice_is_reported_in_a_change() -> None:
 @pytest.mark.parametrize("fault", FAULTS)
 def test_a_walk_reports_each_planted_fault(fault: Fault) -> None:
     house = TOYS["house"]
-    found = compare.walk(house.make, house.facts, 0, STEPS, TODAY, Planted(TODAY, fault))
+    found = compare.walk(house.make, house.facts, 0, STEPS, PUBLIC, Planted(PUBLIC, fault))
     assert found.disagreements
     kinds = {"value": "members", "validity": "validity", "possible": "viable"}
     expected = {kinds[fault]} if fault in kinds else {"viable", "report"}
@@ -463,10 +469,10 @@ def test_a_walk_reports_each_planted_fault(fault: Fault) -> None:
 
 
 def _reached(toy: toys.Toy, seed: int, steps: int = 5) -> list[Answers]:
-    """The design spaces a short seeded walk of today's reaches on ``toy``: the start, the
-    dump's change, then a listed value set or a stored choice cleared at each step."""
+    """The design spaces a short seeded walk of the public API reaches on ``toy``: the start,
+    the dump's change, then a listed value set or a stored choice cleared at each step."""
     rng = random.Random(seed)
-    answers = TODAY.open(toy.make())
+    answers = PUBLIC.open(toy.make())
     found = [answers]
     changed = answers.change(toy.change, ()).after
     if changed is not None:
@@ -490,42 +496,43 @@ def _reached(toy: toys.Toy, seed: int, steps: int = 5) -> list[Answers]:
 
 
 @pytest.mark.parametrize("toy", sorted(TOYS))
-def test_todays_cold_build_is_the_recomputation_on_the_toys(toy: str) -> None:
-    """``TODAY.make`` of a design space's Space class, facts and stored choices answers as
-    ``support.space_walk.fresh`` of it (today's recomputation from its internals), at every
-    design space a short walk reaches (``compare.walk`` holds the walked one to it)."""
+def test_the_cold_build_is_the_recomputation_on_the_toys(toy: str) -> None:
+    """``PUBLIC.make`` of a design space's Space class, facts and stored choices (answered
+    with no cache) answers as ``support.space_walk.fresh`` of it (its recomputation, bound
+    from nothing, asked through the public API), at every design space a short walk reaches
+    (``compare.walk`` holds the walked one to it)."""
     configuration = TOYS[toy].make()
     space_class, facts = type(configuration), compare.facts_of(configuration)
     reached = [answers for seed in (0, 1) for answers in _reached(TOYS[toy], seed)]
     assert any(answers.stored() for answers in reached)
     for answers in reached:
-        assert isinstance(answers, TodayAnswers)
-        made = forms.space(TODAY.make(space_class, facts, answers.stored()))
-        assert forms.differences(forms.space(TODAY.open(fresh(answers.point))), made) == []
+        assert isinstance(answers, PublicAnswers)
+        made = forms.space(PUBLIC.make(space_class, facts, answers.stored()))
+        assert forms.differences(forms.space(PUBLIC.open(fresh(answers.point))), made) == []
 
 
 def test_a_cold_build_holds_exactly_the_facts_and_choices_given() -> None:
     """``make`` checks no rule and drops nothing: the house's ``matched`` broken by the
     kitchen's and the dining room's finishes, both kept; a value its type check refuses,
     or a key that is no choice, is refused."""
-    made = TODAY.make(House, {"budget": 100}, {"kitchen.finish": 1, "dining.finish": 2})
+    made = PUBLIC.make(House, {"budget": 100}, {"kitchen.finish": 1, "dining.finish": 2})
     assert made.stored() == {"kitchen.finish": 1, "dining.finish": 2}
     assert forms.validity(made.validity())["status"] == "refused"
     with pytest.raises(ValueError, match="kitchen.finish"):
-        TODAY.make(House, {"budget": 100}, {"kitchen.finish": 9})
+        PUBLIC.make(House, {"budget": 100}, {"kitchen.finish": 9})
     with pytest.raises(KeyError, match="budget"):
-        TODAY.make(House, {"budget": 100}, {"budget": 1})
+        PUBLIC.make(House, {"budget": 100}, {"budget": 1})
 
 
 @pytest.mark.parametrize("historied", ["base", "other", "both"])
 def test_a_walk_reports_history_by_the_cold_build(historied: str) -> None:
     """``Historied``: what a change reaches answers one member otherwise than the same design
-    space made from nothing. Against today's, it is reported on its own side by the cold
-    build, beside the members it answers otherwise than today's; walked against itself,
-    the two sides agree everywhere, and the cold build alone reports it."""
+    space made from nothing. Against the public API, it is reported on its own side by the
+    cold build, beside the members it answers otherwise than the public API does; walked
+    against itself, the two sides agree everywhere, and the cold build alone reports it."""
     house = TOYS["house"]
-    base = Historied(TODAY) if historied in ("base", "both") else TODAY
-    other = Historied(TODAY) if historied in ("other", "both") else TODAY
+    base = Historied(PUBLIC) if historied in ("base", "both") else PUBLIC
+    other = Historied(PUBLIC) if historied in ("other", "both") else PUBLIC
     found = compare.walk(house.make, house.facts, 0, STEPS, base, other)
     sides = {path.split("/cold/")[1].split("/")[0] for path in _paths(found) if "/cold/" in path}
     assert found.by_kind["cold"] > 0
@@ -543,7 +550,7 @@ def _paths(found: compare.Compared) -> list[str]:
 
 
 class _Reordered:
-    """Today's answers, each answer's findings in reverse order."""
+    """The public API's answers, each answer's findings in reverse order."""
 
     def __init__(self, inner: Answers) -> None:
         self.inner = inner
@@ -568,8 +575,8 @@ class _Unordered(Unresolved):
 
 def test_findings_in_another_order_are_no_disagreement() -> None:
     point = design_space(House(budget=100))
-    other: Any = _Reordered(TODAY.open(point))
-    found = compare.everything(TODAY.open(point), other)
+    other: Any = _Reordered(PUBLIC.open(point))
+    found = compare.everything(PUBLIC.open(point), other)
     assert found.disagreements == []
     assert found.tally["order-only"] > 0
 
@@ -725,7 +732,7 @@ class Outer(Space):
 def test_every_scope_is_reached_under_open_selectors_and_guards() -> None:
     """Candidates of an open selector, nested in a candidate, and a child whose presence
     waits on an open choice: each scope's validity is asked through the public API."""
-    answers = TODAY.open(design_space(Outer()))
+    answers = PUBLIC.open(design_space(Outer()))
     assert answers.scopes() == (
         "",
         "held",

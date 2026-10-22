@@ -3,7 +3,7 @@
 """Failure cleanup and cancellation of authored code, through the public surface.
 
 Where an interruption lands inside the evaluator, at each of its own points, is
-``test_world_failures``'s."""
+``test_running_surface``'s."""
 
 from __future__ import annotations
 
