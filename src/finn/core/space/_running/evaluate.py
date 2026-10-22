@@ -187,8 +187,10 @@ class NodeCache(Protocol):
 class Counters:
     """Work done: nodes evaluated, by kind; authored calls by kind; the most evaluations
     in flight at once; the depth guard's restarts. Where a node cache is on: its lookups
-    and hits, the values it hashed, the members it kept a read set for, the read sets it
-    kept, and the most read sets one member held at once (``cache.NodeCache``)."""
+    and hits, the values it hashed (each value whose key it computed, at lookup and at
+    keep; an answer not kept for its width is not hashed at keep), the answers it did not
+    keep for their width, the members it kept a read set for, the read sets it kept, and
+    the most read sets one member held at once (``cache.NodeCache``)."""
 
     evaluated: int = 0
     by_kind: dict[str, int] = field(default_factory=dict)
@@ -198,6 +200,7 @@ class Counters:
     lookups: int = 0
     hits: int = 0
     hashed: int = 0
+    too_wide: int = 0
     members: int = 0
     sets: int = 0
     most_sets: int = 0

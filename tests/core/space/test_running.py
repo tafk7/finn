@@ -25,17 +25,20 @@ model, through the class-based oracle (``support.space_oracle``), as the impleme
   outside the case, whose reading reaches the choice; a selector given as a binding's
   argument, reading its case's name (a ``None`` case's too).
 - **The node cache** (``_running.cache``): the toys walked with a cache dropping half its
-  entries at random, with no disagreement; the purity check over it (each hit evaluated
-  anyway, and each node the depth guard abandoned evaluated again, and compared): a planted
-  impure function caught with it on and not with it off, and the toys' and the reference
-  walks with it on, with no disagreement and no impure function; a cache wrong on purpose
-  (a read left out of each key) caught; each type the cache keys by ``==`` checked against
-  its value semantics, the rules keying an enum member by type and name (an ``==`` or hash
-  of its class's own or a mixin's giving misses only) and a value class field by field
-  checked on sample classes, and nothing else keyed: no value under semantics of its own
-  whose equality is not ``==`` (two design spaces differing only in two values ``==`` holds
-  equal and such semantics tell apart answer as today's by that check alone), nor a value
-  class with a field annotated so.
+  entries at random, and with one keeping no answer read from more than one choice or fact,
+  with no disagreement; a member wider than the width never kept, evaluated at each lookup;
+  the purity check over it (each hit evaluated anyway, and each node the depth guard
+  abandoned evaluated again, and compared): a planted impure function caught with it on and
+  not with it off, and the toys' and the reference walks with it on, with no disagreement
+  and no impure function; caches wrong on purpose (a read left out of each key; a width
+  bound applied to the key rather than to whether an answer is kept, by the comparison and
+  by the purity check) caught; each type the cache keys by ``==`` checked against its value
+  semantics, the rules keying an enum member by type and name (an ``==`` or hash of its
+  class's own or a mixin's giving misses only) and a value class field by field checked on
+  sample classes, and nothing else keyed: no value under semantics of its own whose equality
+  is not ``==`` (two design spaces differing only in two values ``==`` holds equal and such
+  semantics tell apart answer as today's by that check alone), nor a value class with a
+  field annotated so.
 - **Value types** (``finn.core.space.value_type``): a registered class keyed by type and
   ``==``, alone, in a tuple and as a field, apart from what its ``==`` holds equal to it
   (a string), under the default semantics and under semantics declaring
@@ -82,7 +85,7 @@ from core.space._running_shapes import (
     capped,
     even,
 )
-from core.space._running_type import LeavesOneOut, Running
+from core.space._running_type import KeysFirstReads, LeavesOneOut, Running
 from core.space._toys_support import House
 from core.space.reference import (
     Change,
@@ -148,7 +151,9 @@ from finn.core.space.semantics import default_semantics
 
 RUNNING: Implementation = load("core.space._running_type:RUNNING")
 RUNNING_DROPPING: Implementation = load("core.space._running_type:RUNNING_DROPPING")
+RUNNING_NARROW: Implementation = load("core.space._running_type:RUNNING_NARROW")
 RUNNING_PLANTED: Implementation = load("core.space._running_type:RUNNING_PLANTED")
+RUNNING_PLANTED_WIDTH: Implementation = load("core.space._running_type:RUNNING_PLANTED_WIDTH")
 RUNNING_VERIFIED: Implementation = load("core.space._running_type:RUNNING_VERIFIED")
 RUNNING_CACHED: Implementation = load("core.space._running_type:RUNNING_CACHED")
 
@@ -1242,12 +1247,15 @@ def test_a_selector_given_as_a_bindings_argument_reads_its_case_name_as_today(
     assert compare.everything(TODAY.open(point), answers).lines() == []
 
 
-# -- the node cache: a dropping cache, and a cache wrong on purpose -------------------------------
+# -- the node cache: a dropping cache, a width bound, and caches wrong on purpose -----------------
 #
 # The contract lets the cache drop any entry at any time: a miss changes nothing but the
 # work. ``RUNNING_DROPPING`` drops half its hits and half its keeps, at random (seeded), and
-# must answer as today's engine does. ``RUNNING_PLANTED`` keys each answer without the last
-# read of its read set: the comparison must catch it, or the cache's proofs have no teeth.
+# must answer as today's engine does; so must ``RUNNING_NARROW``, which keeps no answer read
+# from more than one choice or fact. ``RUNNING_PLANTED`` keys each answer without the last
+# read of its read set, and ``RUNNING_PLANTED_WIDTH`` applies its width bound to the key
+# rather than to whether an answer is kept: the comparison must catch both, or the cache's
+# proofs have no teeth.
 # A test that counts what a hit saves, or that a wrong hit is answered, runs with the
 # purity check off (``purity_unchecked``): the check evaluates every hit anyway.
 
@@ -1264,6 +1272,69 @@ def test_the_toys_walk_as_today_with_a_cache_dropping_entries_at_random(
     assert found.lines() == []
     assert found.tally["changes"] > 0 and found.tally["cold builds"] > 0
     assert counters(RUNNING_DROPPING).hits > before
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+@pytest.mark.parametrize("toy", sorted(TOYS))
+def test_the_toys_walk_as_today_with_a_cache_keeping_no_wide_answer(toy: str, seed: int) -> None:
+    hits, wide = counters(RUNNING_NARROW).hits, counters(RUNNING_NARROW).too_wide
+    found = compare.walk(
+        TOYS[toy].make, TOYS[toy].facts, seed, 20, TODAY, RUNNING_NARROW, forms.ALL
+    )
+    assert found.lines() == []
+    assert found.tally["changes"] > 0 and found.tally["cold builds"] > 0
+    assert counters(RUNNING_NARROW).hits > hits
+    assert counters(RUNNING_NARROW).too_wide > wide
+
+
+class Summed(Space):
+    a: int = Decision(values=(1, 2, 3))
+    b: int = Decision(values=(1, 2, 3))
+
+    @derived
+    def total(self) -> int:
+        return self.a + self.b
+
+    @derived
+    def twice(self) -> int:
+        return 2 * self.a
+
+
+@pytest.mark.usefixtures("purity_unchecked")
+def test_a_member_wider_than_the_width_is_never_kept_and_is_evaluated_at_each_lookup() -> None:
+    """``total`` reads ``a`` and ``b``, ``twice`` reads ``a``: under a width of one, each of
+    three equal design spaces evaluates ``total`` again, nothing kept for it and nothing
+    hashed at its keep, and finds ``twice`` kept; each answers as today's."""
+    running = Running(NodeCache(wide=1), "running, cached, width 1")
+    cache = cast(NodeCache, running.cache)
+    found = counters(running)
+    today = TODAY.make(Summed, {}, {"a": 1, "b": 2})
+    for round_ in range(3):
+        answers = running.make(Summed, {}, {"a": 1, "b": 2})
+        derived_ = found.by_kind.get("derived", 0)
+        assert answers.query("total") == Available(3)
+        assert found.by_kind["derived"] == derived_ + 1  # evaluated, every round
+        assert found.too_wide == round_ + 1
+        assert answers.query("twice") == Available(2)
+        assert found.by_kind["derived"] == derived_ + (2 if round_ == 0 else 1)
+        assert compare.everything(today, answers).lines() == []
+    ds = cast(Any, answers).ds
+    total, twice = ds.node("total"), ds.node("twice")
+    (table,) = cache._tables.values()
+    kept = {index for _, index in table}
+    assert twice in kept and total not in kept
+    assert all(len(read) <= 1 for sets in table.values() for read in sets)
+
+
+def test_a_width_is_a_number_of_reads() -> None:
+    assert NodeCache().wide == cache_module.WIDE
+    assert NodeCache().mode == f"width {cache_module.WIDE}"
+    assert NodeCache(wide=None).mode == "on"
+    assert NodeCache(wide=None, bound=8).mode == "on, bounded 8"
+    composed = NodeCache(wide=16, bound=8, drop=0.5)
+    assert composed.mode == "width 16, bounded 8, dropping 0.5 (seed 0)"
+    with pytest.raises(ValueError, match="a width is a number of reads"):
+        NodeCache(wide=-1)
 
 
 class Ordered(Space):
@@ -1323,6 +1394,44 @@ def test_a_walk_catches_the_planted_cache() -> None:
     found = compare.walk(house.make, house.facts, 0, 5, TODAY, RUNNING_PLANTED)
     assert found.disagreements
     assert {"members", "validity"} <= set(found.by_kind), found.by_kind
+
+
+@pytest.mark.usefixtures("purity_unchecked")
+def test_a_width_bound_applied_to_the_key_answers_otherwise_and_is_caught() -> None:
+    """``ordered`` reads ``a`` and ``b``; a cache applying a width of one to its key, rather
+    than to whether it keeps the answer, keys it by ``a`` alone. Asked at (2, 3), then at
+    (2, 1), it answers the second as the first, and the comparison finds it; a cache of the
+    same width keeping no answer read from both answers the second as today's."""
+    planted = Running(KeysFirstReads(wide=1), "planted: a width applied to the key")
+    honest = Running(NodeCache(wide=1), "running, cached, width 1")
+    for implementation in (planted, honest):
+        first = implementation.make(Ordered, {}, {"a": 2, "b": 3})
+        assert first.validity().status == "valid"
+    today = TODAY.make(Ordered, {}, {"a": 2, "b": 1})
+    assert honest.make(Ordered, {}, {"a": 2, "b": 1}).validity() == today.validity()
+    wrong = planted.make(Ordered, {}, {"a": 2, "b": 1})
+    assert wrong.validity().status == "valid"
+    found = compare.everything(today, wrong)
+    assert {difference.kind for difference in found.disagreements} >= {"members", "validity"}
+    assert counters(planted).hits > 0 and counters(planted).too_wide == 0
+
+
+def test_the_purity_check_catches_a_width_bound_applied_to_the_key() -> None:
+    """The same planted cache under the purity check: its wrong hit is evaluated again,
+    answers otherwise, and is named."""
+    planted = Running(KeysFirstReads(wide=1), "planted, verified", verify=True)
+    assert planted.make(Ordered, {}, {"a": 2, "b": 3}).validity().status == "valid"
+    with pytest.raises(NativeEvaluationError) as caught:
+        planted.make(Ordered, {}, {"a": 2, "b": 1}).validity()
+    assert caught.value.primary.owner == "ordered"
+    assert "answered differently when run again" in str(caught.value.primary)
+
+
+@pytest.mark.usefixtures("purity_unchecked")
+def test_a_walk_catches_a_width_bound_applied_to_the_key() -> None:
+    house = TOYS["house"]
+    found = compare.walk(house.make, house.facts, 0, 5, TODAY, RUNNING_PLANTED_WIDTH)
+    assert found.disagreements
 
 
 # -- the purity check over the cache and the depth guard ------------------------------------------
