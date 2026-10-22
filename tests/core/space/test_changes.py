@@ -209,6 +209,12 @@ def test_replacement_equality_is_contextual_and_cannot_mutate_stored_values() ->
 
 @pytest.mark.usefixtures("purity_unchecked")
 def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -> None:
+    """A batch of 64 independent choices checks each membership once and derives the limit
+    they share once; refused, a second batch answers both from the model's session. The
+    limit is derived once more, by the published design space's own evaluation: the node
+    cache keys a member by (the guards taken as holding, the node), so a value kept under a
+    membership reading, with a case guard taken as holding, is missed under the design
+    space's own evaluation, and is derived twice."""
     limits: list[int] = []
     admitted: list[int] = []
 
@@ -246,7 +252,7 @@ def test_independent_batch_reuses_trial_dependencies_and_publishes_only_once() -
     assert len(admitted) == len(members)
     assert all(outcome.status == "changed" for outcome in report.outcomes)
     assert report.instance.query(limit) == Available(100)
-    assert limits == [100]  # the successor keeps the change's evaluation: it read no choice
+    assert limits == [100, 100]  # derived again under the successor's own evaluation
 
     limits.clear()
     admitted.clear()

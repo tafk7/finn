@@ -318,8 +318,11 @@ def test_a_successor_keeps_what_its_change_does_not_reach_whichever_order_declar
 
 @pytest.mark.usefixtures("purity_unchecked")
 def test_a_values_trial_keeps_what_the_value_does_not_reach() -> None:
-    """Each value's trial is a world one choice away from the configuration's: a value the
-    trials share is derived once, not again in every trial."""
+    """Each value's trial is one choice away from the design space's own: a value the
+    trials share is derived once more, not again in every trial. Once more, because the
+    node cache keys a member by (the guards taken as holding, the node): a value kept under
+    the design space's own evaluation is missed under a membership reading with a case
+    guard taken as holding, and is derived twice."""
     derivations: list[int] = []
 
     class Shared(Space):
@@ -342,7 +345,7 @@ def test_a_values_trial_keeps_what_the_value_does_not_reach() -> None:
 
     point = design_space(Shared(lanes=128))
     assert possible(point, Shared.compute) == ("stub",)
-    assert derivations == [128]
+    assert derivations == [128, 128]
 
 
 def test_viable_answers_each_listed_value_of_each_choice_asked() -> None:

@@ -33,7 +33,10 @@ from finn.core.space import (
 from finn.core.space._running.evaluate import Ans, Session, evaluation
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_a_successor_keeps_what_its_change_does_not_reach_and_derives_the_rest() -> None:
+    """A successor derives again only what its change reaches. The test counts work, so it
+    runs with the purity check off: the check runs every cache hit's function again."""
     calls: list[str] = []
 
     class Room(Space):

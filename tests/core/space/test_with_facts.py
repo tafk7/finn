@@ -215,7 +215,11 @@ def read(point: Space, reference: Any) -> object:
     return answer.value
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_other_facts_evaluate_what_read_a_changed_formal_and_only_that() -> None:
+    """Other facts evaluate again what read a changed formal, and only that. The test
+    counts work, so it runs with the purity check off: the check runs every cache hit's
+    function again."""
     calls: list[str] = []
 
     class Plate(Space):
