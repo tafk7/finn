@@ -27,6 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import errno
+import logging
 import os
 import re
 import shutil
@@ -39,7 +40,10 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.util.basic import gen_finn_dt_tensor, roundup_to_integer_multiple
 from typing import Dict, Optional, Tuple
 
+from finn.util.build_log import FILE_ONLY
 from finn.util.data_packing import finnpy_to_packed_bytearray
+
+log = logging.getLogger(__name__)
 
 # mapping from PYNQ board names to FPGA part names
 pynq_part_map = dict()
@@ -305,8 +309,9 @@ def launch_process_helper(args, proc_env=None, cwd=None, check=False):
     """Launch a process and capture its output for logging with Python loggers.
 
     Returns ``(cmd_out, cmd_err)`` as UTF-8 strings, with undecodable bytes in
-    tool output replaced rather than raised. Both streams are also written
-    through to ``sys.stdout``/``sys.stderr``.
+    tool output replaced rather than raised. Both streams are also logged at
+    INFO, one record per line, marked ``FILE_ONLY``. Where no logger takes them
+    (outside a build), they are written through to ``sys.stdout``/``sys.stderr``.
 
     When ``check`` is True and the process exits non-zero, raises
     ``subprocess.CalledProcessError`` with ``output`` and ``stderr`` set to the
@@ -327,8 +332,12 @@ def launch_process_helper(args, proc_env=None, cwd=None, check=False):
     )
     cmd_out = proc.stdout
     cmd_err = proc.stderr
-    sys.stdout.write(cmd_out)
-    sys.stderr.write(cmd_err)
+    if log.isEnabledFor(logging.INFO) and log.hasHandlers():
+        for line in (cmd_out + cmd_err).splitlines():
+            log.info(line, extra=FILE_ONLY)
+    else:
+        sys.stdout.write(cmd_out)
+        sys.stderr.write(cmd_err)
     if check and proc.returncode != 0:
         raise subprocess.CalledProcessError(proc.returncode, args, cmd_out, cmd_err)
     return (cmd_out, cmd_err)

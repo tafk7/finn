@@ -3,14 +3,16 @@
 
 import pytest
 
+import logging
 import os
 import subprocess
 import sys
+import warnings
 from onnx import TensorProto, helper
 
 import finn.builder.build_dataflow as build
 from finn.builder.build_dataflow_config import DataflowBuildConfig, DataflowOutputType
-from finn.util.basic import make_build_dir
+from finn.util.basic import launch_process_helper, make_build_dir
 
 
 def make_test_model(build_dir, op_type="Relu", domain=""):
@@ -144,3 +146,38 @@ def test_an_unknown_step_name_is_reported_with_the_valid_names(option):
     message = str(exc.value)
     assert option in message and "'step_foo'" in message
     assert "passing_step" in message
+
+
+def talking_step(model, cfg):
+    sys.stdout.write("(Pdb) from inside the step\n")
+    logging.getLogger("finn.transformation.test").info("a record from the step")
+    with warnings.catch_warnings():
+        warnings.simplefilter("always")
+        warnings.warn("a warning from the step", UserWarning)
+    launch_process_helper(["echo", "a line of tool output"])
+    return model
+
+
+@pytest.mark.util
+def test_a_step_writes_to_the_real_stdout_and_its_records_reach_the_build_log(capfd):
+    finn = logging.getLogger("finn")
+    state = finn.level, list(finn.handlers), finn.propagate
+    build_dir = make_build_dir("test_runner_step_output_")
+    output_dir = os.path.join(build_dir, "output")
+    cfg = make_cfg(output_dir, [talking_step])
+    assert build.build_dataflow_cfg(make_test_model(build_dir), cfg) == 0
+    printed = capfd.readouterr()
+    log_path = os.path.join(output_dir, "build_dataflow.log")
+    with open(log_path) as f:
+        log = f.read()
+    assert "(Pdb) from inside the step" in printed.out
+    assert "Running step: talking_step [1/1]" in printed.out
+    assert "1 Python warnings, in " + log_path in printed.out
+    assert "a record from the step" not in printed.out + printed.err
+    assert "a line of tool output" not in printed.out + printed.err
+    assert "INFO talking_step finn.transformation.test: a record from the step" in log
+    assert "WARNING talking_step py.warnings: " in log
+    assert "UserWarning: a warning from the step" in log
+    assert "INFO talking_step finn.util.basic: a line of tool output" in log
+    assert "(Pdb)" not in log
+    assert (finn.level, finn.handlers, finn.propagate) == state
