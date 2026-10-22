@@ -738,9 +738,9 @@ class Network:
 
     def hops(self, name: str) -> OuterHops | Rejected:
         """Channel ``name``'s hops to the ports beside it (``outer_hops``, from
-        ``neighbours``), of a channel whose netlist is answered; a ``NetworkError`` where
-        it is not bound."""
-        return outer_hops(self.member(name), self.neighbours(name))
+        ``neighbours``), of a channel whose netlist is answered, its refusals owned by
+        ``name``; a ``NetworkError`` where it is not bound."""
+        return outer_hops(self.member(name), self.neighbours(name), owner=name)
 
     def unbound(self, name: str) -> Unbound | None:
         """Why channel ``name`` is not bound, or None where it is."""

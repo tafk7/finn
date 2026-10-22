@@ -190,28 +190,33 @@ _End = tuple[str | None, StreamContract]
 and the contract it presents."""
 
 
-def _kernel_of(port: PortContract) -> str | Rejected:
+def _kernel_of(port: PortContract, owner: str) -> str | Rejected:
     """The node of the kernel whose port ``port`` is, beside the channel: the node above
     its label (``matmul.compute.packed.x``, at any depth below the network:
-    ``^matmul.compute.packed``)."""
+    ``^matmul.compute.packed``). Refused as ``channel-port``, owned by ``owner``."""
     kernel = port.label.rpartition(".")[0]
     if not kernel:
-        return reject("channel-port", f"{port.label} presents a contract, but is no kernel's port")
+        return reject(
+            "channel-port",
+            f"{port.label} presents a contract, but is no kernel's port",
+            owner=owner,
+        )
     return "^" + kernel
 
 
-def outer_hops(channel: Channel, neighbours: Neighbours) -> OuterHops | Rejected:
+def outer_hops(channel: Channel, neighbours: Neighbours, *, owner: str) -> OuterHops | Rejected:
     """``channel``'s hops to the ports beside it (``neighbours``, as its network reads
     them), as wires (``wired``), of a channel whose netlist is answered.
 
     A port belongs to its kernel beside the channel (``_kernel_of``); a stage and the
     source sit below the channel at their labels; a boundary side is the module's own
     pins (``None``). Refused where a port is no kernel's (``channel-port``), or where a
-    hop's wires do not form (``channel-link``).
+    hop's wires do not form (``channel-link``), each finding owned by ``owner``: the
+    channel's name in its network.
     """
     owners: list[str | None] = []
     for port in (neighbours.producer, neighbours.consumer):
-        node = None if port is None else _kernel_of(port)
+        node = None if port is None else _kernel_of(port, owner)
         if isinstance(node, Rejected):
             return node
         owners.append(node)
@@ -238,7 +243,7 @@ def outer_hops(channel: Channel, neighbours: Neighbours) -> OuterHops | Rejected
         if consuming is not None and (stages or producing is None):
             consumed = wired(*out_of, *consuming)
     except ArtifactError as error:
-        return reject("channel-link", str(error))
+        return reject("channel-link", str(error), owner=owner)
     return OuterHops(produced, consumed)
 
 

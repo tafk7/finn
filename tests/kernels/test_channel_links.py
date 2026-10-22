@@ -185,6 +185,13 @@ def test_a_contract_that_is_no_kernels_port_has_no_netlist() -> None:
     assert edge.query(Channel.netlist).value == Fragment()
     refused = point.netlist()
     assert isinstance(refused, Rejected)
-    assert [(item.code, item.message, dict(item.details)) for item in refused.findings] == [
-        ("channel-port", "reader presents a contract, but is no kernel's port", {"tensor": "edge"})
+    assert [
+        (item.code, item.owner, item.message, dict(item.details)) for item in refused.findings
+    ] == [
+        (
+            "channel-port",
+            "edge",
+            "reader presents a contract, but is no kernel's port",
+            {"tensor": "edge"},
+        )
     ]
