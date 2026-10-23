@@ -133,10 +133,13 @@ SPEC = KernelSpec(
             lambda: alone(thresholds=(((-9, 0, 2),),)),
             frozenset({"threshold-value"}),
         ),
+        # The table's type is the thresholds' while never written (``table_dtype``); a
+        # writable table's is sized from the input's type, which neither refusal reaches.
         Probe(
             "input and thresholds of different signedness",
             lambda: alone(threshold_dtype=DataType["UINT4"], thresholds=(((1, 2, 3),),)),
             frozenset({"threshold-type"}),
+            {"use_axilite": False},
         ),
         Probe(
             "a threshold at its type's minimum, which an input wider below it saturates to",
@@ -144,6 +147,7 @@ SPEC = KernelSpec(
                 input_tensor=tensor((PIXELS, CHANNELS), "INT8"), thresholds=(((-8, 0, 2),),)
             ),
             frozenset({"threshold-saturation"}),
+            {"use_axilite": False},
         ),
         Probe(
             "a bias below -N-1, which the RTL does not sign-extend",
