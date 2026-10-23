@@ -219,7 +219,7 @@ class FifoKernel(KernelSpace):
     clock_domain = NATIVE_CLOCKING
 
     # The tensor whose words it buffers, a fact, and what arrives of it.
-    input_tensor: Tensor = Param(required=False)
+    input_tensor: Tensor = Param()
     arriving: BeatSequence = Param()
     depth: int = Param()
     platform: Platform = Param()

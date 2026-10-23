@@ -183,8 +183,9 @@ class DotpAxiKernel(KernelSpace):
     # so that it is known before the results channel exists.
     result_range: tuple[int, int] = Param()
     platform: Platform = Param()
-    # The tensors its input ports read: facts its parent gives.
-    x_tensor: Tensor = Param(required=False)
+    # The tensors its input ports read: facts its parent gives, the weights' where they
+    # stream (absent, the port is idle).
+    x_tensor: Tensor = Param()
     w_tensor: Tensor = Param(required=False)
     # The extents PE and SIMD may divide, which its parent states from the operation's
     # own facts (``extents_stated``). N is the same in every datapath; the widest
@@ -204,8 +205,8 @@ class DotpAxiKernel(KernelSpace):
 
     @derived
     def x_rank(self) -> int:
-        """The activations' rank (two when none are given)."""
-        return len(self.x_tensor.shape) if self.present(DotpAxiKernel.x_tensor) else 2
+        """The activations' rank."""
+        return len(self.x_tensor.shape)
 
     @derived
     def rows_viewed(self) -> bool:

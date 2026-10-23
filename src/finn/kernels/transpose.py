@@ -100,7 +100,7 @@ class TransposeKernel(KernelSpace):
     clock_domain = NATIVE_CLOCKING
 
     # The tensor its input port reads: a fact it is given.
-    input_tensor: Tensor = Param(required=False)
+    input_tensor: Tensor = Param()
     platform: Platform = Param()
 
     @derived

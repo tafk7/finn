@@ -227,9 +227,10 @@ class ThresholdingAxiKernel(KernelSpace):
 
     channels = extent_of(c)  # the input's channels, bound by its tensor
     pe: int = Decision(domain=divisors_of(channels))  # channels a beat
-    # Given by whoever binds it: the tensors its input ports read, and the port its
+    # Given by whoever binds it: the tensor its input port reads; with several sets, the
+    # set indices its set port reads (absent, the port is idle); and the port its
     # AXI-Lite interface is presented at when thresholds are runtime-writable.
-    input_tensor: Tensor = Param(required=False)
+    input_tensor: Tensor = Param()
     set_tensor: Tensor = Param(required=False)
     control: str = Param(required=False)
     platform: Platform = Param()
