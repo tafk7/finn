@@ -16,11 +16,13 @@ from collections.abc import Mapping
 from typing import Any
 
 from core.space.reference import (
+    Absent,
     Change,
     Choice,
     Constraint,
     Derived,
     Members,
+    Open,
     Refuse,
     Scope,
     Selector,
@@ -1159,3 +1161,74 @@ def test_unsetting_an_optional_fact_prunes_what_its_derived_guard_held() -> None
     assert unset.solution().pruned() == ("mover.burst",)
     unset.check_listed()
     unset.check_state("mover.burst")
+
+
+# -- 11. a when over a value that does not apply is false (reading 27) -----------------------------
+#
+# ``g`` is present when ``s.a.v``, a choice of case ``a`` of the selector ``s``, is 1; ``h`` when it
+# is not. With ``s`` at its other case ``o``, ``s.a.v`` does not exist, and both guards are false:
+# ``g`` and ``h`` are absent, not unknown. ``k`` sits in ``e``, present when the fact ``f`` is 1,
+# and ``m`` is present when ``e.d``, a derived value over ``f``, is positive: at ``f = 0`` the facts
+# alone make ``e.d`` not apply, so ``m`` is absent under the facts alone and ``m.z`` leaves the lists.
+
+NOT_APPLYING = Case(
+    "a when over a value that does not apply",
+    Space(
+        ("f",),
+        Scope(
+            "",
+            selectors=(
+                Selector("s", (Scope("a", choices=(Choice("v", listed(1, 2)),)), Scope("o"))),
+            ),
+            children=(
+                Scope(
+                    "g",
+                    when=When(("s.a.v",), lambda read: read["s.a.v"] == 1),
+                    choices=(Choice("y", listed(1, 2)),),
+                ),
+                Scope(
+                    "h",
+                    when=When(("s.a.v",), lambda read: read["s.a.v"] != 1),
+                    choices=(Choice("w", listed(1, 2)),),
+                ),
+                Scope(
+                    "e",
+                    when=When(("f",), lambda read: read["f"] == 1),
+                    derived=(Derived("d", ("f",), lambda read: read["f"] + 1),),
+                ),
+                Scope(
+                    "m",
+                    when=When(("e.d",), lambda read: read["e.d"] > 0),
+                    choices=(Choice("z", listed(1, 2)),),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def test_a_when_over_a_value_that_does_not_apply_leaves_its_scope_absent() -> None:
+    pair = NOT_APPLYING.start({"f": 1}, {"s": "o"})
+    solution = pair.solution()
+    assert isinstance(solution.state("g.y"), Absent)
+    assert isinstance(solution.state("h.w"), Absent)
+    pair.check_state("g.y")
+    pair.check_state("h.w")
+    pair.check_answer("g.y")
+
+
+def test_a_when_over_a_value_still_to_be_chosen_waits() -> None:
+    pair = NOT_APPLYING.start({"f": 1})
+    assert pair.solution().state("g.y") == Open(("s", "s.a.v"))
+    pair.check_state("g.y")
+
+
+def test_a_when_over_a_value_the_facts_make_not_apply_is_pruned() -> None:
+    pair = NOT_APPLYING.start({"f": 0})
+    assert pair.solution().pruned() == ("m.z",)
+    pair.check_listed()
+    pair.check_state("m.z")
+    present = NOT_APPLYING.start({"f": 1})
+    assert "m.z" in present.solution().listed()
+    present.check_listed()
+    present.check_state("m.z")

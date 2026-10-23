@@ -262,9 +262,8 @@ kept as its label; the text here is the rule.
     domain has no piece.
 14. *A stored choice waits on what it waits on*: an unknown presence's waits, never on
     itself (SZ100 (5): never on a fact). An open choice also waits on itself.
-15. *A ``when`` reading an input that does not apply* leaves its scope unknown,
-    waiting on that input (a guard over a value that does not exist neither holds nor
-    refuses).
+15. *Retired, replaced by 27* (a ``when`` reading an input that does not apply left its
+    scope unknown, waiting on that input).
 16. *Cycles* are the dependency rule written at :mod:`.description`.
 17. *A selector picked by a derived value* (``Selector(by=d)``, the engine's
     ``Select(by=d)``: its cases by what ``d`` names, waits on, refuses, or names none of).
@@ -274,7 +273,8 @@ kept as its label; the text here is the rule.
     ``d`` where ``d`` refuses. A picker never answers "nothing": ``None`` names no case (a
     case that places nothing does). A case is present where the value names it and its
     holding scope is present; absent where it names another case; unknown while the value
-    waits (or reads an input that does not apply, as reading 15), so the pieces of the
+    waits (or reads an input that does not apply: a picker is no ``when``, so reading 27 is
+    not its rule, and it waits there), so the pieces of the
     rules inside are unknown, as under an open chosen selector (reading 13); and not in
     play where the value refuses, as under a guard refused through an input (reading 8):
     one ``GUARD`` piece, owned by and in the selector's own name, its cases adding none,
@@ -297,6 +297,18 @@ kept as its label; the text here is the rule.
     an answer refused **through its scope's presence** to inapplicable, and invariant 2
     (additions move answers only up) accepts exactly that move, nothing wider: an answer
     refused on its own never becomes inapplicable while its scope stays present.
+27. *A ``when`` reading a value that does not apply is false: its scope is absent*
+    (replacing reading 15, which left the scope unknown, waiting on that input). The value
+    does not exist in this design space: its scope is absent, and absent stays absent over
+    every addition, so a wait on it would never settle (17's argument). A ``when`` is a
+    condition on its scope's existence, and a condition over a value that does not exist
+    does not hold, whatever its polarity (``when a.v`` and ``when not a.v`` are both false),
+    so the scope is absent, not refused as a domain's list is (reading 6): Kleene's AND over
+    the path. Where the guard reads several inputs, one that does not apply decides it,
+    whatever the others answer. Its neighbours are unchanged: an input waiting leaves the
+    guard waiting; one refused refuses it through the input (reading 26 where a scope above
+    is absent too). Where the input's absence follows from the facts alone, so does the
+    scope's, and its unset choices leave the lists (pruning); a stored one stays dormant.
 """
 
 from __future__ import annotations
@@ -643,6 +655,8 @@ class _Evaluation:
             inputs = self.inputs(info.when.reads)
             if inputs.values is not None:
                 when = _PRESENT if info.when.test(inputs.values) else _ABSENT
+            elif inputs.inapplicable:
+                when = _ABSENT  # reading 27: a condition over a value that does not exist is false
             elif inputs.refused:
                 reasons: list[Reason] = []
                 for read in inputs.refused:
@@ -652,16 +666,15 @@ class _Evaluation:
                 when = _Presence(
                     Presence.REFUSED, guards=inputs.refused, reasons=sorted_reasons(reasons)
                 )
-            elif inputs.waits:
-                when = _Presence(Presence.UNKNOWN, inputs.waits)
             else:
-                when = _Presence(Presence.UNKNOWN, frozenset(inputs.inapplicable))
+                when = _Presence(Presence.UNKNOWN, inputs.waits)
         return parent, selector, when
 
     def picked(self, picker: str, case: str | None) -> _Presence:
         """A derived selector's part in its case's presence (reading 17): present where its
         value names the case, absent where it names another, unknown while it waits (or
-        reads an input that does not apply: reading 15), refused where it refuses (through
+        reads an input that does not apply: a picker is no ``when``, reading 27 aside),
+        refused where it refuses (through
         its input, or naming no case)."""
 
         answer = self.read(picker)
