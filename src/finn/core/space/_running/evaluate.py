@@ -83,7 +83,6 @@ from contextvars import Context, copy_context
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
 
-from .._collapse import guard_implies
 from .._failure import (
     ACTIVE,
     Call,
@@ -99,7 +98,7 @@ from .._failure import (
 )
 from ..errors import EvaluationError, ValueUnavailableError
 from ..graph import Located
-from ..ir import Node, NodeId
+from ..ir import Node, NodeId, guard_implies
 from ..results import (
     Available,
     ConstraintAssessment,

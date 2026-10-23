@@ -6,35 +6,17 @@
 Inside a template, its forwarding after ordering (``collapse``, the template's
 ``forward``); across slots, a model's structure applies the same rule to each node it
 resolves (``_structure``). Scopes, node identities and keys stay as they are; only
-evaluation edges change, each bypass recorded in the reader's ``via``. ``forwards`` and
-``guard_implies`` are also the runtime's test for the same shortcut on method reads
-(``_world.MethodReader``).
+evaluation edges change, each bypass recorded in the reader's ``via``. Its tests,
+``forwards`` and ``guard_implies``, are ``ir``'s: the composed checks and the evaluator read
+them too.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any, cast
 
-from .ir import Argument, Node
-
-
-def forwards(node: Node) -> bool:
-    """A pure forwarding node: an alias that only passes its source's answer on."""
-    return node.kind == "alias" and node.output is not None and node.domain is None
-
-
-def guard_implies(nodes: Sequence[Node], required: int | None, guard: int | None) -> bool:
-    """Whether ``required`` holds whenever ``guard`` does: it is ``guard`` or an outer guard."""
-    if required is None:
-        return True
-    current = guard
-    while current is not None:
-        if current == required:
-            return True
-        current = nodes[current].guard
-    return False
+from .ir import Argument, Node, forwards, guard_implies
 
 
 def _reads_any(node: Node, targets: set[int]) -> bool:
