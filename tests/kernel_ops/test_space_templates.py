@@ -19,10 +19,11 @@ from core.space._domains_support import domain_differences
 from core.space._templates_support import assert_reads_alike, defined, links, reached
 from core.space._whole_support import differences
 from support.chain import MEMBERS, chain
-from support.one_space import chain_model, chain_space, declaration
+from support.models import chain_model
 
 import finn.custom_op
 import finn.kernels
+from finn.core.graph.annotations.platform import read_target
 from finn.core.space import Space, inspection
 from finn.core.space._running.evaluate import evaluation
 from finn.core.space._scopes import EAGER, Address, ScopeRecord
@@ -30,9 +31,12 @@ from finn.core.space._template import link_template
 from finn.core.space.compiler import compile_model
 from finn.core.space.occurrence import ask, held
 from finn.core.space.results import Available, QueryResult, Unresolved
+from finn.custom_op.kernels.network import declaration
+from finn.custom_op.kernels.shell import in_shell
 from finn.kernels.composer import Composed, clear_classes, compose
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
+from finn.platform.shells import shell_row
 
 SUPPORT = Path(__file__).resolve().parents[1] / "support"
 
@@ -64,20 +68,20 @@ def test_the_kernels_domains_compose_as_the_line_checked_them() -> None:
     classes = [
         *_kernels(),
         *(cls for cls in defined(modules) if links(cls)),
-        chain_space(4)[0].space_type,
+        chain_class(),
     ]
     differences = [found for found in map(domain_differences, classes) if found is not None]
     assert not differences, "\n".join(differences)
 
 
 def test_the_chains_members_read_alike_in_any_order_their_scopes_are_made_in() -> None:
-    net = chain()  # configured: its channels bound
-    classes = {inspection.model(net.member(name)).space_type for name in MEMBERS}
+    net = chain()  # configured
+    classes = {type(net.member(name)) for name in MEMBERS}
     assert assert_reads_alike(classes) == 3  # the MatMul, the thresholding, the channel
 
 
 def test_stage_7s_chain_of_eight_kernels_reads_alike_in_any_order_its_scopes_are_made_in() -> None:
-    whole = chain_space(4)[0].space_type
+    whole = chain_class()
     assert_reads_alike([whole])
     templates = reached(link_template(whole))
     # Fifteen classes, and the composite (a port is a declaration of its kernel, no class).
@@ -108,12 +112,12 @@ def test_the_kernels_and_the_test_support_answer_as_the_line() -> None:
     modules = [f"support.{path.stem}" for path in sorted(SUPPORT.glob("*.py"))]
     classes = [*_kernels(), *(cls for cls in defined(modules) if links(cls))]
     net = chain()
-    classes.extend(inspection.model(net.member(name)).space_type for name in MEMBERS)
+    classes.extend(type(net.member(name)) for name in MEMBERS)
     assert _answers_as_the_line(list(dict.fromkeys(classes))) > 50
 
 
 def test_stage_7s_chain_of_eight_kernels_answers_as_the_line() -> None:
-    whole = chain_space(4)[0].space_type
+    whole = chain_class()
     # The choices compared: each MatMul's folding is its own, not each core's; each
     # channel's source's two (absent without a value) and its one adapter memory, and no
     # source, mover or output adapter selector, nor an input adapter's, which its steps
@@ -122,14 +126,25 @@ def test_stage_7s_chain_of_eight_kernels_answers_as_the_line() -> None:
 
 
 def fresh_chain() -> tuple[Composed, dict[str, object]]:
-    """Stage 7's chain at 8 kernels composed as one Space with a model of its own, and its
-    stored values by path: the graph layer binds a partition of the same class as it reads
-    the stored values (``support.one_space.declaration``), so the composer's classes are
-    dropped before it is composed."""
-    declared, stored = declaration(chain_model(4))
+    """Stage 7's chain at 8 kernels composed as one Space with a model of its own (the
+    graph layer's declaration, in its shell, composed), and its stored values by path:
+    the graph layer binds a partition of the same class as it reads the stored values
+    (``in_shell``), so the composer's classes are dropped before it is composed."""
+    model = chain_model(4)
+    nodes = list(model.graph.node)
+    target = read_target(model)
+    declared = declaration(model, nodes, movers=shell_row(target.shell, target.board).movers)
+    stored = in_shell(model, nodes).chosen()
     clear_classes()
     composed = compose(declared)
     return composed, {composed.names.path(key): value for key, value in stored.items()}
+
+
+def chain_class() -> type[Space]:
+    """Stage 7's chain at 8 kernels: its partition's class, as the graph layer binds it in
+    its shell."""
+    model = chain_model(4)
+    return in_shell(model, model.graph.node).composed.space_type
 
 
 def test_stage_7s_chain_read_for_one_value_makes_part_of_it(

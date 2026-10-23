@@ -5,7 +5,9 @@
 
 Also the Chain (``support.chain``) as KernelOps with its choices configured (each kernel's
 on its node, each channel's on its tensor, as ``support.configure`` sets them), its
-partition's network bound again, and a KernelOp's schema digest."""
+partition bound again, and a KernelOp's schema digest; and stage 7's synthetic chain
+(``mlp``), converted and cut for the ZU3EG (``chain_model``), whose partition
+(``in_shell``) the Space oracle and the templates' tests read."""
 
 from __future__ import annotations
 
@@ -370,10 +372,69 @@ def configure_partition(model: ModelWrapper) -> InShell:
     return bound
 
 
+def mlp(layers: int) -> ModelWrapper:
+    """Stage 7's synthetic chain: ``layers`` of a MatMul (16 by 16, INT3 weights) and a
+    MultiThreshold to UINT2, on 4 rows of UINT2."""
+    width = 16
+    nodes: list[Any] = []
+    current = "x"
+    for layer in range(layers):
+        levels = "y" if layer == layers - 1 else f"a{layer}"
+        nodes.append(
+            helper.make_node("MatMul", [current, f"w{layer}"], [f"h{layer}"], name=f"mm{layer}")
+        )
+        nodes.append(
+            helper.make_node(
+                "MultiThreshold",
+                [f"h{layer}", f"t{layer}"],
+                [levels],
+                name=f"mt{layer}",
+                domain="qonnx.custom_op.general",
+                out_dtype="UINT2",
+                out_bias=0.0,
+            )
+        )
+        current = levels
+    graph = helper.make_graph(
+        nodes,
+        "mlp",
+        [helper.make_tensor_value_info("x", TensorProto.FLOAT, [4, width])],
+        [helper.make_tensor_value_info("y", TensorProto.FLOAT, None)],
+    )
+    model = ModelWrapper(
+        qonnx_make_model(
+            graph,
+            opset_imports=[
+                helper.make_opsetid("", 13),
+                helper.make_opsetid("qonnx.custom_op.general", 1),
+            ],
+        )
+    )
+    model.set_tensor_datatype("x", DataType["UINT2"])
+    for layer in range(layers):
+        weights = [[(3 * n + 2 * k + layer) % 7 - 3 for n in range(width)] for k in range(width)]
+        model.set_initializer(f"w{layer}", np.array(weights, dtype=np.float32))
+        model.set_tensor_datatype(f"w{layer}", DataType["INT3"])
+        steps = [[-9 + c % 5, 1 - c % 3, 8 + c % 4] for c in range(width)]
+        model.set_initializer(f"t{layer}", np.array(steps, dtype=np.float32))
+        model.set_tensor_datatype(f"t{layer}", DataType["INT8"])
+    return model
+
+
+def chain_model(layers: int) -> ModelWrapper:
+    """Stage 7's chain of ``2 * layers`` kernels (``mlp``) for the ZU3EG at 5 ns, converted
+    and its channel choices made."""
+    target = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)
+    model = mlp(layers).transform(ToKernelOps(target)).transform(InferKernelTensors())
+    make_cut_choices(model)
+    return model
+
+
 __all__ = [
     "DOMAIN",
     "EDGE",
     "WEIGHT_CHANNEL",
+    "chain_model",
     "chain_source",
     "choose_memories",
     "configure_partition",
@@ -390,6 +451,7 @@ __all__ = [
     "X",
     "lift",
     "matmul_model",
+    "mlp",
     "thresholding_model",
 ]
 

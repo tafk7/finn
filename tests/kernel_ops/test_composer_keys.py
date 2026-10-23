@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """Every key of a graph's partition through the composer's names (``finn.kernels.composer``):
-stage 7's chain of eight kernels and TFC's partition, each declared from its graph
-(``support.one_space.declaration``) and composed.
+stage 7's chain of eight kernels and TFC's partition, each declared from its graph by the
+graph layer (``finn.custom_op.kernels.network.declaration``, in its shell) and composed.
 
 Each choice FINN names by its pair (owner, key), the owner a graph name (every Decision of
 every member of the shell's network, applicable or not, and every choice it stores), is a
@@ -14,22 +14,29 @@ to its member's fact (``Names.roots``)."""
 from __future__ import annotations
 
 from qonnx.core.modelwrapper import ModelWrapper
-from support.one_space import declaration, mlp
+from support.models import mlp
 
+from finn.core.graph.annotations.platform import read_target
 from finn.core.space import inspection
+from finn.custom_op.kernels.network import declaration
 from finn.custom_op.kernels.shell import in_shell, make_cut_choices
 from finn.kernels.composer import Composed, compose
 from finn.platform.resolve import resolve_target
+from finn.platform.shells import shell_row
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 
 
 def _round_trip(model: ModelWrapper) -> tuple[Composed, int]:
     """``model`` composed, every pair of its shell's network checked through the names; the
     composed partition and the number of pairs."""
-    declared, stored = declaration(model)
-    composed = compose(declared)
+    nodes = list(model.graph.node)
+    target = read_target(model)
+    composed = compose(
+        declaration(model, nodes, movers=shell_row(target.shell, target.board).movers)
+    )
     names = composed.names
-    network = in_shell(model, list(model.graph.node))
+    network = in_shell(model, nodes)
+    stored = network.chosen()
     pairs = [*network.decisions(), *stored]
     assert set(stored) <= set(network.decisions())
     for pair in pairs:

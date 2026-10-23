@@ -512,10 +512,12 @@ LAYERS: tuple[Layer, ...] = (
         "tests/kernels",
     ),
     # The class-based oracle's targets and its tool (support.space_oracle): the design
-    # spaces of FINN's kernels it compares (the toys, stage 7's chain). The rest of the
-    # package is the engine's (tests.core.space). Its TFC target, which reads FINN's builder,
-    # is a support module of its own in no row (as support.tfc is): a module this table
-    # names is in the import closure the XSim groups are keyed by (scripts/emitted_text.py).
+    # spaces of FINN's kernels it compares (the toys, stage 7's chain: its model,
+    # support.models, and its partition as the graph layer binds it in its shell). The rest
+    # of the package is the engine's (tests.core.space). Its TFC target, which reads FINN's
+    # builder, is a support module of its own in no row (as support.tfc is): a module this
+    # table names is in the import closure the XSim groups are keyed by
+    # (scripts/emitted_text.py).
     Layer(
         "tests.space_oracle_targets",
         (
@@ -524,8 +526,9 @@ LAYERS: tuple[Layer, ...] = (
             "support.space_oracle.__main__",
         ),
         ("space", "kernels", "tests.core.space"),
-        ("support.one_space",),
+        ("support.models",),
         "tests/kernel_ops",
+        ("finn.custom_op.kernels.shell.in_shell",),
     ),
 )
 

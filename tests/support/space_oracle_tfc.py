@@ -1,9 +1,10 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""The class-based oracle's TFC target (``tfc``): TFC's partition (``support.tfc``) after the
-cut, and after each of seven strategy sequences explored on the cut's body (``SEQUENCES``),
-each composed as one Space (``one_space``) configured with its stored choices; and the oracle's tool
-with every target, TFC's too:
+"""The class-based oracle's TFC target (``tfc``): TFC's partition (``support.tfc``) after
+the cut, and after each of seven strategy sequences explored on the cut's body
+(``SEQUENCES``), each its partition's class as the graph layer binds it in its shell
+(``in_shell``), configured with its stored choices; and the oracle's tool with every target,
+TFC's too:
 
     python -m support.space_oracle_tfc dump tfc OUT.json [--implementation M:A]
     python -m support.space_oracle_tfc walk tfc --seeds A-B --steps N --against M:A
@@ -27,6 +28,7 @@ from pathlib import Path
 
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.custom_op.kernels.shell import in_shell
 from finn.kernels.explore import (
     Defaults,
     Explorer,
@@ -37,7 +39,6 @@ from finn.kernels.explore import (
     TargetThroughput,
 )
 from finn.transformation.kernels import ExploreKernelChoices
-from support.one_space import one_space
 from support.space_oracle.targets import Station, _middle, _partition
 from support.tfc import LANES, cut, streamlined
 
@@ -64,9 +65,9 @@ whose strategy is now ``Defaults``."""
 
 def _tfc_partition(label: str, body: ModelWrapper) -> Station:
     nodes = list(body.graph.node)
-    composed, stored = one_space(body)
     matmuls = [node.name for node in nodes if "MatMul" in node.op_type]
-    return _partition(f"tfc-{label}", composed, stored, len(nodes), _middle(matmuls))
+    bound = in_shell(body, nodes)
+    return _partition(f"tfc-{label}", bound, len(nodes), _middle(matmuls))
 
 
 def tfc(work: Path | None = None) -> list[Station]:
