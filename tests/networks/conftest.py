@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """The fixtures of this tree: TFC_W2A2 built once a run and saved (``support.fixtures``), the
-autouse ``ip_store``, the member cache, and ``purity_unchecked`` (``support.purity``)."""
+autouse ``ip_store``, and ``purity_unchecked`` (``support.purity``)."""
 
 from __future__ import annotations
 
@@ -12,5 +12,4 @@ from support.fixtures import (  # noqa: F401
     tfc_export,
     tfc_streamlined,
 )
-from support.member_cache import _member_cache, pytest_sessionfinish  # noqa: F401
 from support.purity import purity_unchecked  # noqa: F401

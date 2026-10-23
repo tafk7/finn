@@ -4,8 +4,8 @@
 """The DSE seam: what a design space exploration asks of a network, and strategies.
 
 A ``Seam`` answers what an exploration asks of a network (a ``Composition``: a
-partition's one design space, ``finn.kernels.partition.Partition``, or a network
-built by hand, ``finn.kernels.network``; immutable like a point), each choice keyed by a
+partition's one design space, ``finn.kernels.partition.Partition``, a graph's or one
+declared by hand; immutable like a point), each choice keyed by a
 pair ``(owner, key)``: a member by name (a kernel's node, a channel's tensor) and the
 decision key in its space (``("first", "pe")``, ``("y", "transport")``). ``choices`` gives
 each open choice in play with its possible values, every one offered, whether one value is
@@ -159,8 +159,8 @@ class Trial(Generic[N]):
 class Composition(Protocol):
     """What the seam explores: a partition's one design space
     (``finn.kernels.partition.Partition``; the graph binds one in its shell,
-    ``finn.custom_op.kernels.shell.in_shell``), or a network built by hand
-    (``finn.kernels.network.Network``). Its members by name, ranked, its channels among
+    ``finn.custom_op.kernels.shell.in_shell``, and a test declares one by hand). Its
+    members by name, ranked, its channels among
     them, and per member its point, its exports, its Decisions, every choice's state, the
     possible values of those asked, what is open and stored, its validity, and a change
     (``trial``); per channel the ports beside it (``neighbours``, whose paces FIFO sizing
@@ -556,7 +556,7 @@ class Seam:
         *,
         keys: Collection[Key] | None = None,
     ) -> tuple[Choice, ...]:
-        """Each open choice in play (``Network.undecided``; only ``members``' where named,
+        """Each open choice in play (``Composition.undecided``; only ``members``' where named,
         only ``keys`` where named), ranked, with its possible values in listed order, or in
         its policy's ranking where it names one (``finn.kernels.policies.ranked``), every one
         offered: one possible value is a choice as several are. One whose list waits on a
@@ -785,9 +785,9 @@ class Seam:
     def reopen(self, network: S, keys: Iterable[Key]) -> tuple[S, tuple[Key, ...]]:
         """``network`` with the stored ``keys`` cleared, one clear, and the keys cleared,
         ranked. Clearing never breaks a rule: what reads a cleared choice waits on it (a
-        channel whose facts read it, in a network built by hand, is unbound, its stored
-        choices held with it). A clear refused, or one that would put a held choice out of
-        play, is an ``ExploreError``."""
+        channel whose side reads it holds the stored choices the side decides, waiting). A
+        clear refused, or one that would put a held choice out of play, is an
+        ``ExploreError``."""
         wanted = set(keys)
         clear = tuple(key for key in network.chosen() if key in wanted)
         if not clear:
@@ -811,8 +811,7 @@ class Seam:
         strategy: str = "",
     ) -> Restored[S]:
         """``network`` with each choice of ``prior`` it leaves open given back its prior
-        value, all as one batch: one open (in play, or waiting on its presence), or one of
-        a channel unbound there (its kernels' values in the batch bind it). Where the
+        value, all as one batch: one open (in play, or waiting on its presence). Where the
         batch is refused, each is given back alone, ranked: a prior value refused there is
         replaced by the choice's policy (``by_policy``: its KernelOp's for a kernel's
         choice, the cut's for a channel's), or, where its
@@ -1231,11 +1230,8 @@ def _info(network: Composition, key: Key) -> inspection.DecisionInfo[object]:
 
 def _left_open(network: Composition, key: Key) -> bool:
     """Whether choice ``key`` is open on ``network``: unset in play or waiting on its
-    presence, or not stored by a channel that is unbound there."""
-    state = dict(network.states((key[0],))).get(key)
-    if state is None:
-        return key not in network.chosen((key[0],))
-    return isinstance(state, inspection.Open)
+    presence."""
+    return isinstance(dict(network.states((key[0],))).get(key), inspection.Open)
 
 
 def _unheld(seam: Seam, network: Composition) -> list[Key]:

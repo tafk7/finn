@@ -28,7 +28,7 @@ applies them once to a channel's point.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Mapping
 from typing import ClassVar
 
 from finn.core.reporting.findings import Finding
@@ -56,18 +56,16 @@ class Cut:
     policies: ClassVar[Mapping[object, Policy]] = CHANNEL_POLICIES
 
 
-def channel_defaulted(
-    point: Space, kept: Collection[str] = ()
-) -> Defaulted[Space] | tuple[Finding, ...]:
-    """The channel ``point`` with the cut's policies applied once
-    (``finn.kernels.policies.defaulted``): each open choice in play that is not required set
-    to its first valid value, in the flow order (each after what its presence, its list and
-    its facts read), the choices ``kept`` names left open; or why a choice can take no value
+def channel_defaulted(point: Space) -> Defaulted[Space] | tuple[Finding, ...]:
+    """The channel ``point`` (a partition's member, in its design space) with the cut's
+    policies applied once (``finn.kernels.policies.defaulted``): each open choice in play
+    that is not required set to its first valid value, in the flow order (each after what
+    its presence, its list and its facts read); or why a choice can take no value
     (``choice-no-valid-value``, owned by its key). A channel refused on its own facts is
     returned as it is: its validity says why."""
     if isinstance(inspection.validity(point).result, Rejected):
         return Defaulted(point)
-    return defaulted(point, Cut, kept=kept)
+    return defaulted(point, Cut)
 
 
 __all__ = ["CHANNEL_POLICIES", "Cut", "channel_defaulted"]

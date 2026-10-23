@@ -416,11 +416,6 @@ LAYERS: tuple[Layer, ...] = (
     # The finn-dev oracle's captures (scripts/oracle): the standard library only. The
     # kernel tests compare with the HWCustomOp flow's values through it.
     Layer("tests.oracle", ("oracle",), (), (), "tests/kernels"),
-    # Each test one build: the member cache its fixture opens (finn.kernels.members), which
-    # the kernel and the kernel-op tests' conftests import.
-    Layer(
-        "tests.member_cache", ("support.member_cache",), ("kernels",), ("pytest",), "tests/kernels"
-    ),
     # The shell's bus counts (finn.platform.shells.bus_counts) checked against the top's
     # pins on every netlist a test reads, the fixture the kernel and the kernel-op tests'
     # conftests import: the one place the kernel tests reach the platform registry. The
@@ -504,7 +499,6 @@ LAYERS: tuple[Layer, ...] = (
             "tests.core.space",
             "tests.dataflow",
             "tests.oracle",
-            "tests.member_cache",
             "tests.top_pins",
             "tests.purity",
         ),

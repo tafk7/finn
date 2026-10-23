@@ -4,9 +4,9 @@
 """Channels: one tensor from one producer to one consumer, a kernel with children between
 two ports.
 
-A ``Channel`` is one producer-to-consumer edge, a member of a network
-(``finn.kernels.network``) or of a kernel with children, carrying one ``tensor`` given as
-a fact. Its two sides are facts too, ``producer`` and ``consumer``, each one value
+A ``Channel`` is one producer-to-consumer edge, a member of a partition
+(``finn.kernels.partition``) or of a kernel with children, carrying one ``tensor`` given
+as a fact. Its two sides are facts too, ``producer`` and ``consumer``, each one value
 (``finn.kernels.sides.Side``) of its kind: a kernel's port (the ``Stream`` it presents,
 its label, ``matmul.compute.packed.x``, and on an output port its word width: a kernel's
 ``x_side``), a frozen neighbour's (the same, given as a fact), the boundary's (its AXIS
@@ -209,8 +209,8 @@ def wired(
 
 @dataclass(frozen=True)
 class Neighbours:
-    """The ports beside a channel, as its network reads them to bind it (each
-    ``Interface``'s contract, labelled from the network: ``matmul.compute.packed.x``): the
+    """The ports beside a channel, as its partition reads them (each kernel's port's
+    contract view, labelled below its member's node: ``matmul.compute.packed.x``): the
     producing kernel's and the consuming kernel's, each None where that side is the
     channel's own, its source (a known value) or its boundary."""
 
@@ -282,7 +282,7 @@ def outer_hops(channel: Channel, neighbours: Neighbours, *, owner: str) -> Outer
     source sit below the channel at their labels; a boundary side is the module's own
     pins (``None``). Refused where a port is no kernel's (``channel-port``), or where a
     hop's wires do not form (``channel-link``), each finding owned by ``owner``: the
-    channel's name in its network.
+    channel's name in its partition.
     """
     owners: list[str | None] = []
     for port in (neighbours.producer, neighbours.consumer):

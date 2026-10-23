@@ -8,7 +8,7 @@ naming the port its bus is presented at, given where it is placed (``control: st
 Param(required=False)``), and exports, under ``CONTROL``, the bus it presents there
 with that port and the writes that put its configuration into the bus's registers
 (``RegisterMap``): a ``Control``. A kernel's netlist view (its ``Members(CONTROL)``,
-``finn.kernels.base.KernelSpace``) and a network (``finn.kernels.network``) each collect
+``finn.kernels.base.KernelSpace``) and a partition (``finn.kernels.partition``) each collect
 their members' controls (``presented``: each a ``BusExport`` from its member's node) and
 present each in their netlist (``finn.kernels.base.merged``), prefixing its port with the
 member's node
