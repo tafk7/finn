@@ -10,8 +10,9 @@ a fact. The streams of the ports on it are facts too, ``producer`` and ``consume
 the ``Stream`` a member presents at one of its ports (a kernel's ``x_stream``), the fact
 it is bound to its side, or absent: the network's boundary. Beside each, the network gives
 its port's label (``producer_label``, ``consumer_label``: ``matmul.compute.packed.x``),
-and the producing port's word width (``producer_width``, its ``x_data_width``). The
-channel's tensor is never derived from a port.
+and the producing port's word width (``producer_width``, its ``x_data_width``): a stream
+given without them is refused (``channel-side``). The channel's tensor is never derived
+from a port.
 
 Each side's stream must traverse the tensor (``channel-tensor``), and the steps between
 their beat sequences (``finn.dataflow.steps``) must be ones a chain of FinnLib modules
@@ -510,9 +511,17 @@ class Channel(KernelSpace):
             return reject("channel-unused", "no present port is on this channel")
         producer: tuple[str | None, Stream] | None = None
         consumer: tuple[str | None, Stream] | None = None
+        # A side is given whole: a stream without its port's label (or a producer's
+        # without its word width) would read as the boundary's.
         if self.present(Channel.producer):
+            if not self.present(Channel.producer_label):
+                return reject("channel-side", "a producer's stream comes with its port's label")
+            if not self.present(Channel.producer_width):
+                return reject("channel-side", "a producer's stream comes with its word width")
             producer = (self.producer_label, self.producer)
         if self.present(Channel.consumer):
+            if not self.present(Channel.consumer_label):
+                return reject("channel-side", "a consumer's stream comes with its port's label")
             consumer = (self.consumer_label, self.consumer)
         if self.valued:
             if producer is not None:

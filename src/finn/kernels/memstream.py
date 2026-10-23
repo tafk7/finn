@@ -292,14 +292,20 @@ class MemStreamKernel(KernelSpace):
         )
 
     @derived
-    def set_sequence(self) -> BeatSequence:
-        """One index a beat, one beat per pass of the weights."""
+    def set_sequence(self) -> BeatSequence | Rejected:
+        """One index a beat, one beat per pass of the weights; several sets without their
+        indices are refused, as ``selected`` refuses them."""
+        if self.sets >= 2 and not self.present(MemStreamKernel.set_tensor):
+            return reject("memstream-set-channel", "several sets take a set channel")
         return BeatSequence(vector_major(self.set_tensor.shape, 1))
 
     @derived
-    def output_sequence(self) -> BeatSequence:
-        """One set streams cyclically; several stream one pass per accepted index."""
+    def output_sequence(self) -> BeatSequence | Rejected:
+        """One set streams cyclically; several stream one pass per accepted index, and
+        without their indices are refused, as ``selected`` refuses them."""
         if self.sets > 1:
+            if not self.present(MemStreamKernel.set_tensor):
+                return reject("memstream-set-channel", "several sets take a set channel")
             return BeatSequence(self.form.repeated(self.set_tensor.size))
         return BeatSequence(self.form, Repetition.CYCLIC)
 

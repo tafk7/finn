@@ -157,6 +157,17 @@ def test_a_set_port_that_does_not_match_the_sets_is_refused_both_ways() -> None:
     assert inspection.validity(given).status != "refused"
 
 
+def test_several_sets_without_their_indices_refuse_the_set_port_s_order() -> None:
+    # Its rule refuses such a thresholding (``selected``); the set port's order reads the
+    # indices, and refuses the same way rather than read what is not given.
+    two_sets = (((-2, 0, 3), (-1, 1, 4)), ((-3, 0, 5), (-2, 0, 6)))
+    answer = threshold_base(table=two_sets).query(ThresholdingAxiKernel.set_sequence)
+    assert isinstance(answer, Rejected)
+    assert [(finding.code, finding.owner) for finding in answer.findings] == [
+        ("threshold-set-channel", "set_sequence")
+    ]
+
+
 def test_threshold_partial_dtype_query_does_not_adopt_implementation_decisions() -> None:
     base = threshold_base()
     assert base.result_dtype.name == "INT3"

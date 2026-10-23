@@ -234,6 +234,14 @@ class DotpAxiKernel(KernelSpace):
         leading axis together."""
         given: dict[Index, int] = {}
         if self.windowed:
+            # A window's outputs are the weights' last axis: without the weights' tensor,
+            # nothing states them. This rests on MatMul's weights, an open question: should
+            # they become one required fact, a core's w_tensor is required and this
+            # refusal is removed, not respelled.
+            if not self.present(DotpAxiKernel.w_tensor):
+                return reject(
+                    "dotp-extents", "a window's outputs are bound by weights, and none are given"
+                )
             given |= {**self.window.extents, n: self.w_tensor.shape[-1]}
         if self.reshape_activations:
             given[m] = self.x_tensor.shape[0]
