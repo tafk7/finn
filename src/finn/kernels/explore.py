@@ -4,7 +4,7 @@
 """The DSE seam: what a design space exploration asks of a network, and strategies.
 
 A ``Seam`` answers what an exploration asks of a network (a ``Composition``: a
-partition's one design space, ``finn.custom_op.kernels.network.Partition``, or a network
+partition's one design space, ``finn.kernels.partition.Partition``, or a network
 built by hand, ``finn.kernels.network``; immutable like a point), each choice keyed by a
 pair ``(owner, key)``: a member by name (a kernel's node, a channel's tensor) and the
 decision key in its space (``("first", "pe")``, ``("y", "transport")``). ``choices`` gives
@@ -157,7 +157,7 @@ class Trial(Generic[N]):
 
 class Composition(Protocol):
     """What the seam explores: a partition's one design space
-    (``finn.custom_op.kernels.network.Partition``; the graph binds one in its shell,
+    (``finn.kernels.partition.Partition``; the graph binds one in its shell,
     ``finn.custom_op.kernels.shell.in_shell``), or a network built by hand
     (``finn.kernels.network.Network``). Its members by name, ranked, its channels among
     them, and per member its point, its exports, its Decisions, every choice's state, the

@@ -39,8 +39,9 @@ from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import Partition, network, persist
+from finn.custom_op.kernels.network import network, persist
 from finn.custom_op.kernels.shell import configured_network
+from finn.kernels.partition import Partition
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors, kernel_choices_config
 

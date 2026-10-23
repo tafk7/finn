@@ -40,7 +40,7 @@ from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import FindingKind
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.network import Partition, network
+from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network, verify_partition
 from finn.kernels.explore import (
     Accepted,
@@ -53,6 +53,7 @@ from finn.kernels.explore import (
     SizeFifos,
     TargetThroughput,
 )
+from finn.kernels.partition import Partition
 from finn.platform.capabilities import Resources
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import (

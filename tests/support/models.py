@@ -22,8 +22,9 @@ from qonnx.util.basic import qonnx_make_model
 
 from finn.core.graph.annotations.platform import write_target
 from finn.custom_op.kernels.base import KernelOp
-from finn.custom_op.kernels.network import Partition, persist
+from finn.custom_op.kernels.network import persist
 from finn.custom_op.kernels.shell import InShell, in_shell, make_cut_choices
+from finn.kernels.partition import Partition
 from finn.platform.resolve import resolve_target
 from finn.platform.target import Target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps

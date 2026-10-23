@@ -34,11 +34,12 @@ from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.conv import Conv
 from finn.custom_op.kernels.matmul import MatMul
-from finn.custom_op.kernels.network import Partition, network, persist
+from finn.custom_op.kernels.network import network, persist
 from finn.custom_op.kernels.thresholding import Thresholding
 from finn.harness.reference import converted
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.partition import Partition
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.transformation.kernels import InferKernelTensors
 

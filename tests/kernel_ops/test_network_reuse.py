@@ -36,10 +36,11 @@ import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import PLATFORM, write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
-from finn.custom_op.kernels.network import Partition, network, persist
+from finn.custom_op.kernels.network import network, persist
 from finn.custom_op.kernels.shell import in_shell
 from finn.kernels.composer import cached_classes
 from finn.kernels.explore import dotted
+from finn.kernels.partition import Partition
 from finn.platform.resolve import resolve_target
 from finn.platform.shells import shell_row
 from finn.transformation.kernels import InferKernelTensors

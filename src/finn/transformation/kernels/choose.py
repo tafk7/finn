@@ -113,7 +113,7 @@ from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available
 from finn.custom_op.kernels.base import why
-from finn.custom_op.kernels.network import Partition, persist, stale_text
+from finn.custom_op.kernels.network import persist, stale_text
 from finn.custom_op.kernels.shell import (
     InShell,
     ShellResources,
@@ -138,6 +138,7 @@ from finn.kernels.explore import (
 )
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.movers import MEMORY_LATENCY, MoverContract
+from finn.kernels.partition import Partition
 from finn.kernels.policies import Required
 from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
 from finn.platform.capabilities import Platform

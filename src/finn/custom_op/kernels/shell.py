@@ -51,14 +51,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import Available, Inapplicable, QueryResult, Rejected, inspection
-from finn.custom_op.kernels.network import (
-    PARTITION,
-    Partition,
-    _network,
-    _together,
-    persist,
-    stale_text,
-)
+from finn.custom_op.kernels.network import PARTITION, PRODUCER, _network, persist, stale_text
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import CYCLES
 from finn.kernels.composer import Key
@@ -66,6 +59,7 @@ from finn.kernels.configure import chosen, refusal
 from finn.kernels.cut import channel_defaulted
 from finn.kernels.explore import FifoCheck, Seam, dotted
 from finn.kernels.movers import MOVER, MoverContract
+from finn.kernels.partition import Partition, _together
 from finn.kernels.policies import Required, defaulted, policy
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
@@ -317,7 +311,7 @@ def configured_network(
             + "; ".join(map(str, over_budget)),
             findings=over_budget,
         )
-    module = bound.module_of()
+    module = bound.module_of(PRODUCER)
     cycles = {name: bound.query(name, CYCLES) for name in bound.members}
     found = [] if isinstance(module, Available) else list(module.findings)
     for name, each in cycles.items():
