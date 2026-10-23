@@ -735,7 +735,7 @@ def kernel_fixtures(api):
             MatMulKernel(
                 platform=platform,
                 x_tensor=matmul_tensors[0],
-                w_tensor=matmul_tensors[1],
+                weights=matmul_tensors[1],
             ),
             lambda point, index: commit(
                 point,

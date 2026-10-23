@@ -35,7 +35,7 @@ from finn.core.space import Space, design_space
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
-from finn.kernels.matmul import MatMulKernel
+from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import DspBlock, Fabric, Platform
 from finn.kernels.artifacts.module import Composed, Leaf
@@ -100,14 +100,14 @@ for memory in ("none", "memstream"):
     # Stored weights are MatMul's, and the weight channel's value, which its source
     # stores; the result is their columns' (the identity's, [-4, 3]: INT3), or the
     # datatypes' (INT8). Its extents and datatypes are its tensors'.
-    weights: dict[str, object] = {"w_tensor": Tensor((4, 4), INT3)}
+    weights: dict[str, object] = {"weights": Tensor((4, 4), INT3)}
     result = INT8
     if memory == "memstream":
         weights = {
-            "w_contents": IntegerTensorValue.of(
-                ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
-            ),
-            "weights_dtype": DataType["INT3"],
+            "weights": KnownWeights(
+                IntegerTensorValue.of(((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))),
+                DataType["INT3"],
+            )
         }
         result = INT3
     x_tensor, y_tensor = Tensor((2, 4), INT3), Tensor((2, 4), result)

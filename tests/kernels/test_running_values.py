@@ -38,9 +38,9 @@ again in every design space that asks it. Every value FINN's kernels hold is key
 enums (``Form``, a beat sequence's repetition, a channel's steps, a transport's endpoint and
 marker kinds, and the platform's DSP block and fabric, which mix in ``str``), the QONNX
 datatypes, alone and inside a ``Tensor``, a port's stream and a stream contract, and the
-integer tensors. Stage 7's chain, made one Space by ``support.one_space``, holds no root
-facts (its kernels' facts are constants of its class) and stores only str, int and bool
-choices.
+integer tensors, both also inside MatMul's known weights (``KnownWeights``). Stage 7's
+chain, made one Space by ``support.one_space``, holds no root facts (its kernels' facts are
+constants of its class) and stores only str, int and bool choices.
 """
 
 from __future__ import annotations
@@ -93,6 +93,7 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.traversal import Repetition
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import boundary_contract
+from finn.kernels.matmul import KnownWeights
 from finn.kernels.movers import MoverOffer
 from finn.kernels.transport import MarkerKind
 from finn.kernels.values.semantics import (
@@ -154,6 +155,11 @@ VERDICTS: dict[str, Verdict] = {
     ),
     "BaseDataType": Verdict("always", "a value type, the one instance of its name"),
     "IntegerTensorValue": Verdict("always", "a value type, equal by its digest"),
+    "Tensor | KnownWeights": Verdict(
+        "always",
+        "MatMul's weights: a tensor, or known weights, a value class of an integer tensor and "
+        "a QONNX datatype, value types",
+    ),
 }
 """Every value type a choice or fact of FINN's kernels holds, by its check's name (a QONNX
 datatype's is ``BaseDataType``'s), with its verdict."""
@@ -237,7 +243,13 @@ def made() -> dict[str, tuple[object, ...]]:
         ),
         "Form": (Form.DENSE, Form.DEPTHWISE),
         "Platform": (full_platform(DspBlock.DSP58),),
-        "BaseDataType": (DataType["INT8"], DataType["UINT2"]),
+        "BaseDataType": (DataType["INT8"], DataType["UINT2"], DataType["INT8"]),
+        "Tensor | KnownWeights": (
+            KnownWeights(IntegerTensorValue.of(((1, 2), (3, 4))), DataType["INT3"]),
+            KnownWeights(of_array(np.array([[1, 2], [3, 4]], dtype=np.float32)), DataType["INT3"]),
+            KnownWeights(IntegerTensorValue.of(((1, 2), (3, 4))), DataType["INT4"]),
+            eight,
+        ),
         "IntegerTensorValue": (
             IntegerTensorValue.of(((1, 2), (3, 4))),
             of_array(np.array([[1, 2], [3, 4]], dtype=np.float32)),
@@ -305,7 +317,7 @@ def unkeyed_types(value: object) -> set[str]:
 def test_every_value_type_the_kernels_declare_has_a_verdict() -> None:
     names = declared()
     assert sorted(names) == sorted(VERDICTS)
-    assert {"MatMulKernel.weights_dtype", "Channel.tensor"} <= {
+    assert {"MatMulKernel.weights", "Channel.tensor"} <= {
         member for members in names.values() for member in members
     }
     for name in ("BeatSequence", "Steps", "BaseDataType", "IntegerTensorValue", "Tensor"):

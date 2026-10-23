@@ -47,7 +47,7 @@ sys.meta_path.insert(0, RejectGraphDependencies())
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.library import library_module
 from finn.kernels.port import axis
-from finn.kernels.matmul import MatMulKernel
+from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import DspBlock, Fabric, Platform
 from finn.dataflow.datatypes import ordinary_integer_bounds
@@ -172,15 +172,17 @@ for memory in ("none", "memstream"):
     }
     expected = dotp_sources | {"rtl/shape/input_gen.sv"}
     # Unknown weights: the datatypes' result, INT8. Stored ones: their columns', INT7.
-    weights, bits = {"w_tensor": Tensor((4, 4), INT3)}, 8
+    weights, bits = {"weights": Tensor((4, 4), INT3)}, 8
     if memory == "memstream":
         # Stored (k, n): the columns of the by-output rows; MatMul's, and the weight
         # channel's value.
         weights = {
-            "w_contents": IntegerTensorValue.of(
-                ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4))
-            ),
-            "weights_dtype": DataType["INT3"],
+            "weights": KnownWeights(
+                IntegerTensorValue.of(
+                    ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4))
+                ),
+                DataType["INT3"],
+            )
         }
         bits = 7
         choices |= {

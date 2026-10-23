@@ -37,7 +37,7 @@ from finn.custom_op.kernels.thresholding import Thresholding
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name as dtype
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
-from finn.kernels.matmul import MatMulKernel
+from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.members import (
     VERIFY,
     Facts,
@@ -120,16 +120,17 @@ def test_one_binding_per_node_serves_its_outputs_and_its_point() -> None:
 
 def test_a_held_initializer_is_given_as_contents_never_as_a_tensor() -> None:
     """Known weights are the kernel's contents, with the datatype the graph declares them
-    in; streamed weights are a tensor, whose datatype is theirs."""
+    in (``KnownWeights``); streamed weights are a tensor, whose datatype is theirs."""
     stored = kernel_op(matmul_model(), matmul_model().graph.node[0])
     arguments = stored.facts().arguments
-    assert set(arguments) == {"weights_dtype", "platform", "x_tensor", "w_contents"}
+    assert set(arguments) == {"platform", "x_tensor", "weights"}
+    assert arguments["weights"] == KnownWeights(integer_tensor(WEIGHTS), INT3)
     assert arguments["x_tensor"] == Tensor((1, 3, 4), ScalarEncoding(INT3))  # whole
     streamed_model = matmul_model(stored=False)
     streamed = kernel_op(streamed_model, streamed_model.graph.node[0])
     arguments = streamed.facts().arguments
-    assert set(arguments) == {"platform", "x_tensor", "w_tensor"}
-    assert arguments["w_tensor"] == Tensor((4, 4), ScalarEncoding(INT3))
+    assert set(arguments) == {"platform", "x_tensor", "weights"}
+    assert arguments["weights"] == Tensor((4, 4), ScalarEncoding(INT3))
 
 
 def test_the_views_answer_from_facts() -> None:
@@ -137,7 +138,7 @@ def test_the_views_answer_from_facts() -> None:
     columns' (K7), each stated on the result element at the activations' rank."""
     streamed = design_space(
         MatMulKernel(
-            platform=TARGET.platform, x_tensor=X, w_tensor=Tensor((4, 4), ScalarEncoding(INT3))
+            platform=TARGET.platform, x_tensor=X, weights=Tensor((4, 4), ScalarEncoding(INT3))
         )
     )
     assert streamed.y_tensor == Tensor((3, 4), ScalarEncoding(dtype("INT8"), TensorRange(-48, 64)))
@@ -145,8 +146,7 @@ def test_the_views_answer_from_facts() -> None:
         MatMulKernel(
             platform=TARGET.platform,
             x_tensor=Tensor((1, 3, 4), ScalarEncoding(INT3)),
-            w_contents=IntegerTensorValue.of(STORED),
-            weights_dtype=INT3,
+            weights=KnownWeights(IntegerTensorValue.of(STORED), INT3),
         )
     )
     assert owned.y_tensor == Tensor((1, 3, 4), ScalarEncoding(dtype("INT5"), TensorRange(-11, 11)))
@@ -171,8 +171,7 @@ def test_a_graph_tensor_that_disagrees_with_the_facts_is_refused() -> None:
         MatMulKernel(
             platform=TARGET.platform,
             x_tensor=Tensor((3, 5), ScalarEncoding(INT3)),
-            w_contents=IntegerTensorValue.of(STORED),
-            weights_dtype=INT3,
+            weights=KnownWeights(IntegerTensorValue.of(STORED), INT3),
         )
     )
     rejection = wrong.query(MatMulKernel.carried)
@@ -286,9 +285,8 @@ def facts(weights: tuple[tuple[int, ...], ...] = STORED, **changed: object) -> F
     x_tensor = Tensor((3, len(weights)), ScalarEncoding(INT3))
     arguments: dict[str, object] = {
         "platform": TARGET.platform,
-        "weights_dtype": INT3,
         "x_tensor": x_tensor,
-        "w_contents": IntegerTensorValue.of(weights),
+        "weights": KnownWeights(IntegerTensorValue.of(weights), INT3),
     }
     return Facts(MatMulKernel, arguments | changed)
 
@@ -333,10 +331,12 @@ def test_a_hit_loads_no_held_value() -> None:
     the integers of the value it was asked with."""
     model = matmul_model()
     first: Any = kernel_op(model, model.graph.node[0]).bound()
-    assert first.w_contents == integer_tensor(WEIGHTS)
+    assert first.weights.contents == integer_tensor(WEIGHTS)
     again = kernel_op(model, model.graph.node[0])
-    value = again.facts().arguments["w_contents"]
+    known = again.facts().arguments["weights"]
     assert again.bound() is first
+    assert isinstance(known, KnownWeights)
+    value = known.contents
     assert isinstance(value, IntegerTensorValue) and value._integers is None
     assert value._array is None
 

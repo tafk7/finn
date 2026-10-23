@@ -11,12 +11,15 @@ from support.value_classes import frozen_dataclasses, mutable_fields
 from finn.dataflow.datatypes import QONNXDataType
 from finn.kernels.declaration import KernelDeclaration
 from finn.kernels.policies import Ranking
+from finn.kernels.values.semantics import IntegerTensorValue
 
 #: Types outside the checker's rule that are immutable, and why.
 IMMUTABLE: dict[object, str] = {
     QONNXDataType: "QONNX's datatypes are interned and refuse attribute assignment",
     Ranking: "a first valid policy's ranking is a view by class access, its declaration, "
     "fixed once its class is made (finn.kernels.policies.FirstValid)",
+    IntegerTensorValue: "an integer tensor is immutable, a copy the value itself, and refuses "
+    "attribute assignment (finn.kernels.values.semantics); MatMul's known weights hold one",
 }
 
 

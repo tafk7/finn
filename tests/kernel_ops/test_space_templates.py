@@ -142,7 +142,11 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # as values where it asked their presence (16 after ``viable``: the trial's int8 core's).
 # Then 1208 and 1280: four more, each weight channel's ``source.contents``, a required
 # formal bound to the channel's optional ``contents``, read as itself to check its value.
-EVALUATED = ((1212, 136), (1284, 136))
+# Then 1192 (132) and 1262 (132), MatMul's weights one fact: per MatMul, its two known
+# weights' constants (``w_contents``, ``weights_dtype``) one (``weights``), and ``weighted``,
+# ``carried_weights``' guard and its core's ``w_placed`` and ``w_stream`` guard gone (20;
+# 22 after ``viable``, the trial's int8 core's two as well).
+EVALUATED = ((1192, 132), (1262, 132))
 
 
 def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(

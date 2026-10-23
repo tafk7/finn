@@ -21,11 +21,9 @@ from support.helpers import (
     placed,
 )
 from support.netlist import Const, Drive, Pin
-from support.refusals import refused
 
 from finn.core.space import (
     Decision,
-    DefinitionError,
     Rejected,
     Select,
     Unresolved,
@@ -41,7 +39,7 @@ from finn.kernels.artifacts.build import emit_module
 from finn.kernels.configure import commit
 from finn.kernels.dotp import DotpAxiKernel, PackedDotpKernel
 from finn.kernels.library import library_module
-from finn.kernels.matmul import MatMulKernel
+from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 
 FACTS = dict(
@@ -217,7 +215,7 @@ def test_a_folding_factor_under_an_open_core_is_refused_by_its_domain_or_set() -
     own commit by its own finding; 2 is set, waiting on nothing (its domain reads N from the
     facts alone, and every core takes it). Both readings (other facts: twice the rows)."""
     point = design_space(
-        MatMulKernel(platform=FULL_DSP58, x_tensor=int4((8, 4)), w_tensor=int4((4, 4)))
+        MatMulKernel(platform=FULL_DSP58, x_tensor=int4((8, 4)), weights=int4((4, 4)))
     )
     assert isinstance(point.query(MatMulKernel.compute), Unresolved)
     pe = {item.key: item.reference for item in inspection.decisions(point)}["pe"]
@@ -277,9 +275,9 @@ def test_matmul_s_rules_and_its_cores_read_the_values_its_views_present(
     ``result_range``), never MatMul's views: valid, refused and open each answer,
     with no dependency cycle. The views present the same values."""
     if weights == "streamed":
-        facts = dict(w_tensor=int4((4, 4)))
+        facts = dict(weights=int4((4, 4)))
     else:
-        facts = dict(w_contents=KNOWN, weights_dtype=DataType[weights])
+        facts = dict(weights=KnownWeights(KNOWN, DataType[weights]))
     point = design_space(MatMulKernel(platform=FULL_DSP48E2, x_tensor=int4((2, 4)), **facts))
     point = commit(point, choices) if choices else point
     assert validity_of(point) == (status, pieces)
@@ -296,7 +294,7 @@ def test_matmul_s_rules_and_its_cores_read_the_values_its_views_present(
 def test_the_selected_core_s_own_rule_refuses_the_commit_that_breaks_it() -> None:
     """The selected core's own rule: pumping with one SIMD lane, committed together, is
     refused by it, at its origin, nothing standing."""
-    facts = dict(w_contents=KNOWN, weights_dtype=DataType["INT4"])
+    facts = dict(weights=KnownWeights(KNOWN, DataType["INT4"]))
     point = design_space(MatMulKernel(platform=FULL_DSP48E2, x_tensor=int4((2, 4)), **facts))
     handles = {item.key: item.reference for item in inspection.decisions(point)}
     choices = {**PACKED, "simd": 1, "compute.packed.compute_pumping": True}
@@ -309,7 +307,9 @@ def test_the_selected_core_s_own_rule_refuses_the_commit_that_breaks_it() -> Non
 
 
 def test_weights_that_are_not_integers_are_unrecognized_as_the_weights_value() -> None:
-    with refused("literal-unrecognized", error=DefinitionError, message="IntegerTensorValue"):
+    """Known weights hold an ``IntegerTensorValue``: values that are not integers are
+    refused where the known weights are made."""
+    with pytest.raises(TypeError, match="contents: expected IntegerTensorValue, given tuple"):
         assembly(weight_delivery=WeightDelivery.MEMSTREAM, weights=[[0.5] * 4] * 4)
 
 

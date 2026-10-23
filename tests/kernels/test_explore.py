@@ -56,7 +56,7 @@ from finn.kernels.explore import (
     TargetThroughput,
     explore,
 )
-from finn.kernels.matmul import MatMulKernel
+from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.network import Fact, Interface, Network, NetworkError, Wire, dotted, wire
 from finn.kernels.policies import Required
 from finn.kernels.thresholding import ThresholdingAxiKernel
@@ -389,10 +389,9 @@ def dsp58_matmul() -> tuple[Seam, Network]:
 
     def first() -> MatMulKernel:
         return MatMulKernel(
-            weights_dtype=chain.W,
             platform=FULL_DSP58,
             x_tensor=x_tensor,
-            w_contents=IntegerTensorValue.of(chain.W1),
+            weights=KnownWeights(IntegerTensorValue.of(chain.W1), chain.W),
         )
 
     y_tensor = design_space(first()).y_tensor

@@ -48,7 +48,7 @@ from finn.core.space import Available, Rejected, design_space
 from finn.dataflow.steps import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.channels import Channel
-from finn.kernels.matmul import MatMulKernel
+from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
 
@@ -119,23 +119,15 @@ def test_a_matmuls_results_fit_their_channels_tensor():
         assert {finding.code for finding in refused.findings} == {"channel-tensor"}
 
 
-def carried(
-    x: ScalarEncoding, w: ScalarEncoding, *, known: bool = True, declared: bool | None = None
-) -> object:
+def carried(x: ScalarEncoding, w: ScalarEncoding, *, known: bool = True) -> object:
     """MatMul's ``carried`` on tensors of these elements; its weights W1 (known weights,
-    whose tensor MatMul states over the datatype they are declared in) or a tensor of
-    ``w``. ``declared``: whether ``weights_dtype`` is given (as known weights state it)."""
-    declares = known if declared is None else declared
-    weights = (
-        {"w_contents": IntegerTensorValue.of(W1)}
-        if known
-        else {"w_tensor": Tensor((INPUTS, HIDDEN), w)}
-    )
+    declared ``W``, whose tensor MatMul states over the datatype they are declared in) or
+    a tensor of ``w``."""
+    weights = KnownWeights(IntegerTensorValue.of(W1), W) if known else Tensor((INPUTS, HIDDEN), w)
     stated = MatMulKernel(
         platform=FULL_DSP48E2,
         x_tensor=Tensor((ROWS, INPUTS), x),
-        **({"weights_dtype": W} if declares else {}),
-        **weights,
+        weights=weights,
     )
     return design_space(stated).query(MatMulKernel.carried)
 
@@ -152,9 +144,6 @@ def test_a_stream_s_values_fit_what_matmul_consumes_and_matmul_s_fit_what_it_pro
     assert carried(plain_a, ScalarEncoding(W, TensorRange(-3, 3))) == accepted
     assert carried(plain_a, tight, known=False) == accepted
     assert carried(plain_a, ScalarEncoding(DataType["INT4"]), known=False) == accepted
-    # A datatype stated twice is refused: streamed weights' is their tensor's.
-    restated = carried(plain_a, plain_w, known=False, declared=True)
-    assert isinstance(restated, Rejected) and "weights_dtype" in str(restated)
 
 
 @requires_xsim

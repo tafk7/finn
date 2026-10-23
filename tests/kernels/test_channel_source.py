@@ -50,7 +50,7 @@ from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import NETLIST
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import DotpAxiKernel
-from finn.kernels.matmul import MatMulKernel
+from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
 from finn.kernels.values.semantics import IntegerTensorValue
@@ -70,8 +70,8 @@ FACTS = dict(
     platform=FULL_DSP48E2,
 )
 """The harness's MatMul (``matmul_point``, ``matmul_assembly``)."""
-KNOWN = dict(weights_dtype=DataType["INT3"], platform=FULL_DSP48E2)
-"""MatMul's facts beside its tensors, its weights known: their declared datatype."""
+KNOWN = dict(platform=FULL_DSP48E2)
+"""MatMul's facts beside its tensors and its weights."""
 INT3, INT8 = ScalarEncoding(DataType["INT3"]), ScalarEncoding(DataType["INT8"])
 # The result of WEIGHTS' columns over INT3 activations (K7): [-30, 40].
 INT7 = ScalarEncoding(DataType["INT7"])
@@ -136,7 +136,7 @@ def stored(platform: Platform) -> Network:
             "matmul": MatMulKernel(
                 **{**KNOWN, "platform": platform},
                 x_tensor=Tensor((3, 4), INT3),
-                w_contents=IntegerTensorValue.of(WEIGHTS),
+                weights=KnownWeights(IntegerTensorValue.of(WEIGHTS), DataType["INT3"]),
             ),
         }
     )
@@ -391,7 +391,7 @@ def test_a_source_whose_rule_is_false_refuses_the_change_that_places_it():
         "matmul": MatMulKernel(
             **KNOWN,
             x_tensor=Tensor((3, 4), INT3),
-            w_contents=IntegerTensorValue.of((WEIGHTS, WEIGHTS)),
+            weights=KnownWeights(IntegerTensorValue.of((WEIGHTS, WEIGHTS)), DataType["INT3"]),
         ),
     }
     folding = {**FOLDING, "matmul.pe": 2, "matmul.simd": 2}
@@ -474,7 +474,7 @@ def test_a_channel_with_a_value_has_its_source_as_its_only_producer():
                 producer=Interface("matmul", "y_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "matmul": MatMulKernel(platform=FULL_DSP48E2, x_tensor=x_tensor, w_tensor=w_tensor),
+            "matmul": MatMulKernel(platform=FULL_DSP48E2, x_tensor=x_tensor, weights=w_tensor),
         }
     )
     answer = folded(produced).member("y").query(Channel.sides)

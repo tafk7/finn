@@ -30,8 +30,9 @@ operation runs natively (one channel per PE lane, INT8 DSP58 only) or, by the
 (``block_diagonal``), reading its (M, K, N) activations as (M, K * N).
 
 ``MatMulKernel`` is a kernel with children: the compute cores, which read the
-tensors it is given, ``x_tensor`` (the activations) and ``w_tensor`` (the weights),
-its folding factors (``pe``, ``simd``), and N and the widest K (``widest_reduction``),
+activations' tensor it is given (``x_tensor``) and the weights' tensor it carries
+(``carried_weights``), its folding factors (``pe``, ``simd``), and N and the widest K
+(``widest_reduction``),
 stated from its facts alone, and present its ports (``x``, ``w``, ``y``) as the selected
 core's (``finn.kernels.port.served``): ``x_stream`` is the selected core's stream, and
 ``x_contract`` its contract, labelled ``compute.<core>.x``
@@ -45,15 +46,16 @@ not what MatMul requires of it (the activations' element count and last axis, th
 weights' shape), or whose values do not fit what MatMul reads (``matmul-tensor``). A
 boundary channel there presents its ``port`` name (``in0_V``).
 
-MatMul consumes its weights; it never holds them. Known weights are a fact
-(``w_contents``, given by the value's owner, with the datatype the graph declares
-them in, ``weights_dtype``), and its weight channel's value:
-MatMul states what that channel carries, downstream of it. ``w_stored`` is the
-contents its source stores, block-diagonal for a dense realization of a
-depthwise form (it may read ``realization``), and ``w_carried`` the tensor it
+MatMul consumes its weights; it never holds them. Its weights are one fact,
+``weights``: known at build (``KnownWeights``, given by the value's owner: their values
+with the datatype the graph declares them in), or not (their ``Tensor``, which streams;
+an initializer a run may write is read as one too). Known weights are its weight
+channel's value: MatMul states what that channel carries, downstream of it.
+``w_stored`` is the contents its source stores, block-diagonal for a dense realization
+of a depthwise form (it may read ``realization``), and ``w_carried`` the tensor it
 carries, over the stored values' range, narrowed to it (``stored_element``:
 INT8-typed ternary weights are ``INT2``); without known weights, ``w_carried``
-is ``w_tensor``. Its network binds the weight channel's ``tensor`` and
+is the weights' tensor. Its network binds the weight channel's ``tensor`` and
 ``contents`` to the values the two present (``carried_weights``, ``stored_weights``),
 whatever MatMul's validity: what a kernel states for the graph from its facts is a
 value. With several weight sets the contents hold one operand a set, and the
@@ -95,6 +97,7 @@ children's.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from math import prod
 from typing import cast
 
@@ -201,8 +204,26 @@ def block_diagonal(weights: IntegerTensor) -> IntegerTensorValue:
     return IntegerTensorValue.flat((*shape[:-2], shape[-2] * channels, channels), dense)
 
 
-NO_WEIGHTS = "MatMul reads its weights: known (w_contents) or a tensor"
-"""The refusal of a MatMul given neither weights (``matmul-tensor``), wherever they are read."""
+@dataclass(frozen=True)
+class KnownWeights:
+    """Weights known at build: their values (``contents``), which the weight channel's
+    source stores, and the datatype the graph declares them in (``dtype``), which the
+    values narrow (``MatMulKernel.carried_weights``). A field of another type raises
+    ``TypeError``, where the value is made."""
+
+    contents: IntegerTensorValue
+    dtype: QONNXDataType
+
+    def __post_init__(self) -> None:
+        for name, kind, label in (
+            ("contents", IntegerTensorValue, "IntegerTensorValue"),
+            ("dtype", QONNXDataType, "QONNX datatype"),
+        ):
+            found = getattr(self, name)
+            if not isinstance(found, kind):
+                raise TypeError(
+                    f"known weights' {name}: expected {label}, given {type(found).__name__}"
+                )
 
 
 class MatMulKernel(KernelSpace):
@@ -214,18 +235,15 @@ class MatMulKernel(KernelSpace):
     # A dense form read through a window: a lowered convolution (module docstring).
     window: Window | None = Param(default=None)
     platform: Platform = Param()
-    # The tensors its ports read, and the known weights: facts it is given.
+    # The activations' tensor its port reads, and its weights, known or not: facts it is
+    # given.
     x_tensor: Tensor = Param()
-    w_tensor: Tensor | None = Param(default=None)
-    w_contents: IntegerTensorValue | None = Param(default=None)
-    # Known weights' datatype, the graph's, which their values narrow (``w_carried``);
-    # streamed weights' is their tensor's.
-    weights_dtype: QONNXDataType | None = Param(default=None)
+    weights: Tensor | KnownWeights = Param()
 
     @derived
     def stored(self) -> bool:
         """Whether the weights are known, which the weight channel's source stores."""
-        return self.w_contents is not None
+        return isinstance(self.weights, KnownWeights)
 
     @derived
     def depthwise(self) -> bool:
@@ -263,15 +281,14 @@ class MatMulKernel(KernelSpace):
     @derived
     def n(self) -> int | Rejected:
         """N, the outputs: the weights' last axis, known or streamed."""
-        if self.stored:
-            shape = integer_shape(self.w_contents)
+        weights = self.weights
+        if isinstance(weights, KnownWeights):
+            shape = integer_shape(weights.contents)
             if not shape:
                 return reject("matmul-tensor", "the known weights state no shape")
             return shape[-1]
-        if self.w_tensor is not None:
-            found: int = self.w_tensor.shape[-1]
-            return found
-        return reject("matmul-tensor", NO_WEIGHTS)
+        found: int = weights.shape[-1]
+        return found
 
     @derived
     def activation_dtype(self) -> QONNXDataType:
@@ -280,22 +297,13 @@ class MatMulKernel(KernelSpace):
         return found
 
     @derived
-    def weights_type(self) -> QONNXDataType | Rejected:
+    def weights_type(self) -> QONNXDataType:
         """The weights' datatype: known weights' as the graph declares them
-        (``weights_dtype``), streamed weights' their tensor's."""
-        given = self.weights_dtype
-        if self.stored:
-            if given is None:
-                return reject("matmul-tensor", "known weights state their datatype (weights_dtype)")
-            return given
-        if given is not None:
-            return reject(
-                "matmul-tensor",
-                "streamed weights' datatype is their tensor's: weights_dtype is known weights'",
-            )
-        if self.w_tensor is None:
-            return reject("matmul-tensor", NO_WEIGHTS)
-        found: QONNXDataType = self.w_tensor.element.dtype
+        (``KnownWeights.dtype``), streamed weights' their tensor's."""
+        weights = self.weights
+        found: QONNXDataType = (
+            weights.dtype if isinstance(weights, KnownWeights) else weights.element.dtype
+        )
         return found
 
     @derived
@@ -365,9 +373,7 @@ class MatMulKernel(KernelSpace):
         try:
             if self.stored:
                 return column_range(self.x_tensor.element, self.stored_weights)
-            weights = self.w_tensor
-            if weights is None:
-                return reject("matmul-tensor", NO_WEIGHTS)
+            weights = cast(Tensor, self.weights)  # not stored: their tensor
             return datatype_range(self.k, self.x_tensor.element, weights.element)
         except ValueError as error:
             return reject("matmul-arithmetic", str(error))
@@ -467,25 +473,20 @@ class MatMulKernel(KernelSpace):
     # The product its holder reads; inference reads the value it presents.
     y_tensor = View(result_tensor)
 
-    @derived
-    def weighted(self) -> bool:
-        """Whether its weights are placed: known, or a weight tensor given."""
-        return self.stored or self.w_tensor is not None
-
     @derived(when=stored)
     def stored_weights(self) -> IntegerTensorValue:
         """The known weights as the datapath reads them, which the weight channel's source
         stores: block-diagonal when a depthwise operation is realized densely."""
-        weights = cast("IntegerTensorValue", self.w_contents)  # stored: given
+        weights = cast(KnownWeights, self.weights).contents  # stored: known
         return block_diagonal(weights) if self.dense_view else weights
 
-    @derived(when=weighted)
+    @derived
     def carried_weights(self) -> Tensor | Rejected:
         """The tensor the weight channel carries, which the cores read: with known weights,
         a set of the stored values, ``(K, N)``, over their range, narrowed to it
-        (``stored_element``); otherwise ``w_tensor``."""
+        (``stored_element``); otherwise the weights' tensor."""
         if not self.stored:
-            return cast(Tensor, self.w_tensor)  # weighted and not stored: given
+            return cast(Tensor, self.weights)  # not stored: their tensor
         stored = integer_shape(self.stored_weights)
         if not stored or len(stored) < 2:
             return reject("matmul-tensor", f"known weights are (K, N) a set, not {stored}")
@@ -504,7 +505,7 @@ class MatMulKernel(KernelSpace):
     # holder reads; its network (``Fact(member, "carried_weights")``) and the cores read
     # the values.
     w_stored = View(stored_weights, when=stored)
-    w_carried = View(carried_weights, when=weighted)
+    w_carried = View(carried_weights)
 
     @constraint
     def carried(self) -> bool | Rejected:
@@ -513,11 +514,14 @@ class MatMulKernel(KernelSpace):
         states them narrowed to their values. The activations are the element count and
         the last axis of ``activation_tensor``, at any rank; the weights its shape."""
         given: list[tuple[str, Tensor, str, bool]] = [
-            ("x_tensor", self.x_tensor, "activation_tensor", False)
+            ("x_tensor", self.x_tensor, "activation_tensor", False),
+            (
+                "w_carried" if self.stored else "weights",
+                self.carried_weights,
+                "weight_tensor",
+                True,
+            ),
         ]
-        if self.weighted:
-            weights = "w_carried" if self.stored else "w_tensor"
-            given.append((weights, self.carried_weights, "weight_tensor", True))
         for name, supplied_, tensor, whole in given:
             # The weights are read whole, the activations by their count and last axis.
             derived_ = self.required_weights if whole else self.required_activations
@@ -575,6 +579,7 @@ class MatMulKernel(KernelSpace):
 
 
 __all__ = [
+    "KnownWeights",
     "MatMulKernel",
     "block_diagonal",
     "column_range",

@@ -30,7 +30,7 @@ from finn.core.space import (
     design_space,
     inspection,
 )
-from finn.dataflow.gemm import Form, Window
+from finn.dataflow.gemm import Form
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.abi import Clock, Data
@@ -119,28 +119,6 @@ def test_a_core_declares_ports_folding_factors_and_facts_and_the_base_derives_th
     }
     for name in ("activation_dtype", "activation_type", "activation", "iteration", "contraction"):
         assert not hasattr(DotpAxiKernel, name)
-
-
-def test_a_windowed_core_without_its_weights_tensor_refuses_its_extents() -> None:
-    # A window's outputs are the weights' last axis; with no weights' tensor, nothing
-    # states them, and the core refuses its extents rather than read what is not given.
-    core = design_space(
-        PackedDotpKernel(
-            window=Window((4, 4), (3, 3)),
-            x_tensor=Tensor((4, 4, 2), ScalarEncoding(DataType["INT3"])),
-            result_range=(-256, 255),
-            platform=FULL_DSP58,
-            columns=2,
-            widest_reduction=18,
-            pe=2,
-            simd=2,
-        )
-    )
-    answer = core.query(PackedDotpKernel.extents)
-    assert isinstance(answer, Rejected)
-    assert [(finding.code, finding.owner) for finding in answer.findings] == [
-        ("dotp-extents", "extents")
-    ]
 
 
 @pytest.mark.parametrize("target", tuple(DspBlock))
@@ -315,19 +293,7 @@ def role(weights_dtype: str = "INT3") -> Any:
     the packed core chosen, which holds the folding the core is given."""
     x = Tensor((1, 4), ScalarEncoding(DataType["INT3"]))
     w = Tensor((4, 2), ScalarEncoding(DataType[weights_dtype]))
-    return design_space(MatMulKernel(platform=FULL_DSP58, x_tensor=x, w_tensor=w))
-
-
-def test_a_matmul_given_neither_weights_refuses_where_it_reads_them() -> None:
-    """Neither known weights nor a weight tensor: both optional facts are None, and every
-    reader of the weights refuses as ``n`` does (``matmul-tensor``), rather than read a
-    tensor nothing gave."""
-    x = Tensor((1, 4), ScalarEncoding(DataType["INT3"]))
-    point = design_space(MatMulKernel(platform=FULL_DSP58, x_tensor=x))
-    assert point.w_tensor is None and point.w_contents is None and point.weights_dtype is None
-    assert point.stored is False and point.weighted is False
-    for member in (MatMulKernel.n, MatMulKernel.weights_type, MatMulKernel.result_range):
-        assert codes(point.query(member)) == {"matmul-tensor"}, member
+    return design_space(MatMulKernel(platform=FULL_DSP58, x_tensor=x, weights=w))
 
 
 PUMPING = "compute.packed.compute_pumping"
