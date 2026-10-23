@@ -1,47 +1,50 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""What crosses a slot, checked per template and composed per placement.
+"""What crosses a slot, checked per class and composed per placement.
 
-A template is compiled once (``_template``) and placed as scopes (``_structure``). Three
-checks read across the slots a template places, and each is composed here from what one
-template says of itself, never by copying a placement:
+A Space class is compiled once (``_template``: its compiled form, ``Compiled``) and placed
+as scopes (``_structure``). Three checks read across the slots a class places, and each is
+composed here from what one compiled form says of itself, never by copying a placement. A
+walk over a compiled form reads its records (members, and the records it writes for the
+Spaces it places); an edge into a placed Space (``ir.Placed``) is followed there, what it
+reaches out of that Space lifted back through the slot (``lift``).
 
-- **Cycles** (``order``). A template's dependency order runs over its own nodes, with an
-  edge from each import to what its target reaches in the child: the formals it reaches
-  by structural edges (each followed to the placing template's binding: its node, or the
-  guard the scope is placed under for a literal or a default) and the guard the child is
-  placed under, through any depth (``exits``). A
-  cycle through a child is found once, in the placing class's template, and named by
-  that template's keys: its own nodes, its imports and bindings, and the nodes of the
-  Spaces it places on the way, as the one table of every placement named them, relative
-  to the template (a cycle at two levels sharing nodes: the inner template's is found
-  first, as that template is linked first).
-- **Placements** (``check_placement``). Where a placing template leaves a formal
-  unsupplied, a Decision over nodes guarded by ``supplied`` of it never applies: what
-  exists only where it applies is not placed, and a node that still reads it is
-  refused (``reference-not-placed``), as the placing template is linked.
+- **Cycles** (``order``). A template's dependency order runs over its table's nodes, with
+  an edge from each import to what its target reaches in the child: the formals it
+  reaches by structural edges (each followed to the placing template's binding: its node,
+  or the guard the scope is placed under for a literal or a default) and the guard the
+  child is placed under, through any depth (``exits``, on the child's compiled form). A
+  cycle through a child is found once, in the placing class's table, and named by that
+  table's keys: its own nodes, its imports and bindings, and the members of the Spaces it
+  places on the way, as the one table of every placement named them, relative to the
+  class (a cycle at two levels sharing nodes: the inner class's is found first, as that
+  class is linked first).
+- **Placements** (``check_placement``). Where a placing class leaves a formal unsupplied,
+  a Decision over nodes guarded by ``supplied`` of it never applies: what exists only
+  where it applies is not placed, and a record that still reads it is refused
+  (``reference-not-placed``), as the placing class is linked.
 - **The domain rule** (``check_domains``): a domain's membership reads facts only. Per
-  template, each domain's walk follows what its membership inputs may read (arguments,
-  alternatives, a view's validity and a validity's pieces, outputs, selectors, guards,
-  a method's inferred reads and what ``present()`` reads), skipping the guards that
-  decide whether the Decision exists; it stops at a choice (``domain-reads-choice``),
-  and at the template's own formals and the guard it is placed under, which it reports
-  as reached. A child's are followed into the placing template's bindings, with the
-  guards above the slot as existence guards of the child's Decision too, and so up to
-  the root, per placement chain. A template records, for its own formals, which are reached by any
-  domain in its subtree (``_Entry``), once per placement signature.
+  class, each domain's walk follows what its membership inputs may read (arguments,
+  alternatives, a view's validity and a validity's pieces, outputs, selectors, guards, a
+  method's inferred reads and what ``present()`` reads), skipping the guards that decide
+  whether the Decision exists; it stops at a choice (``domain-reads-choice``), and at the
+  class's own formals and the guard it is placed under, which it reports as reached. A
+  child's are followed into the placing class's bindings, with the guards above the slot
+  as existence guards of the child's Decision too, and so up to the root, per placement
+  chain. A class records, for its own formals, which are reached by any domain in its
+  subtree (``_Entry``), once per placement signature.
 
-A template is read **at a placement** (``Placement``): the Decisions over nodes of it that
-never apply there. A placement
-changes a template only where such a Decision never applies: its selector is a
-constant, what is read through it has no alternatives, and its candidates, what exists
-only where it applies and the validity pieces of both are not placed.
+A class is read **at a placement** (``Placement``): the Decisions over nodes of it that
+never apply there. A placement changes a class only where such a Decision never applies:
+its selector is a constant, what is read through it has no alternatives, and its
+candidates, what exists only where it applies and the validity pieces of both are not
+placed.
 
-Each walk is that of the design space the template is placed in: the composition is
-exact. Where a walk back up re-enters the subtree holding the Decision it started from,
-its existence guards inside that subtree are known only per Decision: the walk is done
-once with none of them and, only where it re-entered, again per Decision (``_Approx``).
+Each walk is that of the design space the class is placed in: the composition is exact.
+Where a walk back up re-enters the subtree holding the Decision it started from, its
+existence guards inside that subtree are known only per Decision: the walk is done once
+with none of them and, only where it re-entered, again per Decision (``_Approx``).
 """
 
 from __future__ import annotations
@@ -50,14 +53,15 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast
 
-from ._collapse import forwards
 from ._ordering import cyclic, dependency_order
 from ._reads import _Dynamic, _Missing, _Ref, _TemplateInference
 from ._table import Binding, Table, member_key
 from .errors import DefinitionError
+from .ir import Placed, Placing, forwards
 
 if TYPE_CHECKING:
-    from ._template import Template
+    from ._template import Compiled
+    from .ir import Edge
 
 _OWNER = "space.compose"
 
@@ -67,8 +71,8 @@ _OWNER = "space.compose"
 
 @dataclass(frozen=True, slots=True)
 class Placement:
-    """A template read at a placement: the Decisions over nodes of it that never apply
-    there (guarded by ``supplied`` of a formal the placing template leaves unsupplied)."""
+    """A class read at a placement: the Decisions over nodes of it that never apply there
+    (guarded by ``supplied`` of a formal the placing class leaves unsupplied)."""
 
     never: frozenset[int] = frozenset()
 
@@ -76,10 +80,10 @@ class Placement:
 ROOT = Placement()
 
 
-def placement(template: Template, bindings: Mapping[str, Binding]) -> Placement:
+def placement(compiled: Compiled, bindings: Mapping[str, Binding]) -> Placement:
     never = frozenset(
         choice.index
-        for choice in template.choices
+        for choice in compiled.choices
         if choice.never_formal is not None and bindings[choice.never_formal].kind == "unsupplied"
     )
     return Placement(never)
@@ -87,130 +91,146 @@ def placement(template: Template, bindings: Mapping[str, Binding]) -> Placement:
 
 @dataclass(frozen=True, slots=True)
 class _Slot:
-    """A Space a template places (a placed stub): its class's template and placement, the
-    bindings of its formals, the node it is placed under, and the Decision over nodes whose
-    candidate it is (where that may never apply)."""
+    """A Space a class places: its class's compiled form and placement, the bindings of its
+    formals (a reference's ``node``: the record the placing class writes for it), what it is
+    placed under in the placing class, and the Decision over nodes whose candidate it is
+    (where that may never apply)."""
 
-    template: Template
+    compiled: Compiled
     placement: Placement
     bindings: Mapping[str, Binding]
-    guard: int
+    guard: int | Placing
     requires: int | None
 
 
-def _cache(template: Template, name: str) -> dict[Any, Any]:
-    return cast(dict[Any, Any], template.composed.setdefault(name, {}))
+def _cache(compiled: Compiled, name: str) -> dict[Any, Any]:
+    return cast(dict[Any, Any], compiled.composed.setdefault(name, {}))
 
 
-def slot(template: Template, stub: int) -> _Slot:
-    """A placed stub of ``template``, as a slot."""
-    cache = _cache(template, "slot")
-    found = cache.get(stub)
+def slot(compiled: Compiled, index: int) -> _Slot:
+    """Slot ``index`` of ``compiled``, as the walks read it."""
+    cache = _cache(compiled, "slot")
+    found = cache.get(index)
     if found is None:
-        from ._template import link_template  # noqa: PLC0415 - a cycle
-
-        scope = template.scopes[stub]
-        child = link_template(scope.space_type)
-        found = cache[stub] = _Slot(
-            child,
-            placement(child, scope.bindings),
-            scope.bindings,
-            cast(int, scope.guard),
-            scope.requires,
+        held = compiled.slots[index]
+        found = cache[index] = _Slot(
+            held.compiled,
+            placement(held.compiled, held.bindings),
+            held.bindings,
+            cast("int | Placing", compiled.ref(held.guard)),
+            held.requires,
         )
     return cast(_Slot, found)
 
 
 def _table_slot(table: Table, stub: int) -> _Slot:
-    """A placed stub of a table being linked, as a slot."""
+    """A placed stub of a table being linked, as a slot (its bindings and guard nodes of
+    the table)."""
+    from ._template import compiled  # noqa: PLC0415 - a cycle
+
     draft = table.drafts[stub]
     held = table.stub(stub)
+    child = compiled(held.template.space_type)
     return _Slot(
-        held.template,
-        placement(held.template, held.bindings),
+        child,
+        placement(child, held.bindings),
         held.bindings,
         cast(int, draft.guard),
         held.requires,
     )
 
 
-def path(template: Template, stub: int) -> tuple[int, ...]:
-    """A stub's placed stubs from the template down: a placed stub, then for a nested one
-    each slot in its parent's template."""
+def _table_descent(table: Table, node: int) -> tuple[_Slot, tuple[int, ...], int]:
+    """An import of a table being linked, as a walk reads it: the slot of its placed stub,
+    the slots below it to the class holding its target (each nested stub's), and the
+    target's record there."""
     steps: list[int] = []
-    while True:
-        scope = template.scopes[stub]
-        if scope.parent == 0:
-            steps.append(stub)
-            return tuple(reversed(steps))
-        steps.append(cast(int, scope.slot))
-        stub = cast(int, scope.parent)
-
-
-def _table_path(table: Table, stub: int) -> tuple[int, ...]:
-    steps: list[int] = []
+    stub = table.nodes[node].scope
     while True:
         draft = table.drafts[stub]
         if draft.parent == 0:
-            steps.append(stub)
-            return tuple(reversed(steps))
+            break
         steps.append(cast(int, table.stub(stub).slot))
         stub = cast(int, draft.parent)
+    held = _table_slot(table, stub)
+    current = held.compiled
+    slots: list[int] = []
+    for nested in reversed(steps):
+        index = current.slot_of_stub[nested]
+        slots.append(index)
+        current = current.slots[index].compiled
+    return held, tuple(slots), current.record_of[table.imports[node]]
 
 
-# -- a template at a placement -----------------------------------------------------------------
+# -- a class at a placement -----------------------------------------------------------------
 
-# A reference out of a template: a formal's (``formal``, name, mode), or the guard it is
-# placed under (``guard``, mode). A mode: ``r`` reached, ``s`` followed as ``present()``
-# follows a value's sources, ``S`` the first such step.
+# A reference out of a class: a formal's (``formal``, name, mode), or the guard it is placed
+# under (``guard``, mode). A mode: ``r`` reached, ``s`` followed as ``present()`` follows a
+# value's sources, ``S`` the first such step.
 Exit: TypeAlias = tuple[str, ...]
 Mode = Literal["r", "s", "S"]
-Ref: TypeAlias = "int | Exit"
+# What a walk reads: a record of the class walked, the guard it is placed under, a member of
+# a Space it places (walked there), or a reference out of it.
+Ref: TypeAlias = "int | Placing | Placed | Exit"
 
 
-def _dropped(template: Template, at: Placement, node: int) -> bool:
-    """A node of a stub below a candidate of a Decision over nodes that never applies."""
-    scope = template.nodes[node].scope
-    return scope != 0 and template.scopes[scope].requires in at.never
+def _dropped(compiled: Compiled, at: Placement, ref: Ref) -> bool:
+    """A record written for a placed Space, or a member read in one, below a candidate of a
+    Decision over nodes that never applies."""
+    if isinstance(ref, Placed):
+        return compiled.slots[ref.path[0]].requires in at.never
+    written = compiled.written.get(ref) if isinstance(ref, int) else None
+    return written is not None and compiled.slots[written].requires in at.never
 
 
-def excluded(template: Template, at: Placement, node: int) -> bool:
-    """Whether ``at`` places no node for ``node``: it is below a candidate of a Decision
-    over nodes that never applies there, or exists only where one applies. A selection is
-    placed where something reads it."""
+def excluded(compiled: Compiled, at: Placement, ref: Ref) -> bool:
+    """Whether ``at`` places nothing for ``ref``: it is below a candidate of a Decision over
+    nodes that never applies there, or exists only where one applies. A selection is placed
+    where something reads it."""
     if not at.never:
         return False
-    if _dropped(template, at, node):
+    if _dropped(compiled, at, ref):
         return True
-    if node in template.index.selections or node in template.stub_selects:
+    if isinstance(ref, int) and (ref in compiled.selections or _chosen(compiled, ref)):
         return False
-    return template.requires.get(node) in at.never
+    return compiled.requires.get(ref) in at.never
 
 
-def is_decision(template: Template, at: Placement, node: int) -> bool:
+def _chosen(compiled: Compiled, record: int) -> bool:
+    """Whether a record is a selection the class makes in a placed Space's choice."""
+    cache = _cache(compiled, "chosen")
+    found = cache.get(None)
+    if found is None:
+        found = cache[None] = frozenset(compiled.chosen.values())
+    return record in cast(frozenset[int], found)
+
+
+def is_decision(compiled: Compiled, at: Placement, ref: int) -> bool:
     """A Decision at ``at`` (a selector that never applies is a constant there)."""
-    return template.nodes[node].kind == "decision" and template.selectors.get(node) not in at.never
+    return compiled.records[ref].kind == "decision" and compiled.selectors.get(ref) not in at.never
 
 
-def _never_selection(template: Template, at: Placement, node: int) -> bool:
-    selection = template.index.selections.get(node)
+def _never_selection(compiled: Compiled, at: Placement, record: int) -> bool:
+    selection = compiled.selections.get(record)
     return selection is not None and selection[0] in at.never
 
 
-def pieces(template: Template, at: Placement) -> list[Ref]:
-    """A validity node's pieces at ``at``: its constraints and Decisions, then each placed
+def pieces(compiled: Compiled, at: Placement) -> list[Ref]:
+    """A validity's pieces at ``at``: its constraints and Decisions, then each placed
     Space's validity. A formal it lists stands for nothing here (no binding is a Decision
     of its own)."""
     own: list[Ref] = []
     placed: list[Ref] = []
-    for piece in template.nodes[template.validity].constraints:
-        if template.nodes[piece].scope != 0:
-            if not _dropped(template, at, piece):
+    for edge in compiled.records[compiled.validity].constraints:
+        piece = compiled.ref(edge)
+        if isinstance(piece, Placed):
+            if not _dropped(compiled, at, piece):
                 placed.append(piece)
             continue
-        if piece in template.formal_names or excluded(template, at, piece):
+        piece = cast(int, piece)
+        if piece in compiled.formal_names or excluded(compiled, at, piece):
             continue
-        if template.selectors.get(piece) not in at.never:
+        if compiled.selectors.get(piece) not in at.never:
             own.append(piece)
     return [*own, *placed]
 
@@ -219,13 +239,13 @@ def pieces(template: Template, at: Placement) -> list[Ref]:
 class _Fields:
     """A node's references at a placement, by role."""
 
-    arguments: tuple[int, ...]
-    domain_arguments: tuple[int, ...]
-    guard: int | None
-    output: int | None
-    selector: int | None
+    arguments: tuple[Ref, ...]
+    domain_arguments: tuple[Ref, ...]
+    guard: Ref | None
+    output: Ref | None
+    selector: Ref | None
     constraints: tuple[Ref, ...]
-    alternatives: tuple[int, ...]
+    alternatives: tuple[Ref, ...]
 
     def dependencies(self) -> list[Ref]:
         """In ``Node.dependencies``' order."""
@@ -247,34 +267,35 @@ class _Fields:
         return found
 
 
-def fields(template: Template, at: Placement, node: int) -> _Fields:
-    spec = template.nodes[node]
-    alternatives = tuple(target for _, target in spec.alternatives)
-    constraints: tuple[Ref, ...] = spec.constraints
-    if node == template.validity:
-        constraints = tuple(pieces(template, at))
-    elif at.never and _never_selection(template, at, node):
+def fields(compiled: Compiled, at: Placement, record: int) -> _Fields:
+    """A record's references at ``at``, as a walk reads them (``Compiled.ref``)."""
+    spec = compiled.records[record]
+    ref = compiled.ref
+    alternatives = tuple(ref(target) for _, target in spec.alternatives)
+    constraints: tuple[Ref, ...] = tuple(ref(piece) for piece in spec.constraints)
+    if record == compiled.validity:
+        constraints = tuple(pieces(compiled, at))
+    elif at.never and _never_selection(compiled, at, record):
         alternatives = ()  # read through a Decision over nodes that never applies here
     elif at.never and spec.kind == "members":
         alternatives = tuple(
-            target for target in alternatives if not _dropped(template, at, target)
+            target for target in alternatives if not _dropped(compiled, at, target)
         )
     return _Fields(
-        tuple(argument.node for argument in spec.arguments),
-        tuple(argument.node for argument in spec.domain_arguments),
-        spec.guard,
-        spec.output,
-        spec.selector,
+        tuple(ref(edge) for _, edge in spec.arguments),
+        tuple(ref(edge) for _, edge in spec.domain_arguments),
+        None if spec.guard is None else ref(spec.guard),
+        None if spec.output is None else ref(spec.output),
+        None if spec.selector is None else ref(spec.selector),
         constraints,
         alternatives,
     )
 
 
-def lift(slot_: _Slot, exits: Iterable[Exit]) -> Iterator[tuple[int, Mode]]:
-    """What a placed Space's references out stand for in its placing template: a formal,
-    its binding's node (or, for a literal or a default, the guard the scope is placed
-    under: a constant's or an unsupplied formal's only edge); the guard it is placed
-    under."""
+def lift(slot_: _Slot, exits: Iterable[Exit]) -> Iterator[tuple[int | Placing, Mode]]:
+    """What a placed Space's references out stand for in its placing class: a formal, its
+    binding's record (or, for a literal or a default, the guard the scope is placed under: a
+    constant's or an unsupplied formal's only edge); the guard it is placed under."""
     for exit in exits:
         kind = exit[0]
         if kind == "formal":
@@ -287,13 +308,13 @@ def lift(slot_: _Slot, exits: Iterable[Exit]) -> Iterator[tuple[int, Mode]]:
             yield slot_.guard, cast(Mode, exit[1])
 
 
-def _classify(template: Template, ref: Ref, mode: Mode) -> Exit | None:
-    """``ref``'s reference out of ``template``, if it is one."""
+def _classify(compiled: Compiled, ref: Ref, mode: Mode) -> Exit | None:
+    """``ref``'s reference out of ``compiled``'s class, if it is one."""
     if isinstance(ref, tuple):
         return ref
-    if ref == template.placement_guard:
+    if isinstance(ref, Placing):
         return ("guard", "s" if mode == "S" else mode)
-    formal = template.formal_names.get(ref)
+    formal = compiled.formal_names.get(ref) if isinstance(ref, int) else None
     if formal is not None:
         return ("formal", formal, mode)
     return None
@@ -302,73 +323,72 @@ def _classify(template: Template, ref: Ref, mode: Mode) -> Exit | None:
 # -- cycles ------------------------------------------------------------------------------------
 
 
-def exits(template: Template, at: Placement, node: int) -> frozenset[Exit]:
-    """What ``node`` reaches out of ``template`` at ``at`` by structural edges (its
-    dependencies, through any depth of the Spaces it places). A template's graph is
-    acyclic once linked, so each node's are found once."""
-    memo = cast(dict[int, frozenset[Exit]], _cache(template, "exits").setdefault(at, {}))
-    if node in memo:
-        return memo[node]
-    stack: list[tuple[int, Iterator[Ref]]] = [(node, iter(_successors(template, at, node)))]
-    open_ = {node}
-    found: dict[int, set[Exit]] = {node: set()}
+def exits(compiled: Compiled, at: Placement, ref: int | Placed) -> frozenset[Exit]:
+    """What ``ref`` reaches out of ``compiled``'s class at ``at`` by structural edges (its
+    dependencies, through any depth of the Spaces it places). A class's graph is acyclic
+    once linked, so each record's are found once."""
+    memo = cast(dict[object, frozenset[Exit]], _cache(compiled, "exits").setdefault(at, {}))
+    if ref in memo:
+        return memo[ref]
+    stack: list[tuple[int | Placed, Iterator[Ref]]] = [(ref, iter(_successors(compiled, at, ref)))]
+    open_: set[object] = {ref}
+    found: dict[object, set[Exit]] = {ref: set()}
     while stack:
         current, successors = stack[-1]
-        ref = next(successors, None)
-        if ref is None:
+        following = next(successors, None)
+        if following is None:
             stack.pop()
             open_.discard(current)
             memo[current] = frozenset(found.pop(current))
             if stack:
                 found[stack[-1][0]] |= memo[current]
             continue
-        out = _classify(template, ref, "r")
+        out = _classify(compiled, following, "r")
         if out is not None:
             found[current].add(out)
             continue
-        ref = cast(int, ref)
-        if excluded(template, at, ref):
+        following = cast("int | Placed", following)
+        if excluded(compiled, at, following):
             continue
-        if ref in memo:
-            found[current] |= memo[ref]
-        elif ref not in open_:
-            open_.add(ref)
-            found[ref] = set()
-            stack.append((ref, iter(_successors(template, at, ref))))
-    return memo[node]
+        if following in memo:
+            found[current] |= memo[following]
+        elif following not in open_:
+            open_.add(following)
+            found[following] = set()
+            stack.append((following, iter(_successors(compiled, at, following))))
+    return memo[ref]
 
 
-def _successors(template: Template, at: Placement, node: int) -> list[Ref]:
-    """A node's dependencies at ``at``; an import's, what its target reaches in the child,
-    lifted into this template."""
-    if template.nodes[node].kind == "import":
-        return [ref for ref, _ in _descend(template, at, node)]
-    return fields(template, at, node).dependencies()
+def _successors(compiled: Compiled, at: Placement, ref: int | Placed) -> list[Ref]:
+    """A record's dependencies at ``at``; a placed Space's member's, what it reaches there,
+    lifted into this class."""
+    if isinstance(ref, Placed):
+        return [found for found, _ in _through(compiled, ref.path, ref.member)]
+    return fields(compiled, at, ref).dependencies()
 
 
-def _descend(template: Template, at: Placement, node: int) -> list[tuple[int, Mode]]:
-    stub = template.nodes[node].scope
-    return _through(template, path(template, stub), template.imports[node])
-
-
-def _reaching(template: Template, at: Placement, ref: Ref) -> frozenset[Exit]:
-    """What a reference of ``template`` reaches out of it: itself, if it is one."""
-    out = _classify(template, ref, "r")
+def _reaching(compiled: Compiled, at: Placement, ref: Ref) -> frozenset[Exit]:
+    """What a reference of ``compiled``'s class reaches out of it: itself, if it is one."""
+    out = _classify(compiled, ref, "r")
     if out is not None:
         return frozenset((out,))
-    return exits(template, at, cast(int, ref))
+    return exits(compiled, at, cast("int | Placed", ref))
 
 
-def _through(template: Template, steps: Sequence[int], target: int) -> list[tuple[int, Mode]]:
-    """What ``target`` (a node of the template ``steps`` reach) reaches out of it, followed
-    up to ``template``."""
-    return _up(slot(template, steps[0]), steps[1:], target)
+def _through(
+    compiled: Compiled, steps: Sequence[int], target: int | Placing
+) -> list[tuple[int | Placing, Mode]]:
+    """What ``target`` (a record of the class ``steps`` reach) reaches out of it, followed up
+    to ``compiled``'s class."""
+    return _up(slot(compiled, steps[0]), steps[1:], target)
 
 
-def _up(held: _Slot, steps: Sequence[int], target: int) -> list[tuple[int, Mode]]:
-    """What ``target`` (a node of the template ``steps`` reach from ``held``'s) reaches out
-    of it, followed up through ``held`` into its placing template."""
-    child, at = held.template, held.placement
+def _up(
+    held: _Slot, steps: Sequence[int], target: int | Placing
+) -> list[tuple[int | Placing, Mode]]:
+    """What ``target`` (a record of the class ``steps`` reach from ``held``'s) reaches out of
+    it, followed up through ``held`` into its placing class."""
+    child, at = held.compiled, held.placement
     reached: set[Exit] = set()
     if steps:
         for ref, _ in _through(child, steps, target):
@@ -380,16 +400,15 @@ def _up(held: _Slot, steps: Sequence[int], target: int) -> list[tuple[int, Mode]
 
 def order(table: Table) -> tuple[int, ...]:
     """The dependency order of a table being linked, with each import's edges to what its
-    target reaches out of the child (``exits``). A cycle is ``cyclic-dependency``, named by
-    the table's keys: its own nodes, its imports and bindings, and the nodes of the Spaces
-    it places on the way (``_named``)."""
+    target reaches out of the child (``exits``, on the child's compiled form). A cycle is
+    ``cyclic-dependency``, named by the table's keys: its own nodes, its imports and
+    bindings, and the members of the Spaces it places on the way (``_named``)."""
     dependencies: list[tuple[int, ...]] = []
     for node in table.nodes:
         found = list(node.dependencies)
         if node.kind == "import":
-            steps = _table_path(table, node.scope)
-            held = _table_slot(table, steps[0])
-            found.extend(ref for ref, _ in _up(held, steps[1:], table.imports[node.index]))
+            held, steps, target = _table_descent(table, node.index)
+            found.extend(cast(int, ref) for ref, _ in _up(held, steps, target))
         dependencies.append(tuple(dict.fromkeys(found)))
     names = tuple(node.key for node in table.nodes)
     try:
@@ -403,31 +422,39 @@ def order(table: Table) -> tuple[int, ...]:
             named = set(members)
             for member in nodes:
                 if table.nodes[member].kind == "import":
-                    steps = _table_path(table, table.nodes[member].scope)
-                    held = _table_slot(table, steps[0])
+                    held, steps, target = _table_descent(table, member)
+                    stub = _table_placed(table, member)
                     named |= _named(
                         held,
-                        steps[1:],
-                        table.imports[member],
-                        table.drafts[steps[0]].name,
+                        steps,
+                        target,
+                        table.drafts[stub].name,
                         lambda ref: ref in nodes,
                     )
             cycles.append(tuple(sorted(named)))
         raise cyclic(cycles) from None
 
 
+def _table_placed(table: Table, node: int) -> int:
+    """The placed stub an import of a table being linked is below."""
+    stub = table.nodes[node].scope
+    while table.drafts[stub].parent != 0:
+        stub = cast(int, table.drafts[stub].parent)
+    return stub
+
+
 def _named(
     held: _Slot,
     steps: Sequence[int],
-    target: int,
+    target: int | Placing,
     name: str,
     wanted: Callable[[Ref], bool],
 ) -> set[str]:
-    """The keys (under ``name``, the placed scope's) of the nodes on the ways from
-    ``target`` (a node of the template ``steps`` reach from ``held``'s) back to a reference
-    of the placing template that ``wanted`` accepts: what a cycle through an import passes
+    """The keys (under ``name``, the placed scope's) of the members on the ways from
+    ``target`` (a record of the class ``steps`` reach from ``held``'s) back to a reference
+    of the placing class that ``wanted`` accepts: what a cycle through an import passes
     through inside the Spaces placed, as the one table of every placement named it."""
-    child, at = held.template, held.placement
+    child, at = held.compiled, held.placement
 
     def reaches(ref: Ref) -> bool:
         return any(
@@ -435,43 +462,42 @@ def _named(
         )
 
     found: set[str] = set()
-    starts: list[int] = []
+    starts: list[Ref] = []
     if steps:
         below = slot(child, steps[0])
         found |= _named(
-            below, steps[1:], target, member_key(name, child.scopes[steps[0]].name), reaches
+            below, steps[1:], target, member_key(name, child.slots[steps[0]].name), reaches
         )
         starts = [ref for ref, _ in _up(below, steps[1:], target) if reaches(ref)]
     elif reaches(target):
         starts = [target]
     formals: set[str] = set()
-    seen = set(starts)
+    seen: set[object] = set(starts)
     pending = list(starts)
     while pending:
-        node = pending.pop()
-        if _classify(child, node, "r") is not None:
+        current = pending.pop()
+        if _classify(child, current, "r") is not None:
             continue
-        spec = child.nodes[node]
-        if spec.kind == "import":
-            inner = path(child, spec.scope)
+        current = cast("int | Placed", current)
+        if isinstance(current, Placed):
             found |= _named(
-                slot(child, inner[0]),
-                inner[1:],
-                child.imports[node],
-                member_key(name, child.scopes[inner[0]].name),
+                slot(child, current.path[0]),
+                current.path[1:],
+                current.member,
+                member_key(name, child.slots[current.path[0]].name),
                 reaches,
             )
         else:
-            found.add(member_key(name, spec.key))
-        for ref in _successors(child, at, node):
+            found.add(member_key(name, child.records[current].key))
+        for ref in _successors(child, at, current):
             out = _classify(child, ref, "r")
             if out is not None:
                 if out[0] == "formal" and reaches(out):
                     formals.add(out[1])
                 continue
-            if ref not in seen and not excluded(child, at, cast(int, ref)) and reaches(ref):
-                seen.add(cast(int, ref))
-                pending.append(cast(int, ref))
+            if ref not in seen and not excluded(child, at, ref) and reaches(ref):
+                seen.add(ref)
+                pending.append(ref)
     # A formal bound to a literal or a default is a constant node of the placed scope.
     found.update(
         member_key(name, formal) for formal in formals if held.bindings[formal].node is None
@@ -484,42 +510,40 @@ def _named(
 
 def check_placements(table: Table) -> None:
     """Each Space a table being linked places where a Decision over nodes of it never
-    applies: no node it places there reads what is not placed (``check_placement``)."""
+    applies: no record it places there reads what is not placed (``check_placement``)."""
     for draft in table.drafts:
         if draft.parent != 0:
             continue
         held = _table_slot(table, draft.index)
         if held.placement.never:
-            check_placement(held.template, held.placement, table.local_name(0, draft.index))
+            check_placement(held.compiled, held.placement, table.local_name(0, draft.index))
 
 
-def check_placement(template: Template, at: Placement, name: str) -> None:
-    """No node of ``template`` placed at ``at`` (at scope ``name``) reads a node it does not
-    place: ``reference-not-placed`` (as the line's one table of every placement refused
-    it, when lowering the reader there)."""
-    for node in range(len(template.nodes)):
-        if template.nodes[node].kind == "import" or excluded(template, at, node):
+def check_placement(compiled: Compiled, at: Placement, name: str) -> None:
+    """No record of ``compiled``'s class placed at ``at`` (at scope ``name``) reads what it
+    does not place: ``reference-not-placed`` (as the line's one table of every placement
+    refused it, when lowering the reader there)."""
+    for record in range(len(compiled.records)):
+        if excluded(compiled, at, record):
             continue
-        for ref in fields(template, at, node).dependencies():
-            if isinstance(ref, int) and excluded(template, at, ref):
-                raise _not_placed(template, at, name, node, ref)
+        for ref in fields(compiled, at, record).dependencies():
+            if isinstance(ref, (int, Placed)) and excluded(compiled, at, ref):
+                raise _not_placed(compiled, at, name, record, ref)
 
 
 def _not_placed(
-    template: Template, at: Placement, name: str, reader: int, target: int
+    compiled: Compiled, at: Placement, name: str, reader: int, target: int | Placed
 ) -> DefinitionError:
-    owner = member_key(name, template.nodes[reader].owner)
-    scope = template.nodes[target].scope
-    if scope != 0 and _dropped(template, at, target):
+    owner = member_key(name, compiled.records[reader].owner)
+    if _dropped(compiled, at, target):
         # Below a candidate that is not placed: the candidate's node declaration.
-        while template.scopes[scope].parent != 0:
-            scope = cast(int, template.scopes[scope].parent)
-        record = template.scopes[scope].record
+        placed = target.path[0] if isinstance(target, Placed) else compiled.written[target]
+        record = compiled.slots[placed].record
         describe = getattr(record, "describe", None)
         text = describe() if callable(describe) else repr(record)
         detail = f"{owner}: {text} is not placed in {name or '<root>'}"
     else:
-        detail = f"{owner}: {member_key(name, template.nodes[target].key)} is not placed"
+        detail = f"{owner}: {member_key(name, compiled.key_of(target))} is not placed"
     return DefinitionError.broken("reference-not-placed", _OWNER, detail, declaration=owner)
 
 
@@ -565,18 +589,18 @@ class _Refusal:
         return DefinitionError.broken("domain-reads-choice", owner, detail, declaration=owner)
 
 
-# Where the Decision a walk started from is, from the template walked: the placed stubs down
-# to its template, then its guard there (``_Path``).
-_Path: TypeAlias = tuple[int, ...]
+# Where the Decision a walk started from is, from the class walked: the slots down to its
+# class, then its guard there (``_Path``).
+_Path: TypeAlias = "tuple[int | Placing, ...]"
 
 
 @dataclass(frozen=True, slots=True)
 class _Approx:
-    """A walk up from below ``stub``, the guards the Decision's scope is placed under in
-    this template skipped; where it re-enters ``stub`` it is walked with no existence
-    guards (it reaches at least what the Decision's walk reaches) and marked."""
+    """A walk up from below slot ``index``, the guards the Decision's scope is placed under in
+    this class skipped; where it re-enters ``index`` it is walked with no existence guards (it
+    reaches at least what the Decision's walk reaches) and marked."""
 
-    stub: int
+    index: int
 
 
 Origin: TypeAlias = "_Path | _Approx | None"
@@ -584,8 +608,8 @@ Origin: TypeAlias = "_Path | _Approx | None"
 
 @dataclass(slots=True)
 class _Outcome:
-    """A walk's result: a refusal, or what it reached out of its template (each with its
-    way), and whether it re-entered an ``_Approx`` walk's stub (then the refusal or what it
+    """A walk's result: a refusal, or what it reached out of its class (each with its way),
+    and whether it re-entered an ``_Approx`` walk's slot (then the refusal or what it
     reached is a superset of the Decision's own)."""
 
     refusal: _Refusal | None = None
@@ -597,10 +621,10 @@ class _Outcome:
 
 @dataclass(slots=True)
 class _Entry:
-    """What the domains of a template's subtree reach out of it, for one set of
-    references out: each with its way, the first Decision's key, and every Decision's place
-    (``("own", guard, key)``; ``("via", stub, entry, name)``: every Decision of a child's
-    entry below that stub, named ``name`` here; ``("path", path, key)``: one, by its
+    """What the domains of a class's subtree reach out of it, for one set of references
+    out: each with its way, the first Decision's key, and every Decision's place
+    (``("own", guard, key)``; ``("via", slot, entry, name)``: every Decision of a child's
+    entry below that slot, named ``name`` here; ``("path", path, key)``: one, by its
     ``_Path``)."""
 
     exits: dict[Exit, tuple[str, ...]]
@@ -616,14 +640,14 @@ def _places(origins: Iterable[tuple[Any, ...]], name: str = "") -> Iterator[tupl
         elif origin[0] == "path":
             yield cast(_Path, origin[1]), member_key(name, origin[2])
         else:
-            stub, entry, local = origin[1], cast(_Entry, origin[2]), origin[3]
+            index, entry, local = origin[1], cast(_Entry, origin[2]), origin[3]
             for place, key in _places(entry.origins, member_key(name, local)):
-                yield (stub, *place), key
+                yield (index, *place), key
 
 
 @dataclass(slots=True)
 class _Summary:
-    """The domains of a template's subtree at a placement: what they reach out of it
+    """The domains of a class's subtree at a placement: what they reach out of it
     (``entries``), and the refusals found (one, unless every refusal is asked for: then
     every Decision refused, by its key)."""
 
@@ -635,10 +659,10 @@ _Push: TypeAlias = "tuple[Ref, Mode, tuple[str, ...]]"
 
 
 def _way(name: str, exit: Exit, way: tuple[str, ...]) -> tuple[str, ...]:
-    """A way out of a placed Space (at ``name``), under the placing template's keys. A way
-    out through a formal keeps the formal as a step: the hop across the slot, from the
-    child's formal to what the placing template binds it to, is what its author needs to
-    see (a forwarding alias inside one template is no step)."""
+    """A way out of a placed Space (at ``name``), under the placing class's keys. A way out
+    through a formal keeps the formal as a step: the hop across the slot, from the child's
+    formal to what the placing class binds it to, is what its author needs to see (a
+    forwarding alias inside one class is no step)."""
     found = tuple(member_key(name, step) for step in way)
     if exit[0] == "formal":
         found = (*found, member_key(name, exit[1]))
@@ -657,34 +681,36 @@ class _Domains:
     # -- existence guards
 
     @staticmethod
-    def _chain(template: Template, head: int | None) -> frozenset[int]:
-        """``head`` and every guard it is evaluated under, in ``template``."""
-        cache = _cache(template, "chain")
+    def _chain(compiled: Compiled, head: int | Placing) -> frozenset[object]:
+        """``head`` and every guard it is evaluated under, in ``compiled``'s class."""
+        cache = _cache(compiled, "chain")
         found = cache.get(head)
         if found is None:
-            nodes: list[int] = []
-            current = head
+            nodes: list[object] = []
+            current: Ref | None = head
             while current is not None:
                 nodes.append(current)
-                current = template.nodes[current].guard
+                guard = compiled.records[current].guard if isinstance(current, int) else None
+                current = None if guard is None else compiled.ref(guard)
             found = cache[head] = frozenset(nodes)
-        return cast(frozenset[int], found)
+        return cast(frozenset[object], found)
 
-    def _skip(self, template: Template, origin: Origin) -> frozenset[int]:
+    def _skip(self, compiled: Compiled, origin: Origin) -> frozenset[object]:
         if origin is None:
             return frozenset()
         if isinstance(origin, _Approx):
-            return self._chain(template, template.scopes[origin.stub].guard)
+            return self._chain(compiled, slot(compiled, origin.index).guard)
         if len(origin) == 1:
-            return self._chain(template, origin[0])
-        return self._chain(template, template.scopes[origin[0]].guard)
+            return self._chain(compiled, origin[0])
+        return self._chain(compiled, slot(compiled, cast(int, origin[0])).guard)
 
     @staticmethod
-    def _into(origin: Origin, stub: int) -> tuple[Origin, bool]:
-        """The origin below ``stub``, and whether an approximate walk re-entered there."""
+    def _into(origin: Origin, index: int) -> tuple[Origin, bool]:
+        """The origin below slot ``index``, and whether an approximate walk re-entered
+        there."""
         if isinstance(origin, _Approx):
-            return None, origin.stub == stub
-        if origin is not None and len(origin) > 1 and origin[0] == stub:
+            return None, origin.index == index
+        if origin is not None and len(origin) > 1 and origin[0] == index:
             return origin[1:], False
         return None, False
 
@@ -692,27 +718,27 @@ class _Domains:
 
     def walk(
         self,
-        template: Template,
+        compiled: Compiled,
         at: Placement,
         origin: Origin,
         starts: Sequence[_Push],
         *,
         exempt: bool = False,
     ) -> _Outcome:
-        """Everything ``starts`` may read in ``template`` at ``at``, the existence guards of
-        ``origin`` skipped (``exempt``: the starts themselves are a domain's inputs, read
-        whatever guards them); see the module docstring."""
+        """Everything ``starts`` may read in ``compiled``'s class at ``at``, the existence
+        guards of ``origin`` skipped (``exempt``: the starts themselves are a domain's
+        inputs, read whatever guards them); see the module docstring."""
         if origin is None and len(starts) == 1 and not exempt:
-            return self._single(template, at, starts[0])
-        return self._walk(template, at, origin, starts, exempt)
+            return self._single(compiled, at, starts[0])
+        return self._walk(compiled, at, origin, starts, exempt)
 
-    def _single(self, template: Template, at: Placement, start: _Push) -> _Outcome:
+    def _single(self, compiled: Compiled, at: Placement, start: _Push) -> _Outcome:
         ref, mode, route = start
-        memo = _cache(template, "walk").setdefault(at, {})
+        memo = _cache(compiled, "walk").setdefault(at, {})
         key = (ref, mode)
         found = memo.get(key)
         if found is None:
-            found = memo[key] = self._walk(template, at, None, [(ref, mode, ())], False)
+            found = memo[key] = self._walk(compiled, at, None, [(ref, mode, ())], False)
         outcome = cast(_Outcome, found)
         if not route:
             return outcome
@@ -727,38 +753,38 @@ class _Domains:
 
     def _walk(
         self,
-        template: Template,
+        compiled: Compiled,
         at: Placement,
         origin: Origin,
         starts: Sequence[_Push],
         exempt: bool,
     ) -> _Outcome:
         outcome = _Outcome()
-        skip = self._skip(template, origin)
+        skip = self._skip(compiled, origin)
         seen: set[tuple[int, Mode]] = set()
         pending: list[tuple[int, Mode, tuple[str, ...]]] = []
 
         def push(ref: Ref, mode: Mode, route: tuple[str, ...], checked: bool = True) -> None:
-            if checked and mode == "r" and isinstance(ref, int) and ref in skip:
+            if checked and mode == "r" and not isinstance(ref, tuple) and ref in skip:
                 return  # what decides whether the choice exists holds where it does
-            out = _classify(template, ref, mode)
+            out = _classify(compiled, ref, mode)
             if out is not None:
                 outcome.exits.setdefault(out, route)
                 return
-            node = cast(int, ref)
-            if excluded(template, at, node):
+            node = cast("int | Placed", ref)
+            if excluded(compiled, at, node):
                 return
-            if template.nodes[node].kind == "import":
-                down(
-                    path(template, template.nodes[node].scope), template.imports[node], mode, route
-                )
+            if isinstance(node, Placed):
+                down(node.path, node.member, mode, route)
                 return
             if (node, mode) not in seen:
                 seen.add((node, mode))
                 pending.append((node, mode, route))
 
-        def down(steps: Sequence[int], target: int, mode: Mode, route: tuple[str, ...]) -> None:
-            found = self._enter(template, at, origin, steps, [(target, mode, ())])
+        def down(
+            steps: Sequence[int], target: int | Placing, mode: Mode, route: tuple[str, ...]
+        ) -> None:
+            found = self._enter(compiled, at, origin, steps, [(target, mode, ())])
             outcome.reentered |= found.reentered
             if found.refusal is not None:
                 if outcome.refusal is None:
@@ -776,26 +802,26 @@ class _Domains:
             push(ref, mode, route, checked=not exempt)
         while pending and outcome.refusal is None:
             node, mode, route = pending.pop()
-            spec = template.nodes[node]
+            spec = compiled.records[node]
             if mode == "r":
                 step = route if forwards(spec) else (*route, spec.owner)
-                if is_decision(template, at, node):
+                if is_decision(compiled, at, node):
                     outcome.refusal = _Refusal(None, spec.key, None, step)
                     break
-                for ref in fields(template, at, node).following():
+                for ref in fields(compiled, at, node).following():
                     push(ref, "r", step)
                 if spec.call_style == "self" and spec.function is not None:
-                    items = self.inference.reads(spec.function, template)
-                    if self._dynamic(template, at, items):
+                    items = self.inference.reads(spec.function, compiled)
+                    if self._dynamic(compiled, at, items):
                         outcome.refusal = _Refusal(None, None, spec.owner, step)
                         break
-                    self._reads(template, at, items, step, push, down)
+                    self._reads(compiled, at, items, step, push, down)
                 continue
             # ``present()``'s sources: a guard is read, an alias, a guard or a view is
             # followed to its output, a selection to its selector and alternatives.
-            if mode == "S" and node in template.selectors:
+            if mode == "S" and node in compiled.selectors:
                 push(node, "r", route)
-            fields_ = fields(template, at, node)
+            fields_ = fields(compiled, at, node)
             if fields_.guard is not None:
                 push(fields_.guard, "r", route)
             kind = spec.kind
@@ -809,15 +835,15 @@ class _Domains:
             outcome.exits.clear()
         return outcome
 
-    def _dynamic(self, template: Template, at: Placement, items: Iterable[object]) -> bool:
+    def _dynamic(self, compiled: Compiled, at: Placement, items: Iterable[object]) -> bool:
         """Whether a method's reads are not fixed at ``at``: a dynamic read placed there."""
         return any(
-            isinstance(item, _Dynamic) and self._placed(template, at, item.when) for item in items
+            isinstance(item, _Dynamic) and self._placed(compiled, at, item.when) for item in items
         )
 
     def _reads(
         self,
-        template: Template,
+        compiled: Compiled,
         at: Placement,
         items: Iterable[object],
         route: tuple[str, ...],
@@ -830,38 +856,38 @@ class _Domains:
                 mode: Mode = "S" if item.sources else "r"
                 if not item.steps:
                     push(item.node, mode, route)
-                elif self._placed(template, at, item.steps):
+                elif self._placed(compiled, at, item.steps):
                     down(item.steps, item.node, mode, route)
             else:
                 assert isinstance(item, (_Missing, _Dynamic))
 
     @staticmethod
-    def _placed(template: Template, at: Placement, steps: Sequence[int]) -> bool:
-        for stub in steps:
-            held = slot(template, stub)
+    def _placed(compiled: Compiled, at: Placement, steps: Sequence[int]) -> bool:
+        for index in steps:
+            held = slot(compiled, index)
             if held.requires in at.never:
                 return False
-            template, at = held.template, held.placement
+            compiled, at = held.compiled, held.placement
         return True
 
     def _enter(
         self,
-        template: Template,
+        compiled: Compiled,
         at: Placement,
         origin: Origin,
         steps: Sequence[int],
         starts: Sequence[_Push],
     ) -> _Outcome:
-        """Walk ``starts`` (nodes of the template ``steps`` reach) there, and what they reach
-        out of it, up to ``template``: the nodes to read there, each with its way
+        """Walk ``starts`` (records of the class ``steps`` reach) there, and what they reach
+        out of it, up to ``compiled``'s class: what to read there, each with its way
         (``_Outcome.lifted``), or a refusal; and whether it re-entered an ``_Approx`` walk's
-        stub."""
-        held = slot(template, steps[0])
+        slot."""
+        held = slot(compiled, steps[0])
         if held.requires in at.never:
             return _Outcome()
-        name = template.scopes[steps[0]].name
+        name = compiled.slots[steps[0]].name
         below, reentered = self._into(origin, steps[0])
-        child, child_at = held.template, held.placement
+        child, child_at = held.compiled, held.placement
         if len(steps) > 1:
             inner = self._enter(child, child_at, below, steps[1:], starts)
             reentered |= inner.reentered
@@ -880,45 +906,45 @@ class _Domains:
         ]
         return _Outcome(lifted=lifted, reentered=reentered)
 
-    # -- per template
+    # -- per class
 
-    def summary(self, template: Template, at: Placement) -> _Summary:
-        """The domains of ``template``'s subtree at ``at`` (keys relative to it); found
-        once."""
-        cache = _cache(template, self.name)
+    def summary(self, compiled: Compiled, at: Placement) -> _Summary:
+        """The domains of ``compiled``'s class's subtree at ``at`` (keys relative to it);
+        found once."""
+        cache = _cache(compiled, self.name)
         if at not in cache:
-            # The templates below first, deepest first: a chain of placements may be deep.
-            for below, below_at in self._below(template, at):
+            # The classes below first, deepest first: a chain of placements may be deep.
+            for below, below_at in self._below(compiled, at):
                 held = _cache(below, self.name)
                 if below_at not in held:
                     held[below_at] = self._summary(below, below_at)
         return cast(_Summary, cache[at])
 
-    def _below(self, template: Template, at: Placement) -> list[tuple[Template, Placement]]:
-        """``template`` at ``at`` and every template it places, each after those it places
-        (none whose domains are known already)."""
-        found: list[tuple[Template, Placement]] = []
+    def _below(self, compiled: Compiled, at: Placement) -> list[tuple[Compiled, Placement]]:
+        """``compiled`` at ``at`` and every class it places, each after those it places (none
+        whose domains are known already)."""
+        found: list[tuple[Compiled, Placement]] = []
         done: set[tuple[int, Placement]] = set()
-        stack: list[tuple[Template, Placement, Iterator[int]]] = [
-            (template, at, iter(template.index.placed))
+        stack: list[tuple[Compiled, Placement, Iterator[int]]] = [
+            (compiled, at, iter(range(len(compiled.slots))))
         ]
         while stack:
-            current, current_at, stubs = stack[-1]
-            stub = next(stubs, None)
-            if stub is None:
+            current, current_at, slots = stack[-1]
+            index = next(slots, None)
+            if index is None:
                 stack.pop()
                 found.append((current, current_at))
                 continue
-            held = slot(current, stub)
-            key = (id(held.template), held.placement)
+            held = slot(current, index)
+            key = (id(held.compiled), held.placement)
             if held.requires in current_at.never or key in done:
                 continue
             done.add(key)
-            if held.placement not in _cache(held.template, self.name):
-                stack.append((held.template, held.placement, iter(held.template.index.placed)))
+            if held.placement not in _cache(held.compiled, self.name):
+                stack.append((held.compiled, held.placement, iter(range(len(held.compiled.slots)))))
         return found
 
-    def _summary(self, template: Template, at: Placement) -> _Summary:
+    def _summary(self, compiled: Compiled, at: Placement) -> _Summary:
         summary = _Summary()
         merged: dict[frozenset[Exit], _Entry] = {}
 
@@ -937,36 +963,36 @@ class _Domains:
             summary.refusals.append(refusal)
             return not self.every
 
-        # Its own Decisions, in node order.
-        for node, spec in enumerate(template.nodes):
+        # Its own Decisions, in member order.
+        for node, spec in enumerate(compiled.records):
             domain = spec.domain
             if (
                 domain is None
-                or not is_decision(template, at, node)
-                or excluded(template, at, node)
+                or not is_decision(compiled, at, node)
+                or excluded(compiled, at, node)
             ):
                 continue
             named = set(domain.membership_inputs)
             starts: list[_Push] = [
-                (argument.node, "r", ())
-                for argument in dict.fromkeys(
-                    argument for argument in spec.domain_arguments if argument.name in named
+                (compiled.ref(edge), "r", ())
+                for _, edge in dict.fromkeys(
+                    argument for argument in spec.domain_arguments if argument[0] in named
                 )
             ]
-            head = cast(int, spec.guard)
-            outcome = self.walk(template, at, (head,), starts, exempt=True)
+            head = cast("int | Placing", compiled.ref(cast("Edge", spec.guard)))
+            outcome = self.walk(compiled, at, (head,), starts, exempt=True)
             if outcome.refusal is not None:
                 if refused(outcome.refusal.at(spec.key)):
                     return summary
                 continue
             add(outcome.exits, spec.key, ("own", head, spec.key))
         # Each placed Space's, followed into its bindings here.
-        for stub in template.index.placed:
-            held = slot(template, stub)
+        for index in range(len(compiled.slots)):
+            held = slot(compiled, index)
             if held.requires in at.never:
                 continue
-            name = template.scopes[stub].name
-            below = self.summary(held.template, held.placement)
+            name = compiled.slots[index].name
+            below = self.summary(held.compiled, held.placement)
             for refusal in below.refusals:
                 if refused(refusal.under(name)):
                     return summary
@@ -976,16 +1002,16 @@ class _Domains:
                     for exit in entry.exits
                     for ref, mode in lift(held, (exit,))
                 ]
-                outcome = self.walk(template, at, _Approx(stub), pushes)
+                outcome = self.walk(compiled, at, _Approx(index), pushes)
                 if outcome.reentered:
                     # It re-entered the subtree holding the Decisions: per Decision, exactly.
                     for place, key in _places(entry.origins, name):
-                        exact = self.walk(template, at, (stub, *place), pushes)
+                        exact = self.walk(compiled, at, (index, *place), pushes)
                         if exact.refusal is not None:
                             if refused(exact.refusal.at(key)):
                                 return summary
                             continue
-                        add(exact.exits, key, ("path", (stub, *place), key))
+                        add(exact.exits, key, ("path", (index, *place), key))
                     continue
                 if outcome.refusal is not None:
                     if not self.every:
@@ -994,24 +1020,24 @@ class _Domains:
                     for _, key in _places(entry.origins, name):
                         refused(outcome.refusal.at(key))
                     continue
-                add(outcome.exits, member_key(name, entry.owner), ("via", stub, entry, name))
+                add(outcome.exits, member_key(name, entry.owner), ("via", index, entry, name))
         summary.entries = list(merged.values())
         return summary
 
 
-def check_domains(template: Template) -> None:
-    """The domain rule of ``template`` compiled as a root (see the module docstring): the
+def check_domains(compiled: Compiled) -> None:
+    """The domain rule of ``compiled``'s class as a root (see the module docstring): the
     first refusal found, ``domain-reads-choice``, its Decision's key and its way relative
     to the root."""
-    refusals = _Domains().summary(template, ROOT).refusals
+    refusals = _Domains().summary(compiled, ROOT).refusals
     if refusals:
         raise refusals[0].error()
 
 
-def domain_refusals(template: Template) -> dict[str, DefinitionError]:
-    """Every Decision the domain rule refuses in ``template`` compiled as a root, by its key
+def domain_refusals(compiled: Compiled) -> dict[str, DefinitionError]:
+    """Every Decision the domain rule refuses in ``compiled``'s class as a root, by its key
     (a diagnostic: compiling stops at the first)."""
-    refusals = _Domains(every=True).summary(template, ROOT).refusals
+    refusals = _Domains(every=True).summary(compiled, ROOT).refusals
     return {cast(str, refusal.owner): refusal.error() for refusal in refusals}
 
 

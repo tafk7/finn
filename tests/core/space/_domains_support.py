@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 """The domain rule as the line checked it, over one table holding every node: the oracle
-the composed rule (``finn.core.space._compose.check_domains``, per template) is compared
+the composed rule (``finn.core.space._compose.check_domains``, per class) is compared
 with, on ``expand(C)``.
 
 ``line_domains`` is the line's ``_reads.check_domains`` (``6d02612cc``) as it was: from the
@@ -16,7 +16,7 @@ from finn.core.space import Space
 from finn.core.space._compose import check_domains
 from finn.core.space._reads import ModelReads, infer
 from finn.core.space._structure import expand
-from finn.core.space._template import link_template
+from finn.core.space._template import compiled
 from finn.core.space.errors import DefinitionError
 from finn.core.space.ir import LinkedModel, NodeId
 
@@ -109,7 +109,7 @@ def _reads_choice(
 def composed_domains(space_type: type[Space]) -> DefinitionError | None:
     """The composed rule on ``space_type`` as a root: its refusal, or None."""
     try:
-        check_domains(link_template(space_type))
+        check_domains(compiled(space_type))
     except DefinitionError as error:
         return error
     return None

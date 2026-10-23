@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Templates: each Space class's own scope, compiled once.
+"""Templates: each Space class's own scope, compiled once, and its compiled form.
 
 The front end compiles a Space class into its template, and nothing else: there is no
 table of a whole design space. ``link_template(C)`` runs the linker's phases on one
@@ -19,9 +19,21 @@ unsupplied. A template is compiled once, with the choice's candidates; it record
 formal, and what exists only where the choice applies (``Template.requires``); where the
 template is placed, the rule is applied per placement.
 
-What crosses a slot is checked per template and composed (``_compose``): cycles through
-the Spaces it places and the reads its placements do not place, as it is linked; the
-domain rule, from the root's template, when a model is made (``compiler.compile_model``).
+**The compiled form** (``Compiled``, ``compiled(C)``) is made from the template when it is
+linked, and cached on the class with it: C's members numbered within the class, each
+reference an edge (``ir.Edge``: a member of C; a member of a class C places, through its
+slots; C's own formal; the guard C is placed under; a selection of a choice's member, in
+the choice's own scope). No record stands for a member of a placed class (an import), for
+a stub, or for the guard C is placed under; what C writes for a Space it places (a formal's
+binding by reference, a selection made in that Space's choice) is a record of C's,
+addressed by its slot. Each Space C places is a slot (``CompiledSlot``): its class's
+compiled form, its bindings and guard.
+
+What crosses a slot is checked per class and composed (``_compose``), on the compiled
+forms: cycles through the Spaces it places and the reads its placements do not place, as
+it is linked; the domain rule, from the root's compiled form, when a model is made
+(``compiler.compile_model``). Read inference (``_reads``) and the questions about the whole
+design space (``_whole``) walk the compiled forms too.
 
 A model's structure (``_structure``) places templates as scopes, made when addressed, and
 resolves each node of a scope from its template when read; ``_structure.expand`` is the
@@ -31,10 +43,10 @@ eager form, every scope placed and every node resolved, into one table.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, cast
+from typing import Any, TypeAlias, cast
 
 from . import _compose
 from ._allocate import allocate
@@ -43,9 +55,9 @@ from ._collapse import collapse
 from ._configuration import Space
 from ._lower import lower
 from ._nodes import NodeDecision, NodeDecl, slot_declaration
-from ._table import Binding, Read, ScopeDraft, Table
+from ._table import Binding, Read, ScopeDraft, Table, member_key
 from .errors import DefinitionError
-from .ir import Node
+from .ir import PLACING, Edge, Formal, Local, Member, Node, Placed, Placing, Selected
 
 _OWNER = "space.template"
 
@@ -176,8 +188,6 @@ class Template:
     keys: Mapping[str, int]
     # What placing it as scopes looks up (``TemplateIndex``).
     index: TemplateIndex
-    # What the checks composed across slots found of it, per placement (``_compose``).
-    composed: dict[str, object] = field(default_factory=dict, compare=False, repr=False)
 
     @property
     def members(self) -> Mapping[object, int]:
@@ -202,6 +212,422 @@ class Template:
     def counts(self) -> dict[str, int]:
         """Its nodes by kind."""
         return dict(Counter(node.kind for node in self.nodes))
+
+
+# -- the compiled form ----------------------------------------------------------------------------
+
+# What a walk over a compiled form reads an edge as (``Compiled.ref``): a record of the class
+# (its number), the guard it is placed under, or a member of a class it places (``Placed``),
+# walked there.
+Ref: TypeAlias = "int | Placing | Placed"
+
+
+@dataclass(frozen=True, eq=False, slots=True)
+class CompiledSlot:
+    """A Space a class places (a child node, or a candidate of a Decision over nodes), slot
+    ``index`` of its compiled form: its local name, its class's compiled form, the node
+    declaration placed, the guard it is placed under (an edge of the placing class), its
+    candidacy (choice, case), the Decision over nodes it exists only where it applies
+    (``requires``), its formals' bindings (``Binding``: a literal or a default as a value; a
+    reference by the record the placing class writes for it, ``node``; or unsupplied), and
+    its declaration position (``position``: its structure item, 0 for a child node or 1 + its
+    case for a candidate)."""
+
+    index: int
+    name: str
+    compiled: Compiled = field(repr=False)
+    record: NodeDecl | None
+    guard: Edge
+    candidate: tuple[int, str] | None
+    requires: int | None
+    bindings: Mapping[str, Binding]
+    position: tuple[int, int]
+
+    @property
+    def space_type(self) -> type[Space]:
+        return self.compiled.space_type
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledChoice:
+    """An own Decision over nodes, as ``TemplateChoice``: its selector and selections are
+    records of the class, its cases slots."""
+
+    index: int
+    key: str
+    selector: int
+    guard: Edge
+    cases: tuple[tuple[str, int | None], ...]
+    members: Mapping[str, int]
+    space_types: tuple[type[Space], ...]
+    never_formal: str | None
+    never_value: str
+    selects: Mapping[int, str]
+    shared: frozenset[int]
+    readers: Mapping[str, tuple[Read, ...]]
+    dropped: frozenset[str]
+
+
+@dataclass(frozen=True, eq=False, slots=True)
+class Compiled:
+    """A Space class's compiled form: computed once, from its template, and cached on the
+    class (``compiled``).
+
+    ``records``: its members, numbered within the class, and between them, in the order its
+    template states them, the records it writes for the Spaces it places: a formal's binding
+    by reference (``bound``, by slot and formal) and a selection it makes in a placed Space's
+    choice (``chosen``, by the selection's slots, choice and member); each written record's
+    slot is ``written``'s. Every reference is an edge (``ir.Edge``): no record stands for a
+    member of another class (an import), for a scope it places (a stub), or for the guard it
+    is placed under. A walk reads each edge as ``ref`` says.
+
+    ``slots``: the Spaces it places, in placement order (structure order, candidates in case
+    order). Its own maps as its template's, by record and slot: ``formals``, ``members``,
+    ``children``, ``choices``, ``selections`` (each own selection's (choice, member)),
+    ``requires`` (what exists only where an own Decision over nodes applies, a record or a
+    member of a placed Space it reads: carried for ``supplied()``'s rule).
+
+    ``nodes``, ``record_of``, ``stubs`` and ``slot_of_stub`` relate it to its template (each
+    record's node, each slot's stub), which the model's structure still places."""
+
+    space_type: type[Space]
+    records: tuple[Member, ...]
+    slots: tuple[CompiledSlot, ...]
+    choices: tuple[CompiledChoice, ...]
+    validity: int
+    value_members: tuple[int, ...]
+    formals: Mapping[str, int]
+    formal_names: Mapping[int, str]
+    selections: Mapping[int, tuple[int, str]]
+    own_selection: Mapping[tuple[int, str], int]
+    selectors: Mapping[int, int]
+    requires: Mapping[object, int]
+    bound: Mapping[tuple[int, str], int]
+    chosen: Mapping[tuple[tuple[int, ...], int, str], int]
+    written: Mapping[int, int]
+    members: Mapping[object, int]
+    named_members: Mapping[str, int]
+    children: Mapping[object, int]
+    named_children: Mapping[str, int]
+    choice_index: Mapping[object, int]
+    slot_names: Mapping[str, int]
+    choice_positions: Mapping[int, int]
+    value_positions: Mapping[int, int]
+    structure: tuple[tuple[str, int], ...]
+    keys: Mapping[str, int]
+    refs: Mapping[Edge, Ref]
+    nodes: tuple[int, ...]
+    record_of: Mapping[int, int]
+    stubs: tuple[int, ...]
+    slot_of_stub: Mapping[int, int]
+    # What the checks composed across slots found of it, per placement (``_compose``,
+    # ``_whole``).
+    composed: dict[str, object] = field(default_factory=dict, repr=False)
+
+    def ref(self, edge: Edge) -> Ref:
+        """What a walk over this class reads ``edge`` as: a record of the class (a member,
+        an own formal, a selection it reads, a formal of a placed Space it binds by
+        reference), the guard it is placed under, or a member of a placed Space, walked
+        there."""
+        if type(edge) is Local:
+            return edge.member
+        return self.refs[edge]
+
+    def reached(self, path: Sequence[int]) -> Compiled:
+        """The compiled form the slots ``path`` reach."""
+        current = self
+        for slot in path:
+            current = current.slots[slot].compiled
+        return current
+
+    def key_of(self, ref: int | Placed) -> str:
+        """A record's key, or a placed Space's member's under its slots' names."""
+        if isinstance(ref, int):
+            return self.records[ref].key
+        names: list[str] = []
+        current = self
+        for slot in ref.path:
+            names.append(current.slots[slot].name)
+            current = current.slots[slot].compiled
+        return member_key(".".join(names), current.records[ref.member].key)
+
+
+def compiled(space_type: type[Space]) -> Compiled:
+    """The compiled form of a Space class: computed once, with its template (``link_template``),
+    and cached on the class."""
+    link_template(space_type)
+    return cached_compiled(space_type)
+
+
+def cached_compiled(space_type: type[Space]) -> Compiled:
+    """The compiled form of a Space class already linked (``compiled``), as cached."""
+    found = space_type.__dict__.get("_space_compiled")
+    if not isinstance(found, Compiled) or found.space_type is not space_type:
+        raise DefinitionError.broken(
+            "template-cache-invalid", _OWNER, "invalid compiled form cache on Space class"
+        )
+    return found
+
+
+class _Compiling:
+    """A template's compiled form (``Compiled``), the classes it places compiled first."""
+
+    def __init__(self, template: Template) -> None:
+        self.template = template
+        nodes = template.nodes
+        self.kept = tuple(
+            node.index
+            for node in nodes
+            if node.index != template.placement_guard and node.kind != "import"
+        )
+        self.record_of = {node: record for record, node in enumerate(self.kept)}
+        self.slot_of_stub = {stub: slot for slot, stub in enumerate(template.index.placed)}
+        self.placed = tuple(
+            cached_compiled(template.scopes[stub].space_type) for stub in template.index.placed
+        )
+
+    def slot_path(self, stub: int) -> tuple[tuple[int, ...], Compiled]:
+        """A stub's slots from the class (a placed stub's, then each nested stub's in the
+        class the one before reaches), and the compiled form they reach."""
+        scopes = self.template.scopes
+        stubs: list[int] = []
+        while True:
+            scope = scopes[stub]
+            if scope.parent == 0:
+                stubs.append(stub)
+                break
+            stubs.append(cast(int, scope.slot))
+            stub = cast(int, scope.parent)
+        stubs.reverse()
+        path = [self.slot_of_stub[stubs[0]]]
+        current = self.placed[path[0]]
+        for nested in stubs[1:]:
+            slot = current.slot_of_stub[nested]
+            path.append(slot)
+            current = current.slots[slot].compiled
+        return tuple(path), current
+
+    def edge(self, node: int) -> Edge:
+        """What a node of the template stands for, as an edge of the class."""
+        template = self.template
+        if node == template.placement_guard:
+            return PLACING
+        spec = template.nodes[node]
+        if spec.scope == 0:
+            formal = template.formal_names.get(node)
+            if formal is not None:
+                return Formal(formal)
+            selection = template.index.selections.get(node)
+            if selection is not None:
+                return Selected((), *selection)
+            return Local(self.record_of[node])
+        if spec.kind == "import":
+            path, reached = self.slot_path(spec.scope)
+            target = reached.record_of[template.imports[node]]
+            selection = reached.selections.get(target)
+            if selection is not None:
+                return Selected(path, *selection)
+            return Placed(path, target)
+        formal = template.binding_names.get(node)
+        if formal is not None:
+            slot = self.slot_of_stub[spec.scope]
+            return Placed((slot,), self.placed[slot].formals[formal])
+        stub, choice, member = template.stub_selects[node]
+        return Selected(self.slot_path(stub)[0], choice, member)
+
+    def member(self, record: int, node: Node) -> Member:
+        edge = self.edge
+        return Member(
+            record,
+            node.key,
+            node.kind,
+            node.semantics,
+            guard=None if node.guard is None else edge(node.guard),
+            arguments=tuple((argument.name, edge(argument.node)) for argument in node.arguments),
+            function=node.function,
+            call_style=node.call_style,
+            value=node.value,
+            required=node.required,
+            domain=node.domain,
+            domain_arguments=tuple(
+                (argument.name, edge(argument.node)) for argument in node.domain_arguments
+            ),
+            output=None if node.output is None else edge(node.output),
+            constraints=tuple(edge(piece) for piece in node.constraints),
+            alternatives=tuple((label, edge(target)) for label, target in node.alternatives),
+            selector=None if node.selector is None else edge(node.selector),
+            source_owner=node.source_owner,
+            origin=node.origin,
+        )
+
+    def compiled(self) -> Compiled:
+        template, record_of = self.template, self.record_of
+        records = tuple(
+            self.member(record, template.nodes[node]) for record, node in enumerate(self.kept)
+        )
+        bound: dict[tuple[int, str], int] = {}
+        chosen: dict[tuple[tuple[int, ...], int, str], int] = {}
+        written: dict[int, int] = {}
+        for record, node in enumerate(self.kept):
+            scope = template.nodes[node].scope
+            if scope == 0:
+                continue
+            formal = template.binding_names.get(node)
+            if formal is not None:
+                slot = self.slot_of_stub[scope]
+                bound[(slot, formal)] = record
+                written[record] = slot
+                continue
+            stub, choice, member = template.stub_selects[node]
+            path = self.slot_path(stub)[0]
+            chosen[(path, choice, member)] = record
+            written[record] = path[0]
+        slots = tuple(self.slot(index, stub) for index, stub in enumerate(template.index.placed))
+        formals = {name: record_of[node] for name, node in template.formals.items()}
+        selections = {
+            record_of[node]: selection for node, selection in template.index.selections.items()
+        }
+        own_selection = {selection: record for record, selection in selections.items()}
+        # What a walk reads each edge as: the records and slots are known now.
+        refs: dict[Edge, Ref] = {}
+        edges = [edge for member in records for edge in member.dependencies]
+        edges.extend(slot.guard for slot in slots)
+        for edge in edges:
+            if type(edge) is not Local and edge not in refs:
+                refs[edge] = self.ref(edge, slots, formals, own_selection, chosen)
+        requires: dict[object, int] = {}
+        for node, choice in template.requires.items():
+            found = record_of.get(node)
+            if found is not None:
+                requires[found] = choice
+                continue
+            if node == template.placement_guard:
+                continue
+            read = refs.get(self.edge(node))
+            if read is None:  # an import nothing reads (made once, for its first reader)
+                read = self.ref(self.edge(node), slots, formals, own_selection, chosen)
+            requires.setdefault(read, choice)
+        return Compiled(
+            template.space_type,
+            records,
+            slots,
+            tuple(self.choice(choice) for choice in template.choices),
+            record_of[template.validity],
+            tuple(record_of[node] for node in template.value_members),
+            _frozen(formals),
+            _frozen({record: name for name, record in formals.items()}),
+            _frozen(selections),
+            _frozen(own_selection),
+            _frozen({record_of[node]: choice for node, choice in template.selectors.items()}),
+            _frozen(requires),
+            _frozen(bound),
+            _frozen(chosen),
+            _frozen(written),
+            _frozen({key: record_of[node] for key, node in template.members.items()}),
+            _frozen({name: record_of[node] for name, node in template.named_members.items()}),
+            _frozen({key: self.slot_of_stub[stub] for key, stub in template.children.items()}),
+            _frozen(
+                {name: self.slot_of_stub[stub] for name, stub in template.named_children.items()}
+            ),
+            template.choice_index,
+            _frozen({name: self.slot_of_stub[stub] for name, stub in template.index.stubs.items()}),
+            template.index.choice_positions,
+            _frozen(
+                {
+                    record_of[node]: position
+                    for node, position in template.index.value_positions.items()
+                }
+            ),
+            tuple(
+                (kind, self.slot_of_stub[index] if kind == "child" else index)
+                for kind, index in template.structure
+            ),
+            _frozen(
+                {
+                    record.key: record.index
+                    for record in records
+                    if template.nodes[self.kept[record.index]].scope == 0
+                }
+            ),
+            _frozen(refs),
+            self.kept,
+            _frozen(record_of),
+            template.index.placed,
+            _frozen(self.slot_of_stub),
+        )
+
+    def ref(
+        self,
+        edge: Edge,
+        slots: tuple[CompiledSlot, ...],
+        formals: Mapping[str, int],
+        own_selection: Mapping[tuple[int, str], int],
+        chosen: Mapping[tuple[tuple[int, ...], int, str], int],
+    ) -> Ref:
+        """What a walk reads ``edge`` (not a local one) as (``Compiled.ref``)."""
+        if isinstance(edge, Formal):
+            return formals[edge.name]
+        if isinstance(edge, Placing):
+            return PLACING
+        if isinstance(edge, Selected):
+            found = chosen.get((edge.path, edge.choice, edge.member))
+            if found is not None:
+                return found
+            if not edge.path:
+                return own_selection[(edge.choice, edge.member)]
+            reached = slots[edge.path[0]].compiled.reached(edge.path[1:])
+            return Placed(edge.path, reached.own_selection[(edge.choice, edge.member)])
+        placed = cast(Placed, edge)
+        if len(placed.path) == 1:
+            slot = slots[placed.path[0]]
+            formal = slot.compiled.formal_names.get(placed.member)
+            if formal is not None and slot.bindings[formal].node is not None:
+                # A formal this class binds by reference: the record it writes for it.
+                return cast(int, slot.bindings[formal].node)
+        return placed
+
+    def slot(self, index: int, stub: int) -> CompiledSlot:
+        template = self.template
+        scope = template.scopes[stub]
+        bindings = {
+            name: binding
+            if binding.node is None
+            else Binding(binding.kind, binding.value, self.record_of[binding.node])
+            for name, binding in scope.bindings.items()
+        }
+        candidate = scope.candidate
+        return CompiledSlot(
+            index,
+            scope.name,
+            self.placed[index],
+            scope.record,
+            self.edge(cast(int, scope.guard)),
+            candidate,
+            scope.requires,
+            _frozen(bindings),
+            template.index.slot_positions[stub],
+        )
+
+    def choice(self, choice: TemplateChoice) -> CompiledChoice:
+        record_of = self.record_of
+        return CompiledChoice(
+            choice.index,
+            choice.key,
+            record_of[choice.selector],
+            self.edge(choice.guard),
+            tuple(
+                (case, None if stub is None else self.slot_of_stub[stub])
+                for case, stub in choice.cases
+            ),
+            _frozen({member: record_of[node] for member, node in choice.members.items()}),
+            choice.space_types,
+            choice.never_formal,
+            choice.never_value,
+            _frozen({record_of[node]: member for node, member in choice.selects.items()}),
+            frozenset(record_of[node] for node in choice.shared),
+            choice.readers,
+            choice.dropped,
+        )
 
 
 def link_template(space_type: type[Space]) -> Template:
@@ -299,6 +725,7 @@ def _link(space_type: type[Space]) -> Template:
             scope.record.freeze(reason)
     for definition in _definition_classes((space_type,)):
         type.__setattr__(definition, "_space_definition_finalized", True)
+    type.__setattr__(space_type, "_space_compiled", _Compiling(template).compiled())
     type.__setattr__(space_type, "_space_template", template)
     return template
 
@@ -477,4 +904,16 @@ def _choice(table: Table, index: int) -> TemplateChoice:
     )
 
 
-__all__ = ["Template", "TemplateChoice", "TemplateIndex", "TemplateScope", "link_template"]
+__all__ = [
+    "Compiled",
+    "CompiledChoice",
+    "CompiledSlot",
+    "Ref",
+    "Template",
+    "TemplateChoice",
+    "TemplateIndex",
+    "TemplateScope",
+    "cached_compiled",
+    "compiled",
+    "link_template",
+]

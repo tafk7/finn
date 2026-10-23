@@ -26,12 +26,12 @@ scope's, innermost first. The **domain rule** (a domain's membership reads facts
 is checked from the inference per template when a model is made
 (``_compose.check_domains``).
 
-A model's structure resolves its nodes on demand, so there the inference is per template:
-each function's paths resolve against its template once, and a node's reads, existence
-guards and case guards are found for it when first asked (``_TemplateInference``,
+A model's structure resolves its nodes on demand, so there the inference is per class:
+each function's paths resolve against its class's compiled form once, and a node's reads,
+existence guards and case guards are found for it when first asked (``_TemplateInference``,
 ``_Mapping``). The questions about the whole design space (the flow order, the presence
-readers) walk the same reads per template (``_whole``). ``summary``, a diagnostic, reads
-every node.
+readers) walk the same reads per class (``_whole``). ``summary``, a diagnostic, reads every
+node.
 """
 
 from __future__ import annotations
@@ -44,11 +44,11 @@ from dataclasses import dataclass, field
 from types import CodeType, MappingProxyType
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
-from .ir import Argument, Linked, LinkedModel, Node, NodeId
+from .ir import Argument, Linked, LinkedModel, Node, NodeId, Placing
 
 if TYPE_CHECKING:
     from ._structure import ScopeRecord, Structure
-    from ._template import Template
+    from ._template import Compiled
 
 # A path from a receiver: the attribute names read in order (``self.x.contract``).
 Path = tuple[str, ...]
@@ -502,41 +502,40 @@ class _Inference:
         return known
 
 
-# -- read inference per template ------------------------------------------------------------
+# -- read inference per class ---------------------------------------------------------------
 #
 # A model's structure (``_structure``) resolves its nodes on demand, so what a method may read
-# is inferred per template: each ``self`` function's paths resolve against the template it
-# runs in (its own members, its stubs, through each case's template, helpers followed in the
-# template they are reached through) to references relative to the scope it runs in, once per
-# template and function (``_TemplateInference``); a node's reads are those references mapped
-# to ``NodeId``s in its scope when first asked (``_Mapping``). What a placement decides (a
-# candidate of a choice that never applies there) is decided when mapped.
+# is inferred per class: each ``self`` function's paths resolve against the compiled form of
+# the class it runs in (its own members, its slots, through each case's class, helpers
+# followed in the class they are reached through) to references relative to the scope it runs
+# in, once per class and function (``_TemplateInference``); a node's reads are those
+# references mapped to ``NodeId``s in its scope when first asked (``_Mapping``). What a
+# placement decides (a candidate of a choice that never applies there) is decided when mapped.
 
 
 @dataclass(frozen=True, slots=True)
 class _Place:
-    """Where a path reaches, from the scope a method runs in: the placed stubs from there
-    (``steps``), the template they reach, and the place above (None: the scope itself)."""
+    """Where a path reaches, from the scope a method runs in: the slots from there
+    (``steps``), the compiled form they reach, and the place above (None: the scope
+    itself)."""
 
     steps: tuple[int, ...]
-    template: Template
+    compiled: Compiled
     above: _Place | None
 
-    def child(self, stub: int) -> _Place:
-        from ._template import link_template  # noqa: PLC0415 - a cycle
-
-        return _Place(
-            (*self.steps, stub), link_template(self.template.scopes[stub].space_type), self
-        )
+    def child(self, slot: int) -> _Place:
+        return _Place((*self.steps, slot), self.compiled.slots[slot].compiled, self)
 
 
 @dataclass(frozen=True, slots=True)
 class _Ref:
-    """A node a method may read: a node of the template ``steps`` reach. ``sources``: what
-    decides whether it is supplied (``present`` of a value input), followed when mapped."""
+    """What a method may read: a record of the class ``steps`` reach, or the guard it is
+    placed under (``PLACING``: where ``present()`` of a child reads the guard the child is
+    placed under, and that is the reading class's own). ``sources``: what decides whether it
+    is supplied (``present`` of a value input), followed when mapped."""
 
     steps: tuple[int, ...]
-    node: int
+    node: int | Placing
     sources: bool = False
 
 
@@ -576,9 +575,9 @@ def _prefixed(steps: tuple[int, ...], item: _Item) -> _Item:
 
 
 class _TemplateInference:
-    """The reads of each ``self`` function per template (``_Found``), helpers followed in
-    the template they are reached through. A helper reached again through itself adds
-    nothing; what is found while such a cycle is open is kept once it closes."""
+    """The reads of each ``self`` function per class (``_Found``), on its compiled form,
+    helpers followed in the class they are reached through. A helper reached again through
+    itself adds nothing; what is found while such a cycle is open is kept once it closes."""
 
     def __init__(self) -> None:
         self.uses: dict[int, _Uses] = {}
@@ -593,8 +592,8 @@ class _TemplateInference:
             found = self.uses[key] = _uses(function)
         return found
 
-    def reads(self, function: Callable[..., object], template: Template) -> _Found:
-        key = (id(function), id(template))
+    def reads(self, function: Callable[..., object], compiled: Compiled) -> _Found:
+        key = (id(function), id(compiled))
         held = self.found.get(key)
         if held is not None:
             return held
@@ -604,7 +603,7 @@ class _TemplateInference:
         self.visiting.append(key)
         self.cuts.append(set())
         try:
-            result = self._reads(function, _Place((), template, None))
+            result = self._reads(function, _Place((), compiled, None))
         finally:
             self.visiting.pop()
             still = self.cuts.pop() - {key}
@@ -629,7 +628,7 @@ class _TemplateInference:
         for prefix, name in sorted(uses.calls):
             self._call(place, prefix, name, items, helpers)
         for helper, at in helpers:
-            items.extend(_prefixed(at.steps, item) for item in self.reads(helper, at.template))
+            items.extend(_prefixed(at.steps, item) for item in self.reads(helper, at.compiled))
         return tuple(items)
 
     def _scopes(self, place: _Place, path: Path, items: list[_Item]) -> list[_Place] | None:
@@ -639,18 +638,18 @@ class _TemplateInference:
         for name in path:
             following: list[_Place] = []
             for at in reached:
-                template = at.template
-                stub = template.named_children.get(name)
-                if stub is not None:
-                    following.append(at.child(stub))
+                compiled = at.compiled
+                slot = compiled.named_children.get(name)
+                if slot is not None:
+                    following.append(at.child(slot))
                     continue
-                selector = template.named_members.get(name)
-                choice = None if selector is None else template.selectors.get(selector)
+                selector = compiled.named_members.get(name)
+                choice = None if selector is None else compiled.selectors.get(selector)
                 if selector is None or choice is None:
                     return None
                 items.append(_Ref(at.steps, selector))
                 following.extend(
-                    at.child(case) for _, case in template.choices[choice].cases if case is not None
+                    at.child(case) for _, case in compiled.choices[choice].cases if case is not None
                 )
             reached = following
         return reached
@@ -663,34 +662,34 @@ class _TemplateInference:
         helpers: list[tuple[Callable[..., object], _Place]],
         text: str,
     ) -> bool:
-        """Add the nodes ``path`` may read from ``place``; as ``_Inference._resolve``."""
-        template = place.template
+        """Add the records ``path`` may read from ``place``; as ``_Inference._resolve``."""
+        compiled = place.compiled
         name, rest = path[0], path[1:]
-        stub = template.named_children.get(name)
-        if stub is not None:
+        slot = compiled.named_children.get(name)
+        if slot is not None:
             if rest:
-                self._resolve(place.child(stub), rest, items, helpers, text)
+                self._resolve(place.child(slot), rest, items, helpers, text)
             return True
-        index = template.named_members.get(name)
+        index = compiled.named_members.get(name)
         if index is None:
-            held = self._helper(template, name)
+            held = self._helper(compiled, name)
             if held is None:
                 return False
             helpers.append((held, place))
             return True
         items.append(_Ref(place.steps, index))
-        choice = template.selectors.get(index)
+        choice = compiled.selectors.get(index)
         if choice is not None and rest:
-            for _, case in template.choices[choice].cases:
+            for _, case in compiled.choices[choice].cases:
                 if case is not None:
                     self._resolve(place.child(case), rest, items, helpers, text)
         return True
 
     @staticmethod
-    def _helper(template: Template, name: str) -> Callable[..., object] | None:
+    def _helper(compiled: Compiled, name: str) -> Callable[..., object] | None:
         """A name of the Space class itself: a property's getter or a method, read in the
         scope it is reached through; None for anything else (it reads nothing of the Space)."""
-        held = inspect.getattr_static(template.space_type, name, None)
+        held = inspect.getattr_static(compiled.space_type, name, None)
         if isinstance(held, property) and held.fget is not None:
             return cast(Callable[..., object], held.fget)
         if inspect.isfunction(held):
@@ -715,7 +714,7 @@ class _TemplateInference:
             return
         known: list[tuple[int, ...]] = []
         for at in reached:
-            held = inspect.getattr_static(at.template.space_type, name, None)
+            held = inspect.getattr_static(at.compiled.space_type, name, None)
             if isinstance(held, (staticmethod, classmethod)):
                 known.append(at.steps)
             elif inspect.isfunction(held):
@@ -734,15 +733,16 @@ class _TemplateInference:
         name = path[-1]
         known: list[tuple[int, ...]] = []
         for at in reached:
-            template = at.template
-            stub = template.named_children.get(name)
-            if stub is not None:
-                guard = template.scopes[stub].guard
-                if guard is not None:
-                    items.append(_Ref(at.steps, guard))
+            compiled = at.compiled
+            slot = compiled.named_children.get(name)
+            if slot is not None:
+                # The guard the child is placed under: a record of this class, or the guard
+                # this class is placed under.
+                guard = compiled.ref(compiled.slots[slot].guard)
+                items.append(_Ref(at.steps, cast("int | Placing", guard)))
                 known.append(at.steps)
                 continue
-            index = template.named_members.get(name)
+            index = compiled.named_members.get(name)
             if index is not None:
                 items.append(_Ref(at.steps, index, sources=True))
                 known.append(at.steps)
@@ -772,7 +772,7 @@ class _Mapping:
             if node.call_style != "self" or node.function is None:
                 raise KeyError(index)
             record = structure.records[node.scope]
-            found = self.inference.reads(node.function, record.template)
+            found = self.inference.reads(node.function, structure.compiled_of(record))
             held = self.methods[index] = self._map(record, found)
             return held
 
@@ -784,16 +784,16 @@ class _Mapping:
         missing: list[str] = []
         for item in found:
             if isinstance(item, _Dynamic):
-                if structure.walk(record, item.when) is not None:
+                if structure.reach(record, item.when) is not None:
                     return None, ()
             elif isinstance(item, _Missing):
-                if structure.walk(record, item.when) is not None and not any(
-                    structure.walk(record, unless) is not None for unless in item.unless
+                if structure.reach(record, item.when) is not None and not any(
+                    structure.reach(record, unless) is not None for unless in item.unless
                 ):
                     missing.append(item.text)
             else:
-                at = structure.walk(record, item.steps)
-                index = None if at is None else structure.ident(at, item.node)
+                at = structure.reach(record, item.steps)
+                index = None if at is None else structure.member(at, item.node)
                 if index is not None:
                     self._add(index, item.sources, nodes)
         return frozenset(nodes), tuple(dict.fromkeys(missing))

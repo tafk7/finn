@@ -58,13 +58,23 @@ from dataclasses import dataclass, field, replace
 from threading import RLock
 from typing import TYPE_CHECKING, Any, cast, overload
 
-from ._collapse import forwards, guard_implies
 from ._configuration import Space
 from ._ordering import dependency_order
 from ._table import Binding, member_key
-from ._template import Template, TemplateChoice, link_template
+from ._template import Compiled, Template, TemplateChoice, cached_compiled, link_template
 from .errors import DefinitionError
-from .ir import Argument, Choice, LinkedModel, Node, NodeId, NodeKind, Scope
+from .ir import (
+    Argument,
+    Choice,
+    LinkedModel,
+    Node,
+    NodeId,
+    NodeKind,
+    Placing,
+    Scope,
+    forwards,
+    guard_implies,
+)
 from .semantics import STRING, ValueSemantics
 
 if TYPE_CHECKING:
@@ -293,6 +303,31 @@ class Structure:
                 return None
             current = self.child(current, stub)
         return current
+
+    # -- the compiled forms (the walks', per class) ----------------------------------------------
+
+    @staticmethod
+    def compiled_of(record: ScopeRecord) -> Compiled:
+        """The compiled form of ``record``'s class (``_template.Compiled``), made with its
+        template."""
+        return cached_compiled(record.template.space_type)
+
+    def reach(self, record: ScopeRecord, slots: Sequence[int]) -> ScopeRecord | None:
+        """The scope reached from ``record`` through the slots ``slots`` of the compiled forms
+        on the way (None where one is not placed)."""
+        current: ScopeRecord | None = record
+        for slot in slots:
+            if current is None:
+                return None
+            current = self.child(current, self.compiled_of(current).stubs[slot])
+        return current
+
+    def member(self, record: ScopeRecord, ref: int | Placing) -> NodeId | None:
+        """The ``NodeId`` a record of ``record``'s compiled form (or the guard it is placed
+        under) stands for there; None where the placement excludes it."""
+        if isinstance(ref, Placing):
+            return self.guard_of(record)
+        return self.ident(record, self.compiled_of(record).nodes[ref])
 
     def address_all(self) -> None:
         """Make every scope (the whole design space's records)."""

@@ -167,8 +167,9 @@ def _definition_classes(space_types: tuple[type[Space], ...]) -> tuple[type[Spac
 def compile_model(space_type: type[S]) -> Model[S]:
     """The canonical model of a Space class whose formals are all runtime inputs: its
     template, placed as scopes on demand (``_structure``). Its templates are linked first
-    (each checked, with the cycles through the Spaces it places); then the domain rule,
-    composed per template up to this root (``_compose``)."""
+    (each checked, with the cycles through the Spaces it places), each with its class's
+    compiled form; then the domain rule, composed per class on the compiled forms up to this
+    root (``_compose``)."""
 
     if not isinstance(space_type, type) or not issubclass(space_type, Space):
         raise DefinitionError.broken(
@@ -184,12 +185,12 @@ def compile_model(space_type: type[S]) -> Model[S]:
             return cached
         from ._compose import check_domains
         from ._structure import Structure, modes
-        from ._template import link_template
+        from ._template import compiled, link_template
 
         template = link_template(space_type)
         # Every domain's membership reads facts only (what each method may read is
         # inferred from its source).
-        check_domains(template)
+        check_domains(compiled(space_type))
         permuted, eager = modes()
         lock = RLock()
         structure = Structure(template, lock, permuted=permuted, eager=eager)

@@ -42,7 +42,7 @@ from finn.core.space import (
 )
 from finn.core.space._compose import domain_refusals
 from finn.core.space._structure import expand
-from finn.core.space._template import link_template
+from finn.core.space._template import compiled, link_template
 from finn.core.space.compiler import compile_model
 from finn.core.space.errors import DefinitionError
 
@@ -165,7 +165,7 @@ def test_the_domain_rule_composed_equals_the_lines_on_random_composites(seed: in
         link_template(space_type)
     except DefinitionError:
         return  # a cycle, refused alike (the cases above)
-    assert set(domain_refusals(link_template(space_type))) == set(line_refusals(expand(space_type)))
+    assert set(domain_refusals(compiled(space_type))) == set(line_refusals(expand(space_type)))
 
 
 # -- cycles through a slot ---------------------------------------------------------------------
