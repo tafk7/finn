@@ -281,6 +281,9 @@ class Compiled:
     member of another class (an import), for a scope it places (a stub), or for the guard it
     is placed under. A walk reads each edge as ``ref`` says.
 
+    ``binds``, ``chooses`` and ``chosen_reads`` read each written record back: what it is
+    written for, and a selection's reads (whose first, where it exists, owns it).
+
     ``slots``: the Spaces it places, in placement order (structure order, candidates in case
     order). Its own maps as its template's, by record and slot: ``formals``, ``members``,
     ``children``, ``choices``, ``selections`` (each own selection's (choice, member)),
@@ -305,6 +308,12 @@ class Compiled:
     bound: Mapping[tuple[int, str], int]
     chosen: Mapping[tuple[tuple[int, ...], int, str], int]
     written: Mapping[int, int]
+    # Each written record back to what it is written for: a binding's (slot, formal), a
+    # selection's (slots, choice, member) and each read of that selection (``Read``, in the
+    # class's declaration order).
+    binds: Mapping[int, tuple[int, str]]
+    chooses: Mapping[int, tuple[tuple[int, ...], int, str]]
+    chosen_reads: Mapping[int, tuple[Read, ...]]
     members: Mapping[object, int]
     named_members: Mapping[str, int]
     children: Mapping[object, int]
@@ -468,6 +477,7 @@ class _Compiling:
         bound: dict[tuple[int, str], int] = {}
         chosen: dict[tuple[tuple[int, ...], int, str], int] = {}
         written: dict[int, int] = {}
+        chosen_reads: dict[int, tuple[Read, ...]] = {}
         for record, node in enumerate(self.kept):
             scope = template.nodes[node].scope
             if scope == 0:
@@ -482,6 +492,7 @@ class _Compiling:
             path = self.slot_path(stub)[0]
             chosen[(path, choice, member)] = record
             written[record] = path[0]
+            chosen_reads[record] = template.stub_reads.get(node, ())
         slots = tuple(self.slot(index, stub) for index, stub in enumerate(template.index.placed))
         formals = {name: record_of[node] for name, node in template.formals.items()}
         selections = {
@@ -523,6 +534,9 @@ class _Compiling:
             _frozen(bound),
             _frozen(chosen),
             _frozen(written),
+            _frozen({record: written_for for written_for, record in bound.items()}),
+            _frozen({record: written_for for written_for, record in chosen.items()}),
+            _frozen(chosen_reads),
             _frozen({key: record_of[node] for key, node in template.members.items()}),
             _frozen({name: record_of[node] for name, node in template.named_members.items()}),
             _frozen({key: self.slot_of_stub[stub] for key, stub in template.children.items()}),
