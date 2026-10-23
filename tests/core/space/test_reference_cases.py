@@ -30,6 +30,7 @@ from core.space.reference import (
     computed,
     listed,
     membership,
+    nothing,
 )
 from core.space.reference_harness import Case, Pair, Spelling, check_definition, expected
 
@@ -1042,6 +1043,68 @@ def test_a_guard_the_facts_refuse_or_a_choice_decides_is_no_pruning() -> None:
     pair.check_listed()
     pair.check_state("gated.x")
     pair.check_state("opted.y")
+
+
+# A selector picked by a derived value over facts alone (lane 3's ``input_chain``) is the rule's
+# widest reach: under the facts alone it names one case, so the choices of every other case are
+# pruned. ``adapter`` is picked by ``chain`` over ``mode`` (0: ``fifo``, 1: ``reg``, 2 refuses);
+# ``other`` by ``side`` over the choice ``pe``, which waits under the facts alone, so its cases stay
+# listed, as ``adapter``'s do where ``chain`` refuses.
+
+
+def chain_by_mode(read: Mapping[str, Any]) -> object:
+    return Refuse("chain-refused") if read["mode"] == 2 else ("fifo", "reg")[read["mode"]]
+
+
+PICKED = Case(
+    "a selector picked by facts",
+    Space(
+        ("mode",),
+        Scope(
+            "",
+            choices=(Choice("pe", listed(1, 2)),),
+            derived=(
+                Derived("chain", ("mode",), chain_by_mode),
+                Derived("side", ("pe",), lambda read: ("u", "v")[read["pe"] - 1]),
+            ),
+            selectors=(
+                Selector(
+                    "adapter",
+                    (
+                        Scope("fifo", choices=(Choice("depth", listed(2, 4)),)),
+                        Scope("reg", choices=(Choice("stages", listed(1, 2)),)),
+                        nothing("direct"),
+                    ),
+                    by="chain",
+                ),
+                Selector(
+                    "other",
+                    (
+                        Scope("u", choices=(Choice("a", listed(1, 2)),)),
+                        Scope("v", choices=(Choice("b", listed(1, 2)),)),
+                    ),
+                    by="side",
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def test_a_selector_picked_by_facts_prunes_the_cases_it_does_not_pick() -> None:
+    pair = PICKED.start({"mode": 0})
+    assert pair.solution().pruned() == ("adapter.reg.stages",)
+    assert {"adapter.fifo.depth", "other.u.a", "other.v.b"} <= set(pair.solution().listed())
+    pair.check_listed()
+    pair.check_state("adapter.reg.stages")
+    pair.check_state("adapter.fifo.depth")
+
+
+def test_a_selector_picked_by_facts_that_refuse_prunes_no_case() -> None:
+    pair = PICKED.start({"mode": 2})
+    assert pair.solution().pruned() == ()
+    pair.check_listed()
+    pair.check_state("adapter.reg.stages")
 
 
 @expected("optional-fact-one-space")
