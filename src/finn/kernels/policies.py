@@ -277,13 +277,22 @@ def stated(owner: str, root: type[Space], policies: object) -> Mapping[object, P
 
 
 @cache
-def _views(space_type: type[Space]) -> Mapping[str, ValueHandle[object]]:
-    """Every view below ``space_type``, by its key."""
-    return {
-        member.key: member.reference
-        for member in inspection.members(space_type)
-        if member.kind == "view"
-    }
+def _class_views(space_type: type[Space]) -> Mapping[str, ValueHandle[object]]:
+    """Every view below ``space_type``, by its key, read once per class."""
+    return _view_handles(inspection.members(space_type))
+
+
+def _view_handles(members: Iterable[inspection.NodeInfo]) -> Mapping[str, ValueHandle[object]]:
+    return {member.key: member.reference for member in members if member.kind == "view"}
+
+
+def _views(point: Space) -> Mapping[str, ValueHandle[object]]:
+    """Every view below ``point``'s scope, by its key, as its Decisions are keyed: a root's
+    (its class's, read once), or a Space placed in a root's (a partition's member: its keys
+    are its paths there, and its views the root's model's)."""
+    if point.root is point:
+        return _class_views(type(point))
+    return _view_handles(inspection.members(point))
 
 
 def _view_name(view: object) -> str:
@@ -331,7 +340,7 @@ def ranked(
         return values, None
     view = found.order
     name = str(getattr(view, "name", ""))
-    handle = _views(type(point)).get(f"{item.scope}.{name}" if item.scope else name)
+    handle = _views(point).get(f"{item.scope}.{name}" if item.scope else name)
     if handle is None:
         return values, None  # unreachable: ``stated`` checked the view is the class's
     answer = point.query(handle)
