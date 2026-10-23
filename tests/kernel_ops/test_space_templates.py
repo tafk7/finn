@@ -146,7 +146,9 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # weights' constants (``w_contents``, ``weights_dtype``) one (``weights``), and ``weighted``,
 # ``carried_weights``' guard and its core's ``w_placed`` and ``w_stream`` guard gone (20;
 # 22 after ``viable``, the trial's int8 core's two as well).
-EVALUATED = ((1192, 132), (1262, 132))
+# Then 1196 (132) and 1266 (132): each thresholding's ``table_dtype`` (4), its table's type,
+# which the rules, the module's parameters and its resources read.
+EVALUATED = ((1196, 132), (1266, 132))
 
 
 def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(

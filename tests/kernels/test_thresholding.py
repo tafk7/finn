@@ -377,7 +377,7 @@ def test_a_writable_table_holds_thresholds_of_another_signedness_than_the_input(
     facts = dict(
         input_tensor=Tensor((1, 1), ScalarEncoding(DataType["INT4"])),
         threshold_dtype=DataType["UINT5"],
-        thresholds=table,
+        thresholds=IntegerTensorValue.of(table),
         bias=0,
         platform=FULL_DSP48E2,
     )

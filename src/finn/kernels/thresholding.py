@@ -339,7 +339,7 @@ class ThresholdingAxiKernel(KernelSpace):
         """The input's element type: its tensor's."""
         return self.input_element.dtype
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def table_dtype(self) -> QONNXDataType:
         """The table's type, WT, which its memories hold and the input is compared in.
         Never written (``use_axilite`` False), the table is its initial values, and its
