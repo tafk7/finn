@@ -40,7 +40,14 @@ from typing import Any
 import numpy as np
 import numpy.typing as npt
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP58, built, choose, with_direct_transports
+from support.helpers import (
+    FULL_DSP58,
+    built,
+    by_hand,
+    choose,
+    with_channel_defaults,
+    with_direct_transports,
+)
 from support.kernel_specs.eltwise import computed
 
 from finn.core.rtlsim_bench import materialize
@@ -52,8 +59,9 @@ from finn.dataflow.traversal import Traversal, pack
 from finn.harness.orders import Stream, decode
 from finn.harness.toolchain import print_identity
 from finn.kernels.channels import Channel
+from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.network import Interface, Network, wire
+from finn.kernels.sides import Side
 from finn.toolchain.launcher import host_toolchain
 from kernels.sweeps.rtl_transport import drive_observed
 
@@ -115,15 +123,14 @@ def placed(case: Case) -> Any:
     tensors = {**operands, "result": design_space(alone).result_tensor}
     members: dict[str, Any] = {}
     for name, tensor in tensors.items():
-        contract = Interface("arithmetic", f"{name}_contract")
-        side: dict[str, Any] = {"producer" if name == "result" else "consumer": contract}
-        members[name] = wire(tensor=tensor, port=PORTS[name], platform=FULL_DSP58, **side)
-    members["arithmetic"] = EltwiseKernel(
-        **facts,
-        lhs_tensor=tensors["lhs"],
-        rhs_tensor=tensors["rhs"],
+        port, boundary = Port("arithmetic", name), Side.boundary(PORTS[name])
+        sides = (port, boundary) if name == "result" else (boundary, port)
+        members[name] = channel(*sides, tensor=tensor, platform=FULL_DSP58)
+    members["arithmetic"] = Facts(
+        EltwiseKernel, {**facts, "lhs_tensor": tensors["lhs"], "rhs_tensor": tensors["rhs"]}
     )
-    return with_direct_transports(choose(Network(members), {"arithmetic.pe": case.pe}))
+    chosen = choose(by_hand(members), {"arithmetic.pe": case.pe})
+    return with_channel_defaults(with_direct_transports(chosen))
 
 
 def stem(case: Case) -> str:

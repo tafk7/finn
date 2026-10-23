@@ -23,8 +23,9 @@ from support.models import TARGET, matmul_model, thresholding_model
 from support.refusals import refused
 
 from finn.core.graph.errors import KernelOpError
+from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import DefinitionError, Rejected, design_space, inspection
-from finn.custom_op.kernels.base import KernelOp, kernel_op
+from finn.custom_op.kernels.base import KernelOp, kernel_op, reasons
 from finn.custom_op.kernels.conv import Conv
 from finn.custom_op.kernels.matmul import MatMul
 from finn.custom_op.kernels.thresholding import Thresholding
@@ -255,3 +256,15 @@ def test_an_op_s_policies_are_checked_when_its_class_is_made() -> None:
 
         class Unfixed(Thresholding):
             policies = {ThresholdingAxiKernel.ram_style: "auto"}  # type: ignore[dict-item]
+
+
+def test_reasons_name_each_key_once_with_the_choices_standing_in_its_way() -> None:
+    """A refusal's text: each key once, in order, a finding it owns by code and message,
+    another's whole, and the stored choices standing in its way where any do."""
+    owned = Finding(FindingKind.REJECTION, "dotp-pumping", "rule", "pumping requires SIMD >= 2")
+    other = Finding(FindingKind.REJECTION, "uram-absent", "elsewhere", "no UltraRAM")
+    found = {"rule": (owned, other), "a": (other,)}
+    assert reasons(found, {"rule": ("simd", "pumping")}) == (
+        "a: elsewhere: uram-absent: no UltraRAM; rule: dotp-pumping: pumping requires "
+        "SIMD >= 2; elsewhere: uram-absent: no UltraRAM (standing: simd, pumping)"
+    )

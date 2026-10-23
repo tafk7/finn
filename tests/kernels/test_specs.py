@@ -52,7 +52,7 @@ from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import KernelSpace, PortContract
 from finn.kernels.configure import undecided
 from finn.kernels.declaration import declarations
-from finn.kernels.network import Network
+from finn.kernels.partition import Partition
 from finn.kernels.port import AxiStreamPort, Served
 from finn.kernels.sides import Side
 
@@ -90,7 +90,7 @@ def test_the_covering_points_reach_every_case_and_are_valid(name: str) -> None:
         point = configured(base, chosen)
         kernel: Space = design_member(point, KERNEL)
         assert not rejected(kernel), f"{name} refuses its covering point {chosen}"
-        open_ = point.undecided() if isinstance(point, Network) else undecided(point, "*")
+        open_ = point.undecided() if isinstance(point, Partition) else undecided(point, "*")
         assert not open_, f"{name} at {chosen}"
         module = design_module(point, spec.kernel)
         assert isinstance(module, Available), f"{name} at {chosen}: {module}"
@@ -191,7 +191,7 @@ def _ports(member: Space) -> tuple[str, ...]:
     return tuple(name for name, each in found.items() if isinstance(each, (AxiStreamPort, Served)))
 
 
-def _ports_checked(point: Network) -> int:
+def _ports_checked(point: Partition) -> int:
     """Each placed stream port of each member of ``point``, checked: its label is its
     contract's, and its side states its stream, that label and, on an output port, its
     word width. How many it checked."""

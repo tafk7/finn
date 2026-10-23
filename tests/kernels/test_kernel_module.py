@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP48E2, OtherPins, codes
+from support.helpers import FULL_DSP48E2, OtherPins, by_hand, codes
 from support.refusals import refused
 
 from finn.core.space import (
@@ -47,12 +47,13 @@ from finn.kernels.artifacts.abi import (
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Held, Leaf, RegisterMap
 from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
+from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.control import CONTROL, Control, ControlBus, held_bus
 from finn.kernels.library import LibraryModule, library_module
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.network import Interface, Network, wire
 from finn.kernels.port import AxiStreamPort, served
+from finn.kernels.sides import Side
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.platform.capabilities import Resources
 
@@ -97,15 +98,12 @@ class Probe(KernelSpace):
 
 
 def probe(**facts: object) -> Probe:
-    network = Network(
+    network = by_hand(
         {
-            "edge": wire(
-                tensor=TENSOR,
-                port="in0_V",
-                consumer=Interface("kernel", "x_contract"),
-                platform=FULL_DSP48E2,
+            "edge": channel(
+                Side.boundary("in0_V"), Port("kernel", "x"), tensor=TENSOR, platform=FULL_DSP48E2
             ),
-            "kernel": Probe(tensor=TENSOR, **facts),  # type: ignore[arg-type]
+            "kernel": Facts(Probe, {"tensor": TENSOR, **facts}),  # type: ignore[arg-type]
         }
     )
     kernel: Probe = network.member("kernel")

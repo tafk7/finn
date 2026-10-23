@@ -36,7 +36,7 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import replace
 from types import MappingProxyType
-from typing import Any, Self, TypeVar
+from typing import Any, Self, TypeVar, overload
 
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
@@ -758,6 +758,37 @@ def boundary(declared: PartitionDeclaration) -> tuple[tuple[str, str], ...]:
 P = TypeVar("P", bound=Partition)
 
 
+@overload
+def partition(
+    declared: PartitionDeclaration,
+    stored: Mapping[Key, object] | None = None,
+    *,
+    name: str = ...,
+    order: Sequence[str] | None = ...,
+    owners: Mapping[str, Owner] | None = ...,
+    ports: Sequence[tuple[str, str]] | None = ...,
+    movers: tuple[MoverOffer, ...] = ...,
+    stray: Mapping[str, tuple[Finding, ...]] | None = ...,
+    whole: bool = ...,
+) -> Partition: ...
+
+
+@overload
+def partition(
+    declared: PartitionDeclaration,
+    stored: Mapping[Key, object] | None = None,
+    *,
+    name: str = ...,
+    order: Sequence[str] | None = ...,
+    owners: Mapping[str, Owner] | None = ...,
+    ports: Sequence[tuple[str, str]] | None = ...,
+    movers: tuple[MoverOffer, ...] = ...,
+    stray: Mapping[str, tuple[Finding, ...]] | None = ...,
+    whole: bool = ...,
+    kind: Callable[..., P],
+) -> P: ...
+
+
 def partition(
     declared: PartitionDeclaration,
     stored: Mapping[Key, object] | None = None,
@@ -769,23 +800,26 @@ def partition(
     movers: tuple[MoverOffer, ...] = (),
     stray: Mapping[str, tuple[Finding, ...]] | None = None,
     whole: bool = True,
-    kind: Callable[..., P] = Partition,  # type: ignore[assignment]
-) -> P:
+    kind: Callable[..., Partition] = Partition,
+) -> Partition:
     """``declared`` composed (``finn.kernels.composer.compose``; a ``PartitionRefused``
     naming each reason it cannot be) and its ``stored`` choices, by key, bound on one design
     space of its class (the module docstring: a value outside its domain, or a key that is
-    no choice, dropped as stale; a rule they break binds, read refused), made by ``kind``
-    (``Partition``, or a shell's partition over it). ``order``: its module's instance order
-    (the kernels, then the channels, as declared, by default); ``owners``: each kernel's
-    policies' owner (``Unstated`` where none is given); ``ports``: each boundary channel and
-    its AXIS port, inputs then outputs (``boundary``'s by default), ``movers`` the offers
-    on them; ``stray`` and ``whole``, a graph's."""
+    no choice or no member's, dropped as stale; a rule they break binds, read refused), made
+    by ``kind`` (``Partition``, or a shell's partition over it). ``order``: its module's
+    instance order (the kernels, then the channels, as declared, by default); ``owners``:
+    each kernel's policies' owner (``Unstated`` where none is given); ``ports``: each
+    boundary channel and its AXIS port, inputs then outputs (``boundary``'s by default),
+    ``movers`` the offers on them; ``stray`` and ``whole``, a graph's."""
     composed = compose(declared)
     point = composed.design_space()
     decisions = {item.key: item.reference for item in inspection.decisions(point)}
     unknown: dict[Key, tuple[Finding, ...]] = {}
     values: dict[object, object] = {}
     for key, value in (stored or {}).items():
+        if key[0] not in composed.names.members:
+            unknown[key] = _not_a_decision(key)
+            continue
         path = composed.names.path(key)
         if path in decisions:
             values[decisions[path]] = value

@@ -42,7 +42,6 @@ from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, Traversal, vector_major
 from finn.kernels.adapters import Convert, realize
 from finn.kernels.channels import Channel, ChannelFifo, OuterHops
-from finn.kernels.configure import chosen
 from finn.kernels.library import library_module
 from finn.kernels.sides import Side
 from finn.kernels.utilization import memory_preference
@@ -136,7 +135,8 @@ def test_exactly_one_chain_a_side_carries_out_its_steps():
         (columns_first(ROWS, CHANNELS, 4), 4, "input_gen", False),
         (columns_first(ROWS, CHANNELS, 4), 2, "input_gen", True),
     ):
-        x = adapted(source, pe).member("x")
+        point = adapted(source, pe)
+        x = point.member("x")
         # The output side's one chain is placed where its steps convert a width; the input
         # side's is picked by its steps (``input_chain``, the kinds ``realize`` takes,
         # joined), ``none`` where nothing happens after the transport.
@@ -145,8 +145,9 @@ def test_exactly_one_chain_a_side_carries_out_its_steps():
         # Where the picker answers, it places a chain exactly where the channel adapts.
         assert x.adapter_placed == x.adapting == (chain != "none")
         # Neither is a choice: no chain is listed, so none is tried.
-        assert not {"adapter", "output_adapter"} & {item.key for item in inspection.decisions(x)}
-        assert ("adapter_ram_style" in chosen(x)) == (chain != "none")
+        decisions = {key for owner, key in point.decisions() if owner == "x"}
+        assert not {"adapter", "output_adapter"} & decisions
+        assert (("x", "adapter_ram_style") in point.chosen(["x"])) == (chain != "none")
 
 
 def _channel(source, sink, shape, platform=FULL_DSP48E2):
@@ -232,8 +233,8 @@ def test_a_stream_admitting_no_adapter_refuses_its_steps():
     assert isinstance(refused, Rejected)
     refusals = [finding for finding in refused.findings if finding.code == "channel-plan"]
     assert refusals and "width_conversion" in refusals[0].message
-    # Its adapter Decision does not apply, and the network leaves a channel refused on its
-    # own facts as it is: its transport stays open.
+    # Its adapter Decision does not apply, and the cut's policies leave a channel refused on
+    # its own facts as it is: its transport stays open.
     assert not point.member("x").adapting
     assert ("x", "transport") in point.undecided()
 
@@ -277,10 +278,12 @@ def test_a_fifo_refuses_what_carries_markers():
 
 
 def validity_of(point):
-    """The point's validity status, and each piece that is not true with its codes."""
+    """The point's validity status, and each piece that is not true with its codes, each
+    owned by its key in channel ``x``."""
     found = inspection.validity(point)
     return found.status, [
-        (piece.owner, {finding.code for finding in piece.result.findings}) for piece in found.pieces
+        (piece.owner.removeprefix("x."), {finding.code for finding in piece.result.findings})
+        for piece in found.pieces
     ]
 
 

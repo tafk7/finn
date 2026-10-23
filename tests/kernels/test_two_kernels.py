@@ -17,13 +17,12 @@ adapter refuses it.
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import (
     FULL_DSP48E2,
     built,
+    by_hand,
     choose,
     cycles_of,
     dotp_extents,
@@ -36,17 +35,18 @@ from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.rtlsim_pacing import FREE, STALLED
-from finn.core.space import design_space
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.steps import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import Traversal, period
 from finn.kernels.base import BUFFERING
 from finn.kernels.channels import Channel
+from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.network import Interface, Network, wire
+from finn.kernels.partition import Partition
+from finn.kernels.sides import Side
 from finn.toolchain.launcher import host_toolchain
 
 ROWS, INPUTS, HIDDEN, OUTPUTS = 3, 4, 4, 4
@@ -65,26 +65,29 @@ STEM = "layered"
 
 def _layer(
     result: DataType, x_tensor: Tensor, w_tensor: Tensor, y_tensor: Tensor, pe: int, simd: int
-) -> Any:
+) -> Facts:
     """A layer's core, given its folding (its role's choices)."""
-    return PackedDotpKernel(
-        result_range=ordinary_integer_bounds(result),
-        x_tensor=x_tensor,
-        w_tensor=w_tensor,
-        **dotp_extents(w_tensor),
-        pe=pe,
-        simd=simd,
-        platform=FULL_DSP48E2,
+    return Facts(
+        PackedDotpKernel,
+        {
+            "result_range": ordinary_integer_bounds(result),
+            "x_tensor": x_tensor,
+            "w_tensor": w_tensor,
+            **dotp_extents(w_tensor),
+            "pe": pe,
+            "simd": simd,
+            "platform": FULL_DSP48E2,
+        },
     )
 
 
-def _period(layer: Any) -> Traversal:
+def _period(layer: Facts) -> Traversal:
     """One pass of a layer's weights, in the order it reads them at its folding."""
-    folded = commit(design_space(layer), {"compute_pumping": False, "reducer": "tree"})
+    folded = commit(layer.bind(), {"compute_pumping": False, "reducer": "tree"})
     return period(folded.w_stream.sequence.form)
 
 
-def layered(*, adaptable: bool = True) -> Network:
+def layered(*, adaptable: bool = True) -> Partition:
     x_tensor = Tensor((ROWS, INPUTS), ScalarEncoding(A))
     w1_tensor = Tensor((INPUTS, HIDDEN), ScalarEncoding(W))
     h_tensor = Tensor((ROWS, HIDDEN), ScalarEncoding(H))
@@ -96,52 +99,36 @@ def layered(*, adaptable: bool = True) -> Network:
     }
     # One pass of each layer's weights, in the order that layer reads them.
     periods = {name: _period(_layer(*facts)) for name, facts in layers.items()}
-    network = Network(
+    network = by_hand(
         {
-            "x": wire(
-                platform=FULL_DSP48E2,
-                tensor=x_tensor,
-                port="in0_V",
-                consumer=Interface("first", "x_contract"),
+            "x": channel(
+                Side.boundary("in0_V"), Port("first", "x"), platform=FULL_DSP48E2, tensor=x_tensor
             ),
-            "w1": wire(
-                tensor=w1_tensor,
-                producer=Interface("rom1", "output_contract"),
-                consumer=Interface("first", "w_contract"),
-                platform=FULL_DSP48E2,
+            "w1": channel(
+                Port("rom1", "output"), Port("first", "w"), tensor=w1_tensor, platform=FULL_DSP48E2
             ),
-            "h": wire(
+            "h": channel(
+                Port("first", "y"),
+                Port("second", "x"),
                 tensor=h_tensor,
                 adaptable=adaptable,
-                producer=Interface("first", "y_contract"),
-                consumer=Interface("second", "x_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "w2": wire(
-                tensor=w2_tensor,
-                producer=Interface("rom2", "output_contract"),
-                consumer=Interface("second", "w_contract"),
-                platform=FULL_DSP48E2,
+            "w2": channel(
+                Port("rom2", "output"), Port("second", "w"), tensor=w2_tensor, platform=FULL_DSP48E2
             ),
-            "y": wire(
-                platform=FULL_DSP48E2,
-                tensor=y_tensor,
-                port="out0_V",
-                producer=Interface("second", "y_contract"),
+            "y": channel(
+                Port("second", "y"), Side.boundary("out0_V"), platform=FULL_DSP48E2, tensor=y_tensor
             ),
             "first": _layer(*layers["first"]),
             "second": _layer(*layers["second"]),
-            "rom1": MemStreamKernel(
-                platform=FULL_DSP48E2,
-                dtype=W,
-                form=periods["first"],
-                contents=W1,
+            "rom1": Facts(
+                MemStreamKernel,
+                {"platform": FULL_DSP48E2, "dtype": W, "form": periods["first"], "contents": W1},
             ),
-            "rom2": MemStreamKernel(
-                platform=FULL_DSP48E2,
-                dtype=W,
-                form=periods["second"],
-                contents=W2,
+            "rom2": Facts(
+                MemStreamKernel,
+                {"platform": FULL_DSP48E2, "dtype": W, "form": periods["second"], "contents": W2},
             ),
         }
     )

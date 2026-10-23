@@ -21,6 +21,7 @@ from support.adapted import ELEMENT, transposed
 from support.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
+    by_hand,
     choose,
     eltwise,
     in_order,
@@ -35,6 +36,7 @@ from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.base import RESOURCES
+from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import (
     Int8Dsp58DotpKernel,
     PackedDotpKernel,
@@ -44,7 +46,7 @@ from finn.kernels.dotp import (
 from finn.kernels.fifo import fifo_resources
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.network import Interface, Network, wire
+from finn.kernels.sides import Side
 from finn.kernels.thresholding import (
     ThresholdingAxiKernel,
     stage_style,
@@ -273,21 +275,21 @@ def pages(rows: int, cols: int) -> Any:
 
     tensor = Tensor(shape, ELEMENT)
 
-    network = Network(
+    network = by_hand(
         {
-            "a": wire(
+            "a": channel(
+                Side.boundary("in0_V"),
+                Port("shuffle", "input"),
                 tensor=tensor,
-                port="in0_V",
-                consumer=Interface("shuffle", "input_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "b": wire(
+            "b": channel(
+                Port("shuffle", "output"),
+                Side.boundary("out0_V"),
                 tensor=tensor,
-                port="out0_V",
-                producer=Interface("shuffle", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "shuffle": TransposeKernel(input_tensor=tensor, platform=FULL_DSP48E2),
+            "shuffle": Facts(TransposeKernel, {"input_tensor": tensor, "platform": FULL_DSP48E2}),
         }
     )
     return with_direct_transports(choose(network, {"shuffle.simd": 4}))

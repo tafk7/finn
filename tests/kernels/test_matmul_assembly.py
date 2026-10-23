@@ -315,11 +315,10 @@ def test_the_core_is_one_possible_case_and_is_given_the_folding():
     base = matmul_point(**FACTS)
     # On DSP48E2 only the packed core is possible, before any folding factor (the INT8
     # core is a DSP58 mode, refused by its own rule): ``compute`` is open until set, as
-    # conversion's policy sets it, never forced. Its channels wait on its contracts, which the
-    # folding decides.
+    # conversion's policy sets it, never forced. Its channels' sides wait on its folding.
     ((_, compute),) = base.viable([("matmul", "compute")])
     assert compute.cases == ("packed",)
-    assert base.chosen() == {} and base.unbound("x") is not None
+    assert base.chosen() == {} and base.validity("x").status == "open"
     point = choose(
         base,
         {
@@ -332,7 +331,7 @@ def test_the_core_is_one_possible_case_and_is_given_the_folding():
         point, {"x.transport": "direct", "w.transport": "direct", "y.transport": "direct"}
     )
     # The activation channel's adapter is picked once its steps are known, which the
-    # folding decides; its memory is the channel's, the network's.
+    # folding decides; its memory is the channel's.
     point = choose(point, {"x.adapter_ram_style": "auto"})
     compute = point.member("matmul").compute
     assert isinstance(compute.inspect(DotpAxiKernel.netlist).accepted_result, Unresolved)
@@ -427,7 +426,7 @@ def test_matmul_honors_its_cores_rules_not_just_its_raw_module(monkeypatch):
     ((_, compute),) = base.viable([("matmul", "compute")])
     assert compute.cases == ()
     ((value, rules),) = [
-        (item.value, [rule.rule for rule in item.broken])
+        (item.value, [base.pair("matmul", rule.rule)[1] for rule in item.broken])
         for item in compute.values or ()
         if isinstance(item, inspection.Refused)
     ]

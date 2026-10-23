@@ -59,7 +59,7 @@ from finn.kernels.fifo_sizing import (
     simulate,
 )
 from finn.kernels.input_generator import NestBuffer, nest_buffer, nest_geometry
-from finn.kernels.network import Network
+from finn.kernels.partition import Partition
 from finn.kernels.policies import Required
 from finn.toolchain.launcher import host_toolchain
 
@@ -212,7 +212,7 @@ def test_a_fifo_s_depth_is_the_least_whose_storage_holds_the_words() -> None:
 # -- a channel's sides, from the paces its ports state ----------------------------------------
 
 
-def _folded() -> tuple[Seam, Network]:
+def _folded() -> tuple[Seam, Partition]:
     """The Chain as conversion and the cut leave it (``with_defaults``), folded to 12
     cycles a frame."""
     explorer = Seam(FULL_DSP48E2)
@@ -220,7 +220,7 @@ def _folded() -> tuple[Seam, Network]:
     return explorer, TargetCycles(12).explore(explorer, with_defaults(chain.network()))
 
 
-def chosen(explorer: Seam, network: Network) -> dict[str, object]:
+def chosen(explorer: Seam, network: Partition) -> dict[str, object]:
     """``network``'s stored choices, each by ``member.key``."""
     return {dotted(key): value for key, value in explorer.chosen(network).items()}
 
@@ -517,7 +517,7 @@ def test_the_check_is_sizing_s_own_test_at_the_words_a_transport_holds() -> None
     assert keeps(_burst(32), _every(1, 32), 32, sized)
 
 
-def _with_fifo(depth: int = 8) -> tuple[Seam, Network]:
+def _with_fifo(depth: int = 8) -> tuple[Seam, Partition]:
     """The folded Chain with a FIFO of ``depth`` on ``levels`` (a shift register of
     ``max(5, depth)`` words)."""
     explorer, point = _folded()

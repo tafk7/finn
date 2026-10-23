@@ -1,14 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The DSE seam over a network: choices, changes, cost, a strategy's run (reopen, search,
-restore), and the strategies that search it.
+"""The DSE seam over a partition declared by hand: choices, changes, cost, a strategy's
+run (reopen, search, restore), and the strategies that search it.
 
 On the Chain (``support.chain``: MatMul ``first``, Thresholding ``activate`` at a
 fixed PE, MatMul ``second``; three rows of four), its platform at 5 ns: as conversion and
 the cut leave it (``support.helpers.with_defaults``: each kernel's choices by its
 policies, each channel's by the cut's), or with nothing chosen
-(``chain.network()``) where a test reads what is open. No ONNX: the seam reads a network
+(``chain.network()``) where a test reads what is open. No ONNX: the seam reads a partition
 and its members, each key a member and the key in its space; owners are the KernelOps'
 (``tests/kernel_ops/test_explore.py``). A test names a key ``member.key``
 (``helpers.keyed``).
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, replace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from qonnx.core.datatype import DataType
@@ -27,6 +27,7 @@ from support.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
     Lanes,
+    by_hand,
     choose,
     keyed,
     matmul_point,
@@ -36,8 +37,9 @@ from support.refusals import refused
 
 import finn.kernels.explore as explore_module
 from finn.core.reporting.findings import Finding, FindingKind
-from finn.core.space import design_space, inspection
+from finn.core.space import inspection
 from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.kernels import composer
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.explore import (
     Accepted,
@@ -58,8 +60,9 @@ from finn.kernels.explore import (
     explore,
 )
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
+from finn.kernels.partition import Partition
 from finn.kernels.policies import Required
+from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.utilization import total
 from finn.platform.capabilities import RESOURCE_NAMES, Resources
@@ -71,18 +74,18 @@ def held(explorer: Seam) -> Seam:
     return explorer
 
 
-def seam() -> tuple[Seam, Network]:
+def seam() -> tuple[Seam, Partition]:
     """A seam holding the Chain's fixed PE, and the Chain as conversion and the cut leave
     it."""
     return held(Seam(FULL_DSP48E2)), with_defaults(chain.network())
 
 
-def chosen(explorer: Seam, network: Network) -> dict[str, object]:
+def chosen(explorer: Seam, network: Partition) -> dict[str, object]:
     """``network``'s stored choices, each by ``member.key``."""
     return {dotted(key): value for key, value in explorer.chosen(network).items()}
 
 
-def folding(explorer: Seam, network: Network) -> dict[str, object]:
+def folding(explorer: Seam, network: Partition) -> dict[str, object]:
     """``network``'s stored folding: each MatMul's PE and SIMD (the thresholding's PE is
     the Chain's, held)."""
     return {
@@ -92,12 +95,12 @@ def folding(explorer: Seam, network: Network) -> dict[str, object]:
     }
 
 
-def offered(explorer: Seam, network: Network) -> dict[str, Any]:
+def offered(explorer: Seam, network: Partition) -> dict[str, Any]:
     """``network``'s open choices, each by ``member.key``."""
     return {dotted(choice.key): choice for choice in explorer.choices(network)}
 
 
-def state(network: Network, name: str) -> inspection.ChoiceState:
+def state(network: Partition, name: str) -> inspection.ChoiceState:
     """The state of choice ``name`` (``member.key``) in ``network``."""
     ((owner, key),) = keyed({name: None})
     return dict(network.states((owner,)))[(owner, key)]
@@ -116,7 +119,8 @@ FOLDED_12 = {
 def test_a_choice_names_its_space_class_and_whether_its_cases_are_ordered() -> None:
     """Every open choice in play is offered, one possible value or several, each refused
     value with the rule it would break; one whose presence waits on another open choice
-    is not in play yet, and a channel's choices are offered once its contracts are known."""
+    is not in play yet. A channel's choices are in play as a kernel's are: its transport at
+    once, while its sides wait on its kernels' folding."""
     explorer, base = seam()
     fresh = offered(explorer, chain.network())
     # Each core is open: on a DSP48E2 platform one value is possible, and offered.
@@ -126,12 +130,12 @@ def test_a_choice_names_its_space_class_and_whether_its_cases_are_ordered() -> N
     ((rule, (finding,)),) = compute.refused["int8_dsp58"].why.items()
     assert (rule, finding.code) == (("first", "compute.int8_dsp58.core_supported"), "dotp-target")
     assert fresh["activate.ultra_stages"].space_type is ThresholdingAxiKernel
-    # The folding is MatMul's, offered while its core is open; the channels wait on their
-    # kernels' contracts, and a core's own choices on its presence.
+    # The folding is MatMul's, offered while its core is open; a core's own choices wait
+    # on its presence. A channel's transport is offered at once.
     pe = fresh["first.pe"]
     assert pe.key == ("first", "pe")
     assert pe.space_type is MatMulKernel and pe.ordered and pe.cases == (1, 2, 4)
-    assert "levels.transport" not in fresh and "first.compute.packed.reducer" not in fresh
+    assert "levels.transport" in fresh and "first.compute.packed.reducer" not in fresh
     cored = choose(chain.network(), {"first.compute": "packed"})
     first = offered(explorer, cored)
     assert first["first.pe"].cases == (1, 2, 4)
@@ -387,42 +391,44 @@ def test_target_cycles_states_the_bottleneck_of_the_restored_point_where_it_leav
     assert (report["bottleneck_of"], report["met"]) == ("restored", False)
 
 
-def dsp58_matmul() -> tuple[Seam, Network]:
+def dsp58_matmul() -> tuple[Seam, Partition]:
     """The Chain's first MatMul alone, on a DSP58 platform, as conversion and the cut leave
     it: its core ``packed``, the first valid, and ``int8_dsp58`` possible too."""
 
     x_tensor = Tensor((chain.ROWS, chain.INPUTS), ScalarEncoding(chain.A))
 
-    def first() -> MatMulKernel:
-        return MatMulKernel(
-            weights_dtype=chain.W,
-            platform=FULL_DSP58,
-            x_tensor=x_tensor,
-            w_contents=chain.W1,
-        )
-
-    y_tensor = design_space(first()).y_tensor
-    network = Network(
+    first = composer.Facts(
+        MatMulKernel,
         {
-            "x": wire(
-                platform=FULL_DSP58,
+            "weights_dtype": chain.W,
+            "platform": FULL_DSP58,
+            "x_tensor": x_tensor,
+            "w_contents": chain.W1,
+        },
+    )
+    y_tensor = cast(Any, first.bind()).y_tensor
+    network = by_hand(
+        {
+            "x": composer.channel(
+                Side.boundary("s_axis_0"),
+                composer.Port("first", "x"),
                 tensor=x_tensor,
-                port="s_axis_0",
-                consumer=Interface("first", "x_contract"),
-            ),
-            "w": wire(
-                tensor=Fact("first", "carried_weights"),
-                contents=Fact("first", "stored_weights"),
-                consumer=Interface("first", "w_contract"),
                 platform=FULL_DSP58,
             ),
-            "y": wire(
+            "w": composer.channel(
+                Side.source(),
+                composer.Port("first", "w"),
+                tensor=composer.Stated("first", "carried_weights"),
+                contents=composer.Stated("first", "stored_weights"),
+                platform=FULL_DSP58,
+            ),
+            "y": composer.channel(
+                composer.Port("first", "y"),
+                Side.boundary("m_axis_0"),
                 tensor=y_tensor,
-                port="m_axis_0",
-                producer=Interface("first", "y_contract"),
                 platform=FULL_DSP58,
             ),
-            "first": first(),
+            "first": first,
         }
     )
     return Seam(FULL_DSP58), with_defaults(network)
@@ -537,19 +543,19 @@ def test_the_defaults_set_each_open_choice_by_its_policy_and_leave_required_ones
 
 
 def test_reopen_clears_its_keys_in_one_change_and_a_channel_waits_on_its_kernel() -> None:
-    """Clearing a MatMul's folding leaves its channels' contracts open: they wait, their
-    stored choices with them, and come back when the folding does. A clear never breaks
+    """Clearing a MatMul's folding leaves its channels' sides open: the stored choices they
+    decide wait on it (the input's adapter memory), the others stay set (its transport),
+    and they come back when the folding does. A clear never breaks
     a rule: a choice under a selector cleared waits on it, stored, and comes back in play
     with it. Nothing else is touched."""
     explorer, base = seam()
     opened, reach = explorer.reopen(base, [("first", "pe")])
     assert reach == (("first", "pe"),)
     assert set(explorer.chosen(base)) - set(explorer.chosen(opened)) == set(reach)
-    held_ = opened.unbound("x")
-    assert held_ is not None and held_.stored == {
-        key[1]: value for key, value in explorer.chosen(base).items() if key[0] == "x"
-    }
-    # The folding back, the channel is bound again, its choices set again.
+    states = dict(opened.states(["x"]))
+    assert states[("x", "adapter_ram_style")] == inspection.Waiting("distributed", ("first.pe",))
+    assert states[("x", "transport")] == inspection.Set("direct")
+    # The folding back, the channel's stored choices are set again.
     again = explorer.set(opened, keyed({"first.pe": 1}))
     assert isinstance(again, Accepted) and not again.cleared and not again.settled
     assert explorer.chosen(again.network) == explorer.chosen(base)
@@ -759,7 +765,7 @@ def test_the_debug_placeholder_takes_a_required_choice_s_first_case_or_refuses_i
 PART = replace(FULL_DSP48E2, resources=Resources(lut=1000, ff=2000, bram18=10, uram=0, dsp=10))
 
 
-def within_part() -> tuple[Seam, Network]:
+def within_part() -> tuple[Seam, Partition]:
     return held(Seam(PART)), with_defaults(chain.network())
 
 
@@ -839,7 +845,7 @@ def test_a_core_no_value_of_which_is_possible_refuses_the_cost_strategies_naming
         weights_dtype=DataType["UINT3"],
         platform=PART,
     )
-    with pytest.raises(NetworkError, match="compute.packed.w_element_taken: dtype-family"):
+    with pytest.raises(ValueError, match="compute.packed.w_element_taken: dtype-family"):
         choose(unsigned, {"matmul.compute": "packed"})
     with refused(
         "cycles-unknown",

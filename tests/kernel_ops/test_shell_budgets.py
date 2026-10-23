@@ -26,7 +26,14 @@ from typing import Any
 import pytest
 from qonnx.core.datatype import DataType
 from support.configure import configured
-from support.helpers import built, choose, with_adapter_memories, with_direct_transports
+from support.helpers import (
+    built,
+    by_hand,
+    choose,
+    with_adapter_memories,
+    with_channel_defaults,
+    with_direct_transports,
+)
 from support.models import MATMUL, configure_partition, kernel_model
 from support.refusals import refused
 from support.tfc import ULTRA96
@@ -54,7 +61,9 @@ from finn.kernels.artifacts.abi import (
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.artifacts.module import Abi, BusExport, Fragment, Leaf
 from finn.kernels.artifacts.top import module_abi
-from finn.kernels.network import Interface, Network, wire
+from finn.kernels.composer import Facts, Port, channel
+from finn.kernels.partition import Partition
+from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform.shells import IP_ROW, ShellRow, budgets, bus_counts, shell_row
 from finn.transformation.kernels import explore_kernel_choices
@@ -69,37 +78,35 @@ TABLE = (((0, 1, 2), (0, 1, 2)),)
 """Each thresholding's table: two channels of three thresholds over UINT2, to UINT2."""
 
 
-def thresholdings(count: int, row: ShellRow) -> Network:
-    """A network for ``row`` of ``count`` AXI-Lite thresholdings in a row, each
-    presenting its bus (``t<i>_s_axilite``), configured: every thresholding
+def thresholdings(count: int, row: ShellRow) -> Partition:
+    """A partition declared by hand, for ``row``, of ``count`` AXI-Lite thresholdings in a
+    row, each presenting its bus (``t<i>_s_axilite``), configured: every thresholding
     runtime-writable, at its baseline otherwise, every transport direct."""
     platform = ULTRA96.platform
-    offered: dict[str, Any] = {"mover_offer": row.movers} if row.movers else {}
-    # Each channel takes the contracts of the thresholdings on either side of it.
+    # Each channel is on the ports of the thresholdings on either side of it; the first's
+    # and the last's other side the boundary, offered the row's movers.
     names = ["x", *(f"c{index}" for index in range(count - 1)), "y"]
     channels: dict[str, Any] = {}
     for index, name in enumerate(names):
-        sides: dict[str, Any] = {}
-        if index > 0:
-            sides["producer"] = Interface(f"t{index - 1}", "output_contract")
-        if index < count:
-            sides["consumer"] = Interface(f"t{index}", "input_contract")
-        boundary = {"port": "s_axis_0" if index == 0 else "m_axis_0", **offered}
-        channels[name] = wire(
-            tensor=TENSOR,
-            platform=platform,
-            **sides,
-            **(boundary if name in ("x", "y") else {}),
+        producer = (
+            Port(f"t{index - 1}", "output") if index > 0 else Side.boundary("s_axis_0", row.movers)
         )
+        consumer = (
+            Port(f"t{index}", "input") if index < count else Side.boundary("m_axis_0", row.movers)
+        )
+        channels[name] = channel(producer, consumer, tensor=TENSOR, platform=platform)
     members: dict[str, Any] = {name: channels[name] for name in names[:-1]}
     for index in range(count):
-        members[f"t{index}"] = ThresholdingAxiKernel(
-            threshold_dtype=UINT2,
-            thresholds=TABLE,
-            bias=0,
-            input_tensor=TENSOR,
-            control=f"t{index}_s_axilite",
-            platform=platform,
+        members[f"t{index}"] = Facts(
+            ThresholdingAxiKernel,
+            {
+                "threshold_dtype": UINT2,
+                "thresholds": TABLE,
+                "bias": 0,
+                "input_tensor": TENSOR,
+                "control": f"t{index}_s_axilite",
+                "platform": platform,
+            },
         )
     members["y"] = channels["y"]
     choices: dict[str, object] = {}
@@ -107,16 +114,16 @@ def thresholdings(count: int, row: ShellRow) -> Network:
         held = {"use_axilite": True, "pe": 1, "deep_pipeline": False, "ram_style": "auto"}
         choices |= {f"t{index}.{key}": value for key, value in held.items()}
         choices[f"t{index}.ultra_stages"] = 0
-    point = with_direct_transports(choose(Network(members), choices))
-    return with_adapter_memories(point)
+    point = with_direct_transports(choose(by_hand(members), choices))
+    return with_channel_defaults(with_adapter_memories(point))
 
 
-def movers_of(point: Network) -> tuple[Any, ...]:
+def movers_of(point: Partition) -> tuple[Any, ...]:
     """The movers the shell places on the network's boundary channels."""
     return tuple(point.member("x").placed_mover) + tuple(point.member("y").placed_mover)
 
 
-def over_budget(point: Network, row: ShellRow) -> tuple[Finding, ...]:
+def over_budget(point: Partition, row: ShellRow) -> tuple[Finding, ...]:
     """``row``'s budgets of ``point``'s netlist and of its movers' AXI-Lite buses."""
     movers = sum(mover.control_buses for mover in movers_of(point))
     netlist = point.netlist()

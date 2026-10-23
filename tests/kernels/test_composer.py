@@ -6,7 +6,7 @@
 
 Its class: a Param per fact at the root, named ``<member>-<fact>``, each kernel's formals
 bound to those Params only, each channel's sides to its kernels' sides below their member's
-node; its answers, configured as the Chain's network is, the network's, by key; the class
+node; its answers, configured with the Chain's stored choices, keyed by pair; the class
 kept by its structure, at most ``CLASS_CACHE_BOUND`` of them; names, roles (each port's
 endpoint read off its class, ``port_endpoint``) and reads refused by name when the class is
 made; keys mapped between a path and FINN's pair.
@@ -86,7 +86,7 @@ def kernels(names: Mapping[str, str] | None = None) -> dict[str, Facts]:
 
 
 def channels(names: Mapping[str, str] | None = None) -> dict[str, ChannelDeclaration]:
-    """The Chain's channels, by tensor, as its network wires them (``support.chain``)."""
+    """The Chain's channels, by tensor, as ``support.chain`` declares them."""
     named = names or {}
     first, activate, second = (named.get(each, each) for each in ("first", "activate", "second"))
     platform = FULL_DSP48E2
@@ -138,7 +138,10 @@ def cache() -> Iterator[None]:
     composer.clear_classes()
 
 
-def test_the_chain_composed_answers_as_its_network_by_key(cache: None) -> None:
+def test_the_chain_composed_answers_by_key_as_its_partition(cache: None) -> None:
+    """The class composed here, configured with the Chain's stored choices, is valid, and
+    its answers keyed by pair (``Names.pair``) are the partition's
+    (``support.chain.chain``, the same declaration bound)."""
     network = chain.chain()
     composed = compose(declared())
     names = composed.names
@@ -187,17 +190,28 @@ def test_each_kernel_formal_is_bound_to_a_root_param_only(cache: None) -> None:
             ]
 
 
-def test_a_kernel_side_is_labelled_below_its_member_s_node_as_the_network_labels_it(
-    cache: None,
-) -> None:
+#: Each channel's sides' labels: a kernel's port below its member's node, the boundary's
+#: AXIS port, a source's none.
+LABELS = {
+    "x": ("s_axis_0", "first.compute.packed.x"),
+    "w1": ("", "first.compute.packed.w"),
+    "hidden": ("first.compute.packed.y", "activate.input"),
+    "levels": ("activate.output", "second.compute.packed.x"),
+    "y": ("second.compute.packed.y", "m_axis_0"),
+}
+
+
+def test_a_kernel_side_is_labelled_below_its_member_s_node(cache: None) -> None:
     network = chain.chain()
     composed = compose(declared())
     stored = {composed.names.path(key): value for key, value in network.chosen().items()}
     point = commit(composed.design_space(), stored)
-    for name in ("hidden", "levels", "y", "x", "w1"):
-        for role in ("producer", "consumer"):
-            found = getattr(point, name).query(getattr(Channel, role))
-            assert found == network.member(name).query(getattr(Channel, role))
+    for name, labels in LABELS.items():
+        found = tuple(
+            getattr(point, name).query(getattr(Channel, role)) for role in ("producer", "consumer")
+        )
+        assert all(isinstance(each, Available) for each in found), found
+        assert tuple(each.value.label for each in found if isinstance(each, Available)) == labels
     side = point.hidden.query(Channel.producer)  # type: ignore[attr-defined]
     assert isinstance(side, Available) and side.value.label == "first.compute.packed.y"
     assert side.value.kind is SideKind.KERNEL

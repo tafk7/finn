@@ -1,16 +1,17 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The shell's bus counts checked against the top's pins, on every network a test reads.
+"""The shell's bus counts checked against the top's pins, on every partition a test reads.
 
 A shell counts a partition's AXI-Lite buses, memory initiators and doubled clock from its
 netlist and boundary buses (``finn.platform.shells.bus_counts``), without building its top.
 The oracle counts the same from the top's pins (``bus_counts_of_abi``, of
-``finn.kernels.artifacts.top.module_abi``). The autouse ``_top_pins`` checks the two equal on
-every netlist a network reads (``Network.netlist``, which ``Network.module`` and the shell's
-counts read) while a test runs, and fails the test at its end where one differs. A netlist
-whose top's pins cannot be formed has no oracle, and is passed by. A conftest imports the
-fixture; every conftest that a gate's ``--confcutdir`` stops at does so itself."""
+``finn.kernels.artifacts.top.module_abi``). The autouse ``_top_pins`` checks the two equal
+on every netlist a partition reads (``Partition.netlist``, which ``Partition.module`` and
+the shell's counts read: a graph's and one built by hand) while a test runs, and fails the
+test at its end where one differs. A netlist whose top's pins cannot be formed has no
+oracle, and is passed by. A conftest imports the fixture; every conftest that a gate's
+``--confcutdir`` stops at does so itself."""
 
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.module import Abi, Fragment
 from finn.kernels.artifacts.top import module_abi
-from finn.kernels.network import Network
+from finn.kernels.partition import Partition
 from finn.platform.shells import bus_counts
 
 
@@ -57,12 +58,12 @@ def mismatch(fragment: Fragment, boundary: Iterable[Bus]) -> str | None:
 
 @pytest.fixture(autouse=True)
 def _top_pins(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Each netlist this test's networks read checked (``mismatch``); the test fails at its
-    end, naming each difference, where one differs."""
-    read = Network.netlist
+    """Each netlist this test's partitions read checked (``mismatch``); the test fails at
+    its end, naming each difference, where one differs."""
+    read = Partition.netlist
     found: list[str] = []
 
-    def netlist(network: Network) -> object:
+    def netlist(network: Partition) -> object:
         answer = read(network)
         if isinstance(answer, Available):
             differs = mismatch(*answer.value)
@@ -70,6 +71,6 @@ def _top_pins(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
                 found.append(f"{network!r}: {differs}")
         return answer
 
-    monkeypatch.setattr(Network, "netlist", netlist)
+    monkeypatch.setattr(Partition, "netlist", netlist)
     yield
     assert not found, "; ".join(found)

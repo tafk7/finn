@@ -14,7 +14,7 @@ from support.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
     built,
-    choose,
+    by_hand,
     cycles_of,
     fifo_node,
     keyed,
@@ -25,7 +25,7 @@ from support.tiled_mvu import MH, MW, NF, PE_T, SF, SIMD_T, R, T
 from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import pack_lanes, stream_through
-from finn.core.space import Rejected, Unresolved, design_space, inspection
+from finn.core.space import Rejected, Unresolved, design_space
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import (
@@ -39,10 +39,11 @@ from finn.dataflow.traversal import (
 )
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import Channel, wired
+from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.network import Interface, Network, wire
+from finn.kernels.sides import Side
 from finn.kernels.transport import (
     MarkerKind,
     ReadyValidTransport,
@@ -262,8 +263,9 @@ def eltwise_with_constant(form=None):
 
 
 def constant_network(form=None, *, adaptable=False):
-    """``eltwise_with_constant``'s network, its transports open, its constant's channel
-    admitting an adapter where ``adaptable``."""
+    """``eltwise_with_constant``'s partition, its transports open, its constant's channel
+    admitting an adapter where ``adaptable``; its kernels' choices stored as it is bound (a
+    stored set that breaks a channel's rule binds, and the channel reads refused)."""
     form = vector_major((CHANNELS,), PE) if form is None else form
     int4, int5 = DataType["INT4"], DataType["INT5"]
 
@@ -271,44 +273,40 @@ def constant_network(form=None, *, adaptable=False):
     c_tensor = Tensor((CHANNELS,), INT4)
     y_tensor = Tensor((PIXELS, CHANNELS), ScalarEncoding(int5))
 
-    network = Network(
+    return by_hand(
         {
-            "x": wire(
-                tensor=x_tensor,
-                port="in0_V",
-                consumer=Interface("add", "lhs_contract"),
-                platform=FULL_DSP48E2,
+            "x": channel(
+                Side.boundary("in0_V"), Port("add", "lhs"), tensor=x_tensor, platform=FULL_DSP48E2
             ),
-            "c": wire(
+            "c": channel(
+                Port("rhs", "output"),
+                Port("add", "rhs"),
                 tensor=c_tensor,
                 adaptable=adaptable,
-                producer=Interface("rhs", "output_contract"),
-                consumer=Interface("add", "rhs_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "y": wire(
+            "y": channel(
+                Port("add", "result"),
+                Side.boundary("out0_V"),
                 tensor=y_tensor,
-                port="out0_V",
-                producer=Interface("add", "result_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "rhs": MemStreamKernel(
-                platform=FULL_DSP48E2,
-                dtype=int4,
-                form=form,
-                contents=PARAMETERS,
+            "rhs": Facts(
+                MemStreamKernel,
+                {"platform": FULL_DSP48E2, "dtype": int4, "form": form, "contents": PARAMETERS},
             ),
-            "add": EltwiseKernel(
-                operation="ADD",
-                b_scale=1.0,
-                platform=FULL_DSP58,
-                lhs_tensor=x_tensor,
-                rhs_tensor=c_tensor,
+            "add": Facts(
+                EltwiseKernel,
+                {
+                    "operation": "ADD",
+                    "b_scale": 1.0,
+                    "platform": FULL_DSP58,
+                    "lhs_tensor": x_tensor,
+                    "rhs_tensor": c_tensor,
+                },
             ),
-        }
-    )
-    return choose(
-        network, {"add.pe": PE, "rhs.ram_style": "distributed", "rhs.pumped_memory": False}
+        },
+        keyed({"add.pe": PE, "rhs.ram_style": "distributed", "rhs.pumped_memory": False}),
     )
 
 
@@ -342,7 +340,7 @@ def test_steps_that_refuse_refuse_the_input_adapter_once():
     strided = constant_network(
         Traversal.over((CHANNELS,), ((0, 2, 1),), ((0, 2, 2),)), adaptable=True
     )
-    validity = inspection.validity(strided.member("c"))
+    validity = strided.validity("c")
     assert validity.status == "refused"
     pieces = {
         piece.owner: {(f.code, f.owner) for f in piece.result.findings} for piece in validity.pieces

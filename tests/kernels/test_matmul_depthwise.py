@@ -33,6 +33,7 @@ from finn.core.space import Available, Unresolved, inspection
 from finn.dataflow.gemm import Form
 from finn.dataflow.steps import Step
 from finn.dataflow.traversal import Traversal
+from finn.kernels.channels import Channel
 from finn.kernels.matmul import MatMulKernel
 
 FACTS = dict(
@@ -158,7 +159,9 @@ def test_native_is_offered_only_where_a_core_reads_the_depthwise_operands(
     assert realization.cases == offered
     if offered == ("dense",):
         refused = {
-            item.value: [(rule.rule, rule.standing) for rule in item.broken]
+            item.value: [
+                (space.pair("matmul", rule.rule)[1], rule.standing) for rule in item.broken
+            ]
             for item in realization.values or ()
             if isinstance(item, inspection.Refused)
         }
@@ -189,21 +192,20 @@ def test_depthwise_cyclic_weights_are_the_channel_tile():
 
 def test_one_network_carries_the_weights_of_whichever_realization_is_committed():
     # The weight channel carries MatMul's view of its weights (``w_carried``), which
-    # follows the realization: open, the channel waits on it.
+    # follows the realization: open, the channel's tensor waits on it, MatMul's.
     weights = tuple(tuple((c + k) % 7 - 3 for c in range(4)) for k in range(9))
     point = matmul_point(**FACTS, weights=weights)
-    pending = point.unbound("w")
-    assert pending is not None and isinstance(pending.result, Unresolved)
-    assert pending.member == "matmul"
-    assert {finding.owner for finding in pending.result.findings} == {"realization"}
+    pending = point.member("w").query(Channel.tensor)
+    assert isinstance(pending, Unresolved)
+    assert {finding.owner for finding in pending.findings} == {"matmul.realization"}
     for realization, shape, core in (
         ("native", (9, 4), "int8_dsp58"),
         ("dense", (36, 4), "packed"),
     ):
         committed = choose(point, {"matmul.realization": realization})
         assert committed.member("matmul").w_carried.shape == shape
-        # The realization and the kernel's choices commit in one batch, the channels'
-        # once their contracts are known.
+        # The realization and the kernel's choices commit in one batch, then the
+        # channels'.
         folded = choose(
             point,
             {
@@ -216,7 +218,7 @@ def test_one_network_carries_the_weights_of_whichever_realization_is_committed()
             },
         )
         # Whether the weight channel has a value is the weights' presence, a fact: its
-        # source is placed as the channel is built, no choice.
+        # source is placed by it, no choice.
         assert folded.member("w").valued and folded.member("w").tensor.shape == shape
         assert ("w", "source") not in folded.chosen()
         configured = choose(
@@ -354,5 +356,6 @@ def test_a_cores_folding_factors_are_listed_from_facts_and_simd_fits_its_datapat
         }
         assert set(refused) == {2, 4, 6, 12, 18, 36}
         assert all(
-            found == {("compute.int8_dsp58.simd_fits", "dotp-simd")} for found in refused.values()
+            found == {("matmul.compute.int8_dsp58.simd_fits", "dotp-simd")}
+            for found in refused.values()
         )

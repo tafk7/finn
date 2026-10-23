@@ -24,6 +24,7 @@ from qonnx.core.datatype import DataType
 from support.helpers import (
     FULL_DSP48E2,
     FULL_DSP58,
+    by_hand,
     choose,
     dotp_extents,
     keyed,
@@ -33,7 +34,7 @@ from support.helpers import (
     with_direct_transports,
 )
 
-from finn.core.space import Available, Rejected, inspection
+from finn.core.space import Available, Rejected
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.gemm import Form
 from finn.dataflow.steps import Step
@@ -47,12 +48,13 @@ from finn.dataflow.traversal import (
     vector_major,
 )
 from finn.kernels.channels import Channel
+from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import refusal
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.network import Interface, Network, wire
+from finn.kernels.sides import Side
 
 A, W, R = DataType["INT3"], DataType["INT3"], DataType["INT8"]
 ROWS, REDUCTION, OUTPUTS, PE, SIMD = 2, 4, 4, 2, 2
@@ -92,42 +94,40 @@ def placed(
     w_tensor = Tensor(w, ScalarEncoding(W))
     r_tensor = Tensor(y, ScalarEncoding(R))
 
-    network = Network(
+    network = by_hand(
         {
-            "a": wire(
-                tensor=a_tensor,
-                port="in0_V",
-                consumer=Interface("compute", "x_contract"),
-                platform=FULL_DSP48E2,
+            "a": channel(
+                Side.boundary("in0_V"), Port("compute", "x"), tensor=a_tensor, platform=FULL_DSP48E2
             ),
-            "w_s": wire(
+            "w_s": channel(
+                Port("weights", "output"),
+                Port("compute", "w"),
                 platform=FULL_DSP48E2,
                 tensor=w_tensor,
                 adaptable=adaptable,
-                producer=Interface("weights", "output_contract"),
-                consumer=Interface("compute", "w_contract"),
             ),
-            "r": wire(
+            "r": channel(
+                Port("compute", "y"),
+                Side.boundary("out0_V"),
                 tensor=r_tensor,
-                port="out0_V",
-                producer=Interface("compute", "y_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "weights": MemStreamKernel(
-                platform=FULL_DSP48E2,
-                dtype=W,
-                form=tiled,
-                contents=weight_values(w),
+            "weights": Facts(
+                MemStreamKernel,
+                {"platform": FULL_DSP48E2, "dtype": W, "form": tiled, "contents": weight_values(w)},
             ),
-            "compute": core(
-                form=form,
-                result_range=ordinary_integer_bounds(R),
-                x_tensor=a_tensor,
-                w_tensor=w_tensor,
-                **dotp_extents(w_tensor),
-                pe=pe,
-                simd=SIMD,
-                platform=FULL_DSP58,
+            "compute": Facts(
+                core,
+                {
+                    "form": form,
+                    "result_range": ordinary_integer_bounds(R),
+                    "x_tensor": a_tensor,
+                    "w_tensor": w_tensor,
+                    **dotp_extents(w_tensor),
+                    "pe": pe,
+                    "simd": SIMD,
+                    "platform": FULL_DSP58,
+                },
             ),
         }
     )
@@ -178,7 +178,7 @@ def test_depthwise_activations_carry_pe_channels_of_simd_window_positions():
 def test_a_folding_factor_that_does_not_divide_its_extent_refuses_the_core_given_it():
     # A core is given its folding (its role's choice, refused there by its domain): one
     # that does not divide its extent refuses the core's schedule.
-    found = inspection.validity(placed(pe=3).member("compute"))
+    found = placed(pe=3).validity("compute")
     assert found.status == "refused"
     assert {(f.code, f.owner) for f in found.result.findings} == {("kernel-schedule", "schedule")}
 
@@ -268,32 +268,29 @@ def eltwise_between(rhs_shape: tuple[int, ...], rhs_dtype: str = "INT4", pe: int
     rhs_tensor = Tensor(rhs_shape, ScalarEncoding(DataType[rhs_dtype]))
     out_tensor = Tensor((3, 4), ScalarEncoding(DataType["INT5"]))
 
-    network = Network(
+    network = by_hand(
         {
-            "lhs": wire(
-                platform=FULL_DSP48E2,
-                tensor=lhs_tensor,
-                port="in0_V",
-                consumer=Interface("add", "lhs_contract"),
+            "lhs": channel(
+                Side.boundary("in0_V"), Port("add", "lhs"), platform=FULL_DSP48E2, tensor=lhs_tensor
             ),
-            "rhs": wire(
-                tensor=rhs_tensor,
-                port="in1_V",
-                consumer=Interface("add", "rhs_contract"),
-                platform=FULL_DSP48E2,
+            "rhs": channel(
+                Side.boundary("in1_V"), Port("add", "rhs"), tensor=rhs_tensor, platform=FULL_DSP48E2
             ),
-            "out": wire(
+            "out": channel(
+                Port("add", "result"),
+                Side.boundary("out0_V"),
                 tensor=out_tensor,
-                port="out0_V",
-                producer=Interface("add", "result_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "add": EltwiseKernel(
-                operation="ADD",
-                b_scale=1.0,
-                platform=FULL_DSP58,
-                lhs_tensor=lhs_tensor,
-                rhs_tensor=rhs_tensor,
+            "add": Facts(
+                EltwiseKernel,
+                {
+                    "operation": "ADD",
+                    "b_scale": 1.0,
+                    "platform": FULL_DSP58,
+                    "lhs_tensor": lhs_tensor,
+                    "rhs_tensor": rhs_tensor,
+                },
             ),
         }
     )

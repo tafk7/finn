@@ -9,7 +9,14 @@ from typing import cast
 
 import pytest
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP48E2, THRESHOLDS, controlled, set_indices, threshold_base
+from support.helpers import (
+    FULL_DSP48E2,
+    THRESHOLDS,
+    by_hand,
+    controlled,
+    set_indices,
+    threshold_base,
+)
 from support.refusals import refused
 
 from finn.core.space import (
@@ -23,9 +30,10 @@ from finn.core.space import (
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint
+from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.library import library_module
-from finn.kernels.network import Interface, Network, wire
 from finn.kernels.port import AxiStreamPort
+from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel, c
 from finn.kernels.values.domains import Integer
 from finn.kernels.values.semantics import IntegerTensor, IntegerTensorValue, integer_shape
@@ -261,26 +269,29 @@ def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:
     x_tensor = Tensor(shape, ScalarEncoding(DataType["INT8"]))
     y_tensor = Tensor(shape, ScalarEncoding(DataType["INT3"]))
 
-    network = Network(
+    network = by_hand(
         {
-            "x": wire(
+            "x": channel(
+                Side.boundary("x"),
+                Port("activate", "input"),
                 tensor=x_tensor,
-                port="x",
-                consumer=Interface("activate", "input_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "y": wire(
+            "y": channel(
+                Port("activate", "output"),
+                Side.boundary("y"),
                 tensor=y_tensor,
-                port="y",
-                producer=Interface("activate", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "activate": ThresholdingAxiKernel(
-                threshold_dtype=DataType["INT5"],
-                thresholds=table,
-                bias=-1,
-                input_tensor=x_tensor,
-                platform=FULL_DSP48E2,
+            "activate": Facts(
+                ThresholdingAxiKernel,
+                {
+                    "threshold_dtype": DataType["INT5"],
+                    "thresholds": table,
+                    "bias": -1,
+                    "input_tensor": x_tensor,
+                    "platform": FULL_DSP48E2,
+                },
             ),
         }
     )
@@ -311,9 +322,9 @@ def test_runtime_writable_thresholds_declare_the_writes_of_their_table() -> None
     point = threshold(table=table, pe=1, axilite=True)
     # PE 1: three folds of one lane; two bits of threshold, no lane bit, two of fold.
     expected = []
-    for channel, row in enumerate(table[0]):
+    for row_index, row in enumerate(table[0]):
         for index, value in enumerate(row):
-            expected.append((((channel << 2) | index) << 2, value & 0x1F))
+            expected.append((((row_index << 2) | index) << 2, value & 0x1F))
     assert point.register_map.writes == tuple(expected)
     assert point.config_control.registers == point.register_map
     shared = threshold(table=(((-2, 0, 3),),), pe=2, axilite=True)  # C = 1: one row, lane 0

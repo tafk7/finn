@@ -41,7 +41,6 @@ from finn.dataflow.traversal import pack, unreplayed
 from finn.harness.hls import c_simulate
 from finn.kernels.artifacts.contributions import HlsSource
 from finn.kernels.artifacts.module import Leaf
-from finn.kernels.channels import Channel
 from finn.kernels.pool import PoolKernel, element_type
 from finn.toolchain import hls
 from finn.toolchain.launcher import ToolUnavailable, host_toolchain
@@ -124,12 +123,13 @@ def test_an_image_at_the_graphs_rank_is_read_as_it_is() -> None:
 
 def test_its_output_is_the_windows_and_a_channel_of_another_shape_refuses_it() -> None:
     windows = pool()["outputs"]["output_channel"]
-    case = dict(pool(), outputs={"output_channel": (3, 3, 6)})
-    point, _, _ = placed(case, 1)
+    point, _, _ = placed(pool(), 1)
     assert design_member(point, KERNEL).output_tensor.shape == windows
-    refused = design_member(point, "output_channel").query(Channel.well_formed)
-    assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"channel-tensor"}
+    # A channel of another shape refuses the folding that places the output on it, by its
+    # rule (``channel-tensor``).
+    case = dict(pool(), outputs={"output_channel": (3, 3, 6)})
+    with pytest.raises(ValueError, match="output_channel.well_formed: .*channel-tensor"):
+        placed(case, 1)
 
 
 def test_its_request_is_written_from_the_point() -> None:

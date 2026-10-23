@@ -3,7 +3,7 @@
 
 """Non-stream interfaces: exported control buses, tie-offs and child padding.
 
-dotp feeds thresholding in one network; the activation channel's adapter replays
+dotp feeds thresholding in one partition; the activation channel's adapter replays
 each row for dotp. dotp's padded AXIS result feeds a child: the padding bits
 stay unconnected and the consumer's padding is zero. Thresholding's AXI-Lite
 bus is presented, at the port it is given, when its thresholds are
@@ -19,6 +19,7 @@ from support.emitted_netlist import read
 from support.helpers import (
     FULL_DSP48E2,
     built,
+    by_hand,
     choose,
     cycles_of,
     dotp_extents,
@@ -30,14 +31,16 @@ from support.netlist import Const, Drive, Pin
 from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import stream_through
-from finn.core.space import Available, Rejected, design_space, inspection
+from finn.core.space import Available, design_space, inspection
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Bus, Endpoint, StandardProtocol
 from finn.kernels.artifacts.build import netlist
 from finn.kernels.base import NETLIST
+from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
-from finn.kernels.network import Interface, Network, wire
+from finn.kernels.partition import Partition
+from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.toolchain.launcher import host_toolchain
 
@@ -51,51 +54,54 @@ RESULT_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(R))
 LEVEL_TENSOR = Tensor((REPETITIONS, HEIGHT), ScalarEncoding(DataType["UINT2"]))
 
 
-def activated(*, writable: bool) -> Network:
+def activated(*, writable: bool) -> Partition:
     """dotp, then thresholding, its control bus given the port ``s_axilite``: a padded
     child result feeding a child."""
-    network = Network(
+    network = by_hand(
         {
-            "activations": wire(
-                tensor=X,
-                port="in0_V",
-                consumer=Interface("compute", "x_contract"),
-                platform=FULL_DSP48E2,
+            "activations": channel(
+                Side.boundary("in0_V"), Port("compute", "x"), tensor=X, platform=FULL_DSP48E2
             ),
-            "weights": wire(
+            "weights": channel(
+                Side.boundary("in1_V"),
+                Port("compute", "w"),
                 tensor=WEIGHT_TENSOR,
-                port="in1_V",
-                consumer=Interface("compute", "w_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "results": wire(
+            "results": channel(
+                Port("compute", "y"),
+                Port("activate", "input"),
                 tensor=RESULT_TENSOR,
-                producer=Interface("compute", "y_contract"),
-                consumer=Interface("activate", "input_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "levels": wire(
+            "levels": channel(
+                Port("activate", "output"),
+                Side.boundary("out0_V"),
                 tensor=LEVEL_TENSOR,
-                port="out0_V",
-                producer=Interface("activate", "output_contract"),
                 platform=FULL_DSP48E2,
             ),
-            "compute": PackedDotpKernel(
-                result_range=ordinary_integer_bounds(R),
-                x_tensor=X,
-                w_tensor=WEIGHT_TENSOR,
-                **dotp_extents(WEIGHT_TENSOR),
-                pe=1,
-                simd=SIMD,
-                platform=FULL_DSP48E2,
+            "compute": Facts(
+                PackedDotpKernel,
+                {
+                    "result_range": ordinary_integer_bounds(R),
+                    "x_tensor": X,
+                    "w_tensor": WEIGHT_TENSOR,
+                    **dotp_extents(WEIGHT_TENSOR),
+                    "pe": 1,
+                    "simd": SIMD,
+                    "platform": FULL_DSP48E2,
+                },
             ),
-            "activate": ThresholdingAxiKernel(
-                threshold_dtype=R,
-                thresholds=THRESHOLDS,
-                bias=0,
-                input_tensor=RESULT_TENSOR,
-                control="s_axilite",
-                platform=FULL_DSP48E2,
+            "activate": Facts(
+                ThresholdingAxiKernel,
+                {
+                    "threshold_dtype": R,
+                    "thresholds": THRESHOLDS,
+                    "bias": 0,
+                    "input_tensor": RESULT_TENSOR,
+                    "control": "s_axilite",
+                    "platform": FULL_DSP48E2,
+                },
             ),
         }
     )
@@ -114,7 +120,7 @@ def activated(*, writable: bool) -> Network:
     return with_channel_defaults(with_direct_transports(chosen))
 
 
-def activated_module(design: Network) -> Any:
+def activated_module(design: Partition) -> Any:
     """The network's module, ``finn_activated``."""
     return built(design, "activated")
 
@@ -238,36 +244,39 @@ def test_several_threshold_sets_take_a_set_selector_stream():
     selectors = Tensor((REPETITIONS * HEIGHT,), ScalarEncoding(DataType["UINT1"]))
     two_sets = (THRESHOLDS[0], ((-4, 1, 8), (-3, 2, 9)))
 
-    def selected(sets: Tensor) -> Network:
+    def selected(sets: Tensor) -> Partition:
         """A thresholding of two sets, its values, its set indices ``sets`` and its levels
         each a channel, every choice set: the kernel's by hand, the transports direct."""
-        network = Network(
+        network = by_hand(
             {
-                "values": wire(
+                "values": channel(
+                    Side.boundary("in0_V"),
+                    Port("activate", "input"),
                     tensor=RESULT_TENSOR,
-                    port="in0_V",
-                    consumer=Interface("activate", "input_contract"),
                     platform=FULL_DSP48E2,
                 ),
-                "sets": wire(
+                "sets": channel(
+                    Side.boundary("in1_V"),
+                    Port("activate", "set"),
                     tensor=sets,
-                    port="in1_V",
-                    consumer=Interface("activate", "set_contract"),
                     platform=FULL_DSP48E2,
                 ),
-                "levels": wire(
+                "levels": channel(
+                    Port("activate", "output"),
+                    Side.boundary("out0_V"),
                     tensor=LEVEL_TENSOR,
-                    port="out0_V",
-                    producer=Interface("activate", "output_contract"),
                     platform=FULL_DSP48E2,
                 ),
-                "activate": ThresholdingAxiKernel(
-                    threshold_dtype=R,
-                    thresholds=two_sets,
-                    bias=0,
-                    input_tensor=RESULT_TENSOR,
-                    set_tensor=sets,
-                    platform=FULL_DSP48E2,
+                "activate": Facts(
+                    ThresholdingAxiKernel,
+                    {
+                        "threshold_dtype": R,
+                        "thresholds": two_sets,
+                        "bias": 0,
+                        "input_tensor": RESULT_TENSOR,
+                        "set_tensor": sets,
+                        "platform": FULL_DSP48E2,
+                    },
                 ),
             }
         )
@@ -285,10 +294,10 @@ def test_several_threshold_sets_take_a_set_selector_stream():
 
     point = selected(selectors)
     assert isinstance(point.query("sets", NETLIST), Available)
-    # Its consumer, the set selector port beside it, as the network reads it.
+    # Its consumer, the set selector port beside it, as the partition reads it.
     assert point.neighbours("sets").consumer.contract.transport.name == "s_axis_set"
-    # One set index for every input beat: a shorter selector channel is refused.
+    # One set index for every input beat: with a shorter selector channel, the folding
+    # that places the set port is refused by it, its set sequence's rule.
     short = Tensor((HEIGHT,), ScalarEncoding(DataType["UINT1"]))
-    refused = selected(short).query("sets", NETLIST)
-    assert isinstance(refused, Rejected)
-    assert {finding.code for finding in refused.findings} == {"threshold-set-channel"}
+    with pytest.raises(ValueError, match="activate.set_sequence: .*threshold-set-channel"):
+        selected(short)

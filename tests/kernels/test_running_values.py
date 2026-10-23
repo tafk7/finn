@@ -40,9 +40,9 @@ again in every design space that asks it. Every value FINN's kernels hold is key
 enums (``Form``, a beat sequence's repetition, a channel's steps, a channel side's kind, a
 transport's endpoint and marker kinds, and the platform's DSP block and fabric, which mix in
 ``str``), the QONNX datatypes, alone and inside a ``Tensor``, a channel's side (a port's
-stream inside it) and a stream contract, and the integer tensors. Stage 7's chain, composed
-as one Space by ``support.one_space`` (``finn.kernels.composer``), holds its members' facts
-as root Params (each a value above) and stores only str, int and bool choices.
+stream inside it) and a stream contract, and the integer tensors. A partition, composed as
+one Space (``finn.kernels.composer``), holds its members' facts as root Params (each a
+value above) and stores only str, int and bool choices.
 """
 
 from __future__ import annotations
@@ -94,6 +94,7 @@ from finn.dataflow.gemm import Form, Window
 from finn.dataflow.steps import Hop, Step, Steps
 from finn.dataflow.streams import Stream
 from finn.dataflow.traversal import Repetition
+from finn.kernels import composer
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import boundary_contract
 from finn.kernels.movers import MoverOffer, iodma_hls
@@ -174,7 +175,10 @@ verdict."""
 
 def kernel_space_classes() -> list[type[Space]]:
     """Every Space class of ``finn.kernels``: each module of the package imported, then
-    every subclass of ``Space`` declared in one of them (a generated scope's too)."""
+    every subclass of ``Space`` declared in one of them (a generated scope's too), but a
+    partition's class the composer makes at run time of them (``finn.kernels.composer``:
+    whichever a test composed earlier in the process, a declaration it means to refuse
+    among them)."""
     for module in pkgutil.walk_packages(finn.kernels.__path__, "finn.kernels."):
         importlib.import_module(module.name)
 
@@ -183,7 +187,11 @@ def kernel_space_classes() -> list[type[Space]]:
             yield sub
             yield from below(sub)
 
-    found = {kind for kind in below(Space) if kind.__module__.startswith("finn.kernels.")}
+    found = {
+        kind
+        for kind in below(Space)
+        if kind.__module__.startswith("finn.kernels.") and kind.__module__ != composer.__name__
+    }
     return sorted(found, key=lambda kind: (kind.__module__, kind.__qualname__))
 
 
@@ -239,7 +247,8 @@ def made() -> dict[str, tuple[object, ...]]:
             Steps(()),
             Steps((Hop(Step.WIDTH, in_order(eight), in_order(four)),)),
         ),
-        "Form": (Form.DENSE, Form.DEPTHWISE),
+        # The Chain gives its MatMuls no form (the default): two equal ones made here.
+        "Form": (Form.DENSE, Form.DEPTHWISE, Form.DENSE),
         "Side": (
             Side.boundary("s_axis_0", (iodma_hls(64),)),
             Side.boundary("s_axis_0", (iodma_hls(64),)),
@@ -259,18 +268,20 @@ def made() -> dict[str, tuple[object, ...]]:
 @cache
 def samples() -> dict[str, list[object]]:
     """Each name's samples: the configured Chain's facts and stored choices (each read
-    with its member's semantics), a copy of its first side, the stream contracts the
-    streams of its sides make as a channel's free side (a mover's side), and the values
-    ``made`` here."""
+    with its member's semantics), its channels' sides (a kernel's, which the channel is
+    given from it), a copy of its first side, the stream contracts the streams of its sides
+    make as a channel's free side (a mover's side), and the values ``made`` here."""
     found: dict[str, list[object]] = {}
     network = chain()
-    for name in network.members:
-        current = held(network.member(name)).ds
-        for values in (current.facts, current.stored):
-            for index, value in values.items():
-                semantics = index.semantics
-                assert semantics is not None
-                found.setdefault(semantics.name, []).append(value)
+    current = held(network.point).ds
+    for values in (current.facts, current.stored):
+        for index, value in values.items():
+            semantics = index.semantics
+            assert semantics is not None
+            found.setdefault(semantics.name, []).append(value)
+    for name in network.channels:
+        channel = network.member(name)
+        found.setdefault("Side", []).extend((channel.producer, channel.consumer))
     sides = cast(list[Side], found.get("Side", []))
     sides.append(dataclasses.replace(sides[0]))  # an equal one, another object
     streams = [side.stream for side in sides if side.stream is not None]

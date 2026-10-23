@@ -34,10 +34,10 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.space import Decision, Space, derived, inspection
 from finn.custom_op.kernels.network import persist
 from finn.custom_op.kernels.shell import in_shell
-from finn.kernels.composer import Facts, PartitionDeclaration, Port, Stated, channel, compose
+from finn.kernels.composer import Facts, PartitionDeclaration, Port, Stated, channel
 from finn.kernels.explore import Accepted, ExploreError, Hold, Refused, Seam, TargetCycles
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.partition import Partition
+from finn.kernels.partition import Partition, partition
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.platform.capabilities import Platform
@@ -111,22 +111,7 @@ def boarded(
     """The partition with UltraRAM, the thresholding at the Chain's PE and ``folding``,
     every other choice by its policy, as conversion and the cut leave it; then the hidden
     channel's ``hidden`` choices."""
-    made = declared(adaptable=adaptable)
-    composed = compose(made)
-    empty = Partition(
-        composed,
-        composed.design_space(),
-        name="board",
-        order=tuple(composed.names.members),
-        sides={tensor: (each.producer, each.consumer) for tensor, each in made.channels.items()},
-        boundary=(("x", "s_axis_0"), ("levels", "m_axis_0")),
-        movers=(),
-        owners={},
-        dropped={},
-        stray={},
-        stored={},
-        whole=True,
-    )
+    empty = partition(declared(adaptable=adaptable), name="board")
     chosen = empty.with_choices(keyed({"board.uram": True, "activate.pe": chain.PE, **folding}))
     return with_defaults(chosen).with_choices(keyed({f"hidden.{k}": v for k, v in hidden.items()}))
 

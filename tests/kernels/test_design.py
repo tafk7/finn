@@ -19,7 +19,6 @@ from pathlib import Path
 from qonnx.core.datatype import DataType
 from qonnx.core.ranges import TensorRange
 from support.chain import (
-    ACTIVATE,
     HIDDEN,
     INPUTS,
     OUTPUTS,
@@ -36,11 +35,10 @@ from support.chain import (
     X,
     Y,
     chain,
-    configure_chain,
     matmul,
-    network,
+    members,
 )
-from support.helpers import FULL_DSP48E2, built, cycles_of, labels
+from support.helpers import FULL_DSP48E2, built, by_hand, cycles_of, labels
 from support.xsim import requires_xsim
 
 from finn.core.rtlsim_bench import pack_lanes, stream_through
@@ -83,7 +81,7 @@ def test_each_edge_carries_its_own_adapter_and_the_netlist_is_flat():
 def test_a_matmul_on_a_stream_of_another_tensor_is_refused():
     # Its K is the activations' last axis: two more than its known weights' rows.
     misplaced = matmul(W1, Tensor((ROWS, INPUTS + 2), ScalarEncoding(A)))
-    refused = design_space(misplaced).query(MatMulKernel.carried)
+    refused = misplaced.bind().query(MatMulKernel.carried)
     assert isinstance(refused, Rejected)
     assert {finding.code for finding in refused.findings} == {"matmul-tensor"}
 
@@ -91,7 +89,7 @@ def test_a_matmul_on_a_stream_of_another_tensor_is_refused():
 def test_a_matmul_reads_its_extents_and_datatypes_from_its_tensors():
     """Its extents and its activations' datatype are its tensors', stated once; at any
     rank, its rows are the activations' leading axes, and its results keep them."""
-    point = design_space(matmul(W1, Tensor((1, ROWS, INPUTS), ScalarEncoding(A))))
+    point = matmul(W1, Tensor((1, ROWS, INPUTS), ScalarEncoding(A))).bind()
     assert (point.m, point.n, point.k) == (ROWS, HIDDEN, INPUTS)
     assert point.activation_dtype == A
     assert point.y_tensor.shape == (1, ROWS, HIDDEN)
@@ -102,8 +100,10 @@ def hidden_on(element: ScalarEncoding) -> object:
     """The Chain's first MatMul's results channel on a tensor of ``element``: whether the
     channel takes what the MatMul states."""
 
-    # The thresholding reads the channel's tensor, as a graph gives its consumer.
-    stated = configure_chain(network(Tensor((ROWS, HIDDEN), element)), **ACTIVATE)
+    # The thresholding reads the channel's tensor, as a graph gives its consumer. The
+    # configured Chain's choices are bound on it: a stored set that breaks the channel's
+    # rule binds, and the channel reads refused.
+    stated = by_hand(members(Tensor((ROWS, HIDDEN), element)), chain().chosen())
     return stated.member("hidden").query(Channel.well_formed)
 
 
