@@ -485,13 +485,14 @@ class ThresholdingAxiKernel(KernelSpace):
 
     @derived
     def set_sequence(self) -> BeatSequence | Rejected:
-        """One set index for each input beat; several sets without their indices are
-        refused, as ``selected`` refuses them."""
-        if self.shape[0] >= 2 and not self.present(ThresholdingAxiKernel.set_tensor):
-            return reject("threshold-set-channel", "several threshold sets take a set channel")
-        shape = self.set_tensor.shape
+        """One set index for each input beat. A single set takes no set channel, and its
+        idle port's order is refused, with a set tensor or without; several sets without
+        their indices are refused, as ``selected`` refuses them."""
         if self.shape[0] < 2:
             return reject("threshold-set-channel", "a single threshold set takes no set channel")
+        if not self.present(ThresholdingAxiKernel.set_tensor):
+            return reject("threshold-set-channel", "several threshold sets take a set channel")
+        shape = self.set_tensor.shape
         if shape != (self.input_stream.sequence.form.beats,):
             return reject("threshold-set-channel", "each input beat needs one set index")
         return BeatSequence(vector_major(shape, 1))

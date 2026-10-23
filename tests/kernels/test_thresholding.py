@@ -168,6 +168,17 @@ def test_several_sets_without_their_indices_refuse_the_set_port_s_order() -> Non
     ]
 
 
+def test_a_single_set_refuses_its_idle_set_port_s_order() -> None:
+    # One set takes no set channel: its set port is idle, and the port's order is refused
+    # with the kernel's set-channel code. Open with the human (SZ124 (1)): refused, or
+    # inapplicable.
+    answer = threshold_base().query(ThresholdingAxiKernel.set_sequence)
+    assert isinstance(answer, Rejected)
+    assert [(finding.code, finding.owner, finding.message) for finding in answer.findings] == [
+        ("threshold-set-channel", "set_sequence", "a single threshold set takes no set channel")
+    ]
+
+
 def test_threshold_partial_dtype_query_does_not_adopt_implementation_decisions() -> None:
     base = threshold_base()
     assert base.result_dtype.name == "INT3"

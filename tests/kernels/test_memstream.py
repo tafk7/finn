@@ -24,9 +24,9 @@ from support.helpers import (
     placed,
 )
 
-from finn.core.space import Rejected, design_space
+from finn.core.space import Available, Rejected, design_space
 from finn.dataflow.tensor import ScalarEncoding
-from finn.dataflow.traversal import tile, vector_major
+from finn.dataflow.traversal import BeatSequence, Repetition, tile, vector_major
 from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import ContributionError, GeneratedData
@@ -173,6 +173,28 @@ def test_several_sets_without_their_indices_refuse_the_sequences_that_read_them(
         assert [(finding.code, finding.owner) for finding in answer.findings] == [
             ("memstream-set-channel", owner)
         ]
+
+
+def test_a_single_set_refuses_its_idle_set_port_s_order():
+    # One set takes no set channel: its set port is idle, and the port's order, which
+    # would read the indices, is refused with the kernel's set-channel code. Open with the
+    # human (SZ124 (1)): refused, or inapplicable.
+    space = design_space(
+        MemStreamKernel(
+            dtype=DataType["INT3"],
+            form=tile(4, 4, 2, 2),
+            contents=WEIGHTS,
+            platform=FULL_DSP48E2,
+        )
+    )
+    answer = space.query(MemStreamKernel.set_sequence)
+    assert isinstance(answer, Rejected)
+    assert [(finding.code, finding.owner, finding.message) for finding in answer.findings] == [
+        ("memstream-set-channel", "set_sequence", "a single set takes no set channel")
+    ]
+    assert space.query(MemStreamKernel.output_sequence) == Available(
+        BeatSequence(tile(4, 4, 2, 2), Repetition.CYCLIC)
+    )
 
 
 def test_a_channel_s_placements_keep_the_labels_it_states_in_the_emitted_netlist():

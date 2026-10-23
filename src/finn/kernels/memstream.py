@@ -293,9 +293,12 @@ class MemStreamKernel(KernelSpace):
 
     @derived
     def set_sequence(self) -> BeatSequence | Rejected:
-        """One index a beat, one beat per pass of the weights; several sets without their
-        indices are refused, as ``selected`` refuses them."""
-        if self.sets >= 2 and not self.present(MemStreamKernel.set_tensor):
+        """One index a beat, one beat per pass of the weights. Without a set tensor its port
+        is idle, and its order is refused: several sets as ``selected`` refuses them, a
+        single set because it takes no set channel."""
+        if not self.present(MemStreamKernel.set_tensor):
+            if self.sets < 2:
+                return reject("memstream-set-channel", "a single set takes no set channel")
             return reject("memstream-set-channel", "several sets take a set channel")
         return BeatSequence(vector_major(self.set_tensor.shape, 1))
 
