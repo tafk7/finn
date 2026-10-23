@@ -1167,9 +1167,9 @@ def test_unsetting_an_optional_fact_prunes_what_its_derived_guard_held() -> None
 #
 # ``g`` is present when ``s.a.v``, a choice of case ``a`` of the selector ``s``, is 1; ``h`` when it
 # is not. With ``s`` at its other case ``o``, ``s.a.v`` does not exist, and both guards are false:
-# ``g`` and ``h`` are absent, not unknown. ``k`` sits in ``e``, present when the fact ``f`` is 1,
-# and ``m`` is present when ``e.d``, a derived value over ``f``, is positive: at ``f = 0`` the facts
-# alone make ``e.d`` not apply, so ``m`` is absent under the facts alone and ``m.z`` leaves the lists.
+# ``g`` and ``h`` are absent, not unknown. ``e``, present when the fact ``f`` is 1, holds ``d``, a
+# derived value over ``f``; ``m`` is present when ``e.d`` is positive. At ``f = 0`` the facts alone
+# make ``e.d`` not apply, so ``m`` is absent under the facts alone and ``m.z`` leaves the lists.
 
 NOT_APPLYING = Case(
     "a when over a value that does not apply",
