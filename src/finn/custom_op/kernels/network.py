@@ -1135,11 +1135,13 @@ def _network(
             if path in decisions:
                 values[decisions[path]] = value
             else:
+                # Owned by its path, as the engine's findings are: relative to the member
+                # once the partition holds it.
                 unknown[key] = (
                     Finding(
                         FindingKind.REJECTION,
                         "not-a-decision",
-                        key[1],
+                        path,
                         "not a Decision of this member",
                     ),
                 )
