@@ -650,8 +650,8 @@ class Seam:
         if cleared:
             # A key cleared again in the run keeps its first clearing: its value before it.
             stored = network.chosen({key[0] for key in cleared})
-            for key, why in cleared.items():
-                self._cleared.setdefault(key, (stored.get(key), why))
+            for key, found in cleared.items():
+                self._cleared.setdefault(key, (stored.get(key), found))
         self._settled.update(settled)
         return Accepted(reached, cleared, settled, unsettled)
 
