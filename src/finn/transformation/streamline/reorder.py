@@ -887,7 +887,10 @@ class MoveTransposePastEltwise(Transformation):
     """Move a Transpose past a following elementwise Add/Mul whose other input is
     a constant initializer: y = transpose(x) (op) a  <=>  y = transpose(x (op) a^T),
     where a^T is a transposed by the inverse permutation (scalar/effectively-scalar
-    constants are left untouched). This lets NHWC<->NCHW transposes slide past the
+    constants are left untouched). A constant of lower rank is first padded with
+    leading unit axes, as broadcasting does, and a constant that other nodes also
+    read is copied rather than changed in place. A constant that is also a graph
+    output and needs a transpose stops the move. This lets NHWC<->NCHW transposes slide past the
     per-channel bias/scale ops between convolutions so that opposite transposes end
     up adjacent and cancel via AbsorbConsecutiveTransposes. Only handles plain
     (non-fork, non-join) transposes feeding a non-join Add/Mul."""
@@ -921,12 +924,32 @@ class MoveTransposePastEltwise(Transformation):
             if value is None:
                 continue
             perm = get_by_name(node.attribute, "perm")
-            perm = list(perm.ints) if perm is not None else None
-            inverse_perm = None if not perm else [perm.index(i) for i in range(len(perm))]
+            if perm is not None:
+                perm = list(perm.ints)
+            else:
+                # no perm attribute: the Transpose reverses the axes
+                in_shape = model.get_tensor_shape(inp)
+                if in_shape is None:
+                    continue
+                perm = list(reversed(range(len(in_shape))))
+            inverse_perm = [perm.index(i) for i in range(len(perm))]
+            # a constant of higher rank widens the output, so the transpose cannot
+            # be moved past it
+            if value.ndim > len(perm):
+                continue
             # transpose the constant so it still lines up post-move, unless it is
             # scalar / effectively scalar (broadcasts either way)
-            if not (value.shape is None or all(x == 1 for x in value.shape)):
-                model.set_initializer(a, value.transpose(inverse_perm))
+            if any(x != 1 for x in value.shape):
+                # a constant that is also a graph output must keep its value
+                if a in [x.name for x in model.graph.output]:
+                    continue
+                value = value.reshape((1,) * (len(perm) - value.ndim) + value.shape)
+                value = value.transpose(inverse_perm)
+                if len(model.find_consumers(a)) > 1:
+                    shared = a
+                    a = model.make_new_valueinfo_name()
+                    model.set_tensor_datatype(a, model.get_tensor_datatype(shared))
+                model.set_initializer(a, value)
             # rewire so the elementwise op runs first, then the transpose
             successor.input[:] = [inp, a]
             successor.output[0] = mid
@@ -937,6 +960,23 @@ class MoveTransposePastEltwise(Transformation):
             # inp/out are unchanged and must not be cleared -- clearing a graph
             # input's shape here cannot be recovered by InferShapes.
             model.set_tensor_shape(mid, None)
+            # the middle tensor holds the values of out in the layout of inp
+            model.set_tensor_datatype(mid, model.get_tensor_datatype(out))
+            mid_layout = model.get_tensor_layout(inp)
+            if mid_layout is None:
+                out_layout = model.get_tensor_layout(out)
+                if out_layout is not None and len(out_layout) == len(perm):
+                    mid_layout = [out_layout[i] for i in inverse_perm]
+            if mid_layout is not None:
+                model.set_tensor_layout(mid, mid_layout)
+            else:
+                # no layout known: drop the stale annotation of the transpose output
+                annotation = get_by_name(model.graph.quantization_annotation, mid, "tensor_name")
+                if annotation is not None:
+                    params = annotation.quant_parameter_tensor_names
+                    layout = get_by_name(params, "tensor_layout", "key")
+                    if layout is not None:
+                        params.remove(layout)
             graph_modified = True
             break
         model = model.transform(InferShapes())
