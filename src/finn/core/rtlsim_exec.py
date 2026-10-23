@@ -137,6 +137,11 @@ def file_to_basename(x):
     return os.path.basename(os.path.realpath(x))
 
 
+def get_top_module_name(verilog_file):
+    """Return the top module name for a Verilog wrapper named <top module>.v."""
+    return file_to_basename(verilog_file).removesuffix(".v")
+
+
 def rtlsim_exec_cppxsi(
     model,
     execution_context,
@@ -197,7 +202,7 @@ def rtlsim_exec_cppxsi(
     # prepare rtlsim compiled object (unless it already exists)
     rtlsim_so = model.get_metadata_prop("rtlsim_so")
     top_module_file_name = file_to_basename(model.get_metadata_prop("wrapper_filename"))
-    top_module_name = top_module_file_name.strip(".v")
+    top_module_name = get_top_module_name(model.get_metadata_prop("wrapper_filename"))
     if (rtlsim_so is None) or (not os.path.isfile(rtlsim_so)):
         vivado_stitch_proj_dir = model.get_metadata_prop("vivado_stitch_proj")
         with open(vivado_stitch_proj_dir + "/all_verilog_srcs.txt", "r") as f:
@@ -382,7 +387,7 @@ def rtlsim_exec_finnxsi(model, execution_context, pre_hook=None, post_hook=None)
         with open(vivado_stitch_proj_dir + "/all_verilog_srcs.txt", "r") as f:
             all_verilog_srcs = f.read().split()
         top_module_file_name = file_to_basename(model.get_metadata_prop("wrapper_filename"))
-        top_module_name = top_module_file_name.strip(".v")
+        top_module_name = get_top_module_name(model.get_metadata_prop("wrapper_filename"))
         single_src_dir = make_build_dir("rtlsim_" + top_module_name + "_")
         debug = not (trace_file is None or trace_file == "")
         rtlsim_behavioral = model.get_metadata_prop("rtlsim_behavioral")
