@@ -77,4 +77,4 @@ def test_absorb_opposite_transposes():
     assert ox.compare_execution(new_model, model, inp_dict)
     assert len(new_model.graph.node) == 6
     for n in new_model.graph.node:
-        assert new_model.graph.node[0].op_type != "Transpose"
+        assert n.op_type != "Transpose"

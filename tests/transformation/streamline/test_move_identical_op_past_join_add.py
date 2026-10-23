@@ -31,7 +31,9 @@ import pytest
 import numpy as np
 from onnx import TensorProto
 from onnx import helper as oh
+from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import gen_finn_dt_tensor, qonnx_make_model
 
 import finn.core.onnx_exec as oxe
@@ -149,3 +151,35 @@ def test_move_identical_op_past_join_op(identical_op):
     assert node0_optype_model == last_node_optype_model_transformed
     assert node1_optype_model == last_node_optype_model_transformed
     assert node0_optype_model_transformed == node1_optype_model_transformed == "Add"
+
+
+@pytest.mark.streamline
+def test_transposes_of_different_perms_stay_before_the_add():
+    """Transposes with different perms are not identical ops, so
+    MoveTransposePastJoinAdd must leave them before the Add."""
+    shape = [1, 4, 4, 8]
+    nodes = [
+        oh.make_node("Transpose", ["in1"], ["t1"], perm=[0, 3, 1, 2]),
+        oh.make_node("Transpose", ["in2"], ["t2"], perm=[0, 3, 2, 1]),
+        oh.make_node("Add", ["t1", "t2"], ["out"]),
+    ]
+    graph = oh.make_graph(
+        nodes=nodes,
+        name="different_perms",
+        inputs=[
+            oh.make_tensor_value_info("in1", TensorProto.FLOAT, shape),
+            oh.make_tensor_value_info("in2", TensorProto.FLOAT, shape),
+        ],
+        outputs=[oh.make_tensor_value_info("out", TensorProto.FLOAT, [1, 8, 4, 4])],
+    )
+    model = ModelWrapper(qonnx_make_model(graph, producer_name="different_perms"))
+    model = model.transform(InferShapes())
+    input_dict = {
+        "in1": gen_finn_dt_tensor(DataType["FLOAT32"], shape),
+        "in2": gen_finn_dt_tensor(DataType["FLOAT32"], shape),
+    }
+
+    model_transformed = model.transform(MoveTransposePastJoinAdd())
+
+    assert [n.op_type for n in model_transformed.graph.node] == ["Transpose", "Transpose", "Add"]
+    assert oxe.compare_execution(model, model_transformed, input_dict)
