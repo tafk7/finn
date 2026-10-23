@@ -190,10 +190,10 @@ def model_of(
     root: Compiled, *, permuted: bool | None = None, eager: bool | None = None
 ) -> Model[Space]:
     """A fresh model of the compiled form ``root``, in the test modes the environment asks
-    for (``_scopes.modes``) unless given; ``compile_model`` keeps one per class."""
-    from ._scopes import Scopes, modes
+    for (``_scopes.test_modes``) unless given; ``compile_model`` keeps one per class."""
+    from ._scopes import Scopes, test_modes
 
-    asked = modes()
+    asked = test_modes()
     scopes = Scopes(
         root,
         permuted=asked[0] if permuted is None else permuted,

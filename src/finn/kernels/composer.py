@@ -48,7 +48,7 @@ when its class is made.
 (``member_name``). Refused, each finding naming the graph name: two graph names that meet
 one member name (``name-shared``), a name that is no ASCII name segment once substituted
 (``name-invalid``: ``\\W`` keeps non-ASCII letters), a name the engine reserves
-(``name-reserved``: ``finn.core.space.collection``'s list, and ``__`` names). Inside the
+(``name-reserved``: ``finn.core.space.RESERVED_NAMES``, and ``__`` names). Inside the
 class a key is a path (``mm0.compute.packed.pe``); at FINN's surface it is the pair
 (owner, key), the owner a graph name: ``Names.path`` and ``Names.pair`` map one to the
 other, and ``Names.roots`` maps each root member (a Param, a side) to (owner, fact).
@@ -77,10 +77,17 @@ from types import MappingProxyType
 from typing import Any, cast
 
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
-from finn.core.space import Param, Space, composite, derived, design_space
-from finn.core.space._nodes import space_formals
-from finn.core.space.collection import _RESERVED
-from finn.core.space.declarations import MISSING, declared_annotation
+from finn.core.space import (
+    MISSING,
+    RESERVED_NAMES,
+    Param,
+    Space,
+    composite,
+    declared_annotation,
+    derived,
+    design_space,
+    space_formals,
+)
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import Channel
 from finn.kernels.members import Facts
@@ -224,7 +231,7 @@ def _named(graph: list[str]) -> dict[str, str]:
                     f"not {member!r}",
                 )
             )
-        elif member in _RESERVED or member.startswith("__"):
+        elif member in RESERVED_NAMES or member.startswith("__"):
             findings.append(
                 _refused("name-reserved", name, f"{name}: {member} is a name the engine reserves")
             )
