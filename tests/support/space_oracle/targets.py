@@ -26,7 +26,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from finn.core.space import Space, inspection
-from finn.kernels.composer import Composed, clear_classes
+from finn.kernels.composer import Composed
 from finn.kernels.configure import commit
 from support.one_space import chain_space
 from support.space_oracle import Implementation, forms
@@ -67,10 +67,9 @@ def _middle(names: Sequence[str]) -> str:
 
 def chain(kernels: int) -> list[Station]:
     """Stage 7's chain of ``kernels`` kernels, configured as conversion and the cut store
-    it, then the middle MatMul's ``pe`` set to 2. Its class is made afresh: the composer
-    keeps a class, and its model, by structure, and a model reads the test modes
-    (``FINN_SPACE_PERMUTE``, ``FINN_SPACE_EAGER``) when it is made."""
-    clear_classes()
+    it, then the middle MatMul's ``pe`` set to 2. The composer keeps its class by
+    structure and by the test modes a model is made in (``FINN_SPACE_PERMUTE``,
+    ``FINN_SPACE_EAGER``), so each mode reads a model made in it."""
     composed, stored = chain_space(kernels // 2)
     middle = _middle([f"mm{layer}" for layer in range(kernels // 2)])
     return [_partition(f"chain-{kernels}", composed, stored, kernels, middle, change=True)]

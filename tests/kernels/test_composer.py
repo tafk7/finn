@@ -32,6 +32,7 @@ from support.chain import (
 from support.helpers import FULL_DSP48E2
 
 from finn.core.space import Available, inspection
+from finn.core.space._scopes import EAGER, PERMUTE
 from finn.core.space.compiler import compile_model
 from finn.kernels import composer
 from finn.kernels.artifacts.abi import Endpoint
@@ -226,6 +227,27 @@ def test_the_same_structure_is_one_class_and_new_facts_a_new_design_space(cache:
     renamed = compose(declared({"first": "first_"}))
     assert renamed.space_type is not composed.space_type
     assert cached_classes() == 3
+
+
+@pytest.mark.parametrize("mode", [PERMUTE, EAGER])
+def test_the_same_structure_in_another_test_mode_is_another_class(
+    cache: None, mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(PERMUTE, raising=False)
+    monkeypatch.delenv(EAGER, raising=False)
+    plain = compose(declared())
+    monkeypatch.setenv(mode, "1")
+    other = compose(declared())
+    assert other.space_type is not plain.space_type and other.names == plain.names
+    assert compose(declared()).space_type is other.space_type
+    assert cached_classes() == 2
+    # Each class's model is made in the mode its class was composed in.
+    assert compile_model(other.space_type).scopes.permuted == (mode == PERMUTE)
+    monkeypatch.delenv(mode)
+    assert compile_model(plain.space_type).scopes.permuted is False
+    monkeypatch.setenv(mode, "1")
+    monkeypatch.delenv(mode)
+    assert compose(declared()).space_type is plain.space_type
 
 
 def test_the_class_cache_holds_at_most_its_bound(cache: None) -> None:
