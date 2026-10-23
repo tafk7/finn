@@ -23,8 +23,9 @@ from support.xsim import requires_xsim
 from finn.builder.build_dataflow_testbench import boundary_words
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import measure
-from finn.custom_op.kernels.network import member, network
+from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network
+from finn.kernels.composer import member_name
 from finn.toolchain.launcher import host_toolchain
 
 
@@ -51,6 +52,6 @@ def test_the_chain_leaves_a_frame_per_bottleneck_beat_count(tmp_path: Path) -> N
     assert measured.interval() == max(beats.values())
     for node in model.graph.node:
         if node.op_type == "MatMul":
-            core = f"{member(node.name)}.compute.packed.s_axis_input_tdata"
+            core = f"{member_name(node.name)}.compute.packed.s_axis_input_tdata"
             assert measured.per_frame(core) == beats[node.name]
             assert measured.busy(core)[-1] == beats[node.name]

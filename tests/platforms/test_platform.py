@@ -65,8 +65,9 @@ def test_a_node_binds_the_models_platform_and_its_dsp_block() -> None:
 def test_a_memory_case_the_device_cannot_build_is_refused_by_name() -> None:
     ultra = {"w": {"source.ram_style": "ultra"}}
     ultra96 = matmul_model()  # TARGET: Ultra96, no UltraRAM
-    # Its weight channel's contracts wait on the MatMul's core: nothing to check yet.
-    with refused("decision-unassigned", owner="compute"):
+    # Its weight channel's contracts wait on the MatMul's core, its memory's rule on
+    # UltraRAM does not: the channel's own rule refuses it already.
+    with refused("uram-absent", owner="source.uram_present"):
         configured(ultra96, ultra)
     configured(ultra96, {"first": MATMUL})
     with refused("uram-absent", owner="source.uram_present"):

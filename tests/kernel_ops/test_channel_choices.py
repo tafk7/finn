@@ -451,6 +451,5 @@ def test_a_channel_choice_out_of_play_is_saved_and_replayed_out_of_play() -> Non
     configured(model, {"levels": {"transport.fifo.depth": 8}})
     assert entries(model, "levels")["finn.channel/transport.fifo.depth"] == "8"
     assert channel_choices(model, "levels")["transport"] == "direct"
-    point = network(model, model.graph.node).member("levels")
-    states = dict(inspection.states(point))
-    assert states["transport.fifo.depth"] == inspection.Dormant(8)
+    states = dict(network(model, model.graph.node).states(["levels"]))
+    assert states[("levels", "transport.fifo.depth")] == inspection.Dormant(8)

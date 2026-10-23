@@ -49,7 +49,7 @@ from finn.custom_op.kernels import shell
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
 from finn.kernels.channels import Channel
-from finn.kernels.explore import Ranked, SizeFifos, dotted
+from finn.kernels.explore import Ranked, Seam, SizeFifos, dotted
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import (
     InferKernelTensors,
@@ -308,6 +308,67 @@ def test_two_nodes_of_one_name_are_refused() -> None:
         message="a node and another node are both named",
     ):
         network(model, model.graph.node)
+
+
+def test_two_graph_names_of_one_member_name_are_refused_by_the_composer() -> None:
+    """``a.b`` and ``a_b`` are one member name (``\\W`` as ``_``): the composer refuses the
+    partition (``name-shared``), which the graph layer reports as it reports a graph it
+    cannot bind, a ``KernelOpError`` carrying the composer's findings."""
+    model = kernel_model()
+    model.graph.node[0].name = "a.b"
+    model.graph.node[2].name = "a_b"
+    with refused(
+        "name-shared",
+        error=KernelOpError,
+        owner="a.b",
+        message="members share a node in the module: a_b: a.b, a_b",
+    ) as caught:
+        network(model, model.graph.node)
+    assert str(caught.error).startswith("partition: a.b: name-shared: ")
+
+
+def test_a_tensor_no_port_names_is_refused_by_name() -> None:
+    """``y`` leaves no node and is no graph output: a channel with no consumer and no
+    boundary port to give it one, refused as the graph is read (``channel-boundary``, by
+    the tensor), before anything is composed."""
+    model = kernel_model()
+    (y,) = model.graph.output
+    model.graph.value_info.append(y)
+    del model.graph.output[:]
+    with refused(
+        "channel-boundary",
+        error=KernelOpError,
+        owner="y",
+        tensor="y",
+        message="y: a boundary of its partition, but no port names it",
+    ):
+        network(model, model.graph.node)
+
+
+def test_a_refused_value_names_each_rule_and_choice_standing_by_its_owner() -> None:
+    """The seam offers a choice's values with each refused one's rules and the stored
+    choices standing in their way, keyed by owner and key: the partition answers each by
+    its path in the design space, mapped back (``Partition.pair``), so a rule of another
+    member a value reaches is named by that member. Pumping the MatMul's core at SIMD 1 is
+    refused by the core's rule, the stored ``simd`` standing."""
+    model = matmul_model()
+    configured(model, {"first": {**MATMUL, "simd": 1, "compute.packed.compute_pumping": False}})
+    bound = network(model, model.graph.node)
+    (pumping,) = Seam().choices(
+        bound.trial({}, [("first", "compute.packed.compute_pumping")]).network,
+        keys=[("first", "compute.packed.compute_pumping")],
+    )
+    rule = ("first", "compute.packed.pumping_has_lanes")
+    assert pumping.cases == (False,)
+    assert set(pumping.refused[True].why) == {rule}
+    assert pumping.refused[True].standing == {rule: (("first", "simd"),)}
+    assert [(f.code, f.owner) for f in pumping.refused[True].why[rule]] == [
+        ("dotp-pumping", "compute.packed.pumping_has_lanes")
+    ]
+    assert bound.pair("first", "w.source.geometry_supported") == (
+        "w",
+        "source.geometry_supported",
+    )
 
 
 FAN_OUT = {

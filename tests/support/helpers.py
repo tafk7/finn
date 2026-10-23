@@ -38,7 +38,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from fnmatch import fnmatchcase
-from typing import Any, TypedDict, TypeVar, cast
+from typing import Any, Protocol, Self, TypedDict, TypeVar, cast
 
 from qonnx.core.ranges import TensorRange
 
@@ -66,7 +66,7 @@ from finn.kernels.configure import chosen, commit, describe
 from finn.kernels.cut import Cut, channel_defaulted
 from finn.kernels.declaration import KernelDeclaration, ModuleOrder, Product
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.explore import Choice, Defaults, Seam, dotted
+from finn.kernels.explore import Choice, Composition, Defaults, Seam, dotted
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel, datatype_range
@@ -151,12 +151,24 @@ def keyed(choices: Mapping[str, object]) -> dict[Key, object]:
     return found
 
 
-N = TypeVar("N", bound=Network)
+class Bound(Composition, Protocol):
+    """What a test changes and emits: a network built by hand (``Network``), or the graph's
+    partition (``finn.custom_op.kernels.network.Partition``, which this layer does not
+    import)."""
+
+    def with_choices(self, changes: Mapping[Key, object]) -> Self: ...
+
+    def module(self, producer: ProducerIdentity, stem: str) -> QueryResult[Composed]: ...
+
+
+N = TypeVar("N", bound=Bound)
+W = TypeVar("W", bound=Network)
 
 
 def choose(network: N, choices: Mapping[str, object]) -> N:
     """``network`` with ``choices`` (``member.key``) committed, atomically; a refusal, or a
-    stored choice the change would drop, is a ``NetworkError`` (a ``ValueError``)."""
+    stored choice the change would drop, is a ``ValueError`` (a network's
+    ``NetworkError``)."""
     return network.with_choices(keyed(choices)) if choices else network
 
 
@@ -170,19 +182,19 @@ def refused_codes(network: N, choices: Mapping[str, object]) -> set[str]:
     return {finding.code for finding in found} | {c.code for f in found for c in f.causes}
 
 
-def module_of(network: Network, stem: str) -> QueryResult[Composed]:
+def module_of(network: Bound, stem: str) -> QueryResult[Composed]:
     """``network``'s module, named ``finn_<stem>``."""
     return network.module(PRODUCER, f"finn_{stem}")
 
 
-def built(network: Network, stem: str) -> Composed:
+def built(network: Bound, stem: str) -> Composed:
     """``network``'s module, named ``finn_<stem>``, which must be accepted."""
     module = module_of(network, stem)
     assert isinstance(module, Available), describe([module])
     return module.value
 
 
-def cycles_of(network: Network) -> QueryResult[int]:
+def cycles_of(network: Bound) -> QueryResult[int]:
     """The most cycles a frame any member of ``network`` takes, once each states its own."""
     found = [network.query(name, CYCLES) for name in network.members]
     waiting = [answer for answer in found if not isinstance(answer, Available)]
@@ -620,20 +632,20 @@ ADAPTER_RAM_STYLES = "*adapter_ram_style"
 """The keys (``fnmatch``) of every channel's one memory choice for its input adapter's
 ``input_gen`` stages."""
 
-P = TypeVar("P", bound=Space | Network)
+P = TypeVar("P", bound=Space | Bound)
 
 
-def open_choices(network: Network, pattern: str) -> list[str]:
+def open_choices(network: Bound, pattern: str) -> list[str]:
     """The open choices of ``network`` matching ``pattern`` (``fnmatch``), as
     ``member.key``."""
     return _undecided(network, pattern)
 
 
-def _undecided(subject: Space | Network, pattern: str) -> list[str]:
-    """The open choices in play of a point or a network matching ``pattern``, by key (a
-    network's as ``member.key``): unset in a scope that is present (``inspection.Open``,
-    waiting on nothing)."""
-    if isinstance(subject, Network):
+def _undecided(subject: Space | Bound, pattern: str) -> list[str]:
+    """The open choices in play of a point, a network or a partition matching ``pattern``,
+    by key (a network's or a partition's as ``member.key``): unset in a scope that is
+    present (``inspection.Open``, waiting on nothing)."""
+    if not isinstance(subject, Space):
         return [dotted(key) for key in subject.undecided() if fnmatchcase(dotted(key), pattern)]
     return [
         key
@@ -643,16 +655,16 @@ def _undecided(subject: Space | Network, pattern: str) -> list[str]:
 
 
 def _committed(subject: P, choices: Mapping[str, object]) -> P:
-    if isinstance(subject, Network):
+    if not isinstance(subject, Space):
         return cast(P, choose(subject, choices))
     return cast(P, commit(subject, choices))
 
 
-def _first_valid(point: Space, key: str) -> object:
-    """The first value of ``point``'s channel choice ``key`` that setting alone accepts, in
-    its policy's order (the cut's, ``finn.kernels.policies.ranked``), as its first valid
-    policy takes it."""
-    info = cast(Any, decision(point, key))
+def _first_valid(point: Space, key: str | inspection.DecisionInfo[object]) -> object:
+    """The first value of ``point``'s channel choice ``key`` (or the Decision a
+    composition's ``decision`` gives) that setting alone accepts, in its policy's order (the
+    cut's, ``finn.kernels.policies.ranked``), as its first valid policy takes it."""
+    info = cast(Any, decision(point, key) if isinstance(key, str) else key)
     (found,) = inspection.viable(point, [info.reference])
     items, fallback = ranked(point, Cut, info, found.values or ())
     assert fallback is None, f"{key}: {fallback}"
@@ -671,12 +683,12 @@ def with_adapter_memories(subject: P, ram_style: str | None = None) -> P:
     if not styles:
         return subject
     if ram_style is None:
-        if isinstance(subject, Network):
-            first = {
-                key: _first_valid(subject.member(owner), below)
-                for key in styles
-                for owner, below in (key.split(".", 1),)
-            }
+        if not isinstance(subject, Space):
+            first = {}
+            for key in styles:
+                owner, _, below = key.partition(".")
+                info = cast(Any, subject.decision((owner, below)))
+                first[key] = _first_valid(subject.member(owner), info)
         else:
             first = {key: _first_valid(subject, key) for key in styles}
         return _committed(subject, first)
@@ -695,7 +707,7 @@ def with_defaults(network: N) -> N:
     return Defaults().explore(seam, network)
 
 
-def with_channel_defaults(network: N) -> N:
+def with_channel_defaults(network: W) -> W:
     """``network`` with each bound channel's open choices in play that are not required set
     as the cut sets them, by its policies (``finn.kernels.cut.channel_defaulted``: first
     valid; a FIFO's depth stays open): for a network built by hand, which no cut made."""

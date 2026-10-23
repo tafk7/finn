@@ -19,7 +19,7 @@ from core.space._domains_support import domain_differences
 from core.space._templates_support import assert_reads_alike, defined, links, reached
 from core.space._whole_support import differences
 from support.chain import MEMBERS, chain
-from support.one_space import chain_space
+from support.one_space import chain_model, chain_space, declaration
 
 import finn.custom_op
 import finn.kernels
@@ -30,7 +30,7 @@ from finn.core.space._template import link_template
 from finn.core.space.compiler import compile_model
 from finn.core.space.occurrence import ask, held
 from finn.core.space.results import Available, QueryResult, Unresolved
-from finn.kernels.composer import clear_classes
+from finn.kernels.composer import Composed, clear_classes, compose
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 
@@ -121,12 +121,22 @@ def test_stage_7s_chain_of_eight_kernels_answers_as_the_line() -> None:
     assert _answers_as_the_line([whole]) == 130
 
 
+def fresh_chain() -> tuple[Composed, dict[str, object]]:
+    """Stage 7's chain at 8 kernels composed as one Space with a model of its own, and its
+    stored values by path: the graph layer binds a partition of the same class as it reads
+    the stored values (``support.one_space.declaration``), so the composer's classes are
+    dropped before it is composed."""
+    declared, stored = declaration(chain_model(4))
+    clear_classes()
+    composed = compose(declared)
+    return composed, {composed.names.path(key): value for key, value in stored.items()}
+
+
 def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv(EAGER, raising=False)  # the eager test mode makes everything at once
-    clear_classes()  # a model of its own: the composer keeps one class per structure
-    composed, _ = chain_space(4)
+    composed, _ = fresh_chain()
     point = composed.design_space()
     scopes = inspection.model(point).scopes
     assert isinstance(point.mm0.query(MatMulKernel.cycles), Unresolved)  # type: ignore[attr-defined]
@@ -165,8 +175,7 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     output adapters of the channels beside it, ``a1`` and ``h2``, which read its ports'
     streams)."""
     monkeypatch.delenv(EAGER, raising=False)
-    clear_classes()  # a model of its own: the composer keeps one class per structure
-    composed, stored = chain_space(4)
+    composed, stored = fresh_chain()
     point = composed.design_space()
     scopes = inspection.model(point).scopes
     committed = commit(point, stored)

@@ -84,9 +84,10 @@ whose initializer the node may hold (MatMul's weights), also names the kernel's 
 the initializer's values are given as (``contents``, ``w_contents``, in place of its
 tensor) and the kernel's derived values of what its channel carries, downstream of the
 kernel: the tensor (``carried``, ``carried_weights``) and the values its source stores
-(``stored``, ``stored_weights``). A network wires the kernel and its channels by it
-(``finn.kernels.network``): each channel's tensor (a parameter channel's from the
-kernel's values, ``Fact``) and its port's contract from the kernel (``Interface``).
+(``stored``, ``stored_weights``). The graph layer declares the kernel and its channels by
+it (``finn.custom_op.kernels.network.declaration``): each channel's tensor (a parameter
+channel's from the kernel's values, ``Stated``) and its port as the channel's side
+(``Port``).
 """
 
 from __future__ import annotations

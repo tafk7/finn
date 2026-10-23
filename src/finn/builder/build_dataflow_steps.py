@@ -336,8 +336,8 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
     partition is named ``partition``: its node, its body (partition/partition.onnx), its
     IP and its block-design instance. Each channel's choices are created here (the cut's
     policies), and each KernelOp's checked again in context: one made stale by an edit
-    since conversion is dropped (a kernel's left open for a strategy, a channel's derived
-    again by the interim channel rule), noted as a limitation
+    since conversion is dropped (a kernel's left open for a strategy, a channel's set again
+    by the cut's policies), noted as a limitation
     (``choice-stale``, owned by the choice, the kernel's findings its causes); one the
     body never had set at conversion is set by its KernelOp's policies
     (``choice-converted-late``), one no value could be set for is left open, noted
@@ -348,7 +348,7 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
     for key, found in cut.dropped.items():
         message = (
             "dropped as stale at the cut (a kernel's left open for a strategy, a channel's "
-            f"derived again by the interim channel rule): {stale_text(key, found)}"
+            f"set again by the cut's policies): {stale_text(key, found)}"
         )
         note(Finding(FindingKind.LIMITATION, "choice-stale", key, message, causes=found))
     for found in (*cut.late.values(), *cut.fallbacks.values(), *cut.unset.values()):

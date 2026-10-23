@@ -244,13 +244,27 @@ def test_a_channels_value_of_another_type_is_refused() -> None:
     assert channel_choices(model, "w") == before
 
 
-def test_a_channel_whose_contracts_wait_on_an_open_kernel_is_refused() -> None:
-    """The MatMul's core is open, so the weight channel's contracts are and its choice cannot
-    be checked."""
+def test_a_channel_whose_contracts_wait_on_an_open_kernel_stores_its_choice() -> None:
+    """The MatMul's core is open, so the weight channel's contracts are: a choice of the
+    channel set there is no change of a channel not bound, but one of the partition's: a
+    rule waiting on the open core does not refuse it, so it is stored and saved on its
+    tensor, and the channel waits with it, open, on the MatMul's ``compute``. A rule the
+    choice breaks whatever the core is refuses it (UltraRAM on a part without it)."""
     model = matmul_model()
-    with refused("decision-unassigned", owner="compute"):
+    with refused("uram-absent", owner="source.uram_present"):
         configured(model, {"w": {"source.ram_style": "ultra"}})
     assert channel_choices(model, "w") == {}
+    configured(model, {"w": {"source.ram_style": "block"}})
+    assert channel_choices(model, "w")["source.ram_style"] == "block"
+    bound = network(model, model.graph.node)
+    assert bound.chosen(["w"])[("w", "source.ram_style")] == "block"
+    validity = bound.validity("w")
+    assert validity.status == "open"
+    assert {
+        (found.code, found.owner, dict(found.details).get("node"))
+        for piece in validity.pieces
+        for found in piece.result.findings
+    } == {("decision-unassigned", "compute", "first")}
 
 
 def test_a_memory_the_device_cannot_build_is_refused() -> None:
