@@ -26,7 +26,8 @@ choices stand in its way is made again with those choices cleared, as one change
 seam then sets, on the design space that change reaches, each channel choice it cleared
 or brought into play by the cut's policy, first valid (not one the running strategy
 decides itself: one it reopened, or one it sets as it finds it, ``Ranked``'s and
-``Defaults``'). Each is the strategy's, named
+``Defaults``', which a change clears or brings into play while its search runs: left open
+for its loop, it is set again by the strategy's own policy). Each is the strategy's, named
 (``Accepted.cleared``, ``Accepted.settled``; a run's ``Run.cleared``, ``Run.settled``).
 The seam clears channel choices only: a kernel's stored choice standing in the way (the
 neighbour's, or the changed kernel's own) refuses the change, naming it. The seam reads
@@ -535,6 +536,9 @@ class Seam:
         # their policy (``Seam.run``'s ``decides``).
         self._scope: frozenset[Key] = frozenset()
         self._decides: Callable[[Policy], bool] | None = None
+        # Whether the running strategy's search runs (not its restore): a choice it decides
+        # that a change clears is left open for its own loop then.
+        self._searching = False
 
     def declared(self, network: Composition) -> Mapping[Key, type[Space] | None]:
         """Every Decision of the network by key, open or not, in play or not (one nested
@@ -611,8 +615,9 @@ class Seam:
         kernel's. A rule that reads a cleared choice is open, not false.
 
         Accepted, the seam sets on the network reached each channel choice the change
-        cleared or brought into play (not one the running strategy decides itself) by the
-        cut's policy (``_settle``): first valid, in its
+        cleared or brought into play (not one the running strategy decides itself; a cleared
+        one its search sets as it finds it is left open for its loop) by the cut's policy
+        (``_settle``): first valid, in its
         listed order or ranking, a value taken where setting it is accepted (no rule newly
         false); a required one (a FIFO's depth) is left open for ``SizeFifos``. A stored
         FIFO's depth not standing in the way stays stored. A change that would put a held
@@ -654,10 +659,12 @@ class Seam:
         self, before: Composition, network: S, cleared: Collection[Key]
     ) -> tuple[S, dict[Key, object], dict[Key, tuple[Finding, ...]]]:
         """The fold rule's second change (``set``): ``network``, the design space a change
-        of ``before``'s reached, with each channel choice the change cleared (``cleared``)
-        or brought into play (open in play here, not in ``before``; not one the running
-        strategy decides itself: one it reopened, or one of the policies its search sets as
-        it finds them, ``Seam.run``'s ``decides``) set by its policy, the cut's
+        of ``before``'s reached, with each channel choice the change cleared (``cleared``;
+        not one of the policies the running strategy's search sets as it finds them, while
+        it runs: that one is left open for its loop, which sets it again by its own policy,
+        ``_loops``) or brought into play (open in play here, not in ``before``; not one the
+        running strategy decides itself: one it reopened, or one of the policies its search
+        sets as it finds them, ``Seam.run``'s ``decides``) set by its policy, the cut's
         (``policy``): one at a time, in the seam's order, each value first valid,
         taken where setting it alone is accepted (no rule newly false), until none is left
         that was not tried (a value set may bring another into play: a FIFO's choices under
@@ -674,7 +681,11 @@ class Seam:
                 if key[0] in channels
                 and key not in settled
                 and key not in unsettled
-                and (key in cleared or not self._decided(network, key))
+                and (
+                    not self._loops(network, key)
+                    if key in cleared
+                    else not self._decided(network, key)
+                )
             ]
             if candidates and was_open is None:
                 was_open = set(before.undecided())
@@ -695,6 +706,16 @@ class Seam:
         if key in self._scope:
             return True
         return self._decides is not None and self._decides(self.policy(network, key))
+
+    def _loops(self, network: Composition, key: Key) -> bool:
+        """Whether choice ``key``, cleared by a change, is the running strategy's to set
+        again in its own loop (``_settle``): its search runs and sets every open choice of
+        its policy as it finds it (``Seam.run``'s ``decides``: ``Ranked``'s, ``Defaults``')."""
+        return (
+            self._searching
+            and self._decides is not None
+            and self._decides(self.policy(network, key))
+        )
 
     def _tried(self, network: S, changes: Mapping[Key, object]) -> Accepted[S] | Refused:
         """``changes`` tried on ``network`` as asked, one change: accepted where no rule is
@@ -921,13 +942,15 @@ class Seam:
         before = dict(network.chosen())
         opened, reopened = self.reopen(network, scope)
         prior = {key: before[key] for key in reopened}
-        enclosing = (self._scope, self._decides)
+        enclosing = (self._scope, self._decides, self._searching)
         self._scope, self._decides = frozenset(reopened), decides
         try:
+            self._searching = True
             found = search(opened, prior)
+            self._searching = False
             restored = self.restore(found, prior, strategy) if restore else Restored(found)
         finally:
-            self._scope, self._decides = enclosing
+            self._scope, self._decides, self._searching = enclosing
         after = restored.network.chosen()
         cleared = {
             key: why

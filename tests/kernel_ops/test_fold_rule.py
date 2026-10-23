@@ -275,6 +275,48 @@ def test_a_choice_cleared_twice_in_a_run_is_reported_by_its_first_clearing() -> 
     assert run.settled == {STYLE: "auto"}
 
 
+#: A strategy's own order of the FIFO's styles, other than the cut's (``auto`` first).
+PREFERRED = ("distributed", "block", "auto", "ultra")
+
+
+def test_a_cleared_choice_the_running_strategy_sets_as_it_finds_it_is_left_to_its_loop() -> None:
+    """A strategy whose search sets every open choice as it finds it, by its own order
+    (``Seam.run``'s ``decides``, as ``Ranked``'s), sets the FIFO's style itself
+    (``ultra``); a later change of its search takes the UltraRAM away, and the style,
+    standing in its way, is cleared. The fold rule leaves it open for the strategy's loop
+    (cleared, not settled), which sets it again by the strategy's own order
+    (``distributed``), not by the cut's (``auto``).
+
+    ``Ranked`` itself does not reach this on FINN's channels: its loop sets every kernel
+    choice before any channel's (a partition's members are ranked kernels first, and no
+    kernel choice comes into play after a channel's is set: a kernel reads its facts only),
+    and no channel's choice it sets later in its seam order makes a rule false that an
+    earlier channel choice stands in the way of (none found on the Chain's channels)."""
+    network = boarded(ULTRA)
+    seam = Seam(FULL_DSP48E2)
+
+    def accepted(done: Accepted[Partition] | Refused) -> Accepted[Partition]:
+        assert isinstance(done, Accepted), done
+        return done
+
+    def search(opened: Partition, _: Mapping[tuple[str, str], object]) -> Partition:
+        network = accepted(seam.set(opened, {STYLE: "ultra"})).network
+        done = accepted(seam.set(network, NO_URAM))
+        assert list(done.cleared) == [STYLE] and done.settled == {}
+        assert dict(done.network.states(["hidden"]))[STYLE] == inspection.Open(())
+        network = done.network
+        while STYLE in network.undecided():
+            (choice,) = seam.choices(network, keys=(STYLE,))
+            assert choice.cases is not None
+            value = next(each for each in PREFERRED if each in choice.cases)
+            network = accepted(seam.set(network, {STYLE: value})).network
+        return network
+
+    found = seam.run(network, (STYLE,), search, "preferring", restore=False, decides=lambda _: True)
+    assert dict(found.states(["hidden"]))[STYLE] == inspection.Set("distributed")
+    assert found.chosen()[("board", "uram")] is False
+
+
 def test_a_fifo_newly_in_play_leaves_its_depth_open_and_its_style_set_by_policy() -> None:
     """A change that places the hidden channel's FIFO brings its choices into play: the
     seam sets its style by the cut's policy (``auto``) and leaves its depth, required,
