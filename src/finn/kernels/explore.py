@@ -3,12 +3,14 @@
 
 """The DSE seam: what a design space exploration asks of a network, and strategies.
 
-A ``Seam`` answers what an exploration asks of a network (``finn.kernels.network``,
-immutable like a point), each choice keyed by a pair ``(owner, key)``: a member by name (a
-kernel's node, a channel's tensor) and the decision key in its space (``("first",
-"pe")``, ``("y", "transport")``). ``choices`` gives each open choice in
-play with its possible values, every one offered, whether one value is possible or many;
-``set`` is the one change, one change of the network's (``Network.trial``), accepted or
+A ``Seam`` answers what an exploration asks of a network (a ``Composition``: a
+partition's one design space, ``finn.custom_op.kernels.network.Partition``, or a network
+built by hand, ``finn.kernels.network``; immutable like a point), each choice keyed by a
+pair ``(owner, key)``: a member by name (a kernel's node, a channel's tensor) and the
+decision key in its space (``("first", "pe")``, ``("y", "transport")``). ``choices`` gives
+each open choice in play with its possible values, every one offered, whether one value is
+possible or many; ``set`` is the one change, one change of the network's
+(``Composition.trial``: of a partition, one change of its design space), accepted or
 refused with findings: the engine's, each rule it would break with the stored choices
 standing in its way, or the seam's own (``SEAM_CODES``); ``cost`` gives each member's
 cycles a frame, buffering and resources, and the bottleneck; ``resources`` what the
