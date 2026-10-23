@@ -100,7 +100,7 @@ def test_a_seeded_walk_keeps_the_four_invariants_and_the_engines_own_checks(
     tally = gate_walk(seed, strict)
     assert tally.failure is None, tally.failure
     if strict:
-        assert not tally.by_milestone and not tally.model_only
+        assert not tally.by_milestone
     # each step is a change of choices (its assignment checked) or a facts step; a batch's
     # choices are checked as a change of choices too
     checks = tally.checks
@@ -115,7 +115,7 @@ def test_a_seeded_walk_keeps_the_four_invariants_and_the_engines_own_checks(
     assert tally.engine_errors == 0
     # the public API, every permanent check run (the cold build through the public API's ``make``)
     assert tally.implementation == "public"
-    assert tally.engine_checks["cold change"] == tally.steps - tally.model_only
+    assert tally.engine_checks["cold change"] == tally.steps
 
 
 def test_the_full_run_meets_its_causes_and_counts_each_under_its_milestone() -> None:
@@ -141,8 +141,6 @@ def test_the_gates_walks_exercise_every_invariant() -> None:
         "facts batch",
     ):
         assert checks[name], (name, checks)
-    # a fact unset reaches the engine too (given None): nothing is the model's alone
-    assert not sum(tally.model_only for tally in tallies)
     # a design space a facts step left reading refused binds again, on both sides
     assert sum(tally.binds_broken for tally in tallies)
 

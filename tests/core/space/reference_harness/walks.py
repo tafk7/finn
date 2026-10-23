@@ -1725,9 +1725,6 @@ class Tally:
     seed: int
     steps: int = 0
     accepted: int = 0
-    #: steps the model alone tried, checked and never applied: none since the engine takes an
-    #: optional fact unset (``Point.change``), so 0 (the summary's "the model's alone")
-    model_only: int = 0
     #: descriptions drawn and skipped, by why
     skipped: Counter[str] = field(default_factory=Counter)
     #: the model's invariant checks run, by name
@@ -2316,8 +2313,8 @@ def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
         f"implementation: {', '.join(sorted(implementations)) or '-'}",
         "derived selectors: " + ("drawn" if any(tally.by for tally in tallies) else "not drawn"),
         f"walks {len(tallies)} ({_counts(runs)}), failed {sum(failed.values())} "
-        f"({_counts(failed)}); steps {summed('steps')}, accepted {summed('accepted')}, the "
-        f"model's alone {summed('model_only')}; {seconds:.1f} s, "
+        f"({_counts(failed)}); steps {summed('steps')}, accepted {summed('accepted')}; "
+        f"{seconds:.1f} s, "
         f"{seconds / max(len(tallies), 1):.2f} s per walk",
         f"descriptions skipped: {_counts(totals['skipped'])}",
         f"invariant checks: {_counts(totals['checks'])}; binds reading refused, reporting rules "

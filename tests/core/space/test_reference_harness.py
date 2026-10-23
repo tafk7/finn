@@ -578,7 +578,7 @@ def test_the_check_against_a_cold_build_runs_for_every_implementation() -> None:
     assert renamed.failure is None, renamed.failure
     assert renamed.implementation == "public, renamed"
     assert renamed.engine_checks["cold"] == renamed.compared
-    assert renamed.engine_checks["cold change"] == renamed.steps - renamed.model_only
+    assert renamed.engine_checks["cold change"] == renamed.steps
     assert renamed.engine_checks["bind"] == renamed.engine_checks["bind held"] == renamed.compared
 
 
