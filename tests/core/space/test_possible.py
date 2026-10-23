@@ -69,13 +69,15 @@ def test_one_possible_case_and_why_the_other_is_refused() -> None:
 def test_inspection_answers_are_equal_for_a_design_space_and_read_once_per_model() -> None:
     """A design space's validity is a function of its value: asked again it is equal (a
     new answer each time, read from the model's cache; none is kept beside it). What is
-    the model's alone is read once per model."""
+    the model's alone is read once per model: its decisions, which a design space whose
+    facts rule none out lists all of."""
     point = design_space(Unit(width=128))
     stub = inspection.candidate(point, Unit.compute, "stub")
     assert stub is not None
     assert inspection.validity(stub) == inspection.validity(stub)
     assert inspection.validity(point) == inspection.validity(point)
-    assert inspection.decisions(point) is inspection.decisions(Unit)
+    assert inspection.decisions(inspection.model(point)) is inspection.decisions(Unit)
+    assert inspection.decisions(point) == inspection.decisions(Unit)
 
 
 def test_a_choice_stays_open_whatever_its_possible_values() -> None:

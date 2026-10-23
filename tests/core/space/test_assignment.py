@@ -652,9 +652,10 @@ class OverChoice(Space):
 
 def test_a_false_when_beneath_an_open_selector_makes_its_scope_absent() -> None:
     """Presence is the AND over the path: the ``when`` reads false whatever the selector
-    above it will hold, so its choice is absent, not open waiting on the selector."""
+    above it will hold, so its choice is absent, not open waiting on the selector. Absent
+    under the facts alone, it is in no list (SZ113)."""
     states = dict(inspection.states(design_space(Over(k=0))))
-    assert states == {"s": Open(), "s.a.g.x": Absent()}
+    assert states == {"s": Open()}
     assert dict(inspection.states(design_space(Over(k=5))))["s.a.g.x"] == Open(("s",))
 
 

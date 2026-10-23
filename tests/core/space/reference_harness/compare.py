@@ -289,12 +289,8 @@ def possible_form(solution: reference.Solution, path: str) -> PossibleForm:
     return PossibleForm(tuple(outcomes))
 
 
-def listed_form(solution: reference.Solution, pruning: bool = True) -> ListedForm:
-    """The choices the design space lists (SZ113): every choice but the pruned;
-    ``pruning=False``: every choice, as an implementation that has not reached T4c lists
-    them."""
-    if not pruning:
-        return ListedForm(frozenset(solution.index.choices))
+def listed_form(solution: reference.Solution) -> ListedForm:
+    """The choices the design space lists (SZ113): every choice but the pruned."""
     return ListedForm(frozenset(solution.listed()))
 
 
@@ -401,14 +397,10 @@ class Pair:
         expected = ruled or validity_form(self.solution())
         _check(self.case.name, "validity", expected, self.engine.validity())
 
-    def check_listed(self, *, ruled: ListedForm | None = None, pruning: bool | None = None) -> None:
-        """The choices the design space lists (SZ113): pruned as the model prunes where the
-        engine's implementation has reached T4c, else every choice (``pruning`` overrides;
-        the T4c row's witness asks it pruned)."""
+    def check_listed(self, *, ruled: ListedForm | None = None) -> None:
+        """The choices the design space lists (SZ113): pruned as the model prunes."""
         __tracebackhide__ = True
-        if pruning is None:
-            pruning = "T4c" in self.engine.reached
-        expected = ruled or listed_form(self.solution(), pruning)
+        expected = ruled or listed_form(self.solution())
         _check(self.case.name, "the listed choices", expected, self.engine.listed())
 
     def check_possible(self, path: str, *, ruled: PossibleForm | None = None) -> None:

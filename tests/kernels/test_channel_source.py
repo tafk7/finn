@@ -91,7 +91,9 @@ def folded(point, *, pe=2, simd=2):
 
 
 def handle(point, key):
-    return next(item.reference for item in inspection.decisions(point) if item.key == key)
+    """The choice ``key`` of ``point``, by name, listed or not (its model's)."""
+    every = inspection.decisions(inspection.model(point))
+    return next(item.reference for item in every if item.key == key)
 
 
 def configured(point, *, style=None, pe=2, simd=2):
@@ -216,6 +218,31 @@ def test_the_channel_owns_its_source_and_its_choices():
     assert unvalued.accepted
     states = dict(unvalued.network.states(("w",)))
     assert states[("w", "source.ram_style")] == inspection.Dormant("block")
+
+
+def test_a_channel_without_contents_lists_none_of_its_sources_choices():
+    # SZ113: without contents the channel's source is absent under the facts alone (its
+    # guard, ``valued``, reads the facts only), so the source's choices are in none of the
+    # channel's lists: its decisions, its states, the network's states and open choices.
+    # Asked by name they still answer, and set by name one is accepted, dormant, and is then
+    # listed: a stored choice is never pruned (SZ119 (5)).
+    source = {"source.ram_style", "source.pumped_memory"}
+    network = configured(base())
+    w = network.member("w")
+    assert not w.valued
+    assert source <= {item.key for item in inspection.decisions(Channel)}
+    assert source <= {item.key for item in inspection.decisions(inspection.model(w))}
+    assert not source & {item.key for item in inspection.decisions(w)}
+    assert not source & {key for key, _ in inspection.states(w)}
+    assert not source & {key for (_, key), _ in network.states(("w",))}
+    assert not source & {key for _, key in network.undecided()}
+    (asked,) = inspection.viable(w, [handle(w, "source.ram_style")])
+    assert asked.key == "source.ram_style" and asked.values is not None
+    stored = w.with_choices({handle(w, "source.ram_style"): "block"})
+    states = dict(inspection.states(stored))
+    assert states["source.ram_style"] == inspection.Dormant("block")
+    assert "source.pumped_memory" not in states
+    assert "source.ram_style" in {item.key for item in inspection.decisions(stored)}
 
 
 def test_the_stored_memory_takes_its_choices_with_its_channel_and_refuses_bad_weights():

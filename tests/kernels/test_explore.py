@@ -747,7 +747,8 @@ def test_a_choice_a_rebuild_brings_into_play_is_the_interim_rule_s_not_the_strat
     folding_ = {"first.pe": 4, "first.simd": 4}
     wide = with_defaults(choose(chain.network(), {"first.compute": "packed", **folding_}))
     assert wide.member("x").input_chain == "none"
-    assert isinstance(state(wide, "x.adapter_ram_style"), inspection.Absent)
+    # its adapter places nothing for x's facts, so its memory is in none of x's lists (SZ113)
+    assert ("x", "adapter_ram_style") not in dict(wide.states(("x",)))
     folded = TargetCycles(48).explore(explorer, wide)
     assert folding(explorer, folded)["first.simd"] == 1
     assert folded.member("x").input_chain == "input_gen"

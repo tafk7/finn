@@ -19,6 +19,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from .._failure import NativeEvaluationError
 from ..edits import BrokenRule, ChangeOutcome
 from ..inspection import (
     Absent,
@@ -161,10 +162,32 @@ def state_of(ev: Evaluation, index: Address) -> ChoiceState:
     return Waiting(value, _waits(read)) if isinstance(read, Unresolved) else Set(value)
 
 
-def states(ev: Evaluation, scope: ScopeRecord | None = None) -> tuple[tuple[str, ChoiceState], ...]:
-    """Every choice's state, in the flow order (today's, from the compiled forms)."""
+def pruned(ev: Evaluation, index: Address) -> bool:
+    """Whether the choice ``index`` is in none of the design space's lists (SZ113): unset,
+    and its existence false under the facts alone. That is its presence read in its facts
+    layer's design space with nothing stored (every choice unknown): absent there, by a
+    guard or a case not picked, is false, an absent guard dominating a refused one. Present,
+    unknown, refused or failing is not false, and a stored choice is never pruned (SZ119
+    (5)): it is listed, dormant where its scope is absent."""
+    if index in ev.ds.stored or not ev.inferred.guards(index):
+        return False
+    try:
+        found, answer = presence(evaluation(ev.ds.layer.bare, ev.session), index)
+    except NativeEvaluationError:
+        return False
+    return found == "absent" and not isinstance(answer, Rejected)
+
+
+def listed(ev: Evaluation, scope: ScopeRecord | None = None) -> tuple[Address, ...]:
+    """The choices below ``scope`` (the root's by default) in the design space's lists, in
+    the flow order: every choice but the pruned (``pruned``)."""
     at = ev.scopes.root if scope is None else scope
-    return tuple((i.key, state_of(ev, i)) for i in _flow(ev.model, at))
+    return tuple(i for i in _flow(ev.model, at) if not pruned(ev, i))
+
+
+def states(ev: Evaluation, scope: ScopeRecord | None = None) -> tuple[tuple[str, ChoiceState], ...]:
+    """Every listed choice's state, in the flow order (``listed``)."""
+    return tuple((i.key, state_of(ev, i)) for i in listed(ev, scope))
 
 
 # -- pairs, origins, standing -----------------------------------------------------------
@@ -556,10 +579,12 @@ __all__ = [
     "bind",
     "change",
     "check",
+    "listed",
     "moved",
     "pairs",
     "placed",
     "presence",
+    "pruned",
     "standing",
     "state_of",
     "states",

@@ -10,6 +10,12 @@ pieces of a Space's validity; ``viable`` tries each listed value of a choice as 
 would set it, publishing nothing; ``states`` reads each choice's state; explain evaluates
 one query and follows the reads its answers recorded. ``states`` and ``viable`` detach the
 values they hand out, by each choice's semantics.
+
+**The lists** (SZ113). A design space's ``decisions`` and ``states`` (and so its flow
+order) leave out each choice whose existence the facts alone rule out, unless it is stored
+(SZ119 (5); ``_running.questions.pruned``). A choice asked by name is answered all the same:
+its state, its possible values (``viable``), a change setting it (accepted, dormant). A
+compiled model's or a Space class's ``decisions`` list every decision.
 """
 
 # The running type imports this module's types: it is imported inside the bodies here.
@@ -218,9 +224,13 @@ def _decision_info(model: Model[Space], index: Address) -> DecisionInfo[object]:
 
 
 def decisions(subject: Space | Model[S] | type[Space]) -> tuple[DecisionInfo[object], ...]:
-    """Discover all owning decisions below this scope, including inactive cases, in the
-    flow order (``_running.per_class.flow_below``). Read once per compiled model and scope,
-    from its compiled forms and scope records (``_whole``): no member is evaluated."""
+    """The owning decisions below this scope, in the flow order
+    (``_running.per_class.flow_below``). Of a compiled model or a Space class, every one,
+    inactive cases included: read once per compiled model and scope, from its compiled
+    forms and scope records (``_whole``), no member evaluated. Of a design space, those in
+    its lists (SZ113): every one but each choice whose existence the facts alone rule out,
+    unless it is stored (``_running.questions.pruned``). A decision asked by name is
+    answered whether it is listed or not."""
 
     compiled, scope = _context(subject)
     found = compiled._read.get(("decisions", scope))
@@ -228,7 +238,22 @@ def decisions(subject: Space | Model[S] | type[Space]) -> tuple[DecisionInfo[obj
         found = compiled._read[("decisions", scope)] = tuple(
             _decision_info(compiled, index) for index in flow_below(compiled, scope)
         )
-    return cast(tuple[DecisionInfo[object], ...], found)
+    every = cast(tuple[DecisionInfo[object], ...], found)
+    if not isinstance(subject, Space):
+        return every
+    from ._running.evaluate import evaluation
+    from ._running.questions import listed
+
+    driver_only("decisions")
+    at = held(subject)
+
+    def answer(session: Session) -> tuple[DecisionInfo[object], ...]:
+        kept = {index.key for index in listed(evaluation(at.ds, session), at.scope)}
+        if len(kept) == len(every):
+            return every
+        return tuple(item for item in every if item.key in kept)
+
+    return ask(compiled, answer)
 
 
 @overload
@@ -421,7 +446,8 @@ class Viable:
 
 def viable(point: Space, keys: Iterable[object]) -> tuple[Viable, ...]:
     """Each named choice's listed values (its domain over the facts, listed as if the
-    choice existed), each tried alone as a change would set it, publishing nothing:
+    choice existed; a choice the design space's lists leave out is answered all the same),
+    each tried alone as a change would set it, publishing nothing:
     possible, with what it would move, or refused, with each rule it would break and
     the stored choices standing in its way. A rule waiting on an open choice does not
     refuse; the value stored is possible (setting it changes nothing). In the order of
@@ -501,11 +527,13 @@ ChoiceState: TypeAlias = Set | Waiting | Dormant | Open | Absent
 
 
 def states(point: Space) -> tuple[tuple[str, ChoiceState], ...]:
-    """Every choice below this scope, by key, with its state, in the flow order (each
-    after every choice its presence, its list or its Space's facts read: a selector before
-    the choices its cases hold)."""
+    """Every choice below this scope in the design space's lists, by key, with its state,
+    in the flow order (each after every choice its presence, its list or its Space's facts
+    read: a selector before the choices its cases hold). A choice whose existence the facts
+    alone rule out is in no list, unless it is stored (SZ113, SZ119 (5);
+    ``_running.questions.pruned``)."""
     from ._running.evaluate import evaluation
-    from ._running.questions import state_of
+    from ._running.questions import listed, state_of
 
     driver_only("choice states")
     at = held(point)
@@ -515,7 +543,7 @@ def states(point: Space) -> tuple[tuple[str, ChoiceState], ...]:
         ev = evaluation(at.ds, session)
         return tuple(
             (index.key, _detached_state(index, state_of(ev, index)))
-            for index in flow_below(model, at.scope)
+            for index in listed(ev, at.scope)
         )
 
     return ask(model, answer)

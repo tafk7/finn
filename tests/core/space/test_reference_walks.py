@@ -9,13 +9,12 @@ model's invariants hold strictly (history-independence and the bind publishing i
 nothing broken, additions moving answers only up the information order, no accepted change
 adding a (false piece, origin) pair, every refusal naming exactly its origins and their
 standing choices), and the engine's own checks hold (its walked configuration against one
-built from nothing). Each seed walks twice (DESIGN § 6): the strict run draws neither of the
-rulings' causes the engine has not reached (no view read in, every fact given, no unset),
-and each disagreement fails it; the full run draws both, attributes each disagreement by its
-cause to T4b or T4c and counts it under that pending milestone, and fails on an unattributed
-one, or on one whose milestone is taken as removed. Every invariant's checker is also shown
-catching a deliberately wrong answer on a small description. Reading 8's shapes, which no
-drawn description holds, are walked by hand.
+built from nothing). Each seed walks twice (DESIGN § 6): the strict run draws no view read in,
+gives every fact and unsets none, and each disagreement fails it; the full run draws them,
+counts a disagreement attributed to T4b (a view read in) under that pending milestone, and
+fails on any other, or on one whose milestone is taken as removed. Every invariant's checker
+is also shown catching a deliberately wrong answer on a small description. Reading 8's
+shapes, which no drawn description holds, are walked by hand.
 
 The gate runs a fixed set of seeds; ``python -m core.space.reference_harness walks`` (from
 ``tests``) runs more and prints what they met.
@@ -120,12 +119,12 @@ def test_a_seeded_walk_keeps_the_four_invariants_and_the_engines_own_checks(
 
 
 def test_the_full_run_meets_its_causes_and_counts_each_under_its_milestone() -> None:
-    # T4c's facts known are reached (an optional fact left out is None in the engine too),
-    # and its pruning is compared unpruned while it is pending: nothing is counted under it
+    # T4c is reached (an optional fact left out or unset is None in the engine too, and the
+    # lists are pruned): only T4b's view read in is counted, anything else fails
     tallies = [gate_walk(seed, False) for seed in SEEDS]
     counted = sum((tally.by_milestone for tally in tallies), start=type(tallies[0].checks)())
-    assert counted["T4b"] and not counted["T4c"], counted
-    assert set(counted) <= {"T4b", "T4c"}
+    assert counted["T4b"], counted
+    assert set(counted) == {"T4b"}
 
 
 def test_the_gates_walks_exercise_every_invariant() -> None:
@@ -142,7 +141,8 @@ def test_the_gates_walks_exercise_every_invariant() -> None:
         "facts batch",
     ):
         assert checks[name], (name, checks)
-    assert sum(tally.model_only for tally in tallies)  # a fact unset, on the model alone
+    # a fact unset reaches the engine too (given None): nothing is the model's alone
+    assert not sum(tally.model_only for tally in tallies)
     # a design space a facts step left reading refused binds again, on both sides
     assert sum(tally.binds_broken for tally in tallies)
 
@@ -180,7 +180,7 @@ def test_descriptions_hold_two_to_six_choices_and_skip_views_read_in() -> None:
 
 # -- the engine comparison: attributed by cause in the full run, failing in the strict one -------
 #
-# The public API differs from the model where the rulings reach (T4b, T4c). Elsewhere it
+# The public API differs from the model where the ruling reaches (T4b). Elsewhere it
 # agrees, so a disagreement with no cause is made here: the engine answers every choice's
 # state as absent (the model's start holds an open choice).
 
@@ -206,7 +206,7 @@ def first_line(tally: walks.Tally) -> str:
 
 @pytest.mark.usefixtures("engine_disagrees")
 def test_a_disagreement_with_no_cause_fails_the_full_run_and_any_fails_the_strict_run() -> None:
-    # seed 1 declares no optional fact: nothing reaches one left out
+    # only a view read in has a cause (T4b)
     assert first_line(walk(1, 6)) == "seed 1, step 0: the engine disagrees (state; no cause)"
     strict = walk(1, 6, strict=True)
     assert first_line(strict) == "seed 1, step 0: the engine disagrees (state; strict run)"
@@ -238,13 +238,11 @@ def test_an_engine_refusing_a_view_read_in_as_the_model_does_is_not_counted(
 
 def test_a_question_reaching_an_optional_fact_left_out_agrees() -> None:
     # seed 7 leaves its optional f1 out: the engine reads it None, as the model does, so f1's
-    # own answer and a rule reading it agree: nothing counted, and nothing fails with T4c
-    # taken as removed
+    # own answer and a rule reading it agree: nothing counted (T4c reached, a disagreement
+    # there would fail the walk)
     tally = walk(7, 3)
     assert tally.failure is None, tally.failure
     assert not tally.by_milestone and not tally.by_question
-    removed = walk(7, 3, without=("T4c",))
-    assert removed.failure is None, removed.failure
 
 
 # Reading 8's two shapes, which no drawn description holds (nothing is drawn below the
@@ -437,13 +435,12 @@ def test_the_summary_names_the_runs_the_milestones_and_the_checks() -> None:
     assert "walks 2 (full 1, strict 1)" in text
     assert "implementation: public" in text.splitlines()
     assert (
-        "engine disagreements (full: attributed by cause, counted while pending (T4b, T4c), "
-        "else failing; strict: every one failing): by milestone T4b 0, T4c 0; by "
-        "question -"
+        "engine disagreements (full: attributed by cause, counted while pending (T4b), "
+        "else failing; strict: every one failing): by milestone T4b 0; by question -"
     ) in text
     assert text.splitlines()[2].startswith("| 7 | full | 3 |")
     assert text.splitlines()[3].startswith("| 7 | strict | 3 |")
-    removed = ("T4b", "T4c")
+    removed = ("T4b",)
     assert "every one failing (no milestone with rows pending)" in table(tallies, removed)
 
 
@@ -618,16 +615,14 @@ def test_the_listed_choices_grow_over_an_addition_only_by_what_it_sets() -> None
     }
 
 
-def test_a_strict_walk_that_prunes_compares_its_lists_unpruned_while_t4c_is_pending() -> None:
+def test_a_strict_walk_that_prunes_compares_its_lists_pruned() -> None:
     # pruning is no drawn cause (a guard over facts prunes in the strict run too): seed 16's
-    # description prunes a choice from its start, compared unpruned while T4c is pending, and
-    # pruned, so disagreeing, once T4c is taken as removed
+    # description prunes a choice from its start, and the engine's lists agree, pruned (T4c)
     tally = gate_walk(16, True)
-    assert tally.failure is None
-    assert tally.unpruned > 0
-    assert first_line(walk(16, STEPS, strict=True, without=("T4c",))) == (
-        "seed 16, step 0: the engine disagrees (listed; strict run)"
-    )
+    assert tally.failure is None, tally.failure
+    generated, _ = generate(random.Random(16), strict=True)
+    configuration = Configuration(generated.description, generated.facts)
+    assert configuration.solve().pruned()
 
 
 def a_view_of_a_space_refused_by_an_addition() -> Space:

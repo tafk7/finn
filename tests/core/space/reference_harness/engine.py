@@ -740,10 +740,10 @@ class Engine:
     ) -> Point:
         """The configuration with ``facts`` and nothing committed, as ``implementation``
         answers it (the harness's default by default, ``implementation.default``): an
-        optional fact the model reads ``None`` left unsupplied. The design space is built by
-        the public API, the common input every implementation opens."""
-        supplied = {name: value for name, value in facts.items() if not self._left_out(name, value)}
-        configuration = design_space(self.root(**cast(dict[str, Any], supplied)))
+        optional fact the model reads ``None`` given ``None``, the fact left out (SZ100 (5)).
+        The design space is built by the public API, the common input every implementation
+        opens."""
+        configuration = design_space(self.root(**cast(dict[str, Any], dict(facts))))
         implementation = chosen(implementation)
         return Point(
             self, implementation.open(configuration), implementation.name, _reached(implementation)
@@ -772,13 +772,9 @@ class Engine:
         ``implementation`` (``Implementation.make``; the harness's default by default): no
         rule checked, nothing dropped. A walked configuration answers as the one made from its
         facts and stored choices."""
-        supplied = {name: value for name, value in facts.items() if not self._left_out(name, value)}
         implementation = chosen(implementation)
-        made = implementation.make(self.root, supplied, dict(stored))
+        made = implementation.make(self.root, dict(facts), dict(stored))
         return Point(self, made, implementation.name, _reached(implementation))
-
-    def _left_out(self, name: str, value: object) -> bool:
-        return value is None and name in self.index.optional
 
     def path(self, owner: str) -> str:
         """The model path an engine finding's owner names."""
@@ -977,13 +973,11 @@ class Point:
         return PossibleForm(tuple(outcomes))
 
     def change(self, edit: model.Change) -> tuple[ChangeForm, Point | None]:
-        """``edit`` applied: its comparable result, and the configuration it publishes."""
-        if edit.unset or any(
-            self.engine._left_out(name, value) for name, value in edit.facts.items()
-        ):
-            raise NotTranslatable("the engine cannot set an optional fact back to unsupplied")
+        """``edit`` applied: its comparable result, and the configuration it publishes. An
+        optional fact unset is given ``None``, the fact left out (SZ100 (5))."""
+        facts = {**edit.facts, **dict.fromkeys(edit.unset)}
         before = self.stored()
-        changed = self.answers.change(dict(edit.commit), tuple(edit.clear), dict(edit.facts))
+        changed = self.answers.change(dict(edit.commit), tuple(edit.clear), facts)
         return self._form(changed, before)
 
     def bind(self, stored: Mapping[str, object]) -> tuple[ChangeForm, Point]:

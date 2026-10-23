@@ -133,7 +133,7 @@ def refusal(point: Space, choices: Mapping[str, object]) -> frozenset[str]:
     the commit would break, at its origin; where the commit is accepted, those that
     refuse the configuration it makes (``rejected``: refused by its facts alone); empty
     when neither is refused."""
-    handles = {item.key: item.reference for item in inspection.decisions(point)}
+    handles = {item.key: item.reference for item in inspection.decisions(inspection.model(point))}
     unknown = sorted(set(choices) - set(handles))
     if unknown:
         raise KeyError(f"{type(point).__name__} has no Decisions {unknown}")

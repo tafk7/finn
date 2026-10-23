@@ -149,14 +149,15 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``commit`` of the chain's stored values on a design space made from scratch, before
-    any trial or ``viable``. Listing its choices (``inspection.decisions``, in the flow
-    order) makes every scope's record and evaluates no member; the change evaluates what it
-    and its checks read, each member as its scope reads it. An absent scope's validity is
-    read from its guard and its choices' presence from their guards, so no scope absent at
-    the baseline has a member evaluated for either, and none of unknown presence in the
-    design space before the change either: the scopes with a member evaluated (in play)
-    are exactly the 38 present at the baseline (the line's present scopes). Each MatMul's
-    ``compute.int8_dsp58`` case, of unknown presence before the change, has none evaluated.
+    any trial or ``viable``. Listing its model's choices (``inspection.decisions`` of the
+    model, in the flow order, by which ``commit`` names them) makes every scope's record and
+    evaluates no member; the change evaluates what it and its checks read, each member as
+    its scope reads it. An absent scope's validity is read from its guard and its choices'
+    presence from their guards, so no scope absent at the baseline has a member evaluated
+    for either, and none of unknown presence in the design space before the change
+    either: the scopes with a member evaluated (in play) are exactly the 38 present at the
+    baseline (the line's present scopes). Each MatMul's ``compute.int8_dsp58`` case, of
+    unknown presence before the change, has none evaluated.
     Then ``viable`` of the middle MatMul's choices and one change of its ``pe``: what trials
     evaluate more (the middle MatMul's ``int8_dsp58`` case, which a trial selects, and the
     output adapters of the channels beside it, ``a1`` and ``h2``, which read its ports'
@@ -203,7 +204,9 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
         assert guard is not None and isinstance(answer(point, guard), Unresolved)
     handles = {item.key: item.reference for item in inspection.decisions(committed)}
     middle = [key for key in handles if key.startswith("mm2.")]
-    assert len(middle) == 7
+    # the middle MatMul's choices listed: its ``realization`` (``when=depthwise``) is not,
+    # its facts alone rule it out (SZ113)
+    assert len(middle) == 6 and "mm2.realization" not in middle
     inspection.viable(committed, [handles[key] for key in middle])
     counted = scopes.counts()
     assert (counted["scopes made"], counted["scopes in play"]) == (225, 43)

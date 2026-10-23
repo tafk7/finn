@@ -952,8 +952,8 @@ def test_a_refused_when_in_an_unselected_case_does_not_apply() -> None:
 # over ``mode`` refusing at 2; ``opted`` when the choice ``pe`` is 2. Under the facts alone
 # (every choice unknown) ``wide`` is false at any other mode, so ``wide.lanes`` is
 # pruned: in no list, unless it is stored (SZ119 (5)). A refused guard and a guard over a choice
-# are not false, so ``gated.x`` and ``opted.y`` stay listed. Until the engine reaches T4c its
-# lists are compared unpruned (``Pair.check_listed``); the row's witness asks them pruned.
+# are not false, so ``gated.x`` and ``opted.y`` stay listed. The engine prunes as the model does
+# (T4c, its row ``facts-pruning`` removed).
 
 
 def checked(read: Mapping[str, Any]) -> object:
@@ -990,11 +990,10 @@ PRUNED = Case(
 )
 
 
-@expected("facts-pruning")
 def test_a_choice_the_facts_rule_out_is_in_no_list() -> None:
     pair = PRUNED.start({"mode": 0})
     assert pair.solution().pruned() == ("wide.lanes",)
-    pair.check_listed(pruning=True)
+    pair.check_listed()
 
 
 def test_a_change_of_facts_prunes_a_choice() -> None:
@@ -1108,3 +1107,55 @@ def test_a_selector_picked_by_facts_that_refuse_prunes_no_case() -> None:
 
 def test_an_optional_fact_given_none_is_the_one_left_out() -> None:
     OPTIONAL.check_one_space({"width": None}, {})
+
+
+# A guard over a derived value over facts alone is evaluated, never read as a presence (lane
+# 4's ``offered``, computed from the channel's sides; E2's ``valued``, over ``contents``):
+# ``offered`` reads the optional fact ``offer``, ``mover`` is present where it holds. Left out
+# (None), the guard reads false and ``mover.burst`` is pruned, still answered by name; given,
+# it is listed. Set by name where pruned, it is stored, dormant and listed (SZ119 (5)).
+
+OFFERED = Case(
+    "a derived guard over an optional fact",
+    Space(
+        ("offer",),
+        Scope(
+            "",
+            derived=(Derived("offered", ("offer",), lambda read: read["offer"] is not None),),
+            children=(
+                Scope(
+                    "mover",
+                    when=When(("offered",), lambda read: read["offered"]),
+                    choices=(Choice("burst", listed(1, 2)),),
+                ),
+            ),
+        ),
+        optional=("offer",),
+    ),
+    Spelling(types={"offered": bool}),
+)
+
+
+def test_a_derived_guard_over_facts_alone_prunes_where_it_reads_false() -> None:
+    pair = OFFERED.start()
+    assert pair.solution().pruned() == ("mover.burst",)
+    pair.check_listed()
+    pair.check_state("mover.burst")
+    pair.check_possible("mover.burst")
+    stored = pair.reach(Change(commit={"mover.burst": 2}))
+    assert stored.solution().pruned() == ()
+    assert "mover.burst" in stored.solution().dormant()
+    stored.check_listed()
+    stored.check_state("mover.burst")
+    offered = OFFERED.start({"offer": 3})
+    assert offered.solution().pruned() == ()
+    offered.check_listed()
+    offered.check_state("mover.burst")
+
+
+def test_unsetting_an_optional_fact_prunes_what_its_derived_guard_held() -> None:
+    pair = OFFERED.start({"offer": 3})
+    unset = pair.reach(Change(unset=("offer",)))
+    assert unset.solution().pruned() == ("mover.burst",)
+    unset.check_listed()
+    unset.check_state("mover.burst")

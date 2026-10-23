@@ -104,7 +104,7 @@ from core.space.reference_harness import MILESTONES, ROWS, Case, Spelling, expec
 from core.space.reference_harness import implementation as harness_implementation
 from core.space.reference_harness import walks as reference_walks
 from core.space.reference_harness.engine import definition
-from core.space.reference_harness.forms import ValidityForm
+from core.space.reference_harness.forms import StateForm, ValidityForm
 from core.space.reference_harness.implementation import Option
 from finn.core.space import (
     Available,
@@ -390,7 +390,6 @@ def test_a_witness_is_expected_to_fail_for_a_default_short_of_its_milestone() ->
     with _default(_Reaching()):
         assert marks(expected("view-read-in")(witness)) == ["xfail"]
         assert marks(expected("view-read-in")(other)) == []
-        assert marks(expected("facts-pruning")(other)) == ["xfail"]
 
 
 # -- a ``when`` read past its guard, through a formal of its scope ----------------------------
@@ -437,8 +436,11 @@ WHEN_THROUGH_FORMAL = Case(
 
 def test_a_when_read_past_its_guard_reads_its_scopes_formal_at_its_source() -> None:
     pair = WHEN_THROUGH_FORMAL.start({"f0": 1}, implementation=RUNNING)
-    assert dict(pair.engine.answers.states())["s.a.g.c1"] == inspection.Absent()
+    # absent under the facts alone, so pruned (SZ113): in no list, absent asked by name
+    assert "s.a.g.c1" not in dict(pair.engine.answers.states())
+    assert pair.engine.state("s.a.g.c1") == StateForm("absent")
     pair.check_state("s.a.g.c1")
+    pair.check_listed()
     pair.check_validity()
     pair.check_possible("s")
     configuration = design_space(WHEN_THROUGH_FORMAL.engine.root(f0=1))  # type: ignore[call-arg]
