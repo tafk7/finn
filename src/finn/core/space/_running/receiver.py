@@ -5,18 +5,16 @@
 A method's ``self`` (``receiver``) is a Space of its scope's class whose reads go to its
 ``MethodReader``: the read boundary (only from the method's own call, never in a value
 transformation), the read check (a read its source does not name is the method's
-failure), resolution of what it reads, ``present()`` (whether a node is present, or a value
-input supplied: a source applies, its value never read), and the receivers below it
-(``child``, ``candidate``, ``selected_candidate``, ``root``).
+failure), resolution of what it reads, ``present()`` (whether a node is present), and the
+receivers below it (``child``, ``candidate``, ``selected_candidate``, ``root``).
 
 The reader reads the compiled model alone: its scope records, their choices and the
 addresses' member records (``model.scopes``), its resolution (``model.resolve``), and what
 each method may read, the
 model's per-class record's inferred reads (``per_class.PerClass.reads``). How a read is
 answered is the evaluator's: a reader of an evaluation says how a member's value and
-answer are read (``_read_value``, ``_value``, ``_answer``) and whether a source applies
-(``_source_applies``). What a method read only to know whether something exists
-(``existence``: a selector, for its candidate; a guard or a source's presence, for
+answer are read (``_read_value``, ``_value``, ``_answer``). What a method read only to know
+whether something exists (``existence``: a selector, for its candidate; a guard, for
 ``present``) is told apart from what it read as a value (``valued``).
 """
 
@@ -36,12 +34,23 @@ from .._nodes import NodeDecl, unwrap
 from ..declarations import Param, declared_path
 from ..errors import EvaluationError, RequestError
 from ..references import descend
-from ..results import Available, Inapplicable, QueryResult, Unresolved
+from ..results import Available, Inapplicable, QueryResult
 from .depth import Deeper
 
 if TYPE_CHECKING:
     from .._scopes import Address, ChoiceRecord, ScopeRecord
     from ..compiler import Model
+
+
+def not_a_node(reference: object) -> RequestError:
+    """``present()`` of what is no node: a value input is a known value (an optional one
+    ``None`` where it is left out), read and tested with ``is not None``."""
+    if isinstance(reference, Param):
+        return RequestError(
+            "present() takes a node (a child or a selector's case): a value input is known, "
+            "never absent; read it and test it with `is not None`"
+        )
+    return RequestError("present() takes a node (a child or a selector's case)")
 
 
 def scope_choice(scope: ScopeRecord, decision: object) -> ChoiceRecord:
@@ -117,10 +126,6 @@ class MethodReader:
         cleanup, after a failure, it is a cleanup read)."""
         raise NotImplementedError
 
-    def _source_applies(self, index: Address) -> bool | Address:
-        """Whether a source applies at ``index``, or the presence node still undecided."""
-        raise NotImplementedError
-
     # -- what a receiver reads ---------------------------------------------------------
 
     def read_value(self, point: Space, reference: object) -> object:
@@ -133,24 +138,18 @@ class MethodReader:
             raise
 
     def present(self, point: Space, node: object) -> bool:
-        """Whether a node is present, or a value input supplied (``occurrence.present``)."""
+        """Whether a node is present (``occurrence.present``)."""
         self._enter()
         target = self._node_scope(point, node)
         if target is None:
-            if isinstance(node, Param):
-                return self._supplied(point, node)
-            raise RequestError(
-                "present() takes a node (a child or a selector's case) or a value input"
-            )
+            raise not_a_node(node)
         presence = target.guard
         if presence is None:
             return True
         answer = self._answer(presence)
         if isinstance(answer, Available):
             return answer.value is True
-        if isinstance(answer, Inapplicable) or (
-            isinstance(answer, Unresolved) and _unsupplied(answer)
-        ):
+        if isinstance(answer, Inapplicable):
             return False
         return bool(self._value(presence))  # undecided: halts like any value read
 
@@ -171,22 +170,6 @@ class MethodReader:
         if target is None:
             raise RequestError("node is not part of this compiled scope")
         return target
-
-    def _supplied(self, point: Space, formal: object) -> bool:
-        """Whether a value input is supplied: a source applies (never its value)."""
-        index = self.model.resolve(point._scope, formal)
-        applies = self._source_applies(index)
-        if isinstance(applies, bool):
-            return applies
-        self._value(applies)  # undecided: halts like any value read
-        raise AssertionError("an undecided presence read halts")
-
-    def _holds(self, guard: Address) -> bool | Address:
-        """Whether a guard holds (inapplicable: it does not), or the guard while undecided."""
-        answer = self._answer(guard)
-        if isinstance(answer, Available):
-            return answer.value is True
-        return False if isinstance(answer, Inapplicable) else guard
 
     def child(self, point: Space, record: object) -> Space:
         """A child node's receiver."""
@@ -228,11 +211,6 @@ class MethodReader:
         return point if point._scope.parent is None else receiver(self, self.model.scopes.root)
 
 
-def _unsupplied(answer: Unresolved) -> bool:
-    findings = answer.findings
-    return bool(findings) and all(finding.code == "input-unsupplied" for finding in findings)
-
-
 def receiver(reader: MethodReader, scope: ScopeRecord) -> Space:
     """A Space of ``scope``'s class reading through ``reader``: a method's ``self``."""
     space_type = scope.space_type
@@ -242,4 +220,4 @@ def receiver(reader: MethodReader, scope: ScopeRecord) -> Space:
     return made
 
 
-__all__ = ["MethodReader", "receiver", "scope_choice"]
+__all__ = ["MethodReader", "not_a_node", "receiver", "scope_choice"]

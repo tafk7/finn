@@ -112,7 +112,6 @@ class CompiledChoice:
     cases: tuple[tuple[str, int | None], ...]
     members: Mapping[str, int]
     space_types: tuple[type[Space], ...]
-    never_formal: str | None
     never_value: str
     selects: Mapping[int, str]
     shared: frozenset[int]
@@ -547,7 +546,6 @@ class _Freezing:
             tuple(
                 record.space_type for record in decision.candidates.values() if record is not None
             ),
-            draft.never_formal,
             next(iter(decision.candidates)),
             _frozen(draft.selects),
             frozenset(draft.shared),

@@ -88,7 +88,7 @@ from finn.core.space._scopes import Address
 from finn.core.space._value_types import is_value_type, registered
 from finn.core.space.compiler import compile_model
 from finn.core.space.occurrence import held
-from finn.core.space.semantics import default_semantics
+from finn.core.space.semantics import OptionalSemantics, default_semantics
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import Form, Window
 from finn.dataflow.steps import Hop, Step, Steps
@@ -184,15 +184,25 @@ def kernel_space_classes() -> list[type[Space]]:
 
 
 @cache
+def named(semantics: ValueSemantics[Any]) -> str:
+    """The name a value's semantics are listed by: an optional value's (``T | None``) are
+    its ``T``'s, which the cache trusts them as (``None`` keyed as the plain ``None``)."""
+    if isinstance(semantics, OptionalSemantics):
+        return semantics.inner.name
+    return semantics.name
+
+
 def declared() -> dict[str, dict[str, Address]]:
     """Each choice's and fact's value semantics in FINN's kernels, by name: the members
-    holding it (``Class.key``), each with its node."""
+    holding it (``Class.key``), each with its node. An optional fact's (``T | None``) are
+    ``T``'s, made optional: named by ``T``'s, which the cache trusts them as (``None`` keyed
+    as the plain ``None``)."""
     found: dict[str, dict[str, Address]] = {}
     for kind in kernel_space_classes():
         for node in compile_model(kind).scopes.all_addresses():
             if node.kind in ("param", "decision"):
                 assert node.semantics is not None, (kind, node.key)
-                members = found.setdefault(node.semantics.name, {})
+                members = found.setdefault(named(node.semantics), {})
                 members[f"{kind.__qualname__}.{node.key}"] = node
     return found
 
@@ -258,9 +268,10 @@ def samples() -> dict[str, list[object]]:
         current = held(network.member(name)).ds
         for values in (current.facts, current.stored):
             for index, value in values.items():
-                semantics = index.semantics
-                assert semantics is not None
-                found.setdefault(semantics.name, []).append(value)
+                assert index.semantics is not None
+                if value is None:
+                    continue  # an optional fact left out: keyed as the plain None
+                found.setdefault(named(index.semantics), []).append(value)
     streams = cast(list[Stream], found.get("Stream", []))
     streams.append(dataclasses.replace(streams[0]))  # an equal one, another object
     found["StreamContract"] = [
@@ -709,6 +720,17 @@ def test_the_semantics_comparing_by_eq_are_those_listed_before() -> None:
     assert by_eq == set(BEFORE)
 
 
+def before_of(semantics: ValueSemantics[Any]) -> Callable[[Any, Any], bool]:
+    """``semantics``' ``equal`` as it was before (``BEFORE``, else its own); an optional
+    value's (``T | None``): ``None`` equal to ``None`` alone, else ``T``'s before."""
+    if isinstance(semantics, OptionalSemantics):
+        inner = before_of(semantics.inner)
+        return lambda left, right: (
+            left is right if left is None or right is None else inner(left, right)
+        )
+    return BEFORE.get(semantics.name, semantics.equal)
+
+
 def test_values_equal_answers_as_before_on_finns_samples() -> None:
     """Every value semantics in FINN's kernels and the engine (``finn_semantics``), over
     every ordered pair of the values it recognizes among the samples (``samples``, the
@@ -719,12 +741,12 @@ def test_values_equal_answers_as_before_on_finns_samples() -> None:
     pool += [*tensor_samples(), *RAW]
     pairs: dict[str, int] = {}
     for semantics in finn_semantics():
-        before = BEFORE.get(semantics.name, semantics.equal)
+        before = before_of(semantics)
         known = [value for value in pool if semantics.accepts(value)]
         for left, right in itertools.product(known, repeat=2):
             given = bool(before(left, right))
             assert semantics.values_equal(left, right) is given, (semantics.name, left, right)
-            pairs[semantics.name] = pairs.get(semantics.name, 0) + 1
+            pairs[named(semantics)] = pairs.get(named(semantics), 0) + 1
         for value in (value for value in pool if known and not semantics.accepts(value)):
             assert not semantics.values_equal(value, known[0]), (semantics.name, value)
             assert not semantics.values_equal(known[0], value), (semantics.name, value)

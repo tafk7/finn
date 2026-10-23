@@ -124,10 +124,8 @@ from .answers import (
     _guard_assessment,
     _guard_piece,
     _guard_result,
-    _input_missing,
     _inputs_absent,
     _listed_members,
-    _present,
     _same_value,
     _unassigned,
     membership_arguments,
@@ -1057,31 +1055,6 @@ class Reader(MethodReader):
             self.call.failure.add(CleanupFailure(node.owner, "cleanup read", result=answer))
         raise ValueUnavailableError(answer, context=node.owner)
 
-    def _source_applies(self, index: Address) -> bool | Address:
-        index = self._source(index)
-        node = index
-        if node.guard is not None:
-            holds = self._holds(node.guard)
-            if holds is not True:
-                return holds
-        if node.kind == "param":
-            return isinstance(self._answer(index), Available)
-        if node.kind in ("alias", "guard", "view"):
-            return self._source_applies(cast("Address", node.output))
-        if node.kind == "select":
-            selector = cast("Address", node.selector)
-            case = self._answer(selector)
-            if not isinstance(case, Available):
-                return False if isinstance(case, Inapplicable) else selector
-            target = cast("Mapping[str, Address]", node.selection_index).get(cast(str, case.value))
-            return False if target is None else self._source_applies(target)
-        if node.kind == "present":
-            answers = [self._source_applies(target) for _, target in node.alternatives]
-            if any(answer is True for answer in answers):
-                return True
-            return next((answer for answer in answers if answer is not False), False)
-        return True
-
 
 # -- frames: each kind of node (``reader``: whose scope its reads are made from) ----------
 
@@ -1089,9 +1062,8 @@ class Reader(MethodReader):
 def _param(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     if ev.session.cache is not None:
         ev.note({node})
-    if node in ev.ds.facts:
-        return Ans(Available(ev.ds.facts[node]), tuple(trace))
-    return Ans(_input_missing(node), tuple(trace))
+    # Every fact is known: given, or its default (``facts.open``).
+    return Ans(Available(ev.ds.facts[node]), tuple(trace))
 
 
 def _const(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
@@ -1297,11 +1269,7 @@ def _choice_piece(
     return piece.key, cast(QueryResult[bool], listed)
 
 
-def _graph(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
-    if node.kind == "present":
-        answers = [ev.read(trace, target, reader).result for _, target in node.alternatives]
-        several = sum(1 for answer in answers if isinstance(answer, Available)) > 1
-        return Ans(_present(node, answers), tuple(trace), own_refusal=several)
+def _members(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     located: list[Located[object]] = []
     failures: list[QueryResult[object]] = []
     for (name, target), member in zip(node.alternatives, cast(tuple[str, ...], node.value)):
@@ -1342,8 +1310,7 @@ _FRAMES: Mapping[str, Callable[[Evaluation, Address, _Tr, Address], Ans]] = {
     "select": _select,
     "view": _view,
     "validity": _validity,
-    "present": _graph,
-    "members": _graph,
+    "members": _members,
     "derived": _callback,
     "constraint": _callback,
 }

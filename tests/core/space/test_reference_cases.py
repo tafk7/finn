@@ -801,7 +801,7 @@ def test_a_rule_reading_a_view_is_no_definition() -> None:
 # -- 8. an optional fact left out is None (SZ100 (5)) ---------------------------------------------
 #
 # ``width`` is optional: left out, it reads None, a known value, and ``lanes`` lists 1 and 2
-# then. The public API reads an unsupplied optional param as unresolved, until T4c.
+# then; given None, it is the fact left out (one design space).
 
 OPTIONAL = Case(
     "an optional fact left out",
@@ -822,7 +822,6 @@ OPTIONAL = Case(
 )
 
 
-@expected("optional-fact-none")
 def test_an_optional_fact_left_out_reads_none() -> None:
     OPTIONAL.start().check_answer("lanes")
 
@@ -1107,6 +1106,5 @@ def test_a_selector_picked_by_facts_that_refuse_prunes_no_case() -> None:
     pair.check_state("adapter.reg.stages")
 
 
-@expected("optional-fact-one-space")
 def test_an_optional_fact_given_none_is_the_one_left_out() -> None:
     OPTIONAL.check_one_space({"width": None}, {})

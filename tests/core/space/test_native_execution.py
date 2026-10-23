@@ -265,7 +265,7 @@ def test_blocked_self_constraint_keeps_its_inspectable_assessment() -> None:
 def test_membership_only_domain_enumeration_keeps_applicability_and_blockers() -> None:
     class Example(Space):
         enabled: bool = Param()
-        prerequisite: int = Param(required=False)
+        prerequisite: int | None = Param(default=None)
         choice: int = Decision(
             domain=domain(accepts=lambda candidate, value: candidate == value, value=prerequisite),
             when=enabled,
@@ -275,7 +275,7 @@ def test_membership_only_domain_enumeration_keeps_applicability_and_blockers() -
         design_space(Example(enabled=False)).field(Example.choice).candidates(), Inapplicable
     )
     point = design_space(Example(enabled=True))
-    assert isinstance(point.field(Example.choice).candidates(), Unresolved)  # a missing fact
+    assert point.field(Example.choice).candidates() is None  # known by membership only
     assert point.with_facts({Example.prerequisite: 1}).field(Example.choice).candidates() is None
 
 

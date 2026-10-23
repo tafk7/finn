@@ -17,12 +17,10 @@ as it is first read (``Table.lift``).
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
 from dataclasses import replace
 from typing import Any, cast
 
 from ._bindings import PlacementBinding
-from ._configuration import Space
 from ._names import Names
 from ._nodes import selector_value
 from ._signatures import BoundFunction
@@ -38,7 +36,6 @@ from .declarations import (
     MemberRef,
     Members,
     Param,
-    Supplied,
     ValueRef,
     View,
     ViewKey,
@@ -55,13 +52,6 @@ _OWNER = "space.lower"
 def lower(table: Table) -> None:
     """Lower every member, then link every guard's condition and every expression."""
     _Lowering(table).run()
-
-
-def _supply(formal: Param[object]) -> Callable[..., object]:
-    def supplied(point: Space) -> bool:
-        return point.present(formal)
-
-    return supplied
 
 
 def _constant(semantics: ValueSemantics[object], constant: Const[object], *, owner: str) -> object:
@@ -318,7 +308,9 @@ class _Lowering:
         """What a declared member's node holds, by the kind of its declaration."""
         scope = self.table.drafts[task.scope]
         if isinstance(declaration, Param):
-            return {"required": declaration.required}
+            # Its default, where it has one: the value it takes where nobody supplies it.
+            default = None if declaration.required else declaration.default
+            return {"required": declaration.required, "value": default}
         if isinstance(declaration, Const):
             assert node.semantics is not None
             return {"value": _constant(node.semantics, declaration, owner=node.key)}
@@ -334,8 +326,6 @@ class _Lowering:
             return {}
         if isinstance(declaration, (Derived, Constraint)):
             return self.callback(node, scope.effective.functions[task.name])
-        if isinstance(declaration, Supplied):
-            return {"function": _supply(declaration.formal), "call_style": "self"}
         if isinstance(declaration, View):
             return {
                 "output": self.view_output(node, guard, declaration, task.name),

@@ -35,15 +35,12 @@ from ._nodes import NodeDecl, SlotKind, slot_kind
 from ._signatures import BoundArgument
 from .collection import EffectiveSpace, collect_space
 from .declarations import Declaration, ValueRef
-from .errors import DefinitionError
 from .expressions import IntOperator
 from .ir import Node, NodeKind, NodeRef, Placed, Placing, Selected
 from .semantics import BOOL, ValueSemantics
 
 if TYPE_CHECKING:
-    from ._template import Compiled, CompiledChoice
-
-_OWNER = "space.table"
+    from ._template import Compiled
 
 
 def member_key(scope: str, member: str) -> str:
@@ -51,21 +48,17 @@ def member_key(scope: str, member: str) -> str:
     return f"{scope}.{member}" if scope else member
 
 
-BindingForm = Literal["literal", "reference", "unsupplied"]
+BindingForm = Literal["literal", "reference"]
 
 
 @dataclass(frozen=True, slots=True)
 class Binding:
     """How a placing body binds one formal of a child: a literal or a default (``value``,
-    no record), a reference (``node``: the record the placing class writes for it), or
-    nothing."""
+    no record), or a reference (``node``: the record the placing class writes for it)."""
 
     kind: BindingForm
     value: object = None
     node: int | None = None
-
-
-UNSUPPLIED_BINDING = Binding("unsupplied")
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,11 +126,8 @@ class ChoiceDraft:
     selector: int
     cases: list[tuple[str, int | None]] = field(default_factory=list)
     members: dict[str, int] = field(default_factory=dict)
-    # The formal whose absence makes the choice never apply (its guard is
-    # ``supplied(formal)``); every selection made for it (node -> member), those its
-    # candidates share, each read of a member through it; shared selections dropped for
-    # disagreeing types.
-    never_formal: str | None = None
+    # Every selection made for it (node -> member), those its candidates share, each read
+    # of a member through it; shared selections dropped for disagreeing types.
     selects: dict[int, str] = field(default_factory=dict)
     shared: set[int] = field(default_factory=set)
     readers: dict[str, list[Read]] = field(default_factory=dict)
@@ -356,27 +346,8 @@ class Table:
             above, cast("int | Placing", compiled.ref(compiled.slots[place.steps[-1]].guard))
         )
 
-    def never_at(self, place: Place, choice: CompiledChoice) -> bool:
-        """Whether a Decision over nodes of the class placed at ``place`` never applies there:
-        its guard is the supply of a formal the placing body leaves unsupplied."""
-        if choice.never_formal is None:
-            return False
-        return self.bindings(place)[choice.never_formal].kind == "unsupplied"
-
-    def below(self, place: Place, slot: int, *, owner: str) -> Place:
-        """The scope of slot ``slot`` of the class placed at ``place``; a candidate of a
-        Decision over nodes that never applies there is not placed (``reference-not-placed``)."""
-        compiled = self.compiled_at(place)
-        placing = compiled.slots[slot]
-        if placing.candidate is not None and self.never_at(
-            place, compiled.choices[placing.candidate[0]]
-        ):
-            raise DefinitionError.broken(
-                "reference-not-placed",
-                _OWNER,
-                f"{owner}: {placing.record!r} is not placed in {self.name(place) or '<root>'}",
-                declaration=owner,
-            )
+    def below(self, place: Place, slot: int) -> Place:
+        """The scope of slot ``slot`` of the class placed at ``place``."""
         return Place(place.draft, (*place.steps, slot))
 
     def member_at(self, place: Place, member: object) -> NodeRef:

@@ -224,30 +224,6 @@ def test_a_facts_change_checks_a_dormant_value_again_as_if_it_existed_and_drops_
     ]
 
 
-class Waits(Space):
-    extent: int = Param(required=False)
-    lanes: int = Decision(domain=divisors_of(extent))
-
-
-def test_a_missing_fact_leaves_the_choice_waiting_until_the_facts_change_checks_it() -> None:
-    base = start(Waits())
-    report = change(base, {"lanes": 5})
-    assert report.accepted
-    assert codes(report.outcomes[0].result) == [("input-missing", "extent")]
-    point = published(report)
-    assert codes(read(point, "lanes")) == [("input-missing", "extent")]
-    # The fact arrives and 5 does not divide 12: the waiting value is dropped.
-    dropped = change(point, facts={"extent": 12})
-    assert dropped.accepted
-    assert [(o.owner, o.status, o.requested) for o in dropped.outcomes] == [
-        ("extent", "changed", True),
-        ("lanes", "dropped", False),
-    ]
-    assert codes(read(published(dropped), "lanes")) == [("decision-unassigned", "lanes")]
-    supplied = change(point, facts={"extent": 10})
-    assert supplied.accepted and read(published(supplied), "lanes") == Available(5)
-
-
 class Lanes(Space):
     w: int = Param()
 
@@ -322,7 +298,3 @@ def test_a_domain_input_that_does_not_apply_refuses_the_assignment_and_the_open_
     assert codes(validity(narrow).result) == [("domain-input-absent", "lanes")]
     # The facts that make the input apply make the domain.
     assert change(start(Banks(wide=True)), {"lanes": 2}).accepted
-
-
-def test_an_omitted_optional_fact_leaves_the_domain_unresolved() -> None:
-    assert codes(validity(start(Waits())).result) == [("input-missing", "extent")]

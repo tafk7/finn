@@ -111,16 +111,11 @@ class ChoiceInfo:
 
 @dataclass(frozen=True, slots=True)
 class EvidenceNode:
-    """Detached result and actual outgoing demands for one visited computation.
-
-    Input presence is recorded only when parameter evaluation reached its body.
-    An inactive parameter therefore exposes no unused external value.
-    """
+    """Detached result and actual outgoing demands for one visited computation."""
 
     declaration: NodeInfo
     result: QueryResult[object]
     dependencies: tuple[ValueHandle[object], ...]
-    input_presence: Literal["supplied", "omitted"] | None = None
     decision_state: QueryResult[DecisionState[object]] | None = None
     selector: bool = False
     is_guard: bool = False

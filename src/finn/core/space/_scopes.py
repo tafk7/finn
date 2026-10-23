@@ -37,11 +37,11 @@ its edges through the scope when it is read (``ScopeRecord.target``): ``Local`` 
 scope, ``Placed`` in the scope its slots reach, ``Formal`` the scope's own formal,
 ``Placing`` the guard the scope is placed under (its parent's slot guard), ``Selected``
 the selection's address. A formal of a placed scope reads as its placement binds it: a
-literal is a constant under the scope's guard, an unsupplied formal a ``present`` member,
-a reference the record the placing class writes for it, its edges mapped in the placing
-scope. A choice that never applies at a placement has its selections read through its
-selector alone, and its selector a constant. No node is built per placement: an address
-reads its class's member record (the few a placement's shape changes, a formal's literal,
+literal (or the formal's default) is a constant under the scope's guard, a reference the
+record the placing class writes for it, its edges mapped in the placing scope. A choice
+that never applies at a placement has its selections read through its selector alone, and
+its selector a constant. No node is built per placement: an address reads its class's
+member record (the few a placement's shape changes, a formal's literal,
 a choice that never applies, a validity's or a ``members`` list's dropped candidates, are
 made once per shape and model).
 
@@ -388,13 +388,7 @@ class ScopeRecord:
             self.position = (depth + 1, (*path, held.position))
             bindings = held.bindings
         self.bindings = bindings
-        self.never: frozenset[int] = frozenset(
-            choice.index
-            for choice in compiled.choices
-            if choice.never_formal is not None
-            and (binding := bindings.get(choice.never_formal)) is not None
-            and binding.kind == "unsupplied"
-        )
+        self.never: frozenset[int] = frozenset()
         # The selections the classes above may make in its class's choices, (choice, member)
         # in order: each a member of the scope numbered after its class's records, the same
         # whatever has been made or read (fixed by the compiled forms on its path).
@@ -707,20 +701,6 @@ class ScopeRecord:
                         member.semantics,
                         guard=PLACING,
                         value=binding.value,
-                        origin=member.origin,
-                    ),
-                )
-                return made, self, key, None
-            if binding.kind == "unsupplied":
-                made = registry.member(
-                    ("unsupplied", id(compiled), index),
-                    lambda: Member(
-                        index,
-                        member.key,
-                        "present",
-                        member.semantics,
-                        guard=member.guard,
-                        required=member.required,
                         origin=member.origin,
                     ),
                 )

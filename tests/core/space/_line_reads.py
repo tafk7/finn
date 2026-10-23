@@ -227,8 +227,6 @@ def line_sources(scopes: Scopes, index: Address, found: set[Address]) -> None:
         elif current.kind == "select" and current.selector is not None:
             found.add(current.selector)
             pending.extend(target for _, target in current.alternatives)
-        elif current.kind == "present":
-            pending.extend(target for _, target in current.alternatives)
     if scopes.selector_choice(index) is not None:
         found.add(index)
 

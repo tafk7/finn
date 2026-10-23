@@ -291,42 +291,6 @@ def test_a_guard_suppresses_functions_and_both_decision_questions_agree() -> Non
     assert isinstance(point.query(Guarded.active), Unresolved)
 
 
-CONSUMED: list[object] = []
-
-
-class Consumer(Space):
-    source: None = Param(required=False)
-
-    @derived
-    def consumer(self) -> bool:
-        source = self.source
-        CONSUMED.append(source)
-        return source is None
-
-    @derived
-    def refused(self) -> int | Rejected:
-        return reject("unsupported", "unsupported value")
-
-    @derived
-    def still_refused(self) -> bool:
-        CONSUMED.append(self.refused)
-        return True
-
-
-def test_a_missing_optional_input_blocks_functions_and_differs_from_a_supplied_none() -> None:
-    CONSUMED.clear()
-    absent = design_space(Consumer())
-    supplied = design_space(Consumer(source=None))
-    assert isinstance(absent.query(Consumer.consumer), Unresolved)
-    assert CONSUMED == []
-    assert supplied.query(Consumer.consumer) == Available(True)
-    assert CONSUMED == [None]
-    propagated = absent.query(Consumer.still_refused)
-    assert isinstance(propagated, Rejected)
-    assert propagated.findings[0].owner == "refused"
-    assert CONSUMED == [None]
-
-
 class Lengths(Space):
     source: list[int] = Param()
 
@@ -413,26 +377,3 @@ def test_a_functions_output_of_the_wrong_type_is_its_owners_error() -> None:
     assert raised.value.owner == "broken"
     assert raised.value.role == "derived"
     assert isinstance(raised.value.__cause__, TypeError)
-
-
-class Reader(Space):
-    value: int = Param()
-
-    @derived
-    def consumer(self) -> int:
-        self.value  # noqa: B018 - a missing input halts the read
-        raise AssertionError("a missing input must prevent the call")
-
-
-class Supplier(Space):
-    source: int = Param(required=False)
-    child = Reader(value=source)
-
-
-def test_a_formal_bound_to_an_omitted_input_names_the_input_as_missing() -> None:
-    point = design_space(Supplier())
-    answer = point.query(Supplier.child.consumer)
-    assert isinstance(answer, Unresolved)
-    assert all(finding.owner == "source" for finding in answer.findings)
-    evidence = inspection.explain(point, Supplier.child.consumer)
-    assert _reads(evidence, "child.consumer") == ["source"]

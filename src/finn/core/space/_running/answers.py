@@ -7,10 +7,9 @@ space shares, whatever it keeps.
   constraint's assessment, whether it refused on its own values, what a method read only
   to know whether something exists); ``_finish`` and ``_finished`` make one from what the
   function returned;
-- the non-values a node answers on its own: ``_unassigned``, ``_input_missing``,
-  ``_inputs_absent``, ``_guard_piece``, ``_empty_domain``; ``_blocked`` (the highest
-  non-value of required inputs), ``_guard_result`` and ``_guard_assessment`` (a node under
-  its guard's answer), ``_present`` (the one present source of a formal);
+- the non-values a node answers on its own: ``_unassigned``, ``_inputs_absent``,
+  ``_guard_piece``, ``_empty_domain``; ``_blocked`` (the highest non-value of required
+  inputs), ``_guard_result`` and ``_guard_assessment`` (a node under its guard's answer);
 - a domain's helpers: ``membership_arguments`` (the inputs its membership reads),
   ``_listed_members`` and ``_first_member`` (membership asked over listed values);
 - equality and detachment by a member's value semantics: ``_same_value``, ``_clone``,
@@ -152,19 +151,6 @@ def _unassigned(node: Address) -> Unresolved:
     )
 
 
-def _input_missing(node: Address) -> Unresolved:
-    return Unresolved(
-        (
-            Finding(
-                FindingKind.LIMITATION,
-                "input-missing",
-                node.owner,
-                "optional input was omitted at start",
-            ),
-        )
-    )
-
-
 def _inputs_absent(node: Address, absent: list[str]) -> Rejected:
     """A present choice's domain whose input does not apply: the input does not exist
     for these facts (inputs under the choice's own existence guards are present whenever
@@ -202,37 +188,6 @@ def _guard_piece(owner: str, refusal: Rejected) -> Rejected:
 
 def _empty_domain(node: Address) -> Rejected:
     return reject("domain-empty", "the domain lists no value", owner=node.owner)
-
-
-def _present(node: Address, answers: list[QueryResult[object]]) -> QueryResult[object]:
-    """The single present source: two known present ones refuse at once; else a refused
-    source refuses, and while one is unresolved the answer is unresolved."""
-    active = [answer for answer in answers if not isinstance(answer, Inapplicable)]
-    failures = [answer for answer in active if not isinstance(answer, Available)]
-    known = len(active) - len(failures)
-    if known > 1:
-        failures.append(
-            reject(
-                "multiple-suppliers",
-                f"{known} sources are present; at most one may supply this value",
-                owner=node.owner,
-            )
-        )
-    blocked = _blocked(failures)
-    if blocked is not None:
-        return blocked
-    if not active:
-        return Unresolved(
-            (
-                Finding(
-                    FindingKind.LIMITATION,
-                    "input-unsupplied",
-                    node.owner,
-                    "no present source supplies this value",
-                ),
-            )
-        )
-    return active[0]
 
 
 def _finish(node: Address, returned: object) -> Called:
@@ -321,8 +276,8 @@ def _ordered(pieces: list[Piece]) -> tuple[Piece, ...]:
 
 
 def _waits(result: object) -> tuple[str, ...]:
-    """What an unresolved answer waits on: its findings' owners (the open choices and the
-    missing facts), by key."""
+    """What an unresolved answer waits on: its findings' owners (the open choices), by
+    key."""
     if not isinstance(result, Unresolved):
         return ()
     return tuple(sorted({finding.owner for finding in result.findings}))

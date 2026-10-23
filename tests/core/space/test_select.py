@@ -35,7 +35,6 @@ from finn.core.space import (
     domain,
     inspection,
     reject,
-    supplied,
     view,
 )
 from finn.core.space.inspection import Dormant, Open, Set, Waiting
@@ -517,20 +516,26 @@ def test_a_derived_selector_reads_a_value() -> None:
         Select(by="fifo", fifo=Fifo, width=2)
 
 
-def test_a_derived_selector_takes_no_supplied_guard() -> None:
-    # Whether a formal is supplied is settled where its holder is placed, and only a chosen
-    # selector reads it there: a picked one is refused it until facts are known values.
-    with refused("select-by-supplied"):
+def test_a_derived_selector_under_a_guard_over_an_optional_fact() -> None:
+    # Facts are known values: a selector picked by a derived value takes a guard over an
+    # optional fact like any other, its case in play only where the fact is given.
+    class Guarded(Space):
+        w: int | None = Param(default=None)
 
-        class Guarded(Space):
-            w: int = Param(required=False)
-            given = supplied(w)
+        @derived
+        def given(self) -> bool:
+            return self.w is not None
 
-            @derived
-            def chain(self) -> str:
-                return "fifo"
+        @derived
+        def chain(self) -> str:
+            return "fifo"
 
-            adapter = Select(by=chain, when=given, fifo=Fifo, width=w)
+        adapter = Select(by=chain, when=given, fifo=Fifo, width=w)
+
+    given = design_space(Guarded(w=2))
+    assert isinstance(given.adapter, Fifo) and given.adapter.width == 2
+    left_out = design_space(Guarded())
+    assert isinstance(left_out.query(Guarded.adapter), Inapplicable)
 
 
 # -- 5. a selector given as a binding's argument reads its case name ----------------------------

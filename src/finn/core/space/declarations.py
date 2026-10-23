@@ -107,26 +107,11 @@ def at(origin: str | None) -> str:
     return "" if origin is None else f" (declared at {origin})"
 
 
-class _Unsupplied:
-    """Default of an optional formal: nobody need supply it."""
-
-    _instance: _Unsupplied | None = None
-
-    def __new__(cls) -> _Unsupplied:
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    def __repr__(self) -> str:
-        return "UNSUPPLIED"
-
-
 class _Missing:
     def __repr__(self) -> str:
         return "<required>"
 
 
-UNSUPPLIED = _Unsupplied()
 MISSING = _Missing()
 
 
@@ -417,10 +402,12 @@ class Param(ValueDecl[T], Generic[T]):
     the node.
 
     ``Param()`` is required: preparing a Space class in which nothing supplies it is
-    a definition error. ``default=`` makes it optional, and ``required=False``
-    leaves it unsupplied when nobody binds it. A formal takes a value, never a node:
-    a formal annotated with a Space class is refused (a node is placed in a class
-    body, and reads what it needs as values).
+    a definition error. ``default=`` gives the value it takes where nobody supplies it.
+    An optional fact is ``x: T | None = Param(default=None)``: left out it is ``None``,
+    a known value, the same fact as one given ``None``; its readers test it with
+    ``self.x is None``. A formal takes a value, never a node: a formal annotated with a
+    Space class is refused (a node is placed in a class body, and reads what it needs as
+    values).
     """
 
     default: object
@@ -440,18 +427,10 @@ class Param(ValueDecl[T], Generic[T]):
 
     @overload
     def __new__(  # type: ignore[misc]
-        cls, *, required: bool = True, semantics: ValueSemantics[T] | None = None
+        cls, *, semantics: ValueSemantics[T] | None = None
     ) -> T: ...
 
-    def __new__(
-        cls, *, default: object = MISSING, required: object = None, semantics: object = None
-    ) -> Any:
-        if default is not MISSING and required is not None:
-            raise DefinitionError.broken(
-                "param-required-with-default",
-                _OWNER,
-                "Param(default=...) is already optional; required= applies without a default",
-            )
+    def __new__(cls, *, default: object = MISSING, semantics: object = None) -> Any:
         if semantics is not None and not isinstance(semantics, ValueSemantics):
             raise DefinitionError.broken(
                 "semantics-invalid", _OWNER, "semantics= must be a ValueSemantics"
@@ -461,8 +440,8 @@ class Param(ValueDecl[T], Generic[T]):
         instance.explicit = cast("ValueSemantics[object] | None", semantics)
         instance.semantics = instance.explicit
         instance.resolved = False
-        instance.required = default is MISSING and required is not False
-        instance.default = default if default is not MISSING or instance.required else UNSUPPLIED
+        instance.required = default is MISSING
+        instance.default = default
         return instance
 
     def __set_name__(self, owner: type[object], name: str) -> None:
@@ -490,7 +469,7 @@ class Param(ValueDecl[T], Generic[T]):
                 declaration=label,
             )
         semantics = _annotation_semantics(annotation, self.explicit, label)
-        if self.default not in (MISSING, UNSUPPLIED):
+        if self.default is not MISSING:
             if not recognize(semantics, self.default, owner=label, role="default recognition"):
                 raise DefinitionError.broken(
                     "literal-unrecognized",
@@ -730,8 +709,7 @@ def Select(  # noqa: N802 - a declaration, spelled as one
     ...)``, it has no key and is never a choice: the case is the one the value names, and
     a value naming no case (``None`` included: a ``None`` case is named by its key)
     refuses, ``select-no-case``. While the value waits its cases wait; while it refuses
-    they are not in play, refusing the Space once, in the selector's name. A picked
-    selector's ``when=`` is no ``supplied()`` guard (``select-by-supplied``).
+    they are not in play, refusing the Space once, in the selector's name.
 
     **Reading it.** A case's path is ``<selector>.<case>``: ``heating["boiler"].kw``
     reads one case's member, and ``heating.kw`` a member every case declares. A binding
@@ -1409,32 +1387,6 @@ class CaseRef(ValueDecl[str]):
         self.semantics = cast("ValueSemantics[str]", STRING)
 
 
-class Supplied(ValueDecl[bool]):
-    """Whether a value input of this Space class is supplied (see ``supplied``)."""
-
-    def __init__(self, formal: Param[object]) -> None:
-        self.formal = formal
-        self.semantics = cast("ValueSemantics[bool]", BOOL)
-
-
-def supplied(formal: object) -> bool:
-    """Whether the value input ``formal`` is supplied, as a declaration: what
-    ``present(formal)`` answers in a method (whether a source applies; its value
-    is not evaluated).
-
-    As a guard (``when=supplied(contents)``) the compiler reads it before
-    evaluation: where the declaration never supplies the input, a Decision over
-    nodes it guards can never apply, and its candidates are not compiled.
-    """
-    if not isinstance(formal, Param):
-        raise DefinitionError.broken(
-            "supplied-not-param",
-            _OWNER,
-            "supplied() takes a value input (a Param) of this Space class",
-        )
-    return cast(bool, Supplied(cast("Param[object]", formal)))
-
-
 class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
     """Every present child node exporting ``key``, as ``Located`` values in
     declaration order.
@@ -1467,8 +1419,6 @@ __all__ = [
     "Param",
     "Projection",
     "Required",
-    "Supplied",
-    "UNSUPPLIED",
     "ValueDecl",
     "ValueRef",
     "View",
@@ -1476,7 +1426,6 @@ __all__ = [
     "constraint",
     "derived",
     "required",
-    "supplied",
     "unfinished",
     "unmet_required",
     "view",

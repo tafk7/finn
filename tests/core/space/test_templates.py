@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -33,7 +34,6 @@ from finn.core.space import (
     derived,
     design_space,
     inspection,
-    supplied,
     view,
 )
 from finn.core.space._scopes import EAGER, PERMUTE, Address, ScopeRecord, Scopes
@@ -131,20 +131,25 @@ class Fetcher(Space):
 
 
 class Edge(Space):
-    """Choices that never apply where ``contents`` is unsupplied: one read through by a
-    selection its candidates share, one by a selection of its one candidate."""
+    """Choices under a guard over an optional fact, absent where ``contents`` is None: one
+    read through by a selection its candidates share, one by a selection of its one
+    candidate."""
 
-    contents: int = Param(required=False)
-    valued = supplied(contents)
+    contents: int | None = Param(default=None)
+
+    @derived
+    def valued(self) -> bool:
+        return self.contents is not None
+
     source: Memory | Fetcher = Select(memory=Memory, fetch=Fetcher, when=valued, contents=contents)
     words = View(source.words)
     cache: Fetcher | None = Select(none=None, fetch=Fetcher, when=valued, contents=contents)
     cache_lanes = View(cache.lanes)  # type: ignore[union-attr]
 
 
-class SuppliedOnceAndNot(Space):
-    """The same supplied-guarded choice placed once supplied, once not; the parent reads
-    through each."""
+class GivenOnceAndNot(Space):
+    """The same guarded choice placed once with its fact given, once left out; the parent
+    reads through each."""
 
     stored = Edge(contents=4)
     streamed = Edge()
@@ -175,18 +180,22 @@ class WideStream(Space):
 
 
 class Guarded(Space):
-    """What exists only where a supplied-guarded choice applies: a case's guard, a case's
-    own choice with a ``when``, and a case's formal bound to an expression; and a Decision
-    of the class its cases share, which exists wherever the class does."""
+    """What exists only where a choice guarded over an optional fact applies: a case's
+    guard, a case's own choice with a ``when``, and a case's formal bound to an expression;
+    and a Decision of the class its cases share, which exists wherever the class does."""
 
-    contents: int = Param(required=False)
+    contents: int | None = Param(default=None)
     wide: bool = Decision(values=(False, True))
     split: int = Decision(values=(1, 4))
-    valued = supplied(contents)
+
+    @derived
+    def valued(self) -> bool:
+        return self.contents is not None
+
     source: WideStream | Stream | None = Select(
         none=None,
         fetch=WideStream(wide=wide, when=wide),
-        plus=Stream(lanes=contents + 1),
+        plus=Stream(lanes=cast(int, contents) + 1),  # read only where valued
         when=valued,
         contents=contents,
     )
@@ -255,7 +264,7 @@ EDGE_CASES = (
     BoundIntoChildren,
     ReadsThroughAChild,
     ReadsLater,
-    SuppliedOnceAndNot,
+    GivenOnceAndNot,
     GuardedOnceAndNot,
     GuardedDecision,
     Outer,
@@ -301,18 +310,6 @@ def test_a_selection_read_by_several_classes_is_one_address_in_its_choices_scope
     assert found.scope is heater and found.member >= len(heater.compiled.records)
     assert found.held.scope is through.root and found.held != found
     assert through.holds_address(found) and not through.holds_address(found.held)
-
-
-def test_a_choice_never_applies_where_its_formal_is_unsupplied() -> None:
-    scopes = compile_model(SuppliedOnceAndNot).scopes
-    assert scopes.find("stored.source").kind == "decision"
-    assert scopes.find("streamed.source").kind == "const"
-    assert not any(key.startswith("streamed.source.") for key in scopes.keys if "$" not in key)
-    # Its class compiled the candidates once, and records the formal.
-    source, cache = compiled(Edge).choices
-    assert source.never_formal == cache.never_formal == "contents"
-    assert [case for case, slot in source.cases if slot is not None] == ["memory", "fetch"]
-    assert scopes.find("streamed.cache.$member.lanes").alternatives == ()
 
 
 # -- compiled forms: once per class ---------------------------------------------------------------

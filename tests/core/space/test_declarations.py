@@ -479,16 +479,18 @@ def test_binding_forms_and_local_edit_ownership() -> None:
 def test_child_omissions_and_incompatible_bindings_are_not_implicit_exposure() -> None:
     class Child(Space):
         width: int = Param()
-        optional_width: int = Param(required=False)
+        optional_width: int | None = Param(default=None)
 
-    # An optional formal may stay unsupplied: it is not implicitly exposed.
+    # An optional formal may be left out: it is not implicitly exposed, and takes its
+    # default, None, a constant.
     assert unsupplied_formals(record_of(Child(width=8))) == []
     assert unsupplied_formals(record_of(Child())) == ["width"]
 
     class Holder(Space):
         child = Child(width=8)
 
-    assert compile_model(Holder).scopes.find("child.optional_width").kind == "present"
+    left_out = compile_model(Holder).scopes.find("child.optional_width")
+    assert left_out.kind == "const" and left_out.value is None
 
     # A required formal nobody supplies is legal at the call (an assignment may
     # still supply it), and fails when a Space class containing the node is prepared.

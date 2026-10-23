@@ -60,7 +60,7 @@ COST = ViewKey("cost", int)
 
 class Room(Space):
     area: int = Param()
-    label: str = Param(required=False)
+    label: str | None = Param(default=None)
     finish: int = Decision(values=(1, 2, 3))
 
     @view
@@ -264,7 +264,7 @@ def keys(board: Board, house: House) -> None:
     assert_type(Kernel.spec, Spec)
     assert_type(Board.kernel.buffer.depth, int)
     assert_type(board.kernel.query(Kernel.spec), QueryResult[Spec])
-    assert_type(board.kernel.present(Kernel.spec), bool)
+    assert_type(board.present(Board.kernel), bool)
     assert_type(board.kernel.spec.payload_bits, int)
     assert_type(inspection.decision_handle(house, House.kitchen.finish), DecisionHandle[int])
     assert_type(inspection.decision_handle(house, House.heating), DecisionHandle[str])

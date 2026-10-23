@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 from support.space_cores import chain
-from support.space_pipeline import Meter, Pipeline, Probe
+from support.space_pipeline import Pipeline
 from support.space_walk import check, fresh, walk
 
 from core.space._choices_support import replay
@@ -36,7 +36,6 @@ from finn.core.space import (
     domain,
     inspection,
     occurrence,
-    supplied,
 )
 from finn.core.space._running.evaluate import Session, evaluation
 from finn.core.space.inspection import candidate
@@ -163,39 +162,6 @@ def test_a_gearbox_change_after_a_warm_chain_answers_as_a_recomputation() -> Non
         (o.owner, o.status, o.result) for o in want.outcomes
     ]
     assert inspection.validity(got.instance) == inspection.validity(want.instance)
-
-
-# -- presence reads the Decisions of the guards it reads ------------------------------------
-
-
-def test_presence_records_the_guards_decisions() -> None:
-    point = design_space(Pipeline(width=10)).with_choices({Pipeline.probe.enabled: True})
-    assert point.meter.seen == 3
-    assert "probe.enabled" in decisions_read(point.meter, Meter.seen)
-    off = point.with_choices({Pipeline.probe.enabled: False})
-    assert off.meter.seen == 0
-    assert "probe.enabled" in decisions_read(off.meter, Meter.seen)
-
-
-def test_supplied_records_the_guards_decisions() -> None:
-    class Sees(Space):
-        reading: int = Param(required=False)
-        valued = supplied(reading)
-
-        @derived
-        def has_reading(self) -> bool:
-            return self.valued
-
-    class Plant(Space):
-        probe = Probe()
-        sees = Sees(reading=probe.level)
-
-    on = design_space(Plant()).with_choices({Plant.probe.enabled: True})
-    assert on.sees.has_reading is True
-    assert "probe.enabled" in decisions_read(on.sees, Sees.has_reading)
-    off = on.with_choices({Plant.probe.enabled: False})
-    assert off.sees.has_reading is False
-    assert "probe.enabled" in decisions_read(off.sees, Sees.has_reading)
 
 
 # -- a choice under a selector: waiting, dormant, back in play ------------------------------

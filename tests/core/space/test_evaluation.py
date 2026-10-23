@@ -65,7 +65,7 @@ def test_a_choice_reads_its_stored_value_unassigned_waiting_or_dormant() -> None
 
 
 class Facts(Space):
-    extent: int = Param(required=False)
+    extent: int = Param()
 
     @derived
     def checked(*, extent: int) -> int | Rejected:
@@ -80,9 +80,6 @@ class Facts(Space):
 def test_a_stored_value_reads_through_its_type_check_over_facts() -> None:
     outside = open_evaluation(Facts(extent=4), {"lanes": 3})
     assert _codes(answer(outside, "lanes")) == [("domain-membership", "lanes")]
-
-    missing = open_evaluation(Facts(), {"lanes": 2})
-    assert _codes(answer(missing, "lanes")) == [("input-missing", "extent")]
 
     refused = open_evaluation(Facts(extent=1), {"banks": 1})
     assert _codes(answer(refused, "banks")) == [("extent-small", "checked")]

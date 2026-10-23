@@ -5,7 +5,9 @@ and its facts) and its stored choices, dormant ones included. Two design spaces 
 same layer and stored choices are equal, whatever led to them, and answer alike.
 
 - ``FactsLayer(model, facts)``: one per model and facts, interned in the model's record
-  (``structure.Record.layers``). It holds what reads facts alone, for every design space
+  (``structure.Record.layers``). Every fact is known: a root formal not given takes its
+  default (``None`` for an optional fact), so a fact left out and one given its default
+  are one layer. It holds what reads facts alone, for every design space
   with those facts: the membership readings (a choice's membership read as if the choice
   existed, an evaluation of the layer with nothing stored) and the domains' outcomes. Both
   are the layer's memo, part of the value, never a cache.
@@ -95,9 +97,18 @@ class FactsLayer:
 
     @staticmethod
     def of(model: Model[Space], facts: Mapping[Address, object]) -> FactsLayer:
-        """The layer of ``model`` with ``facts``: the one the model's record holds for
-        facts with the same hash keys and equal by value, else a new one, interned there
+        """The layer of ``model`` with ``facts``, each root formal not given at its default
+        (a formal's member record holds it): the one the model's record holds for facts
+        with the same hash keys and equal by value, else a new one, interned there
         (unhashable facts give a new layer each time, equal by value all the same)."""
+        facts = {
+            **{
+                index: index.value
+                for index in model.scopes.parameters
+                if not index.required and index not in facts
+            },
+            **facts,
+        }
         layers = record(model).layers
         key = frozenset((index, hashkey(value)) for index, value in facts.items())
         hashable = all(part[1] is not None for part in key)

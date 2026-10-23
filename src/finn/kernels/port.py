@@ -81,7 +81,6 @@ from finn.core.space import (
     default_semantics,
     derived,
     reject,
-    supplied,
     view,
 )
 from finn.core.space._nodes import selected
@@ -183,11 +182,13 @@ class AxiStreamPort(KernelDeclaration):
 
     def placement(self) -> bool | None:
         """Whether it is placed: True or False when the class is made, None where it reads
-        whether its tensor is supplied (``<name>_placed``)."""
+        whether its tensor is given (``<name>_placed``): a formal whose default is ``None``,
+        an optional tensor (``x: Tensor | None = Param(default=None)``). A formal with any
+        other default is always given."""
         tensor = self.tensor
         if tensor is None:
             return False
-        if isinstance(tensor, Param) and not tensor.required:
+        if isinstance(tensor, Param) and tensor.default is None:
             return None
         if is_member(tensor) and getattr(tensor, "when", None) is not None:
             raise DefinitionError.broken(
@@ -228,7 +229,13 @@ class AxiStreamPort(KernelDeclaration):
         placed = (f"{name}_placed",) if placement is None else ()
         guard: bool | None = None
         if placement is None:
-            guard = supplied(self.tensor)
+
+            @declared_reads(*self.paths("tensor"))
+            def placed_(self: Space) -> bool:
+                """Whether its tensor is given: the port is idle without it."""
+                return port.value(self, "tensor") is not None
+
+            guard = derived(placed_)
             members[f"{name}_placed"] = guard
         tensor = self.paths("tensor") if placement is not False else ()
 

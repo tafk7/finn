@@ -34,7 +34,6 @@ from ._nodes import (
     structural_settings,
     unsupplied_formals,
 )
-from .declarations import MISSING, UNSUPPLIED
 from .errors import DefinitionError, RequestError
 from .references import ValueHandle, resolve_decision, resolve_reference
 
@@ -235,22 +234,18 @@ def root_record(node: object) -> NodeDecl:
 
 
 def root_parameters(model: Model[Space], record: NodeDecl) -> dict[Address, object]:
-    """The root's plain values and value defaults, by formal."""
+    """The root's plain values, by formal: what its call or assignments gave (a formal
+    nothing gives takes its default when the design space is opened, ``facts.open``)."""
 
     values: dict[Address, object] = {}
     root = model.scopes.root
     own = record.bindings
-    for name, formal in space_formals(record.space_type).items():
+    for name in space_formals(record.space_type):
         index = root.named_members.get(name)
-        if index is None or index.kind != "param":
+        if index is None or index.kind != "param" or name not in own:
             continue
-        if name in own:
-            value = own[name]
-            values[index] = getattr(value, "value", value) if _is_const(value) else value
-        else:
-            default = formal.default
-            if default is not MISSING and default is not UNSUPPLIED:
-                values[index] = default
+        value = own[name]
+        values[index] = getattr(value, "value", value) if _is_const(value) else value
     return values
 
 

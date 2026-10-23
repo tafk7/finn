@@ -133,7 +133,7 @@ class MemStreamKernel(KernelSpace):
     contents: IntegerTensor = Param(semantics=INTEGER_TENSOR)
     sets: int = Param(default=1)
     # The set indices its set port reads (several sets only): a fact it is given.
-    set_tensor: Tensor = Param(required=False)
+    set_tensor: Tensor | None = Param(default=None)
     platform: Platform = Param()
 
     @derived
@@ -211,12 +211,11 @@ class MemStreamKernel(KernelSpace):
     @constraint
     def selected(self) -> bool | Rejected:
         """Several sets take a tensor of set indices, one a beat; a single set none."""
-        placed = self.present(MemStreamKernel.set_tensor)
         if self.sets < 2:
-            if placed:
+            if self.set_tensor is not None:
                 return reject("memstream-set-channel", "a single set takes no set channel")
             return True
-        if not placed:
+        if self.set_tensor is None:
             return reject("memstream-set-channel", "several sets take a set channel")
         if len(self.set_tensor.shape) != 1:
             return reject("memstream-set-channel", "the set channel carries a vector of indices")
@@ -296,7 +295,7 @@ class MemStreamKernel(KernelSpace):
         """One index a beat, one beat per pass of the weights. Without a set tensor its port
         is idle, and its order is refused: several sets as ``selected`` refuses them, a
         single set because it takes no set channel."""
-        if not self.present(MemStreamKernel.set_tensor):
+        if self.set_tensor is None:
             if self.sets < 2:
                 return reject("memstream-set-channel", "a single set takes no set channel")
             return reject("memstream-set-channel", "several sets take a set channel")
@@ -307,7 +306,7 @@ class MemStreamKernel(KernelSpace):
         """One set streams cyclically; several stream one pass per accepted index, and
         without their indices are refused, as ``selected`` refuses them."""
         if self.sets > 1:
-            if not self.present(MemStreamKernel.set_tensor):
+            if self.set_tensor is None:
                 return reject("memstream-set-channel", "several sets take a set channel")
             return BeatSequence(self.form.repeated(self.set_tensor.size))
         return BeatSequence(self.form, Repetition.CYCLIC)

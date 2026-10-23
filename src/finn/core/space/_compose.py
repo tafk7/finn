@@ -81,12 +81,7 @@ ROOT = Placement()
 
 
 def placement(compiled: Compiled, bindings: Mapping[str, Binding]) -> Placement:
-    never = frozenset(
-        choice.index
-        for choice in compiled.choices
-        if choice.never_formal is not None and bindings[choice.never_formal].kind == "unsupplied"
-    )
-    return Placement(never)
+    return ROOT
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,7 +274,7 @@ def fields(compiled: Compiled, at: Placement, record: int) -> _Fields:
 def lift(slot_: _Slot, exits: Iterable[Exit]) -> Iterator[tuple[int | Placing, Mode]]:
     """What a placed Space's references out stand for in its placing class: a formal, its
     binding's record (or, for a literal or a default, the guard the scope is placed under: a
-    constant's or an unsupplied formal's only edge); the guard it is placed under."""
+    constant's only edge); the guard it is placed under."""
     for exit in exits:
         kind = exit[0]
         if kind == "formal":

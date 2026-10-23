@@ -53,10 +53,10 @@ def _check_nodes(table: Table, order: tuple[int, ...]) -> None:
                 )
             if node.semantics is None:
                 nodes[index] = node = replace(node, semantics=output)
-        if node.kind in {"present", "select"} and node.semantics is None and node.alternatives:
-            # Like an alias, these take their sources' linked semantics.
+        if node.kind == "select" and node.semantics is None and node.alternatives:
+            # Like an alias, a selection takes its sources' linked semantics.
             nodes[index] = node = replace(node, semantics=semantics_of(node.alternatives[0][1]))
-        if node.kind in {"select", "present"}:
+        if node.kind == "select":
             for _, target in node.alternatives:
                 semantics = semantics_of(target)
                 if (

@@ -51,7 +51,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from math import ceil, floor, prod
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from qonnx.core.ranges import TensorRange
 
@@ -178,7 +178,7 @@ class DotpAxiKernel(KernelSpace):
     form: Form = Param(default=Form.DENSE)
     reshape_activations: bool = Param(default=False)
     # A dense form read through a window (the module docstring): a lowered convolution.
-    window: Window = Param(required=False)
+    window: Window | None = Param(default=None)
     # The range of its results: its parent's statement (MatMul binds its result range),
     # so that it is known before the results channel exists.
     result_range: tuple[int, int] = Param()
@@ -186,7 +186,7 @@ class DotpAxiKernel(KernelSpace):
     # The tensors its input ports read: facts its parent gives, the weights' where they
     # stream (absent, the port is idle).
     x_tensor: Tensor = Param()
-    w_tensor: Tensor = Param(required=False)
+    w_tensor: Tensor | None = Param(default=None)
     # The extents PE and SIMD may divide, which its parent states from the operation's
     # own facts (``extents_stated``). N is the same in every datapath; the widest
     # reduction is the widest datapath's K: K * N for a depthwise operation, which a
@@ -201,7 +201,7 @@ class DotpAxiKernel(KernelSpace):
     @derived
     def windowed(self) -> bool:
         """Whether it reads its activations through a window."""
-        return self.present(DotpAxiKernel.window)
+        return self.window is not None
 
     @derived
     def x_rank(self) -> int:
@@ -238,11 +238,12 @@ class DotpAxiKernel(KernelSpace):
             # nothing states them. This rests on MatMul's weights, an open question: should
             # they become one required fact, a core's w_tensor is required and this
             # refusal is removed, not respelled.
-            if not self.present(DotpAxiKernel.w_tensor):
+            window, weights = cast(Window, self.window), self.w_tensor
+            if weights is None:
                 return reject(
                     "dotp-extents", "a window's outputs are bound by weights, and none are given"
                 )
-            given |= {**self.window.extents, n: self.w_tensor.shape[-1]}
+            given |= {**window.extents, n: weights.shape[-1]}
         if self.reshape_activations:
             given[m] = self.x_tensor.shape[0]
         if self.rows_viewed:
@@ -322,7 +323,7 @@ class DotpAxiKernel(KernelSpace):
     @derived
     def signature(self) -> tuple[tuple[Index | Affine, ...], ...]:
         """The indices x, w and y read: the form's, or its window's over the image's rank."""
-        found = self.window.over(self.x_rank) if self.windowed else self.form.value
+        found = cast(Window, self.window).over(self.x_rank) if self.windowed else self.form.value
         return found.x, found.w, found.y
 
     @derived

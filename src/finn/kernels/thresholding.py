@@ -232,15 +232,15 @@ class ThresholdingAxiKernel(KernelSpace):
     # set indices its set port reads (absent, the port is idle); and the port its
     # AXI-Lite interface is presented at when thresholds are runtime-writable.
     input_tensor: Tensor = Param()
-    set_tensor: Tensor = Param(required=False)
-    control: str = Param(required=False)
+    set_tensor: Tensor | None = Param(default=None)
+    control: str | None = Param(default=None)
     platform: Platform = Param()
 
     @derived
     def controllable(self) -> bool:
         """Whether whoever binds it named a port for its control bus, which runtime writes
         reach it by."""
-        return self.present(ThresholdingAxiKernel.control)
+        return self.control is not None
 
     use_axilite: bool = Decision(values=(False, True))
 
@@ -258,7 +258,7 @@ class ThresholdingAxiKernel(KernelSpace):
         FinnLib's ``rtl/nonlin/thresholding_axi.sv`` joins the two streams with several sets
         (SETS >= 2), accepting an input beat only beside a set beat, so without a set
         tensor it takes no beat; with one set it leaves the set port's ready undriven."""
-        placed = self.present(ThresholdingAxiKernel.set_tensor)
+        placed = self.set_tensor is not None
         if self.shape[0] < 2:
             if placed:
                 return reject(
@@ -490,7 +490,7 @@ class ThresholdingAxiKernel(KernelSpace):
         their indices are refused, as ``selected`` refuses them."""
         if self.shape[0] < 2:
             return reject("threshold-set-channel", "a single threshold set takes no set channel")
-        if not self.present(ThresholdingAxiKernel.set_tensor):
+        if self.set_tensor is None:
             return reject("threshold-set-channel", "several threshold sets take a set channel")
         shape = self.set_tensor.shape
         if shape != (self.input_stream.sequence.form.beats,):

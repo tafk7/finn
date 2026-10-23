@@ -68,8 +68,8 @@ selector reads its case's name); a selector picked by a derived value (the model
 by binding the selector itself (a binding to a selector reads its case's name); a child's
 guard is a derived member ``when-<name>``. Facts
 are the root's formals (SZ100 (5)): a required fact is ``Param()``, an optional one
-``Param(required=False)``, left unsupplied where the model reads ``None`` (the engine
-reads it unresolved: T4c's row). A ``Members`` is the
+``T | None = Param(default=None)``, left out where the model reads ``None`` (the engine
+reads it ``None`` too). A ``Members`` is the
 engine's ``Members(KEY)``, a key of its own, each entry its child's value export of that key
 (``exports = {KEY: derived}``); each entry is in a child or a case placed by the
 ``Members``'s scope, one per child. Its value, the engine's ``Located`` entries, is read as
@@ -447,7 +447,7 @@ class _Builder:
         if name in index.pickers:
             return self.picked(scope, name)
         if name in index.facts:
-            return Param(required=False) if name in index.optional else Param()
+            return Param(default=None) if name in index.optional else Param()
         if name in index.choices and index.choices[name].cases is not None:
             # a selector's value, read as its selected key
             return self._selector_key(scope, name)
@@ -663,7 +663,10 @@ class _Builder:
         if scope == "":
             for fact in sorted(index.facts):
                 members[fact] = self.member(scope, fact)
-                annotations[fact] = self.value_type(fact)
+                fact_type = self.value_type(fact)
+                annotations[fact] = (
+                    cast(Any, fact_type) | None if fact in index.optional else fact_type
+                )
         for path in self.externals[scope]:
             members[_input(path)] = self.member(scope, _input(path))
             annotations[_input(path)] = self.value_type(path)

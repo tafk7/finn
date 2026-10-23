@@ -680,8 +680,6 @@ def _address_sources(scopes: Scopes, index: Address, found: set[Address]) -> Non
             if selector is not None:
                 found.add(selector)
                 pending.extend(target for _, target in current.alternatives)
-        elif kind == "present":
-            pending.extend(target for _, target in current.alternatives)
     if scopes.selector_choice(index) is not None:
         found.add(index)
 

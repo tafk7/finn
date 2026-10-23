@@ -390,7 +390,7 @@ def test_a_witness_is_expected_to_fail_for_a_default_short_of_its_milestone() ->
     with _default(_Reaching()):
         assert marks(expected("view-read-in")(witness)) == ["xfail"]
         assert marks(expected("view-read-in")(other)) == []
-        assert marks(expected("optional-fact-none")(other)) == ["xfail"]
+        assert marks(expected("facts-pruning")(other)) == ["xfail"]
 
 
 # -- a ``when`` read past its guard, through a formal of its scope ----------------------------

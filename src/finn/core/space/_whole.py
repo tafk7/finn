@@ -31,11 +31,9 @@ method's subtree is one summary per class too.
 
 **Per scope, composition.** A summary's finds are addressed in the scope it is read at
 (``ScopeRecord.reach`` and ``member_address``: a scope's record, no member read); each exit
-is followed
-into the placing scope's binding (``_compose.lift``: a literal, a default or an
-unsupplied formal ends at the guard the scope is placed under; a reference continues
-there), by that class's summaries, up to the root, where a formal is a fact. Composed per
-scope and exit once.
+is followed into the placing scope's binding (``_compose.lift``: a literal or a default
+ends at the guard the scope is placed under; a reference continues there), by that class's
+summaries, up to the root, where a formal is a fact. Composed per scope and exit once.
 
 That this is the line's answer, the line's algorithms over one table of every node,
 is the tests' oracle (``core.space._whole_support``), on every Space class of the tests

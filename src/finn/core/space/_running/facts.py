@@ -7,11 +7,12 @@
   adapter is invoked, then each frozen; ``prepare_values``, the same with one role for
   all;
 - ``open``: the design space of a compiled model over its facts (each a root formal the
-  model exposes; every required one given), every choice open: its facts layer's design
-  space with nothing stored (``value.FactsLayer.bare``).
+  model exposes; every required one given, every other one its default where not given,
+  ``value.FactsLayer.of``), every choice open: its facts layer's design space with nothing
+  stored (``value.FactsLayer.bare``).
 
 An address is read for its own fields (key, semantics, owner, whether a formal is
-required): its member record, as its scope reads it.
+required, its default): its member record, as its scope reads it.
 """
 
 from __future__ import annotations
@@ -58,7 +59,8 @@ def prepare_values(pending: Mapping[Address, object], role: str) -> dict[Address
 def open(model: Model[Space], parameters: Mapping[Address, object]) -> DesignSpace:
     """The design space of ``model`` over ``parameters`` (by root formal), every choice
     open: all root inputs checked (each exposed, every required one given), recognized and
-    frozen before any evaluation."""
+    frozen before any evaluation; each other formal not given takes its default in its
+    facts layer (``value.FactsLayer.of``)."""
     driver_only("configuration binding")
     exposed = model.scopes.parameters
     for index in parameters:

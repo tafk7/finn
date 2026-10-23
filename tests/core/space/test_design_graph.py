@@ -219,16 +219,16 @@ class Source(Space):
 
 class Sink(Space):
     width: int = Param()
-    limit: int = Param(required=False)
+    limit: int | None = Param(default=None)
 
 
-def test_an_optional_formal_nobody_supplies_is_unsupplied() -> None:
+def test_an_optional_formal_nobody_supplies_is_none() -> None:
     class Holder(Space):
         sink = Sink(width=3)
 
     point = design_space(Holder()).sink
     assert point.width == 3
-    assert codes(point.query(Sink.limit)) == {"input-unsupplied"}
+    assert point.limit is None and point.query(Sink.limit) == Available(None)
 
 
 # -- 5. a cycle in the graph, anchored; and an unanchored value cycle ------------------
@@ -344,7 +344,7 @@ class Tuned(Space):
 class WithChoice(Space):
     """The structural choice: a selector, read through ``choice.physical``."""
 
-    base: int = Param(required=False)
+    base: int = Param()
     choice: Fixed | Tuned = Select(fixed=Fixed(width=8), tuned=Tuned(base=base))
     physical = View(choice.physical)
 
@@ -352,7 +352,7 @@ class WithChoice(Space):
 class WithPrimitives(Space):
     """The same choice spelled with the primitives it lowers onto."""
 
-    base: int = Param(required=False)
+    base: int = Param()
     choice: str = Decision(values=("fixed", "tuned"))
 
     @derived

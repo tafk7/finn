@@ -60,7 +60,7 @@ class Pool(KernelSpace):
     """Global sum pooling, model only: Y[b, c] = sum_s X[b, s, c], PE channels a beat."""
 
     id = "test.accpool"
-    x_tensor: Tensor = Param(required=False)
+    x_tensor: Tensor | None = Param(default=None)
 
     channels = extent_of(c)
     pe: int = Decision(domain=divisors_of(channels))

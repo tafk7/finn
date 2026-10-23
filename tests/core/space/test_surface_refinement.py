@@ -117,7 +117,7 @@ def test_prepared_inherited_declarations_and_their_owners_are_immutable() -> Non
     assert instance.query(reference) == Available(1)
 
     class Variant(Base):
-        value: int = Param(required=False)
+        value: int = Param(default=0)
 
     assert design_space(Variant(value=2)).value == 2
 

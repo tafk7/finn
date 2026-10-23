@@ -119,10 +119,12 @@ def test_a_seeded_walk_keeps_the_four_invariants_and_the_engines_own_checks(
     assert tally.engine_checks["cold change"] == tally.steps - tally.model_only
 
 
-def test_the_full_run_meets_both_causes_and_counts_each_under_its_milestone() -> None:
+def test_the_full_run_meets_its_causes_and_counts_each_under_its_milestone() -> None:
+    # T4c's facts known are reached (an optional fact left out is None in the engine too),
+    # and its pruning is compared unpruned while it is pending: nothing is counted under it
     tallies = [gate_walk(seed, False) for seed in SEEDS]
     counted = sum((tally.by_milestone for tally in tallies), start=type(tallies[0].checks)())
-    assert counted["T4b"] and counted["T4c"], counted
+    assert counted["T4b"] and not counted["T4c"], counted
     assert set(counted) <= {"T4b", "T4c"}
 
 
@@ -234,17 +236,15 @@ def test_an_engine_refusing_a_view_read_in_as_the_model_does_is_not_counted(
     assert (tally.by_milestone["T4b"], tally.by_question["definition"]) == (0, 0)
 
 
-def test_a_question_reaching_an_optional_fact_left_out_is_counted_under_t4c() -> None:
-    # seed 7 leaves its optional f1 out: the engine reads it unresolved, the model None, so
-    # f1's own answer (its subject the fact itself) and a rule reading it disagree, each
-    # counted under T4c
+def test_a_question_reaching_an_optional_fact_left_out_agrees() -> None:
+    # seed 7 leaves its optional f1 out: the engine reads it None, as the model does, so f1's
+    # own answer and a rule reading it agree: nothing counted, and nothing fails with T4c
+    # taken as removed
     tally = walk(7, 3)
     assert tally.failure is None, tally.failure
-    assert tally.by_milestone == {"T4c": 2}
-    assert tally.by_question == {"answer": 1, "rule": 1}
+    assert not tally.by_milestone and not tally.by_question
     removed = walk(7, 3, without=("T4c",))
-    assert first_line(removed) == "seed 7, step 0: the engine disagrees (answer; T4c not pending)"
-    assert removed.failure is not None and "walk: the answer of f1" in removed.failure
+    assert removed.failure is None, removed.failure
 
 
 # Reading 8's two shapes, which no drawn description holds (nothing is drawn below the
@@ -407,11 +407,7 @@ def test_each_facts_answer_is_asked_at_each_configuration() -> None:
     for fact in sorted(index.facts):
         expected = generated.facts.get(fact)
         assert answer_form(solution, fact) == AnswerForm("value", expected)
-        found = point.answer(fact)
-        if fact in generated.facts:
-            assert found == AnswerForm("value", expected)
-        else:  # left out: the public API reads it unresolved (T4c's row)
-            assert found.kind == "unresolved", found
+        assert point.answer(fact) == AnswerForm("value", expected)  # left out: None
 
 
 def test_with_no_milestone_pending_every_disagreement_fails_its_walk(
@@ -419,8 +415,8 @@ def test_with_no_milestone_pending_every_disagreement_fails_its_walk(
 ) -> None:
     monkeypatch.setattr(walks, "ROWS", ())
     assert pending() == ()
-    assert first_line(walk(7, 3)) == (
-        "seed 7, step 0: the engine disagrees (answer; T4c not pending)"
+    assert first_line(walk(0, 3)) == (
+        "seed 0, step 0: the engine disagrees (definition; T4b not pending)"
     )
     with pytest.raises(ValueError, match="no such milestone"):
         pending(("lane 10",))
@@ -442,8 +438,8 @@ def test_the_summary_names_the_runs_the_milestones_and_the_checks() -> None:
     assert "implementation: public" in text.splitlines()
     assert (
         "engine disagreements (full: attributed by cause, counted while pending (T4b, T4c), "
-        "else failing; strict: every one failing): by milestone T4b 0, T4c 2; by "
-        "question answer 1, rule 1"
+        "else failing; strict: every one failing): by milestone T4b 0, T4c 0; by "
+        "question -"
     ) in text
     assert text.splitlines()[2].startswith("| 7 | full | 3 |")
     assert text.splitlines()[3].startswith("| 7 | strict | 3 |")

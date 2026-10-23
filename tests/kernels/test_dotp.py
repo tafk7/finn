@@ -318,6 +318,18 @@ def role(weights_dtype: str = "INT3") -> Any:
     return design_space(MatMulKernel(platform=FULL_DSP58, x_tensor=x, w_tensor=w))
 
 
+def test_a_matmul_given_neither_weights_refuses_where_it_reads_them() -> None:
+    """Neither known weights nor a weight tensor: both optional facts are None, and every
+    reader of the weights refuses as ``n`` does (``matmul-tensor``), rather than read a
+    tensor nothing gave."""
+    x = Tensor((1, 4), ScalarEncoding(DataType["INT3"]))
+    point = design_space(MatMulKernel(platform=FULL_DSP58, x_tensor=x))
+    assert point.w_tensor is None and point.w_contents is None and point.weights_dtype is None
+    assert point.stored is False and point.weighted is False
+    for member in (MatMulKernel.n, MatMulKernel.weights_type, MatMulKernel.result_range):
+        assert codes(point.query(member)) == {"matmul-tensor"}, member
+
+
 PUMPING = "compute.packed.compute_pumping"
 
 

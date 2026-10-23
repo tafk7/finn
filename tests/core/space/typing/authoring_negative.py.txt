@@ -3,7 +3,7 @@ from finn.core.space import Decision, Param, Select, Space, View, constraint, de
 
 class Child(Space):
     width: int = Param()
-    label: str = Param(required=False)
+    label: str | None = Param(default=None)
     lanes: int = Decision(values=(1, 2))
 
     @view

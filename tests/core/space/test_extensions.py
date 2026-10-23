@@ -136,7 +136,7 @@ def stream_of(node: Space) -> StreamValue:
 
 def test_stream_shape_takes_the_pairs_choices_and_keeps_narrow_fields_available() -> None:
     class Pair(Space):
-        limit: int = Param(required=False)
+        limit: int = Param()
         # The formals the children take, and the choices bound to them, are declared here.
         left_dtype: Encoding = Param(semantics=ENCODING)
         right_dtype: Encoding = Param(semantics=ENCODING)
@@ -151,18 +151,18 @@ def test_stream_shape_takes_the_pairs_choices_and_keeps_narrow_fields_available(
 
     # The bundle's own members stay inside its Space class.
     assert "maximum_bits" not in vars(Pair) and "minimum_lanes" not in vars(Pair)
-    missing = design_space(Pair(left_dtype=Encoding(3), right_dtype=Encoding(6)))
-    first = missing.with_choices({Pair.left_lanes: 2})
+    wide = design_space(Pair(left_dtype=Encoding(3), right_dtype=Encoding(6), limit=8))
+    first = wide.with_choices({Pair.left_lanes: 2})
     assert first.left.bits == 6
     assert first.right.element_bits == 6
     # The pair's constraint reads the right lanes: one lane alone balances the left's 6
     # bits, and nothing fills it in.
     assert isinstance(first.right.query(StreamShape.lanes), Unresolved)
-    # The limit is not supplied, so the left stream's constraint waits: its Space is open,
-    # and its view answers all the same.
-    assert inspection.validity(first.left).status == "open"
+    # The left stream is admitted under the limit, and its view answers; the right one's
+    # lanes wait.
+    assert inspection.validity(first.left).status == "valid"
     assert first.query(stream_of(Pair.left)) == Available(StreamValue(Encoding(3), 2, 6))
-    assert isinstance(missing.left.query(StreamShape.lanes), Unresolved)
+    assert isinstance(wide.left.query(StreamShape.lanes), Unresolved)
 
     admitted = design_space(Pair(left_dtype=Encoding(3), right_dtype=Encoding(6), limit=4))
     selected = admitted.with_choices({Pair.left_lanes: 2, Pair.right_lanes: 1})

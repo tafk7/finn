@@ -158,8 +158,8 @@ def query(point: Space, reference: object) -> QueryResult[object]:
 
 
 def present(point: Space, node: object) -> bool:
-    """Whether a node, or a value input, is present, read like a value (undecided presence
-    raises)."""
+    """Whether a node is present, read like a value (undecided presence raises); a value
+    input is no node (it is known: test it with ``is not None``)."""
     from ._running import surface
 
     reader = _reader(point)

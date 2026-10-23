@@ -246,23 +246,18 @@ def standing(ev: Evaluation, origin: Address, named: frozenset[Address]) -> tupl
         return ()
     deciders = _deciders(ev, origin)
     read: set[Address] = set()
-    if node.kind == "present":
-        for target, answer in ev.get(origin).trace:
-            if not isinstance(answer, Inapplicable) and target != node.guard:
-                read |= {i for i in _deciders(ev, target) if i.kind == "decision"}
-    else:
-        pending, seen = [origin], {origin}
-        while pending:
-            index = pending.pop()
-            for dependency in _value_reads(ev, index):
-                if dependency in seen:
-                    continue
-                seen.add(dependency)
-                kind = dependency.kind
-                if kind == "decision":
-                    read.add(dependency)
-                elif kind not in ("param", "const", "validity"):
-                    pending.append(dependency)
+    pending, seen = [origin], {origin}
+    while pending:
+        index = pending.pop()
+        for dependency in _value_reads(ev, index):
+            if dependency in seen:
+                continue
+            seen.add(dependency)
+            kind = dependency.kind
+            if kind == "decision":
+                read.add(dependency)
+            elif kind not in ("param", "const", "validity"):
+                pending.append(dependency)
     stored = ev.ds.stored
     return tuple(
         sorted(i.key for i in read if i in stored and i not in named and i not in deciders)

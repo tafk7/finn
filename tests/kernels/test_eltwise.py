@@ -14,23 +14,17 @@ from support.helpers import eltwise, module_of
 from support.kernel_specs.eltwise import computed
 
 from finn.core.space import (
-    Available,
     Decision,
-    Param,
     Rejected,
-    Space,
-    Unresolved,
-    design_space,
     inspection,
 )
 from finn.dataflow.datatypes import resolve_qonnx_datatype_name
-from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.configure import refusal
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.library import library_module
-from finn.platform.capabilities import DspBlock, Platform
+from finn.platform.capabilities import DspBlock
 from kernels.sweeps import eltwise_numeric
 
 
@@ -136,28 +130,6 @@ def test_eltwise_pe_is_a_divisor_of_the_channels_its_parameter_holds() -> None:
     assert isinstance(declared, Decision)
     assert declared.domain.accepts(candidate=2**31, extent=2**32) is True
     assert declared.domain.accepts(candidate=2**32, extent=2**33) is False
-
-
-def test_eltwise_result_is_known_while_an_optional_parent_platform_is_unset() -> None:
-    # The optional formal is the parent's own, bound to the child by name.
-    class OptionalPlatform(Space):
-        platform: Platform = Param(required=False)
-        arithmetic = EltwiseKernel(
-            operation="ADD",
-            lhs_tensor=Tensor((1, 2), ScalarEncoding(resolve_qonnx_datatype_name("INT3"))),
-            rhs_tensor=Tensor((1, 2), ScalarEncoding(resolve_qonnx_datatype_name("INT3"))),
-            b_scale=1.0,
-            platform=platform,
-        )
-
-    point = design_space(OptionalPlatform()).with_choices({OptionalPlatform.arithmetic.pe: 2})
-    assert point.arithmetic.result_dtype.name == "INT4"
-    # Its validity waits on the platform; its module, a product, answers meanwhile.
-    assert inspection.validity(point.arithmetic).status == "open"
-    assessment = point.arithmetic.inspect(EltwiseKernel.netlist)
-    assert isinstance(assessment.output_result, Available)
-    assert isinstance(assessment.validity, Unresolved)
-    assert assessment.accepted_result == assessment.output_result
 
 
 def test_the_reference_computes_each_operation_with_its_operand_in_turn() -> None:

@@ -4,8 +4,9 @@
 """The acceptance matrix: every disagreement between the engine and the reference model
 expected at this commit, by the milestone that removes it. The model holds the human's
 rulings on the core types (DECISIONS SZ100) before the engine does: T4b reads views out
-(SZ100 (3)), T4c reads an optional fact left out as None (SZ100 (5)) and lists no choice
-its facts alone rule out (SZ113).
+(SZ100 (3)), T4c lists no choice its facts alone rule out (SZ113). T4c's facts known (an
+optional fact left out read as None, given None the one left out: SZ100 (5)) are reached,
+their rows removed.
 
 Each row names the change that removes it, in one sentence, and its **witness**: the one
 test that shows it, marked with :func:`expected` (a strict expected failure raising
@@ -74,22 +75,6 @@ ROWS: tuple[Row, ...] = (
         "a view, as a definition error (view-read-in)",
         "test_reference_cases::test_a_rule_reading_a_view_is_no_definition",
         "the engine builds the Space and answers",
-    ),
-    Row(
-        "optional-fact-none",
-        "T4c",
-        "The engine reads an optional fact left out as None, a known value, wherever it is "
-        "read: in membership, guards, bodies and lists. It never reads it as unresolved",
-        "test_reference_cases::test_an_optional_fact_left_out_reads_none",
-        "an unsupplied optional param reads unresolved",
-    ),
-    Row(
-        "optional-fact-one-space",
-        "T4c",
-        "The engine takes an optional fact given None as the fact left out: K(x=None) == K(), "
-        "one interned facts layer, so one design space",
-        "test_reference_cases::test_an_optional_fact_given_none_is_the_one_left_out",
-        "the engine refuses None for an optional fact's type",
     ),
     Row(
         "facts-pruning",

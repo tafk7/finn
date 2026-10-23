@@ -133,7 +133,14 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # The members evaluated (and the constants among them) after the commit, and after
 # ``viable`` and the change (the structure's nodes resolved were 1366 (96) and 1464 (96),
 # 1371 and 1463 since T4c's piece 1 placed the required inputs' ports by construction).
-EVALUATED = ((1153, 96), (1224, 96))
+# Since facts are known (T4c), 1153 (96) and 1224 (96) became these: 40 optional facts
+# left out are constants (None) their readers now read as values (each channel's
+# ``contents`` and ``mover_offer``, a weight channel's ``producer`` and ``index_tensor``,
+# the boundaries' ``producer`` and ``consumer``, MatMul's ``window``, a thresholding's
+# ``set_tensor``), and the 15 producers' word widths (``y_data_width`` of each MatMul and
+# its core, ``output_data_width`` of each thresholding) that a channel's ``sides`` reads
+# as values where it asked their presence (16 after ``viable``: the trial's int8 core's).
+EVALUATED = ((1208, 136), (1280, 136))
 
 
 def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(

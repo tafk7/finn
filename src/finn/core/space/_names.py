@@ -231,11 +231,9 @@ class Names:
         self, target: Place, decision: object, member: str, *, owner: str
     ) -> NodeRef:
         """``decision.member`` through a placed Space's choice. The selection its candidates
-        share in that class, where the choice applies at ``target``; else one this class
-        makes for it, over the candidates' members (none where the choice never applies at
-        ``target``: typed as ``choice_member`` types it there). Where the classes are
-        placed, the selections made for one member in one scope are one address
-        (``_scopes``)."""
+        share in that class; else one this class makes for it, over the candidates'
+        members. Where the classes are placed, the selections made for one member in one
+        scope are one address (``_scopes``)."""
         read = Read(owner, self.table.applying)
         compiled = self.table.compiled_at(target)
         index = compiled.choice_index.get(decision)
@@ -256,9 +254,8 @@ class Names:
                 f"{key}: alternatives have incompatible value semantics",
                 declaration=key,
             )
-        never = self.table.never_at(target, choice)
         existing = choice.members.get(member)
-        if existing is not None and existing in choice.shared and not never:
+        if existing is not None and existing in choice.shared:
             return self.table.lift(target, existing)
         identity = (target, index, member)
         cached = self.placed_choice_members.get(identity)
@@ -266,33 +263,24 @@ class Names:
             self.table.chosen_reads[cached].append(read)
             return cached
         alternatives: list[tuple[str, NodeRef]] = []
-        if not never:
-            for case, slot in choice.cases:
-                if slot is None:
-                    continue
-                found = self.table.named_at(self.table.below(target, slot, owner=owner), member)
-                if found is not None:
-                    alternatives.append((case, found))
-        semantics: ValueSemantics[object] | None = None
+        for case, slot in choice.cases:
+            if slot is None:
+                continue
+            found = self.table.named_at(self.table.below(target, slot), member)
+            if found is not None:
+                alternatives.append((case, found))
         if not alternatives:
-            declared = [
-                effective.semantics.get(effective.members[member])
-                for effective in map(self.table.collected, choice.space_types)
-                if member in effective.members
-            ]
-            if not never or not declared:
-                raise DefinitionError.broken(
-                    "candidate-member-absent",
-                    _OWNER,
-                    f"{owner}: no case of {choice.key} has a member {member}",
-                    declaration=owner,
-                )
-            semantics = declared[0]
+            raise DefinitionError.broken(
+                "candidate-member-absent",
+                _OWNER,
+                f"{owner}: no case of {choice.key} has a member {member}",
+                declaration=owner,
+            )
         node = self.table.reserve(
             target.draft,
             key,
             "select",
-            semantics,
+            None,
             guard=self.table.lift(target, compiled.ref(choice.guard)),
             source_owner=member_key(self.table.name(target), choice.key),
         )
@@ -315,7 +303,7 @@ class Names:
             child: Place | None
             if in_slot:
                 slot = self.table.compiled_at(place).children.get(record)
-                child = None if slot is None else self.table.below(place, slot, owner=owner)
+                child = None if slot is None else self.table.below(place, slot)
             else:
                 found = self.table.drafts[place.draft].children.get(record)
                 child = None if found is None else Place(found)
