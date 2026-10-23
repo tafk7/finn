@@ -6,6 +6,7 @@ import pytest
 import numpy as np
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
+from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.infer_datatypes import InferDataTypes
 from qonnx.transformation.infer_shapes import InferShapes
 from qonnx.util.basic import qonnx_make_model
@@ -147,4 +148,30 @@ def test_avg_pool_trunc_rounding(rounding_mode, signed, kernel, act_bits, droppe
     produced = oxe.execute_onnx(model, idict)[model.graph.output[0].name]
     # Both outputs are level * out_scale, compare the integer levels exactly
     # instead of floats with a tolerance
+    assert np.array_equal(np.round(produced / out_scale), np.round(expected / out_scale))
+
+
+@pytest.mark.transform
+@pytest.mark.parametrize("signed", [False, True])
+@pytest.mark.parametrize("quantizer", ["Quant", "IntQuant"])
+def test_avg_pool_trunc_after_unconverted_quantizer(quantizer, signed):
+    # A 10-bit quantizer is wider than the default filter allows, so it stays in the
+    # graph and the Trunc takes its sign from the quantizer.
+    kernel, act_bits = 2, 10
+    trunc_out_bits = get_trunc_in_bits(act_bits, kernel) - 1
+    act_int, n_windows = make_all_window_sums(kernel, act_bits, signed)
+    model, act_scale, out_scale = make_avgpool_trunc_model(
+        kernel, act_bits, signed, trunc_out_bits, "FLOOR", n_windows
+    )
+    model.graph.node[0].op_type = quantizer
+    idict = {"inp": act_int * act_scale}
+    expected = oxe.execute_onnx(model, idict)["outp"]
+
+    model = model.transform(ConvertQONNXtoFINN())
+    # the conversion leaves the quantizer, as a Quant node
+    assert [n.op_type for n in model.graph.node][0] == "Quant"
+    pool = model.get_nodes_by_op_type("QuantAvgPool2d")
+    assert len(pool) == 1
+    assert getCustomOp(pool[0]).get_nodeattr("signed") == int(signed)
+    produced = oxe.execute_onnx(model, idict)[model.graph.output[0].name]
     assert np.array_equal(np.round(produced / out_scale), np.round(expected / out_scale))

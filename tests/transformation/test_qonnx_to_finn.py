@@ -147,6 +147,120 @@ def test_QONNX_to_FINN(model_name, wbits, abits):
     temp_dir.cleanup()
 
 
+def _converted_parts(model):
+    """Each node's op type and attributes, and the values of its initialized inputs.
+    Tensor names are left out, since the conversion names the tensors it adds at random."""
+    nodes, values = [], []
+    for node in model.graph.node:
+        nodes.append((node.op_type, node.domain, str(node.attribute)))
+        for name in node.input:
+            value = model.get_initializer(name)
+            if value is not None:
+                values.append(value)
+    return nodes, values
+
+
+@pytest.mark.transform
+@pytest.mark.parametrize("graph", ["TFC_W2A2", "Relu_Quant"])
+def test_QONNX_to_FINN_intquant(graph, tmp_path):
+    """A graph with every Quant renamed IntQuant converts to the same graph."""
+    if graph == "TFC_W2A2":
+        brev_model, in_shape, input_tensor = get_brev_model_and_sample_inputs("TFC", 2, 2)
+        raw, clean = str(tmp_path / "raw.onnx"), str(tmp_path / "clean.onnx")
+        export_qonnx(brev_model, torch.randn(in_shape), raw)
+        cleanup(raw, out_file=clean)
+        quant = ModelWrapper(clean)
+        intquant = ModelWrapper(clean)
+    else:
+        quant = _activation_model("Relu", "Quant", 0.25, bits=4)
+        intquant = _activation_model("Relu", "Quant", 0.25, bits=4)
+        input_tensor = np.linspace(-1.0, 4.0, 4, dtype=np.float32).reshape(1, 4)
+    for node in intquant.graph.node:
+        if node.op_type == "Quant":
+            node.op_type = "IntQuant"
+    assert intquant.get_nodes_by_op_type("IntQuant")
+    assert not intquant.get_nodes_by_op_type("Quant")
+
+    quant = quant.transform(ConvertQONNXtoFINN())
+    intquant = intquant.transform(ConvertQONNXtoFINN())
+
+    intquant.analysis(analysis_testing_for_no_quant_nodes)
+    quant_nodes, quant_values = _converted_parts(quant)
+    intquant_nodes, intquant_values = _converted_parts(intquant)
+    assert intquant_nodes == quant_nodes
+    assert len(intquant_values) == len(quant_values)
+    for got, want in zip(intquant_values, quant_values):
+        assert got.dtype == want.dtype and np.array_equal(got, want)
+    want = oxe.execute_onnx(quant, {quant.get_first_global_in(): input_tensor})
+    got = oxe.execute_onnx(intquant, {intquant.get_first_global_in(): input_tensor})
+    assert np.array_equal(got[intquant.get_first_global_out()], want[quant.get_first_global_out()])
+
+
+def _transposed_weights_model(quantizer, scale, debug_marker):
+    """global_in [1, 4] -> MatMul with the weights: a constant ``quantizer`` (signed 4-bit,
+    ``scale``), then (``debug_marker``) a DebugMarker, then a Transpose."""
+    weights = np.array(
+        [[-1.0, -0.5, 0.25, 0.75], [0.5, 1.0, -0.25, -0.75], [-0.5, 0.25, 0.75, 1.0]],
+        dtype=np.float32,
+    )
+    inits = [
+        nph.from_array(weights, "weights"),
+        nph.from_array(np.asarray(scale, dtype=np.float32), "scale"),
+        nph.from_array(np.asarray(0.0, dtype=np.float32), "zeropt"),
+        nph.from_array(np.asarray(4.0, dtype=np.float32), "bitwidth"),
+    ]
+    nodes = [
+        helper.make_node(
+            quantizer,
+            ["weights", "scale", "zeropt", "bitwidth"],
+            ["quant_weights"],
+            domain="qonnx.custom_op.general",
+            signed=1,
+            narrow=0,
+            rounding_mode="ROUND",
+        )
+    ]
+    transpose_in = "quant_weights"
+    if debug_marker:
+        nodes.append(
+            helper.make_node(
+                "DebugMarker",
+                ["quant_weights"],
+                ["marked_weights"],
+                domain="qonnx.custom_op.general",
+                export_debug_name="debug_weights",
+            )
+        )
+        transpose_in = "marked_weights"
+    nodes.append(helper.make_node("Transpose", [transpose_in], ["weights_t"], perm=[1, 0]))
+    nodes.append(helper.make_node("MatMul", ["global_in", "weights_t"], ["global_out"]))
+    gi = helper.make_tensor_value_info("global_in", TensorProto.FLOAT, [1, 4])
+    go = helper.make_tensor_value_info("global_out", TensorProto.FLOAT, [1, 3])
+    graph = helper.make_graph(nodes, "transposed_weights", [gi], [go], initializer=inits)
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.opset_import.append(helper.make_opsetid("qonnx.custom_op.general", 1))
+    return ModelWrapper(model).transform(InferShapes()).transform(InferDataTypes())
+
+
+@pytest.mark.transform
+@pytest.mark.parametrize("debug_marker", [False, True])
+@pytest.mark.parametrize("scale", [0.25, 1.0])
+def test_QONNX_to_FINN_intquant_transposed_weights(scale, debug_marker):
+    """IntQuant weights before a Transpose fold as Quant weights do."""
+    x = np.array([[1.0, 2.0, 3.0, 4.0]], dtype=np.float32)
+    converted = {}
+    for quantizer in ["Quant", "IntQuant"]:
+        model = _transposed_weights_model(quantizer, scale, debug_marker)
+        expected = oxe.execute_onnx(model, {"global_in": x})["global_out"]
+        model = model.transform(ConvertQONNXtoFINN())
+        model.analysis(analysis_testing_for_no_quant_nodes)
+        assert not model.get_nodes_by_op_type("Transpose")
+        produced = oxe.execute_onnx(model, {"global_in": x})["global_out"]
+        assert np.array_equal(produced, expected)
+        converted[quantizer] = model
+    assert _converted_parts(converted["IntQuant"])[0] == _converted_parts(converted["Quant"])[0]
+
+
 def _make_single_quant_model(x, scale, zeropt, bitwidth, signed, narrow, rounding):
     """Minimal graph: global_in -> Quant -> global_out, params as initializers."""
     ish = list(x.shape)
