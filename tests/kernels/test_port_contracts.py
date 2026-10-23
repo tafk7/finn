@@ -47,6 +47,7 @@ from finn.dataflow.traversal import (
     vector_major,
 )
 from finn.kernels.channels import Channel
+from finn.kernels.configure import refusal
 from finn.kernels.dotp import Int8Dsp58DotpKernel, PackedDotpKernel
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.library import library_module
@@ -327,7 +328,7 @@ def test_eltwise_refuses_an_operand_it_cannot_broadcast_or_does_not_carry():
     other = eltwise_between((4,), rhs_dtype="INT3", pe=None)
     assert other.member("add").rhs_element == ScalarEncoding(DataType["INT3"])
     pair = {("eltwise-integer-pair", "implementation_supported")}
-    assert {(f.code, f.owner) for f in other.checked(["add"])[("add", "")]} == pair
+    assert {(f.code, f.owner) for f in refusal(other.validity("add"))} == pair
     trial = other.trial(keyed({"add.pe": 2}))
     assert trial.accepted
-    assert {(f.code, f.owner) for f in trial.network.checked(["add"])[("add", "")]} == pair
+    assert {(f.code, f.owner) for f in refusal(trial.network.validity("add"))} == pair

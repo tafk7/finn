@@ -262,7 +262,7 @@ def test_size_fifos_proposes_every_transport_in_one_batch_and_says_why() -> None
     assert {
         key: value for key, value in chosen(explorer, sized).items() if key.endswith(".transport")
     } == {f"{name}.transport": "direct" for name in transports}
-    # It reopened every transport (each stored direct by the cut's interim channel rule)
+    # It reopened every transport (each stored direct by the cut's policy)
     # and gave back nothing else.
     (_, run) = explorer.runs
     assert set(run.reopened) == {(name, "transport") for name in transports}
@@ -305,19 +305,25 @@ def test_a_fifo_sized_before_is_sized_again_and_a_held_one_is_not(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Every transport not held is reopened, its FIFO's depth and style with it, and
-    sized again; a held transport is not reopened."""
+    sized again; a held transport is not reopened, nor its held depth (its style, not
+    held, is the strategy's: reopened, and given back)."""
     explorer, point = _folded()
     placed = explorer.set(
         point, keyed({"levels.transport": "fifo", "levels.transport.fifo.depth": 64})
     )
+    # The FIFO's style, brought into play, set by the fold rule (the cut's policy).
     assert isinstance(placed, Accepted)
+    assert placed.settled == keyed({"levels.transport.fifo.buffer.ram_style": "auto"})
     sized = SizeFifos().explore(explorer, placed.network)
     assert chosen(explorer, sized)["levels.transport"] == "direct"
     assert ("levels", "transport.fifo.depth") in explorer.runs[-1].reopened
     explorer.held.update(keyed({"levels.transport": "fifo", "levels.transport.fifo.depth": 64}))
     kept = SizeFifos().explore(explorer, placed.network)
     assert chosen(explorer, kept)["levels.transport.fifo.depth"] == 64
-    assert not any(key[0] == "levels" for key in explorer.runs[-1].reopened)
+    assert chosen(explorer, kept)["levels.transport.fifo.buffer.ram_style"] == "auto"
+    assert [key for key in explorer.runs[-1].reopened if key[0] == "levels"] == [
+        ("levels", "transport.fifo.buffer.ram_style")
+    ]
 
 
 def _hidden_needs_eight(
@@ -340,8 +346,8 @@ def test_a_fifo_is_proposed_with_its_depth_and_memory_in_the_same_batch(
     values = chosen(explorer, found)
     assert values["hidden.transport"] == "fifo"
     assert values["hidden.transport.fifo.depth"] == 8
-    # Its style, never stored, is committed with its depth: the interim channel rule's,
-    # FinnLib's ``auto``. Nothing is given back or set by policy after.
+    # Its style, never stored, is committed with its depth: the cut's policy's first
+    # valid, FinnLib's ``auto``. Nothing is given back or set by policy after.
     assert values["hidden.transport.fifo.buffer.ram_style"] == "auto"
     assert explorer.runs[-1].kept == explorer.runs[-1].by_policy == {}
     assert strategy.report()["ram_style"] is None
@@ -367,7 +373,7 @@ def test_a_depth_is_sized_for_the_style_its_fifo_is_built_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Sizing without a style sizes each FIFO for the style it is built in: its held
-    style, else its earlier one, else ``auto`` (the interim channel rule's). Above 257
+    style, else its earlier one, else ``auto`` (the cut's policy's first valid). Above 257
     words ``auto`` is block RAM,
     which holds more than its DEPTH, and ``distributed`` holds DEPTH words: a FIFO stored
     ``distributed`` before is sized at the words it needs, which the check keeps."""

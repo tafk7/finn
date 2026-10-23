@@ -7,7 +7,7 @@ The MatMul sits in a network (``support.helpers.matmul_point``) that gives it it
 weights: the weight channel carries what MatMul states for it, its ``contents`` and
 its tensor over their range. Known weights give the channel a value, so its
 ``source`` applies (``memstream``, its one candidate, set first valid as the network
-builds the channel: the interim channel rule) and stores them; unknown weights leave the
+builds the channel: the cut's policies) and stores them; unknown weights leave the
 channel without a source, and it is the boundary ``in1_V``. The channel's contracts are
 MatMul's, known once its folding is: its choices are made after the kernel's. These
 tests cover the source, laziness, the memory's own choices, their replay on another
@@ -221,7 +221,7 @@ def test_the_channel_owns_its_source_and_its_choices():
 
 def test_the_stored_memory_takes_its_choices_with_its_channel_and_refuses_bad_weights():
     # The memory's choices are set, first valid, as the network builds the weight channel
-    # (the interim channel rule): LUTRAM for a table of 64 bits, unpumped.
+    # (the cut's policies): LUTRAM for a table of 64 bits, unpumped.
     built_with = configured(base(weights=WEIGHTS))
     assert built_with.chosen(("w",)) == {
         ("w", "source.ram_style"): "distributed",
@@ -292,7 +292,7 @@ def test_the_cores_do_not_wait_on_the_source():
         },
     )
     # The weight channel, built once the folding is known, takes its memory's choices
-    # (the interim channel rule), so the module is complete.
+    # (the cut's policies), so the module is complete.
     assert isinstance(module_of(point, "matmul"), Available)
     # The packed core does not wait for the memory: its weights' range is the one their
     # owner states on the channel.
@@ -313,7 +313,7 @@ def test_the_sources_choices_round_trip_through_another_network():
     point = configured(base(weights=WEIGHTS), style="block")
     saved = point.chosen()
     # Every choice is stored: the source's and the adapter's memory too, set where the
-    # network builds their channels (the interim channel rule).
+    # network builds their channels (the cut's policies).
     assert sorted(f"{owner}.{key}" for owner, key in saved) == [
         "matmul.compute",
         "matmul.compute.packed.compute_pumping",
@@ -350,7 +350,7 @@ def test_several_weight_sets_without_known_weights_leave_the_set_channel_unused(
     assert "channel-unused" in codes(answer)
 
 
-def test_a_source_whose_rule_is_false_refuses_the_change_that_places_it():
+def test_a_source_whose_rule_is_false_reads_refused_where_the_change_places_it():
     # Several sets need the set channel; a memory without one refuses itself.
     members = {
         **{name: stored(FULL_DSP48E2).wiring(name) for name in ("x", "y")},
@@ -369,10 +369,10 @@ def test_a_source_whose_rule_is_false_refuses_the_change_that_places_it():
     }
     folding = {**FOLDING, "matmul.pe": 2, "matmul.simd": 2}
     # The folding gives the weight channel its value, so its source is placed, and the
-    # memory's own rule is false: the channel would newly read refused, so the fold is
-    # refused by that rule, the channel's own refusal. A strategy can be stopped by a
-    # channel it does not decide, where forcing accepted the fold and left the channel
-    # silently refused.
+    # memory's own rule is false. A network built by hand binds the channel from the facts
+    # it waited on as it reads: the change is accepted (no rule of the change's is newly
+    # false; a hand-built network checks no channel after a change), and the channel reads
+    # refused by the memory's rule, which its validity names, and emission with it.
     # The memory's output order, which the channel's sides read, refuses the same way: so
     # do the channel's rules and guards that read its sides.
     memory = {
@@ -380,21 +380,18 @@ def test_a_source_whose_rule_is_false_refuses_the_change_that_places_it():
         ("memstream-set-channel", "source.output_sequence"),
     }
     trial = Network(members).trial(keyed(folding))
-    assert set(trial.refused) == {("w", "")}
-    assert {
-        (why.code, why.owner) for why in trial.refused[("w", "")] if why.code != "guard-refused"
-    } == memory
-    # Bound with the folding stored, the channel is refused by the memory's rule.
-    w = Network(members, stored=keyed(folding)).member("w")
-    validity = inspection.validity(w)
-    assert validity.status == "refused"
-    assert "source.selected" in {piece.owner for piece in validity.pieces}
-    assert {
-        (finding.code, finding.owner)
-        for piece in validity.pieces
-        for finding in piece.result.findings
-        if finding.code != "guard-refused"
-    } == memory
+    assert trial.accepted
+    for w in (trial.network.member("w"), Network(members, stored=keyed(folding)).member("w")):
+        # Bound with the folding stored, the same.
+        validity = inspection.validity(w)
+        assert validity.status == "refused"
+        assert "source.selected" in {piece.owner for piece in validity.pieces}
+        assert {
+            (finding.code, finding.owner)
+            for piece in validity.pieces
+            for finding in piece.result.findings
+            if finding.code != "guard-refused"
+        } == memory
 
 
 @pytest.mark.parametrize(
@@ -549,7 +546,7 @@ def test_fifo_depth_is_owned_by_the_channel_and_only_demanded_when_selected():
     assert direct.instance.netlist == w.netlist
     # In the network the same: nothing is dropped, and the module is the direct one.
     trial = deep.trial(keyed({"w.transport": "direct"}))
-    assert trial.accepted and not trial.rederived
+    assert trial.accepted
     assert ("w", "transport.fifo.depth") in trial.network.chosen()
     assert built(trial.network, "matmul") == built(point, "matmul")
 

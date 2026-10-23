@@ -8,8 +8,8 @@ replay after a fact change, the report as a log of the exploration.
 On the Chain as a model (MatMul ``first``, Thresholding ``activate``, MatMul
 ``second``; three rows of four) for Ultra96 without a shell: as conversion leaves it, its
 channels' choices not made (a body no cut created, ``kernel_model``), or as the cut leaves
-it (``cut_model``: ``MakeCutChoices``, each channel's choices by the interim channel
-rule); and an INT8 MatMul retargeted from Ultra96 to a VCK190.
+it (``cut_model``: ``MakeCutChoices``, each channel's choices by the cut's policies);
+and an INT8 MatMul retargeted from Ultra96 to a VCK190.
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ def seam_of(model: ModelWrapper) -> tuple[Seam, Partition]:
 
 def cut_model() -> ModelWrapper:
     """The Chain as the cut leaves it: ``kernel_model`` with each channel's choices made
-    by the interim channel rule (``MakeCutChoices``, what the cut does to a body made by
+    by the cut's policies (``MakeCutChoices``, what the cut does to a body made by
     hand)."""
     return kernel_model().transform(MakeCutChoices())
 
@@ -268,9 +268,10 @@ def test_exploring_with_no_strategy_sets_nothing_and_every_value_is_saved() -> N
 def test_the_report_logs_what_each_strategy_changed_kept_and_set() -> None:
     """A log of the exploration (provenance is logged, never stored): each value its
     strategy changed, before and after, how many it reopened and gave back, those it set by
-    their policy (none here), and who set each value: the body, the strategy, or the
-    interim channel rule (a channel's value its rebuild gave it: none here, the levels'
-    output adapter the fold brings into play being placed, no choice)."""
+    their policy (none here), what the fold rule cleared and set for its changes (none
+    here: no stored channel choice stands in a fold's way, and the levels' output adapter
+    the fold brings into play is placed, no choice), and who set each value: the body or
+    the strategy."""
     model = cut_model()
     report = explore_kernel_choices(model, TargetThroughput(1_000_000_000 // (5 * 6))).report
     target = report["strategy"]
@@ -279,8 +280,8 @@ def test_the_report_logs_what_each_strategy_changed_kept_and_set() -> None:
     # Pumping, stored at conversion, is given back at SIMD 4: unchanged.
     assert "first.compute.packed.compute_pumping" not in target["changed"]
     assert target["committed"] == len(target["changed"])
-    assert (target["by_policy"], target["unset"], target["rederived"]) == ([], {}, {})
-    assert target["interim"] == []
+    assert (target["by_policy"], target["unset"]) == ([], {})
+    assert (target["cleared"], target["settled"]) == ({}, {})
     assert target["reopened"] > target["kept"] > 0 and "held" not in target
     entries = report["choices"]
     assert entries["first"]["pe"] == {"value": 2, "by": "target_throughput"}
@@ -385,7 +386,7 @@ def test_a_memory_saved_or_pinned_auto_is_kept_and_stated_as_vivado_s(tmp_path: 
 def test_a_strategy_changes_what_it_decides_and_the_defaults_start_over() -> None:
     """Explored again, a saved value is replaced where a strategy decides it (no choice
     is closed once saved), and kept where none does; ``Defaults`` resets every value not
-    held to conversion's policies and the interim channel rule's."""
+    held to conversion's policies and the cut's policies'."""
     model = cut_model()
     explore_kernel_choices(model, Ranked(Lanes(2)))
     assert choices(model)["first"]["pe"] == 2
@@ -631,7 +632,7 @@ def test_a_retarget_keeps_the_folding_and_another_core_keeps_it_too() -> None:
     # The other core: the folding kept in play, the packed core's own choices out of play,
     # kept, the INT8 core's open.
     elsewhere = Seam(VCK190.platform).set(bound, {("first", "compute"): "int8_dsp58"})
-    assert isinstance(elsewhere, Accepted) and not elsewhere.rederived
+    assert isinstance(elsewhere, Accepted) and not elsewhere.cleared
     states = dict(elsewhere.network.states(("first",)))
     assert states[("first", "pe")] == inspection.Set(saved["pe"])
     assert states[("first", "simd")] == inspection.Set(saved["simd"])
@@ -697,7 +698,8 @@ def test_tfc_at_a_million_frames_a_second_is_saved_as_the_57_values_it_is_built_
     assert found == TFC_STORED
     assert sum(map(len, TFC_BUILT.values())) == 57 and sum(map(len, found.values())) == 69
     sizing = report["strategy"]
-    assert (target["by_policy"], target["unset"], target["rederived"]) == ([], {}, {})
+    assert (target["by_policy"], target["unset"]) == ([], {})
+    assert (target["cleared"], target["settled"]) == ({}, {})
     assert (sizing["reopened"], sizing["changed"], sizing["fifo_bits"]) == (13, {}, 0)
     assert report["open"] == []
     # Emission replays the saved choices: the configured network is the explored one.

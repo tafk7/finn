@@ -55,14 +55,16 @@ a change, atomic over the members it reaches:
    ``realization``);
 3. each channel named with the same facts: one change on its point, as a kernel's. Each
    channel given other facts is rebuilt from them, a change of facts on the channel it
-   was (a channel never bound before is bound, as above), with the change's choices.
-   Rebuilt, it takes **the cut's policies** (``finn.kernels.cut``, the interim channel
-   rule): the stored choices the new facts refuse (outside their domain, or standing in
-   the way of a rule they make false) are derived again by their policies, each named
-   with its old value, its new one and why (``Trial.rederived``), and the open choices the
-   new facts bring into play take theirs; a choice the change names or clears is never
-   one of them, and a ranking a policy could not read is named (``Trial.fallbacks``);
-4. every channel rebuilt from new facts checked: its validity (``inspection.validity``).
+   was (a channel never bound before is bound, as above; refused on its own, its
+   validity states it), with the change's choices and its stored ones. A stored choice
+   the new facts refuse (outside its domain, or standing in the way of a rule they make
+   false) refuses the change, named as standing in the way (a value outside its domain
+   stands in its own), as a partition's design space refuses a fold a channel's stored
+   choice stands in the way of: the seam's fold rule (``finn.kernels.explore.Seam.set``)
+   clears it and sets it again. Nothing is derived again. The open choices the new facts
+   bring into play take **the cut's policies** (``finn.kernels.cut``), first valid, as a
+   channel bound by hand first does (all left open where one can take no value); a
+   choice the change names or clears is never one of them.
 
 Keys are pairs, ``(owner, key)``: a member by name and the decision key in its space
 (``("first", "pe")``). Findings keep their owner, the key or the
@@ -89,9 +91,10 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Self, TypeVar, cast
 
-from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.reporting.findings import Finding
 from finn.core.space import (
     Available,
+    ConfigurationResult,
     Inapplicable,
     QueryResult,
     Rejected,
@@ -110,7 +113,7 @@ from finn.kernels.artifacts.top import compose
 from finn.kernels.base import BOUNDARY, NETLIST, PortContract, merged
 from finn.kernels.channels import Channel, Neighbours, OuterHops, outer_hops
 from finn.kernels.composer import Key
-from finn.kernels.configure import chosen, refusal
+from finn.kernels.configure import chosen
 from finn.kernels.control import CONTROL, Control
 from finn.kernels.control import presented as presented_buses
 from finn.kernels.cut import Cut, channel_defaulted
@@ -254,34 +257,9 @@ def _channel(
     return configured(Facts(_CHANNEL, dict(facts)), stored, change, clear)
 
 
-def _rederived(
-    key: str, old: object, new: inspection.ChoiceState | None, why: tuple[Finding, ...]
-) -> Finding:
-    """The finding of a stored channel choice the cut's policies derived again
-    (``choice-rederived``): its old value, its new one (none where it stays open, a
-    required one), why the new facts refuse the old (its causes). Its text keeps the rule's
-    name, the interim channel rule."""
-    value = new.value if isinstance(new, inspection.Set) else None
-    details = tuple(
-        (name, each)
-        for name, each in (("value", old), ("rederived", value))
-        if type(each) in (bool, int, float, str)
-    )
-    taken = "left open (required)" if value is None else f"first valid {value!r}"
-    return Finding(
-        FindingKind.LIMITATION,
-        "choice-rederived",
-        key,
-        f"{old!r} is refused by the channel's new facts: {taken} (the interim channel rule)",
-        details,
-        why,
-    )
-
-
-Rebuilt = tuple[Space, Mapping[str, Finding], tuple[Finding, ...]] | Refusal
-"""A channel rebuilt from new facts (``_rebuilt``): its point, each choice derived again,
-by key, and each ranking its policies could not read (``choice-order-unknown``); or why the
-change is refused."""
+Rebuilt = Space | Refusal
+"""A channel rebuilt from new facts (``_rebuilt``): its point, or why the change is
+refused."""
 
 
 def _rebuilt(
@@ -331,8 +309,7 @@ def _observed_rebuilt(entry: Rebuilt) -> object:
     """What a network reads of a rebuilt channel, to compare in the verifying mode."""
     if isinstance(entry, Refusal):
         return (None, dict(entry.why), dict(entry.standing))
-    point, again, fallbacks = entry
-    return (observed(Configured(point)), dict(again), fallbacks)
+    return observed(Configured(entry))
 
 
 def _users(name: str, ports: Mapping[str, PortContract]) -> Rejected | None:
@@ -393,70 +370,31 @@ def _rebuild(
     (the module docstring, step 3): a change of facts on the channel it ``was``, where it
     was bound before with facts of the same names; else bound from the new facts with its
     ``stored`` choices, as the network binds it (a fact that goes missing is no change of
-    facts). The stored choices the new facts refuse, those outside their domain (the change
-    drops them) and those standing in the way of a rule the new facts make false (cleared
-    after it, a change of clears alone), are taken out, and the cut's policies give them
-    and every choice the new facts bring into play their values
-    (``finn.kernels.cut.channel_defaulted``). Returns the channel, each choice derived again
-    (``_rederived``), by key, and each ranking its policies could not read; or why the
-    change is refused: a value of its own, a rule the new facts and the change break with
-    nothing stored in its way (or beside a value they drop), or a choice no value can be set
-    for."""
+    facts). Its stored choices are kept: one the new facts refuse refuses the change, a
+    value outside its domain standing in its own way, a rule they make false with the
+    stored choices standing in its way (``standing``: those the change does not name),
+    which the seam's fold rule clears. A channel bound from facts it waited on is bound as
+    it reads, refused or not: its validity states it. The open choices the new facts bring
+    into play take the cut's policies (``finn.kernels.cut.channel_defaulted``), or, where
+    one can take no value, are left open. Returns the channel, or why the change is
+    refused: a value of its own, or a rule the new facts and the change break."""
     named = {*change, *cleared}
-    refused: dict[str, tuple[Finding, ...]] = {}
     if was is not None and {fact for fact, _ in was[0]} == {fact for fact, _ in read}:
         before = was[1]
         # Cleared while unbound: no longer stored, so cleared here too.
         gone = (*(key for key in chosen(before) if key not in stored), *cleared)
         report = changed(before, change, gone, dict(read))
-        if not isinstance(report, Refusal) and not report.accepted:
-            # Refused by a choice the change names (its value, or a rule it breaks): where
-            # stored choices stand in each rule's way, made again with them cleared.
-            first = refusal_of(report)
-            blocking = {
-                key: why
-                for key, why in first.why.items()
-                if key in named or (key not in first.outside and not first.standing.get(key))
-            }
-            if blocking:
-                return Refusal(blocking, first.standing, first.outside)
-            for key, why in first.why.items():
-                for each in first.standing[key]:
-                    refused[each] = (*refused.get(each, ()), *why)
-            report = changed(before, change, (*gone, *refused), dict(read))
-            if not isinstance(report, Refusal) and not report.accepted:
-                return refusal_of(report)
         if isinstance(report, Refusal):
             return report
-        # Accepted: the stored values the new facts put outside their domains are dropped;
-        # a rule they make false refuses where one is dropped too, or nothing stored but
-        # what the change names stands in its way; else those standing are cleared.
-        dropped = {
-            outcome.owner: () if isinstance(outcome.result, Available) else outcome.result.findings
-            for outcome in report.outcomes
-            if outcome.status == "dropped"
-        }
-        broken = {rule.rule: rule.result.findings for rule in report.broken}
-        # A rule beside a dropped value refuses: the answer of the rebuild's former two-step
-        # retry (drop, then refused by the rule), kept so no network answer changes, not a
-        # rule of the engine's. The network layer's replacement removes it.
-        standing = {
-            rule.rule: tuple(key for key in rule.standing if key not in named)
-            for rule in report.broken
-        }
-        blocking = {
-            key: why for key, why in broken.items() if dropped or key in named or not standing[key]
-        }
-        if blocking:
-            return Refusal(blocking, standing)
-        refused |= dropped
-        for key, why in broken.items():
-            for each in standing[key]:
-                refused[each] = (*refused.get(each, ()), *why)
-        stood = tuple(dict.fromkeys(each for keys in standing.values() for each in keys))
-        point = commit(report.instance, {}, stood) if stood else report.instance
-        if isinstance(point, Refusal):  # a change of clears alone is never refused
-            return point
+        if not report.accepted:
+            return refusal_of(report)
+        # Accepted as a change of facts: the stored values the new facts put outside their
+        # domains are dropped, and the rules they make false are reported beside it; either
+        # refuses the change, naming what stands in its way.
+        refused = _refused_by_facts(report, named)
+        if refused is not None:
+            return refused
+        point = report.instance
         # Open before (left open by a change, or not in play), or named: kept open.
         opened = {
             key for key, state in inspection.states(before) if isinstance(state, inspection.Open)
@@ -466,15 +404,33 @@ def _rebuild(
         bound = _channel(read, stored, change, cleared)
         if bound.point is None:
             return Refusal(bound.refused, bound.standing)
-        point, refused, kept = bound.point, dict(bound.dropped), named
+        if bound.dropped:
+            return Refusal(bound.dropped, {key: (key,) for key in bound.dropped})
+        point, kept = bound.point, named
     done = channel_defaulted(point, kept)
-    if isinstance(done, tuple):
-        return Refusal({finding.owner: (finding,) for finding in done})
-    states = dict(inspection.states(done.point))
-    again = {
-        key: _rederived(key, stored[key], states.get(key), why) for key, why in refused.items()
+    # A choice no value can be set for leaves them open: the seam's fold rule sets each it
+    # can, and leaves that one open, named; it refuses no change.
+    return point if isinstance(done, tuple) else done.point
+
+
+def _refused_by_facts(report: ConfigurationResult[Any], named: Collection[str]) -> Refusal | None:
+    """Why a change of a channel's facts, accepted as one (``report``: the stored values
+    the new facts put outside their domains dropped, the rules they make false reported),
+    is refused: each value dropped, by its key, standing in its own way; each rule broken,
+    by its key, with the stored choices standing in its way that ``named`` (the change's
+    keys) does not name. None where it is not."""
+    dropped = {
+        outcome.owner: () if isinstance(outcome.result, Available) else outcome.result.findings
+        for outcome in report.outcomes
+        if outcome.status == "dropped"
     }
-    return done.point, again, done.fallbacks
+    if not dropped and not report.broken:
+        return None
+    why = dict(dropped) | {rule.rule: rule.result.findings for rule in report.broken}
+    standing = {key: (key,) for key in dropped} | {
+        rule.rule: tuple(key for key in rule.standing if key not in named) for rule in report.broken
+    }
+    return Refusal(why, standing)
 
 
 def _keyed(
@@ -1021,12 +977,12 @@ class Network:
             return held.was
         return (self._facts[name], self._points[name])
 
-    def trial(
-        self, changes: Mapping[Key, object], clear: Collection[Key] = (), *, check: bool = True
-    ) -> Trial[Self]:
+    def trial(self, changes: Mapping[Key, object], clear: Collection[Key] = ()) -> Trial[Self]:
         """``changes`` set and ``clear`` cleared, atomically over the members they reach;
-        see the module docstring. ``check`` false skips step 4 (a reopen's clear, or the
-        cut, which leaves a refused channel for emission to name)."""
+        see the module docstring. Refused only by a value outside its domain or a rule the
+        change makes newly false, of a member or of a channel rebuilt from new facts: a
+        channel refused on its own (one bound from facts it waited on, or never had) is its
+        validity's to state."""
         names = set(self._ranked)
         refused: dict[Key, tuple[Finding, ...]] = {}
         standing: dict[Key, tuple[Key, ...]] = {}
@@ -1043,7 +999,7 @@ class Network:
             else:
                 clears.setdefault(key[0], []).append(key[1])
         if refused:
-            return Trial(self, {}, refused)
+            return Trial(self, refused)
         points = dict(self._points)
         unbound = dict(self._unbound)
         facts = dict(self._facts)
@@ -1058,10 +1014,7 @@ class Network:
             points[name] = outcome
             changed.append(name)
         if refused:
-            return Trial(self, {}, refused, standing)
-        rederived: dict[Key, tuple[Finding, ...]] = {}
-        fallbacks: dict[Key, tuple[Finding, ...]] = {}
-        rebuilt: list[str] = []
+            return Trial(self, refused, standing)
         for name in self.channels:
             named = name in by_member or name in clears
             if not named and not any(read in changed for read in self._wires[name].reads):
@@ -1096,38 +1049,20 @@ class Network:
             if isinstance(built, Refusal):
                 _keyed(name, built, refused, standing)
                 continue
-            points[name], again, fell = built
+            points[name] = built
             facts[name] = read
-            rederived |= {(name, key): (finding,) for key, finding in again.items()}
-            fallbacks |= {(name, finding.owner): (finding,) for finding in fell}
             unbound.pop(name, None)
             changed.append(name)
-            rebuilt.append(name)
         if refused:
-            return Trial(self, rederived, refused, standing)
-        network = self._made(points, unbound, facts)
-        if check:
-            refused = network.checked(rebuilt)
-            if refused:
-                return Trial(self, rederived, refused)
-        return Trial(network, rederived, {}, fallbacks=fallbacks)
-
-    def checked(self, members: Iterable[str]) -> dict[Key, tuple[Finding, ...]]:
-        """Why each of ``members`` is refused, by ``(name, "")``: its validity's false
-        pieces' findings (``refusal``)."""
-        refused: dict[Key, tuple[Finding, ...]] = {}
-        for name in members:
-            found = refusal(inspection.validity(self.member(name)))
-            if found:
-                refused[(name, "")] = found
-        return refused
+            return Trial(self, refused, standing)
+        return Trial(self._made(points, unbound, facts), {})
 
     def with_choices(self, changes: Mapping[Key, object]) -> Self:
         """``changes`` set as the engine accepts them (a channel rebuilt from new facts is
         not checked here: its validity is its own to state); a refusal is a
         ``NetworkError`` naming each refused value or rule, with the stored choices
         standing in its way."""
-        trial = self.trial(changes, check=False)
+        trial = self.trial(changes)
         if trial.refused:
             raise NetworkError(
                 "choices are not accepted: "

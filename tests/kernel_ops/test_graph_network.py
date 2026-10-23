@@ -160,7 +160,7 @@ def test_a_lifted_initializers_source_choices_are_out_of_play_in_the_partition()
     model = model.transform(InferKernelTensors())
     streamed = kernel_op(model, model.graph.node[0])
     # The node replays its own choices only: the weight edge's are the partition's, its
-    # source's memory's (the interim channel rule's beside the one set).
+    # source's memory's (the cut's policies' beside the one set).
     source = {
         "source.ram_style": "block",
         "source.pumped_memory": False,

@@ -535,18 +535,16 @@ class Partition:
 
     # -- a change ---------------------------------------------------------------------------
 
-    def trial(
-        self, changes: Mapping[Key, object], clear: Collection[Key] = (), *, check: bool = True
-    ) -> Trial[Self]:
+    def trial(self, changes: Mapping[Key, object], clear: Collection[Key] = ()) -> Trial[Self]:
         """``changes`` set and ``clear`` cleared, as one change of the design space
         (``try_with_choices``), each key mapped to its path: refused where a value is
         outside its domain (by the choice's key) or a rule the change makes newly false (by
         the rule's key, another member's where the change reaches it), with the stored
-        choices standing in its way; or a key that names no choice (``not-a-decision``).
-        Nothing is rebuilt: the trial's ``rederived`` and ``fallbacks`` are empty, and
-        ``check`` (a hand-built network's check of the channels it rebuilt) reads nothing. A
-        request the engine refuses as malformed (a value of another type) is refused, each
-        key named (``request-refused``)."""
+        choices standing in its way (a channel's, where a fold reaches its rules, or a
+        kernel's: the seam's fold rule, ``finn.kernels.explore.Seam.set``, reads them); or a
+        key that names no choice (``not-a-decision``). A request the engine refuses as
+        malformed (a value of another type) is refused, each key named
+        (``request-refused``)."""
         refused: dict[Key, tuple[Finding, ...]] = {}
         values: dict[object, object] = {}
         for key, value in changes.items():
@@ -563,21 +561,20 @@ class Partition:
             else:
                 clears.append(self._point.field(info.reference).clear())
         if refused:
-            return Trial(self, {}, refused)
+            return Trial(self, refused)
         try:
             report = self._point.try_with_choices(values, *clears)
         except (RequestError, ConfigurationError) as error:
             # A request the engine refuses as malformed (a value of another type).
             return Trial(
                 self,
-                {},
                 {
                     key: (Finding(FindingKind.REJECTION, "request-refused", key[1], str(error)),)
                     for key in (*changes, *clear)
                 },
             )
         if report.accepted:
-            return Trial(self.at(report.instance), {}, {})
+            return Trial(self.at(report.instance), {})
         standing: dict[Key, tuple[Key, ...]] = {}
         for outcome in report.outcomes:
             if outcome.status == "refused" and isinstance(outcome.result, (Rejected, Unresolved)):
@@ -590,7 +587,7 @@ class Partition:
                 key = self._composed.names.pair(rule.rule)
                 refused[key] = self._locator.rule(rule).result.findings
                 standing[key] = tuple(self._composed.names.pair(each) for each in rule.standing)
-        return Trial(self, {}, refused, standing)
+        return Trial(self, refused, standing)
 
     def with_choices(self, changes: Mapping[Key, object]) -> Self:
         """``changes`` set as one change (``trial``); a refusal is a ``ValueError`` naming

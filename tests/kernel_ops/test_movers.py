@@ -202,7 +202,7 @@ def chain_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None
 
 def cut_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None) -> InShell:
     """The Chain's network in the shell of ``target``, its channels' choices made there as
-    the cut makes them (``MakeCutChoices``: the interim channel rule; the movers the shell
+    the cut makes them (``MakeCutChoices``: the cut's policies; the movers the shell
     offers are placed, no choice)."""
     model = kernel_model() if model is None else model
     write_target(model, target)
@@ -289,7 +289,7 @@ def test_a_network_waits_for_its_members_resources() -> None:
     assert bound.undecided() == ()
     assert isinstance(shell_resources(bound), ShellResources)
     # A weight's memory style cleared: it waits on that open choice, owned by its member.
-    opened = bound.trial({}, clear=[("w1", "source.ram_style")], check=False).network
+    opened = bound.trial({}, clear=[("w1", "source.ram_style")]).network
     waiting = shell_resources(opened)
     assert isinstance(waiting, tuple)
     assert {(finding.code, finding.owner) for finding in waiting} == {

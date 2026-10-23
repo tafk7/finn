@@ -41,15 +41,15 @@ and nothing fills a value in but a strategy):
 - keeps what it found (``explored``): the network, its cost and the report: the strategy
   with every value it changed (``changed``: before and after, by owner), how many it
   reopened and gave back their prior values (``kept``), those it set by their policy
-  where the prior value is refused (``by_policy``), those it left open (``unset``), the
-  stored channel choices the interim channel rule derived again on its way
-  (``rederived``) and those it set as the new facts brought them into play
-  (``interim``), a ``Hold``'s held keys, attempts and time; every value by its owner (a
-  node or a tensor, by graph name, and the key there, as the log
-  ``report/kernel_choices.json`` names it), with who set it (``saved``: the body, the
-  strategy, the strategy by the choice's policy, ``<strategy>, its policy``, or the
-  interim channel rule, a channel's value its rebuild gave it on the strategy's way,
-  ``interim channel rule``); the keys
+  where the prior value is refused (``by_policy``), those it left open (``unset``), what
+  the fold rule did for the strategy's changes (``finn.kernels.explore.Seam.set``): the
+  stored channel choices the seam cleared, each standing in the way of a change, with why
+  (``cleared``), and the channel choices it set by the cut's policy, cleared or brought
+  into play by a change, with their values (``settled``), a ``Hold``'s held keys, attempts
+  and time; every value by its owner (a node or a tensor, by graph name, and the key
+  there, as the log ``report/kernel_choices.json`` names it), with who set it (``saved``:
+  the body, the strategy (the fold rule's values among its own), or the strategy by the
+  choice's policy, ``<strategy>, its policy``); the keys
   held; the choices left open (a required one named so); each FIFO's memory style beside
   the storage FinnLib's selection gives it and what it uses
   (``fifo_storage``: its ``auto`` is FinnLib's, not Vivado's); whether FIFOs were
@@ -148,9 +148,6 @@ if TYPE_CHECKING:
 
 #: No value: a key absent from a mapping of values.
 _ABSENT = object()
-
-#: Who set a channel's value the network's rebuild gave it, as a report names it.
-INTERIM = "interim channel rule"
 
 
 @dataclass(frozen=True)
@@ -501,14 +498,13 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
             if before.get(key, _ABSENT) != after.get(key, _ABSENT)
         ]
         by_policy = {key for run in seam.runs for key in run.by_policy}
-        by_rule = {key for run in seam.runs for key in (*run.rederived, *run.interim)}
         for key in changed:
             if key not in after:
                 set_by.pop(key, None)
             elif key in by_policy:
                 set_by[key] = f"{label}, its policy"
             else:
-                set_by[key] = INTERIM if key in by_rule else label
+                set_by[key] = label
         entry = {
             **report,
             "committed": sum(key in after for key in changed),
@@ -519,10 +515,12 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
             "unset": {
                 dotted(key): why(found) for run in seam.runs for key, found in run.unset.items()
             },
-            "rederived": {
-                dotted(key): why(found) for run in seam.runs for key, found in run.rederived.items()
+            "cleared": {
+                dotted(key): why(found) for run in seam.runs for key, found in run.cleared.items()
             },
-            "interim": [dotted(key) for run in seam.runs for key in run.interim],
+            "settled": {
+                dotted(key): value for run in seam.runs for key, value in run.settled.items()
+            },
             "attempts": seam.attempts - attempts,
             "seconds": round(time.perf_counter() - began, 3),
         }

@@ -53,7 +53,7 @@ def configured(model: ModelWrapper, choices: Mapping[str, Mapping[str, object]])
     """``model`` with ``choices`` (by graph name: a kernel's under its node, a channel's
     under its tensor) set the way the compiler sets them: the network of the model's
     KernelOps bound, the values set through the seam as a strategy sets them, one batch,
-    each channel's open choices then set by the interim channel rule, as the cut sets them,
+    each channel's open choices then set by the cut's policies, as the cut sets them,
     the result persisted (``persist``); a value the seam refuses is refused, by its code.
     ``model`` is changed in place and returned."""
     nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]

@@ -821,7 +821,7 @@ def matmul_assembly(
     ``Unstated``). PE, SIMD and pumping are the core's, and the
     packed core's ``reducer``. The kernel's choices are set first, then its channels',
     whose contracts are its: the network builds each channel as its contracts become
-    known and gives its choices their first valid values (the interim channel rule), the
+    known and gives its choices their first valid values (the cut's policies), the
     weight channel's memory and FIFO as given.
     """
     if not isinstance(weight_delivery, WeightDelivery):

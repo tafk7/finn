@@ -202,8 +202,7 @@ def test_a_folding_factor_outside_its_domain_is_refused_by_its_own_finding_alone
             ("matmul", "pe"): 3,
             ("matmul", "simd"): 2,
             ("matmul", "compute.packed.compute_pumping"): False,
-        },
-        check=False,
+        }
     )
     assert list(trial.refused) == [("matmul", "pe")]
     found = {(item.code, item.owner) for item in trial.refused[("matmul", "pe")]}

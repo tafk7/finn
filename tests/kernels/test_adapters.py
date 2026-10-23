@@ -8,8 +8,8 @@ PE channels a beat, channels innermost. The channel between them derives the
 steps from the two presentations, split at its transport, and exactly one
 adapter candidate a side carries them out: nothing for the same order, a ``vpc``
 before the transport for other lanes, an ``input_gen`` after it for another
-beat order, and both: each side's set first valid as the network builds the channel (the
-interim channel rule). A FIFO sits between the two sides. A channel that admits no adapter
+beat order, and both: each side's set first valid as the network builds the channel (the cut's
+policies). A FIFO sits between the two sides. A channel that admits no adapter
 refuses any step. FinnLib's ``inner_shuffle`` is not a candidate; a
 kernel with children places it explicitly (``TransposeKernel``, ``test_transpose.py``).
 """

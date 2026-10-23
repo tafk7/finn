@@ -3,9 +3,11 @@
 
 """The cut's policies: how the compiler gives a channel's choices their first values.
 
-A channel's choices are first set where the channel first has both its sides: at the cut
-(``finn.custom_op.kernels.shell.make_cut_choices``), and where a change rebuilds a channel
-from new facts (``finn.kernels.network.Network.trial``). The cut states their policies
+A channel's choices are first set at the cut
+(``finn.custom_op.kernels.shell.make_cut_choices``); after it, by a strategy only: where a
+change clears a channel's stored choice standing in its way or brings one into play, the
+seam's fold rule sets it by these policies, the strategy's
+(``finn.kernels.explore.Seam.set``). The cut states their policies
 (``finn.kernels.policies``), as a KernelOp states its kernel's: ``CHANNEL_POLICIES``,
 keyed by the class-level Decisions of the channel and its stages, checked against
 ``Channel`` when this module is imported:

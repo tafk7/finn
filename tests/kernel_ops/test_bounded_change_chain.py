@@ -5,7 +5,7 @@
 Stage 7's synthetic chain (four MatMuls, each followed by a Thresholding, and the
 channels between them) joined as one Space, kernels first, its choices committed as
 conversion and the cut set them (each kernel's by its default policies, each channel's
-by the interim channel rule). The engine's walk (``support.space_walk``) applies seeded
+by the cut's policies). The engine's walk (``support.space_walk``) applies seeded
 changes to it: a kernel's core, its folding, a channel's memory or depth, a clear, a
 pair of changes, and ones the kernels refuse; each successor is compared with a
 configuration of the same assignments built from nothing. Here a channel's facts read

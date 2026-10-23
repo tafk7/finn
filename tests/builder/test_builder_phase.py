@@ -1062,17 +1062,14 @@ def test_a_target_throughput_folds_tfc_as_set_folding_does(
     assert (target["unfolded"], target["met"]) == ({}, True)
     # Of TFC's 69 choices, every one saved: the target throughput changes the folding off
     # conversion's (6 of 12); the output adapter the new folding brings into play on five
-    # channels is placed, no choice, so the interim channel rule sets none; the rest keep
+    # channels is placed, no choice, so the fold rule clears and sets none; the rest keep
     # the values stored at their creation (a node's at conversion, a channel's at the cut),
     # each MatMul's pumping given back off, transports direct (no step_size_fifos). The
     # report names who set each.
     assert target["committed"] == 6
+    assert (target["cleared"], target["settled"]) == ({}, {})
     made_by = [entry["by"] for held in report["choices"].values() for entry in held.values()]
-    assert (
-        made_by.count("target_throughput"),
-        made_by.count("interim channel rule"),
-        made_by.count("saved"),
-    ) == (6, 0, 63)
+    assert (made_by.count("target_throughput"), made_by.count("saved")) == (6, 63)
     assert report["open"] == []
     assert report["fifos"] == "not sized here (no size_fifos): each transport as it was"
     # The Zynq shell's input mover binds: 196 beats and a call's 4 cycles (SZ3 (a): a

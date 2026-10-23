@@ -445,7 +445,7 @@ def test_tfc_s_choices_are_created_at_conversion_and_at_the_cut(
 ) -> None:
     """SR6's two moments on TFC_W2A2: conversion stores each KernelOp's own choices,
     each at its default policy, first valid (44 values on 8 nodes), and no channel's; the
-    cut creates the channels' by the interim channel rule, first valid (25 values on 13
+    cut creates the channels' by the cut's policies, first valid (25 values on 13
     tensors: transports, the weights' memories, the input buffers' adapters' memories; the
     weights' sources and the two boundary movers are placed, and the input buffers'
     adapters picked by their steps, no choices), on the body's network, where it binds the

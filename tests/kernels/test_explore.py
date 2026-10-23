@@ -7,7 +7,7 @@ restore), and the strategies that search it.
 On the Chain (``support.chain``: MatMul ``first``, Thresholding ``activate`` at a
 fixed PE, MatMul ``second``; three rows of four), its platform at 5 ns: as conversion and
 the cut leave it (``support.helpers.with_defaults``: each kernel's choices by its
-policies, each channel's by the interim channel rule), or with nothing chosen
+policies, each channel's by the cut's), or with nothing chosen
 (``chain.network()``) where a test reads what is open. No ONNX: the seam reads a network
 and its members, each key a member and the key in its space; owners are the KernelOps'
 (``tests/kernel_ops/test_explore.py``). A test names a key ``member.key``
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, replace
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from qonnx.core.datatype import DataType
@@ -36,7 +36,7 @@ from support.refusals import refused
 
 import finn.kernels.explore as explore_module
 from finn.core.reporting.findings import Finding, FindingKind
-from finn.core.space import Decision, Space, derived, design_space, inspection
+from finn.core.space import design_space, inspection
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.explore import (
@@ -58,11 +58,11 @@ from finn.kernels.explore import (
     explore,
 )
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.network import Fact, Interface, Network, NetworkError, Wire, wire
+from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
 from finn.kernels.policies import Required
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.utilization import total
-from finn.platform.capabilities import RESOURCE_NAMES, Platform, Resources
+from finn.platform.capabilities import RESOURCE_NAMES, Resources
 
 
 def held(explorer: Seam) -> Seam:
@@ -213,12 +213,16 @@ def test_a_batch_commits_a_selector_and_a_choice_nested_under_it_together() -> N
     explorer, base = seam()
     batch = keyed({"hidden.transport": "fifo", "hidden.transport.fifo.depth": 16})
     outcome = explorer.set(base, batch)
-    assert isinstance(outcome, Accepted) and not outcome.rederived
+    # The FIFO's style, brought into play by the change, is set by the cut's policy (the
+    # fold rule: first valid, ``auto``), the strategy's, named.
+    assert isinstance(outcome, Accepted) and not outcome.cleared
+    assert outcome.settled == keyed({"hidden.transport.fifo.buffer.ram_style": "auto"})
     assert {
         k: v for k, v in chosen(explorer, outcome.network).items() if k.startswith("hidden.")
     } == {
         "hidden.transport": "fifo",
         "hidden.transport.fifo.depth": 16,
+        "hidden.transport.fifo.buffer.ram_style": "auto",
     }
     # Alone, the nested choice is stored out of play: its case is not selected.
     alone = explorer.set(base, keyed({"hidden.transport.fifo.depth": 16}))
@@ -236,7 +240,7 @@ def test_a_change_that_puts_a_choice_out_of_play_keeps_it_dormant_and_a_held_one
     )
     assert isinstance(fifo, Accepted)
     direct = explorer.set(fifo.network, keyed({"hidden.transport": "direct"}))
-    assert isinstance(direct, Accepted) and not direct.rederived
+    assert isinstance(direct, Accepted) and not direct.cleared and not direct.settled
     depth = "hidden.transport.fifo.depth"
     assert chosen(explorer, direct.network)[depth] == 16
     assert state(direct.network, depth) == inspection.Dormant(16)
@@ -260,10 +264,12 @@ def test_a_fifo_depth_is_known_by_membership_and_proposed_through_a_change() -> 
     small = explorer.set(fifo.network, {depth.key: 1})
     assert isinstance(small, Refused)
     assert "domain-membership" in [finding.code for finding in small.why[depth.key]]
-    # Its style is a choice of its own, set with it: nothing fills it in.
+    # Its style is a choice of its own, brought into play with it: the fold rule sets it by
+    # the cut's policy (first valid, ``auto``) and leaves the depth, required, open.
     style = ("levels", "transport.fifo.buffer.ram_style")
-    assert offered(explorer, fifo.network)[dotted(style)].cases[0] == "auto"
-    sized = explorer.set(fifo.network, {depth.key: 16, style: "auto"})
+    assert fifo.settled == {style: "auto"} and list(fifo.unsettled) == [depth.key]
+    assert dotted(style) not in offered(explorer, fifo.network)
+    sized = explorer.set(fifo.network, {depth.key: 16})
     assert isinstance(sized, Accepted)
     # The FIFO sits before the input adapter that makes second's markers, so the
     # channel carries it: folded around it (no transport is a folding strategy's),
@@ -316,7 +322,7 @@ def test_target_cycles_folds_the_least_parallelism_that_meets_the_budget() -> No
     assert explorer.choices(folded) == ()
     assert chosen(explorer, folded) == {**chosen(explorer, network), **FOLDED_12}
     (run,) = explorer.runs
-    assert (run.by_policy, run.unset, run.rederived) == ({}, {}, {})
+    assert (run.by_policy, run.unset, run.cleared, run.settled) == ({}, {}, {}, {})
     report = strategy.report()
     assert report["bottleneck"] == {
         "members": ["first", "second", "x", "hidden", "levels"],
@@ -511,8 +517,8 @@ def test_a_target_throughput_is_a_cycles_budget_at_the_platform_s_clock() -> Non
 
 def test_the_defaults_set_each_open_choice_by_its_policy_and_leave_required_ones() -> None:
     """``Defaults`` on a network with nothing chosen sets each kernel's choices by its
-    policies (each first valid here) and each channel's by the interim channel rule,
-    every transport ``direct``; a required choice stays open."""
+    policies (each first valid here) and each channel's by the cut's, every transport
+    ``direct``; a required choice stays open."""
     explorer = held(Seam(FULL_DSP48E2))
     base = Defaults().explore(explorer, chain.network())
     values = chosen(explorer, base)
@@ -545,7 +551,7 @@ def test_reopen_clears_its_keys_in_one_change_and_a_channel_waits_on_its_kernel(
     }
     # The folding back, the channel is bound again, its choices set again.
     again = explorer.set(opened, keyed({"first.pe": 1}))
-    assert isinstance(again, Accepted) and not again.rederived
+    assert isinstance(again, Accepted) and not again.cleared and not again.settled
     assert explorer.chosen(again.network) == explorer.chosen(base)
     # A key not stored is nothing to reopen.
     network = chain.network()
@@ -617,7 +623,7 @@ def test_set_refuses_a_change_that_breaks_a_rule_naming_what_stands_in_its_way()
     assert isinstance(explorer.set(base, keyed({"first.pe": 3})), Refused)
 
 
-def test_a_held_choice_a_change_would_put_out_of_play_or_derive_again_refuses_the_change() -> None:
+def test_a_held_choice_a_change_would_put_out_of_play_refuses_the_change() -> None:
     """A held choice a change would put out of play refuses the change, naming it; one a
     change leaves breaking a rule refuses it by the rule, as any other; a strategy that
     cannot restore a held choice never reopens it."""
@@ -627,7 +633,7 @@ def test_a_held_choice_a_change_would_put_out_of_play_or_derive_again_refuses_th
     style = ("x", "adapter_ram_style")
     folding = keyed({"first.simd": 4, "first.pe": 4})
     unheld = explorer.set(base, folding)
-    assert isinstance(unheld, Accepted) and not unheld.rederived
+    assert isinstance(unheld, Accepted) and not unheld.cleared
     assert state(unheld.network, dotted(style)) == inspection.Dormant("distributed")
     explorer.held[style] = "distributed"
     dropped = explorer.set(base, folding)
@@ -662,102 +668,6 @@ def test_a_held_choice_a_change_would_put_out_of_play_or_derive_again_refuses_th
     assert pumping not in explorer.runs[-1].reopened
 
 
-class Board(Space):
-    """A member that states the platform of the Chain's hidden channel: with UltraRAM or
-    without, by its own choice."""
-
-    uram: bool = Decision(values=(True, False))
-
-    @derived
-    def platform(self) -> Platform:
-        return replace(FULL_DSP48E2, uram=self.uram, uram_init=self.uram)
-
-
-def boarded() -> Network:
-    """The Chain as conversion and the cut leave it, its hidden channel's platform read
-    from a ``Board`` with UltraRAM."""
-    members = chain.members()
-    hidden = cast(Wire, members["hidden"])
-    network = Network(
-        {
-            "board": Board(),
-            **members,
-            "hidden": Wire({**hidden.facts, "platform": Fact("board", "platform")}),
-        }
-    )
-    return with_defaults(choose(network, {"activate.pe": chain.PE, "board.uram": True}))
-
-
-#: A FIFO depth an UltraRAM FIFO holds and a block RAM one cannot address: ``auto`` takes
-#: UltraRAM where the platform has it, block RAM where not.
-DEEP = 3 * 2**30 + 10
-
-
-def test_a_held_channel_choice_a_rebuild_would_derive_again_refuses_the_change() -> None:
-    """A channel rebuilt from new facts derives again the stored choices they refuse
-    (interim: the interim channel rule), each named (``Accepted.rederived``); a held one
-    refuses the change instead (``held``), the derivation its cause: a FIFO's depth (left
-    open, a required choice) as its style (first valid). Here the change is the Board's,
-    taking the hidden channel's UltraRAM away."""
-    explorer = Seam(FULL_DSP48E2)
-    network = boarded()
-    deep = choose(
-        network,
-        {
-            "hidden.transport": "fifo",
-            "hidden.transport.fifo.depth": DEEP,
-            "hidden.transport.fifo.buffer.ram_style": "auto",
-        },
-    )
-    depth = ("hidden", "transport.fifo.depth")
-    unheld = explorer.set(deep, keyed({"board.uram": False}))
-    assert isinstance(unheld, Accepted) and depth in unheld.rederived
-    assert depth not in unheld.network.chosen()
-    explorer.held[depth] = DEEP
-    held_ = explorer.set(deep, keyed({"board.uram": False}))
-    assert isinstance(held_, Refused) and list(held_.why) == [depth]
-    (found,) = held_.why[depth]
-    assert (found.code, found.owner) == ("held", "hidden.transport.fifo.depth")
-    assert found.message.startswith(f"held to {DEEP}, derived again by the change: ")
-    assert [cause.code for cause in found.causes] == ["choice-rederived"]
-    # The FIFO's style, ``ultra``, the same way.
-    ultra = choose(
-        network,
-        {
-            "hidden.transport": "fifo",
-            "hidden.transport.fifo.depth": 16,
-            "hidden.transport.fifo.buffer.ram_style": "ultra",
-        },
-    )
-    style = ("hidden", "transport.fifo.buffer.ram_style")
-    explorer.held = {style: "ultra"}
-    held_ = explorer.set(ultra, keyed({"board.uram": False}))
-    assert isinstance(held_, Refused) and list(held_.why) == [style]
-    assert [f.code for f in held_.why[style]] == ["held"]
-    # A strategy that changes the Board is refused the same way.
-    with refused("pin-refused", error=ExploreError, message="derived again by the change"):
-        Hold({"board": {"uram": False}}).explore(explorer, ultra)
-
-
-def test_a_choice_a_rebuild_brings_into_play_is_the_interim_rule_s_not_the_strategy_s() -> None:
-    """A fold that brings a channel's choice into play (the memory of the adapter its
-    kernel's narrower folding needs, which the steps pick) leaves it to the network's
-    rebuild, the interim channel rule: the strategy sets by its policy only the choices
-    under a selector it reopened."""
-    explorer = held(Seam(FULL_DSP48E2))
-    folding_ = {"first.pe": 4, "first.simd": 4}
-    wide = with_defaults(choose(chain.network(), {"first.compute": "packed", **folding_}))
-    assert wide.member("x").input_chain == "none"
-    assert isinstance(state(wide, "x.adapter_ram_style"), inspection.Absent)
-    folded = TargetCycles(48).explore(explorer, wide)
-    assert folding(explorer, folded)["first.simd"] == 1
-    assert folded.member("x").input_chain == "input_gen"
-    style = chosen(explorer, folded)["x.adapter_ram_style"]
-    (run,) = explorer.runs
-    assert run.by_policy == {} and run.unset == {}
-    assert run.interim == {("x", "adapter_ram_style"): style}
-
-
 def test_a_strategy_reopens_its_scope_and_keeps_what_it_does_not_decide() -> None:
     """A strategy changes only what it decides: a reducer an earlier strategy set stays,
     though the folding strategy reopens every choice of a member; the run records what
@@ -772,8 +682,8 @@ def test_a_strategy_reopens_its_scope_and_keeps_what_it_does_not_decide() -> Non
     (run,) = explorer.runs
     assert run.strategy == "target_cycles"
     assert ("second", "compute.packed.reducer") in run.reopened
-    # A channel's choices are not a fold's: the network's rebuild keeps them, or derives
-    # again what the new facts refuse.
+    # A channel's choices are not a fold's: they stay as stored, and one standing in a
+    # fold's way is the fold rule's to clear and set again (``Seam.set``).
     assert not any(key[0] in folded.channels for key in run.reopened)
     assert run.kept[("second", "compute.packed.reducer")] == "compressor"
     assert set(run.kept) | set(run.by_policy) <= set(run.reopened)

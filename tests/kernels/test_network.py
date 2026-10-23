@@ -9,9 +9,9 @@ once per set of facts; a change reaching one kernel and the channels that read i
 the change names refused, by its value's domain or by the rule it would break; its module, one
 composed netlist, each member under its node, refused where its pins cannot be formed;
 its stored choices set as each member binds, as one change (a value outside its domain
-dropped, a rule they break refusing the network); the interim channel rule where a channel
-is rebuilt from new facts; a kernel given bound; and a change that keeps a network's
-class.
+dropped, a rule they break refusing the network); a channel rebuilt from new facts
+keeping its stored choices, one they refuse refusing the change; a kernel given bound;
+and a change that keeps a network's class.
 """
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ def test_a_trial_refuses_what_the_change_names_and_keeps_what_it_puts_out_of_pla
     fifo = choose(folded, {"hidden.transport": "fifo", "hidden.transport.fifo.depth": 16})
     # The FIFO's depth, under a case no longer selected, is kept, dormant: nothing drops.
     trial = fifo.trial(keyed({"hidden.transport": "direct"}))
-    assert trial.accepted and not trial.rederived
+    assert trial.accepted
     states = dict(trial.network.states(("hidden",)))
     assert states[("hidden", "transport.fifo.depth")] == inspection.Dormant(16)
     assert fifo.with_choices(keyed({"hidden.transport": "direct"})).chosen(("hidden",)) == {
@@ -245,29 +245,31 @@ def test_reasons_name_each_key_once_with_the_choices_standing_in_its_way() -> No
     )
 
 
-def test_a_channel_rebuilt_from_new_facts_rederives_only_what_they_refuse() -> None:
-    """Interim (to be replaced): a channel rebuilt from new facts keeps every
-    stored choice the new facts accept; one they refuse is derived again, first valid, and
-    named with its old value, its new one and why. A change of the channel's own choices
-    alone takes nothing, and a choice a change left open stays open."""
+def test_a_channel_rebuilt_from_new_facts_keeps_its_choices_and_refuses_what_they_break() -> None:
+    """A channel rebuilt from new facts keeps every stored choice; one the new facts
+    refuse refuses the change, standing in the way of the rule they make false, as a
+    partition's design space refuses it (nothing is derived again: the seam's fold rule
+    clears it and sets it again, the strategy's). Cleared in the same change, it is left
+    open; and a choice a change left open stays open."""
     network = choose(Network(boarded()), {**{"activate.pe": chain.PE}, **FOLDING})
     network = choose(network, ULTRA_FIFO)
+    style = ("hidden", "transport.fifo.buffer.ram_style")
     trial = network.trial(keyed({"board.uram": False}))
-    assert trial.accepted
-    assert list(trial.rederived) == [("hidden", "transport.fifo.buffer.ram_style")]
-    (finding,) = trial.rederived[("hidden", "transport.fifo.buffer.ram_style")]
-    assert finding.code == "choice-rederived"
-    assert dict(finding.details) == {"value": "ultra", "rederived": "auto"}
-    assert [cause.code for cause in finding.causes] == ["uram-absent"]
-    assert trial.network.chosen(("hidden",)) == {
-        **network.chosen(("hidden",)),
-        ("hidden", "transport.fifo.buffer.ram_style"): "auto",
+    rule = ("hidden", "transport.fifo.buffer.uram_present")
+    assert not trial.accepted and list(trial.refused) == [rule]
+    assert [finding.code for finding in trial.refused[rule]] == ["uram-absent"]
+    assert trial.standing == {rule: (style,)}
+    cleared = network.trial(keyed({"board.uram": False}), (style,))
+    assert cleared.accepted
+    assert dict(cleared.network.states(("hidden",)))[style] == inspection.Open()
+    assert cleared.network.chosen(("hidden",)) == {
+        key: value for key, value in network.chosen(("hidden",)).items() if key != style
     }
     # A transport a change left open stays open when its channel is rebuilt.
     reopened = network.trial({}, (("hidden", "transport"),)).network
     assert dict(reopened.states(("hidden",)))[("hidden", "transport")] == inspection.Open()
     rebuilt = reopened.trial(keyed({"board.uram": False}))
-    assert rebuilt.accepted and not rebuilt.rederived
+    assert rebuilt.accepted
     assert ("hidden", "transport") in rebuilt.network.undecided()
 
 

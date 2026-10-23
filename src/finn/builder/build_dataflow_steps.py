@@ -305,7 +305,7 @@ def step_size_fifos(
     producer within its idle time, plus ``fifo_margin`` words. A held channel is kept.
     ``fifo_ram_style`` commits a memory style with each FIFO's depth; with None the FIFO
     keeps its held style, else its earlier one, else takes ``auto`` (FinnLib's own choice by
-    depth and width, the interim channel rule's), and its depth is sized for that style.
+    depth and width, the cut's policy's first valid), and its depth is sized for that style.
     Writes report/step_size_fifos.json."""
     strategy = SizeFifos(margin=fifo_margin, ram_style=fifo_ram_style)
     _explore(model, cfg, "step_size_fifos", strategy)
