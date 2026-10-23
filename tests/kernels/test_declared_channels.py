@@ -31,6 +31,7 @@ from finn.kernels.channels import Channel, boundary_contract
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
 from finn.kernels.port import STREAM
+from finn.kernels.sides import SIDE, Side
 from finn.kernels.transport import AxisBeat, StreamContract
 
 INT4 = ScalarEncoding(DataType["INT4"])
@@ -130,15 +131,18 @@ def test_a_channel_waits_for_its_own_sides_only():
     assert isinstance(point.member("first").query(Channel.netlist), Available)
     assert isinstance(point.member("second").query(Channel.netlist), Available)
     assert isinstance(module_of(point, "constants"), Unresolved)
-    # A channel takes its ports' streams as facts, each with its port's label from the
-    # network, and its producing port's word width; the fact a stream is bound to is its side.
+    # A channel takes each side as one fact: a port's side, its stream, its label from the
+    # network and, an output's, its word width; the side no port is wired to the boundary's.
     first = point.member("first")
     produced = point.member("first_source")
-    assert first.producer == produced.output_stream
-    assert first.producer_label == "first_source.output"
-    assert first.producer_width == produced.output_data_width == 8
+    assert first.producer == Side.kernel(
+        produced.output_stream, "first_source.output", produced.output_data_width
+    )
+    assert first.producer.width == 8
+    assert first.consumer == Side.boundary("out0_V")
     sides = first.sides
-    assert (sides.source_owner, sides.sink_owner) == ("first_source.output", None)
+    assert (sides.source_owner, sides.sink_owner) == ("first_source.output", "out0_V")
+    assert sides.owners == ("first_source.output", None)
     assert first.boundary.transport.name == "out0_V"
     assert sides.sink == Stream(first.boundary.element, first.boundary.sequence)
 
@@ -169,6 +173,10 @@ class Replaying(Space):
         contract = replaying()
         return Stream(contract.element, contract.sequence)
 
+    @derived(semantics=SIDE)
+    def port_side(self) -> Side:
+        return Side.kernel(self.port_stream, "port")
+
     @view(semantics=PORT_CONTRACT)
     def port_contract(self) -> PortContract:
         return PortContract("port", replaying())
@@ -188,7 +196,7 @@ def test_a_boundary_presents_its_free_side_without_the_replay_the_receiver_reali
     )
     edge = receiver.member("edge")
     sides = edge.sides
-    assert sides.source_owner is None and sides.sink_owner == "reader.port"
+    assert sides.producer == Side.boundary("in0_V") and sides.sink_owner == "reader.port"
     # Each row once, no marker: the replay and the frame are the receiver's to realize.
     assert sides.source == Stream(INT4, BeatSequence(vector_major((2, 4), 2)))
     assert edge.boundary.transport.name == "in0_V" and not edge.boundary.rules
@@ -270,12 +278,15 @@ def test_a_boundary_channel_needs_its_port_name():
             "source": source((1, 2, 3, 4), VECTOR),
         }
     )
-    refused = unnamed.member("out").query(Channel.netlist)
+    # A side no port is wired to, and no port names, is no side the network can give: it
+    # refuses the channel as it binds it, owned by the channel.
+    validity = unnamed.validity("out")
+    assert validity.status == "refused"
+    assert isinstance(validity.result, Rejected)
+    assert {(f.code, f.owner) for f in validity.result.findings} == {("channel-boundary", "out")}
+    refused = module_of(unnamed, "unnamed")
     assert isinstance(refused, Rejected)
-    # The origin, and beside it each guard that reads it (guard-refused, by its scope).
-    assert {f.code for f in refused.findings} == {"channel-boundary", "guard-refused"}
-    origins = {(f.code, f.owner) for f in refused.findings if f.code != "guard-refused"}
-    assert origins == {("channel-boundary", "sides")}
+    assert {f.code for f in refused.findings} == {"channel-boundary"}
 
 
 # -- the anchoring rule: a channel's facts read the members before it --------------------

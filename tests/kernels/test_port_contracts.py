@@ -159,7 +159,7 @@ def test_every_port_presents_what_the_schedule_derives():
     assert y.form == vector_major((ROWS, OUTPUTS), PE)
     assert [rule.beats for rule in x.markers] == [REDUCTION // SIMD]
     # Each port's contract is labelled after the port, from the root.
-    assert point.member("r").producer_label == "compute.y"
+    assert point.member("r").producer.label == "compute.y"
     # The cyclic weights and the results connect as derived.
     assert isinstance(point.member("w_s").query(Channel.netlist), Available)
     assert isinstance(point.member("r").query(Channel.netlist), Available)

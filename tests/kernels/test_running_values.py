@@ -37,12 +37,12 @@ miss, never a wrong answer.
 
 **What it costs.** An answer that read a value with no key is never kept: it is evaluated
 again in every design space that asks it. Every value FINN's kernels hold is keyed: the
-enums (``Form``, a beat sequence's repetition, a channel's steps, a transport's endpoint and
-marker kinds, and the platform's DSP block and fabric, which mix in ``str``), the QONNX
-datatypes, alone and inside a ``Tensor``, a port's stream and a stream contract, and the
-integer tensors. Stage 7's chain, made one Space by ``support.one_space``, holds no root
-facts (its kernels' facts are constants of its class) and stores only str, int and bool
-choices.
+enums (``Form``, a beat sequence's repetition, a channel's steps, a channel side's kind, a
+transport's endpoint and marker kinds, and the platform's DSP block and fabric, which mix in
+``str``), the QONNX datatypes, alone and inside a ``Tensor``, a channel's side (a port's
+stream inside it) and a stream contract, and the integer tensors. Stage 7's chain, made one
+Space by ``support.one_space``, holds no root facts (its kernels' facts are constants of its
+class) and stores only str, int and bool choices.
 """
 
 from __future__ import annotations
@@ -96,7 +96,8 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.traversal import Repetition
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import boundary_contract
-from finn.kernels.movers import MoverOffer
+from finn.kernels.movers import MoverOffer, iodma_hls
+from finn.kernels.sides import Side, SideKind
 from finn.kernels.transport import MarkerKind
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
@@ -153,9 +154,12 @@ VERDICTS: dict[str, Verdict] = {
         "a value class holding its element's QONNX datatype, a value type, and enums (the "
         "transport's endpoint and marker kinds and its repetition)",
     ),
-    "Stream": Verdict(
+    "Side": Verdict(
         "always",
-        "a value class holding its element's QONNX datatype, a value type, and a beat sequence",
+        "a value class: its kind an enum member, keyed by type and name; its label a str; "
+        "its stream, where it states one, a value class holding its element's QONNX "
+        "datatype, a value type, and a beat sequence; its width an int or None; its offers "
+        "value classes of a str and ints",
     ),
     "QONNXDataType": Verdict(
         "always", "semantics comparing by ==: a value type, the one instance of its name"
@@ -236,6 +240,12 @@ def made() -> dict[str, tuple[object, ...]]:
             Steps((Hop(Step.WIDTH, in_order(eight), in_order(four)),)),
         ),
         "Form": (Form.DENSE, Form.DEPTHWISE),
+        "Side": (
+            Side.boundary("s_axis_0", (iodma_hls(64),)),
+            Side.boundary("s_axis_0", (iodma_hls(64),)),
+            Side.source(),
+            Side.neighbour(Stream(eight.element, in_order(eight)), "a.y", 8),
+        ),
         "Platform": (full_platform(DspBlock.DSP58),),
         "QONNXDataType": (DataType["INT8"], DataType["UINT2"]),
         "integer tensor": (
@@ -249,9 +259,9 @@ def made() -> dict[str, tuple[object, ...]]:
 @cache
 def samples() -> dict[str, list[object]]:
     """Each name's samples: the configured Chain's facts and stored choices (each read
-    with its member's semantics), a copy of its first stream, the stream contracts its
-    streams make as a channel's free side (a mover's side), and the values ``made``
-    here."""
+    with its member's semantics), a copy of its first side, the stream contracts the
+    streams of its sides make as a channel's free side (a mover's side), and the values
+    ``made`` here."""
     found: dict[str, list[object]] = {}
     network = chain()
     for name in network.members:
@@ -261,8 +271,9 @@ def samples() -> dict[str, list[object]]:
                 semantics = index.semantics
                 assert semantics is not None
                 found.setdefault(semantics.name, []).append(value)
-    streams = cast(list[Stream], found.get("Stream", []))
-    streams.append(dataclasses.replace(streams[0]))  # an equal one, another object
+    sides = cast(list[Side], found.get("Side", []))
+    sides.append(dataclasses.replace(sides[0]))  # an equal one, another object
+    streams = [side.stream for side in sides if side.stream is not None]
     found["StreamContract"] = [
         boundary_contract("stream", stream.element, stream.sequence, endpoint)
         for stream in streams
@@ -351,7 +362,16 @@ def test_a_key_hit_is_a_value_the_semantics_hold_equal(name: str) -> None:
         assert hits, name
 
 
-ENUMS: tuple[type[Enum], ...] = (Form, Repetition, Step, Endpoint, MarkerKind, DspBlock, Fabric)
+ENUMS: tuple[type[Enum], ...] = (
+    Form,
+    Repetition,
+    Step,
+    SideKind,
+    Endpoint,
+    MarkerKind,
+    DspBlock,
+    Fabric,
+)
 """Every enum the samples hold, at any depth: the cache keys every one's members, the
 platform's DSP block and fabric (which mix in ``str``) too."""
 

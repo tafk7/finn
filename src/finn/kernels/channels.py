@@ -6,13 +6,15 @@ two ports.
 
 A ``Channel`` is one producer-to-consumer edge, a member of a network
 (``finn.kernels.network``) or of a kernel with children, carrying one ``tensor`` given as
-a fact. The streams of the ports on it are facts too, ``producer`` and ``consumer``: each
-the ``Stream`` a member presents at one of its ports (a kernel's ``x_stream``), the fact
-it is bound to its side, or absent: the network's boundary. Beside each, the network gives
-its port's label (``producer_label``, ``consumer_label``: ``matmul.compute.packed.x``),
-and the producing port's word width (``producer_width``, its ``x_data_width``): a stream
-given without them is refused (``channel-side``). The channel's tensor is never derived
-from a port.
+a fact. Its two sides are facts too, ``producer`` and ``consumer``, each one value
+(``finn.kernels.sides.Side``) of its kind: a kernel's port (the ``Stream`` it presents,
+its label, ``matmul.compute.packed.x``, and on an output port its word width: a kernel's
+``x_side``), a frozen neighbour's (the same, given as a fact), the boundary's (its AXIS
+port's name, ``s_axis_0``, and the movers a shell offers on it, its stream unstated), or,
+for a known value, its own source. Each side's role takes its kinds only (``channel-users``):
+a producer is an output port, the boundary or the channel's source, and the source is the
+producer of a channel with a known value, and of no other; a consumer is an input port or
+the boundary. The channel's tensor is never derived from a port.
 
 Each side's stream must traverse the tensor (``channel-tensor``), and the steps between
 their beat sequences (``finn.dataflow.steps``) must be ones a chain of FinnLib modules
@@ -35,20 +37,20 @@ nothing, or ``fifo``; the FIFO owns its ``depth`` (the cut's policy requires it:
 exploration sizes it, ``finn.kernels.cut``) and its ``ram_style``, and carries data words
 only (``fifo-markers``). Its keys are the channel's, by its name (``("x", "transport")``).
 
-A channel with a port on one side only is a boundary: its ``port`` names the module's
-AXIS port (``in0_V``), refused where absent (``channel-boundary``), whose contract the
-channel builds from its facts (``boundary``). The boundary presents what its inner side
-presents, by one rule: an input without the replay or window its receiver realizes
-(``unreplayed``), an output as produced, neither with markers. Where a
-shell offers movers (``mover_offer``, ``finn.kernels.movers``), the channel places its
-``mover`` on that free side; it binds no RTL in the module and exports its contract
-(``MOVER``) for the shell's budget check and resources.
+A channel with a boundary side presents the module's AXIS port its label names, whose
+contract the channel builds from its facts (``boundary``). The boundary is unstated: it
+presents what its other side presents, by one rule: an input without the replay or window
+its receiver realizes (``unreplayed``), an output as produced, neither with markers. Where
+a shell offers movers on it (``offered``: the boundary side's ``offers``,
+``finn.kernels.movers``), the channel places its ``mover`` on that free side; it binds no
+RTL in the module and exports its contract (``MOVER``) for the shell's budget check and
+resources.
 
 A channel whose tensor has a known value (``contents``) places its ``source`` (a
-memory, ``MemStreamKernel``) as its only producer (``channel-users``), storing one period
-in the order its consumer reads it; with several sets, the source's set port is the
-channel's port (``set``, served by its source: ``set_stream``), which the index tensor's
-channel consumes.
+memory, ``MemStreamKernel``) as its producer (its producer side the source's,
+``channel-users``), storing one period in the order its consumer reads it; with several
+sets, the source's set port is the channel's port (``set``, served by its source:
+``set_stream``), which the index tensor's channel consumes.
 
 The source and the output adapter are placed where their condition holds, not chosen,
 and each keeps the label it is placed at (``SOURCE_LABEL``, ``OUTPUT_ADAPTER_LABEL``),
@@ -120,7 +122,8 @@ from finn.kernels.fifo import FifoKernel
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import MOVER, IodmaMover, MoverContract, MoverOffer
-from finn.kernels.port import STREAM, served
+from finn.kernels.port import served
+from finn.kernels.sides import Side, SideKind
 from finn.kernels.transport import (
     AxisBeat,
     Mismatch,
@@ -162,8 +165,8 @@ BOUNDARY_CONTRACT: ValueSemantics[StreamContract | None] = ValueSemantics(
     lambda left, right: left == right,
     lambda value: value,
 )
-"""The AXIS port a channel's module presents for its side without a port; None where both
-sides have one."""
+"""The AXIS port a channel's module presents for its boundary side; None where neither
+side is the boundary."""
 
 
 def boundary_contract(
@@ -402,32 +405,53 @@ class ChannelFifo(KernelSpace):
 
 @dataclass(frozen=True)
 class ChannelSides:
-    """A channel's producing and consuming sides: each side's owner (its port's label from
-    the network, ``matmul.compute.packed.x``; the channel's source label, ``SOURCE_LABEL``,
-    for a known value; None on the boundary) and its stream (on the boundary, what the
-    module's AXIS port presents: ``Channel.boundary``)."""
+    """A channel's producing and consuming sides: each its ``Side`` (``producer``,
+    ``consumer``; its kind says whether it is the boundary) and its stream (``source``,
+    ``sink``: a stated side's own; its source's, for a known value; on the boundary, what
+    the module's AXIS port presents, ``Channel.boundary``)."""
 
-    source_owner: str | None
+    producer: Side
     source: Stream
-    sink_owner: str | None
+    consumer: Side
     sink: Stream
+
+    @property
+    def source_owner(self) -> str:
+        """Where the producing stream sits: its port's label (``matmul.compute.packed.y``),
+        the channel's source label (``SOURCE_LABEL``) for a known value, or the boundary's
+        AXIS port's name."""
+        if self.producer.kind is SideKind.SOURCE:
+            return SOURCE_LABEL
+        return self.producer.label
+
+    @property
+    def sink_owner(self) -> str:
+        """Where the consuming stream sits: its port's label, or the boundary's AXIS port's
+        name."""
+        return self.consumer.label
+
+    @property
+    def owners(self) -> tuple[str | None, str | None]:
+        """Each side's owner as a reason names it, the producer's first: None on the
+        boundary (``finn.dataflow.streams.misfit``: "the boundary")."""
+        source = None if self.producer.kind is SideKind.BOUNDARY else self.source_owner
+        sink = None if self.consumer.kind is SideKind.BOUNDARY else self.sink_owner
+        return (source, sink)
 
 
 class Channel(KernelSpace):
-    """One tensor between the two streams it takes: one producer, one consumer.
+    """One tensor between the two sides it takes: one producer, one consumer.
 
-    ``producer`` and ``consumer`` are the streams of the ports on it (a kernel's
-    ``x_stream``), facts its network gives (``Interface``); the fact a stream is bound to
-    is its side. Each comes with its port's label (``producer_label``,
-    ``consumer_label``: ``matmul.compute.packed.x``, as the network reads it), and the
-    producer with its port's word width (``producer_width``, its ``x_data_width``). A side
-    without a port is the boundary, presented as the AXIS port ``port`` (``boundary``),
-    where the ``mover`` sits where the shell offers one (``mover_offer``). A channel with a
-    known value places its ``source`` as its producer; with several sets, the source reads the set
-    indices (``index_tensor``) from the channel whose consumer is ``set_stream``, the one
-    port it presents (``set``, its source's). ``platform`` is the target's: its source,
-    its adapters' stages and its FIFO read it. Its members are declared in the order the
-    stream runs through them, so its netlist places them in that order.
+    ``producer`` and ``consumer`` are its sides, each one value (``Side``): a kernel's
+    port (its ``x_side``: its stream, its label, ``matmul.compute.packed.x``, and on an
+    output port its word width), a frozen neighbour's, the boundary's (the AXIS port its
+    label names, presented as ``boundary``, where the ``mover`` sits where the shell
+    offers one: ``offered``), or its source's. A channel with a known value places its
+    ``source`` as its producer; with several sets, the source reads the set indices
+    (``index_tensor``) from the channel whose consumer is ``set_stream``, the one port it
+    presents (``set``, its source's). ``platform`` is the target's: its source, its
+    adapters' stages and its FIFO read it. Its members are declared in the order the stream
+    runs through them, so its netlist places them in that order.
     """
 
     id = "finn.channel"
@@ -435,41 +459,51 @@ class Channel(KernelSpace):
     tensor: Tensor = Param()
     # False admits no adapter: the two sides must connect directly.
     adaptable: bool = Param(default=True)
-    port: str = Param(required=False)
-    producer: Stream = Param(required=False, semantics=STREAM)
-    consumer: Stream = Param(required=False, semantics=STREAM)
-    producer_label: str = Param(required=False)
-    consumer_label: str = Param(required=False)
-    producer_width: int = Param(required=False)
+    producer: Side = Param()
+    consumer: Side = Param()
     contents: IntegerTensor = Param(semantics=INTEGER_TENSOR, required=False)
     sets: int = Param(default=1)
     index_tensor: Tensor = Param(required=False)
     platform: Platform = Param()
-    mover_offer: tuple[MoverOffer, ...] = Param(required=False)
     # Whether the channel carries a known value, which its source drives: where nothing
     # supplies ``contents``, the source is never placed.
     valued = supplied(contents)
-    # Whether a shell offers movers on its free side: where nothing supplies the offers,
-    # the mover is never placed.
-    offered = supplied(mover_offer)
+
+    @derived
+    def offered(self) -> bool:
+        """Whether a shell offers movers on its boundary: a boundary side with offers. Where
+        none is, the mover is never placed."""
+        return any(
+            side.kind is SideKind.BOUNDARY and bool(side.offers)
+            for side in (self.producer, self.consumer)
+        )
+
+    @derived(when=offered)
+    def offers(self) -> tuple[MoverOffer, ...]:
+        """The movers a shell offers on its boundary side."""
+        return next(
+            side.offers
+            for side in (self.producer, self.consumer)
+            if side.kind is SideKind.BOUNDARY and side.offers
+        )
 
     @derived
     def attached(self) -> tuple[Stream, ...]:
-        """The streams given, the producer's first."""
-        found: list[Stream] = []
-        if self.present(Channel.producer):
-            found.append(self.producer)
-        if self.present(Channel.consumer):
-            found.append(self.consumer)
-        return tuple(found)
+        """The streams its stated sides give (a kernel's port's, a frozen neighbour's), the
+        producer's first."""
+        return tuple(
+            side.stream
+            for side in (self.producer, self.consumer)
+            if side.stated and side.stream is not None
+        )
 
     @derived
     def consumed(self) -> Stream | Rejected:
         """The consuming port's stream: the order a source stores the value in."""
-        if not self.present(Channel.consumer):
+        consumer: Side = self.consumer
+        if consumer.stream is None:
             return reject("channel-source", "a known value streams to exactly one consumer")
-        consumer: Stream = self.consumer
-        return consumer
+        return consumer.stream
 
     @derived
     def source_form(self) -> Traversal:
@@ -503,81 +537,59 @@ class Channel(KernelSpace):
 
     @derived
     def sides(self) -> ChannelSides | Rejected:
-        """The producing and consuming sides, without the stages between them: each the
-        stream bound to it and its port's label; with a known value, the producer is the
-        channel's source (its ``output_stream``); a side without a port is the boundary,
-        what the module's AXIS port presents (``boundary``)."""
+        """The producing and consuming sides, without the stages between them: each its
+        ``Side`` and its stream; with a known value, the producer is the channel's source
+        (its ``output_stream``); a boundary side presents what the module's AXIS port
+        presents (``boundary``). Each role takes its kinds only (``channel-users``)."""
+        producer: Side = self.producer
+        consumer: Side = self.consumer
         if not self.attached and not self.valued:
             return reject("channel-unused", "no present port is on this channel")
-        producer: tuple[str | None, Stream] | None = None
-        consumer: tuple[str | None, Stream] | None = None
-        # A side is given whole: a stream without its port's label (or a producer's
-        # without its word width) would read as the boundary's.
-        if self.present(Channel.producer):
-            if not self.present(Channel.producer_label):
-                return reject("channel-side", "a producer's stream comes with its port's label")
-            if not self.present(Channel.producer_width):
-                return reject("channel-side", "a producer's stream comes with its word width")
-            producer = (self.producer_label, self.producer)
-        if self.present(Channel.consumer):
-            if not self.present(Channel.consumer_label):
-                return reject("channel-side", "a consumer's stream comes with its port's label")
-            consumer = (self.consumer_label, self.consumer)
+        misplaced = _misplaced(producer, consumer, self.valued)
+        if misplaced is not None:
+            return reject("channel-users", misplaced)
+        source: Stream | None = producer.stream
         if self.valued:
-            if producer is not None:
-                return reject(
-                    "channel-users",
-                    "a channel with a value has its source as its only producer, "
-                    f"not {producer[0]}",
-                )
-            produced: Stream = self.source.output_stream
-            producer = (self.source_label, produced)
-        if producer is not None and consumer is not None:
-            return ChannelSides(*producer, *consumer)
-        if not self.present(Channel.port):
-            return reject(
-                "channel-boundary",
-                "a boundary of its network, but no port names it: only an ONNX input or output "
-                "of a partition crosses its boundary",
-            )
-        # A side without a port is the boundary. Seen from inside, the module's input is
-        # the AXIS target and its output the initiator.
+            source = self.source.output_stream
+        sink: Stream | None = consumer.stream
+        # A boundary side presents what the other side presents. Seen from inside, the
+        # module's input is the AXIS target and its output the initiator.
         try:
-            if consumer is not None:
-                inside = self._boundary(consumer[1], Endpoint.TARGET)
-                return ChannelSides(None, _stream(inside), *consumer)
-            if producer is not None:
-                inside = self._boundary(producer[1], Endpoint.INITIATOR)
-                return ChannelSides(*producer, None, _stream(inside))
+            if source is None and sink is not None:
+                source = _stream(self._boundary(producer.label, sink, Endpoint.TARGET))
+            elif sink is None and source is not None:
+                sink = _stream(self._boundary(consumer.label, source, Endpoint.INITIATOR))
         except ValueError as error:
             return reject("channel-boundary", str(error))
-        return reject("channel-unused", "no present port is on this channel")
+        if source is None or sink is None:
+            return reject("channel-unused", "no present port is on this channel")
+        return ChannelSides(producer, source, consumer, sink)
 
-    def _boundary(self, inside: Stream, endpoint: Endpoint) -> StreamContract:
-        """The AXIS port the module presents for a side without a port, from what the
-        other side presents (``inside``): an input without the replay or window its
+    def _boundary(self, port: str, inside: Stream, endpoint: Endpoint) -> StreamContract:
+        """The AXIS port ``port`` the module presents for a boundary side, unstated, from
+        what the other side presents (``inside``): an input without the replay or window its
         receiver realizes (``unreplayed``), an output as produced, neither with markers."""
         form = inside.sequence.form
         if endpoint is Endpoint.TARGET:
             form = unreplayed(form)
-        return boundary_contract(self.port, self.tensor.element, BeatSequence(form), endpoint)
+        return boundary_contract(port, self.tensor.element, BeatSequence(form), endpoint)
 
     @derived(semantics=BOUNDARY_CONTRACT)
     def boundary(self) -> StreamContract | None:
-        """The AXIS port the module presents for the side without a port
-        (``boundary_contract``: ``port``, the tensor's element, and what the other side
-        presents); None where both sides have a port."""
+        """The AXIS port the module presents for its boundary side (``boundary_contract``:
+        the side's label, the tensor's element, and what the other side presents); None
+        where neither side is the boundary."""
         found = self.sides
-        if found.source_owner is None:
-            return self._boundary(found.sink, Endpoint.TARGET)
-        if found.sink_owner is None:
-            return self._boundary(found.source, Endpoint.INITIATOR)
+        if found.producer.kind is SideKind.BOUNDARY:
+            return self._boundary(found.producer.label, found.sink, Endpoint.TARGET)
+        if found.consumer.kind is SideKind.BOUNDARY:
+            return self._boundary(found.consumer.label, found.source, Endpoint.INITIATOR)
         return None
 
     @derived
     def free_side(self) -> StreamContract | Rejected:
-        """The side without a port, as the module presents it (``boundary``): where a
-        shell's mover sits."""
+        """The boundary side, as the module presents it (``boundary``): where a shell's
+        mover sits."""
         found: StreamContract | None = self.boundary
         if found is None:
             return reject(
@@ -586,7 +598,7 @@ class Channel(KernelSpace):
             )
         return found
 
-    mover = IodmaMover(when=offered, offers=mover_offer, side=free_side)
+    mover = IodmaMover(when=offered, offers=offers, side=free_side)
     mover_contract = View(mover.contract)
 
     @derived
@@ -609,7 +621,7 @@ class Channel(KernelSpace):
         """Each side's stream traverses this channel's tensor
         (``finn.dataflow.streams.misfit``)."""
         found = self.sides
-        why = misfit(self.tensor, self.streams, (found.source_owner, found.sink_owner))
+        why = misfit(self.tensor, self.streams, found.owners)
         return True if why is None else reject("channel-tensor", why)
 
     @derived
@@ -753,7 +765,7 @@ class Channel(KernelSpace):
     def compatible(self) -> bool | Rejected:
         """Each hop's two streams, source through every stage to sink, connect directly
         (``compatibility``); and on a boundary output, the last producer's word (a stage's,
-        the producing port's, ``producer_width``, or the source's) is no wider than the
+        the producing port's, its side's ``width``, or the source's) is no wider than the
         AXIS word that carries it (``channel-padding``).
 
         An element mismatch is ``well_formed``'s (``channel-tensor``: each side
@@ -768,9 +780,9 @@ class Channel(KernelSpace):
             current, width = stage.output, stage.width
         found += compatibility(current, sides.sink)
         boundary: StreamContract | None = self.boundary
-        if sides.sink_owner is None and boundary is not None:
-            if width is None and sides.source_owner is not None:
-                width = self.source.output_data_width if self.valued else self.producer_width
+        if sides.consumer.kind is SideKind.BOUNDARY and boundary is not None:
+            if width is None and sides.producer.kind is not SideKind.BOUNDARY:
+                width = self.source.output_data_width if self.valued else sides.producer.width
             if width is not None and width > boundary.transport.data_width:
                 found.append(
                     Mismatch(
@@ -808,7 +820,7 @@ class Channel(KernelSpace):
         if self.valued:
             offered: PortContract = self.source.output_contract
             current = (self.source_label, offered.contract)
-        elif sides.source_owner is None and boundary is not None:
+        elif sides.producer.kind is SideKind.BOUNDARY and boundary is not None:
             current = (None, boundary)
         stages: tuple[Stage, ...] = self.stages
         links: list[Link] = []
@@ -817,7 +829,11 @@ class Channel(KernelSpace):
                 if current is not None:
                     links.append(wired(*current, stage.label, stage.input))
                 current = (stage.label, stage.output)
-            if current is not None and sides.sink_owner is None and boundary is not None:
+            if (
+                current is not None
+                and sides.consumer.kind is SideKind.BOUNDARY
+                and boundary is not None
+            ):
                 links.append(wired(*current, None, boundary))
         except ArtifactError as error:
             # A hop that does not connect (another element, say) is refused by the
@@ -835,8 +851,8 @@ class Channel(KernelSpace):
 
     @view
     def boundary_bus(self) -> tuple[Bus, ...]:
-        """The AXIS bus the module presents for it (``boundary``), when one side has no
-        port."""
+        """The AXIS bus the module presents for it (``boundary``), when one side is the
+        boundary."""
         found: StreamContract | None = self.boundary
         return () if found is None else (found.transport.axis_bus(),)
 
@@ -850,6 +866,24 @@ class Channel(KernelSpace):
         RESOURCES: KernelSpace.resources,
         MOVER: mover_export,
     }
+
+
+def _misplaced(producer: Side, consumer: Side, valued: bool) -> str | None:
+    """Why a side is in a role its kind does not take (``channel-users``), or None: a
+    channel with a known value has its source as its producer, and one without has none; a
+    source is never a consumer; a producer is an output port (a stated side with its word
+    width), and a consumer an input port (one without)."""
+    if valued and producer.kind is not SideKind.SOURCE:
+        return f"a channel with a value has its source as its only producer, not {producer.label}"
+    if not valued and producer.kind is SideKind.SOURCE:
+        return "a source produces a known value, and this channel has none"
+    if consumer.kind is SideKind.SOURCE:
+        return "a channel's source is its producer, never its consumer"
+    if producer.stated and producer.width is None:
+        return f"a channel's producer is an output port, and {producer.label} is an input's"
+    if consumer.stated and consumer.width is not None:
+        return f"a channel's consumer is an input port, and {consumer.label} is an output's"
+    return None
 
 
 def _stream(contract: StreamContract) -> Stream:

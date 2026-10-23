@@ -44,6 +44,7 @@ from finn.kernels.adapters import Convert, realize
 from finn.kernels.channels import Channel, ChannelFifo, OuterHops
 from finn.kernels.configure import chosen
 from finn.kernels.library import library_module
+from finn.kernels.sides import Side
 from finn.kernels.utilization import memory_preference
 from finn.kernels.vpc import VpcKernel
 
@@ -149,17 +150,16 @@ def test_exactly_one_chain_a_side_carries_out_its_steps():
 
 
 def _channel(source, sink, shape, platform=FULL_DSP48E2):
-    """A channel between two kernels' streams, ``source`` produced and ``sink`` consumed
-    (``BeatSequence``s of a ``shape`` tensor), as a network binds it (``Interface``),
-    alone."""
+    """A channel between two kernels' ports, ``source`` produced and ``sink`` consumed
+    (``BeatSequence``s of a ``shape`` tensor), each its side, as a network binds it
+    (``Interface``), alone."""
     return design_space(
         Channel(
             tensor=Tensor(shape, ELEMENT),
-            producer=Stream(ELEMENT, source),
-            consumer=Stream(ELEMENT, sink),
-            producer_label="producer.y",
-            consumer_label="consumer.x",
-            producer_width=ELEMENT.bits * source.form.lanes,
+            producer=Side.kernel(
+                Stream(ELEMENT, source), "producer.y", ELEMENT.bits * source.form.lanes
+            ),
+            consumer=Side.kernel(Stream(ELEMENT, sink), "consumer.x"),
             platform=platform,
         )
     )

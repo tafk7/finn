@@ -11,8 +11,6 @@ netlist. A link's end belongs to the kernel whose port it is, beside the channel
 boundary is the root's own pins (``None``).
 """
 
-from typing import Any
-
 from qonnx.core.datatype import DataType
 from support.helpers import (
     FULL_DSP48E2,
@@ -22,11 +20,11 @@ from support.helpers import (
     with_direct_transports,
 )
 
-from finn.core.space import Available, Rejected, Space, derived, design_space, view
+from finn.core.space import Available, Rejected, Space, derived, view
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import BeatSequence, vector_major
+from finn.dataflow.traversal import vector_major
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.artifacts.module import Fragment, Leaf
 from finn.kernels.base import PORT_CONTRACT, PortContract
@@ -34,6 +32,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.port import STREAM
+from finn.kernels.sides import SIDE, Side
 from finn.kernels.transport import AxisBeat, StreamContract
 
 INT3, INT8 = DataType["INT3"], DataType["INT8"]
@@ -152,34 +151,15 @@ def test_a_boundary_no_port_names_is_refused() -> None:
     """A weight channel with one side and no port is a boundary nothing may cross: only an
     ONNX input or output of a partition is one."""
 
-    refused = choose(placing(w_port=None), FOLDING).member("w").query(Channel.sides)
-    assert isinstance(refused, Rejected)
-    assert {(item.code, item.owner) for item in refused.findings} == {("channel-boundary", "sides")}
+    # A side no port is wired to, and no port names, is no side the network can give: it
+    # refuses the channel as it binds it, owned by the channel.
+    validity = choose(placing(w_port=None), FOLDING).validity("w")
+    assert validity.status == "refused" and isinstance(validity.result, Rejected)
+    assert {(item.code, item.owner) for item in validity.result.findings} == {
+        ("channel-boundary", "w")
+    }
     # The same network with the port named is accepted.
     assert not isinstance(choose(placing(), FOLDING).member("w").sides, Rejected)
-
-
-def test_a_side_given_without_its_label_or_width_is_refused() -> None:
-    """A side's stream comes with its port's label, and a producer's with its word width:
-    a stream given without them would read as the boundary's side."""
-    words = Stream(ScalarEncoding(INT3), BeatSequence(vector_major((3, 4), 2)))
-    sides: dict[str, Any] = dict(
-        producer=words,
-        consumer=words,
-        producer_label="producer.y",
-        consumer_label="consumer.x",
-        producer_width=6,
-    )
-
-    def channel(**facts: Any) -> Channel:
-        return design_space(Channel(tensor=X, platform=FULL_DSP48E2, **facts))
-
-    assert not isinstance(channel(**sides).sides, Rejected)
-    for missing in ("producer_label", "producer_width"):
-        given = {name: value for name, value in sides.items() if name != missing}
-        refused = channel(**given).query(Channel.sides)
-        assert isinstance(refused, Rejected)
-        assert [(item.code, item.owner) for item in refused.findings] == [("channel-side", "sides")]
 
 
 def reading() -> StreamContract:
@@ -197,6 +177,10 @@ class Reader(Space):
     def port_stream(self) -> Stream:
         contract = reading()
         return Stream(contract.element, contract.sequence)
+
+    @derived(semantics=SIDE)
+    def port_side(self) -> Side:
+        return Side.kernel(self.port_stream, "port")
 
     @view(semantics=PORT_CONTRACT)
     def port_contract(self) -> PortContract:
@@ -217,7 +201,7 @@ def test_a_contract_that_is_no_kernels_port_has_no_netlist() -> None:
     )
     point = with_direct_transports(bare)
     edge = point.member("edge")
-    assert edge.consumer_label == "reader"
+    assert edge.consumer.label == "reader.port"
     # The channel's own netlist has no hop to the reader; the network's refuses it.
     assert edge.query(Channel.netlist).value == Fragment()
     refused = point.netlist()

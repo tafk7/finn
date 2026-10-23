@@ -7,8 +7,8 @@ composite class.
 ``one_space`` reads a model of KernelOps whose channel choices are stored (the cut's, or
 ``make_cut_choices``'): each node's kernel declared from its facts
 (``KernelOp.facts``), each channel from the shell's wiring (``in_shell``), its facts read
-from the kernels' declarations (``channel_facts``: a port's stream and word width,
-``Interface``; a value a kernel states, ``Fact``), and the values conversion and the cut
+from the kernels' declarations (``channel_facts``: a port's side, ``Interface``; a value a
+kernel states, ``Fact``), and the values conversion and the cut
 stored, by key. ``mlp`` is stage 7's
 synthetic chain, and ``chain_space`` that chain as one Space.
 
@@ -29,7 +29,9 @@ from finn.core.space import Space, composite
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import in_shell, make_cut_choices
 from finn.kernels.channels import Channel
+from finn.kernels.movers import MoverOffer
 from finn.kernels.network import Fact, Interface, Network
+from finn.kernels.sides import Side
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
 
@@ -86,21 +88,25 @@ def mlp(layers: int) -> ModelWrapper:
 def channel_facts(net: Network, channel: str, members: dict[str, Any]) -> dict[str, Any]:
     """Channel ``channel``'s facts as ``net`` wires them, each bound to the member of
     ``members`` (the declarations of one Space) it is read from, never a view: a port's
-    stream (``Interface``: ``x_stream``) and, on the producer's side, its word width
-    (``x_data_width``); a value a kernel states (``Fact``). A port's label is a constant:
-    its contract's own (``compute.packed.x``), as ``net``'s bound member presents it."""
+    side (``Interface``: ``x_side``, its stream, its label, ``compute.packed.x``, and on an
+    output port its word width); a value a kernel states (``Fact``). A side no port is wired
+    to is the channel's source where a kernel states its value (``contents``), else the
+    boundary (``Side.boundary``: the wire's ``port`` and ``mover_offer``)."""
     given: dict[str, Any] = {}
-    for fact, value in net.wiring(channel).facts.items():
+    wired = dict(net.wiring(channel).facts)
+    port, offers = cast(str, wired.pop("port", None)), wired.pop("mover_offer", ())
+    for fact, value in wired.items():
         if isinstance(value, Interface):
-            member = members[value.member]
-            given[fact] = getattr(member, f"{value.port}_stream")
-            given[f"{fact}_label"] = getattr(net.member(value.member), value.view).label
-            if fact == "producer":
-                given["producer_width"] = getattr(member, f"{value.port}_data_width")
+            given[fact] = getattr(members[value.member], f"{value.port}_side")
         elif isinstance(value, Fact):
             given[fact] = getattr(members[value.member], value.name)
         else:
             given[fact] = value
+    if "contents" in given and "producer" not in given:
+        given["producer"] = Side.source()
+    for side in ("producer", "consumer"):
+        if side not in given:
+            given[side] = Side.boundary(port, cast("tuple[MoverOffer, ...]", offers))
     return given
 
 

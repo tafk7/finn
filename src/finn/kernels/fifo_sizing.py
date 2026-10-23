@@ -69,6 +69,7 @@ from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.fifo import least_depth_holding
 from finn.kernels.input_generator import Generate, NestBuffer, nest_buffer
 from finn.kernels.movers import MoverContract
+from finn.kernels.sides import SideKind
 
 
 @dataclass(frozen=True)
@@ -318,10 +319,14 @@ def sides(channel: Channel, neighbours: Neighbours) -> tuple[Pattern, Acceptance
         raise NotModelled("a memory source: paced by its consumer")
     found = channel.sides
     producer = (
-        _free(channel) if found.source_owner is None else _pattern(neighbours.producer, "producer")
+        _free(channel)
+        if found.producer.kind is SideKind.BOUNDARY
+        else _pattern(neighbours.producer, "producer")
     )
     consumer = (
-        _free(channel) if found.sink_owner is None else _pattern(neighbours.consumer, "consumer")
+        _free(channel)
+        if found.consumer.kind is SideKind.BOUNDARY
+        else _pattern(neighbours.consumer, "consumer")
     )
     times = producer.times
     if channel.output_adapting:

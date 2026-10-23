@@ -53,6 +53,7 @@ from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
+from finn.kernels.sides import Side
 from finn.platform.capabilities import Platform
 
 STORED_INSTANCE = "w.source.memstream"
@@ -169,11 +170,11 @@ def test_known_weights_give_the_weight_channel_its_source():
     # the channel states for it.
     assert w.sides.source_owner == "source.memstream"
     assert instance_parameters(stored_, STORED_INSTANCE)["RAM_STYLE"] == '"block"'
-    # Unknown weights: no value, no source; the channel is the boundary in1_V.
+    # Unknown weights: no value, no source; the channel's producer is the boundary in1_V.
     unvalued = external.member("w")
     assert not unvalued.valued
     assert isinstance(unvalued.query(Channel.source), Inapplicable)
-    assert unvalued.sides.source_owner is None
+    assert unvalued.sides.producer == Side.boundary("in1_V")
     # MatMul's netlist is its cores' alone.
     matmul = stored_.member("matmul")
     assert [item.node for item in matmul.netlists] == ["compute.packed"]
@@ -442,6 +443,7 @@ def test_a_channel_with_a_value_has_its_source_as_its_only_producer():
             ),
             "y": wire(
                 tensor=y_tensor,
+                port="out0_V",
                 contents=((0,) * 4,) * 3,
                 producer=Interface("matmul", "y_contract"),
                 platform=FULL_DSP48E2,

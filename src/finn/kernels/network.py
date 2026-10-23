@@ -11,19 +11,22 @@ read from a member:
 
 - a port (``Interface(member, view)``, its contract's view: a kernel's ``x_contract``; a
   channel's ``set_contract``, its source's set port), on the channel's ``producer`` or
-  ``consumer`` side: the channel takes the port's stream (``x_stream``), the label of the
-  ``PortContract`` the member presents for it, read outside the channel and labelled from
-  the network (``PortContract.under``: ``first.compute.packed.x``; ``producer_label``,
-  ``consumer_label``), and on the producer's side its word width (``x_data_width``,
-  ``producer_width``); a side without one is a boundary. A stream has no direction, so
-  a port wired to the side its contract's endpoint is not (a producer's on the
-  consumer's side) leaves the channel refused as it is bound (``channel-users``, owned
-  by the channel). The contracts stay the
-  network's: its hops to the channel (``hops``) and FIFO sizing's paces (``neighbours``)
-  read them;
+  ``consumer`` side: the channel takes the side the member states for the port (its
+  ``x_side``: its stream, its label and on an output port its word width), labelled from
+  the network (``Side.under``: ``first.compute.packed.x``). A port wired to the side its
+  contract's endpoint is not (a producer's on the consumer's side) leaves the channel
+  refused as it is bound (``channel-users``, owned by the channel). The contracts stay
+  the network's: its hops to the channel (``hops``) and FIFO sizing's paces
+  (``neighbours``) read them;
 - a fact a member states (``Fact(member, name)``): a parameter channel's tensor and
   contents, as its kernel states them, values read whatever the kernel's validity
   (``MatMulKernel.carried_weights``, ``stored_weights``).
+
+A side no port is wired to is the channel's source where it has a known value (its
+producer, ``Side.source``), else the boundary: the AXIS port the wire names (``port``),
+offered the movers the wire gives (``mover_offer``), ``Side.boundary``. A channel with no
+port on either side and no known value is refused as it is bound (``channel-unused``), and
+one with a boundary side no port names (``channel-boundary``), each owned by the channel.
 
 Facts flow one way: a kernel's facts are values, and a channel's are read from the
 members before it. So the members are ranked kernels first, in the order declared,
@@ -47,9 +50,9 @@ a change, atomic over the members it reaches:
 1. each kernel named: one change of the engine's on its point, refused where a value is
    outside its domain or a rule it reaches would be newly false, naming the rule and the
    stored choices standing in its way;
-2. each member that changed: every fact it gives a channel read again (its ports'
-   streams, labels and widths, and for a parameter channel what it states: these may read
-   a choice, MatMul's ``realization``);
+2. each member that changed: every fact it gives a channel read again (its ports' sides,
+   and for a parameter channel what it states: these may read a choice, MatMul's
+   ``realization``);
 3. each channel named with the same facts: one change on its point, as a kernel's. Each
    channel given other facts is rebuilt from them, a change of facts on the channel it
    was (a channel never bound before is bound, as above), with the change's choices.
@@ -127,7 +130,9 @@ from finn.kernels.members import (
 from finn.kernels.members import decision as decision_of
 from finn.kernels.members import key as member_key
 from finn.kernels.members import refusal as refusal_of
+from finn.kernels.movers import MoverOffer
 from finn.kernels.policies import Owner, Unstated
+from finn.kernels.sides import Side
 from finn.platform.capabilities import Resources
 
 T = TypeVar("T")
@@ -160,9 +165,9 @@ class NetworkError(ValueError):
 @dataclass(frozen=True)
 class Interface:
     """A port in the wiring, by the view of its contract: the ``PortContract`` member
-    ``member`` presents at its view ``view`` (``x_contract``, ``set_contract``), labelled
-    from the network. A channel takes the port's stream (``x_stream``), that label, and on
-    its producer's side the port's word width (``x_data_width``)."""
+    ``member`` presents at its view ``view`` (``x_contract``, ``set_contract``). A channel
+    takes the side the member states for the port (``x_side``), labelled from the
+    network."""
 
     member: str
     view: str
@@ -195,7 +200,9 @@ FactsKey = tuple[tuple[str, object], ...]
 @dataclass
 class Wire:
     """A channel as a network declares it: the facts of a ``Channel``, each a value, or
-    read from a member (``Interface``, ``Fact``)."""
+    read from a member (``Interface``, ``Fact``); a side no port is wired to, by the
+    boundary's AXIS port (``port``) and the movers offered on it (``mover_offer``), which
+    the network gives the channel as its boundary side (``Side.boundary``)."""
 
     facts: Mapping[str, object] = field(default_factory=dict)
 
@@ -382,6 +389,31 @@ def _users(name: str, ports: Mapping[str, PortContract]) -> Rejected | None:
         f"a channel has at most one producer and one consumer; its ports are {named}",
         owner=name,
     )
+
+
+def _sided(name: str, resolved: dict[str, object]) -> Rejected | None:
+    """Channel ``name``'s facts (``resolved``) given their sides, in place: a side no port
+    is wired to is its source where it has a known value (``contents``), else the
+    boundary, the AXIS port ``port`` names, offered the movers of ``mover_offer``; the two
+    wire facts taken out. Why not, owned by ``name``: no port on either side and no known
+    value (``channel-unused``), or a boundary side no port names (``channel-boundary``)."""
+    port = resolved.pop("port", None)
+    offers = resolved.pop("mover_offer", ())
+    if "contents" in resolved and "producer" not in resolved:
+        resolved["producer"] = Side.source()
+    missing = [side for side in ("producer", "consumer") if side not in resolved]
+    if len(missing) == 2:
+        return reject("channel-unused", "no present port is on this channel", owner=name)
+    if missing:
+        if not isinstance(port, str):
+            return reject(
+                "channel-boundary",
+                "a boundary of its network, but no port names it: only an ONNX input or output "
+                "of a partition crosses its boundary",
+                owner=name,
+            )
+        resolved[missing[0]] = Side.boundary(port, cast("tuple[MoverOffer, ...]", offers))
+    return None
 
 
 def _rebuild(
@@ -953,7 +985,7 @@ class Network:
                     continue
                 if isinstance(contract, (Unresolved, Rejected)):
                     return Unbound(source, contract, stored)
-                port = self._port(name, fact, value, point, contract)
+                port = self._port(name, fact, value, point)
                 if isinstance(port, Inapplicable):
                     continue
                 if isinstance(port, (Unresolved, Rejected)):
@@ -970,6 +1002,9 @@ class Network:
         users = _users(name, ports)
         if users is not None:
             return Unbound(name, users, stored)
+        unsided = _sided(name, resolved)
+        if unsided is not None:
+            return Unbound(name, unsided, stored)
         return tuple(sorted(resolved.items(), key=lambda item: item[0]))
 
     def _contract(
@@ -989,23 +1024,16 @@ class Network:
         return found.under(self._nodes[value.member])
 
     def _port(
-        self, name: str, fact: str, value: Interface, point: Space, contract: PortContract
+        self, name: str, fact: str, value: Interface, point: Space
     ) -> dict[str, object] | Inapplicable | Unresolved | Rejected:
-        """The facts the port ``value`` names gives channel ``name`` on its side ``fact``
-        (its ``contract``, read first, as the channel took it): its stream
-        (``x_stream``), its contract's label (``<fact>_label``) and on the producer's side
-        its word width (``x_data_width``, ``producer_width``), each read from its member's
-        ``point``; or the read's answer where one has no value."""
-        found: dict[str, object] = {f"{fact}_label": contract.label}
-        reads = {fact: f"{value.port}_stream"}
-        if fact == "producer":
-            reads["producer_width"] = f"{value.port}_data_width"
-        for given, member in reads.items():
-            answer = point.query(_handle(name, value.member, point, member))
-            if not isinstance(answer, Available):
-                return answer
-            found[given] = answer.value
-        return found
+        """The side the port ``value`` names gives channel ``name`` as its ``fact``: the
+        side its member's ``point`` states for it (``x_side``), labelled from the network
+        (``Side.under``); or the read's answer where it has no value."""
+        answer = point.query(_handle(name, value.member, point, f"{value.port}_side"))
+        if not isinstance(answer, Available):
+            return answer
+        side: Side = answer.value
+        return {fact: side.under(self._nodes[value.member])}
 
     def _stored(self, name: str) -> Mapping[str, object]:
         """What member ``name`` stores: a bound member's choices, by their stored values,
