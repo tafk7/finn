@@ -43,6 +43,7 @@ from finn.kernels.composer import (
     CLASS_CACHE_BOUND,
     SEPARATOR,
     ChannelDeclaration,
+    Facts,
     PartitionDeclaration,
     PartitionRefused,
     Port,
@@ -53,7 +54,6 @@ from finn.kernels.composer import (
 )
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.members import Facts
 from finn.kernels.port import port_endpoint
 from finn.kernels.sides import Side, SideKind
 from finn.kernels.thresholding import ThresholdingAxiKernel

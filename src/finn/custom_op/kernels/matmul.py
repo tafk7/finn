@@ -33,8 +33,8 @@ from finn.core.graph.facts import (
 )
 from finn.core.space import Rejected
 from finn.custom_op.kernels.base import KernelOp, Match, Wiring, refused, unstated
+from finn.kernels.composer import Facts
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.members import Facts
 
 if TYPE_CHECKING:
     from onnx import NodeProto

@@ -17,8 +17,8 @@ Three terms, used throughout the package:
 - its *kernel*: its kernel class bound to its facts, nothing chosen (``bound``);
 - its *point*: its kernel with the node's stored choices committed (``point``).
 
-Both are kept by the facts, by value, in the build's member cache
-(``finn.kernels.members``): a node's kernel is bound once a build.
+Each is bound from the node's facts as it is asked for (``finn.kernels.composer.Facts``);
+nothing is kept between asks.
 
 Conversion asks two questions of a node. Does the op's pattern cover it? ``match`` reads
 only the graph's structure (op types, connections, attributes), never a datatype or a
@@ -107,12 +107,21 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import edge_tensor, initializer, state
 from finn.core.reporting.findings import Finding, FindingKind
-from finn.core.space import Available, Rejected, Space, inspection
+from finn.core.space import (
+    Available,
+    ConfigurationError,
+    Rejected,
+    RequestError,
+    Space,
+    Unresolved,
+    bind,
+    inspection,
+)
 from finn.dataflow.tensor import Tensor
 from finn.kernels.base import KernelSpace
+from finn.kernels.composer import Facts
 from finn.kernels.configure import describe
 from finn.kernels.configure import refusal as refusal_of
-from finn.kernels.members import Facts, configured, reasons
 from finn.kernels.policies import Defaulted, Policy, defaulted, stated
 from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.target import Target
@@ -194,6 +203,65 @@ def why(findings: Iterable[Finding]) -> str:
     if found and all(finding.code == "inapplicable" for finding in found):
         return "inapplicable"
     return "; ".join(map(str, found))
+
+
+def reasons(
+    found: Mapping[str, Iterable[Finding]], standing: Mapping[str, Iterable[str]] | None = None
+) -> str:
+    """Why each key of ``found`` (a choice's or a rule's) is refused, as text, in key order:
+    the key once, then each of its findings (its code and message where the key owns it),
+    and the stored choices ``standing`` in its way where any do."""
+    standing = standing or {}
+
+    def text(key: str, finding: Finding) -> str:
+        return f"{finding.code}: {finding.message}" if finding.owner == key else str(finding)
+
+    def stood(key: str) -> str:
+        keys = tuple(standing.get(key, ()))
+        return f" (standing: {', '.join(keys)})" if keys else ""
+
+    return "; ".join(
+        f"{key}: " + "; ".join(text(key, finding) for finding in found[key]) + stood(key)
+        for key in sorted(found)
+    )
+
+
+def replayed(
+    point: Space, stored: Mapping[str, object]
+) -> tuple[Space, dict[str, tuple[Finding, ...]]]:
+    """``point``, a kernel bound with nothing stored, with its ``stored`` choices bound
+    (the engine's ``bind``), and what refuses them, by key, each with its findings: a key
+    that names no choice (``not-a-decision``), a value outside its domain over the kernel's
+    facts, a request the engine refuses as malformed (``request-refused``, each key), and
+    each rule the values set together break, by the rule's key (nothing stands in a rule's
+    way at a bind, which sets every stored choice)."""
+    if not stored:
+        return point, {}
+    decisions = {item.key: item.reference for item in inspection.decisions(point)}
+    refused: dict[str, tuple[Finding, ...]] = {
+        key: (
+            Finding(FindingKind.REJECTION, "not-a-decision", key, "not a Decision of this member"),
+        )
+        for key in stored
+        if key not in decisions
+    }
+    if refused:
+        return point, refused
+    try:
+        report = bind(point, {decisions[key]: value for key, value in stored.items()})
+    except (RequestError, ConfigurationError) as error:
+        return point, {
+            key: (Finding(FindingKind.REJECTION, "request-refused", key, str(error)),)
+            for key in stored
+        }
+    for outcome in report.outcomes:
+        if outcome.status == "dropped":
+            result = outcome.result
+            refused[outcome.owner] = (
+                result.findings if isinstance(result, (Rejected, Unresolved)) else ()
+            )
+    refused |= {rule.rule: rule.result.findings for rule in report.broken}
+    return report.instance, refused
 
 
 def refusal(
@@ -389,9 +457,8 @@ class KernelOp(CustomOp):
         }
 
     def bound(self) -> KernelSpace:
-        """The node's kernel bound to its facts, nothing chosen (kept by them in the build's
-        member cache)."""
-        point: KernelSpace = configured(self.facts()).point  # type: ignore[assignment]
+        """The node's kernel bound to its facts, nothing chosen: its own design space."""
+        point: KernelSpace = self.facts().bind()  # type: ignore[assignment]
         return point
 
     def _channel_hint(self, names: Iterable[str]) -> str:
@@ -471,21 +538,14 @@ class KernelOp(CustomOp):
         return self._replayed({**self.choices(), **(extra or {})})
 
     def _replayed(self, choices: Mapping[str, object]) -> KernelSpace:
-        """``point``, with ``choices`` (by attribute) in place of the node's: set on its
-        kernel as one change, as a network binds a member's stored choices
-        (``configured``); refused where a value is outside its domain, or a rule they break
-        together, each by name with its findings (``refusal``; nothing stands in a rule's
-        way at a bind, which sets every stored choice)."""
-        found = configured(self.facts(), typed(type(self).kernel, choices))
-        if found.dropped or found.point is None:
-            raise refusal(
-                self.op_type,
-                self.label,
-                {**found.dropped, **found.refused},
-                found.standing,
-                node=self.label,
-            )
-        point: KernelSpace = found.point  # type: ignore[assignment]
+        """``point``, with ``choices`` (by attribute) in place of the node's: bound on its
+        kernel (``replayed``), as a partition binds its stored choices; refused where a
+        value is outside its domain, or a rule they break together, each by name with its
+        findings (``refusal``)."""
+        found, refused = replayed(self.bound(), typed(type(self).kernel, choices))
+        if refused:
+            raise refusal(self.op_type, self.label, refused, node=self.label)
+        point: KernelSpace = found  # type: ignore[assignment]
         return point
 
     def _saved(self, choices: Mapping[str, object]) -> dict[str, int | str]:
@@ -632,8 +692,10 @@ __all__ = [
     "Wiring",
     "kernel_op",
     "node_attributes",
+    "reasons",
     "refusal",
     "refused",
+    "replayed",
     "typed",
     "unstated",
     "why",

@@ -63,35 +63,13 @@ from finn.core.space import (
     RequestError,
     Space,
     Unresolved,
-    design_space,
     inspection,
 )
+from finn.kernels.composer import Facts
 from finn.kernels.configure import chosen
 
 VERIFY = "FINN_VERIFY_MEMBER_CACHE"
 """The environment variable that switches the verifying mode on (see the module docstring)."""
-
-
-class Facts:
-    """A member as it is bound: its Space class and the arguments it is given, by name (a
-    record, not a value class: its arguments are anything a Space takes)."""
-
-    __slots__ = ("arguments", "space_type")
-
-    space_type: type[Space]
-    arguments: Mapping[str, object]
-
-    def __init__(self, space_type: type[Space], arguments: Mapping[str, object]) -> None:
-        self.space_type = space_type
-        self.arguments = MappingProxyType(dict(arguments))
-
-    def __repr__(self) -> str:
-        return f"Facts({self.space_type.__name__}, {dict(self.arguments)!r})"
-
-    def bind(self) -> Space:
-        """Its design space: the class bound to its arguments, nothing chosen."""
-        point: Space = design_space(cast(Any, self.space_type)(**self.arguments))
-        return point
 
 
 class Configured:

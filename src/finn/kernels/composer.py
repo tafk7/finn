@@ -96,7 +96,6 @@ from finn.core.space import (
 )
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import Channel
-from finn.kernels.members import Facts
 from finn.kernels.port import port_endpoint
 from finn.kernels.sides import SIDE, Side, SideKind
 
@@ -136,6 +135,29 @@ class Stated:
 
 # A declaration is a record the composer reads once, never a value a Space holds: plain
 # classes, since a frozen dataclass is a value class, which holds immutable values only.
+
+
+class Facts:
+    """A member as it is bound: its Space class and the arguments it is given, by name (a
+    record, not a value class: its arguments are anything a Space takes). A kernel's, as
+    ``KernelOp.facts`` gives it and a partition declares it."""
+
+    __slots__ = ("arguments", "space_type")
+
+    space_type: type[Space]
+    arguments: Mapping[str, object]
+
+    def __init__(self, space_type: type[Space], arguments: Mapping[str, object]) -> None:
+        self.space_type = space_type
+        self.arguments = MappingProxyType(dict(arguments))
+
+    def __repr__(self) -> str:
+        return f"Facts({self.space_type.__name__}, {dict(self.arguments)!r})"
+
+    def bind(self) -> Space:
+        """Its design space: the class bound to its arguments, nothing chosen."""
+        point: Space = design_space(cast(Any, self.space_type)(**self.arguments))
+        return point
 
 
 class ChannelDeclaration:
@@ -608,6 +630,7 @@ __all__ = [
     "SEPARATOR",
     "ChannelDeclaration",
     "Composed",
+    "Facts",
     "Key",
     "Names",
     "PartitionDeclaration",

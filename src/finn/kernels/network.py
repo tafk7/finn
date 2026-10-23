@@ -112,7 +112,7 @@ from finn.kernels.artifacts.module import Composed, Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose
 from finn.kernels.base import BOUNDARY, NETLIST, PortContract, merged
 from finn.kernels.channels import Channel, Neighbours, OuterHops, outer_hops
-from finn.kernels.composer import Key
+from finn.kernels.composer import Facts, Key
 from finn.kernels.configure import chosen
 from finn.kernels.control import CONTROL, Control
 from finn.kernels.control import presented as presented_buses
@@ -120,7 +120,6 @@ from finn.kernels.cut import Cut, channel_defaulted
 from finn.kernels.explore import Trial, dotted
 from finn.kernels.members import (
     Configured,
-    Facts,
     Refusal,
     changed,
     commit,

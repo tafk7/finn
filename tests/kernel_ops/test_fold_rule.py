@@ -34,10 +34,9 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.space import Decision, Space, derived, inspection
 from finn.custom_op.kernels.network import persist
 from finn.custom_op.kernels.shell import in_shell
-from finn.kernels.composer import PartitionDeclaration, Port, Stated, channel, compose
+from finn.kernels.composer import Facts, PartitionDeclaration, Port, Stated, channel, compose
 from finn.kernels.explore import Accepted, ExploreError, Hold, Refused, Seam, TargetCycles
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.members import Facts
 from finn.kernels.partition import Partition
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel
