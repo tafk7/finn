@@ -19,6 +19,11 @@ after it (``x``):
   sequence it presents, refused as ``port-presentation`` or ``port-schedule``;
 - ``x_data_width``, a derived value while it is placed: the bits of its words
   (``data_width``, from its stream), which a channel reads of the port producing into it;
+- ``x_label``, a derived value: its label, ``x``, the one its contract carries;
+- ``x_side``, a derived value while it is placed: the side it gives a channel
+  (``finn.kernels.sides.Side.kernel``), its stream, its label and, on an output port
+  (an initiator), its word width: what a channel's ``producer`` or ``consumer`` is bound
+  to;
 - ``x_access``, a derived value while it binds (placed, an input, reading indices): its
   read of the tensor, from which its kernel binds its indices' extents;
 - ``x_element_taken``, a constraint where it states the integer policy its hardware takes
@@ -61,8 +66,8 @@ FinnLib's native pins (``idat``, ``ivld``, ``irdy`` for a target, ``odat``, ``ov
 presenting the sequence it is given.
 
 A kernel with children presents a child's port as its own: ``x = served(compute, "x")``
-lowers to ``x_stream`` and ``x_data_width``, the selected child's, and ``x_contract``, the
-child's labelled below it (``compute.packed.x``).
+lowers to ``x_stream`` and ``x_data_width``, the selected child's, and ``x_label``,
+``x_side`` and ``x_contract``, the child's labelled below it (``compute.packed.x``).
 """
 
 from __future__ import annotations
@@ -94,6 +99,7 @@ from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import PORT_CONTRACT, KernelSpace, PortContract
 from finn.kernels.declaration import KernelDeclaration, Product, declared_reads, is_member
+from finn.kernels.sides import SIDE, Side
 from finn.kernels.transport import (
     AxisBeat,
     AxisSpelling,
@@ -265,6 +271,27 @@ class AxiStreamPort(KernelDeclaration):
             )
 
         members[f"{name}_data_width"] = derived(when=guard)(data_width_)
+
+        @declared_reads()
+        def label_(self: Space) -> str:
+            return name
+
+        members[f"{name}_label"] = derived(label_)
+        # An output port's side carries its word width: read where its endpoint may say so.
+        endpoint = self.endpoint
+        widths = (
+            (f"{name}_data_width",) if is_member(endpoint) or endpoint is Endpoint.INITIATOR else ()
+        )
+
+        @declared_reads(f"{name}_stream", f"{name}_label", *widths, *self.paths("endpoint"))
+        def side_(self: Space) -> Side:
+            stream: Stream = getattr(self, f"{name}_stream")
+            label: str = getattr(self, f"{name}_label")
+            if port.value(self, "endpoint") is Endpoint.INITIATOR:
+                return Side.kernel(stream, label, getattr(self, f"{name}_data_width"))
+            return Side.kernel(stream, label)
+
+        members[f"{name}_side"] = derived(semantics=SIDE, when=guard)(side_)
         binding = self.binding()
         binds = guard
         if binding is None:
@@ -625,9 +652,10 @@ class Served(KernelDeclaration):
     """A port a kernel with children presents as its child's: ``child`` (a child of the
     kernel, or a selector over children, ``Select``) and that child's port ``port``. It
     lowers to ``<name>_stream`` and ``<name>_data_width``, the selected child's stream and
-    word width, and ``<name>_contract``, the child's contract labelled below the kernel
-    (``compute.<case>.x``; ``child.x`` for a child; ``<labelled>.x`` where the kernel
-    states the label its child keeps: a channel's source, ``source.memstream.set``)."""
+    word width, and ``<name>_label``, ``<name>_side`` and ``<name>_contract``, the child's
+    label, side and contract labelled below the kernel (``compute.<case>.x``; ``child.x``
+    for a child; ``<labelled>.x`` where the kernel states the label its child keeps: a
+    channel's source, ``source.memstream.set``)."""
 
     child: Any
     port: str
@@ -653,6 +681,8 @@ class Served(KernelDeclaration):
             )
         given = getattr(self.child, f"{self.port}_stream")
         widths = getattr(self.child, f"{self.port}_data_width")
+        labels = getattr(self.child, f"{self.port}_label")
+        sides = getattr(self.child, f"{self.port}_side")
         offered = getattr(self.child, f"{self.port}_contract")
         members: dict[str, object] = {}
 
@@ -668,26 +698,52 @@ class Served(KernelDeclaration):
             case = selected(self.child)  # a selector over children: the case it selects
         except DefinitionError:
             case = None
+        # Its label, side and contract, each the child's below the same label: the one the
+        # kernel states its child keeps, the selected case's, or the child's.
         if self.labelled is not None:
-            label = self.labelled
+            above = self.labelled
+
+            def stated_label(label: str) -> str:
+                return f"{above}.{label}"
+
+            def stated_side(side: Side) -> Side:
+                return side.under(above)
 
             def stated(contract: PortContract) -> PortContract:
-                return contract.under(label)
+                return contract.under(above)
 
+            members[f"{name}_label"] = derived(label=labels)(stated_label)
+            members[f"{name}_side"] = derived(semantics=SIDE, side=sides)(stated_side)
             members[f"{name}_contract"] = view(semantics=PORT_CONTRACT, contract=offered)(stated)
         elif case is not None:
+
+            def chosen_label(case: str, label: str) -> str:
+                return f"{child}.{case}.{label}"
+
+            def chosen_side(case: str, side: Side) -> Side:
+                return side.under(f"{child}.{case}")
 
             def chosen(case: str, contract: PortContract) -> PortContract:
                 return contract.under(f"{child}.{case}")
 
+            members[f"{name}_label"] = derived(case=case, label=labels)(chosen_label)
+            members[f"{name}_side"] = derived(semantics=SIDE, case=case, side=sides)(chosen_side)
             members[f"{name}_contract"] = view(
                 semantics=PORT_CONTRACT, case=case, contract=offered
             )(chosen)
         else:
 
+            def placed_label(label: str) -> str:
+                return f"{child}.{label}"
+
+            def placed_side(side: Side) -> Side:
+                return side.under(child)
+
             def placed(contract: PortContract) -> PortContract:
                 return contract.under(child)
 
+            members[f"{name}_label"] = derived(label=labels)(placed_label)
+            members[f"{name}_side"] = derived(semantics=SIDE, side=sides)(placed_side)
             members[f"{name}_contract"] = view(semantics=PORT_CONTRACT, contract=offered)(placed)
         return members
 

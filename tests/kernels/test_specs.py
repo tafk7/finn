@@ -11,7 +11,11 @@
 - what it gathers is there: its conformance cases (one spec each), the sweeps' case
   lists it names, its unit tests; its reference is the oracle or test-side;
 - every kernel of ``finn.kernels`` that binds a library module is a spec's, so its
-  covering points build its module, checking that its sources provide it.
+  covering points build its module, checking that its sources provide it;
+- every stream port of every member of every conformance case, at each of the case's
+  covering points, states its contract's label (``x_label``) and the side it gives a
+  channel (``x_side``: its stream, that label and, an output's, its word width), so the
+  side a channel is bound to and the contract its network reads cannot drift.
 
 The simulations are elsewhere: its conformance cases in ``test_conformance.py``,
 the KernelOps' parity in ``tests/kernel_ops/test_parity.py``.
@@ -42,10 +46,15 @@ from support.layering import ROOT
 import finn.kernels
 from finn.core.space import Available, Space
 from finn.core.space.declarations import unmet_required
+from finn.dataflow.streams import Stream
 from finn.harness.points import Covering, covering, refusal, refused_cases, rejected
-from finn.kernels.base import KernelSpace
+from finn.kernels.artifacts.abi import Endpoint
+from finn.kernels.base import KernelSpace, PortContract
 from finn.kernels.configure import undecided
+from finn.kernels.declaration import declarations
 from finn.kernels.network import Network
+from finn.kernels.port import AxiStreamPort, Served
+from finn.kernels.sides import Side
 
 BY_NAME = {spec.name: spec for spec in SPECS}
 
@@ -171,3 +180,43 @@ def test_every_kernel_binding_a_module_is_a_spec_s_so_its_module_is_built() -> N
     kernels = _binding_a_module()
     assert len(kernels) >= 11
     assert kernels <= {spec.kernel for spec in SPECS}, kernels - {spec.kernel for spec in SPECS}
+
+
+def _ports(member: Space) -> tuple[str, ...]:
+    """The stream ports ``member``'s class declares, by name: its module's, and those it
+    presents for a child; none for a member that is no kernel."""
+    if not isinstance(member, KernelSpace):
+        return ()
+    found = declarations(type(member), KernelSpace)
+    return tuple(name for name, each in found.items() if isinstance(each, (AxiStreamPort, Served)))
+
+
+def _ports_checked(point: Network) -> int:
+    """Each placed stream port of each member of ``point``, checked: its label is its
+    contract's, and its side states its stream, that label and, on an output port, its
+    word width. How many it checked."""
+    checked = 0
+    for name in point.members:
+        member = point.member(name)
+        for port in _ports(member):
+            offered = member.query(getattr(type(member), f"{port}_contract"))
+            if not isinstance(offered, Available):
+                continue
+            contract: PortContract = offered.value
+            label: str = getattr(member, f"{port}_label")
+            side: Side = getattr(member, f"{port}_side")
+            stream: Stream = getattr(member, f"{port}_stream")
+            where = f"{name}.{port}"
+            assert label == contract.label, where
+            output = contract.contract.transport.endpoint is Endpoint.INITIATOR
+            width = getattr(member, f"{port}_data_width") if output else None
+            assert side == Side.kernel(stream, label, width), where
+            checked += 1
+    return checked
+
+
+@pytest.mark.parametrize("case", sorted(conformance_cases()))
+def test_every_port_states_its_contracts_label_and_its_side(case: str) -> None:
+    base = unchosen(**conformance_cases()[case]())
+    for chosen in _covering(base).points or ({},):
+        assert _ports_checked(configured(base, chosen)), f"{case} at {chosen}"
