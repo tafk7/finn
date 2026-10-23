@@ -165,7 +165,7 @@ def threshold_table_dtype(least: int, most: int, *, signed: bool) -> QONNXDataTy
     type size it here: the KernelOp from its initial values (``stored_thresholds``), the
     kernel from the values a host may write (``table_dtype``)."""
     if signed or least < 0:
-        magnitude = max((-least - 1).bit_length() if least < 0 else 0, most.bit_length())
+        magnitude = max((-least - 1).bit_length() if least < 0 else 0, max(most, 0).bit_length())
         return resolve_qonnx_datatype_name(f"INT{max(magnitude + 1, 2)}")
     return resolve_qonnx_datatype_name(f"UINT{max(most.bit_length(), 1)}")
 
