@@ -61,27 +61,14 @@ class Binding:
     node: int | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class Read:
-    """One read of ``decision.member``: its reader's key, and the Decision over nodes it
-    exists only where it applies (None: everywhere)."""
-
-    owner: str
-    requires: int | None
-
-
 @dataclass
 class SlotDraft:
     """A Space the class places, slot ``slot`` of its compiled form: the placed class's
-    compiled form, and what the placing body writes for it (its formals' bindings).
-    ``requires`` is the class's Decision over nodes whose candidate it is, where that
-    choice may never apply (a guard ``supplied(formal)``): what the class writes for it
-    exists only where it applies."""
+    compiled form, and what the placing body writes for it (its formals' bindings)."""
 
     compiled: Compiled
     slot: int
     bindings: dict[str, Binding] = field(default_factory=dict)
-    requires: int | None = None
 
 
 @dataclass
@@ -126,11 +113,10 @@ class ChoiceDraft:
     selector: int
     cases: list[tuple[str, int | None]] = field(default_factory=list)
     members: dict[str, int] = field(default_factory=dict)
-    # Every selection made for it (node -> member), those its candidates share, each read
-    # of a member through it; shared selections dropped for disagreeing types.
+    # Every selection made for it (node -> member), those its candidates share; shared
+    # selections dropped for disagreeing types.
     selects: dict[int, str] = field(default_factory=dict)
     shared: set[int] = field(default_factory=set)
-    readers: dict[str, list[Read]] = field(default_factory=dict)
     dropped: set[str] = field(default_factory=set)
 
 
@@ -189,21 +175,15 @@ class Table:
     # Lowering -> checks: integer expressions, and each callback argument's target.
     expression_tasks: list[ExpressionTask] = field(default_factory=list)
     argument_checks: list[tuple[BoundArgument, NodeRef, str]] = field(default_factory=list)
-    # The Decision over nodes each node exists only where it applies, and the one whose
-    # nodes are being made. Each edge out of the class, in the order first named, with the
-    # Decision being applied then (an edge takes its first reader's applicability), and
-    # the records and edges in the order they were made (``vertices``: the dependency
-    # order's).
-    requires: dict[int, int] = field(default_factory=dict)
-    applying: int | None = None
-    edges: dict[Edge, int | None] = field(default_factory=dict)
+    # Each edge out of the class, and the records and edges in the order they were made
+    # (``vertices``: the dependency order's).
+    edges: set[Edge] = field(default_factory=set)
     vertices: list[int | Edge] = field(default_factory=list)
     # ``Select(by=...)``: each derived selector's node, its scope and what picks it.
     picks: list[tuple[int, int, object]] = field(default_factory=list)
     # Each selection made in a placed Space's choice: node -> (its slots, the choice in the
-    # class those slots reach, member), and its reads.
+    # class those slots reach, member).
     chooses: dict[int, tuple[tuple[int, ...], int, str]] = field(default_factory=dict)
-    chosen_reads: dict[int, list[Read]] = field(default_factory=dict)
 
     def collected(self, space_type: type[Space]) -> EffectiveSpace:
         effective = self.effective.get(space_type)
@@ -244,8 +224,6 @@ class Table:
             )
         )
         self.vertices.append(index)
-        if self.applying is not None:
-            self.requires[index] = self.applying
         return index
 
     def guarded(
@@ -329,9 +307,9 @@ class Table:
         return self.named(edge)
 
     def named(self, edge: Edge) -> Edge:
-        """An edge out of the class, named: the first reader's applicability is its own."""
+        """An edge out of the class, named (a vertex of the order when first named)."""
         if edge not in self.edges:
-            self.edges[edge] = self.applying
+            self.edges.add(edge)
             self.vertices.append(edge)
         return edge
 

@@ -15,10 +15,9 @@ A reference into a placed Space resolves in that class's compiled form, at a pla
 of the class (``Table.lift``): a member through the slots, or a selection in a choice's
 scope; a formal this class binds by reference is the record it writes for it. A
 ``decision.member`` read through a placed Space's choice reads the selection its candidates
-share there, or else one this class makes for it, a record it writes; each read through a
-choice is recorded (``_table.Read``). A selection several classes make for one scope is one
-address where they are placed, in the choice's scope (``_scopes``); its owner is always the
-choice's key.
+share there, or else one this class makes for it, a record it writes. A selection several
+classes make for one scope is one address where they are placed, in the choice's scope
+(``_scopes``); its owner is always the choice's key.
 """
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ from dataclasses import replace
 from typing import cast
 
 from ._nodes import NodeChoice, NodeDecision, NodeDecl, unwrap
-from ._table import ChoiceDraft, ExpressionTask, Place, Read, ScopeDraft, Table, member_key
+from ._table import ExpressionTask, Place, ScopeDraft, Table, member_key
 from .declarations import (
     CaseRef,
     ChoiceMemberRef,
@@ -99,13 +98,10 @@ class Names:
 
     def __init__(self, table: Table) -> None:
         self.table = table
-        # Each expression and projection once per scope and per Decision over nodes its
-        # readers exist only where it applies (``Table.applying``): a node made for a
-        # candidate's reader is not placed where that Decision never applies, so a reader
-        # placed there too has its own.
-        self.expression_nodes: dict[tuple[int, Expr, int | None], int] = {}
+        # Each expression and projection once per scope.
+        self.expression_nodes: dict[tuple[int, Expr], int] = {}
         self.expression_counts: dict[str, int] = {}
-        self.projections: dict[tuple[int, Projection[object], int | None], int] = {}
+        self.projections: dict[tuple[int, Projection[object]], int] = {}
         self.choice_member_nodes: dict[tuple[int, str], int] = {}
         self.placed_scopes: dict[int, tuple[int, ...]] = {}
         # Selections made in a placed Space's choice, by (where, choice, member).
@@ -184,7 +180,6 @@ class Names:
                 declaration=owner,
             )
         choice = self.table.choice_drafts[index]
-        self.read_through(choice, source.member, Read(owner, self.table.applying))
         if source.member in choice.members:
             return choice.members[source.member]
         identity = (choice.index, source.member)
@@ -221,12 +216,6 @@ class Names:
         choice.selects[node] = source.member
         return node
 
-    @staticmethod
-    def read_through(choice: ChoiceDraft, member: str, read: Read) -> None:
-        """A read of ``decision.member`` through an own choice (its owner where several
-        classes read it: ``_scopes``; the reads in declaration order: ``_template``)."""
-        choice.readers.setdefault(member, []).append(read)
-
     def placed_choice_member(
         self, target: Place, decision: object, member: str, *, owner: str
     ) -> NodeRef:
@@ -234,7 +223,6 @@ class Names:
         share in that class; else one this class makes for it, over the candidates'
         members. Where the classes are placed, the selections made for one member in one
         scope are one address (``_scopes``)."""
-        read = Read(owner, self.table.applying)
         compiled = self.table.compiled_at(target)
         index = compiled.choice_index.get(decision)
         if index is None:
@@ -260,7 +248,6 @@ class Names:
         identity = (target, index, member)
         cached = self.placed_choice_members.get(identity)
         if cached is not None:
-            self.table.chosen_reads[cached].append(read)
             return cached
         alternatives: list[tuple[str, NodeRef]] = []
         for case, slot in choice.cases:
@@ -291,7 +278,6 @@ class Names:
         )
         self.placed_choice_members[identity] = node
         self.table.chooses[node] = (self.table.path(target), index, member)
-        self.table.chosen_reads[node] = [read]
         return node
 
     def descend(self, scope: int, path: Iterable[Declaration], *, owner: str) -> Place:
@@ -390,7 +376,7 @@ class Names:
 
     def projection(self, scope: int, source: Projection[object], *, owner: str) -> int:
         """``spec.payload_bits``: a derived node reading one attribute of a value."""
-        identity = (scope, source, self.table.applying)
+        identity = (scope, source)
         cached = self.projections.get(identity)
         if cached is not None:
             return cached
@@ -427,8 +413,7 @@ class Names:
         owner: str,
         index: int | None = None,
     ) -> int:
-        """Register each source expression once per scope (and per Decision over nodes
-        its readers exist only where it applies: ``projections``).
+        """Register each source expression once per scope.
 
         A named expression owns its authored node. Anonymous shared expressions
         use their first consumer's source owner; every later consumer retains
@@ -436,7 +421,7 @@ class Names:
         Their applicability comes from the scope, never the first consumer.
         """
 
-        identity = (scope, source, self.table.applying)
+        identity = (scope, source)
         previous = self.expression_nodes.get(identity)
         if previous is not None:
             return previous

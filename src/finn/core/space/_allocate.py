@@ -216,9 +216,7 @@ class _Allocation:
         if parent is not None:
             # The child's compiled form, compiled first; a slot of this class.
             draft.placed = SlotDraft(
-                self.table.compiled_of(space_type),
-                len(self.table.slot_drafts),
-                requires=self.table.applying,
+                self.table.compiled_of(space_type), len(self.table.slot_drafts)
             )
             self.table.slot_drafts.append(index)
         draft.slots = self.own_slots(draft)

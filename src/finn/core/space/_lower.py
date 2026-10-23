@@ -8,9 +8,7 @@ references); a Space class's own member becomes its kind's payload: a formal's
 requirement, a constant, a Decision's domain and its arguments, a callback with
 its arguments, a view's output and its Space's validity, and ``Members`` entries. Guards
 and integer expressions are linked after every member, references resolving
-through ``_names``. What a task makes exists only where its own node does
-(``Table.requires``): a candidate's binding, or a case's guard, of a Decision over nodes
-that may never apply. A reference into a placed Space is an edge out of the class, named
+through ``_names``. A reference into a placed Space is an edge out of the class, named
 as it is first read (``Table.lift``).
 """
 
@@ -77,12 +75,9 @@ class _Lowering:
         self.names = Names(table)
 
     def run(self) -> None:
-        requires = self.table.requires
         for task in self.table.members:
-            self.table.applying = requires.get(task.index)
             self.link_member(task)
         for guard_task in self.table.guards:
-            self.table.applying = requires.get(guard_task.index)
             node = self.table.nodes[guard_task.index]
             self.table.nodes[guard_task.index] = replace(
                 node,
@@ -91,12 +86,10 @@ class _Lowering:
                 ),
             )
         for selector, source_scope, by in self.table.picks:
-            self.table.applying = requires.get(selector)
             node = self.table.nodes[selector]
             target = self.names.reference(source_scope, by, owner=node.owner)
             self.table.nodes[selector] = replace(node, arguments=(Argument("value", target),))
         self.link_expressions()
-        self.table.applying = None
 
     # -- expressions ----------------------------------------------------------------------
 
@@ -105,7 +98,6 @@ class _Lowering:
         while cursor < len(self.table.expression_tasks):
             task = self.table.expression_tasks[cursor]
             cursor += 1
-            self.table.applying = self.table.requires.get(task.index)
             if task.operator not in {"add", "sub", "mul", "floordiv", "mod", "neg"}:
                 raise DefinitionError.broken(
                     "expression-operator-unsupported",

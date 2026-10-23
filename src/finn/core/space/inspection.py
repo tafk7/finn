@@ -404,8 +404,8 @@ class Refused:
 class Viable:
     """One choice's listed values, each possible or refused, in its domain's list order.
     ``values`` is ``None`` where nothing can be listed: a domain known by membership only,
-    or a list that waits on missing facts (``waits``, by key) or is refused through an
-    input of the domain."""
+    or a list that waits (``waits``, by key) or is refused through an input of the
+    domain."""
 
     key: str
     values: tuple[Possible | Refused, ...] | None
@@ -469,8 +469,8 @@ class Set:
 
 @dataclass(frozen=True, slots=True)
 class Waiting:
-    """Stored, never read as a value: its presence is unknown, or its domain waits on a
-    missing fact. ``waits``: what it waits on (open choices, missing facts), by key."""
+    """Stored, never read as a value: its presence is unknown. ``waits``: what it waits on
+    (open choices), by key."""
 
     value: object
     waits: tuple[str, ...]

@@ -9,12 +9,12 @@ resolves them again at every scope, over a model whose every scope is made and e
 read (``line_scopes``: an eager model of its own), as the line's inference did over a table
 holding every node: each path's names against the scope's own children and members, through
 each selector to its candidates' scopes, helpers followed in the scope they are reached
-through, ``present()`` through a child's guard or the guards and selectors on the way to a
-value's source. Its answers are addresses of that model (``ModelReads``, keyed by address):
-each method's possible reads, the paths that name nothing, each guarded member's existence
-guards (its guard, then each guard that one is evaluated under, to the root), and each case
-guard. The line oracles (``_whole_support``, ``_domains_support``,
-``kernel_ops/test_stream_reads``) read it, so they do not share the inference they check.
+through, ``present()`` through a child's guard. Its answers are addresses of that model
+(``ModelReads``, keyed by address): each method's possible reads, the paths that name
+nothing, each guarded member's existence guards (its guard, then each guard that one is
+evaluated under, to the root), and each case guard. The line oracles (``_whole_support``,
+``_domains_support``, ``kernel_ops/test_stream_reads``) read it, so they do not share the
+inference they check.
 """
 
 from __future__ import annotations
@@ -186,8 +186,8 @@ class LineInference:
         return known
 
     def _presence(self, scope: ScopeRecord, path: Path, found: set[Address]) -> bool:
-        """Add what ``present()`` reads of the last name of ``path``: a child's guard; for a
-        value input, the guards and selectors on the way to its source."""
+        """Add what ``present()`` reads of the last name of ``path``, a child: its guard.
+        Anything else is no node (a value input is known): nothing found."""
         reached = self._scopes(scope, path[:-1], found)
         if reached is None:
             return False
@@ -199,36 +199,7 @@ class LineInference:
                 if guard is not None:
                     found.add(guard)
                 known = True
-                continue
-            index = at.named_members.get(name)
-            if index is None:
-                continue
-            known = True
-            line_sources(self.scopes, index, found)
         return known
-
-
-def line_sources(scopes: Scopes, index: Address, found: set[Address]) -> None:
-    """What decides whether a value input is supplied at ``index`` (``present``): the guards
-    and selectors on the way to its source, every alias on the way walked, so each one's
-    guard is named."""
-    pending, seen = [index], set()
-    while pending:
-        current = pending.pop()
-        if current in seen:
-            continue
-        seen.add(current)
-        if current.guard is not None:
-            found.add(current.guard)
-        if current.kind == "param":
-            found.add(current)
-        elif current.kind in ("alias", "guard", "view") and current.output is not None:
-            pending.append(current.output)
-        elif current.kind == "select" and current.selector is not None:
-            found.add(current.selector)
-            pending.extend(target for _, target in current.alternatives)
-    if scopes.selector_choice(index) is not None:
-        found.add(index)
 
 
 def line_existence(index: Address) -> tuple[Address, ...]:
@@ -291,5 +262,4 @@ __all__ = [
     "line_existence",
     "line_infer",
     "line_scopes",
-    "line_sources",
 ]
