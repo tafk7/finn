@@ -74,7 +74,8 @@ def _refusal(reads: ModelReads, decision: Address) -> DefinitionError | None:
                     "reads facts only)",
                     declaration=decision.key,
                 )
-            following.extend(found)
+            # In address order: a set of addresses iterates by identity, which no run fixes.
+            following.extend(sorted(found))
         for dependency in following:
             if dependency in own or dependency in came:
                 continue
