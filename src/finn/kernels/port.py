@@ -68,6 +68,10 @@ presenting the sequence it is given.
 A kernel with children presents a child's port as its own: ``x = served(compute, "x")``
 lowers to ``x_stream`` and ``x_data_width``, the selected child's, and ``x_label``,
 ``x_side`` and ``x_contract``, the child's labelled below it (``compute.packed.x``).
+
+A port's endpoint is read off its class, before any design space (``port_endpoint``: a
+served port's is its child's): the composer (``finn.kernels.composer``) places an output
+port on a channel's producer side and an input port on its consumer side by it.
 """
 
 from __future__ import annotations
@@ -89,7 +93,7 @@ from finn.core.space import (
     supplied,
     view,
 )
-from finn.core.space._nodes import selected
+from finn.core.space._nodes import NodeDecision, NodeDecl, selected, unwrap
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.schedule import Access, Affine, Index, Pace, Refused, Schedule, plain_index
 from finn.dataflow.streams import Stream
@@ -98,7 +102,13 @@ from finn.dataflow.traversal import BeatSequence, LevelEnd
 from finn.kernels.artifacts.abi import Clocking, Direction, Endpoint, Pin
 from finn.kernels.artifacts.module import Held
 from finn.kernels.base import PORT_CONTRACT, KernelSpace, PortContract
-from finn.kernels.declaration import KernelDeclaration, Product, declared_reads, is_member
+from finn.kernels.declaration import (
+    KernelDeclaration,
+    Product,
+    declarations,
+    declared_reads,
+    is_member,
+)
 from finn.kernels.sides import SIDE, Side
 from finn.kernels.transport import (
     AxisBeat,
@@ -755,6 +765,34 @@ def served(child: Any, port: str, *, label: str | None = None) -> Served:
     return Served(child, port, label)
 
 
+def _child_types(child: object) -> tuple[type[Space], ...]:
+    """The classes a ``Served`` port's child may be: a child's, or each case's of a selector
+    over children (a ``None`` case places none)."""
+    record = unwrap(child)
+    if isinstance(record, NodeDecision):
+        return tuple(case.space_type for case in record.candidates.values() if case is not None)
+    if isinstance(record, NodeDecl):
+        return (record.space_type,)
+    return ()
+
+
+def port_endpoint(space_type: type[Space], port: str) -> Endpoint | None:
+    """The endpoint port ``port`` of ``space_type`` declares, as the class states it: an
+    ``AxiStreamPort``'s (``INITIATOR`` for an output, ``TARGET`` for an input), or a served
+    port's, its child's (every case's, where they agree). None where the class states no
+    stream port of that name, or where its endpoint is not known when the class is made (an
+    endpoint read from a member, or cases that disagree)."""
+    if not (isinstance(space_type, type) and issubclass(space_type, KernelSpace)):
+        return None
+    declared = declarations(space_type, KernelSpace).get(port)
+    if isinstance(declared, AxiStreamPort):
+        return None if is_member(declared.endpoint) else declared.endpoint
+    if isinstance(declared, Served):
+        found = {port_endpoint(child, declared.port) for child in _child_types(declared.child)}
+        return found.pop() if len(found) == 1 else None
+    return None
+
+
 __all__ = [
     "INTEGER_POLICY",
     "STREAM",
@@ -769,6 +807,7 @@ __all__ = [
     "held",
     "lane_count",
     "native_stream",
+    "port_endpoint",
     "pace",
     "pins",
     "served",
