@@ -64,13 +64,16 @@ The cache is **bounded**: it holds at most ``CLASS_CACHE_BOUND`` classes (16), t
 recently composed dropped past it (a dropped class lives on while a design space of it
 does, and a later composition of its structure makes it again). Each class holds its
 compiled model and, with it, the engine's node cache, so the bound is what limits the
-classes a long build keeps. ``cached_classes()`` reads its size, in entries.
+classes a long build keeps. ``cached_classes()`` reads its size, in entries. Composing may
+be called from several threads: one lock guards the cache, and a class is made under it,
+so a structure composed at once from two threads is one class.
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
+import threading
 from collections import Counter, OrderedDict
 from collections.abc import Callable, Hashable, Mapping
 from dataclasses import dataclass
@@ -467,15 +470,21 @@ def structure(declared: PartitionDeclaration, ranked: list[str]) -> Hashable:
 
 _CLASSES: OrderedDict[Hashable, tuple[type[Space], Names]] = OrderedDict()
 
+_LOCK = threading.Lock()
+"""Held while the cache is read or changed, a class made under it: one class per key,
+whichever thread composes first."""
+
 
 def cached_classes() -> int:
     """How many classes the cache holds (at most ``CLASS_CACHE_BOUND``)."""
-    return len(_CLASSES)
+    with _LOCK:
+        return len(_CLASSES)
 
 
 def clear_classes() -> None:
     """Drop every class the cache holds."""
-    _CLASSES.clear()
+    with _LOCK:
+        _CLASSES.clear()
 
 
 def _param(
@@ -570,14 +579,15 @@ def compose(declared: PartitionDeclaration) -> Composed:
         raise PartitionRefused(findings)
     ranked = _ranked(declared)
     key = structure(declared, ranked)
-    found = _CLASSES.get(key)
-    if found is None:
-        found = _made(declared, ranked, names, key)
-        _CLASSES[key] = found
-        while len(_CLASSES) > CLASS_CACHE_BOUND:
-            _CLASSES.popitem(last=False)
-    else:
-        _CLASSES.move_to_end(key)
+    with _LOCK:
+        found = _CLASSES.get(key)
+        if found is None:
+            found = _made(declared, ranked, names, key)
+            _CLASSES[key] = found
+            while len(_CLASSES) > CLASS_CACHE_BOUND:
+                _CLASSES.popitem(last=False)
+        else:
+            _CLASSES.move_to_end(key)
     space_type, table = found
     facts: dict[str, object] = {}
     for owner, kernel in declared.kernels.items():

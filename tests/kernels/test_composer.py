@@ -14,7 +14,9 @@ made; keys mapped between a path and FINN's pair.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from core.space._line_reads import line_scopes
@@ -248,6 +250,18 @@ def test_the_same_structure_in_another_test_mode_is_another_class(
     monkeypatch.setenv(mode, "1")
     monkeypatch.delenv(mode)
     assert compose(declared()).space_type is plain.space_type
+
+
+def test_one_structure_composed_from_several_threads_is_one_class(cache: None) -> None:
+    barrier = threading.Barrier(8)
+
+    def composed(_: int) -> type[object]:
+        barrier.wait()
+        return compose(declared()).space_type
+
+    with ThreadPoolExecutor(8) as pool:
+        made = set(pool.map(composed, range(8)))
+    assert len(made) == 1 and cached_classes() == 1
 
 
 def test_the_class_cache_holds_at_most_its_bound(cache: None) -> None:
