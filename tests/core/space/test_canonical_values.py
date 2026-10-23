@@ -7,7 +7,8 @@ walked item by item, whatever its annotation (a tuple's items, a frozen set's me
 value class's fields): ``-0.0`` becomes ``0.0``; NaN is refused, naming the input (``==``
 does not hold it equal to itself, so no design space holding it would equal itself); a
 mutable value is refused. A dataclass leaving a field out of ``==`` (``compare=False``) is
-refused as a value type where it is annotated, and as a value where it enters.
+refused as a value type where it is annotated, and as a value where it enters. Two values
+``==`` holds equal are one value, whatever a reader sees that ``==`` leaves out.
 """
 
 from __future__ import annotations
@@ -229,3 +230,41 @@ def test_a_field_not_given_at_init_is_taken_in_its_canonical_form() -> None:
         assert not negative(point.held.value) and not negative(point.held.negated)
         changed = point.with_facts({Mirror.held: given})
         assert not negative(changed.held.negated)
+
+
+@dataclass(frozen=True)
+class Coarse:
+    """A value whose ``==`` is coarser than what its readers see: ``width`` is left out."""
+
+    count: int
+    width: int
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Coarse) and other.count == self.count
+
+    def __hash__(self) -> int:
+        return hash(self.count)
+
+
+def test_values_equal_by_their_eq_are_one_value_whatever_their_readers_see() -> None:
+    """Two values the type calls equal are one value to the engine: one design space and
+    one facts layer. A reader of what ``==`` leaves out answers for the one the engine met
+    first, here ``width`` 8 for ``Coarse(4, 16)``: an ``==`` coarser than its readers is
+    its author's to answer for. A value ``==`` tells apart answers for itself."""
+
+    class Packed(Space):
+        lanes: Coarse = Param()
+
+        @derived
+        def width(self) -> int:
+            return self.lanes.width
+
+    narrow = design_space(Packed(lanes=Coarse(4, 8)))
+    assert narrow.width == 8
+    wide = design_space(Packed(lanes=Coarse(4, 16)))
+    assert held(wide).ds is held(narrow).ds and held(wide).ds.layer is held(narrow).ds.layer
+    assert wide.width == 8 and wide.lanes.width == 8
+    # A change of facts to an equal value is no change: the receiver itself.
+    assert narrow.with_facts({Packed.lanes: Coarse(4, 16)}) is narrow
+    other = narrow.with_facts({Packed.lanes: Coarse(5, 16)})
+    assert held(other).ds is not held(narrow).ds and other.width == 16
