@@ -60,12 +60,13 @@ from finn.custom_op.kernels.network import (
 )
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import CYCLES
+from finn.kernels.composer import Key
 from finn.kernels.configure import chosen
 from finn.kernels.cut import channel_defaulted
-from finn.kernels.explore import FifoCheck, Seam
+from finn.kernels.explore import FifoCheck, Seam, dotted
 from finn.kernels.members import Facts
 from finn.kernels.movers import MOVER, MoverContract
-from finn.kernels.network import Key, Wire, dotted
+from finn.kernels.network import Wire
 from finn.kernels.policies import Defaulted, Required, defaulted, policy
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources

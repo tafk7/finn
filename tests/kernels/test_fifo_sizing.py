@@ -41,6 +41,7 @@ from finn.kernels.explore import (
     Seam,
     SizeFifos,
     TargetCycles,
+    dotted,
     explore,
 )
 from finn.kernels.fifo import least_depth_holding
@@ -58,7 +59,7 @@ from finn.kernels.fifo_sizing import (
     simulate,
 )
 from finn.kernels.input_generator import NestBuffer, nest_buffer, nest_geometry
-from finn.kernels.network import Network, dotted
+from finn.kernels.network import Network
 from finn.kernels.policies import Required
 from finn.toolchain.launcher import host_toolchain
 

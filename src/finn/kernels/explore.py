@@ -95,10 +95,10 @@ from finn.core.space import (
 )
 from finn.kernels.base import BUFFERING, CYCLES, RESOURCES
 from finn.kernels.channels import ChannelFifo, Neighbours
+from finn.kernels.composer import Key
 from finn.kernels.configure import refusal
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.fifo_sizing import FRAMES, NotModelled, Sized, holds, size
-from finn.kernels.network import Key, Trial, dotted
 from finn.kernels.policies import (
     FIRST_VALID,
     Fixed,
@@ -114,16 +114,61 @@ from finn.kernels.utilization import binding, over, ratio, total
 from finn.platform.capabilities import RESOURCE_NAMES, Platform, Resources
 
 T = TypeVar("T")
+N = TypeVar("N")
+
+
+def dotted(key: Key) -> str:
+    """A key as text, its owner and key joined (``first.pe``), as a report names a value;
+    a member's own refusal (``(name, "")``) is its name. Text only: a member's name, a
+    graph name, may hold a dot itself."""
+    owner, name = key
+    return f"{owner}.{name}" if name else owner
+
+
+# A trial is a record the seam reads, never a value a Space holds: a plain dataclass, since
+# a frozen one is a value class, which holds immutable values only.
+
+
+@dataclass
+class Trial(Generic[N]):
+    """A change tried on a composition (``Composition.trial``): the composition it reaches
+    (the one tried, where it is refused); why it is refused, by key: a value outside its
+    domain by the choice's key, a rule broken by the rule's key (a member's own refusal by
+    ``(name, "")``), each with the stored choices standing in its way (``standing``).
+    ``rederived`` and ``fallbacks``, a hand-built network's (``finn.kernels.network``: the
+    stored channel choices the cut's policies derived again as it rebuilt a channel, each
+    with one ``choice-rederived`` finding, and each choice a rebuilt channel's policy set in
+    listed order, ``choice-order-unknown``), are empty from a partition, which rebuilds
+    nothing."""
+
+    network: N
+    rederived: Mapping[Key, tuple[Finding, ...]]
+    refused: Mapping[Key, tuple[Finding, ...]]
+    standing: Mapping[Key, tuple[Key, ...]] = field(default_factory=dict)
+    fallbacks: Mapping[Key, tuple[Finding, ...]] = field(default_factory=dict)
+
+    @property
+    def accepted(self) -> bool:
+        return not self.refused
 
 
 class Composition(Protocol):
-    """What the seam explores: a ``finn.kernels.network.Network`` (the graph's binds one,
-    ``finn.custom_op.kernels.shell.in_shell``, in its shell). Its members by name, ranked,
-    its channels among them, and per member its point, its exports, its Decisions, every
-    choice's state, the possible values of those asked, what is open and stored, its
-    validity, and a change (``trial``); per channel the ports beside it (``neighbours``,
-    whose paces FIFO sizing reads); its own statement of what it uses, where it makes
-    one (``own_resources``); and the owner of each member's policies (``owner``)."""
+    """What the seam explores: a partition's one design space
+    (``finn.custom_op.kernels.network.Partition``; the graph binds one in its shell,
+    ``finn.custom_op.kernels.shell.in_shell``), or a network built by hand
+    (``finn.kernels.network.Network``). Its members by name, ranked, its channels among
+    them, and per member its point, its exports, its Decisions, every choice's state, the
+    possible values of those asked, what is open and stored, its validity, and a change
+    (``trial``); per channel the ports beside it (``neighbours``, whose paces FIFO sizing
+    reads); its own statement of what it uses, where it makes one (``own_resources``); the
+    owner of each member's policies (``owner``); and the key, by owner, of a rule or a
+    stored choice an answer about a member names (``pair``: a refused value's rules and
+    the choices standing in their way, which may be another member's).
+
+    ``states``, ``decisions`` and ``undecided`` answer by member in rank order, each
+    member's choices in its flow order: the seam's order, in which ``Ranked``, ``Defaults``
+    and ``DebugPlaceholder`` set choices (a partition's own flow order interleaves its
+    members, each channel after the kernels it joins; the cut reads that one)."""
 
     @property
     def members(self) -> tuple[str, ...]: ...
@@ -162,6 +207,8 @@ class Composition(Protocol):
     ) -> Trial[Any]: ...
 
     def own_resources(self) -> QueryResult[Resources] | None: ...
+
+    def pair(self, name: str, key: str) -> Key: ...
 
 
 S = TypeVar("S", bound=Composition)
@@ -422,13 +469,17 @@ def _records(why: Mapping[str, Iterable[Finding]]) -> dict[str, list[dict[str, A
     return {key: [finding.record() for finding in found] for key, found in why.items()}
 
 
-def _broken(owner: str, broken: Iterable[BrokenRule]) -> Refused:
-    """Each rule member ``owner`` would break, by the rule's key in the network, with the
-    stored choices standing in its way."""
+def _broken(network: Composition, owner: str, broken: Iterable[BrokenRule]) -> Refused:
+    """Each rule a value of member ``owner`` would break, by the rule's key
+    (``Composition.pair``: in a partition, another member's rule where the value reaches
+    it), with the stored choices standing in its way."""
     rules = tuple(broken)
     return Refused(
-        {(owner, rule.rule): rule.result.findings for rule in rules},
-        {(owner, rule.rule): tuple((owner, key) for key in rule.standing) for rule in rules},
+        {network.pair(owner, rule.rule): rule.result.findings for rule in rules},
+        {
+            network.pair(owner, rule.rule): tuple(network.pair(owner, key) for key in rule.standing)
+            for rule in rules
+        },
     )
 
 
@@ -502,7 +553,7 @@ class Seam:
                 self.fallbacks[key] = fallback
             cases = tuple(each.value for each in values if isinstance(each, inspection.Possible))
             refused = {
-                each.value: _broken(key[0], each.broken)
+                each.value: _broken(network, key[0], each.broken)
                 for each in values
                 if isinstance(each, inspection.Refused)
             }
@@ -2447,5 +2498,7 @@ __all__ = [
     "Stated",
     "TargetCycles",
     "TargetThroughput",
+    "Trial",
+    "dotted",
     "explore",
 ]

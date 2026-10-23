@@ -54,10 +54,11 @@ from finn.kernels.explore import (
     Stated,
     TargetCycles,
     TargetThroughput,
+    dotted,
     explore,
 )
 from finn.kernels.matmul import MatMulKernel
-from finn.kernels.network import Fact, Interface, Network, NetworkError, Wire, dotted, wire
+from finn.kernels.network import Fact, Interface, Network, NetworkError, Wire, wire
 from finn.kernels.policies import Required
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.utilization import total

@@ -24,8 +24,8 @@ from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.harness.points import rejected
 from finn.kernels.artifacts.abi import Signal
 from finn.kernels.channels import Channel
+from finn.kernels.explore import dotted
 from finn.kernels.library import library_module
-from finn.kernels.network import dotted
 from finn.kernels.transpose import TransposeKernel
 
 SIMDS = [factors["simd"] for factors in transpose()["factors"]]

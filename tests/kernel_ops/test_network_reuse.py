@@ -43,6 +43,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
 from finn.custom_op.kernels.network import Partition, network, persist
 from finn.custom_op.kernels.shell import InShell, in_shell
+from finn.kernels.explore import dotted
 from finn.kernels.members import (
     VERIFY,
     MemberCache,
@@ -53,7 +54,6 @@ from finn.kernels.members import (
     verification_counts,
     write_counts,
 )
-from finn.kernels.network import dotted
 from finn.platform.resolve import resolve_target
 from finn.platform.shells import shell_row
 from finn.transformation.kernels import InferKernelTensors

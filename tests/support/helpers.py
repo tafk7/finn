@@ -61,24 +61,17 @@ from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
 from finn.kernels.artifacts.abi import Pin
 from finn.kernels.artifacts.module import Composed, Held, Leaf, ProducerIdentity
 from finn.kernels.base import CYCLES, KernelSpace
+from finn.kernels.composer import Key
 from finn.kernels.configure import chosen, commit, describe
 from finn.kernels.cut import Cut, channel_defaulted
 from finn.kernels.declaration import KernelDeclaration, ModuleOrder, Product
 from finn.kernels.eltwise import EltwiseKernel
-from finn.kernels.explore import Choice, Defaults, Seam
+from finn.kernels.explore import Choice, Defaults, Seam, dotted
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.matmul import MatMulKernel, datatype_range
 from finn.kernels.members import decision
-from finn.kernels.network import (
-    Fact,
-    Interface,
-    Key,
-    Network,
-    Wire,
-    dotted,
-    wire,
-)
+from finn.kernels.network import Fact, Interface, Network, Wire, wire
 from finn.kernels.policies import Unstated, defaulted, ranked
 from finn.kernels.port import AxiStreamPort, axis, transport
 from finn.kernels.thresholding import ThresholdingAxiKernel

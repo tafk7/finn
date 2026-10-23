@@ -49,8 +49,7 @@ from finn.custom_op.kernels import shell
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
 from finn.kernels.channels import Channel
-from finn.kernels.explore import Ranked, SizeFifos
-from finn.kernels.network import dotted
+from finn.kernels.explore import Ranked, SizeFifos, dotted
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import (
     InferKernelTensors,

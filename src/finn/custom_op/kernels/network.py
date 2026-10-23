@@ -96,10 +96,12 @@ from finn.kernels.artifacts.abi import Bus
 from finn.kernels.artifacts.module import Composed, Fragment, ProducerIdentity
 from finn.kernels.base import RESOURCES
 from finn.kernels.channels import Channel
+from finn.kernels.composer import Key
+from finn.kernels.explore import dotted
 from finn.kernels.members import Configured, Facts, current, observed, uncached
 from finn.kernels.members import typed as key_part
 from finn.kernels.movers import MoverOffer
-from finn.kernels.network import Fact, Interface, Key, Network, NetworkError, Wire, dotted, wire
+from finn.kernels.network import Fact, Interface, Network, NetworkError, Wire, wire
 from finn.kernels.policies import Owner
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources

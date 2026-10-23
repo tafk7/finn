@@ -87,7 +87,7 @@ from collections import Counter
 from collections.abc import Callable, Collection, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, Generic, Self, TypeVar, cast
+from typing import Any, Self, TypeVar, cast
 
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.space import (
@@ -109,10 +109,12 @@ from finn.kernels.artifacts.module import Composed, Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose
 from finn.kernels.base import BOUNDARY, NETLIST, PortContract, merged
 from finn.kernels.channels import Channel, Neighbours, OuterHops, outer_hops
+from finn.kernels.composer import Key
 from finn.kernels.configure import chosen, refusal
 from finn.kernels.control import CONTROL, Control
 from finn.kernels.control import presented as presented_buses
 from finn.kernels.cut import Cut, channel_defaulted
+from finn.kernels.explore import Trial, dotted
 from finn.kernels.members import (
     Configured,
     Facts,
@@ -136,17 +138,6 @@ from finn.kernels.sides import Side
 from finn.platform.capabilities import Resources
 
 T = TypeVar("T")
-
-Key = tuple[str, str]
-"""A choice by owner: a member's name and the decision key in its space."""
-
-
-def dotted(key: Key) -> str:
-    """A key as text, its owner and key joined (``first.pe``), as a report
-    names a value; a member's own refusal (``(name, "")``) is its name. Text only: a
-    member's name, a graph name, may hold a dot itself."""
-    owner, name = key
-    return f"{owner}.{name}" if name else owner
 
 
 class NetworkError(ValueError):
@@ -238,31 +229,6 @@ class Unbound:
     result: Unresolved | Rejected
     stored: Mapping[str, object]
     was: tuple[FactsKey, Space] | None = None
-
-
-N = TypeVar("N")
-
-
-@dataclass
-class Trial(Generic[N]):
-    """A change tried on a network: the network it reaches (the one tried, where it is
-    refused); the stored channel choices the cut's policies derived again, each with one
-    finding (``choice-rederived``: its old value, its new one, and why the new facts refuse
-    the old, its causes); why it is refused, by key: a value outside its domain by the
-    choice's key, a rule broken by the rule's key (a member's own refusal by ``(name,
-    "")``), each with the stored choices standing in its way (``standing``); and each
-    choice a rebuilt channel's policy set in listed order, its ranking not read
-    (``fallbacks``: ``choice-order-unknown``)."""
-
-    network: N
-    rederived: Mapping[Key, tuple[Finding, ...]]
-    refused: Mapping[Key, tuple[Finding, ...]]
-    standing: Mapping[Key, tuple[Key, ...]] = field(default_factory=dict)
-    fallbacks: Mapping[Key, tuple[Finding, ...]] = field(default_factory=dict)
-
-    @property
-    def accepted(self) -> bool:
-        return not self.refused
 
 
 #: ``Channel``, called with facts by name, each checked by the engine.
@@ -822,6 +788,11 @@ class Network:
         ``name``; a ``NetworkError`` where it is not bound."""
         return outer_hops(self.member(name), self.neighbours(name), owner=name)
 
+    def pair(self, name: str, key: str) -> Key:
+        """The key, by owner, of ``key``, a rule or a stored choice an answer about member
+        ``name`` names: its own (each member is its own space)."""
+        return (name, key)
+
     def unbound(self, name: str) -> Unbound | None:
         """Why channel ``name`` is not bound, or None where it is."""
         return self._unbound.get(name)
@@ -1265,12 +1236,9 @@ class Network:
 __all__ = [
     "Fact",
     "Interface",
-    "Key",
     "Network",
     "NetworkError",
-    "Trial",
     "Unbound",
     "Wire",
-    "dotted",
     "wire",
 ]

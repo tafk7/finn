@@ -128,10 +128,12 @@ from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.artifacts.rtl import Declined, extract
 from finn.kernels.base import KernelSpace
 from finn.kernels.channels import Channel
+from finn.kernels.composer import Key
 from finn.kernels.configure import chosen, describe
 from finn.kernels.cut import CHANNEL_POLICIES
+from finn.kernels.explore import dotted
 from finn.kernels.memstream import MemStreamKernel
-from finn.kernels.network import Interface, Key, Network, dotted, wire
+from finn.kernels.network import Interface, Network, wire
 from finn.kernels.policies import FirstValid, Policy, defaulted
 from finn.kernels.transport import StreamContract
 from finn.kernels.transpose import TransposeKernel

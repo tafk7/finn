@@ -23,8 +23,14 @@ from support.refusals import refused
 from finn.core.graph.errors import KernelOpError
 from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network
-from finn.kernels.explore import Choice, DebugPlaceholder, ExploreError, Ranked, RankPolicy
-from finn.kernels.network import dotted
+from finn.kernels.explore import (
+    Choice,
+    DebugPlaceholder,
+    ExploreError,
+    Ranked,
+    RankPolicy,
+    dotted,
+)
 from finn.platform.target import Target
 from finn.transformation.kernels import (
     ExploreKernelChoices,

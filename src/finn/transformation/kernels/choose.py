@@ -122,6 +122,7 @@ from finn.custom_op.kernels.shell import (
     shell_resources,
 )
 from finn.kernels.base import RESOURCES
+from finn.kernels.composer import Key
 from finn.kernels.explore import (
     FIFOS_BY_MODEL,
     FIFOS_NOT_CHECKED,
@@ -133,10 +134,10 @@ from finn.kernels.explore import (
     Seam,
     SizeFifos,
     TargetThroughput,
+    dotted,
 )
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.movers import MEMORY_LATENCY, MoverContract
-from finn.kernels.network import Key, dotted
 from finn.kernels.policies import Required
 from finn.kernels.utilization import SHELL_CHARACTERISED, binding, over, total
 from finn.platform.capabilities import Platform
