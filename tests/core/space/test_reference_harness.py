@@ -109,11 +109,14 @@ def test_every_row_has_exactly_one_witness_and_every_expected_failure_a_row() ->
 def test_the_pending_milestones_are_the_rulings_the_engine_has_not_reached() -> None:
     # The engine core's, the facts-instance and T4a's milestones are accepted, their rows
     # removed; the model holds SZ100's rulings before the engine (T4b: views read out; T4c:
-    # an optional fact left out is None).
+    # an optional fact left out is None, given None it is the one left out, and a choice its
+    # facts alone rule out is in no list, SZ113).
     assert MILESTONES == ("base", "T4b", "T4c")
     assert [(row.id, row.milestone) for row in ROWS] == [
         ("view-read-in", "T4b"),
         ("optional-fact-none", "T4c"),
+        ("optional-fact-one-space", "T4c"),
+        ("facts-pruning", "T4c"),
     ]
 
 

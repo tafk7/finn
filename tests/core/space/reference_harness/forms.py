@@ -128,6 +128,15 @@ class PossibleForm:
 
 
 @dataclass(frozen=True)
+class ListedForm:
+    """The choices a design space lists (its states, decisions, flow and the choices whose
+    possible values it lists, one set): every choice but those its facts alone rule out
+    (SZ113). Compared as a set, never in either side's order."""
+
+    choices: frozenset[str]
+
+
+@dataclass(frozen=True)
 class DefinitionForm:
     """Whether a description is a definition at all: ``error`` the kind of definition
     error it is (``"cycle"``, ``"domain-reads-choice"``), or ``None`` where it builds and
@@ -136,4 +145,13 @@ class DefinitionForm:
     error: str | None
 
 
-Form = StateForm | AnswerForm | RuleForm | ValidityForm | ChangeForm | PossibleForm | DefinitionForm
+Form = (
+    StateForm
+    | AnswerForm
+    | RuleForm
+    | ValidityForm
+    | ChangeForm
+    | PossibleForm
+    | ListedForm
+    | DefinitionForm
+)

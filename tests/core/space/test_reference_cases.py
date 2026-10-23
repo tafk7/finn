@@ -944,3 +944,106 @@ def test_a_refused_when_in_a_case_of_an_open_selector_leaves_validity_open() -> 
 
 def test_a_refused_when_in_an_unselected_case_does_not_apply() -> None:
     IN_AN_OPEN_CASE.start({"f": 1}, {"s": "b"}).check_validity()
+
+
+# -- 10. a choice its facts alone rule out is in no list (SZ113) -----------------------------------
+#
+# ``wide`` is present when the fact ``mode`` is 1; ``gated`` when ``checked``, a derived value
+# over ``mode`` refusing at 2; ``opted`` when the choice ``pe`` is 2. Under the facts alone
+# (every choice unknown) ``wide`` is false at any other mode, so ``wide.lanes`` is
+# pruned: in no list, unless it is stored (SZ119 (5)). A refused guard and a guard over a choice
+# are not false, so ``gated.x`` and ``opted.y`` stay listed. Until the engine reaches T4c its
+# lists are compared unpruned (``Pair.check_listed``); the row's witness asks them pruned.
+
+
+def checked(read: Mapping[str, Any]) -> object:
+    return Refuse("mode-bad") if read["mode"] == 2 else 1
+
+
+PRUNED = Case(
+    "a choice its facts rule out",
+    Space(
+        ("mode",),
+        Scope(
+            "",
+            choices=(Choice("pe", listed(1, 2)),),
+            derived=(Derived("checked", ("mode",), checked),),
+            children=(
+                Scope(
+                    "wide",
+                    when=When(("mode",), lambda read: read["mode"] == 1),
+                    choices=(Choice("lanes", listed(2, 4)),),
+                ),
+                Scope(
+                    "gated",
+                    when=When(("checked",), lambda read: read["checked"] == 1),
+                    choices=(Choice("x", listed(1, 2)),),
+                ),
+                Scope(
+                    "opted",
+                    when=When(("pe",), lambda read: read["pe"] == 2),
+                    choices=(Choice("y", listed(1, 2)),),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+@expected("facts-pruning")
+def test_a_choice_the_facts_rule_out_is_in_no_list() -> None:
+    pair = PRUNED.start({"mode": 0})
+    assert pair.solution().pruned() == ("wide.lanes",)
+    pair.check_listed(pruning=True)
+
+
+def test_a_change_of_facts_prunes_a_choice() -> None:
+    pair = PRUNED.start({"mode": 1})
+    assert pair.solution().pruned() == ()
+    pruned = pair.reach(Change(facts={"mode": 0}))
+    assert pruned.solution().pruned() == ("wide.lanes",)
+    assert "wide.lanes" not in pruned.solution().states()
+    pruned.check_listed()
+    pruned.check_state("wide.lanes")
+
+
+def test_a_change_of_facts_unprunes_a_choice_which_comes_back_open() -> None:
+    pair = PRUNED.start({"mode": 0})
+    assert pair.solution().pruned() == ("wide.lanes",)
+    unpruned = pair.reach(Change(facts={"mode": 1}))
+    assert unpruned.solution().pruned() == ()
+    unpruned.check_listed()
+    unpruned.check_state("wide.lanes")
+
+
+def test_a_stored_choice_is_never_pruned_by_a_change_of_facts() -> None:
+    pair = PRUNED.start({"mode": 1}, {"wide.lanes": 4})
+    narrow = pair.reach(Change(facts={"mode": 0}))
+    assert narrow.solution().pruned() == ()
+    assert "wide.lanes" in narrow.solution().dormant()
+    narrow.check_listed()
+    narrow.check_state("wide.lanes")
+
+
+def test_a_stored_choice_is_never_pruned_by_a_change_of_choices() -> None:
+    pair = PRUNED.start({"mode": 0})
+    assert pair.solution().pruned() == ("wide.lanes",)
+    stored = pair.reach(Change(commit={"wide.lanes": 2}))
+    assert stored.solution().pruned() == ()
+    assert "wide.lanes" in stored.solution().dormant()
+    stored.check_listed()
+    stored.check_state("wide.lanes")
+
+
+def test_a_guard_the_facts_refuse_or_a_choice_decides_is_no_pruning() -> None:
+    pair = PRUNED.start({"mode": 2})
+    assert pair.solution().pruned() == ("wide.lanes",)
+    assert {"gated.x", "opted.y"} <= set(pair.solution().listed())
+    pair.check_listed()
+    pair.check_state("gated.x")
+    pair.check_state("opted.y")
+
+
+@expected("optional-fact-one-space")
+def test_an_optional_fact_given_none_is_the_one_left_out() -> None:
+    OPTIONAL.check_one_space({"width": None}, {})
