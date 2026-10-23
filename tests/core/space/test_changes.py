@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -23,6 +23,9 @@ from finn.core.space import (
     domain,
     inspection,
 )
+from finn.core.space._scopes import Address
+from finn.core.space._template import compiled
+from finn.core.space.compiler import model_of
 from finn.core.space.edits import ChangeRequest
 from finn.core.space.errors import (
     DefinitionError,
@@ -59,12 +62,13 @@ def test_malformed_batch_structure_and_types_precede_every_snapshot_callback() -
     first = base.field(Trial.first).change(1)
     bad_edits: tuple[ChangeRequest, ...] = (
         first,
-        replace(first, scope=True),
-        replace(first, scope=-1),
-        replace(first, node=True),
-        # No identity of this model: as many as are allocated is past every block, or (in
-        # the permuted mode, its blocks allocated downward from a large base) below them.
-        replace(first, node=len(inspection.model(base).linked.nodes)),
+        replace(first, scope=cast(Any, True)),
+        replace(first, scope=cast(Any, -1)),
+        replace(first, node=cast(Any, True)),
+        # No address of this model: a member number past its class's count, and an
+        # address of another model of the same class.
+        replace(first, node=Address(first.node.scope, len(first.node.scope.compiled.records))),
+        replace(first, node=model_of(compiled(Trial)).scopes.find(first.node.key)),
         other.field(Trial.second).change(1),
         base.field(Trial.second).change(cast(int, "wrong")),
         cast(ChangeRequest, object()),

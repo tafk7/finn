@@ -30,6 +30,7 @@ from finn.core.space import (
 )
 from finn.core.space._running.cache import NodeCache
 from finn.core.space._running.evaluate import Ans, Session, evaluation
+from finn.core.space._scopes import Address
 from finn.core.space.occurrence import ask, held
 
 
@@ -328,7 +329,7 @@ def test_an_answer_a_query_keeps_has_read_what_a_fresh_evaluation_reads() -> Non
         want: bool = Decision(values=(True, False))
         choice: int = Decision(values=(1, 2), when=want)
 
-    def read(found: Ans) -> tuple[int, ...]:
+    def read(found: Ans) -> tuple[Address, ...]:
         return tuple(dict.fromkeys(node for node, _ in found.trace))
 
     point = design_space(Example())

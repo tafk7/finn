@@ -37,8 +37,8 @@ def test_the_chains_dump_is_the_same_with_and_without_the_cache(
     else:
         monkeypatch.delenv(PERMUTE, raising=False)
     (station,) = chain(4)
-    structure = inspection.model(station.make()).structure
-    assert structure is not None and structure.permuted is permuted
+    scopes = inspection.model(station.make()).scopes
+    assert scopes.permuted is permuted
     numbering = ["--permuted"] if permuted else []
     cached, uncached = tmp_path / "public.json", tmp_path / "uncached.json"
     assert main(["dump", "chain-4", str(cached), *numbering]) == 0

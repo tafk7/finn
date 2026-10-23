@@ -36,7 +36,8 @@ Targets = Mapping[str, Callable[[], list[Any]]] | None
 """The targets the tool may make, by name (``targets.TARGETS`` where ``None``)."""
 
 PERMUTE = "FINN_SPACE_PERMUTE"
-"""The engine's permuted numbering, read when a model is made (``_structure.PERMUTE``)."""
+"""The engine's permuted order of making scopes, read when a model is made
+(``_scopes.PERMUTE``)."""
 
 
 def _tree() -> dict[str, object]:

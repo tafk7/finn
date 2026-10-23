@@ -3,12 +3,10 @@
 """The per-class record (``_running.per_class.PerClass``), made by every compiled model
 (``compiler.Model.per_class``):
 
-- the inferred reads: each ``self`` method's reads, each node's existence guards and each
-  case guard;
+- the inferred reads: each ``self`` method's reads, each address's existence guards and
+  each case guard;
 - the flow order, found once and noted once per loop (``flow-loop``), and every choice's
   and fact's presence readers;
-- a table built by hand: its inferred reads, and no flow order or presence readers,
-  refused;
 - the model's one session (``session()``): made once, with a node cache; a question
   that fails in it leaves nothing the next question on the model reads (each failure is its
   run's: asked again, the function runs again).
@@ -44,11 +42,8 @@ from finn.core.space._running.cache import NodeCache
 from finn.core.space._running.evaluate import Session, evaluation
 from finn.core.space._running.facts import open as open_design_space
 from finn.core.space._running.per_class import PerClass
-from finn.core.space._structure import Structure
-from finn.core.space._template import link_template
-from finn.core.space.compiler import Model, compile_model
-from finn.core.space.errors import RequestError
-from finn.core.space.ir import Linked, LinkedModel, Node
+from finn.core.space._template import compiled
+from finn.core.space.compiler import Model, compile_model, model_of
 from finn.core.space.occurrence import held
 
 
@@ -87,9 +82,9 @@ def test_the_per_class_record_is_the_models_and_finds_its_flow_once(name: str) -
     assert isinstance(model.per_class.reads, ModelReads)
     flow = model.per_class.flow()
     assert flow is model.per_class.flow()  # found once
-    linked = model.linked
-    assert set(flow) == set(cast(Structure, linked).decisions)
-    for source in (*linked.parameters, *linked.decisions):
+    scopes = model.scopes
+    assert set(flow) == set(scopes.decisions)
+    for source in (*scopes.parameters, *scopes.decisions):
         assert set(model.per_class.presence_readers(source)) <= set(flow)
 
 
@@ -104,22 +99,10 @@ def test_a_loop_in_the_flow_order_is_noted_once(caplog: pytest.LogCaptureFixture
             if getattr(item, FINDING).code == "flow-loop"
         ]
 
-    structure = Structure(link_template(Looped))  # a model of its own: nothing noted yet
-    model = Model(Looped, cast(Linked, structure), structure.lock)
+    model = model_of(compiled(Looped))  # a model of its own: nothing noted yet
     mine = noted(model.per_class.flow)
     assert len(mine) == 1
     assert noted(model.per_class.flow) == []  # found once
-
-
-def test_a_table_built_by_hand_answers_its_reads_and_refuses_the_rest() -> None:
-    table = LinkedModel((Node(0, 0, "x", "decision"),), (), (0,), (), (0,), {"x": 0})
-    model = Model(Space, table)
-    assert isinstance(model.per_class.reads, ModelReads)
-    for ask in (model.per_class.flow, lambda: model.per_class.presence_readers(0)):
-        with pytest.raises(RequestError, match="no question about its whole design space"):
-            ask()
-    with pytest.raises(RequestError, match="a table built by hand"):
-        open_design_space(model, {})
 
 
 # -- the model's one session --------------------------------------------------------------------
@@ -157,7 +140,7 @@ def test_a_failing_question_leaves_nothing_the_next_on_the_model_reads() -> None
     model = current.model
     session = model.per_class.session()
     ds = open_design_space(model, dict(current.facts))
-    keys = model.linked.keys
+    keys = model.scopes.keys
     report = questions.bind(ds, list(current.stored.items()), session)
     assert report.published is not None
     stored = report.published

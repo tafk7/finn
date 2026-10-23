@@ -1,7 +1,7 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Lower each member of a template's table (``_table``) into its node's payload.
+"""Lower each member of a class being compiled (``_table``) into its node's payload.
 
 A supplied formal becomes its binding (a literal, or an alias of what it
 references); a Space class's own member becomes its kind's payload: a formal's
@@ -10,7 +10,8 @@ its arguments, a view's output and its Space's validity, and ``Members`` entries
 and integer expressions are linked after every member, references resolving
 through ``_names``. What a task makes exists only where its own node does
 (``Table.requires``): a candidate's binding, or a case's guard, of a Decision over nodes
-that may never apply.
+that may never apply. A reference into a placed Space is an edge out of the class, named
+as it is first read (``Table.lift``).
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ from .declarations import (
 from .domains import Domain
 from .errors import DefinitionError
 from .expressions import INTEGER_SEMANTICS, Expr, evaluator
-from .ir import Argument, Node
+from .ir import Argument, Node, NodeRef
 from .semantics import ValueSemantics
 
 _OWNER = "space.lower"
@@ -132,6 +133,7 @@ class _Lowering:
                 )
             arguments: list[Argument] = []
             for name, operand in zip(names, task.operands):
+                target: NodeRef
                 if type(operand) is int:
                     literal = self.table.reserve(
                         task.scope,
@@ -246,8 +248,8 @@ class _Lowering:
         }
 
     def view_output(
-        self, node: Node, guard: int | None, declaration: View[object], name: str
-    ) -> int:
+        self, node: Node, guard: NodeRef | None, declaration: View[object], name: str
+    ) -> NodeRef:
         """Both view forms lower to one accepted node with an explicit raw output."""
         if declaration.source is not None:
             return self.names.reference(node.scope, declaration.source, owner=node.key)
@@ -310,7 +312,7 @@ class _Lowering:
         task: MemberTask,
         declaration: Declaration,
         node: Node,
-        guard: int | None,
+        guard: NodeRef | None,
         source_scope: int,
     ) -> dict[str, Any]:
         """What a declared member's node holds, by the kind of its declaration."""

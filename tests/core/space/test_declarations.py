@@ -449,19 +449,14 @@ def test_binding_forms_and_local_edit_ownership() -> None:
         alias = Child(size=supplied)
 
     # How each supply links: a literal is a constant, a reference an alias.
-    linked = compile_model(Parent).linked
-    kinds = [
-        linked.nodes[compile_model(Parent).resolve(0, node.size)].kind
-        for node in (Parent.literal, Parent.alias)
-    ]
-    assert kinds == ["const", "alias"]
-    root = compile_model(Child).linked
-    assert root.nodes[root.keys["size"]].kind == "param"
     model = compile_model(Parent)
-    assert model.linked.nodes[model.decision(0, Parent.alias.internal)].kind == "decision"
+    kinds = [model.resolve(model.root, node.size).kind for node in (Parent.literal, Parent.alias)]
+    assert kinds == ["const", "alias"]
+    assert compile_model(Child).scopes.find("size").kind == "param"
+    assert model.decision(model.root, Parent.alias.internal).kind == "decision"
     for node in (Parent.literal, Parent.alias):
         with pytest.raises(RequestError, match="not an owned Decision"):
-            model.decision(0, node.size)
+            model.decision(model.root, node.size)
 
     # A formal is read like any member, and is never edited through it: its supplier is.
     point = design_space(Parent())
@@ -493,8 +488,7 @@ def test_child_omissions_and_incompatible_bindings_are_not_implicit_exposure() -
     class Holder(Space):
         child = Child(width=8)
 
-    linked = compile_model(Holder).linked
-    assert linked.nodes[linked.keys["child.optional_width"]].kind == "present"
+    assert compile_model(Holder).scopes.find("child.optional_width").kind == "present"
 
     # A required formal nobody supplies is legal at the call (an assignment may
     # still supply it), and fails when a Space class containing the node is prepared.
@@ -636,9 +630,9 @@ def test_linked_child_types_are_inferred_without_mutating_declarations() -> None
         exports = {boolean_view: copied}
 
     model = compile_model(Parent)
-    semantics = model.linked.nodes[model.resolve(0, Parent.copied)].semantics
+    semantics = model.resolve(model.root, Parent.copied).semantics
     assert semantics is not None and semantics.type_token is bool
-    assert model.linked.nodes[model.resolve(0, Parent.value)].guard is not None
+    assert model.resolve(model.root, Parent.value).guard is not None
     assert ref(Child.enabled).semantics is None
     assert Child.admitted.semantics is None
     assert Parent.copied.semantics is None

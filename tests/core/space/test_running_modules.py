@@ -25,6 +25,7 @@ from finn.core.space._running import depth, facts, purity, requests
 from finn.core.space._running.evaluate import Session, evaluation
 from finn.core.space._running.surface import At
 from finn.core.space._running.value import FactsLayer
+from finn.core.space._scopes import Address
 from finn.core.space.occurrence import held
 
 TOYS = toys.TOYS
@@ -43,9 +44,10 @@ def _changed(name: str) -> Space:
 
 def test_the_depth_guard_unwinds_past_any_authored_handler() -> None:
     assert depth.DEPTH == 32
-    found = depth.Deeper(7)
+    seven = cast(Address, 7)
+    found = depth.Deeper(seven)
     assert isinstance(found, BaseException) and not isinstance(found, Exception)
-    assert found.node == 7 and found.args == (7,)
+    assert found.node is seven and found.args == (7,)
 
 
 def test_the_purity_switch_is_read_at_each_ask() -> None:
@@ -76,7 +78,7 @@ def test_a_design_space_opened_on_its_facts_is_the_layers_with_nothing_stored(na
 
 def test_opening_a_design_space_checks_its_facts() -> None:
     model = held(design_space(toys.Boundary(width=3))).ds.model
-    width, inner = model.linked.keys["width"], model.linked.keys["outside.width"]
+    width, inner = model.scopes.find("width"), model.scopes.find("outside.width")
     assert dict(facts.open(model, {width: 4}).facts) == {width: 4}
     for given, refused in (
         ({}, "missing required parameters: width"),
@@ -110,6 +112,6 @@ def test_a_change_made_at_a_childs_scope_applies_at_the_root() -> None:
     reference = type(kitchen).finish
     made = requests.change(held(kitchen), reference, 2)
     root = held(point)
-    assert made.scope == kitchen._scope and made.base == root.ds
-    (normalized,) = requests.normalize(At(root.ds, 0), [made]).values()
+    assert made.scope is kitchen._scope and made.base == root.ds
+    (normalized,) = requests.normalize(At(root.ds), [made]).values()
     assert (normalized.node, normalized.value) == (made.node, 2)

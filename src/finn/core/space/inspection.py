@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias, TypeVar, cas
 from ._configuration import Space
 from ._failure import driver_only
 from ._running.per_class import flow_below, scopes_below
-from ._structure import Structure
 from .compiler import Model, compile_model
 from .declarations import (
     Constraint,
@@ -33,7 +32,7 @@ from .declarations import (
 )
 from .edits import BrokenRule
 from .errors import RequestError
-from .ir import Linked, NodeId, NodeKind
+from .ir import NodeKind
 from .occurrence import ask, held, model_of
 from .occurrence import candidate as _candidate
 from .references import DecisionHandle, ValueHandle, decision_key
@@ -49,6 +48,7 @@ from .results import (
 
 if TYPE_CHECKING:
     from ._running.evaluate import Session
+    from ._scopes import Address, ScopeRecord
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
@@ -144,7 +144,7 @@ class ModelStatistics:
 
     Authored declarations count effective members once in every instantiated
     scope (a Decision over nodes is one member), plus each placed node
-    (including every candidate). Reused templates therefore count at every
+    (including every candidate). Reused classes therefore count at every
     placement. A fresh binding replaces its child formal and is counted once;
     generated output, guard and select nodes are excluded.
     """
@@ -159,33 +159,22 @@ class ModelStatistics:
 
 def statistics(subject: Space | Model[S] | type[Space]) -> ModelStatistics:
     """Count direct structure on demand, with no runtime or closure retention. A model's
-    structure counts from its templates, each counted at every placement: once per shape
-    of placement, times the placements of that shape (``Structure.statistics``; no node
-    resolved); a table, from its nodes."""
+    scope records count from its classes' compiled forms, each counted at every placement:
+    once per shape of placement, times the placements of that shape
+    (``Scopes.statistics``; no member evaluated)."""
 
     if not isinstance(subject, (Model, Space, type)):
         raise RequestError("statistics requires a compiled model")
-    linked = _context(subject)[0].linked
-    if isinstance(linked, Structure):
-        return ModelStatistics(*linked.statistics())
-    scopes, nodes = tuple(linked.scopes), tuple(linked.nodes)
-    placements = len(scopes) - 1
-    authored = sum(len(scope.named_members) for scope in scopes)
-    return ModelStatistics(
-        authored + placements,
-        len(scopes),
-        len(nodes),
-        sum(len(node.dependencies) for node in nodes),
-        len(tuple(linked.choices)),
-        len(linked.decisions),
-    )
+    return ModelStatistics(*_context(subject)[0].scopes.statistics())
 
 
-def _context(subject: Space | Model[S] | type[Space]) -> tuple[Model[Space], int]:
+def _context(subject: Space | Model[S] | type[Space]) -> tuple[Model[Space], ScopeRecord]:
     if isinstance(subject, Model):
-        return cast(Model[Space], subject), 0
+        model = cast(Model[Space], subject)
+        return model, model.scopes.root
     if isinstance(subject, type) and issubclass(subject, Space):
-        return cast(Model[Space], compile_model(subject)), 0
+        model = cast(Model[Space], compile_model(subject))
+        return model, model.scopes.root
     if isinstance(subject, Space):
         return model_of(subject), subject._scope
     raise RequestError("inspection requires a configuration, a compiled model or a Space class")
@@ -196,54 +185,38 @@ def model(subject: Space | Model[S] | type[Space]) -> Model[Space]:
     return _context(subject)[0]
 
 
-def _scope_name(linked: Linked, scope: int) -> str:
-    if isinstance(linked, Structure):
-        return linked.records[scope].name
-    return linked.scopes[scope].name
-
-
-def _scope_type(linked: Linked, scope: int) -> type[Space]:
-    if isinstance(linked, Structure):
-        return linked.records[scope].template.space_type
-    return linked.scopes[scope].space_type
-
-
-def _node_info(linked: Linked, index: int) -> NodeInfo:
-    node = linked.header(index)
+def _node_info(model: Model[Space], index: Address) -> NodeInfo:
+    node = index
     reference = (
-        DecisionHandle[object](linked, index)
+        DecisionHandle[object](model, index)
         if node.kind == "decision"
-        else ValueHandle[object](linked, index)
+        else ValueHandle[object](model, index)
     )
     return NodeInfo(
         reference,
         node.key,
         node.kind,
-        _scope_name(linked, node.scope),
+        node.scope.name,
         node.owner,
         node.source_owner is not None,
-        None if node.guard is None else ValueHandle[bool](linked, node.guard),
+        None if node.guard is None else ValueHandle[bool](model, node.guard),
         node.origin,
     )
 
 
-def _decision_info(
-    linked: Linked,
-    index: int,
-) -> DecisionInfo[object]:
-    node = linked.header(index)
+def _decision_info(model: Model[Space], index: Address) -> DecisionInfo[object]:
+    node = index
     if node.kind != "decision":
         raise RequestError("decision inspection requires an owning Decision")
-    choice_index = linked.selector_choices.get(index)
-    choice = None if choice_index is None else linked.choices[choice_index]
+    choice = model.scopes.selector_choice(index)
     return DecisionInfo(
-        DecisionHandle[object](linked, index),
-        decision_key(linked, index),
-        _scope_name(linked, node.scope),
+        DecisionHandle[object](model, index),
+        decision_key(index),
+        node.scope.name,
         node.owner,
         choice is not None,
         () if choice is None else tuple(name for name, _ in choice.cases),
-        _scope_type(linked, node.scope),
+        node.scope.space_type,
         choice is None and node.domain is not None and node.domain.ordered,
         node.domain is not None and node.domain.candidates is not None,
     )
@@ -252,13 +225,13 @@ def _decision_info(
 def decisions(subject: Space | Model[S] | type[Space]) -> tuple[DecisionInfo[object], ...]:
     """Discover all owning decisions below this scope, including inactive cases, in the
     flow order (``_running.per_class.flow_below``). Read once per compiled model and scope,
-    from its templates and scope records (``_whole``): no node is resolved."""
+    from its compiled forms and scope records (``_whole``): no member is evaluated."""
 
     compiled, scope = _context(subject)
     found = compiled._read.get(("decisions", scope))
     if found is None:
         found = compiled._read[("decisions", scope)] = tuple(
-            _decision_info(compiled.linked, index) for index in flow_below(compiled, scope)
+            _decision_info(compiled, index) for index in flow_below(compiled, scope)
         )
     return cast(tuple[DecisionInfo[object], ...], found)
 
@@ -289,7 +262,7 @@ def decision_handle(subject: Space | Model[S] | type[Space], reference: object) 
     """Bind a typed owning decision while retaining its candidate value type."""
 
     compiled, scope = _context(subject)
-    return _decision_info(compiled.linked, compiled.decision(scope, reference)).reference
+    return _decision_info(compiled, compiled.decision(scope, reference)).reference
 
 
 @overload
@@ -320,49 +293,46 @@ def value_handle(subject: Space | Model[S] | type[Space], reference: object) -> 
     """Bind a typed value, accepted view result, or Boolean assessment result."""
 
     compiled, scope = _context(subject)
-    return ValueHandle(compiled.linked, compiled.resolve(scope, reference))
+    return ValueHandle(compiled, compiled.resolve(scope, reference))
 
 
 def choices(subject: Space | Model[S] | type[Space]) -> tuple[ChoiceInfo, ...]:
     """Every Decision over nodes below this scope, with its candidates (every scope
-    addressed, no node resolved)."""
+    made, no member evaluated)."""
     compiled, scope = _context(subject)
-    linked = compiled.linked
-    included = scopes_below(linked, scope)
+    included = scopes_below(compiled.scopes, scope)
     return tuple(
         ChoiceInfo(
             choice.key,
-            _scope_name(linked, choice.scope),
+            choice.scope.name,
             tuple(
                 CaseInfo(name, None, None)
-                if index is None
-                else CaseInfo(name, _scope_name(linked, index), _scope_type(linked, index))
-                for name, index in choice.cases
+                if child is None
+                else CaseInfo(name, child.name, child.space_type)
+                for name, child in choice.cases
             ),
-            DecisionHandle[str](linked, choice.selector)
-            if linked.header(choice.selector).kind == "decision"
+            DecisionHandle[str](compiled, choice.selector)
+            if choice.selector.kind == "decision"
             else None,
-            None if choice.guard is None else ValueHandle[bool](linked, choice.guard),
+            None if choice.guard is None else ValueHandle[bool](compiled, choice.guard),
         )
-        for choice in sorted(linked.choices, key=lambda item: item.key)
+        for choice in sorted(compiled.scopes.choices(), key=lambda item: item.key)
         if choice.scope in included
     )
 
 
 def members(subject: Space | Model[S] | type[Space]) -> tuple[NodeInfo, ...]:
     """Inspect every named member below this scope (including forwarding aliases; every
-    scope below addressed, no node resolved)."""
+    scope below made, no member evaluated)."""
 
     compiled, scope = _context(subject)
-    linked = compiled.linked
     indices = {
         index
-        for current in scopes_below(linked, scope)
-        for index in linked.scopes[current].named_members.values()
+        for current in scopes_below(compiled.scopes, scope)
+        for index in current.named_members.values()
     }
     return tuple(
-        _node_info(linked, index)
-        for index in sorted(indices, key=lambda item: linked.header(item).key)
+        _node_info(compiled, index) for index in sorted(indices, key=lambda item: item.key)
     )
 
 
@@ -470,28 +440,25 @@ def viable(point: Space, keys: Iterable[object]) -> tuple[Viable, ...]:
 
     def answer(session: Session) -> tuple[Viable, ...]:
         return tuple(
-            _detached_viable(model.linked, index, questions.viable(at.ds, index, session))
-            for index in indices
+            _detached_viable(index, questions.viable(at.ds, index, session)) for index in indices
         )
 
     return ask(model, answer)
 
 
-def _detached(linked: Linked, index: NodeId, value: object) -> object:
+def _detached(index: Address, value: object) -> object:
     """A choice's value detached for a reader, by the choice's semantics."""
     from ._running.answers import copy_result as detached
 
-    return cast(Available[object], detached(linked, index, Available(value))).value
+    return cast(Available[object], detached(index, Available(value))).value
 
 
-def _detached_viable(linked: Linked, index: NodeId, found: Viable) -> Viable:
+def _detached_viable(index: Address, found: Viable) -> Viable:
     """``found`` with each listed value detached (a domain's list is the facts layer's,
     shared by every design space of those facts)."""
     if found.values is None:
         return found
-    values = tuple(
-        replace(item, value=_detached(linked, index, item.value)) for item in found.values
-    )
+    values = tuple(replace(item, value=_detached(index, item.value)) for item in found.values)
     return Viable(found.key, values, found.waits)
 
 
@@ -548,24 +515,22 @@ def states(point: Space) -> tuple[tuple[str, ChoiceState], ...]:
     driver_only("choice states")
     at = held(point)
     model = at.ds.model
-    linked = model.linked
-    header = linked.header  # a choice's key, resolving nothing of an absent one
 
     def answer(session: Session) -> tuple[tuple[str, ChoiceState], ...]:
         ev = evaluation(at.ds, session)
         return tuple(
-            (header(index).key, _detached_state(linked, index, state_of(ev, index)))
+            (index.key, _detached_state(index, state_of(ev, index)))
             for index in flow_below(model, at.scope)
         )
 
     return ask(model, answer)
 
 
-def _detached_state(linked: Linked, index: NodeId, found: ChoiceState) -> ChoiceState:
+def _detached_state(index: Address, found: ChoiceState) -> ChoiceState:
     """A choice's state with its stored value detached (a stored value is the design
     space's own)."""
     if isinstance(found, (Set, Waiting, Dormant)):
-        return replace(found, value=_detached(linked, index, found.value))
+        return replace(found, value=_detached(index, found.value))
     return found
 
 

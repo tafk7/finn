@@ -15,7 +15,7 @@ from finn.core.space import Inapplicable, Rejected, Space, Unresolved, design_sp
 from finn.core.space._running import questions
 from finn.core.space._running.evaluate import Session, evaluation
 from finn.core.space._running.value import DesignSpace
-from finn.core.space.ir import NodeId
+from finn.core.space._scopes import Address, ScopeRecord
 from finn.core.space.occurrence import held
 from finn.core.space.results import QueryResult
 
@@ -31,8 +31,8 @@ def built(declaration: Space, choices: Mapping[str, object]) -> DesignSpace:
     return open_evaluation(declaration, choices).ds
 
 
-def key(ds: DesignSpace, name: str) -> NodeId:
-    return ds.model.linked.keys[name]
+def key(ds: DesignSpace, name: str) -> Address:
+    return ds.node(name)
 
 
 def change(
@@ -43,7 +43,7 @@ def change(
 ) -> questions.Report:
     """``ds`` with ``choices`` set and ``clear`` cleared (by key), and ``facts``, as one
     change."""
-    requests: list[tuple[NodeId, object]] = [
+    requests: list[tuple[Address, object]] = [
         (key(ds, name), value) for name, value in (choices or {}).items()
     ]
     requests += [(key(ds, name), questions.REMOVE) for name in clear]
@@ -63,7 +63,7 @@ def read(ds: DesignSpace, name: str) -> QueryResult[object]:
     return evaluation(ds, Session()).result(key(ds, name))
 
 
-def validity(ds: DesignSpace, scope: int = 0) -> inspection.Validity:
+def validity(ds: DesignSpace, scope: ScopeRecord | None = None) -> inspection.Validity:
     """The validity of ``scope``'s Space in ``ds``."""
     return questions.validity(evaluation(ds, Session()), scope)
 

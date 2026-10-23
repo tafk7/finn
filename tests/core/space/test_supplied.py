@@ -10,7 +10,7 @@ whatever is read through it is inapplicable.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -34,6 +34,7 @@ from finn.core.space import (
     view,
 )
 from finn.core.space._running.answers import _present
+from finn.core.space._scopes import Address
 from finn.core.space.ir import Node
 
 
@@ -96,7 +97,7 @@ def test_a_choice_guarded_by_an_input_nothing_supplies_is_not_compiled() -> None
     point = design_space(Graph())
     assert {"stored.source", "bound.source"} <= keys(point)
     assert not any(key.startswith("streamed.source") for key in keys(point))
-    scopes = {scope.name for scope in inspection.model(point).linked.scopes}
+    scopes = {scope.name for scope in inspection.model(point).scopes.ordered()}
     assert {"stored.source.memory", "stored.source.fetch"} <= scopes
     assert not any(name.startswith("streamed.source") for name in scopes)
     # What is read through it is inapplicable, typed as the candidates declare it.
@@ -231,7 +232,7 @@ def test_two_known_present_sources_refuse_at_once_whatever_else_waits() -> None:
     # The single present source's reduction, read directly: no authored Space places
     # several sources on one formal today. Counting the sources is apart from choosing the
     # value, so two that answer refuse even beside one that waits.
-    node = Node(0, 0, "width", "present")
+    node = cast(Address, Node(0, 0, "width", "present"))
     waiting = Unresolved((Finding(FindingKind.BLOCKER, "decision-unassigned", "s", "open"),))
     two = _present(node, [Available(4), waiting, Available(4)])
     assert isinstance(two, Rejected)

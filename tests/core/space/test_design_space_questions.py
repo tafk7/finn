@@ -30,25 +30,25 @@ from finn.core.space._running import surface
 from finn.core.space._running.evaluate import Session, evaluation
 from finn.core.space._running.surface import At
 from finn.core.space._running.value import DesignSpace
-from finn.core.space.ir import NodeId
+from finn.core.space._scopes import Address
 from finn.core.space.references import ValueHandle
 from finn.core.space.results import QueryResult
 
 
-def _handle(ds: DesignSpace, index: NodeId) -> ValueHandle[object]:
-    return ValueHandle[object](ds.model.linked, index)
+def _handle(ds: DesignSpace, index: Address) -> ValueHandle[object]:
+    return ValueHandle[object](ds.model, index)
 
 
-def answer(ds: DesignSpace, index: NodeId) -> QueryResult[object]:
+def answer(ds: DesignSpace, index: Address) -> QueryResult[object]:
     """``index``'s public answer, detached."""
-    return surface.query(At(ds, 0), _handle(ds, index), Session())
+    return surface.query(At(ds), _handle(ds, index), Session())
 
 
-def value(ds: DesignSpace, index: NodeId) -> object:
-    return surface.value(At(ds, 0), _handle(ds, index), Session())
+def value(ds: DesignSpace, index: Address) -> object:
+    return surface.value(At(ds), _handle(ds, index), Session())
 
 
-def source_applies(ds: DesignSpace, index: NodeId) -> bool | NodeId:
+def source_applies(ds: DesignSpace, index: Address) -> bool | Address:
     return surface._source_applies(evaluation(ds, Session()), index)
 
 
@@ -193,7 +193,7 @@ class Fed(Space):
 
 def test_answers_values_and_whether_an_input_is_supplied() -> None:
     point = start(Fed(depth=3))
-    keys = point.model.linked.keys
+    keys = point.model.scopes.keys
     assert answer(point, keys["doubled"]) == Available(6)
     assert value(point, keys["doubled"]) == 6
     with pytest.raises(ValueUnavailableError):
@@ -206,11 +206,11 @@ def test_answers_values_and_whether_an_input_is_supplied() -> None:
 
 def test_the_evidence_of_a_query_is_what_its_answers_read() -> None:
     point = start(Fed(depth=3))
-    keys = point.model.linked.keys
-    evidence = surface.explain(At(point, 0), _handle(point, keys["doubled"]), Session())
+    keys = point.model.scopes.keys
+    evidence = surface.explain(At(point), _handle(point, keys["doubled"]), Session())
     assert evidence.result == Available(6)
     by_key = {item.declaration.key: item for item in evidence.nodes}
     assert set(by_key) == {"doubled", "depth"}
-    linked = point.model.linked
-    assert [handle._resolve(linked) for handle in by_key["doubled"].dependencies] == [keys["depth"]]
+    scopes = point.model.scopes
+    assert [handle._resolve(scopes) for handle in by_key["doubled"].dependencies] == [keys["depth"]]
     assert by_key["depth"].input_presence == "supplied"

@@ -36,12 +36,12 @@ from ._nodes import (
 )
 from .declarations import MISSING, UNSUPPLIED
 from .errors import DefinitionError, RequestError
-from .ir import Linked
 from .references import ValueHandle, resolve_decision, resolve_reference
 
 if TYPE_CHECKING:
     from ._running.per_class import PerClass
-    from ._structure import Structure
+    from ._scopes import Address, ScopeRecord, Scopes
+    from ._template import Compiled
 
 _OWNER = "space.compiler"
 
@@ -50,20 +50,22 @@ S = TypeVar("S", bound=Space)
 
 @dataclass(frozen=True, slots=True)
 class Model(Generic[S]):
-    """A compiled declaration: its structure, with no inputs or choices. ``linked`` is what
-    the engine reads of it: the root class's template placed as scopes, made when
-    addressed, each node resolved from its template when read (``_structure.Structure``;
-    a table built by hand, in tests). What is read of its structure alone (inspection's
-    Decisions below a scope) is kept with it (``_read``). ``lock`` is the model's one lock:
-    resolution and every public question about a design space of it take it. Its
-    ``per_class`` record is what the running type reads once per model: the inferred
-    reads, the flow order, the presence readers and the model's one session, in which every
-    public question runs (``_running.per_class.PerClass``)."""
+    """A compiled declaration: its root class's compiled form (``compiled``) and its scope
+    records (``scopes``: each placement of a class, made as it is reached, keyed by path,
+    held for the model's life; ``_scopes.Scopes``), with no inputs or choices. What is read
+    of its structure alone (inspection's Decisions below a scope) is kept with it
+    (``_read``). ``lock`` is the model's one lock (its scope records'): making a scope and
+    every public question about a design space of it take it. Its ``per_class`` record is
+    what the running type reads once per model: the inferred reads, the flow order, the
+    presence readers and the model's one session, in which every public question runs
+    (``_running.per_class.PerClass``). Two models are equal only where they are one (their
+    scope records are)."""
 
     space_type: type[S]
-    linked: Linked
-    lock: RLock = field(default_factory=RLock, repr=False, compare=False)
-    _read: dict[tuple[str, int], object] = field(
+    compiled: Compiled = field(repr=False, compare=False)
+    scopes: Scopes = field(repr=False)
+    lock: RLock = field(init=False, repr=False, compare=False)
+    _read: dict[tuple[str, object], object] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
     per_class: PerClass = field(init=False, repr=False, compare=False)
@@ -71,44 +73,34 @@ class Model(Generic[S]):
     def __post_init__(self) -> None:
         from ._running.per_class import PerClass
 
+        object.__setattr__(self, "lock", self.scopes.lock)
         object.__setattr__(self, "per_class", PerClass(cast("Model[Space]", self)))
 
     @property
-    def structure(self) -> Structure | None:
-        """Its structure (None for a table built by hand)."""
-        from ._structure import Structure
+    def root(self) -> ScopeRecord:
+        """The root's scope record."""
+        return self.scopes.root
 
-        return self.linked if isinstance(self.linked, Structure) else None
-
-    def resolve(self, scope: int, reference: object) -> int:
+    def resolve(self, scope: ScopeRecord, reference: object) -> Address:
         """Resolve a declaration in this exact scope without consulting its class: a
-        node's own id (a handle holds one; a scope's members and choices are read through
-        what each identity stands for), never an id standing for another."""
+        member's own address (a handle holds one; a scope's members and choices are read as
+        what each record stands for there), never one standing for another."""
 
         if isinstance(reference, ValueHandle):
-            if not self.linked.holds_scope(scope):
+            if not self.scopes.holds(scope):
                 raise RequestError("reference scope does not belong to this model")
-            return reference._resolve(self.linked)
-        return resolve_reference(
-            self.linked.nodes, self.linked.scopes, self.linked.choices, scope, reference
-        )
+            return reference._resolve(self.scopes)
+        return resolve_reference(self.scopes, scope, reference)
 
-    def decision(self, scope: int, reference: object) -> int:
+    def decision(self, scope: ScopeRecord, reference: object) -> Address:
         """The owning decision ``reference`` may edit in this scope."""
 
         if isinstance(reference, ValueHandle):
             index = self.resolve(scope, reference)
-            if self.linked.nodes[index].kind != "decision":
+            if index.kind != "decision":
                 raise RequestError("parameter aliases are not independently editable")
             return index
-        return resolve_decision(
-            self.linked.nodes,
-            self.linked.scopes,
-            self.linked.choices,
-            scope,
-            reference,
-            self.linked.editable_aliases,
-        )
+        return resolve_decision(self.scopes, scope, reference)
 
 
 _PREPARATION_LOCK = RLock()
@@ -166,9 +158,10 @@ def _definition_classes(space_types: tuple[type[Space], ...]) -> tuple[type[Spac
 
 def compile_model(space_type: type[S]) -> Model[S]:
     """The canonical model of a Space class whose formals are all runtime inputs: its
-    template, placed as scopes on demand (``_structure``). Its templates are linked first
-    (each checked, with the cycles through the Spaces it places); then the domain rule,
-    composed per template up to this root (``_compose``)."""
+    compiled form, placed as scopes on demand (``_scopes``). Its class is compiled first
+    (checked, with the cycles through the Spaces it places, each compiled before it); then
+    the domain rule, composed per class on the compiled forms up to this root
+    (``_compose``)."""
 
     if not isinstance(space_type, type) or not issubclass(space_type, Space):
         raise DefinitionError.broken(
@@ -183,19 +176,37 @@ def compile_model(space_type: type[S]) -> Model[S]:
                 )
             return cached
         from ._compose import check_domains
-        from ._structure import Structure, modes
-        from ._template import link_template
 
-        template = link_template(space_type)
+        root = compiled(space_type)
         # Every domain's membership reads facts only (what each method may read is
         # inferred from its source).
-        check_domains(template)
-        permuted, eager = modes()
-        lock = RLock()
-        structure = Structure(template, lock, permuted=permuted, eager=eager)
-        model = Model(space_type, cast(Linked, structure), lock)
+        check_domains(root)
+        model = model_of(root)
         type.__setattr__(space_type, "_space_prepared_model", model)
-        return model
+        return cast(Model[S], model)
+
+
+def model_of(
+    root: Compiled, *, permuted: bool | None = None, eager: bool | None = None
+) -> Model[Space]:
+    """A fresh model of the compiled form ``root``, in the test modes the environment asks
+    for (``_scopes.modes``) unless given; ``compile_model`` keeps one per class."""
+    from ._scopes import Scopes, modes
+
+    asked = modes()
+    scopes = Scopes(
+        root,
+        permuted=asked[0] if permuted is None else permuted,
+        eager=asked[1] if eager is None else eager,
+    )
+    return Model(root.space_type, root, scopes)
+
+
+def compiled(space_type: type[Space]) -> Compiled:
+    """A Space class's compiled form (``_template.compiled``)."""
+    from ._template import compiled as compiled_form
+
+    return compiled_form(space_type)
 
 
 def root_record(node: object) -> NodeDecl:
@@ -223,15 +234,15 @@ def root_record(node: object) -> NodeDecl:
     return record
 
 
-def root_parameters(model: Model[Space], record: NodeDecl) -> dict[int, object]:
-    """The root's plain values and value defaults, by parameter node."""
+def root_parameters(model: Model[Space], record: NodeDecl) -> dict[Address, object]:
+    """The root's plain values and value defaults, by formal."""
 
-    values: dict[int, object] = {}
-    root = model.linked.scopes[0]
+    values: dict[Address, object] = {}
+    root = model.scopes.root
     own = record.bindings
     for name, formal in space_formals(record.space_type).items():
         index = root.named_members.get(name)
-        if index is None or model.linked.nodes[index].kind != "param":
+        if index is None or index.kind != "param":
             continue
         if name in own:
             value = own[name]
@@ -282,4 +293,4 @@ def design_space(node: S) -> S:
     return cast(S, opened(model, root_parameters(model, record)))
 
 
-__all__ = ["Model", "compile_model", "design_space"]
+__all__ = ["Model", "compile_model", "design_space", "model_of"]

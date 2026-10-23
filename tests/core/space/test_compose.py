@@ -7,10 +7,11 @@ Each case states what the line (``6d02612cc``: one table of every placement, its
 check over it and its domain rule, ``_reads.check_domains``) answered, and the composed
 check answers the same: the same code, the same Decision, the same members (keys relative
 to the template the cycle is found in). The domain rule is also compared with the line's,
-run on ``expand(C)`` (``_domains_support``), on every Space class of the space tests and
-their support, and on random composites (``_compose_support``). The refusals the
-templates make that the line did not are named, each with its fix; so are the
-selection's type where its choice never applies and a selection's owner."""
+run over every address of a model of the class (``_domains_support``), on every Space
+class of the space tests and their support, and on random composites
+(``_compose_support``). The refusals the templates make that the line did not are named,
+each with its fix; so are the selection's type where its choice never applies and a
+selection's owner."""
 
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ from support.refusals import refused
 
 from core.space._compose_support import composite_space
 from core.space._domains_support import domain_differences, line_refusals
+from core.space._line_reads import line_scopes
 from core.space._templates_support import defined
 from finn.core.space import (
     Available,
@@ -41,8 +43,7 @@ from finn.core.space import (
     view,
 )
 from finn.core.space._compose import domain_refusals
-from finn.core.space._structure import expand
-from finn.core.space._template import link_template
+from finn.core.space._template import compiled, link_template
 from finn.core.space.compiler import compile_model
 from finn.core.space.errors import DefinitionError
 
@@ -133,7 +134,7 @@ def test_a_walk_back_into_the_decisions_own_scope_keeps_its_existence_guards() -
     # The line: compiles (walked without the case guard as an existence guard, the
     # selector would be read).
     compile_model(Reenters)
-    assert not line_refusals(expand(Reenters))
+    assert not line_refusals(line_scopes(Reenters))
 
 
 def test_the_domain_rule_composed_equals_the_lines_on_the_corpus() -> None:
@@ -159,13 +160,14 @@ def test_the_domain_rule_composed_equals_the_lines_on_the_corpus() -> None:
 @pytest.mark.parametrize("seed", range(80))
 def test_the_domain_rule_composed_equals_the_lines_on_random_composites(seed: int) -> None:
     """Every Decision either refuses: the composed rule's refusals (all of them, a
-    diagnostic) are the line's, on ``expand``."""
+    diagnostic) are the line's, over every address."""
     space_type = composite_space(seed)
     try:
         link_template(space_type)
     except DefinitionError:
         return  # a cycle, refused alike (the cases above)
-    assert set(domain_refusals(link_template(space_type))) == set(line_refusals(expand(space_type)))
+    line = line_refusals(line_scopes(space_type))
+    assert set(domain_refusals(compiled(space_type))) == set(line)
 
 
 # -- cycles through a slot ---------------------------------------------------------------------
@@ -369,7 +371,7 @@ def test_an_expression_a_candidate_shares_with_another_reader_is_placed_for_each
     assert cast(Lanes, chosen.operand_on.source).total == 5
     # Where the choice applies, each reader has its own node of the projection (the line
     # had the candidate's alone, ``source.a.lanes.$project.0``).
-    keys = set(expand(SharedOperand).keys)
+    keys = set(line_scopes(SharedOperand).keys)
     assert {"source.a.lanes.$project.0", "total.$project.1"} <= keys
 
 
@@ -419,9 +421,9 @@ def test_a_selections_type_where_its_choice_never_applies_is_never_observed() ->
     point = design_space(PlacesThrough())
     assert isinstance(point.off.query(Through.width), Inapplicable)
     assert isinstance(point.off.query(Through.source), Inapplicable)
-    linked = inspection.model(point).linked
-    on = linked.nodes[linked.keys["on.source.$member.width"]]
-    off = linked.nodes[linked.keys["off.source.$member.width"]]
+    keys = inspection.model(point).scopes.keys
+    on = keys["on.source.$member.width"]
+    off = keys["off.source.$member.width"]
     assert off.alternatives == () and on.alternatives != ()
     assert off.semantics is on.semantics is not None
 
@@ -446,8 +448,9 @@ class Boiler(Space):
 
 
 class Owned(Space):
-    """``unit.ok`` is read by ``first``'s guard and by ``second``: ``second`` is lowered
-    first (members before guards), ``first`` is declared first."""
+    """``unit.ok``, a member one candidate has, is read by ``first``'s guard and by
+    ``second`` (``second`` lowered first, ``first`` declared first); ``heat.cop`` is a member
+    both candidates have."""
 
     unit: Pump | None = Select(none=None, pump=Pump(ok=True))
 
@@ -456,13 +459,15 @@ class Owned(Space):
         return 1
 
     second = View(cast(Any, unit).ok)
-    # Read through a choice its candidates share: the choice owns it.
+    # Read through a choice its candidates share.
     heat: Pump | Boiler = Select(pump=Pump(ok=True), boiler=Boiler(ok=False))
     seen = View(heat.cop)
 
 
-def test_a_selections_owner_is_its_first_reader_in_declaration_order() -> None:
-    linked = expand(Owned)
-    assert linked.nodes[linked.keys["unit.$member.ok"]].owner == "first"
-    # A selection the candidates share: the choice's key.
-    assert linked.nodes[linked.keys["heat.$member.cop"]].owner == "heat"
+def test_a_selections_owner_is_its_choices_key() -> None:
+    """Whoever reads it, and whether one candidate has the member or several share it: the
+    owner of a selection is its choice's key (SZ95 (2); the line owned one candidate's by
+    its first reader in declaration order, ``first``)."""
+    scopes = line_scopes(Owned)
+    assert scopes.find("unit.$member.ok").owner == "unit"
+    assert scopes.find("heat.$member.cop").owner == "heat"

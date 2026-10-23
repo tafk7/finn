@@ -55,9 +55,8 @@ from finn.core.space._running.cache import NodeCache
 from finn.core.space._running.evaluate import Session, evaluation
 from finn.core.space._running.surface import At
 from finn.core.space._running.value import DesignSpace
-from finn.core.space._structure import Structure
+from finn.core.space._scopes import Address
 from finn.core.space.edits import Change, ConfigurationResult
-from finn.core.space.ir import NodeId
 
 SHOWN = 5  # the keys a difference names
 FACT_STEPS = 0.3  # the share of a walk's steps that change a root formal, where it may
@@ -96,15 +95,15 @@ def fresh(point: Space) -> Space:
     return occurrence.place(At(_rebound(at.ds), at.scope))
 
 
-def _pairs(ds: DesignSpace) -> dict[tuple[str, bool], dict[NodeId, object]]:
+def _pairs(ds: DesignSpace) -> dict[tuple[str, bool], dict[Address, object]]:
     with ds.model.lock:
         return cast(
-            "dict[tuple[str, bool], dict[NodeId, object]]",
+            "dict[tuple[str, bool], dict[Address, object]]",
             questions.pairs(evaluation(ds, Session())),
         )
 
 
-def held(point: Space) -> set[tuple[str, NodeId]]:
+def held(point: Space) -> set[tuple[str, Address]]:
     """Each false piece of the root's validity with each origin it is false through."""
     found = _pairs(occurrence.held(point).ds)
     return {(piece, origin) for (piece, _), origins in found.items() for origin in origins}
@@ -112,11 +111,11 @@ def held(point: Space) -> set[tuple[str, NodeId]]:
 
 @dataclass(frozen=True)
 class Draw:
-    """One step's change: values to set and Decisions to clear, by node."""
+    """One step's change: values to set and Decisions to clear, by address."""
 
-    values: Mapping[NodeId, object]
-    clear: tuple[NodeId, ...] = ()
-    facts: Mapping[NodeId, object] = field(default_factory=dict)  # root formals, by node
+    values: Mapping[Address, object]
+    clear: tuple[Address, ...] = ()
+    facts: Mapping[Address, object] = field(default_factory=dict)  # root formals
 
 
 @dataclass
@@ -157,12 +156,15 @@ class _Walk:
         self.everything = everything
         self.rng = random.Random(seed)
         self.point = start
-        linked = inspection.model(start).linked
-        self.linked = linked
-        self.handles = {i: DecisionHandle[object](linked, i) for i in linked.decisions}
-        self.keys = {i: linked.header(i).key for i in linked.decisions}
+        model = inspection.model(start)
+        self.model = model
+        decisions = model.scopes.decisions
+        self.handles = {i: DecisionHandle[object](model, i) for i in decisions}
+        self.keys = {i: i.key for i in decisions}
         # The root formals a step may change, and the values it may give them.
-        self.formals = {linked.keys[key]: tuple(values) for key, values in (facts or {}).items()}
+        self.formals = {
+            model.scopes.find(key): tuple(values) for key, values in (facts or {}).items()
+        }
         self.by_facts = facts is not None
         self.report = Report()
         self.step = 0
@@ -170,14 +172,13 @@ class _Walk:
 
     # -- drawing ------------------------------------------------------------------------
 
-    def listed(self, ds: DesignSpace, index: NodeId) -> tuple[object, ...]:
+    def listed(self, ds: DesignSpace, index: Address) -> tuple[object, ...]:
         """A choice's listed values here (its domain over the facts, as if it existed),
         whatever its presence; none where they cannot be listed."""
 
         def ask(session: Session) -> object:
             ev = evaluation(ds, session)
-            node = ev.raw[index]
-            return ev.run(lambda: questions.placed(ev, index).listed(node, []))
+            return ev.run(lambda: questions.placed(ev, index).listed(index, []))
 
         found = occurrence.ask(ds.model, ask)
         if isinstance(found, Available) and found.value:
@@ -189,7 +190,7 @@ class _Walk:
         of the stored draws) cleared."""
         current = occurrence.held(point).ds
         stored = dict(current.stored)
-        pool = list(self.keys)  # declaration order (never by NodeId: ids follow addressing)
+        pool = list(self.keys)  # declaration order (``rank``'s)
         for _ in range(200):
             i = self.rng.choice(pool)
             if i in stored and self.rng.random() < 0.2:
@@ -201,7 +202,7 @@ class _Walk:
             return Draw({i: self.rng.choice(options)})
         return None
 
-    def draw_fact(self, point: Space) -> dict[NodeId, object]:
+    def draw_fact(self, point: Space) -> dict[Address, object]:
         """A root formal set to another of the values the walk was given for it."""
         current = occurrence.held(point).ds
         index = self.rng.choice(list(self.formals))  # in the order the walk was given them
@@ -209,8 +210,7 @@ class _Walk:
         return {index: self.rng.choice(options)} if options else {}
 
     def describe(self, drawn: Draw) -> str:
-        header = self.linked.header
-        parts = [f"fact {header(i).key} = {value!r}" for i, value in drawn.facts.items()]
+        parts = [f"fact {i.key} = {value!r}" for i, value in drawn.facts.items()]
         parts += [f"{self.keys[i]} = {value!r}" for i, value in drawn.values.items()]
         parts += [f"clear {self.keys[i]}" for i in drawn.clear]
         return "; ".join(parts)
@@ -220,15 +220,14 @@ class _Walk:
         values = {self.handles[i]: value for i, value in drawn.values.items()}
         if not self.by_facts:
             return point.try_with_choices(values, *changes)
-        linked = self.linked
-        facts = {ValueHandle[object](linked, i): value for i, value in drawn.facts.items()}
+        facts = {ValueHandle[object](self.model, i): value for i, value in drawn.facts.items()}
         return point.try_with_facts(facts, values, *changes)
 
     def oracle(self, base: Space, drawn: Draw) -> questions.Report:
         """The same change on the recomputation of its base, asked of the running type in
         a session of its own with no cache: the values set, in order, then the clears."""
         ds = _rebound(occurrence.held(base).ds)
-        requests: list[tuple[NodeId, object]] = [
+        requests: list[tuple[Address, object]] = [
             *drawn.values.items(),
             *((i, questions.REMOVE) for i in drawn.clear),
         ]
@@ -293,13 +292,12 @@ class _Walk:
         if not same(dict(at.ds.stored), dict(recomputed.stored)):
             mine, theirs = at.ds.stored, recomputed.stored
             self.differ("stored choices", (keys[i] for i in set(mine) ^ set(theirs)))
-        header = self.linked.header
         wrong: list[str] = []
         unread: list[str] = []
         with model.lock:
             got = evaluation(at.ds, model.per_class.session())
             if self.everything:
-                for index in cast(Structure, self.linked).all_nodes():
+                for index in model.scopes.all_addresses():
                     got.get(index)
             want = evaluation(recomputed, Session(cache=NodeCache()))
             for i in sorted(got.memo):
@@ -308,12 +306,12 @@ class _Walk:
                 try:
                     other = want.get(i)
                 except Exception as error:  # noqa: BLE001 - the recomputation failed where the successor held an answer
-                    wrong.append(f"{header(i).key} (recomputation raised {error!r})")
+                    wrong.append(f"{i.key} (recomputation raised {error!r})")
                     continue
                 if not same(entry.result, other.result):
-                    wrong.append(header(i).key)
+                    wrong.append(i.key)
                 elif other.reads - entry.reads:
-                    unread.append(header(i).key)
+                    unread.append(i.key)
             expected = questions.validity(want, at.scope)
         if wrong:
             self.differ("answers", wrong)
@@ -325,8 +323,7 @@ class _Walk:
     def compare_made_false(self, base: Space, result: ConfigurationResult[Space]) -> None:
         """An accepted facts step's rules broken against the origins through which its
         successor holds a false piece its base did not."""
-        header = self.linked.header
-        new = {header(origin).owner for _, origin in held(result.instance) - held(base)}
+        new = {origin.owner for _, origin in held(result.instance) - held(base)}
         reported = {rule.rule for rule in result.broken}
         if new != reported:
             self.differ("rules made false by the facts", new ^ reported)
@@ -340,12 +337,11 @@ class _Walk:
         if not self.sets(facts.instance, Draw(drawn.values)):
             return
         self.report.tallies.batches += 1
-        header = self.linked.header
         added = held(result.instance) - held(facts.instance)
         if added:
             self.differ(
                 "a pair its choices add to its facts' design space, accepted",
-                {header(origin).owner for _, origin in added},
+                {origin.owner for _, origin in added},
             )
 
     # -- the walk -----------------------------------------------------------------------

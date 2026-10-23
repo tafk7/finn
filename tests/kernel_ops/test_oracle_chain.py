@@ -25,15 +25,15 @@ from finn.core.space import inspection
 
 
 def _chain_8(monkeypatch: pytest.MonkeyPatch, permuted: bool, kernels: int = 8) -> Station:
-    """Stage 7's chain of eight kernels (or ``kernels``), its model made in the numbering
-    asked."""
+    """Stage 7's chain of eight kernels (or ``kernels``), its model's scopes made in the
+    order asked."""
     if permuted:
         monkeypatch.setenv(PERMUTE, "1")
     else:
         monkeypatch.delenv(PERMUTE, raising=False)
     (station,) = chain(kernels)
-    structure = inspection.model(station.make()).structure
-    assert structure is not None and structure.permuted is permuted
+    scopes = inspection.model(station.make()).scopes
+    assert scopes.permuted is permuted
     return station
 
 

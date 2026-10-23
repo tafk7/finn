@@ -20,7 +20,7 @@ from typing import cast
 from core.space._running_type import Running, RunningAnswers
 from finn.core.space import Space, design_space
 from finn.core.space._running.evaluate import Ans, Evaluation, evaluation
-from finn.core.space.ir import NodeId
+from finn.core.space._scopes import Address, ScopeRecord
 from finn.core.space.occurrence import held
 from finn.core.space.results import QueryResult
 
@@ -29,14 +29,13 @@ def open_evaluation(declaration: Space, choices: Mapping[str, object] | None = N
     """The evaluation of ``declaration``'s facts with ``choices`` (by key) stored, unchecked,
     in a session of its own with no cache."""
     ds = held(design_space(declaration)).ds
-    header = ds.model.linked.header
-    facts = {header(index).key: value for index, value in ds.facts.items()}
+    facts = {index.key: value for index, value in ds.facts.items()}
     made = cast(RunningAnswers, Running().make(type(declaration), facts, dict(choices or {})))
     return evaluation(made.ds, made.session)
 
 
-def node(ev: Evaluation, key: str) -> NodeId:
-    return ev.model.linked.keys[key]
+def node(ev: Evaluation, key: str) -> Address:
+    return ev.ds.node(key)
 
 
 def answer(ev: Evaluation, key: str) -> QueryResult[object]:
@@ -48,9 +47,9 @@ def entry(ev: Evaluation, key: str) -> Ans:
     return ev.get(node(ev, key))
 
 
-def validity(ev: Evaluation, scope: int = 0) -> Ans:
-    """``scope``'s validity node's answer."""
-    return ev.get(cast(NodeId, ev.linked.scopes[scope].validity))
+def validity(ev: Evaluation, scope: ScopeRecord | None = None) -> Ans:
+    """``scope``'s validity's answer (the root's by default)."""
+    return ev.get((ev.scopes.root if scope is None else scope).validity)
 
 
 def source_line(function: Callable[..., object], marker: str) -> int:

@@ -1,14 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Check a template's lowered table's value semantics, in dependency order.
+"""Check the value semantics of a class being compiled (its lowered table), in dependency
+order.
 
 An alias, a view, a presence and a selection take their sources' semantics
 when they declare none; then every output, alternative, guard, callback
 argument, export and integer operand must agree with what reads it. A shared
 ``decision.member`` whose candidates disagree on its type is dropped when
-nothing reads it. An import has its target's checked semantics, and a child's exports
-are checked in its own template.
+nothing reads it. A placed Space's member has the semantics its class checked
+(``Table.semantics``), and a child's exports are checked in its own class.
 """
 
 from __future__ import annotations
@@ -31,11 +32,11 @@ def check(table: Table, order: tuple[int, ...]) -> None:
 
 
 def _check_nodes(table: Table, order: tuple[int, ...]) -> None:
-    nodes = table.nodes
+    nodes, semantics_of = table.nodes, table.semantics
     for index in order:
         node = nodes[index]
         if node.kind in {"view", "alias"} and node.output is not None:
-            output = nodes[node.output].semantics
+            output = semantics_of(node.output)
             if output is None:
                 raise DefinitionError.broken(
                     "output-semantics-missing",
@@ -54,10 +55,10 @@ def _check_nodes(table: Table, order: tuple[int, ...]) -> None:
                 nodes[index] = node = replace(node, semantics=output)
         if node.kind in {"present", "select"} and node.semantics is None and node.alternatives:
             # Like an alias, these take their sources' linked semantics.
-            nodes[index] = node = replace(node, semantics=nodes[node.alternatives[0][1]].semantics)
+            nodes[index] = node = replace(node, semantics=semantics_of(node.alternatives[0][1]))
         if node.kind in {"select", "present"}:
             for _, target in node.alternatives:
-                semantics = nodes[target].semantics
+                semantics = semantics_of(target)
                 if (
                     node.semantics is None
                     or semantics is None
@@ -72,7 +73,7 @@ def _check_nodes(table: Table, order: tuple[int, ...]) -> None:
                         declaration=node.key,
                     )
         if node.guard is not None:
-            semantics = nodes[node.guard].semantics
+            semantics = semantics_of(node.guard)
             if semantics is None or not semantics.is_compatible_with(BOOL):
                 raise DefinitionError.broken(
                     "applicability-not-boolean",
@@ -81,7 +82,7 @@ def _check_nodes(table: Table, order: tuple[int, ...]) -> None:
                     declaration=node.key,
                 )
         if node.kind == "guard" and node.output is not None:
-            semantics = nodes[node.output].semantics
+            semantics = semantics_of(node.output)
             if semantics is None or not semantics.is_compatible_with(BOOL):
                 raise DefinitionError.broken(
                     "applicability-not-boolean",
@@ -104,7 +105,7 @@ def _drop_shared(table: Table, index: int) -> bool:
 
 def _check_arguments(table: Table) -> None:
     for dependency, target, owner in table.argument_checks:
-        semantics = table.nodes[target].semantics
+        semantics = table.semantics(target)
         if semantics is None:
             raise DefinitionError.broken(
                 "dependency-semantics-missing",
@@ -117,8 +118,8 @@ def _check_arguments(table: Table) -> None:
 
 def _check_exports(table: Table) -> None:
     for draft in table.drafts:
-        if draft.stub is not None:
-            continue  # a child's exports are checked in its template
+        if draft.placed is not None:
+            continue  # a child's exports are checked in its own class
         exported = [
             (export, draft.members[declaration])
             for export, declaration in draft.effective.exports.items()
@@ -138,7 +139,7 @@ def _check_expressions(table: Table) -> None:
     """Integer operands, once linked aliases have their semantics."""
     for task in table.expression_tasks:
         node = table.nodes[task.index]
-        operands = (table.nodes[arg.node].semantics for arg in node.arguments)
+        operands = (table.semantics(arg.node) for arg in node.arguments)
         if any(semantics is None or semantics.type_token is not int for semantics in operands):
             raise DefinitionError.broken(
                 "expression-operand-not-int",

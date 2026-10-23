@@ -1,14 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 """The templates' tests' comparison (``test_templates``; the kernel tree's
-``test_space_templates``): a model's structure, fully resolved in either numbering, against
-its eager form ``expand(C)``, in a canonical form by key, independent of numbering; and the
-Space classes a set of modules defines.
+``test_space_templates``): a model's scope records, read whole, made by demand, in the
+permuted order (reversed by path) and eagerly, in a canonical form by key; and the Space
+classes a set of modules defines.
 
-Both are built from templates. That they are the line's one table of every placement
-(``6d02612cc``'s ``link_space``) was checked, when templates replaced it, against digests of
-each class's canonical form taken from that table; the selections' owners apart, which a
-rule now fixes (``_structure``)."""
+Every address, scope and choice reads the same whichever order the scopes were made in:
+keys, kinds, owners, edges by key, scopes by path, choices by key, the decisions in
+declaration order. (That the scope records read as the structure they replaced resolved was
+checked when they replaced it, as that structure had been against digests of the line's
+one table of every placement.)"""
 
 from __future__ import annotations
 
@@ -17,11 +18,10 @@ import re
 from collections.abc import Iterable, Iterator
 
 from finn.core.space import Space
-from finn.core.space._structure import Structure, expand
-from finn.core.space._template import Template, link_template
+from finn.core.space._scopes import Address, Scopes
+from finn.core.space._template import Compiled, compiled
 from finn.core.space.domains import Domain
 from finn.core.space.errors import DefinitionError
-from finn.core.space.ir import Linked
 
 # -- the canonical form ------------------------------------------------------------------------
 
@@ -45,15 +45,14 @@ def _stable(value: object) -> object:
     return re.sub(r" at 0x[0-9a-f]+", "", repr(value))
 
 
-def canonical(model: Linked) -> dict[str, object]:
-    """``model`` by key, independent of its numbering."""
-    nodes, scopes, choices = model.nodes, model.scopes, model.choices
+def canonical(scopes: Scopes) -> dict[str, object]:
+    """``scopes`` read whole, by key, independent of the order its scopes were made in."""
 
-    def key(index: int | None) -> str | None:
-        return None if index is None else nodes[index].key
+    def key(address: Address | None) -> str | None:
+        return None if address is None else address.key
 
     found: dict[str, object] = {}
-    for node in nodes:
+    for node in scopes.all_addresses():
         found["node " + node.key] = (
             node.kind,
             node.owner,
@@ -66,69 +65,67 @@ def canonical(model: Linked) -> dict[str, object]:
             key(node.selector),
             tuple(key(target) for target in node.constraints),
             tuple((label, key(target)) for label, target in node.alternatives),
-            tuple((key(alias), key(source)) for alias, source in node.via),
             _stable(node.value),
             _stable(node.domain),
             node.required,
             _name(node.function),
             node.call_style,
-            scopes[node.scope].name,
-            key(model.forward[node.index]),
-            node.index in model.editable_aliases,
+            node.scope.name,
         )
-    for scope in scopes:
+    for scope in scopes.ordered():
         found["scope " + scope.name] = (
-            None if scope.parent is None else scopes[scope.parent].name,
+            scope.path,
+            None if scope.parent is None else scope.parent.name,
             scope.space_type,
             key(scope.guard),
             key(scope.validity),
             sorted((name, key(index)) for name, index in scope.named_members.items()),
-            sorted((name, scopes[index].name) for name, index in scope.named_children.items()),
-            # Keyed by declarations: the same objects in both links.
+            sorted((name, child.name) for name, child in scope.named_children.items()),
+            # Keyed by declarations: the same objects in every model of the class.
             {(id(member), key(index)) for member, index in scope.members.items()},
-            {(id(child), scopes[index].name) for child, index in scope.children.items()},
-            {(id(choice), choices[index].key) for choice, index in scope.choices.items()},
+            {(id(child), record.name) for child, record in scope.children.items()},
+            {(id(choice), record.key) for choice, record in scope.choices.items()},
             id(scope.record),
         )
-    for choice in choices:
+    for choice in scopes.choices():
         found["choice " + choice.key] = (
-            scopes[choice.scope].name,
+            choice.scope.name,
             key(choice.selector),
             key(choice.guard),
-            tuple(
-                (case, None if child is None else scopes[child].name)
-                for case, child in choice.cases
-            ),
+            tuple((case, None if child is None else child.name) for case, child in choice.cases),
             sorted((member, key(index)) for member, index in choice.members.items()),
         )
-    found["decisions"] = [key(index) for index in model.decisions]
-    found["parameters"] = [key(index) for index in model.parameters]
+    found["decisions"] = [key(index) for index in scopes.decisions]
+    found["parameters"] = [key(index) for index in scopes.parameters]
+    found["statistics"] = scopes.statistics()
     return found
 
 
 def differences(space_type: type[Space]) -> list[str]:
-    """The first entries where the structure, fully resolved in either numbering, differs
-    from ``expand``, if any."""
-    eager = canonical(expand(space_type))
+    """The first entries where the class's scope records, made in the permuted order or
+    eagerly, differ from those made by demand, if any."""
+    form = compiled(space_type)
+    lazy = canonical(Scopes(form))
     found: list[str] = []
-    for name, model in (
-        ("structure", Structure(link_template(space_type))),
-        ("structure, permuted", Structure(link_template(space_type), permuted=True)),
+    for name, scopes in (
+        ("permuted", Scopes(form, permuted=True)),
+        ("eager", Scopes(form, eager=True)),
     ):
-        other = canonical(model)
-        for entry in sorted(eager.keys() | other.keys()):
-            held, got = eager.get(entry), other.get(entry)
+        other = canonical(scopes)
+        for entry in sorted(lazy.keys() | other.keys()):
+            held, got = lazy.get(entry), other.get(entry)
             if held != got:
                 found.append(
-                    f"{space_type.__qualname__}: {entry}\n  expand: {held}\n  {name}: {got}"
+                    f"{space_type.__qualname__}: {entry}\n  by demand: {held}\n  {name}: {got}"
                 )
                 if len(found) == 3:
                     return found
     return found
 
 
-def assert_expands(space_types: Iterable[type[Space]]) -> int:
-    """Each class's structure equals its expansion; the number compared."""
+def assert_reads_alike(space_types: Iterable[type[Space]]) -> int:
+    """Each class's scope records read alike by demand, permuted and eager; the number
+    compared."""
     failures: list[str] = []
     compared = 0
     for space_type in space_types:
@@ -156,24 +153,22 @@ def defined(names: Iterable[str]) -> Iterator[type[Space]]:
 
 
 def links(space_type: type[Space]) -> bool:
-    """Whether its template links (a class that is a refusal's case does not)."""
+    """Whether it compiles (a class that is a refusal's case does not)."""
     try:
-        link_template(space_type)
+        compiled(space_type)
     except DefinitionError:
         return False
     return True
 
 
-def reached(template: Template) -> dict[type[Space], Template]:
-    """Every template reached from ``template``, by class."""
-    found: dict[type[Space], Template] = {}
-    pending = [template]
+def reached(form: Compiled) -> dict[type[Space], Compiled]:
+    """Every compiled form reached from ``form`` through its slots, by class."""
+    found: dict[type[Space], Compiled] = {}
+    pending = [form]
     while pending:
         current = pending.pop()
         if current.space_type in found:
             continue
         found[current.space_type] = current
-        pending.extend(
-            link_template(scope.space_type) for scope in current.scopes[1:] if scope.parent == 0
-        )
+        pending.extend(slot.compiled for slot in current.slots)
     return found

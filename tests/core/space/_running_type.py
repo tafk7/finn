@@ -66,9 +66,9 @@ from finn.core.space._running import questions as Q
 from finn.core.space._running.cache import NodeCache
 from finn.core.space._running.evaluate import Ans, Evaluation, Session, evaluation
 from finn.core.space._running.value import DesignSpace, FactsLayer
-from finn.core.space._structure import Structure
+from finn.core.space._scopes import Address, ScopeRecord, Scopes
 from finn.core.space.edits import ConfigurationResult
-from finn.core.space.ir import NodeId, NodeKind
+from finn.core.space.ir import NodeKind
 
 
 class RunningAnswers:
@@ -77,27 +77,26 @@ class RunningAnswers:
     def __init__(self, ds: DesignSpace, session: Session) -> None:
         self.ds = ds
         self.session = session
-        self._scopes: dict[str, int] | None = None
+        self._scopes: dict[str, ScopeRecord] | None = None
 
-    def _structure(self) -> Structure:
-        return self.ds.layer.structure
+    def _records(self) -> Scopes:
+        return self.ds.model.scopes
 
-    # -- what the model holds, by key (the compiled structure's) ---------------------
+    # -- what the model holds, by key (its scope records') ---------------------------
 
-    def _scope_indices(self) -> dict[str, int]:
+    def _scope_indices(self) -> dict[str, ScopeRecord]:
         if self._scopes is None:
-            linked = self._structure()
-            self._scopes = {linked.records[i].name: i for i in linked.subtree(0)}
+            scopes = self._records()
+            self._scopes = {record.name: record for record in scopes.subtree(scopes.root)}
         return self._scopes
 
     def members(self) -> Sequence[tuple[str, NodeKind]]:
-        linked = self._structure()
         indices = {
             index
             for scope in self._scope_indices().values()
-            for index in linked.scopes[scope].named_members.values()
+            for index in scope.named_members.values()
         }
-        return tuple(sorted((linked.header(i).key, linked.header(i).kind) for i in indices))
+        return tuple(sorted((i.key, i.kind) for i in indices))
 
     def scopes(self) -> Sequence[str]:
         return tuple(sorted(self._scope_indices()))
@@ -130,7 +129,7 @@ class RunningAnswers:
     ) -> Changed:
         ds = self.ds
         given = {ds.node(key): value for key, value in facts.items()}
-        requests: list[tuple[NodeId, object]] = [
+        requests: list[tuple[Address, object]] = [
             *((ds.node(key), value) for key, value in commits.items()),
             *((ds.node(key), Q.REMOVE) for key in clears),
         ]
@@ -179,7 +178,7 @@ class Running:
         """The design space value a root Space object holds (``occurrence.held``)."""
         from finn.core.space.occurrence import held  # noqa: PLC0415
 
-        if configuration._scope != 0:
+        if configuration._scope.parent is not None:
             raise ValueError("the running type opens a root configuration only")
         return RunningAnswers(held(configuration).ds, self.session)
 
@@ -201,28 +200,26 @@ class Running:
 
         declared = root_record(space_class(**cast(dict[str, Any], facts)))
         model = compile_model(space_class)
-        linked = cast(Structure, model.linked)
+        scopes = model.scopes
         given = root_parameters(cast(Any, model), declared)
         missing = [
-            linked.header(index).key
-            for index in linked.parameters
-            if linked.raw_nodes[index].required and index not in given
+            index.key for index in scopes.parameters if index.required and index not in given
         ]
         if missing:
             raise RequestError(f"missing required parameters: {', '.join(missing)}")
-        unknown = sorted(key for key in stored if linked.keys.get(key) not in linked.decisions)
+        unknown = sorted(key for key in stored if scopes.keys.get(key) not in scopes.decisions)
         if unknown:
             raise KeyError(f"not choices of {space_class.__qualname__}: {unknown}")
-        layer = FactsLayer.of(cast(Any, model), prepare_values(linked, given, "parameter"))
+        layer = FactsLayer.of(cast(Any, model), prepare_values(given, "parameter"))
         values = prepare_values(
-            linked, {linked.keys[key]: value for key, value in stored.items()}, "choice"
+            {scopes.find(key): value for key, value in stored.items()}, "choice"
         )
         return RunningAnswers(DesignSpace(layer, values), self.session)
 
 
 class LeavesOneOut(NodeCache):
     """A node cache wrong on purpose: each answer whose read set holds more than
-    ``wider_than`` reads is kept with the last of them (by node) left out, so its key misses
+    ``wider_than`` reads is kept with the last of them (by address) left out, so its key misses
     that read (``RUNNING_PLANTED``: every answer that read anything; ``RUNNING_PLANTED_WIDE``:
     only where more than 4 were read)."""
 
@@ -232,7 +229,7 @@ class LeavesOneOut(NodeCache):
         super().__init__()
         self.wider_than = wider_than
 
-    def keep(self, ev: Evaluation, index: NodeId, found: Ans) -> None:
+    def keep(self, ev: Evaluation, index: Address, found: Ans) -> None:
         if len(found.reads) > self.wider_than:
             found = replace(found, reads=found.reads - {max(found.reads)})
         super().keep(ev, index, found)
@@ -241,12 +238,12 @@ class LeavesOneOut(NodeCache):
 class KeysFirstReads(NodeCache):
     """A node cache wrong on purpose: its width bound applied to the key rather than to
     whether an answer is kept. An answer whose read set holds more than ``wide`` reads is
-    kept under the first ``wide`` of them (by node), so its key misses the rest
+    kept under the first ``wide`` of them (by address), so its key misses the rest
     (``RUNNING_PLANTED_WIDTH``)."""
 
     __slots__ = ()
 
-    def keep(self, ev: Evaluation, index: NodeId, found: Ans) -> None:
+    def keep(self, ev: Evaluation, index: Address, found: Ans) -> None:
         if self.wide is not None and len(found.reads) > self.wide:
             found = replace(found, reads=frozenset(sorted(found.reads)[: self.wide]))
         super().keep(ev, index, found)

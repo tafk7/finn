@@ -26,11 +26,13 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
 from .errors import EvaluationError, ValueUnavailableError
-from .ir import NodeId
 from .results import NonValue, QueryResult
+
+if TYPE_CHECKING:
+    from ._scopes import Address
 
 _CANCELLATIONS = (KeyboardInterrupt, SystemExit, GeneratorExit)
 
@@ -111,7 +113,7 @@ class Call:
     role: str
     failure: Failure | None = None
     fault: EvaluationError | None = None
-    blocked: dict[NodeId, NonValue] = field(default_factory=dict)
+    blocked: dict[Address, NonValue] = field(default_factory=dict)
     outer: BaseException | None = None
     abandoned: BaseException | None = None
 

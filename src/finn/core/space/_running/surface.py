@@ -29,14 +29,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from .._configuration import Space
 from .._nodes import NodeDecl
 from ..declarations import Param, declared_path
 from ..errors import EvaluationError, RequestError
 from ..inspection import EvidenceNode, QueryEvidence, _node_info
-from ..ir import Node, NodeId
 from ..references import ValueHandle, descend
 from ..results import (
     Available,
@@ -55,23 +54,30 @@ from .questions import presence
 from .receiver import scope_choice as _scope_choice
 from .value import DesignSpace
 
+if TYPE_CHECKING:
+    from .._scopes import Address, ScopeRecord
+
 Assessment = ViewAssessment[object] | ConstraintAssessment
 
 
 @dataclass(frozen=True)
 class At:
-    """A design space read at one of its scopes (by index): today's configuration of that
-    scope. Equal by value, as its design space is."""
+    """A design space read at one of its scopes (its scope record; the root's by default):
+    today's configuration of that scope. Equal by value, as its design space is."""
 
     ds: DesignSpace
-    scope: int = 0
+    scope: ScopeRecord = cast("ScopeRecord", None)
+
+    def __post_init__(self) -> None:
+        if self.scope is None:
+            object.__setattr__(self, "scope", self.ds.model.scopes.root)
 
 
 def _evaluation(at: At, session: Session) -> Evaluation:
     return evaluation(at.ds, session)
 
 
-def _node_scope(at: At, reference: object) -> int | None:
+def _node_scope(at: At, reference: object) -> ScopeRecord | None:
     """For a node reference (a child or a candidate), the node's scope; ``None`` for
     anything else."""
     if not isinstance(reference, Space):
@@ -82,20 +88,18 @@ def _node_scope(at: At, reference: object) -> int | None:
     *outer, last = path
     if not isinstance(last, NodeDecl):
         return None
-    scopes = at.ds.model.linked.scopes
-    holder = descend(scopes, at.scope, outer)
-    scope = scopes[holder]
-    if last is scope.record:
+    holder = descend(at.scope, outer)
+    if last is holder.record:
         return holder
-    target = scope.children.get(last)
+    target = holder.children.get(last)
     if target is None:
         raise RequestError("node is not part of this compiled scope")
     return target
 
 
-def _public(ev: Evaluation, index: NodeId) -> QueryResult[object]:
+def _public(ev: Evaluation, index: Address) -> QueryResult[object]:
     """``index``'s answer, detached by its semantics."""
-    return copy_result(ev.linked, index, ev.result(index))
+    return copy_result(index, ev.result(index))
 
 
 # -- a member's answer, a value, presence -----------------------------------------------
@@ -108,7 +112,7 @@ def query(at: At, reference: object, session: Session) -> QueryResult[object]:
     ev = _evaluation(at, session)
     target = _node_scope(at, reference)
     if target is not None:
-        guard = at.ds.model.linked.scopes[target].guard
+        guard = target.guard
         if guard is not None:
             answer = ev.result(guard)
             if not isinstance(answer, Available):
@@ -124,7 +128,7 @@ def value(at: At, reference: object, session: Session) -> object:
     ``ValueUnavailableError`` carrying it."""
     index = at.ds.model.resolve(at.scope, reference)
     ev = _evaluation(at, session)
-    return require_value(_public(ev, index), context=ev.linked.header(index).owner)
+    return require_value(_public(ev, index), context=index.owner)
 
 
 def present(at: At, node: object, session: Session) -> bool:
@@ -139,10 +143,10 @@ def present(at: At, node: object, session: Session) -> bool:
             applies = ev.run(lambda: _source_applies(ev, index))
             if isinstance(applies, bool):
                 return applies
-            require_value(_public(ev, applies), context=ev.linked.header(applies).owner)
+            require_value(_public(ev, applies), context=applies.owner)
             raise AssertionError("an undecided presence read halts")
         raise RequestError("present() takes a node (a child or a selector's case) or a value input")
-    guard = at.ds.model.linked.scopes[target].guard
+    guard = target.guard
     if guard is None:
         return True
     answer = ev.result(guard)
@@ -150,7 +154,7 @@ def present(at: At, node: object, session: Session) -> bool:
         return answer.value is True
     if isinstance(answer, Inapplicable) or (isinstance(answer, Unresolved) and _unsupplied(answer)):
         return False
-    return bool(require_value(answer, context=ev.linked.header(guard).owner))
+    return bool(require_value(answer, context=guard.owner))
 
 
 def _unsupplied(answer: Unresolved) -> bool:
@@ -158,11 +162,11 @@ def _unsupplied(answer: Unresolved) -> bool:
     return bool(findings) and all(finding.code == "input-unsupplied" for finding in findings)
 
 
-def _source_applies(ev: Evaluation, index: NodeId) -> bool | NodeId:
-    """Whether a source applies at ``index`` (a value input is supplied), or the node whose
-    answer still decides it: the edges a read of the value follows, reading only what
+def _source_applies(ev: Evaluation, index: Address) -> bool | Address:
+    """Whether a source applies at ``index`` (a value input is supplied), or the address
+    whose answer still decides it: the edges a read of the value follows, reading only what
     decides presence, never a computation."""
-    node = ev.raw[index]
+    node = index
     if node.guard is not None:
         held = ev.result(node.guard)
         if not isinstance(held, Available):
@@ -172,13 +176,13 @@ def _source_applies(ev: Evaluation, index: NodeId) -> bool | NodeId:
     if node.kind == "param":
         return isinstance(ev.result(index), Available)
     if node.kind in ("alias", "guard", "view"):
-        return _source_applies(ev, cast(NodeId, node.output))
+        return _source_applies(ev, cast("Address", node.output))
     if node.kind == "select":
-        selector = cast(NodeId, node.selector)
+        selector = cast("Address", node.selector)
         case = ev.result(selector)
         if not isinstance(case, Available):
             return False if isinstance(case, Inapplicable) else selector
-        target = cast(Mapping[str, NodeId], node.selection_index).get(cast(str, case.value))
+        target = cast("Mapping[str, Address]", node.selection_index).get(cast(str, case.value))
         return False if target is None else _source_applies(ev, target)
     if node.kind == "present":
         answers = [_source_applies(ev, target) for _, target in node.alternatives]
@@ -195,21 +199,20 @@ def inspect(at: At, reference: object, session: Session) -> Assessment:
     """A view's or a constraint's assessment (``Space.inspect``), detached."""
     index = at.ds.model.resolve(at.scope, reference)
     ev = _evaluation(at, session)
-    header = ev.linked.header(index)
-    if header.kind not in {"view", "constraint"}:
+    if index.kind not in {"view", "constraint"}:
         raise RequestError(
-            f"{header.key} is not a view or a constraint: inspect() assesses those; "
+            f"{index.key} is not a view or a constraint: inspect() assesses those; "
             "read or query() any other member"
         )
     assessment = ev.get(index).assessment
     assert assessment is not None
-    return copy_assessment(ev.linked, index, assessment)
+    return copy_assessment(index, assessment)
 
 
-def _decision_state(ev: Evaluation, index: NodeId) -> QueryResult[DecisionState[object]]:
+def _decision_state(ev: Evaluation, index: Address) -> QueryResult[DecisionState[object]]:
     """A Decision's state: committed with its stored value (whatever a read of it
     answers), unassigned where it is present and open, else as its guard answers."""
-    node = ev.raw[index]
+    node = index
     if node.kind != "decision":
         raise EvaluationError(node.owner, "decision state", "reference is not an owning decision")
     stored = ev.ds.stored
@@ -241,7 +244,7 @@ def candidates(
     ``None`` where it is known by membership only (``BoundDecision.candidates``)."""
     index = at.ds.model.decision(at.scope, reference)
     ev = _evaluation(at, session)
-    node = ev.raw[index]
+    node = index
     found = ev.run(lambda: _candidates(ev, node))
     if isinstance(found, Available) and found.value is None:
         return None
@@ -257,7 +260,7 @@ def candidates(
     )
 
 
-def _candidates(ev: Evaluation, node: Node) -> QueryResult[object]:
+def _candidates(ev: Evaluation, node: Address) -> QueryResult[object]:
     domain, semantics = node.domain, node.semantics
     if domain is None or semantics is None:
         raise EvaluationError(node.owner, "domain enumeration", "reference has no domain")
@@ -265,7 +268,7 @@ def _candidates(ev: Evaluation, node: Node) -> QueryResult[object]:
         inactive = _guard_result(node, ev.result(node.guard))
         if inactive is not None:
             return inactive
-    return ev.membership(node.index).listed(node, [])
+    return ev.membership(node).listed(node, [])
 
 
 # -- bound accessors --------------------------------------------------------------------
@@ -315,7 +318,7 @@ def field(at: At, reference: object, session: Session) -> Field:
 
 
 def root(at: At) -> At:
-    return at if at.scope == 0 else At(at.ds, 0)
+    return at if at.scope.parent is None else At(at.ds, at.ds.model.scopes.root)
 
 
 def child(at: At, node: object) -> At:
@@ -331,7 +334,7 @@ def candidate(at: At, decision: object, case: str) -> At | None:
     placing nothing; ``inspection.candidate``)."""
     if type(case) is not str:
         raise RequestError("a case name must be a string")
-    choice = _scope_choice(at.ds.model.linked, at.scope, decision)
+    choice = _scope_choice(at.scope, decision)
     for key, index in choice.cases:
         if key == case:
             return None if index is None else At(at.ds, index)
@@ -341,8 +344,8 @@ def candidate(at: At, decision: object, case: str) -> At | None:
 def selected_candidate(at: At, decision: object, session: Session) -> At | None:
     """The configuration of the candidate a Decision over nodes selects, or ``None``: its
     selector read as a value."""
-    choice = _scope_choice(at.ds.model.linked, at.scope, decision)
-    case = value(at, ValueHandle[str](at.ds.model.linked, choice.selector), session)
+    choice = _scope_choice(at.scope, decision)
+    case = value(at, ValueHandle[str](at.ds.model, choice.selector), session)
     for key, index in choice.cases:
         if key == case:
             return None if index is None else At(at.ds, index)
@@ -366,21 +369,21 @@ def explain(at: At, reference: object, session: Session) -> QueryEvidence[object
     return ev.run(lambda: _evidence(ev, index))
 
 
-def _evidence(ev: Evaluation, index: NodeId) -> QueryEvidence[object]:
-    linked, raw = ev.linked, ev.raw
+def _evidence(ev: Evaluation, index: Address) -> QueryEvidence[object]:
+    model = ev.model
     found = ev.get(index)
     pending = [index]
-    visited: dict[NodeId, Ans] = {}
+    visited: dict[Address, Ans] = {}
     while pending:
         current = pending.pop()
         if current in visited:
             continue
         entry = visited[current] = ev.get(current)
         pending.extend(dependency for dependency, _ in entry.trace)
-    guards = {raw[item].guard for item in visited if raw[item].guard is not None}
+    guards = {item.guard for item in visited if item.guard is not None}
     nodes: list[EvidenceNode] = []
-    for item in sorted(visited, key=lambda each: linked.header(each).key):
-        node, entry = raw[item], visited[item]
+    for item in sorted(visited, key=lambda each: each.key):
+        node, entry = item, visited[item]
         demanded = tuple(dict.fromkeys(dependency for dependency, _ in entry.trace))
         active = True
         if node.guard is not None:
@@ -391,33 +394,33 @@ def _evidence(ev: Evaluation, index: NodeId) -> QueryEvidence[object]:
             supplied = "supplied" if item in ev.ds.facts else "omitted"
         nodes.append(
             EvidenceNode(
-                _node_info(linked, item),
-                copy_result(linked, item, entry.result),
-                tuple(ValueHandle[object](linked, target) for target in demanded),
+                _node_info(model, item),
+                copy_result(item, entry.result),
+                tuple(ValueHandle[object](model, target) for target in demanded),
                 supplied,
                 _decision_state(ev, item) if node.kind == "decision" else None,
-                item in linked.selector_choices,
+                model.scopes.selector_choice(item) is not None,
                 item in guards,
-                tuple(_node_info(linked, formal) for formal in _read_through(ev, node, demanded)),
+                tuple(_node_info(model, formal) for formal in _read_through(ev, node, demanded)),
             )
         )
-    assessment = (
-        None if found.assessment is None else copy_assessment(linked, index, found.assessment)
-    )
+    assessment = None if found.assessment is None else copy_assessment(index, found.assessment)
     return QueryEvidence(
-        _node_info(linked, index),
-        copy_result(linked, index, found.result),
+        _node_info(model, index),
+        copy_result(index, found.result),
         tuple(nodes),
         cast(Any, assessment),
     )
 
 
-def _read_through(ev: Evaluation, node: Node, demanded: tuple[NodeId, ...]) -> tuple[NodeId, ...]:
+def _read_through(
+    ev: Evaluation, node: Address, demanded: tuple[Address, ...]
+) -> tuple[Address, ...]:
     """The formals bound by reference ``node`` read at their source: each node its
     definition names (its output, arguments, domain inputs, alternatives, selector, and a
     method's possible reads, in the order it read their sources) that ``node`` reads at
     another node it then read."""
-    named: list[NodeId] = []
+    named: list[Address] = []
     if node.output is not None:
         named.append(node.output)
     named.extend(argument.node for argument in node.arguments)
@@ -427,12 +430,12 @@ def _read_through(ev: Evaluation, node: Node, demanded: tuple[NodeId, ...]) -> t
         named.append(node.selector)
     if node.call_style == "self":
         order = {source: position for position, source in enumerate(demanded)}
-        possible = sorted(ev.inferred.methods.get(node.index) or ())
+        possible = sorted(ev.inferred.methods.get(node) or ())
         named.extend(
             sorted(possible, key=lambda formal: order.get(ev.source(formal, node), len(order)))
         )
     read = set(demanded)
-    found: dict[NodeId, None] = {}
+    found: dict[Address, None] = {}
     for target in named:
         source = ev.source(target, node)
         if source != target and source in read:

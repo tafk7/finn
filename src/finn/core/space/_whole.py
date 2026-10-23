@@ -1,14 +1,14 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Questions about a whole design space, answered from templates and scope records.
+"""Questions about a whole design space, answered from compiled forms and scope records.
 
 Some questions read every choice of a model, the cases not selected included: the
 **flow order** (each choice after every choice its presence, its list or its Space's
 facts read: ``PerClass.flow``, the order of ``inspection.decisions`` and ``states``,
 and of a change's lists), and the **presence readers** (for each choice and fact, the
 choices whose presence may read it: what a change may move). Each is answered here from
-templates and the scopes' records (``_structure``): no node is resolved.
+the classes' compiled forms and the scopes' records (``_scopes``): no member is evaluated.
 
 **What each walks.** A choice's **upstream** is the first choices met on every way back
 from its existence guards, its domain's inputs and the formals of its scope and of every
@@ -20,21 +20,21 @@ dynamic method's: every choice and fact). A read through ``present()`` follows w
 decides whether the value is supplied (its guards; an alias, a guard or a view to its
 output; a selection to its selector and alternatives; a formal to its binding).
 
-**Per template, summaries.** Each walk is done once per template (and placement:
-``_compose.Placement``), from one start node, over the template's own nodes, and cached
-with the template: what it finds there (choices; for a reach, facts too), what it finds
-in the Spaces it places (an import continued in the child's template by the child's
-summary, and what that reaches out of the child followed into this template's
-bindings), and what it reaches out of the template, which it reports as **exits**
+**Per class, summaries.** Each walk is done once per class (and placement:
+``_compose.Placement``), from one start, over the records of its compiled form, and cached
+with it: what it finds there (choices; for a reach, facts too), what it finds in the Spaces
+it places (an edge into a placed Space continued in the child's compiled form by the
+child's summary, and what that reaches out of the child followed into this class's
+bindings), and what it reaches out of the class, which it reports as **exits**
 (``_compose.Exit``: one of its formals, or the guard it is placed under). A dynamic
-method's subtree is one summary per template too.
+method's subtree is one summary per class too.
 
 **Per scope, composition.** A summary's finds are addressed in the scope it is read at
-(``Structure.walk`` and ``ident``: a scope's record, no node); each exit is followed
+(``ScopeRecord.reach`` and ``member_address``: a scope's record, no member read); each exit
+is followed
 into the placing scope's binding (``_compose.lift``: a literal, a default or an
 unsupplied formal ends at the guard the scope is placed under; a reference continues
-there),
-by that template's summaries, up to the root, where a formal is a fact. Composed per
+there), by that class's summaries, up to the root, where a formal is a fact. Composed per
 scope and exit once.
 
 That this is the line's answer, the line's algorithms over one table of every node,
@@ -47,7 +47,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from heapq import heapify, heappop, heappush
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from ._compose import (
     ROOT,
@@ -56,24 +56,27 @@ from ._compose import (
     Placement,
     Ref,
     _classify,
+    _Slot,
     excluded,
     fields,
     is_decision,
     lift,
-    path,
     slot,
 )
 from ._reads import _Dynamic, _Found, _Ref, _TemplateInference
-from .ir import NodeId
+from .ir import Placed, Placing
 
 if TYPE_CHECKING:
-    from ._structure import ScopeRecord, Structure
-    from ._template import Template
+    from ._scopes import Address, ScopeRecord, Scopes
+    from ._template import Compiled
+
+# A choice in the flow order's algorithms: an address (a table's node id, in the tests).
+N = TypeVar("N")
 
 # The two walks: a choice's upstream, a guard's reach.
 Walk = Literal["upstream", "reach"]
-# A node a walk found: the placed stubs from the template walked, and a node of the
-# template they reach.
+# A member a walk found: the slots from the class walked, and a record of the class they
+# reach.
 Step = tuple[tuple[int, ...], int]
 # A walk's step to a reference, read as a mode.
 _Push = Callable[[Ref, Mode], None]
@@ -81,8 +84,8 @@ _Push = Callable[[Ref, Mode], None]
 
 @dataclass(frozen=True, slots=True)
 class Summary:
-    """What a walk found in a template and the Spaces it places (``found``), what it
-    reached out of the template (``exits``), and whether it met a method whose reads are
+    """What a walk found in a class and the Spaces it places (``found``), what it reached
+    out of the class (``exits``), and whether it met a method whose reads are
     not fixed where the walk reads every choice and fact (``every``: a reach)."""
 
     found: frozenset[Step] = frozenset()
@@ -117,82 +120,81 @@ class _Union:
         return Summary(frozenset(self.found), frozenset(self.exits))
 
 
-# -- per template ------------------------------------------------------------------------------
+# -- per class ---------------------------------------------------------------------------------
 
 
 class _Walks:
-    """The summaries of one walk, per template and placement (cached on the template:
-    ``Template.composed``). ``inference`` answers each method's reads per template."""
+    """The summaries of one walk, per class and placement (cached on the compiled form:
+    ``Compiled.composed``). ``inference`` answers each method's reads per class."""
 
     def __init__(self, walk: Walk, inference: _TemplateInference) -> None:
         self.walk = walk
         self.inference = inference
         self.name = f"whole.{walk}"
 
-    def _memo(self, template: Template, at: Placement) -> dict[tuple[int, Mode], Summary]:
+    def _memo(self, compiled: Compiled, at: Placement) -> dict[tuple[int, Mode], Summary]:
         held = cast(
             dict[Placement, dict[tuple[int, Mode], Summary]],
-            template.composed.setdefault(self.name, {}),
+            compiled.composed.setdefault(self.name, {}),
         )
         return held.setdefault(at, {})
 
-    def summary(self, template: Template, at: Placement, ref: Ref, mode: Mode) -> Summary:
-        """The walk from ``ref`` (read as ``mode``) in ``template`` at ``at``; found once."""
-        out = _classify(template, ref, mode)
+    def summary(self, compiled: Compiled, at: Placement, ref: Ref, mode: Mode) -> Summary:
+        """The walk from ``ref`` (read as ``mode``) in ``compiled``'s class at ``at``; found
+        once."""
+        out = _classify(compiled, ref, mode)
         if out is not None:
             return Summary(exits=frozenset((out,)))
         node = cast(int, ref)
-        memo = self._memo(template, at)
+        memo = self._memo(compiled, at)
         found = memo.get((node, mode))
         if found is None:
-            found = memo[(node, mode)] = self._dfs(template, at, ((node, mode),), memo)
+            found = memo[(node, mode)] = self._dfs(compiled, at, ((node, mode),), memo)
         return found
 
     def gathered(
-        self, template: Template, at: Placement, starts: Iterable[tuple[Ref, Mode]]
+        self, compiled: Compiled, at: Placement, starts: Iterable[tuple[Ref, Mode]]
     ) -> Summary:
         """The walk from each of ``starts``, as one (a walk's finds are a union)."""
         union = _Union()
         for ref, mode in starts:
-            union.add(self.summary(template, at, ref, mode))
+            union.add(self.summary(compiled, at, ref, mode))
         return union.summary()
 
-    def subtree(self, template: Template, at: Placement) -> Summary:
-        """The upstream walk from every node of the scope ``template`` is placed as at
-        ``at`` and of the scopes below it (what a dynamic method of that scope may read):
-        its own nodes and those its placing template writes for it (its formals' bindings),
-        and each placed Space's subtree. Found once."""
-        held = cast(dict[Placement, Summary], template.composed.setdefault("whole.subtree", {}))
+    def subtree(self, compiled: Compiled, at: Placement) -> Summary:
+        """The upstream walk from every record of the scope ``compiled``'s class is placed
+        as at ``at`` and of the scopes below it (what a dynamic method of that scope may
+        read): its own members and the records it writes for the Spaces it places (their
+        formals' bindings), and each placed Space's subtree. Found once."""
+        held = cast(dict[Placement, Summary], compiled.composed.setdefault("whole.subtree", {}))
         found = held.get(at)
         if found is None:
             union = _Union()
             starts: list[tuple[Ref, Mode]] = [
-                (node, "r")
-                for node in range(len(template.nodes))
-                if node != template.placement_guard
+                (record, "r") for record in range(len(compiled.records))
             ]
-            for stub in template.index.placed:
-                child = slot(template, stub)
+            for index in range(len(compiled.slots)):
+                child = slot(compiled, index)
                 if child.requires in at.never:
                     continue
-                below = self.subtree(child.template, child.placement)
-                union.add(Summary(below.found), (stub,))
+                below = self.subtree(child.compiled, child.placement)
+                union.add(Summary(below.found), (index,))
                 starts.extend(item for exit in below.exits for item in lift(child, (exit,)))
-            union.add(self._dfs(template, at, starts, None, subtree=True))
+            union.add(self._dfs(compiled, at, starts, None, subtree=True))
             found = held[at] = union.summary()
         return found
 
     def _dfs(
         self,
-        template: Template,
+        compiled: Compiled,
         at: Placement,
         starts: Sequence[tuple[Ref, Mode]],
         memo: Mapping[tuple[int, Mode], Summary] | None,
         *,
         subtree: bool = False,
     ) -> Summary:
-        """The walk from ``starts`` over ``template``'s nodes at ``at``. A node whose walk
-        is known (``memo``) contributes it whole. ``subtree``: the walk of the scope's
+        """The walk from ``starts`` over ``compiled``'s records at ``at``. A record whose
+        walk is known (``memo``) contributes it whole. ``subtree``: the walk of the scope's
         subtree itself, to which a dynamic method of its own adds nothing."""
         upstream = self.walk == "upstream"
         union = _Union()
@@ -200,16 +202,15 @@ class _Walks:
         pending: list[tuple[int, Mode]] = []
 
         def push(ref: Ref, mode: Mode) -> None:
-            out = _classify(template, ref, mode)
+            out = _classify(compiled, ref, mode)
             if out is not None:
                 union.exits.add(out)
                 return
-            node = cast(int, ref)
-            if excluded(template, at, node):
+            node = cast("int | Placed", ref)
+            if excluded(compiled, at, node):
                 return
-            if template.nodes[node].kind == "import":
-                steps = path(template, template.nodes[node].scope)
-                found, lifted = self._down(template, at, steps, template.imports[node], mode)
+            if isinstance(node, Placed):
+                found, lifted = self._down(compiled, at, node.path, node.member, mode)
                 union.add(found)
                 for item in lifted:
                     push(*item)
@@ -229,14 +230,14 @@ class _Walks:
             if union.every:
                 return Summary(every=True)
             node, mode = pending.pop()
-            spec = template.nodes[node]
+            spec = compiled.records[node]
             if mode != "r":
                 # What ``present()`` reads of a value: its guard; an alias, a guard or a
                 # view's output; a selection's selector and alternatives; a selector
                 # itself where it is the value asked of.
-                if mode == "S" and node in template.selectors:
+                if mode == "S" and node in compiled.selectors:
                     push(node, "r")
-                read = fields(template, at, node)
+                read = fields(compiled, at, node)
                 if read.guard is not None:
                     push(read.guard, "r")
                 if spec.kind in ("alias", "guard", "view") and read.output is not None:
@@ -246,41 +247,41 @@ class _Walks:
                     for target in read.alternatives:
                         push(target, "s")
                 continue
-            if is_decision(template, at, node):
+            if is_decision(compiled, at, node):
                 union.found.add(((), node))
                 if upstream:
                     continue
             elif upstream and spec.kind == "validity":
                 continue
-            for ref in fields(template, at, node).dependencies():
+            for ref in fields(compiled, at, node).dependencies():
                 push(ref, "r")
             if spec.call_style == "self" and spec.function is not None:
-                items = self.inference.reads(spec.function, template)
-                if self._dynamic(template, at, items):
+                items = self.inference.reads(spec.function, compiled)
+                if self._dynamic(compiled, at, items):
                     if not upstream:
                         return Summary(every=True)
                     if not subtree:
-                        union.add(self.subtree(template, at))
+                        union.add(self.subtree(compiled, at))
                     continue
-                self._reads(template, at, items, union, push)
+                self._reads(compiled, at, items, union, push)
         return union.summary()
 
     def _down(
         self,
-        template: Template,
+        compiled: Compiled,
         at: Placement,
         steps: Sequence[int],
-        target: int,
+        target: int | Placing,
         mode: Mode,
-    ) -> tuple[Summary, list[tuple[int, Mode]]]:
-        """The walk from ``target``, a node of the template ``steps`` reach from
-        ``template`` (its placed stubs), there: what it finds below (from ``template``),
-        and what it reaches out of the Space at ``steps[0]``, lifted into ``template``'s
-        nodes to walk on there."""
-        held = slot(template, steps[0])
+    ) -> tuple[Summary, list[tuple[int | Placing, Mode]]]:
+        """The walk from ``target``, a record of the class ``steps`` reach from
+        ``compiled``'s (its slots), there: what it finds below (from ``compiled``'s class),
+        and what it reaches out of the Space at ``steps[0]``, lifted into ``compiled``'s
+        records to walk on there."""
+        held = slot(compiled, steps[0])
         if held.requires in at.never:
             return _NOTHING, []
-        child, child_at = held.template, held.placement
+        child, child_at = held.compiled, held.placement
         union = _Union()
         if len(steps) > 1:
             found, lifted = self._down(child, child_at, steps[1:], target, mode)
@@ -294,43 +295,43 @@ class _Walks:
         found = Summary(frozenset(((steps[0], *inner), node) for inner, node in below.found))
         return found, [item for exit in below.exits for item in lift(held, (exit,))]
 
-    def _dynamic(self, template: Template, at: Placement, items: _Found) -> bool:
+    def _dynamic(self, compiled: Compiled, at: Placement, items: _Found) -> bool:
         """Whether a method's reads are not fixed at ``at`` (as ``_compose``'s domain rule
         reads them): a dynamic read placed there."""
         return any(
-            isinstance(item, _Dynamic) and _placed(template, at, item.when) for item in items
+            isinstance(item, _Dynamic) and _placed(compiled, at, item.when) for item in items
         )
 
     def _reads(
         self,
-        template: Template,
+        compiled: Compiled,
         at: Placement,
         items: _Found,
         union: _Union,
         push: _Push,
     ) -> None:
         """A method's inferred reads at ``at``, walked on (``_reads._Mapping``'s mapping, by
-        template): a node, read as ``present()`` reads it where its source asks presence."""
+        class): a record, read as ``present()`` reads it where its source asks presence."""
         for item in items:
             if isinstance(item, _Ref):
                 mode: Mode = "S" if item.sources else "r"
                 if not item.steps:
                     push(item.node, mode)
-                elif _placed(template, at, item.steps):
-                    found, lifted = self._down(template, at, item.steps, item.node, mode)
+                elif _placed(compiled, at, item.steps):
+                    found, lifted = self._down(compiled, at, item.steps, item.node, mode)
                     union.add(found)
                     for lifted_item in lifted:
                         push(*lifted_item)
 
 
-def _placed(template: Template, at: Placement, steps: Sequence[int]) -> bool:
-    """Whether the placed stubs ``steps`` are placed at ``at`` (none a candidate of a
-    Decision over nodes that never applies)."""
-    for stub in steps:
-        held = slot(template, stub)
+def _placed(compiled: Compiled, at: Placement, steps: Sequence[int]) -> bool:
+    """Whether the slots ``steps`` are placed at ``at`` (none a candidate of a Decision over
+    nodes that never applies)."""
+    for index in steps:
+        held = slot(compiled, index)
         if held.requires in at.never:
             return False
-        template, at = held.template, held.placement
+        compiled, at = held.compiled, held.placement
     return True
 
 
@@ -342,11 +343,11 @@ class Flow:
     """The model's choices in the flow order (``order``), and its loops (``loops``: each
     set of choices reading one another, in declaration order)."""
 
-    order: tuple[NodeId, ...]
-    loops: tuple[tuple[NodeId, ...], ...]
+    order: tuple[Any, ...]
+    loops: tuple[tuple[Any, ...], ...]
 
 
-def flow_order(decisions: Sequence[NodeId], reading: Mapping[NodeId, frozenset[NodeId]]) -> Flow:
+def flow_order(decisions: Sequence[N], reading: Mapping[N, frozenset[N]]) -> Flow:
     """The choices ``decisions`` (in declaration order) in the flow order, each after the
     choices it reads (``reading``), ties in declaration order. Kahn's algorithm orders them,
     the next ready choice the first declared. Choices that read one another (a loop) are
@@ -358,8 +359,8 @@ def flow_order(decisions: Sequence[NodeId], reading: Mapping[NodeId, frozenset[N
     members = {loop[0]: loop for loop in loops}
     # The graph over units (a loop's first member stands for it): each unit's readers,
     # and how many units it waits on.
-    readers: dict[NodeId, set[NodeId]] = {}
-    waiting: dict[NodeId, set[NodeId]] = {}
+    readers: dict[N, set[N]] = {}
+    waiting: dict[N, set[N]] = {}
     for decision in decisions:
         own = unit.get(decision, decision)
         waits = waiting.setdefault(own, set())
@@ -371,7 +372,7 @@ def flow_order(decisions: Sequence[NodeId], reading: Mapping[NodeId, frozenset[N
     count = {node: len(waits) for node, waits in waiting.items()}
     ready = [(ranks[node], node) for node, waits in count.items() if not waits]
     heapify(ready)
-    order: list[NodeId] = []
+    order: list[N] = []
     while ready:
         _, node = heappop(ready)
         order.extend(members.get(node, (node,)))
@@ -383,20 +384,20 @@ def flow_order(decisions: Sequence[NodeId], reading: Mapping[NodeId, frozenset[N
 
 
 def _loops(
-    decisions: Sequence[NodeId],
-    reading: Mapping[NodeId, frozenset[NodeId]],
-    ranks: Mapping[NodeId, int],
-) -> tuple[tuple[NodeId, ...], ...]:
+    decisions: Sequence[N],
+    reading: Mapping[N, frozenset[N]],
+    ranks: Mapping[N, int],
+) -> tuple[tuple[N, ...], ...]:
     """The sets of choices that read one another (strongly connected, more than one), each
     in declaration order (``ranks``), the sets by their first member's (Tarjan's
     algorithm, without recursion; each choice's reads taken in declaration order)."""
-    index: dict[NodeId, int] = {}
-    low: dict[NodeId, int] = {}
-    stack: list[NodeId] = []
-    on_stack: set[NodeId] = set()
-    found: list[tuple[NodeId, ...]] = []
+    index: dict[N, int] = {}
+    low: dict[N, int] = {}
+    stack: list[N] = []
+    on_stack: set[N] = set()
+    found: list[tuple[N, ...]] = []
 
-    def sources(node: NodeId) -> Iterator[NodeId]:
+    def sources(node: N) -> Iterator[N]:
         return iter(sorted(reading[node], key=ranks.__getitem__))
 
     for root in decisions:
@@ -423,7 +424,7 @@ def _loops(
                 parent = frames[-1][0]
                 low[parent] = min(low[parent], low[node])
             if low[node] == index[node]:
-                component: list[NodeId] = []
+                component: list[N] = []
                 while True:
                     member = stack.pop()
                     on_stack.discard(member)
@@ -440,54 +441,56 @@ def _loops(
 
 class Whole:
     """A model's answers to the questions about its whole design space, composed from its
-    templates' summaries per scope (see the module docstring). Its structure's lock is
-    held while it is asked."""
+    classes' summaries per scope (see the module docstring). Its scope records' lock is held
+    while it is asked."""
 
-    def __init__(self, structure: Structure) -> None:
-        self.structure = structure
+    def __init__(self, scopes: Scopes) -> None:
+        self.scopes = scopes
         inference = _TemplateInference()
         self.walks: dict[Walk, _Walks] = {
             "upstream": _Walks("upstream", inference),
             "reach": _Walks("reach", inference),
         }
-        self._placements: dict[int, Placement] = {}
-        self._up: dict[tuple[int, Exit, Walk], tuple[frozenset[NodeId], bool]] = {}
-        self._formals: dict[int, frozenset[NodeId]] = {}
+        self._placements: dict[ScopeRecord, Placement] = {}
+        self._up: dict[tuple[ScopeRecord, Exit, Walk], tuple[frozenset[Address], bool]] = {}
+        self._formals: dict[ScopeRecord, frozenset[Address]] = {}
         self._flow: Flow | None = None
-        self._positions: dict[NodeId, int] | None = None
-        self._readers: tuple[dict[NodeId, tuple[NodeId, ...]], tuple[NodeId, ...]] | None = None
+        self._positions: dict[Address, int] | None = None
+        self._readers: tuple[dict[Address, tuple[Address, ...]], tuple[Address, ...]] | None = None
 
     def placement(self, record: ScopeRecord) -> Placement:
-        """How ``record``'s template is placed there (``_compose.Placement``)."""
-        found = self._placements.get(record.index)
+        """How ``record``'s class is placed there (``_compose.Placement``)."""
+        found = self._placements.get(record)
         if found is None:
-            parent = record.parent
-            found = (
-                ROOT if parent is None else slot(parent.template, cast(int, record.stub)).placement
-            )
-            self._placements[record.index] = found
+            found = ROOT if record.parent is None else self._slot(record).placement
+            self._placements[record] = found
         return found
+
+    @staticmethod
+    def _slot(record: ScopeRecord) -> _Slot:
+        """The slot ``record``'s scope is placed at, of its parent's compiled form."""
+        parent = cast("ScopeRecord", record.parent)
+        return slot(parent.compiled, cast(int, record.slot))
 
     # -- composition
 
     def reached(
         self, record: ScopeRecord, starts: Iterable[tuple[Ref, Mode]], walk: Walk
-    ) -> tuple[frozenset[NodeId], bool]:
-        """What the walk ``walk`` from ``starts`` (refs of ``record``'s template) finds in
-        the design space, by ``NodeId``; and whether it reads every choice and fact."""
-        summary = self.walks[walk].gathered(record.template, self.placement(record), starts)
+    ) -> tuple[frozenset[Address], bool]:
+        """What the walk ``walk`` from ``starts`` (refs of ``record``'s compiled form) finds
+        in the design space, by address; and whether it reads every choice and fact."""
+        summary = self.walks[walk].gathered(record.compiled, self.placement(record), starts)
         return self._composed(record, summary, walk)
 
     def _composed(
         self, record: ScopeRecord, summary: Summary, walk: Walk
-    ) -> tuple[frozenset[NodeId], bool]:
+    ) -> tuple[frozenset[Address], bool]:
         if summary.every:
             return frozenset(), True
-        structure = self.structure
-        found: set[NodeId] = set()
+        found: set[Address] = set()
         for steps, node in summary.found:
-            at = structure.walk(record, steps)
-            index = None if at is None else structure.ident(at, node)
+            at = record.reach(steps)
+            index = None if at is None else at.member_address(node)
             if index is not None:
                 found.add(index)
         for exit in summary.exits:
@@ -497,72 +500,72 @@ class Whole:
             found |= more
         return frozenset(found), False
 
-    def _exit(self, record: ScopeRecord, exit: Exit, walk: Walk) -> tuple[frozenset[NodeId], bool]:
-        """What a walk reaching ``exit`` out of ``record``'s template finds above it: at the
-        root a formal is a fact; else the exit followed into the placing template."""
-        key = (record.index, exit, walk)
+    def _exit(self, record: ScopeRecord, exit: Exit, walk: Walk) -> tuple[frozenset[Address], bool]:
+        """What a walk reaching ``exit`` out of ``record``'s class finds above it: at the root
+        a formal is a fact; else the exit followed into the placing class."""
+        key = (record, exit, walk)
         held = self._up.get(key)
         if held is not None:
             return held
         parent = record.parent
         if parent is None:
-            found: tuple[frozenset[NodeId], bool] = (frozenset(), False)
+            found: tuple[frozenset[Address], bool] = (frozenset(), False)
             if walk == "reach" and exit[0] == "formal":
-                fact = self.structure.ident(record, record.template.formals[exit[1]])
+                fact = record.canonical(record.compiled.formals[exit[1]])
                 found = (frozenset(() if fact is None else (fact,)), False)
         else:
-            lifted = lift(slot(parent.template, cast(int, record.stub)), (exit,))
-            found = self.reached(parent, lifted, walk)
+            found = self.reached(parent, lift(self._slot(record), (exit,)), walk)
         self._up[key] = found
         return found
 
-    def _start(self, index: NodeId) -> tuple[ScopeRecord, Ref]:
-        """Where a walk from ``index`` starts: its scope and template node, or, for a formal
-        its placing template binds, the exit it is there."""
-        record, node = self.structure.canonical(index)
-        name = record.template.formal_names.get(node)
+    @staticmethod
+    def _start(index: Address) -> tuple[ScopeRecord, Ref]:
+        """Where a walk from ``index`` starts: its scope and member, or, for a formal its
+        placing class binds, the exit it is there."""
+        record, member = index.held
+        name = record.compiled.formal_names.get(member)
         if name is not None and record.parent is not None:
             return record, ("formal", name, "r")
-        return record, node
+        return record, member
 
     # -- the flow order
 
-    def formals(self, scope: int) -> frozenset[NodeId]:
+    def formals(self, scope: ScopeRecord) -> frozenset[Address]:
         """The choices the formals of ``scope`` and of every enclosing scope read."""
         found = self._formals.get(scope)
         if found is None:
-            record = self.structure.records[scope]
-            own: set[NodeId] = set()
-            for name in record.template.formals:
-                own |= self._exit(record, ("formal", name, "r"), "upstream")[0]
-            outer = frozenset() if record.parent is None else self.formals(record.parent.index)
+            own: set[Address] = set()
+            for name in scope.compiled.formals:
+                own |= self._exit(scope, ("formal", name, "r"), "upstream")[0]
+            outer = frozenset() if scope.parent is None else self.formals(scope.parent)
             found = self._formals[scope] = frozenset(own) | outer
         return found
 
-    def upstream(self, decision: NodeId) -> frozenset[NodeId]:
+    def upstream(self, decision: Address) -> frozenset[Address]:
         """The choices ``decision``'s presence, its list or its Space's facts read: the
         first on every way back from its existence guards, its domain's inputs and its
         scopes' formals."""
-        head = self.structure.header(decision)
-        spec = head.record.template.nodes[head.node]
+        record, member = decision
+        compiled = record.compiled
+        spec = compiled.records[member]
         starts: list[tuple[Ref, Mode]] = [
-            (argument.node, "r") for argument in spec.domain_arguments
+            (compiled.ref(edge), "r") for _, edge in spec.domain_arguments
         ]
         if spec.guard is not None:
-            starts.append((spec.guard, "r"))
-        found = self.reached(head.record, starts, "upstream")[0] | self.formals(head.scope)
+            starts.append((compiled.ref(spec.guard), "r"))
+        found = self.reached(record, starts, "upstream")[0] | self.formals(record)
         return found - {decision}
 
     def flow(self) -> Flow:
         """The model's choices in the flow order (``flow_order``), with its loops."""
         if self._flow is None:
-            with self.structure.lock:
-                decisions = self.structure.decisions
+            with self.scopes.lock:
+                decisions = self.scopes.decisions
                 reading = {decision: self.upstream(decision) for decision in decisions}
                 self._flow = flow_order(decisions, reading)
         return self._flow
 
-    def position(self, decision: NodeId) -> int:
+    def position(self, decision: Address) -> int:
         """A choice's place in the flow order (``KeyError`` for anything else)."""
         if self._positions is None:
             order = self.flow().order
@@ -571,24 +574,23 @@ class Whole:
 
     # -- presence readers
 
-    def readers(self, source: NodeId) -> tuple[NodeId, ...]:
+    def readers(self, source: Address) -> tuple[Address, ...]:
         """The choices whose presence may read the choice or fact ``source``: those whose
         guards (their own and every enclosing one's) may read it, through what each guard
         reaches; a guard reaching a dynamic method may read every choice and fact. In
         declaration order, those of every source last."""
         if self._readers is None:
-            with self.structure.lock:
+            with self.scopes.lock:
                 self._readers = self._all_readers()
         specific, everywhere = self._readers
         return (*specific.get(source, ()), *everywhere)
 
-    def _all_readers(self) -> tuple[dict[NodeId, tuple[NodeId, ...]], tuple[NodeId, ...]]:
-        structure = self.structure
-        reaches: dict[NodeId, tuple[frozenset[NodeId], bool]] = {}
-        specific: dict[NodeId, list[NodeId]] = {}
-        everywhere: list[NodeId] = []
-        for decision in structure.decisions:
-            guard = structure.header(decision).guard
+    def _all_readers(self) -> tuple[dict[Address, tuple[Address, ...]], tuple[Address, ...]]:
+        reaches: dict[Address, tuple[frozenset[Address], bool]] = {}
+        specific: dict[Address, list[Address]] = {}
+        everywhere: list[Address] = []
+        for decision in self.scopes.decisions:
+            guard = decision.guard
             if guard is None:
                 continue
             found = reaches.get(guard)

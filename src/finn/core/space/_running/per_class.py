@@ -3,22 +3,21 @@
 """The per-class record: what a compiled model answers once for every design space of it,
 made with the model (``compiler.Model``) and held by it for its life.
 
-- ``reads``: what each ``self`` method may read, each node's existence guards, and each
-  case guard (``_reads.infer``; a structure's answered node by node, as read, each under
-  the model's lock);
+- ``reads``: what each ``self`` method may read, each address's existence guards, and each
+  case guard (``_reads.infer``; answered address by address, as read, each under the
+  model's lock);
 - ``flow()``: the model's choices in the flow order, found once, on first use, from its
-  templates, each loop in it noted (``flow-loop``);
+  compiled forms, each loop in it noted (``flow-loop``);
 - ``presence_readers(source)``: the choices whose presence may read the choice or fact
-  ``source``, from its templates;
+  ``source``, from its compiled forms;
 - ``flow_below(model, scope)``: the choices below a scope in the flow order;
-  ``scopes_below(linked, scope)``: a scope and every scope below it;
+  ``scopes_below(scopes, scope)``: a scope and every scope below it;
 - ``session()``: the model's one ``evaluate.Session``, made on first use: every public
   question about a design space of the model runs in it, under the model's lock, and its
   node cache (``cache.NodeCache``, made in its default mode) keeps answers for the model's
   life, or until the session is dropped (``drop_session``).
 
-A table built by hand has no templates: it answers no question about its whole design space
-(its flow order, its presence readers). Each part is made under the model's lock (``lock``).
+Each part is made under the model's lock (``lock``).
 """
 
 from __future__ import annotations
@@ -30,14 +29,12 @@ from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import note
 
 from .._reads import ModelReads, infer
-from .._structure import Structure
-from ..errors import RequestError
-from ..ir import Linked, NodeId, Questions
 
 if TYPE_CHECKING:
     from threading import RLock
 
     from .._configuration import Space
+    from .._scopes import Address, ScopeRecord, Scopes
     from ..compiler import Model
     from .evaluate import Session
 
@@ -45,34 +42,25 @@ if TYPE_CHECKING:
 class PerClass:
     """One compiled model's per-class record (see the module docstring)."""
 
-    __slots__ = ("model", "linked", "reads", "lock", "_flow", "_session")
+    __slots__ = ("model", "scopes", "reads", "lock", "_flow", "_session")
 
     def __init__(self, model: Model[Space]) -> None:
         self.model = model
-        self.linked: Linked = model.linked
-        self.reads: ModelReads = infer(self.linked)
+        self.scopes: Scopes = model.scopes
+        self.reads: ModelReads = infer(self.scopes)
         self.lock: RLock = model.lock
-        self._flow: tuple[NodeId, ...] | None = None
+        self._flow: tuple[Address, ...] | None = None
         self._session: Session | None = None
 
-    def _whole(self) -> Questions:
-        whole = self.linked.whole
-        if whole is None:
-            raise RequestError(
-                "a table built by hand has no templates: it answers no question about its "
-                "whole design space (its flow order, its presence readers)"
-            )
-        return whole
-
-    def flow(self) -> tuple[NodeId, ...]:
+    def flow(self) -> tuple[Address, ...]:
         """The model's choices in the flow order (found once per model, on first use, from
-        its templates: ``_whole``). Each loop in it is noted, a finding stated without
+        its compiled forms: ``_whole``). Each loop in it is noted, a finding stated without
         refusing (``flow-loop``): its choices are taken in declaration order."""
         with self.lock:
             if self._flow is None:
-                found = self._whole().flow()
+                found = self.scopes.flow()
                 for loop in found.loops:
-                    keys = tuple(self.linked.header(index).key for index in loop)
+                    keys = tuple(index.key for index in loop)
                     note(
                         Finding(
                             FindingKind.LIMITATION,
@@ -86,11 +74,11 @@ class PerClass:
                 self._flow = found.order
             return self._flow
 
-    def presence_readers(self, source: NodeId) -> tuple[NodeId, ...]:
+    def presence_readers(self, source: Address) -> tuple[Address, ...]:
         """The choices whose presence may read the choice or fact ``source`` (found once
-        per model, on first use, from its templates: ``_whole``)."""
+        per model, on first use, from its compiled forms: ``_whole``)."""
         with self.lock:
-            return self._whole().readers(source)
+            return self.scopes.readers(source)
 
     def session(self) -> Session:
         """The model's one session (made on first use), with a node cache in its default
@@ -116,28 +104,20 @@ class PerClass:
             self._session = None
 
 
-def scopes_below(linked: Linked, root: int) -> Collection[int]:
-    """``root`` and every scope below it: a structure's from its scope records (every scope
-    addressed, no node resolved); a table's from its scopes, each allocated after its
-    parent."""
-    if isinstance(linked, Structure):
-        return linked.subtree(root)
-    included = {root}
-    for scope in linked.scopes:
-        if scope.parent in included:
-            included.add(scope.index)
-    return included
+def scopes_below(scopes: Scopes, root: ScopeRecord) -> Collection[ScopeRecord]:
+    """``root`` and every scope below it: those whose path ``root``'s prefixes (every scope
+    made, no member read)."""
+    return scopes.subtree(root)
 
 
-def flow_below(model: Model[Space], scope: int) -> tuple[NodeId, ...]:
+def flow_below(model: Model[Space], scope: ScopeRecord) -> tuple[Address, ...]:
     """The choices below ``scope`` in the flow order: each after every choice its
     presence, its list or its Space's facts read (a selector before the choices its cases
     hold), ties in declaration order (``PerClass.flow``)."""
-    linked = model.linked
-    included = scopes_below(linked, scope)
-    return tuple(
-        index for index in model.per_class.flow() if linked.header(index).scope in included
-    )
+    flow = model.per_class.flow()
+    if scope.parent is None:
+        return flow
+    return tuple(index for index in flow if index[0].within(scope))
 
 
 __all__ = ["PerClass", "flow_below", "scopes_below"]
