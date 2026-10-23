@@ -49,7 +49,10 @@ from finn.custom_op.kernels import shell
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
 from finn.kernels.channels import Channel
+from finn.kernels.cut import Cut
 from finn.kernels.explore import Ranked, Seam, SizeFifos, dotted
+from finn.kernels.policies import ranked
+from finn.kernels.utilization import BLOCK_FIRST_BITS
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import (
     InferKernelTensors,
@@ -369,6 +372,36 @@ def test_a_refused_value_names_each_rule_and_choice_standing_by_its_owner() -> N
         "w",
         "source.geometry_supported",
     )
+
+
+def test_a_member_s_ranking_view_orders_its_choice_inside_the_partition() -> None:
+    """A first valid policy that follows a ranking view reads the view on the member's
+    Space where the partition places it, never the listed order in its place: the weight
+    memory of a 64 x 64 MatMul (a table of 12 288 bits, block RAM first from
+    ``BLOCK_FIRST_BITS``) ranks block RAM first, as its ``ram_preference`` states, where
+    its domain lists LUTRAM first. The seam offers it so, and names no fallback; the cut's
+    policy sets it so."""
+    k = n = 64
+    weights = np.array([[(3 * j + 2 * i) % 7 - 3 for j in range(n)] for i in range(k)])
+    model = matmul_model(weights=weights, x_shape=[1, 3, k])
+    bound = network(model, model.graph.node)
+    key = ("w", "source.ram_style")
+    source = bound.member("w").source
+    assert source.table_bits == 12_288 >= BLOCK_FIRST_BITS
+    info = bound.decision(key)
+    assert info is not None
+    ((_, listed),) = bound.viable([key])
+    assert listed.values is not None
+    assert [each.value for each in listed.values] == ["distributed", "block", "ultra", "auto"]
+    order, fallback = ranked(bound.member("w"), Cut, info, listed.values)
+    assert fallback is None
+    assert [each.value for each in order] == ["block", "distributed", "ultra", "auto"]
+    (offered,) = Seam().choices(bound, keys=[key])
+    assert offered.cases == ("block", "distributed", "auto")  # ultra: no UltraRAM here
+    assert offered.fallback is None
+    made = shell.make_cut_choices(model)
+    assert not made.fallbacks and not made.unset
+    assert channel_choices(model, "w")["source.ram_style"] == "block"
 
 
 FAN_OUT = {
