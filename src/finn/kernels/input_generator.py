@@ -79,7 +79,7 @@ from finn.kernels.utilization import (
     auto_unstated,
     memory,
 )
-from finn.kernels.values.semantics import INTEGER_VECTOR, IntegerVector
+from finn.kernels.values.semantics import IntegerVector
 from finn.platform.capabilities import Fabric, Platform, Resources
 
 SOURCE = CopiedSource("finnlib", "rtl/shape/input_gen.sv", provides=("module:input_gen",))
@@ -237,12 +237,12 @@ class InputGeneratorKernel(KernelSpace):
         """FM_SIZE: the input words of a frame."""
         return self.nest.frame
 
-    @derived(semantics=INTEGER_VECTOR)
+    @derived
     def dims(self) -> IntegerVector:
         """DIMS: the nest's loop extents, outer first."""
         return self.nest.dims
 
-    @derived(semantics=INTEGER_VECTOR)
+    @derived
     def strides(self) -> IntegerVector:
         """COEFS: the input words each loop steps."""
         return self.nest.coefs

@@ -11,6 +11,7 @@ import pytest
 
 from finn.core.reporting.findings import Finding, FindingKind, ordered_findings
 from finn.core.space import (
+    Const,
     Decision,
     Param,
     Select,
@@ -38,7 +39,7 @@ from finn.core.space.results import (
     owned_result,
     reject,
 )
-from finn.core.space.semantics import ValueSemantics, default_semantics
+from finn.core.space.semantics import NotAValue, canonical, default_semantics, same
 
 
 def blocker(owner: str = "lanes") -> Unresolved:
@@ -78,17 +79,12 @@ def test_unresolved_and_rejected_require_causes() -> None:
         Rejected(())
 
 
-def test_nominal_semantics_distinguish_bool_and_snapshot_mutable_values() -> None:
+def test_an_int_check_takes_no_bool_and_a_list_is_no_value() -> None:
     integers = default_semantics(int)
     assert not integers.accepts(True)
-    assert not integers.values_equal(True, 1)
-    with pytest.raises(TypeError, match="int"):
-        integers.freeze(True)
-    lists: ValueSemantics[list[int]] = default_semantics(list)
-    source = [1, 2]
-    frozen = lists.freeze(source)
-    source.append(3)
-    assert frozen == [1, 2]
+    assert not same(True, 1, owner="test", role="test")
+    with pytest.raises(NotAValue, match="list is mutable"):
+        canonical([1, 2])
 
 
 @dataclass(frozen=True)
@@ -102,39 +98,14 @@ class Bag:
     values: list[int]
 
 
-def test_a_frozen_dataclass_is_its_own_snapshot_and_anything_else_is_copied() -> None:
-    """The default snapshot's contract: a frozen value class holds immutable values, so
-    its instance is shared; a mutable class, even one holding the same fields, is not."""
+def test_a_frozen_dataclass_is_its_own_canonical_form_and_a_mutable_one_is_no_value() -> None:
+    """A frozen value class holding immutable values is held as it is; a mutable class,
+    even one holding the same fields, is refused."""
 
     pair = Pair(1, (2, 3))
-    assert default_semantics(Pair).freeze(pair) is pair
-    bag = Bag([1, 2])
-    frozen = default_semantics(Bag).freeze(bag)
-    assert frozen is not bag and frozen.values is not bag.values and frozen == bag
-
-
-def test_declared_equality_is_independent_of_python_equality() -> None:
-    bags = ValueSemantics(
-        Bag,
-        "unordered bag",
-        lambda value: type(value) is Bag,
-        lambda left, right: sorted(left.values) == sorted(right.values),
-        lambda value: Bag(list(value.values)),
-    )
-    assert Bag([1, 2]) != Bag([2, 1])
-    assert bags.values_equal(Bag([1, 2]), Bag([2, 1]))
-    source = Bag([1])
-    frozen = bags.freeze(source)
-    source.values.append(2)
-    assert frozen.values == [1]
-
-
-def test_snapshot_must_preserve_declared_value_type() -> None:
-    malformed: ValueSemantics[object] = ValueSemantics(
-        int, "integer", lambda value: type(value) is int, lambda left, right: left == right, str
-    )
-    with pytest.raises(TypeError, match="changed its nominal"):
-        malformed.freeze(1)
+    assert canonical(pair) is pair
+    with pytest.raises(NotAValue, match="not frozen"):
+        canonical(Bag([1, 2]))
 
 
 def test_only_constraints_convert_false_to_refusal() -> None:
@@ -291,26 +262,6 @@ def test_a_guard_suppresses_functions_and_both_decision_questions_agree() -> Non
     assert isinstance(point.query(Guarded.active), Unresolved)
 
 
-class Lengths(Space):
-    source: list[int] = Param()
-
-    @derived
-    def length(self) -> int:
-        source = self.source
-        source.append(99)
-        return len(source)
-
-
-def test_a_functions_arguments_are_detached_from_the_stored_values() -> None:
-    first = design_space(Lengths(source=[1]))
-    assert first.length == 2
-    assert first.source == [1]
-    assert design_space(Lengths(source=[2, 3])).length == 3
-    again = design_space(Lengths(source=[1]))
-    assert again.length == 2
-    assert first.source == [1] and again.source == [1]
-
-
 class Chosen(Space):
     @derived
     def value(self) -> int | Rejected:
@@ -377,3 +328,50 @@ def test_a_functions_output_of_the_wrong_type_is_its_owners_error() -> None:
     assert raised.value.owner == "broken"
     assert raised.value.role == "derived"
     assert isinstance(raised.value.__cause__, TypeError)
+
+
+def test_a_view_of_a_refused_space_refuses_and_keeps_what_waits_visible() -> None:
+    class Grouped(Space):
+        output = Const(4)
+        lanes: int = Decision(values=(1, 2))
+
+        @constraint
+        def refused() -> bool:
+            return False
+
+        @constraint
+        def pending(*, lanes: int) -> bool:
+            return lanes > 0
+
+        physical = View(output)
+
+    point = design_space(Grouped())
+    for _ in range(2):
+        assessment = point.inspect(Grouped.physical)
+        assert assessment.output_result == Available(4)
+        assert isinstance(assessment.accepted_result, Rejected)
+        assert isinstance(assessment.validity, Rejected)
+        assert [finding.owner for finding in assessment.validity.findings] == ["refused"]
+        assert assessment.accepted_result == assessment.validity
+        # Readiness, a diagnostic, names what the refused Space still waits on.
+        readiness = assessment.readiness
+        assert readiness.ready is None
+        assert isinstance(readiness.results["$validity"], Rejected)
+        assert isinstance(readiness.results["pending"], Unresolved)
+    validity = inspection.validity(point)
+    assert validity.status == "refused"
+    assert [piece.owner for piece in validity.pieces] == ["refused"]
+    committed = point.with_choices(lanes=1)
+    assert isinstance(committed.inspect(Grouped.physical).accepted_result, Rejected)
+    assert committed.inspect(Grouped.physical).readiness.ready is True
+
+
+def test_a_view_of_a_space_with_no_pieces_reads_its_output() -> None:
+    class Empty(Space):
+        output = Const(4)
+        physical = View(output)
+
+    point = design_space(Empty())
+    assert point.physical == 4
+    assert point.inspect(Empty.physical).readiness.ready is True
+    assert inspection.validity(point) == inspection.Validity("valid", (), Available(True))

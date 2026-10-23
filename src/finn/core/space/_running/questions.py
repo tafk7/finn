@@ -42,7 +42,7 @@ from ..results import (
     Rejected,
     Unresolved,
 )
-from ..semantics import equal, snapshot
+from ..semantics import same
 from .answers import _ordered, _waits, membership_arguments
 from .evaluate import INAPPLICABLE, TRUE, Evaluation, Session, evaluation
 from .facts import prepare
@@ -431,24 +431,16 @@ def _same(left: Mapping[Address, object], right: Mapping[Address, object]) -> bo
     return left.keys() == right.keys() and all(left[i] is right[i] for i in left)
 
 
-def _equal(node: Address, left: object, right: object, role: str, *, detach: bool) -> bool:
-    """Whether two values of ``node`` are equal by its semantics, in ``role``: a fact's
-    ("parameter equality") as given, a choice's ("configuration equality") each detached
-    first, so equality cannot change a stored value (today's assignment's)."""
-    if left is right:
-        return True
-    semantics = node.semantics
-    assert semantics is not None
-    if detach:
-        left = snapshot(semantics, left, owner=node.owner, role=role)
-        right = snapshot(semantics, right, owner=node.owner, role=role)
-    return equal(semantics, left, right, owner=node.owner, role=role)
+def _equal(node: Address, left: object, right: object, role: str) -> bool:
+    """Whether two values of ``node`` are the same value, in ``role`` (a fact's "parameter
+    equality", a choice's "configuration equality"): of one type and equal by ``==``."""
+    return same(left, right, owner=node.owner, role=role)
 
 
 def _stored(node: Address, value: object, old: object) -> object:
-    """A choice's ``value`` as stored: the held object ``old`` where the two are equal by
-    the choice's semantics (so nothing reads it anew), else ``value``."""
-    if old is not _MISSING and _equal(node, value, old, "configuration equality", detach=True):
+    """A choice's ``value`` as stored: the held object ``old`` where the two are the same
+    value (so nothing reads it anew), else ``value``."""
+    if old is not _MISSING and _equal(node, value, old, "configuration equality"):
         return old
     return value
 
@@ -472,7 +464,7 @@ def change(
     changed: set[Address] = set()
     for i in facts:
         old = held_facts.get(i, _MISSING)
-        if old is not _MISSING and _equal(i, old, values[i], "parameter equality", detach=False):
+        if old is not _MISSING and _equal(i, old, values[i], "parameter equality"):
             given[i] = old
         else:
             given[i] = values[i]

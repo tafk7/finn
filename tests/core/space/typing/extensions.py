@@ -14,7 +14,6 @@ from finn.core.space import (
     Param,
     QueryResult,
     Space,
-    ValueSemantics,
     View,
     ViewKey,
     composite,
@@ -37,7 +36,7 @@ def answer(*, lanes: int) -> QueryResult[int]:
 
 
 computed = derived(doubled)
-answered = derived(semantics=ValueSemantics.immutable_nominal(int))(answer)
+answered = derived(answer)
 complete = View(computed)
 # A derived member is typed as its value, like every reference, so it may supply a formal.
 assert_type(computed, int)

@@ -74,7 +74,6 @@ from finn.core.space import (
     Param,
     Rejected,
     constraint,
-    default_semantics,
     derived,
     divisors_of,
     domain,
@@ -108,9 +107,7 @@ from finn.kernels.utilization import (
 )
 from finn.kernels.values.domains import Integer, admit_element, set_index_dtype
 from finn.kernels.values.semantics import (
-    INTEGER_TENSOR,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
-    IntegerTensor,
+    IntegerTensorValue,
     integer_range,
     integer_shape,
     integers,
@@ -137,7 +134,6 @@ def stage_counts(stages: object) -> Domain[int]:
     return domain(
         accepts=accepts,
         candidates=candidates,
-        semantics=default_semantics(int),
         ordered=True,
         stages=stages,
     )
@@ -195,8 +191,8 @@ class ThresholdingAxiKernel(KernelSpace):
 
     id = "finnlib.thresholding_axi.integer"
 
-    threshold_dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
-    thresholds: IntegerTensor = Param(semantics=INTEGER_TENSOR)
+    threshold_dtype: QONNXDataType = Param()
+    thresholds: IntegerTensorValue = Param()
     bias: int = Param()
 
     @derived
@@ -208,7 +204,7 @@ class ThresholdingAxiKernel(KernelSpace):
         sets, rows, count = found
         return sets, rows, count
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def result_dtype(self) -> QONNXDataType | Rejected:
         bias = self.bias
         _, _, count = self.shape
@@ -322,7 +318,7 @@ class ThresholdingAxiKernel(KernelSpace):
             return 0, uram
         return self.stage_depth(stages - ultra - block), uram
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def input_dtype(self) -> QONNXDataType:
         """The input's element type: its tensor's."""
         return self.input_element.dtype
@@ -438,7 +434,7 @@ class ThresholdingAxiKernel(KernelSpace):
             associated_reset=RESET,
         )
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def selector_dtype(self) -> QONNXDataType:
         return set_index_dtype(self.shape[0])
 

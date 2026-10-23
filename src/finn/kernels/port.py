@@ -76,9 +76,7 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
-    ValueSemantics,
     constraint,
-    default_semantics,
     derived,
     reject,
     view,
@@ -102,18 +100,6 @@ from finn.kernels.transport import (
     StreamMarker,
 )
 from finn.kernels.values.domains import Integer, admit_element
-
-INTEGER_POLICY: ValueSemantics[Integer | None] = ValueSemantics(
-    Integer,
-    "integer policy",
-    lambda value: value is None or isinstance(value, Integer),
-    lambda left, right: left == right,
-    lambda value: value,
-)
-"""An integer policy a port's hardware takes; None when its kernel admits the element."""
-
-STREAM = default_semantics(Stream)
-"""A ``Stream``'s value semantics: a frozen value, compared by value."""
 
 
 @dataclass(frozen=True)
@@ -263,7 +249,7 @@ class AxiStreamPort(KernelDeclaration):
         def stream(self: Space) -> Stream | Rejected:
             return port.presented(self, name)
 
-        members[f"{name}_stream"] = derived(semantics=STREAM, when=guard)(stream)
+        members[f"{name}_stream"] = derived(when=guard)(stream)
 
         @declared_reads(f"{name}_stream", *self.paths(*AxiStreamPort.VIEWED))
         def data_width_(self: Space) -> int | Rejected:
@@ -669,7 +655,7 @@ class Served(KernelDeclaration):
         def width(width: int) -> int:
             return width
 
-        members[f"{name}_stream"] = derived(semantics=STREAM, stream=given)(stream)
+        members[f"{name}_stream"] = derived(stream=given)(stream)
         members[f"{name}_data_width"] = derived(width=widths)(width)
         try:
             case = selected(self.child)  # a selector over children: the case it selects
@@ -707,8 +693,6 @@ def served(child: Any, port: str, *, label: str | None = None) -> Served:
 
 
 __all__ = [
-    "INTEGER_POLICY",
-    "STREAM",
     "AxiStreamPort",
     "LoopEnds",
     "Served",

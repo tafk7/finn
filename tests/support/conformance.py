@@ -135,6 +135,7 @@ from finn.kernels.network import Interface, Key, Network, dotted, wire
 from finn.kernels.policies import FirstValid, Policy, defaulted
 from finn.kernels.transport import StreamContract
 from finn.kernels.transpose import TransposeKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
 from support.helpers import (
     FULL_DSP48E2,
@@ -382,11 +383,12 @@ def _design(
 
 
 def _source(tensor: Tensor, form: Traversal, contents: object) -> MemStreamKernel:
-    """The memory that feeds the adapter sample's first input."""
+    """The memory that feeds the adapter sample's first input: ``contents``, nested int
+    tuples, as its value."""
     return MemStreamKernel(
         dtype=tensor.element.dtype,
         form=form,
-        contents=contents,
+        contents=IntegerTensorValue.of(contents),
         platform=FULL_DSP48E2,
     )
 

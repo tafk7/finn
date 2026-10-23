@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
+from typing import cast
 
 import pytest
 from support.refusals import refused
@@ -25,26 +27,26 @@ from finn.core.space.semantics import ValueSemantics, default_semantics
 INT = default_semantics(int)
 
 
-def test_finite_unhashable_values_use_declared_equality_and_snapshot_values() -> None:
-    semantics: ValueSemantics[list[int]] = ValueSemantics(
-        list,
-        "unordered integers",
-        lambda value: type(value) is list,
-        lambda left, right: sorted(left) == sorted(right),
-        lambda value: list(value),
+def test_listed_values_are_checked_by_the_decisions_type_and_taken_canonical() -> None:
+    """A Decision binds its listed values to its type check: each is checked, and taken in
+    its canonical form (``-0.0`` is ``0.0``); a value that is none is refused (NaN, a
+    mutable one). Membership is by type and ``==``."""
+    reals = default_semantics(float)
+    allowed = finite((-0.0, 1.0)).with_semantics(reals)
+    listed = allowed.enumerate({}, semantics=reals, owner="rate")
+    assert listed == Available((0.0, 1.0)) and math.copysign(1.0, listed.value[0]) == 1.0
+    assert allowed.membership(0.0, {}, semantics=reals, owner="rate") == Available(True)
+    assert allowed.membership(-0.0, {}, semantics=reals, owner="rate") == Available(True)
+    anything = default_semantics(object)
+    refusals: tuple[tuple[object, str], ...] = (
+        (float("nan"), "NaN is no value"),
+        ([1], "list is mutable"),
     )
-    source = [1, 2]
-    allowed = finite((source,)).with_semantics(semantics)
-    source.append(3)
-    assert allowed.membership([2, 1], {}, semantics=semantics, owner="lanes") == Available(True)
-    assert isinstance(
-        allowed.membership([1, 2, 3], {}, semantics=semantics, owner="lanes"), Rejected
-    )
-    first = allowed.enumerate({}, semantics=semantics, owner="lanes")
-    assert isinstance(first, Available)
-    first.value[0].append(9)
-    second = allowed.enumerate({}, semantics=semantics, owner="lanes")
-    assert second == Available(([1, 2],))
+    for value, why in refusals:
+        with refused("domain-value-not-value", error=DefinitionError, message=why):
+            finite((value,)).with_semantics(anything)
+    with pytest.raises(TypeError, match="nominal type float"):
+        finite((cast(float, 1),)).with_semantics(reals)
 
 
 def test_domain_construction_and_binding_do_not_execute_callbacks() -> None:
@@ -130,11 +132,14 @@ def test_domain_rejects_conflicting_dependency_names_and_semantics() -> None:
         Domain((("extent", object()), ("extent", object())), lambda: True)
     with refused("domain-dependency-name-invalid", error=DefinitionError, message="candidate"):
         Domain((("candidate", object()),), lambda: True)
-    strings: ValueSemantics[object] = ValueSemantics.immutable_nominal(str)
+    strings = cast(ValueSemantics[object], default_semantics(str))
     allowed: Domain[object] = finite(("auto",), strings)
-    integers: ValueSemantics[object] = ValueSemantics.immutable_nominal(int)
+    integers = cast(ValueSemantics[object], default_semantics(int))
     with refused("domain-semantics-incompatible", error=DefinitionError, message="incompatible"):
         allowed.with_semantics(integers)
+    # A domain's values are its Decision's annotated type: it states no semantics of its own.
+    with refused("domain-semantics", error=DefinitionError, message="semantics= is gone"):
+        domain(accepts=lambda *, candidate: True, semantics=strings)
 
 
 # -- a domain's inputs ---------------------------------------------------------------------
@@ -144,7 +149,6 @@ def test_each_callable_takes_the_inputs_its_signature_names() -> None:
     styles = domain(
         accepts=lambda *, candidate: candidate in ("block", "lut"),
         candidates=lambda: ("lut", "block"),
-        semantics=default_semantics(str),
     )
     assert styles.membership_inputs == ()
     assert divisors_of(object()).membership_inputs == ("extent",)

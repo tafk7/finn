@@ -42,6 +42,7 @@ from finn.kernels.configure import commit
 from finn.kernels.dotp import DotpAxiKernel, PackedDotpKernel
 from finn.kernels.library import library_module
 from finn.kernels.matmul import MatMulKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 
 FACTS = dict(
     m=2,
@@ -236,7 +237,7 @@ def test_a_folding_factor_under_an_open_core_is_refused_by_its_domain_or_set() -
 
 
 #: Known weights (K, N) = (4, 4) over [-3, 3]: INT3 values, which INT2 does not hold.
-KNOWN = ((1, -2, 3, 0), (2, 1, -1, 1), (0, 3, -2, 1), (1, 1, 1, -3))
+KNOWN = IntegerTensorValue.of(((1, -2, 3, 0), (2, 1, -1, 1), (0, 3, -2, 1), (1, 1, 1, -3)))
 PACKED = {"compute": "packed", "pe": 2}
 FOLDED = {**PACKED, "simd": 2, "compute.packed.compute_pumping": False}
 
@@ -308,7 +309,7 @@ def test_the_selected_core_s_own_rule_refuses_the_commit_that_breaks_it() -> Non
 
 
 def test_weights_that_are_not_integers_are_unrecognized_as_the_weights_value() -> None:
-    with refused("literal-unrecognized", error=DefinitionError, message="integer tensor"):
+    with refused("literal-unrecognized", error=DefinitionError, message="IntegerTensorValue"):
         assembly(weight_delivery=WeightDelivery.MEMSTREAM, weights=[[0.5] * 4] * 4)
 
 

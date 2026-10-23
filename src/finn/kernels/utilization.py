@@ -322,7 +322,7 @@ def memory_styles() -> Domain[str]:
     def candidates() -> tuple[str, ...]:
         return styles
 
-    return domain(accepts=accepts, candidates=candidates, semantics=default_semantics(str))
+    return domain(accepts=accepts, candidates=candidates)
 
 
 def memory_preference(size: int) -> tuple[str, ...]:

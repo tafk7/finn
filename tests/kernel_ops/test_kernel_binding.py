@@ -145,7 +145,7 @@ def test_the_views_answer_from_facts() -> None:
         MatMulKernel(
             platform=TARGET.platform,
             x_tensor=Tensor((1, 3, 4), ScalarEncoding(INT3)),
-            w_contents=STORED,
+            w_contents=IntegerTensorValue.of(STORED),
             weights_dtype=INT3,
         )
     )
@@ -155,7 +155,10 @@ def test_the_views_answer_from_facts() -> None:
     assert owned.w_carried == Tensor((4, 4), ScalarEncoding(dtype("INT2"), TensorRange(-1, 1)))
     table = (tuple((-9 + c, 1 - c, 8 + 2 * c) for c in range(4)),)
     facts: dict[str, Any] = dict(
-        threshold_dtype=dtype("INT8"), thresholds=table, bias=0, platform=TARGET.platform
+        threshold_dtype=dtype("INT8"),
+        thresholds=IntegerTensorValue.of(table),
+        bias=0,
+        platform=TARGET.platform,
     )
     edge = Tensor((1, 3, 4), ScalarEncoding(dtype("INT8")))
     alone = design_space(ThresholdingAxiKernel(**facts, input_tensor=edge))
@@ -168,7 +171,7 @@ def test_a_graph_tensor_that_disagrees_with_the_facts_is_refused() -> None:
         MatMulKernel(
             platform=TARGET.platform,
             x_tensor=Tensor((3, 5), ScalarEncoding(INT3)),
-            w_contents=STORED,
+            w_contents=IntegerTensorValue.of(STORED),
             weights_dtype=INT3,
         )
     )

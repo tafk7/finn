@@ -43,7 +43,6 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    ValueSemantics,
     ValueUnavailableError,
     View,
     ViewKey,
@@ -244,10 +243,11 @@ SHAPES: dict[str, Callable[[], Space]] = {
 }
 
 
-def test_evidence_reads_through_a_formal_at_its_source_and_detaches_its_values() -> None:
+def test_evidence_reads_through_a_formal_at_its_source_and_copies_a_container() -> None:
     """The house's thermostat's cost reads its ``kw`` at its source (a formal bound by
     reference, read within its scope): named in ``via``, with no cache as through the public
-    API. The evidence's values are copies."""
+    API. A mutable container a derived value answers (a list) is handed out as a copy, in
+    the evidence and read as a value: a reader changing it changes nothing held."""
     point = design_space(House(budget=100)).with_choices({House.heating: "boiler"})
     running = Running()
     at = S.At(cast(Any, running.open(point)).ds)
@@ -258,16 +258,24 @@ def test_evidence_reads_through_a_formal_at_its_source_and_detaches_its_values()
     assert via["thermostat.cost.$output"] == ["thermostat.kw"]
 
     class Listed(Space):
-        source: list[int] = Param()
+        n: int = Param()
+
+        @derived
+        def source(self) -> list[int]:
+            return [1, self.n]
+
         physical = View(source)
 
-    listed = design_space(Listed(source=[1, 2]))
+    listed = design_space(Listed(n=2))
     opened = Running()
     here = S.At(cast(Any, opened.open(listed)).ds)
     first = S.explain(here, Listed.physical, opened.session)
     assert isinstance(first.result, Available)
     cast(list[int], first.result.value).append(3)
     assert S.explain(here, Listed.physical, opened.session).result == Available([1, 2])
+    read = listed.source
+    read.append(4)
+    assert listed.source == [1, 2] and listed.physical == [1, 2]
 
 
 def test_a_configuration_is_its_design_space_at_a_scope() -> None:
@@ -1205,45 +1213,13 @@ def test_contextual_domain_error_is_one_primary_failure(way: str) -> None:
 
 
 @pytest.mark.parametrize("way", WAYS)
-def test_public_snapshot_failure_cannot_be_caught_into_success(way: str) -> None:
-    armed = False
-
-    def snapshot(value: list[int]) -> list[int]:
-        if armed:
-            raise LookupError("snapshot failure")
-        return list(value)
-
-    semantics = ValueSemantics(
-        list, "list", lambda value: type(value) is list, lambda left, right: left == right, snapshot
-    )
-
-    class Example(Space):
-        fact: list[int] = Param(semantics=semantics)
-
-        @derived
-        def output(self) -> int:
-            try:
-                return len(self.fact)
-            except EvaluationError:
-                return 99
-
-    space = opened(way, Example(fact=[1]))
-    armed = True
-    with pytest.raises(NativeEvaluationError) as caught:
-        space.read("output")
-    assert isinstance(caught.value.__cause__, LookupError)
-    assert caught.value.primary.owner == "fact"
-    assert caught.value.cleanup_failures == ()
-
-
-@pytest.mark.parametrize("way", WAYS)
 def test_value_transformations_cannot_read_a_design_space_even_when_caught(way: str) -> None:
     class Facts(Space):
         value: int = Param()
 
     facts = opened(way, Facts(value=7))
     with pytest.raises(EvaluationError, match="pure value transformation"):
-        with _failure.transformation("value snapshot"):
+        with _failure.transformation("value recognition"):
             try:
                 facts.read("value")
             except EvaluationError:

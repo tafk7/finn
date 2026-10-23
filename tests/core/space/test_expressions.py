@@ -20,7 +20,6 @@ from finn.core.space import (
     Space,
     View,
     composite,
-    default_semantics,
     derived,
     design_space,
     divisors_of,
@@ -161,7 +160,7 @@ def test_repeated_placements_keep_expression_values_and_guards_independent() -> 
 
 
 def test_expression_truthiness_and_non_integer_operands_are_rejected() -> None:
-    value: int = Param(semantics=default_semantics(int))
+    value: int = Param()
     expression = value + 1
     with pytest.raises(TypeError, match="truth value"):
         bool(expression)

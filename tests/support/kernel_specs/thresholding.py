@@ -19,6 +19,7 @@ from qonnx.core.datatype import DataType
 from finn.core.space import Space, design_space
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from support.helpers import FULL_DSP48E2
 from support.kernel_specs.base import ORACLE, KernelSpec, Probe, SweepCases, refuses
 
@@ -41,7 +42,7 @@ def levels(values: Array) -> Array:
 
 FACTS = dict(
     threshold_dtype=DataType["INT4"],
-    thresholds=THRESHOLDS,
+    thresholds=IntegerTensorValue.of(THRESHOLDS),
     bias=0,
     platform=FULL_DSP48E2,
 )
@@ -89,7 +90,7 @@ def shared_row(*, axilite: bool = False) -> dict[str, Any]:
     def reference(input_channel: Array) -> dict[str, Array]:
         return {"output_channel": (input_channel[..., None] >= np.array(SHARED_ROW)).sum(axis=-1)}
 
-    facts: dict[str, object] = {**FACTS, "thresholds": ((SHARED_ROW,),)}
+    facts: dict[str, object] = {**FACTS, "thresholds": IntegerTensorValue.of(((SHARED_ROW,),))}
     choices = {**CHOICES, "use_axilite": axilite}
     if axilite:
         facts["control"] = "s_axilite"
@@ -125,23 +126,26 @@ SPEC = KernelSpec(
     probes=(
         Probe(
             "a row out of order",
-            lambda: alone(thresholds=(((1, 0, 2),),)),
+            lambda: alone(thresholds=IntegerTensorValue.of((((1, 0, 2),),))),
             frozenset({"threshold-order"}),
         ),
         Probe(
             "a threshold its type does not hold",
-            lambda: alone(thresholds=(((-9, 0, 2),),)),
+            lambda: alone(thresholds=IntegerTensorValue.of((((-9, 0, 2),),))),
             frozenset({"threshold-value"}),
         ),
         Probe(
             "input and thresholds of different signedness",
-            lambda: alone(threshold_dtype=DataType["UINT4"], thresholds=(((1, 2, 3),),)),
+            lambda: alone(
+                threshold_dtype=DataType["UINT4"], thresholds=IntegerTensorValue.of((((1, 2, 3),),))
+            ),
             frozenset({"threshold-type"}),
         ),
         Probe(
             "a threshold at its type's minimum, which an input wider below it saturates to",
             lambda: alone(
-                input_tensor=tensor((PIXELS, CHANNELS), "INT8"), thresholds=(((-8, 0, 2),),)
+                input_tensor=tensor((PIXELS, CHANNELS), "INT8"),
+                thresholds=IntegerTensorValue.of((((-8, 0, 2),),)),
             ),
             frozenset({"threshold-saturation"}),
         ),

@@ -30,8 +30,11 @@ refused.
 This module imports of FINN only its findings (``finn.core.reporting``), and
 ``finn.dataflow`` imports no engine (the layer table, ``tests/support/layering.py``, holds the
 package directions).
-The engine-side ``ValueSemantics`` declaration lives in
-``finn.kernels.values.semantics``, built from the helpers here.
+In a design space a datatype is a value of its annotation, ``QONNXDataType``
+(``BaseDataType``: the engine checks it by ``isinstance``), compared by ``==``;
+``finn.kernels.values.semantics`` registers it as a value type, so the engine keys it.
+A subclass defined elsewhere passes that check but is no registered value type, so
+the engine never keys it; ``canonical_qonnx_datatype`` refuses it.
 
 Two rules it keeps, which qonnx leaves to its callers:
 
@@ -57,7 +60,6 @@ from finn.core.reporting.findings import Finding, FindingKind, Refusal
 __all__ = [
     "DatatypeError",
     "QONNXDataType",
-    "QONNX_DATATYPE_TOKEN",
     "canonical_qonnx_datatype",
     "is_ordinary_integer",
     "is_qonnx_datatype",
@@ -181,17 +183,3 @@ def qonnx_datatype_width(value: object) -> int:
 is_qonnx_datatype = is_datatype
 """Whether ``value`` is a QONNX datatype value: qonnx's ``is_datatype``, total
 (it runs no method of the value), and False for a ``str``."""
-
-
-#: The one engine value domain for datatypes.
-#:
-#: ``type_token`` is ``BaseDataType`` and must stay that single object:
-#: ``ValueSemantics.is_compatible_with`` compares tokens by identity, not by
-#: subtyping, so a second token -- a subclass, say -- would silently
-#: partition the domain and make two datatype fields report that they cannot be
-#: compared.
-#: The single object every datatype value-semantics declaration must use as its
-#: ``type_token``.  Exported so that the declaration -- which lives in
-#: ``finn.kernels.values.semantics`` to keep this module engine-independent --
-#: names the same object this module recognizes against.
-QONNX_DATATYPE_TOKEN = BaseDataType

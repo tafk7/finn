@@ -1,12 +1,13 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""The default snapshot's contract on the engine's own value classes, and its checker.
+"""Values are immutable: the engine's own value classes hold immutable values, and the
+checker that says so.
 
-The engine's value classes are those it states value semantics for: the type
-token of a ``ValueSemantics`` some engine module declares. Its other frozen
-dataclasses (results, inspection reports, declarations, the linked model) are
-returned to callers or used by the engine itself; no semantics snapshots them.
+The engine's value classes are those it states a type check for: the type token of a
+``ValueSemantics`` some engine module declares. Its other frozen dataclasses (results,
+inspection reports, declarations, the linked model) are returned to callers or used by the
+engine itself.
 """
 
 from __future__ import annotations
@@ -29,8 +30,8 @@ T = TypeVar("T")
 
 #: The engine value class fields that may hold a mutable value, and why.
 EXEMPT = {
-    # A Located holds the located node's own snapshot, under that node's semantics:
-    # it is immutable exactly when the located value is (every kernel value is).
+    # A Located holds the located node's value as it is held: immutable exactly when the
+    # located value is (every kernel value is).
     f"{Located.__module__}.Located.value",
 }
 

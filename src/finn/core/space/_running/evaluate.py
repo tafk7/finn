@@ -68,9 +68,9 @@ guards taken as holding. A node abandoned by the depth guard, or failing, keeps 
 the depth guard's restart all rest on purity. The check tests it (``Session.verifying``:
 the session's ``verify``, or the process's switch, ``purity.check_purity``, read each
 time): a cache hit is evaluated anyway, a kept domain outcome computed again, and a node the
-depth guard abandoned evaluated again once it completes; where the two answers differ by the
-member's value semantics (the result, and the assessment where there is one), the
-function is impure, its ``EvaluationError``, today's.
+depth guard abandoned evaluated again once it completes; where the two answers differ (the
+result, and the assessment where there is one; a value by type and ``==``), the function is
+impure, its ``EvaluationError``, today's.
 
 An evaluation, its session and the model's record take no lock: the public layer asks each
 question under the model's lock (``occurrence.ask``), one run of a model at a time.
@@ -118,7 +118,6 @@ from . import depth, purity
 from .answers import (
     Called,
     _blocked,
-    _clone,
     _empty_domain,
     _finished,
     _first_member,
@@ -130,6 +129,7 @@ from .answers import (
     _listed_members,
     _same_value,
     _unassigned,
+    handed_out,
     membership_arguments,
     public_value,
 )
@@ -390,11 +390,11 @@ def invoke(
 
 
 def answer_key(node: Address, answer: QueryResult[object]) -> object:
-    """``node``'s answer as a key: a value as the node cache keys it under ``node``'s value
-    semantics (``cache.key``), a non-value by its variant and findings; ``None`` where it
-    has no key (semantics of its own, a type not keyed, unhashable findings)."""
+    """``node``'s answer as a key: a value as the node cache keys it (``cache.key``: by type
+    and ``==``), a non-value by its variant and findings; ``None`` where it has no key (a
+    type not keyed, an unhashable value or findings)."""
     if isinstance(answer, Available):
-        found = value_key(answer.value, node.semantics)
+        found = value_key(answer.value)
         return None if found is None else ("value", found)
     try:
         hash(answer.findings)
@@ -418,9 +418,9 @@ def _same_findings(left: QueryResult[object], right: QueryResult[object]) -> boo
 
 
 def _same_answer(node: Address, left: QueryResult[object], right: QueryResult[object]) -> bool:
-    """Whether two answers of ``node`` are the same: the same object, or values equal by
-    its value semantics (``answers._same_value``), or non-values of one variant with equal
-    findings."""
+    """Whether two answers of ``node`` are the same: the same object, or the same value (of
+    one type and equal by ``==``, ``answers._same_value``), or non-values of one variant
+    with equal findings."""
     if left is right:
         return True
     if type(left) is not type(right):
@@ -444,7 +444,7 @@ def _same_bool(left: QueryResult[Any], right: QueryResult[Any]) -> bool:
 
 def _same_assessment(node: Address, left: Assessment | None, right: Assessment | None) -> bool:
     """Two assessments of ``node``: a constraint's pieces and result, each exactly; a
-    view's output and accepted result by its semantics, and its validity."""
+    view's output and accepted result as values (``_same_answer``), and its validity."""
     if left is right:
         return True
     if isinstance(left, ConstraintAssessment) and isinstance(right, ConstraintAssessment):
@@ -463,8 +463,9 @@ def _same_assessment(node: Address, left: Assessment | None, right: Assessment |
 
 
 def _same_outcome(node: Address, left: QueryResult[object], right: QueryResult[object]) -> bool:
-    """Two outcomes of a choice's domain: listed values each by the choice's semantics, a
-    bool or nothing listed exactly, a non-value's findings (today's)."""
+    """Two outcomes of a choice's domain: listed values each the same value
+    (``answers._same_value``), a bool or nothing listed exactly, a non-value's findings
+    (today's)."""
     if left is right:
         return True
     if type(left) is not type(right):
@@ -608,7 +609,8 @@ class Evaluation:
 
     def _again(self, index: Address, held: Ans, found: Ans) -> None:
         """The purity check: ``found``, ``index`` evaluated again on the same reads,
-        answers as ``held`` by the member's value semantics; else its function is impure."""
+        answers as ``held`` (``_same_answer``, ``_same_assessment``); else its function is
+        impure."""
         node = index
         if not (
             _same_answer(node, held.result, found.result)
@@ -779,8 +781,8 @@ class Evaluation:
     ) -> QueryResult[object]:
         """A domain's outcome, kept on the facts layer by its inputs' answers (a domain
         reads facts only, so every design space of the layer shares it): each answer keyed
-        as the node cache keys it, under its member's value semantics (the membership
-        candidate's, its choice's); nothing kept where one has no key (``_outcome_key``)."""
+        as the node cache keys it, by type and ``==`` (the membership candidate's too);
+        nothing kept where one has no key (``_outcome_key``)."""
         outcomes = self.ds.layer.outcomes
         local = self._outcome_key(inputs)
         memo_key = None if local is None else (key, local)
@@ -799,19 +801,14 @@ class Evaluation:
         return called.result
 
     def _outcome_key(self, inputs: Trace) -> tuple[object, ...] | None:
-        """A domain outcome's inputs as the facts layer keeps it by (``answer_key``, each
-        under its node's semantics); ``None`` where one has no key."""
+        """A domain outcome's inputs as the facts layer keeps it by (``answer_key``);
+        ``None`` where one has no key."""
         local = tuple(answer_key(index, answer) for index, answer in inputs)
         return None if any(part is None for part in local) else local
 
     def call_explicit(self, node: Address, answers: list[QueryResult[object]]) -> Called:
         arguments = {
-            argument.name: _clone(
-                argument.node,
-                cast(Available[object], answer).value,
-                owner=node.owner,
-                role="dependency snapshot",
-            )
+            argument.name: handed_out(cast(Available[object], answer).value)
             for argument, answer in zip(node.arguments, answers)
         }
         outcome = invoke(
@@ -863,12 +860,7 @@ class Evaluation:
         self, node: Address, answers: tuple[QueryResult[object], ...]
     ) -> dict[str, object]:
         return {
-            argument.name: _clone(
-                argument.node,
-                cast(Available[object], answer).value,
-                owner=node.owner,
-                role="dependency snapshot",
-            )
+            argument.name: handed_out(cast(Available[object], answer).value)
             for argument, answer in zip(membership_arguments(node), answers)
         }
 
@@ -888,7 +880,7 @@ class Evaluation:
             return blocked
 
         def membership() -> Called:
-            candidate = _clone(node, value.value, owner=node.owner, role="domain candidate")
+            candidate = value.value
             outcome = invoke(
                 self.session,
                 Call(node.owner, "domain membership"),

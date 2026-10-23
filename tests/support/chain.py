@@ -25,6 +25,7 @@ from finn.kernels.matmul import MatMulKernel, column_range
 from finn.kernels.network import Fact, Interface, Network, Wire, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.values.domains import range_dtype
+from finn.kernels.values.semantics import IntegerTensorValue
 from support.helpers import (
     FULL_DSP48E2,
     choose,
@@ -61,7 +62,7 @@ def matmul(weights: Any, x_tensor: Any) -> MatMulKernel:
         weights_dtype=W,
         platform=FULL_DSP48E2,
         x_tensor=x_tensor,
-        w_contents=weights,
+        w_contents=IntegerTensorValue.of(weights),
     )
 
 
@@ -129,7 +130,7 @@ def members(hidden: Tensor = HIDDEN_TENSOR) -> dict[str, Space | Wire]:
             "first": matmul(W1, X_TENSOR),
             "activate": ThresholdingAxiKernel(
                 threshold_dtype=THRESHOLD_DTYPE,
-                thresholds=THRESHOLDS,
+                thresholds=IntegerTensorValue.of(THRESHOLDS),
                 bias=0,
                 input_tensor=hidden,
                 platform=platform,

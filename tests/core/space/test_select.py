@@ -26,7 +26,6 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    ValueSemantics,
     View,
     bind,
     constraint,
@@ -413,22 +412,12 @@ def test_a_change_flipping_the_picker_moves_its_cases_choices() -> None:
     assert (back.dormant, back.in_play) == (("adapter.fifo.depth",), ("adapter.reg.stages",))
 
 
-# a picker that may answer None states its semantics: ``str | None`` has none of its own
-MAYBE_CASE: ValueSemantics[str | None] = ValueSemantics(
-    type_token="maybe-case",
-    name="str | None",
-    recognizes=lambda value: value is None or type(value) is str,
-    equal=lambda left, right: left == right,
-    snapshot=lambda value: value,
-)
-
-
 def test_the_picker_never_answers_nothing() -> None:
     # a None case is named by its key; a picker answering None names no case
     class Picked(Space):
         x: int = Decision(values=(0, 1))
 
-        @derived(semantics=MAYBE_CASE)
+        @derived
         def chain(self) -> str | None:
             return "fifo" if self.x == 0 else None
 

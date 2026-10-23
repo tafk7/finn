@@ -25,12 +25,10 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
-    ValueSemantics,
     View,
     ViewKey,
     composite,
     constraint,
-    default_semantics,
     derived,
     design_space,
     inspection,
@@ -50,13 +48,12 @@ class StreamValue:
     bits: int
 
 
-ENCODING = ValueSemantics.immutable_nominal(Encoding)
 STREAM = ViewKey("stream", StreamValue)
 BITS = ViewKey("bits", int)
 
 
 class StreamShape(Space):
-    dtype: Encoding = Param(semantics=ENCODING)
+    dtype: Encoding = Param()
     lanes: int = Param()
 
     @derived
@@ -138,8 +135,8 @@ def test_stream_shape_takes_the_pairs_choices_and_keeps_narrow_fields_available(
     class Pair(Space):
         limit: int = Param()
         # The formals the children take, and the choices bound to them, are declared here.
-        left_dtype: Encoding = Param(semantics=ENCODING)
-        right_dtype: Encoding = Param(semantics=ENCODING)
+        left_dtype: Encoding = Param()
+        right_dtype: Encoding = Param()
         left_lanes: int = Decision(values=(1, 2, 4))
         right_lanes: int = Decision(values=(1, 2, 4))
         left = stream_shape(dtype=left_dtype, lanes=left_lanes, maximum_bits=limit)
@@ -214,35 +211,25 @@ def test_composite_is_pure_and_nodes_share_only_the_space_class() -> None:
 
 
 def test_a_compiled_composite_rejects_structural_changes() -> None:
-    calls: list[int] = []
-
-    def snapshot(value: int) -> int:
-        calls.append(value)
-        return value
-
-    semantics = ValueSemantics(
-        int, "integer", lambda value: type(value) is int, int.__eq__, snapshot
-    )
     value = Const(1)
     space_type = composite("Sealed", {"value": value, "physical": View(value)})
     assert design_space(space_type()).query(value) == Available(1)
     # There is no builder to seal: the compiled Space class itself refuses changes.
     with refused("structure-finalized", error=DefinitionError):
-        setattr(space_type, "too_late", Const(1, semantics=semantics))
+        setattr(space_type, "too_late", Const(2))
     with refused("structure-finalized", error=DefinitionError):
-        setattr(space_type, "too_late", Decision(values=(1,), semantics=semantics))
+        setattr(space_type, "too_late", Decision(values=(1,)))
     with refused("structure-finalized", error=DefinitionError):
         delattr(space_type, "value")
     with refused("structure-finalized", error=DefinitionError):
         setattr(space_type, "exports", {})
     with refused("structure-finalized", error=DefinitionError):
         setattr(space_type, "too_late", Const(1))
-    assert calls == [1, 1]
 
 
 def test_duplicate_names_owned_declarations_and_foreign_exports_are_definition_errors() -> None:
     with refused("override-changes-semantics", error=DefinitionError):
-        composite("Shadow", {"dtype": Param(semantics=default_semantics(int))}, base=StreamShape)
+        composite("Shadow", {"dtype": Param()}, base=StreamShape, annotations={"dtype": int})
     with refused("declaration-reused", error=DefinitionError):
         composite("Renamed", {"renamed": StreamShape.dtype}, base=StreamShape)
     local = Const(3)
@@ -294,15 +281,20 @@ def test_external_references_must_be_explicit_formal_bindings() -> None:
         composite("Hidden", {"hidden_parent": hidden}, base=StreamShape)
 
 
-def test_literal_bindings_snapshot_at_the_node_call() -> None:
+def test_literal_bindings_are_taken_in_their_canonical_form_at_the_node_call() -> None:
     class Vector(Space):
-        values: list[int] = Param()
+        values: tuple[float, ...] = Param()
 
-    source = [1, 2]
-    node = Vector(values=source)
-    source.append(9)
+    node = Vector(values=(-0.0, 2.0))
 
     class Parent(Space):
         vector = node
 
-    assert design_space(Parent()).vector.values == [1, 2]
+    assert design_space(Parent()).vector.values == (0.0, 2.0)
+    assert str(design_space(Parent()).vector.values[0]) == "0.0"
+
+    class Anything(Space):
+        values: object = Param()
+
+    with refused("literal-not-value", error=DefinitionError, message="list is mutable"):
+        Anything(values=[1, 2])

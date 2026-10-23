@@ -30,8 +30,8 @@ from finn.kernels.base import NETLIST, PORT_CONTRACT, KernelSpace, PortContract
 from finn.kernels.channels import Channel, boundary_contract
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
-from finn.kernels.port import STREAM
 from finn.kernels.transport import AxisBeat, StreamContract
+from finn.kernels.values.semantics import IntegerTensorValue
 
 INT4 = ScalarEncoding(DataType["INT4"])
 PRODUCED = vector_major((4,), 2)
@@ -42,7 +42,7 @@ def source(contents: tuple[int, ...], tensor: Tensor) -> MemStreamKernel:
     return MemStreamKernel(
         dtype=DataType["INT4"],
         form=PRODUCED,
-        contents=contents,
+        contents=IntegerTensorValue.of(contents),
         platform=FULL_DSP48E2,
     )
 
@@ -164,7 +164,7 @@ class Replaying(Space):
     """A consumer reading each two-beat group of its input three times, framed: its port's
     stream and its contract."""
 
-    @derived(semantics=STREAM)
+    @derived
     def port_stream(self) -> Stream:
         contract = replaying()
         return Stream(contract.element, contract.sequence)
@@ -237,7 +237,7 @@ def test_an_adapter_under_a_refused_guard_is_one_piece():
             "shared": wire(
                 tensor=VECTOR,
                 port="out0_V",
-                contents=(1, 2, 3, 4),
+                contents=IntegerTensorValue.of((1, 2, 3, 4)),
                 producer=Interface("a", "output_contract"),
                 platform=FULL_DSP48E2,
             ),

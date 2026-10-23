@@ -36,6 +36,7 @@ from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import DspBlock, Fabric, Platform
 from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.base import KernelSpace
@@ -103,7 +104,9 @@ for memory in ("none", "memstream"):
     result = INT8
     if memory == "memstream":
         weights = {
-            "w_contents": ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1)),
+            "w_contents": IntegerTensorValue.of(
+                ((1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1))
+            ),
             "weights_dtype": DataType["INT3"],
         }
         result = INT3

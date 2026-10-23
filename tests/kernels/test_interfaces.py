@@ -39,6 +39,7 @@ from finn.kernels.base import NETLIST
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
 
 REPETITIONS, WIDTH, HEIGHT, SIMD = 2, 4, 2, 2
@@ -91,7 +92,7 @@ def activated(*, writable: bool) -> Network:
             ),
             "activate": ThresholdingAxiKernel(
                 threshold_dtype=R,
-                thresholds=THRESHOLDS,
+                thresholds=IntegerTensorValue.of(THRESHOLDS),
                 bias=0,
                 input_tensor=RESULT_TENSOR,
                 control="s_axilite",
@@ -176,7 +177,7 @@ def test_writable_thresholds_without_a_control_port_are_not_offered():
     point = design_space(
         ThresholdingAxiKernel(
             threshold_dtype=R,
-            thresholds=THRESHOLDS,
+            thresholds=IntegerTensorValue.of(THRESHOLDS),
             bias=0,
             input_tensor=RESULT_TENSOR,
             platform=FULL_DSP48E2,
@@ -263,7 +264,7 @@ def test_several_threshold_sets_take_a_set_selector_stream():
                 ),
                 "activate": ThresholdingAxiKernel(
                     threshold_dtype=R,
-                    thresholds=two_sets,
+                    thresholds=IntegerTensorValue.of(two_sets),
                     bias=0,
                     input_tensor=RESULT_TENSOR,
                     set_tensor=sets,

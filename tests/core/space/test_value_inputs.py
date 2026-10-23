@@ -10,7 +10,6 @@ read in the class body as a typed projection. Nothing here is about hardware.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated
 
 import pytest
 from support.refusals import refused
@@ -21,8 +20,6 @@ from finn.core.space import (
     DefinitionError,
     Param,
     Space,
-    ValueSemantics,
-    default_semantics,
     derived,
     design_space,
 )
@@ -96,20 +93,11 @@ def test_a_formal_takes_a_value_never_a_node() -> None:
             budget: Budget = Param()
 
 
-PAIR: ValueSemantics[tuple[int, int]] = ValueSemantics(
-    tuple[int, int],
-    "pair",
-    lambda value: type(value) is tuple and len(value) == 2,
-    lambda left, right: left == right,
-    lambda value: value,
-)
-
-
 @dataclass(frozen=True)
 class Split:
     head: int
     tail: int
-    both: Annotated[tuple[int, int], PAIR]
+    both: tuple[int, int]
 
 
 def test_an_attribute_of_a_derived_value_is_read_in_the_class_body() -> None:
@@ -119,7 +107,7 @@ def test_an_attribute_of_a_derived_value_is_read_in_the_class_body() -> None:
     class Office(Space):
         total: int = Param()
 
-        @derived(semantics=default_semantics(Split))
+        @derived
         def split(self) -> Split:
             head = self.total // 3
             return Split(head, self.total - head, (head, self.total - head))
@@ -127,11 +115,11 @@ def test_an_attribute_of_a_derived_value_is_read_in_the_class_body() -> None:
         ledger = Ledger(amount=split.tail)  # an attribute of this body's own derived value
 
     class Paired(Space):
-        pair: tuple[int, int] = Param(semantics=PAIR)
+        pair: tuple[int, int] = Param()
 
     class Branch(Office):
         second = Ledger(amount=Office.split.head)  # inherited, read the same way
-        paired = Paired(pair=Office.split.both)  # semantics named by the annotation
+        paired = Paired(pair=Office.split.both)  # typed by the field's annotation
 
     point = design_space(Branch(total=30))
     assert point.ledger.amount == 20 and point.second.amount == 10

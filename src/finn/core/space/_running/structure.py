@@ -84,7 +84,7 @@ def narrows(index: Address) -> bool:
     """Whether ``index``, an alias, takes fewer values than what it reads: a ``T`` formal
     bound to a ``T | None`` value (the two types are compatible, so the binding is a
     definition). Such a formal is no reference: it is read as itself, and recognizes the
-    value it reads by its own semantics (``evaluate._forward``)."""
+    value it reads by its own type check (``evaluate._forward``)."""
     output = index.output
     if index.kind != "alias" or output is None:
         return False

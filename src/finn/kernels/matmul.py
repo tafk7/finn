@@ -130,8 +130,6 @@ from finn.kernels.values.domains import (
     values_within,
 )
 from finn.kernels.values.semantics import (
-    INTEGER_TENSOR,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensor,
     IntegerTensorValue,
     integer_columns,
@@ -219,12 +217,10 @@ class MatMulKernel(KernelSpace):
     # The tensors its ports read, and the known weights: facts it is given.
     x_tensor: Tensor = Param()
     w_tensor: Tensor | None = Param(default=None)
-    w_contents: IntegerTensor | None = Param(default=None, semantics=INTEGER_TENSOR)
+    w_contents: IntegerTensorValue | None = Param(default=None)
     # Known weights' datatype, the graph's, which their values narrow (``w_carried``);
     # streamed weights' is their tensor's.
-    weights_dtype: QONNXDataType | None = Param(
-        default=None, semantics=QONNX_DATATYPE_VALUE_SEMANTICS
-    )
+    weights_dtype: QONNXDataType | None = Param(default=None)
 
     @derived
     def stored(self) -> bool:
@@ -277,13 +273,13 @@ class MatMulKernel(KernelSpace):
             return found
         return reject("matmul-tensor", NO_WEIGHTS)
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def activation_dtype(self) -> QONNXDataType:
         """The activations' datatype: their tensor's."""
         found: QONNXDataType = self.x_tensor.element.dtype
         return found
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def weights_type(self) -> QONNXDataType | Rejected:
         """The weights' datatype: known weights' as the graph declares them
         (``weights_dtype``), streamed weights' their tensor's."""
@@ -376,7 +372,7 @@ class MatMulKernel(KernelSpace):
         except ValueError as error:
             return reject("matmul-arithmetic", str(error))
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def result_type(self) -> QONNXDataType:
         """The result range's smallest encoding: ``INT<b>``, or ``UINT<b>`` when no result
         is negative (``range_dtype``). No core's accumulator enters it."""
@@ -476,11 +472,11 @@ class MatMulKernel(KernelSpace):
         """Whether its weights are placed: known, or a weight tensor given."""
         return self.stored or self.w_tensor is not None
 
-    @derived(when=stored, semantics=INTEGER_TENSOR)
-    def stored_weights(self) -> IntegerTensor:
+    @derived(when=stored)
+    def stored_weights(self) -> IntegerTensorValue:
         """The known weights as the datapath reads them, which the weight channel's source
         stores: block-diagonal when a depthwise operation is realized densely."""
-        weights = cast("IntegerTensor", self.w_contents)  # stored: given
+        weights = cast("IntegerTensorValue", self.w_contents)  # stored: given
         return block_diagonal(weights) if self.dense_view else weights
 
     @derived(when=weighted)

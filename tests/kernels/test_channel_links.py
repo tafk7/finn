@@ -33,7 +33,6 @@ from finn.kernels.base import PORT_CONTRACT, PortContract
 from finn.kernels.channels import Channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.network import Interface, Network, wire
-from finn.kernels.port import STREAM
 from finn.kernels.transport import AxisBeat, StreamContract
 
 INT3, INT8 = DataType["INT3"], DataType["INT8"]
@@ -193,7 +192,7 @@ class Reader(Space):
     """A consumer that presents its stream and contract itself, not through a kernel's
     port."""
 
-    @derived(semantics=STREAM)
+    @derived
     def port_stream(self) -> Stream:
         contract = reading()
         return Stream(contract.element, contract.sequence)

@@ -52,23 +52,6 @@ def lower(table: Table) -> None:
     _Lowering(table).run()
 
 
-def _constant(semantics: ValueSemantics[object], constant: Const[object], *, owner: str) -> object:
-    """The model's own snapshot of a constant, detached from its declaration.
-
-    ``Const`` snapshots its value when declared; a compiled model takes another,
-    so a later change to the declaration's value never reaches it.
-    """
-    try:
-        return semantics.freeze(constant.value)
-    except Exception as cause:
-        raise DefinitionError.broken(
-            "constant-snapshot-failed",
-            _OWNER,
-            f"{owner}: constant snapshot failed",
-            declaration=owner,
-        ) from cause
-
-
 class _Lowering:
     def __init__(self, table: Table) -> None:
         self.table = table
@@ -137,7 +120,7 @@ class _Lowering:
                     )
                     self.table.nodes[target] = replace(
                         self.table.nodes[target],
-                        value=_constant(semantics, operand, owner=task.owner),
+                        value=operand.value,
                     )
                 elif isinstance(operand, ValueRef):
                     target = self.names.reference(task.scope, operand, owner=task.owner)
@@ -304,8 +287,8 @@ class _Lowering:
             default = None if declaration.required else declaration.default
             return {"required": declaration.required, "value": default}
         if isinstance(declaration, Const):
-            assert node.semantics is not None
-            return {"value": _constant(node.semantics, declaration, owner=node.key)}
+            # A Const is immutable, in its canonical form: the model holds it as it is.
+            return {"value": declaration.value}
         if isinstance(declaration, Decision):
             assert node.semantics is not None
             changes: dict[str, Any] = {}

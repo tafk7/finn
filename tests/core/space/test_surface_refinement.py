@@ -19,10 +19,8 @@ from finn.core.space import (
     Select,
     Space,
     Unresolved,
-    ValueSemantics,
     View,
     constraint,
-    default_semantics,
     derived,
     design_space,
     domain,
@@ -61,7 +59,8 @@ def test_failed_preparation_does_not_poison_cache_and_subclasses_do_not_borrow_i
 
     with refused("declaration-unknown", error=DefinitionError):
         compile_model(Broken)
-    value = cast(Param[int], Param(semantics=default_semantics(int)))
+    value = cast(Param[int], Param())
+    setattr(Broken, "__annotations__", {"value": int})
     value.__set_name__(Broken, "value")
     setattr(Broken, "value", value)
     # The formal is added after class creation, so it is not part of the static signature.
@@ -180,37 +179,20 @@ def test_choice_keywords_do_not_collide_with_receiver_arguments(method: str, nam
     assert getattr(revised, name) == 1
 
 
-def test_call_keywords_do_not_steal_formal_names_and_request_errors_precede_snapshots() -> None:
-    snapshots: list[int] = []
-
-    def snapshot(value: int) -> int:
-        snapshots.append(value)
-        return value
-
-    counted = ValueSemantics(
-        int,
-        "integer",
-        lambda value: type(value) is int,
-        lambda left, right: left == right,
-        snapshot,
-    )
-
+def test_call_keywords_do_not_steal_formal_names_and_request_errors_refuse_the_call() -> None:
     class Example(Space):
-        parameters: int = Param(semantics=counted)
-        choice: int = Decision(values=(1, 2), semantics=counted)
+        parameters: int = Param()
+        choice: int = Decision(values=(1, 2))
 
     point = design_space(Example(parameters=3))
     assert point.parameters == 3
-    snapshots.clear()
     # A call on a Space class binds formals by keyword only; a positional mapping is
-    # refused before any value is snapshotted.
+    # refused.
     with refused("formals-by-keyword", error=DefinitionError, message="by keyword"):
         Example({Example.parameters: 3}, parameters=4)  # type: ignore[arg-type, call-arg]
-    assert snapshots == []
-    # A choice requested twice is refused before any value is snapshotted.
+    # A choice requested twice is refused.
     with pytest.raises(RequestError, match="duplicate change"):
         point.try_with_choices({Example.choice: 1}, choice=2)
-    assert snapshots == []
 
 
 def test_dynamic_prepared_space_class_and_bound_metadata_are_collectable() -> None:
@@ -316,19 +298,17 @@ def test_replacement_reuses_frozen_facts_keeps_views_lazy_and_drops_what_it_reac
     calls: list[int] = []
 
     class Example(Space):
-        source: list[object] = Param()
+        source: tuple[object, ...] = Param()
         choice: int = Decision(values=(1, 2))
 
         @derived
-        def output(*, source: list[object], choice: int) -> int:
+        def output(*, source: tuple[object, ...], choice: int) -> int:
             calls.append(choice)
             return len(source) + choice
 
         result = View(output)
 
-    source: list[object] = [1]
-    first = design_space(Example(source=source)).with_choices(choice=1)
-    source.append(2)
+    first = design_space(Example(source=(1,))).with_choices(choice=1)
     assert calls == []
     assert first.result == 2
     revised = first.with_choices(choice=2)

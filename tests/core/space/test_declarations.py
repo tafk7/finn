@@ -25,6 +25,7 @@ from finn.core.space import (
     View,
     ViewKey,
     constraint,
+    default_semantics,
     derived,
     design_space,
     view,
@@ -184,11 +185,11 @@ def test_node_member_alias_and_typed_view_exports() -> None:
         design_space(Exposing())
 
 
-def test_explicit_answer_semantics_preserve_the_value_type() -> None:
+def test_an_answer_annotation_states_its_value_type() -> None:
     class Example(Space):
         value: int = Param()
 
-        @derived(input=value, semantics=ValueSemantics.immutable_nominal(int))
+        @derived(input=value)
         def forwarded(*, input: int) -> QueryResult[int]:
             raise AssertionError("collection must not evaluate")
 
@@ -300,7 +301,7 @@ def test_self_receiver_and_explicit_argument_aliases_are_ambiguous() -> None:
         collect_space(Ambiguous)
 
 
-def test_extra_alias_and_answer_without_semantics_are_rejected() -> None:
+def test_an_extra_alias_is_rejected_and_an_answer_is_typed_by_its_value() -> None:
     class Extra(Space):
         value: int = Param()
 
@@ -311,15 +312,12 @@ def test_extra_alias_and_answer_without_semantics_are_rejected() -> None:
     with refused("alias-unknown", error=DefinitionError, message="unknown arguments.*typo"):
         collect_space(Extra)
 
-    class NoSemantics(Space):
+    class Answer(Space):
         @derived
         def result() -> QueryResult[int]:
             raise AssertionError("must not run")
 
-    with refused(
-        "semantics-unstated", error=DefinitionError, message="QueryResult.*explicit semantics"
-    ):
-        collect_space(NoSemantics)
+    assert collect_space(Answer).functions["result"].semantics.type_token is int
 
 
 def test_incompatible_override_collision_and_reserved_names() -> None:
@@ -416,11 +414,10 @@ def test_unbound_late_declarations_and_bad_exports_are_rejected() -> None:
         collect_space(wrong)
 
 
-def test_definition_constants_snapshot_and_decision_domain_contract() -> None:
-    source = [1, 2]
-    constant = Const(source)
-    source.append(3)
-    assert constant.value == [1, 2]
+def test_definition_constants_are_values_and_decision_domain_contract() -> None:
+    assert Const((1, -0.0)).value == (1, 0.0)
+    with refused("literal-not-value", error=DefinitionError, message="list is mutable"):
+        Const([1, 2])
     with refused("decision-domain-ambiguous", error=DefinitionError, message="exactly one"):
         Decision()  # type: ignore[call-overload]
     with pytest.raises(TypeError, match="truth value"):
@@ -660,7 +657,7 @@ def test_collection_does_not_descend_into_deep_child_hierarchies() -> None:
 
 def test_linker_argument_validation_checks_required_input_types() -> None:
     source = cast(ValueRef[object], Param(default=0))
-    integer = cast(ValueSemantics[object], ValueSemantics.immutable_nominal(int))
+    integer = cast(ValueSemantics[object], default_semantics(int))
     validate_argument(BoundArgument("item", source, int), integer, owner="reader.item")
     with refused("argument-annotation-incompatible", error=DefinitionError, message=r"\bint$"):
         validate_argument(BoundArgument("item", source, str), integer, owner="reader.item")

@@ -15,6 +15,7 @@ from qonnx.core.datatype import DataType
 
 from finn.dataflow.traversal import tile, vector_major
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from support.helpers import FULL_DSP48E2
 from support.kernel_specs.base import TEST_SIDE, KernelSpec, Probe, SweepCases, placed
 
@@ -34,7 +35,11 @@ def memstream() -> dict[str, Any]:
             {"form": tile(*STORED, 2, 3)},
         ),
         choices={"ram_style": "auto", "pumped_memory": False},
-        facts={"dtype": DataType["INT4"], "contents": CONTENTS, "platform": FULL_DSP48E2},
+        facts={
+            "dtype": DataType["INT4"],
+            "contents": IntegerTensorValue.of(CONTENTS),
+            "platform": FULL_DSP48E2,
+        },
     )
 
 
@@ -51,7 +56,11 @@ def one_bit() -> dict[str, Any]:
     case = memstream()
     contents = tuple(tuple(value & 1 for value in row) for row in CONTENTS)
     case["factors"] = ({"form": vector_major(STORED, 1)},)
-    case["facts"] = {**case["facts"], "dtype": DataType["BINARY"], "contents": contents}
+    case["facts"] = {
+        **case["facts"],
+        "dtype": DataType["BINARY"],
+        "contents": IntegerTensorValue.of(contents),
+    }
     return case
 
 

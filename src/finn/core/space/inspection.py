@@ -8,8 +8,9 @@ design space are the running type's (``_running.questions``, ``_running.surface`
 asked in the model's one session under its lock (``occurrence.ask``): validity reads the
 pieces of a Space's validity; ``viable`` tries each listed value of a choice as a change
 would set it, publishing nothing; ``states`` reads each choice's state; explain evaluates
-one query and follows the reads its answers recorded. ``states`` and ``viable`` detach the
-values they hand out, by each choice's semantics.
+one query and follows the reads its answers recorded. ``states`` and ``viable`` hand out
+the choices' values themselves: a choice's value is immutable, in its canonical form
+(``semantics.canonical``), and every answer type is a frozen dataclass of tuples.
 
 **The lists** (SZ113). A design space's ``decisions`` and ``states`` (and so its flow
 order) leave out each choice whose existence the facts alone rule out, unless it is stored
@@ -23,7 +24,7 @@ compiled model's or a Space class's ``decisions`` list every decision.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeAlias, TypeVar, cast, overload
 
 from ._configuration import Space
@@ -43,7 +44,6 @@ from .occurrence import ask, held, model_of
 from .occurrence import candidate as _candidate
 from .references import DecisionHandle, ValueHandle, decision_key
 from .results import (
-    Available,
     ConstraintAssessment,
     DecisionState,
     QueryResult,
@@ -460,27 +460,9 @@ def viable(point: Space, keys: Iterable[object]) -> tuple[Viable, ...]:
     indices = [model.decision(at.scope, key) for key in keys]
 
     def answer(session: Session) -> tuple[Viable, ...]:
-        return tuple(
-            _detached_viable(index, questions.viable(at.ds, index, session)) for index in indices
-        )
+        return tuple(questions.viable(at.ds, index, session) for index in indices)
 
     return ask(model, answer)
-
-
-def _detached(index: Address, value: object) -> object:
-    """A choice's value detached for a reader, by the choice's semantics."""
-    from ._running.answers import copy_result as detached
-
-    return cast(Available[object], detached(index, Available(value))).value
-
-
-def _detached_viable(index: Address, found: Viable) -> Viable:
-    """``found`` with each listed value detached (a domain's list is the facts layer's,
-    shared by every design space of those facts)."""
-    if found.values is None:
-        return found
-    values = tuple(replace(item, value=_detached(index, item.value)) for item in found.values)
-    return Viable(found.key, values, found.waits)
 
 
 # -- every choice's state --------------------------------------------------------------
@@ -541,20 +523,9 @@ def states(point: Space) -> tuple[tuple[str, ChoiceState], ...]:
 
     def answer(session: Session) -> tuple[tuple[str, ChoiceState], ...]:
         ev = evaluation(at.ds, session)
-        return tuple(
-            (index.key, _detached_state(index, state_of(ev, index)))
-            for index in listed(ev, at.scope)
-        )
+        return tuple((index.key, state_of(ev, index)) for index in listed(ev, at.scope))
 
     return ask(model, answer)
-
-
-def _detached_state(index: Address, found: ChoiceState) -> ChoiceState:
-    """A choice's state with its stored value detached (a stored value is the design
-    space's own)."""
-    if isinstance(found, (Set, Waiting, Dormant)):
-        return replace(found, value=_detached(index, found.value))
-    return found
 
 
 @overload

@@ -16,6 +16,7 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.transpose import TransposeKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
 from support.helpers import FULL_DSP48E2, choose, with_direct_transports
 
@@ -62,12 +63,12 @@ def adapted(source: Traversal, pe: int, *, adaptable: bool = True) -> Network:
             "producer": MemStreamKernel(
                 dtype=DataType["INT4"],
                 form=source,
-                contents=values(rows, channels),
+                contents=IntegerTensorValue.of(values(rows, channels)),
                 platform=FULL_DSP48E2,
             ),
             "activate": ThresholdingAxiKernel(
                 threshold_dtype=DataType["INT4"],
-                thresholds=(tuple(LEVELS for _ in range(channels)),),
+                thresholds=IntegerTensorValue.of((tuple(LEVELS for _ in range(channels)),)),
                 bias=0,
                 input_tensor=x_tensor,
                 platform=FULL_DSP48E2,

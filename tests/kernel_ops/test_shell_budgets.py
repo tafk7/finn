@@ -56,6 +56,7 @@ from finn.kernels.artifacts.module import Abi, BusExport, Fragment, Leaf
 from finn.kernels.artifacts.top import module_abi
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.shells import IP_ROW, ShellRow, budgets, bus_counts, shell_row
 from finn.transformation.kernels import explore_kernel_choices
 from finn.transformation.kernels.cut import MakeCutChoices
@@ -65,7 +66,7 @@ PYNQ_ROW = shell_row("pynq", "Ultra96")
 UINT2 = DataType["UINT2"]
 TENSOR = Tensor((3, 2), ScalarEncoding(UINT2))
 """Each channel's tensor: three rows of two UINT2 channels."""
-TABLE = (((0, 1, 2), (0, 1, 2)),)
+TABLE = IntegerTensorValue.of((((0, 1, 2), (0, 1, 2)),))
 """Each thresholding's table: two channels of three thresholds over UINT2, to UINT2."""
 
 

@@ -80,10 +80,9 @@ from finn.kernels.artifacts.abi import CLOCK2X, Clocking, Endpoint
 from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import KernelSpace, extent_of
 from finn.kernels.library import LibraryModule
-from finn.kernels.port import INTEGER_POLICY, AxiStreamPort, axis
+from finn.kernels.port import AxiStreamPort, axis
 from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit
 from finn.kernels.values.domains import Integer, admit_element, integer_bounds, range_dtype
-from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 from finn.platform.capabilities import DspBlock, Platform, Resources, dsp_widths
 
 _DSP_VERSION = {DspBlock.DSP48E1: 1, DspBlock.DSP48E2: 2, DspBlock.DSP58: 3}
@@ -363,7 +362,7 @@ class DotpAxiKernel(KernelSpace):
         """Each weight beat's PE * SIMD lanes, SIMD fastest."""
         return (n, self.lanes_of)
 
-    @derived(semantics=INTEGER_POLICY)
+    @derived
     def activation_policy(self) -> Integer:
         """The activation encodings the core takes (``activations``)."""
         return self.activations
@@ -631,7 +630,7 @@ class PackedDotpKernel(DotpAxiKernel):
     def activations(self) -> Integer:
         return Integer(min_bits=2)
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def accumulator(self) -> QONNXDataType:
         least, greatest = self.result_range
         return range_dtype(least, greatest)
@@ -719,7 +718,7 @@ class Int8Dsp58DotpKernel(DotpAxiKernel):
         # No floor on ACTIVATION_WIDTH: it pads each activation to its 9-bit lane.
         return Integer()
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def accumulator(self) -> QONNXDataType:
         least, greatest = self.result_range
         return range_dtype(least, greatest)

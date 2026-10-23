@@ -4,25 +4,23 @@
 """The value types a choice or a fact holds in FINN's kernels, and whether the running
 type's node cache keys them (``finn.core.space._running.cache``).
 
-The cache matches a value read by type and ``==`` (``cache.key``), and only where its
-choice's or fact's value semantics compare by ``==`` (``cache.trusted``: the default ones,
-or semantics declaring ``equal=operator.eq``, as FINN's datatype and integer-tensor
-semantics do). Under them it keys the plain types, the value types (``value_type``),
-enum members by type and name (whatever their class mixes in), tuples and frozen sets item
-by item, and value classes (frozen dataclasses with the generated ``==`` and hash) field by
-field. Any other type has no key: nothing that read it is kept, and a lookup there is a
-miss, never a wrong answer.
+The cache matches a value read by type and ``==`` (``cache.key``), which are every value's
+semantics. It keys the plain types, the value types (``value_type``), enum members by type
+and name (whatever their class mixes in), tuples and frozen sets item by item, and value
+classes (frozen dataclasses with the generated ``==`` and hash) field by field. Any other
+type has no key: nothing that read it is kept, and a lookup there is a miss, never a wrong
+answer.
 
 - **The types** are found from the kernels' Space classes: every Space class of
-  ``finn.kernels`` compiled, and each choice's and fact's value semantics read from its
-  model, by name (``declared``). Each name is listed in ``VERDICTS``: keyed always, never,
+  ``finn.kernels`` compiled, and each choice's and fact's type check (its annotation's) read
+  from its model, by name (``declared``). Each name is listed in ``VERDICTS``: keyed always, never,
   or by the value, why, and the types its values hold that the cache does not key. A name
   the kernels declare and the list lacks fails the test.
 - **The samples**: the configured Chain's facts and stored choices (``support.chain``),
-  each read with its member's semantics, and values made here of the types the Chain does
-  not hold (``made``). Each verdict holds on them.
-- **The safe direction**, on every pair of samples of one name: a key hit is a value the
-  semantics hold equal (``_running.answers._same_value``).
+  each by its member's type, and values made here of the types the Chain does not hold
+  (``made``). Each verdict holds on them.
+- **The safe direction**, on every pair of samples of one name: a key hit is the same value
+  (``_running.answers._same_value``: of one type, equal by ``==``).
 - **The enums** the samples hold, at any depth (``ENUMS``): each listed, every member
   equal to itself (an equal key is the same member, so the safe direction needs a
   reflexive ``==``), and every pair of its members checked in the safe direction.
@@ -53,7 +51,6 @@ import dataclasses
 import importlib
 import inspect
 import itertools
-import operator
 import pickle
 import pkgutil
 import random
@@ -81,9 +78,9 @@ from support.chain import chain
 from support.helpers import full_platform, in_order, stage_tensor
 
 import finn.kernels
-from finn.core.space import Space, ValueSemantics, ViewKey
+from finn.core.space import Space, ValueSemantics
 from finn.core.space._running.answers import _same_value
-from finn.core.space._running.cache import PLAIN, enum_key, key, trusted, value_class
+from finn.core.space._running.cache import PLAIN, enum_key, key, value_class
 from finn.core.space._scopes import Address
 from finn.core.space._value_types import is_value_type, registered
 from finn.core.space.compiler import compile_model
@@ -99,8 +96,6 @@ from finn.kernels.channels import boundary_contract
 from finn.kernels.movers import MoverOffer
 from finn.kernels.transport import MarkerKind
 from finn.kernels.values.semantics import (
-    INTEGER_TENSOR,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
     IntegerTensorValue,
     integer_bytes,
     integer_digest,
@@ -157,15 +152,11 @@ VERDICTS: dict[str, Verdict] = {
         "always",
         "a value class holding its element's QONNX datatype, a value type, and a beat sequence",
     ),
-    "QONNXDataType": Verdict(
-        "always", "semantics comparing by ==: a value type, the one instance of its name"
-    ),
-    "integer tensor": Verdict(
-        "always", "semantics comparing by ==: a value type, equal by its digest"
-    ),
+    "BaseDataType": Verdict("always", "a value type, the one instance of its name"),
+    "IntegerTensorValue": Verdict("always", "a value type, equal by its digest"),
 }
-"""Every value semantics a choice or fact of FINN's kernels holds, by name, with its
-verdict."""
+"""Every value type a choice or fact of FINN's kernels holds, by its check's name (a QONNX
+datatype's is ``BaseDataType``'s), with its verdict."""
 
 
 def kernel_space_classes() -> list[type[Space]]:
@@ -185,18 +176,17 @@ def kernel_space_classes() -> list[type[Space]]:
 
 @cache
 def named(semantics: ValueSemantics[Any]) -> str:
-    """The name a value's semantics are listed by: an optional value's (``T | None``) are
-    its ``T``'s, which the cache trusts them as (``None`` keyed as the plain ``None``)."""
+    """The name a value's type check is listed by: an optional value's (``T | None``) is
+    its ``T``'s (``None`` keyed as the plain ``None``)."""
     if isinstance(semantics, OptionalSemantics):
         return semantics.inner.name
     return semantics.name
 
 
 def declared() -> dict[str, dict[str, Address]]:
-    """Each choice's and fact's value semantics in FINN's kernels, by name: the members
-    holding it (``Class.key``), each with its node. An optional fact's (``T | None``) are
-    ``T``'s, made optional: named by ``T``'s, which the cache trusts them as (``None`` keyed
-    as the plain ``None``)."""
+    """Each choice's and fact's type check in FINN's kernels, by name: the members holding
+    it (``Class.key``), each with its node. An optional fact's (``T | None``) is named by
+    ``T``'s (``None`` keyed as the plain ``None``)."""
     found: dict[str, dict[str, Address]] = {}
     for kind in kernel_space_classes():
         for node in compile_model(kind).scopes.all_addresses():
@@ -247,8 +237,8 @@ def made() -> dict[str, tuple[object, ...]]:
         ),
         "Form": (Form.DENSE, Form.DEPTHWISE),
         "Platform": (full_platform(DspBlock.DSP58),),
-        "QONNXDataType": (DataType["INT8"], DataType["UINT2"]),
-        "integer tensor": (
+        "BaseDataType": (DataType["INT8"], DataType["UINT2"]),
+        "IntegerTensorValue": (
             IntegerTensorValue.of(((1, 2), (3, 4))),
             of_array(np.array([[1, 2], [3, 4]], dtype=np.float32)),
             IntegerTensorValue.of(((1, 2), (3, 5))),
@@ -258,8 +248,8 @@ def made() -> dict[str, tuple[object, ...]]:
 
 @cache
 def samples() -> dict[str, list[object]]:
-    """Each name's samples: the configured Chain's facts and stored choices (each read
-    with its member's semantics), a copy of its first stream, the stream contracts its
+    """Each name's samples: the configured Chain's facts and stored choices (each by its
+    member's type), a copy of its first stream, the stream contracts its
     streams make as a channel's free side (a mover's side), and the values ``made``
     here."""
     found: dict[str, list[object]] = {}
@@ -285,18 +275,15 @@ def samples() -> dict[str, list[object]]:
 
 
 def semantics_of(name: str) -> tuple[Address, ValueSemantics[Any]]:
-    """A node holding ``name``'s values, and their semantics (one object for every member
-    of that name)."""
+    """A node holding ``name``'s values, and its type check."""
     nodes = list(declared()[name].values())
-    assert len({trusted(node.semantics) for node in nodes}) == 1, name
     node = nodes[0]
     assert node.semantics is not None
     return node, node.semantics
 
 
 def unkeyed_types(value: object) -> set[str]:
-    """The types (by name) ``value`` holds, itself included, that the cache does not key
-    under semantics it trusts."""
+    """The types (by name) ``value`` holds, itself included, that the cache does not key."""
     kind = type(value)
     if kind in PLAIN or is_value_type(kind):
         return set()
@@ -321,40 +308,35 @@ def test_every_value_type_the_kernels_declare_has_a_verdict() -> None:
     assert {"MatMulKernel.weights_dtype", "Channel.tensor"} <= {
         member for members in names.values() for member in members
     }
-    for name in ("BeatSequence", "Steps", "QONNXDataType", "integer tensor", "Tensor"):
+    for name in ("BeatSequence", "Steps", "BaseDataType", "IntegerTensorValue", "Tensor"):
         assert names[name], name
 
 
 @pytest.mark.parametrize("name", sorted(VERDICTS))
 def test_a_value_types_verdict_holds_on_its_samples(name: str) -> None:
     """Keyed always: every sample has a key; never: none has; by value: some have, some
-    have not. The types the samples hold that the cache does not key are the verdict's,
-    and none under semantics it does not trust."""
-    _, semantics = semantics_of(name)
+    have not. The types the samples hold that the cache does not key are the verdict's."""
     verdict, values = VERDICTS[name], samples()[name]
     assert len(values) >= 2, name
-    keys = [key(value, semantics) for value in values]
+    keys = [key(value) for value in values]
     keyed = [found is not None for found in keys]
     expected = {"always": [True], "never": [False], "by value": [False, True]}[verdict.keyed]
     assert sorted(set(keyed)) == expected, (name, values)
-    if not trusted(semantics):
-        assert verdict.holds == frozenset() and verdict.why.startswith("semantics of its own")
-        return
     held = set().union(*(unkeyed_types(value) for value in values))
     assert held == verdict.holds, name
 
 
 @pytest.mark.parametrize("name", sorted(VERDICTS))
 def test_a_key_hit_is_a_value_the_semantics_hold_equal(name: str) -> None:
-    """The safe direction, on every pair of a name's samples: equal keys mean equal by
-    the member's semantics; values the semantics tell apart never share a key. For a type
-    keyed always or by value, two samples share a key, so the check is not empty."""
-    node, semantics = semantics_of(name)
+    """The safe direction, on every pair of a name's samples: equal keys mean the same
+    value; values ``==`` tells apart never share a key. For a type keyed always or by
+    value, two samples share a key, so the check is not empty."""
+    node, _ = semantics_of(name)
     values = samples()[name]
     hits = 0
     for (at, left), (other, right) in itertools.product(enumerate(values), repeat=2):
-        found = key(left, semantics)
-        if found is None or found != key(right, semantics):
+        found = key(left)
+        if found is None or found != key(right):
             continue
         assert _same_value(node, left, right), (name, left, right)
         hits += at != other
@@ -395,21 +377,18 @@ def test_every_enum_the_samples_hold_is_listed() -> None:
 def test_an_enum_member_is_keyed_by_type_and_name_and_a_key_hit_is_the_same_member(
     kind: type[Enum],
 ) -> None:
-    """Every pair of ``kind``'s members under its default semantics (as a member annotated
-    with it holds them): each member equal to itself (the reflexive ``==`` the key's safety
-    needs), keyed by type and name (``cache.enum_key``), and a key hit is a value the
-    semantics hold equal; two members never share a key. An enum mixing in ``str``
-    compares as its string, and is keyed alike."""
-    semantics = default_semantics(kind)
-    node = cast(Address, SimpleNamespace(semantics=semantics, owner="value"))
-    assert trusted(semantics)
+    """Every pair of ``kind``'s members (as a member annotated with it holds them): each
+    member equal to itself (the reflexive ``==`` the key's safety needs), keyed by type and
+    name (``cache.enum_key``), and a key hit is the same value; two members never share a
+    key. An enum mixing in ``str`` compares as its string, and is keyed alike."""
+    node = cast(Address, SimpleNamespace(semantics=default_semantics(kind), owner="value"))
     members = list(kind)
     assert len(members) >= 2, kind
     assert all(member == member for member in members), kind
     for left, right in itertools.product(members, repeat=2):
-        found = key(left, semantics)
+        found = key(left)
         assert found == (kind, left.name), left
-        if found == key(right, semantics):
+        if found == key(right):
             assert left is right and _same_value(node, left, right), (left, right)
     if issubclass(kind, str):
         assert all(member == member.value for member in members)
@@ -418,15 +397,13 @@ def test_an_enum_member_is_keyed_by_type_and_name_and_a_key_hit_is_the_same_memb
 def test_a_datatype_is_keyed_apart_from_its_name_alone_and_inside_a_tensor() -> None:
     """A QONNX datatype is equal to its name, a string, with an equal hash; its key tells
     the two apart, alone, in a tuple and as a field, so a datatype and its name never share
-    an answer. Inside a ``Tensor`` (default semantics) it is keyed as a field."""
+    an answer. Inside a ``Tensor`` it is keyed as a field."""
     int8 = DataType["INT8"]
     assert int8 == "INT8" and hash(int8) == hash("INT8")
-    datatype, name = QONNX_DATATYPE_VALUE_SEMANTICS, default_semantics(str)
-    assert key(int8, datatype) == (IntType, int8) != key("INT8", name)
-    assert key((int8,), default_semantics(tuple)) != key(("INT8",), default_semantics(tuple))
-    _, tensor = semantics_of("Tensor")
-    assert key(stage_tensor(8), tensor) == key(stage_tensor(8), tensor) is not None
-    assert key(stage_tensor(8), tensor) != key(stage_tensor(16), tensor)
+    assert key(int8) == (IntType, int8) != key("INT8")
+    assert key((int8,)) != key(("INT8",))
+    assert key(stage_tensor(8)) == key(stage_tensor(8)) is not None
+    assert key(stage_tensor(8)) != key(stage_tensor(16))
 
 
 # -- the register of value types ----------------------------------------------------------
@@ -642,127 +619,9 @@ def test_equal_values_of_a_registered_class_cannot_be_told_apart(kind: type) -> 
     assert sum(map(bool, others)) > len(values) // 2, kind
 
 
-def test_finns_value_semantics_compare_by_eq_and_are_trusted() -> None:
-    """The datatypes' and the integer tensors' semantics declare ``operator.eq``, so the
-    cache keys their stored values; each value is keyed as its value type."""
-    for semantics in (QONNX_DATATYPE_VALUE_SEMANTICS, INTEGER_TENSOR):
-        assert trusted(semantics), semantics.name
+def test_finns_value_types_are_keyed_as_value_types() -> None:
+    """The cache keys a datatype and an integer tensor by type and ``==``, as every value of
+    a registered value type."""
     tensor = IntegerTensorValue.of(((1, 2),))
-    assert key(tensor, INTEGER_TENSOR) == (IntegerTensorValue, tensor)
-    assert key(DataType["UINT2"], QONNX_DATATYPE_VALUE_SEMANTICS) == (IntType, DataType["UINT2"])
-
-
-# -- values_equal, as it answered before FINN's semantics compared by == -----------------
-#
-# ``ValueSemantics.values_equal`` compares each side's snapshot (``freeze``). Before FINN's
-# datatype and integer-tensor semantics declared ``equal=operator.eq`` (for the register
-# above), it compared the values as given, and those two semantics compared by identity and
-# by the integer tensor made of each side (``BEFORE``). Every other semantics' ``equal`` is
-# as it was.
-
-BEFORE: dict[str, Callable[[Any, Any], bool]] = {
-    "QONNXDataType": lambda left, right: left is right,
-    "integer tensor": lambda left, right: left is right or tensor_of(left) == tensor_of(right),
-}
-"""The ``equal`` of each semantics that now compares by ``operator.eq``, as it was before."""
-
-
-def tensor_of(value: object) -> IntegerTensorValue:
-    """An integer tensor value, or the value of nested int tuples."""
-    return value if type(value) is IntegerTensorValue else IntegerTensorValue.of(value)
-
-
-RAW: tuple[object, ...] = (
-    ((1, 2), (3, 4)),
-    ((1, 2), (3, 5)),
-    ((1, -2), (3, 4)),
-    ((1, 2),),
-    (7,),
-    ((2**70, -1), (0, -(2**65))),
-    "INT8",
-    "UINT2",
-    None,
-)
-"""Values as a caller gives them, unsnapshotted: integer tensors as nested int tuples (equal
-to samples, and not), datatypes by their names, and ``None``."""
-
-
-def finn_semantics() -> list[ValueSemantics[Any]]:
-    """Every value semantics in FINN's kernels and the engine: each a module of
-    ``finn.kernels`` or ``finn.core.space`` holds (itself, or as a ``ViewKey``'s), and each
-    node of a kernel's Space class holds; one of each kind (semantics alike in name, type,
-    recognition, equality and snapshot are one)."""
-    held: list[object] = []
-    for package in ("finn.core.space", "finn.kernels"):
-        root = importlib.import_module(package)
-        below = pkgutil.walk_packages(root.__path__, f"{package}.")
-        for name in (package, *(found.name for found in below)):
-            held += vars(importlib.import_module(name)).values()
-    for kind in kernel_space_classes():
-        held += [index.semantics for index in compile_model(kind).scopes.all_addresses()]
-    found: dict[tuple[object, ...], ValueSemantics[Any]] = {}
-    for value in held:
-        semantics = value.semantics if isinstance(value, ViewKey) else value
-        if isinstance(semantics, ValueSemantics):
-            parts = (semantics.recognizes, semantics.equal, semantics.snapshot)
-            alike = (
-                semantics.name,
-                semantics.type_token,
-                *(getattr(part, "__code__", part) for part in parts),
-            )
-            found.setdefault(alike, semantics)
-    return list(found.values())
-
-
-def test_the_semantics_comparing_by_eq_are_those_listed_before() -> None:
-    """Every other semantics' ``equal`` is the one it had before."""
-    by_eq = {semantics.name for semantics in finn_semantics() if semantics.equal is operator.eq}
-    assert by_eq == set(BEFORE)
-
-
-def before_of(semantics: ValueSemantics[Any]) -> Callable[[Any, Any], bool]:
-    """``semantics``' ``equal`` as it was before (``BEFORE``, else its own); an optional
-    value's (``T | None``): ``None`` equal to ``None`` alone, else ``T``'s before."""
-    if isinstance(semantics, OptionalSemantics):
-        inner = before_of(semantics.inner)
-        return lambda left, right: (
-            left is right if left is None or right is None else inner(left, right)
-        )
-    return BEFORE.get(semantics.name, semantics.equal)
-
-
-def test_values_equal_answers_as_before_on_finns_samples() -> None:
-    """Every value semantics in FINN's kernels and the engine (``finn_semantics``), over
-    every ordered pair of the values it recognizes among the samples (``samples``, the
-    register's integer tensors and the unsnapshotted ``RAW``): ``values_equal`` answers as
-    its ``equal`` before (``BEFORE``, else its own) did on the two as given. Each value it
-    does not recognize, beside one it does, either way round: unequal, as before."""
-    pool = [value for values in samples().values() for value in values]
-    pool += [*tensor_samples(), *RAW]
-    pairs: dict[str, int] = {}
-    for semantics in finn_semantics():
-        before = before_of(semantics)
-        known = [value for value in pool if semantics.accepts(value)]
-        for left, right in itertools.product(known, repeat=2):
-            given = bool(before(left, right))
-            assert semantics.values_equal(left, right) is given, (semantics.name, left, right)
-            pairs[named(semantics)] = pairs.get(named(semantics), 0) + 1
-        for value in (value for value in pool if known and not semantics.accepts(value)):
-            assert not semantics.values_equal(value, known[0]), (semantics.name, value)
-            assert not semantics.values_equal(known[0], value), (semantics.name, value)
-    assert set(VERDICTS) | {"integer vector"} <= set(pairs)
-
-
-def test_values_equal_compares_each_sides_snapshot() -> None:
-    """An integer tensor's value is equal to the same integers given as nested tuples,
-    either way round, and unequal to other integers; a datatype is equal to itself
-    resolved again, and unequal to its name, which is no datatype (``accepts``)."""
-    weights = ((1, -2, 3), (4, 5, -6))
-    value = INTEGER_TENSOR.freeze(weights)
-    assert INTEGER_TENSOR.values_equal(value, weights)
-    assert INTEGER_TENSOR.values_equal(weights, value)
-    assert not INTEGER_TENSOR.values_equal(value, ((1, -2, 3), (4, 5, -7)))
-    int8, datatypes = DataType["INT8"], QONNX_DATATYPE_VALUE_SEMANTICS
-    assert datatypes.values_equal(int8, resolve_datatype("INT8", canonical=True))
-    assert not datatypes.accepts("INT8")
-    assert not datatypes.values_equal(int8, "INT8")
+    assert key(tensor) == (IntegerTensorValue, tensor)
+    assert key(DataType["UINT2"]) == (IntType, DataType["UINT2"])

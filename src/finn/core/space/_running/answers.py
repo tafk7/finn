@@ -12,22 +12,20 @@ space shares, whatever it keeps.
   inputs), ``_guard_result`` and ``_guard_assessment`` (a node under its guard's answer);
 - a domain's helpers: ``membership_arguments`` (the inputs its membership reads),
   ``_listed_members`` and ``_first_member`` (membership asked over listed values);
-- equality and detachment by a member's value semantics: ``_same_value``, ``_clone``,
-  ``public_value``; ``copy_result`` and ``copy_assessment`` detach a public answer, every
-  value in it copied by its node's semantics;
+- sameness, and what a reader receives: ``_same_value`` (of one type and equal by ``==``),
+  ``handed_out`` and ``public_value`` (a value itself, a mutable container a derived value or
+  a view answers copied); ``copy_result`` and ``copy_assessment`` hand out a public answer;
 - the parts of an answer about choices: ``_ordered`` (a validity's pieces in key order),
   ``_waits`` (what an unknown answer waits on, by key).
 
 An address is read for its own fields (its key, kind, semantics, owner): its member
-record, as its scope reads it. ``copy_assessment`` reads one edge, a view's output, and
-follows it to its forwarding source where collapse did (``_forwarded``): a rule kept for
-``semantics=``'s lifetime, so that a view's output is copied by the semantics it was copied
-by before.
+record, as its scope reads it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias, cast
 
@@ -50,8 +48,7 @@ from ..results import (
     owned_result,
     reject,
 )
-from ..semantics import equal, recognize, unrecognized
-from ..semantics import snapshot as snapshot_value
+from ..semantics import recognize, same, unrecognized
 
 if TYPE_CHECKING:
     from .._scopes import Address, Argument
@@ -75,23 +72,9 @@ class Called:
 
 
 def _same_value(node: Address, left: object, right: object) -> bool:
-    """Whether two values of ``node`` are equal by its semantics, each compared as a
-    detached copy (equality may not change a held value)."""
-    if left is right:
-        return True
-    semantics = node.semantics
-    if semantics is None:
-        return False
-    role = "early cutoff"
-    owner = node.owner
-    if not (
-        recognize(semantics, left, owner=owner, role=role)
-        and recognize(semantics, right, owner=owner, role=role)
-    ):
-        return False
-    left = snapshot_value(semantics, left, owner=owner, role=role)
-    right = snapshot_value(semantics, right, owner=owner, role=role)
-    return equal(semantics, left, right, owner=owner, role=role)
+    """Whether two values of ``node`` are the same value: of one type and equal by ``==``
+    (``semantics.same``); an ``==`` that raises fails ``node``."""
+    return same(left, right, owner=node.owner, role="early cutoff")
 
 
 def _blocked(answers: Sequence[QueryResult[object]]) -> NonValue | None:
@@ -124,18 +107,30 @@ def _guard_assessment(node: Address, answer: NonValue) -> Assessment | None:
     return None
 
 
-def _clone(node: Address, value: object, *, owner: str, role: str) -> object:
-    if node.semantics is None:
-        raise EvaluationError(owner, role, f"{node.key} has no value semantics")
-    return snapshot_value(node.semantics, value, owner=owner, role=role)
+_CONTAINERS = (dict, list, set, bytearray)
+
+
+def _holds_container(value: object) -> bool:
+    if isinstance(value, _CONTAINERS):
+        return True
+    kind = type(value)
+    if kind is tuple or kind is frozenset:
+        return any(_holds_container(item) for item in cast("tuple[object, ...]", value))
+    return False
+
+
+def handed_out(value: object) -> object:
+    """``value`` as a reader receives it: the value itself, which is immutable, but a mutable
+    container a derived value or a view answers (a dict, a list, a set, a bytearray, or a
+    tuple or frozen set holding one: a kernel's ``parameters``) is a copy of it, so no reader
+    changes what the design space holds. A fact, a choice or a constant never holds one: the
+    canonical form refuses it where it enters (``semantics.canonical``)."""
+    return deepcopy(value) if _holds_container(value) else value
 
 
 def public_value(node: Address, answer: Available[object]) -> object:
-    """A value as a reader receives it: detached from the answer by its semantics (a
-    validity's answer is an immutable bool)."""
-    if node.kind == "validity" and type(answer.value) is bool:
-        return answer.value
-    return _clone(node, answer.value, owner=node.owner, role="public value snapshot")
+    """A value as a reader receives it (``handed_out``)."""
+    return handed_out(answer.value)
 
 
 def _unassigned(node: Address) -> Unresolved:
@@ -221,9 +216,9 @@ def _finish(node: Address, returned: object) -> Called:
     if node.semantics is None:
         raise EvaluationError(node.owner, node.kind, "derived output has no value semantics")
     value = returned.value if isinstance(returned, Available) else returned
-    return Called(
-        Available(snapshot_value(node.semantics, value, owner=node.owner, role=node.kind))
-    )
+    if not recognize(node.semantics, value, owner=node.owner, role=node.kind):
+        raise TypeError(unrecognized(node.semantics))
+    return Called(Available(value))
 
 
 def _finished(node: Address, returned: object) -> Called:
@@ -300,16 +295,15 @@ def _waits(result: object) -> tuple[str, ...]:
     return tuple(sorted({finding.owner for finding in result.findings}))
 
 
-# -- a public answer, detached -----------------------------------------------------------
+# -- a public answer, handed out ----------------------------------------------------------
 
 
 def copy_result(node: Address, answer: QueryResult[object]) -> QueryResult[object]:
-    """A public answer detached from where it was kept, by its semantics."""
+    """A public answer as a reader receives it: its value handed out (``handed_out``)."""
     if not isinstance(answer, Available):
         return answer
-    if node.kind == "validity" and type(answer.value) is bool:
-        return answer  # an immutable bool, the pieces' AND: shared as it is
-    return Available(public_value(node, answer))
+    value = handed_out(answer.value)
+    return answer if value is answer.value else Available(value)
 
 
 def _copy_readiness(node: Address, assessment: ReadinessAssessment) -> ReadinessAssessment:
@@ -320,48 +314,12 @@ def _copy_readiness(node: Address, assessment: ReadinessAssessment) -> Readiness
     )
 
 
-def _forwards(node: Address) -> bool:
-    """A pure forwarding member: an alias that only passes its source's answer on."""
-    return node.kind == "alias" and node.output is not None and node.domain is None
-
-
-def _implies(required: Address | None, guard: Address | None) -> bool:
-    if required is None:
-        return True
-    current = guard
-    while current is not None:
-        if current == required:
-            return True
-        current = current.guard
-    return False
-
-
-def _forwarded(view: Address) -> Address | None:
-    """What a view's output is copied by: its output, or, where the output is a forwarding
-    alias whose guard holds whenever the view's does, the end of its forwarding chain (each
-    hop an alias forwarding under the guard of the one before). Collapse took this hop at
-    the base; it is kept for ``semantics=``'s lifetime (an alias carries the declared
-    semantics of the member it names, which may differ from its source's) and goes with it."""
-    target = view.output
-    if target is None or not _forwards(target) or not _implies(target.guard, view.guard):
-        return target
-    current = target
-    while True:
-        output = cast("Address", current.output)
-        if not (_forwards(output) and _implies(output.guard, current.guard)):
-            return output
-        current = output
-
-
 def copy_assessment(node: Address, assessment: Assessment) -> Assessment:
-    """An assessment detached from where it was kept: every value in it copied by its
-    semantics (a constraint's answers are exact bools and findings, shared as they are).
-    A view's output is copied by its output's semantics, followed to its forwarding source
-    where its guard is implied (``_forwarded``)."""
+    """An assessment as a reader receives it: every value in it handed out (a constraint's
+    answers are exact bools and findings, shared as they are)."""
     if isinstance(assessment, ConstraintAssessment):
         return assessment
-    output_node = _forwarded(node)
-    output = copy_result(output_node if output_node is not None else node, assessment.output_result)
+    output = copy_result(node, assessment.output_result)
     accepted = (
         output
         if assessment.accepted_result is assessment.output_result
@@ -378,6 +336,7 @@ __all__ = [
     "Called",
     "copy_assessment",
     "copy_result",
+    "handed_out",
     "membership_arguments",
     "public_value",
 ]

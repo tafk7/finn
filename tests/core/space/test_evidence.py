@@ -154,14 +154,20 @@ def test_refusal_causes_stay_visible_while_the_output_is_unresolved() -> None:
     assert inspection.explain(point, Example.physical) == evidence
 
 
-def test_evidence_values_are_detached_from_frozen_inputs_and_caches() -> None:
+def test_evidence_hands_out_a_container_a_derived_value_answers_as_a_copy() -> None:
+    """A derived value answering a mutable container (a list): the evidence's values are
+    copies of it, so a reader changing one changes nothing the design space holds."""
+
     class Example(Space):
-        source: list[int] = Param()
+        n: int = Param()
+
+        @derived
+        def source(self) -> list[int]:
+            return [1, self.n]
+
         physical = View(source)
 
-    source = [1, 2]
-    point = design_space(Example(source=source))
-    source.append(99)
+    point = design_space(Example(n=2))
     first = inspection.explain(point, Example.physical)
     assert isinstance(first.result, Available)
     first.result.value.append(3)

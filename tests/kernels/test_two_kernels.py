@@ -47,6 +47,7 @@ from finn.kernels.configure import commit
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, wire
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
 
 ROWS, INPUTS, HIDDEN, OUTPUTS = 3, 4, 4, 4
@@ -135,13 +136,13 @@ def layered(*, adaptable: bool = True) -> Network:
                 platform=FULL_DSP48E2,
                 dtype=W,
                 form=periods["first"],
-                contents=W1,
+                contents=IntegerTensorValue.of(W1),
             ),
             "rom2": MemStreamKernel(
                 platform=FULL_DSP48E2,
                 dtype=W,
                 form=periods["second"],
-                contents=W2,
+                contents=IntegerTensorValue.of(W2),
             ),
         }
     )

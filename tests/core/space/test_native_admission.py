@@ -18,14 +18,11 @@ import pytest
 from finn.core.space import (
     Available,
     Decision,
-    EvaluationError,
     NativeEvaluationError,
     Param,
     Rejected,
     Space,
-    ValueSemantics,
     constraint,
-    default_semantics,
     derived,
     design_space,
     divisors_of,
@@ -174,67 +171,6 @@ def test_published_reads_do_not_repeat_admission_callbacks() -> None:
     assert calls == [3]
 
 
-@pytest.mark.parametrize("raises", (False, True))
-@pytest.mark.parametrize("operation", ("keywords", "fields"))
-def test_equality_mutation_cannot_change_cached_or_caller_values(
-    raises: bool, operation: str
-) -> None:
-    def equal(left: list[int], right: list[int]) -> bool:
-        answer = left == right
-        left.append(91)
-        right.append(92)
-        if raises:
-            raise LookupError("equality failure")
-        return answer
-
-    semantics = ValueSemantics(list, "bag", lambda value: type(value) is list, equal, list)
-
-    class Example(Space):
-        choice: list[int] = Decision(
-            domain=domain(accepts=lambda candidate: True), semantics=semantics
-        )
-
-    point = design_space(Example()).with_choices(choice=[1])
-    candidate = [1]
-
-    def update() -> object:
-        if operation == "keywords":
-            return point.try_with_choices(choice=candidate)
-        return point.try_with_choices(point.field(Example.choice).change(candidate))
-
-    if raises:
-        with pytest.raises(EvaluationError) as caught:
-            update()
-        assert isinstance(caught.value.__cause__, LookupError)
-    else:
-        if operation == "keywords":
-            assert point.try_with_choices(choice=candidate).instance is point
-        else:
-            assert (
-                point.try_with_choices(point.field(Example.choice).change(candidate)).instance
-                is point
-            )
-    assert point.choice == [1] and candidate == [1]
-
-
-def test_finite_domain_equality_also_detaches_definition_values() -> None:
-    def equal(left: list[int], right: list[int]) -> bool:
-        answer = left == right
-        left.append(91)
-        right.append(92)
-        return answer
-
-    semantics = ValueSemantics(list, "bag", lambda value: type(value) is list, equal, list)
-
-    class Example(Space):
-        choice: list[int] = Decision(values=([1], [2]), semantics=semantics)
-
-    for _ in range(2):
-        point = design_space(Example()).with_choices(choice=[1])
-        assert point.choice == [1]
-        assert point.field(Example.choice).candidates() == Available(([1], [2]))
-
-
 def test_observed_evidence_includes_cached_reads_and_omits_unselected_work() -> None:
     class Child(Space):
         extent: int = Param()
@@ -291,7 +227,10 @@ def declare(space_type: type[Space], bindings: Mapping[str, object]) -> Space:
 def _deep_space(depth: int, completed: list[str] | None = None) -> tuple[type[Space], list[str]]:
     """A chain of ``depth`` methods, each reading the one before; ``completed``: each
     method's name as it completes (one past its read)."""
-    declarations: dict[str, object] = {"value_0": Param(semantics=default_semantics(int))}
+    declarations: dict[str, object] = {
+        "__annotations__": {"value_0": int},
+        "value_0": Param(),
+    }
     names = ["value_0"]
     done = completed if completed is not None else []
 
@@ -346,9 +285,8 @@ def test_native_wide_fan_in_and_cached_prefix_deep_dependency() -> None:
     edges = next(node.dependencies for node in evidence.nodes if node.declaration.key == "output")
     assert len(edges) == 401
 
-    leaves: dict[str, object] = {
-        f"leaf_{index}": Param(semantics=default_semantics(int)) for index in range(1_000)
-    }
+    leaves: dict[str, object] = {f"leaf_{index}": Param() for index in range(1_000)}
+    leaves["__annotations__"] = {f"leaf_{index}": int for index in range(1_000)}
 
     def total(self: Space) -> int:
         return sum(cast(int, getattr(self, f"leaf_{index}")) for index in range(1_000))

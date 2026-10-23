@@ -4,9 +4,9 @@
 """The datatype boundary: what may enter the stack, and as what.
 
 QONNX's datatype is the one datatype identity, with no lossy local form, and these
-pin the three things that depends on -- that identity is by canonical name, that
-recognition never promises more than the snapshot can deliver, and that a
-datatype and its own name never get confused for one another.
+pin the three things that depends on -- that identity is by canonical name, that a
+datatype is a value the engine takes as it is, and that a datatype and its own name
+never get confused for one another.
 
 The last is not a style point.  ``DataType["INT8"] == "INT8"`` is true and their
 hashes agree, so if a string were admitted to this value domain a name and the
@@ -26,16 +26,20 @@ from qonnx.core.datatype import BaseDataType, DataType
 from support.refusals import refused
 
 from finn.core.space import ValueSemantics
+from finn.core.space._running.cache import key
+from finn.core.space._value_types import is_value_type
+from finn.core.space.semantics import annotation_type, canonical, same
 from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,
     canonical_qonnx_datatype,
     is_qonnx_datatype,
 )
-from finn.kernels.values.semantics import QONNX_DATATYPE_VALUE_SEMANTICS
 
-#: The datatype domain at ``object``, so a test can offer it values of any type.
-QONNX_DATATYPE_SEMANTICS = cast(ValueSemantics[object], QONNX_DATATYPE_VALUE_SEMANTICS)
+#: The engine's check of a datatype fact or choice: its annotation, ``QONNXDataType``.
+QONNX_DATATYPE_SEMANTICS = cast(
+    ValueSemantics[object], annotation_type(QONNXDataType, "dtype", owner="test")
+)
 
 #: Every datatype family the stack could be handed, including the ones a
 #: (type, bit width) pair cannot express at all.
@@ -60,7 +64,7 @@ REPRESENTATIVE = (
 # -- the string hazard -------------------------------------------------------
 
 
-def test_value_semantics_do_not_admit_a_string_into_the_datatype_domain() -> None:
+def test_the_datatype_annotation_does_not_admit_a_string() -> None:
     assert QONNX_DATATYPE_SEMANTICS.accepts(DataType["INT8"]) is True
     assert QONNX_DATATYPE_SEMANTICS.accepts("INT8") is False
 
@@ -81,20 +85,23 @@ def test_a_string_and_its_datatype_would_otherwise_collide() -> None:
     mixed[DataType["INT8"]] = "the datatype"
     assert len(mixed) == 1
 
-    # The engine is protected because it compares only within the domain.
-    assert QONNX_DATATYPE_SEMANTICS.values_equal(DataType["INT8"], "INT8") is False
+    # The engine is protected: a value is the same as another only of one type, and its
+    # key tells the two apart.
+    assert same(DataType["INT8"], "INT8", owner="test", role="test") is False
+    assert key(DataType["INT8"]) != key("INT8")
 
 
-# -- recognition implies the snapshot succeeds -------------------------------
+# -- a datatype is taken as it is --------------------------------------------
 
 
 @pytest.mark.parametrize("name", REPRESENTATIVE)
-def test_whatever_is_recognized_can_also_be_frozen(name: str) -> None:
-    """The property the two hooks share a helper to guarantee."""
+def test_every_datatype_is_recognized_and_is_its_own_canonical_form(name: str) -> None:
+    """A registered value type: the engine takes it as it is, and keys it."""
 
     datatype = DataType[name]
     assert QONNX_DATATYPE_SEMANTICS.accepts(datatype) is True
-    assert QONNX_DATATYPE_SEMANTICS.freeze(datatype) == datatype
+    assert canonical(datatype) is datatype
+    assert key(datatype) == key(DataType[name]) is not None
 
 
 class _Unregistered(BaseDataType):
@@ -131,14 +138,17 @@ class _Unregistered(BaseDataType):
         return "ap_uint<3>"
 
 
-def test_an_unregistered_subclass_is_refused_at_recognition() -> None:
-    """Not later, inside the snapshot: ``isinstance`` alone would admit it. A
-    subclass defined outside qonnx is not one of its datatype values."""
+def test_an_unregistered_subclass_passes_the_annotation_and_is_never_keyed() -> None:
+    """The annotation's check is ``isinstance``, so it admits a subclass defined outside
+    qonnx; that subclass is no registered value type, so the engine never keys it (every
+    lookup a miss). The dataflow boundary still refuses it: it is not one of qonnx's
+    datatype values."""
 
     rogue = _Unregistered()
     assert isinstance(rogue, BaseDataType)
+    assert QONNX_DATATYPE_SEMANTICS.accepts(rogue) is True
+    assert not is_value_type(type(rogue)) and key(rogue) is None
     assert is_qonnx_datatype(rogue) is False
-    assert QONNX_DATATYPE_SEMANTICS.accepts(rogue) is False
     with refused("datatype-not-qonnx", error=DatatypeError):
         canonical_qonnx_datatype(rogue)
 
@@ -192,7 +202,8 @@ def test_recognition_is_total_over_arbitrary_failures() -> None:
     assert isinstance(rogue, BaseDataType)
 
     assert is_qonnx_datatype(rogue) is False
-    assert QONNX_DATATYPE_SEMANTICS.accepts(rogue) is False
+    # The annotation's check, ``isinstance``, runs no method of it either.
+    assert QONNX_DATATYPE_SEMANTICS.accepts(rogue) is True
     with refused("datatype-not-qonnx", error=DatatypeError):
         canonical_qonnx_datatype(rogue)
 
@@ -200,15 +211,15 @@ def test_recognition_is_total_over_arbitrary_failures() -> None:
 # -- immutability ------------------------------------------------------------
 
 
-def test_freezing_keeps_the_one_immutable_value() -> None:
+def test_a_datatype_is_held_as_the_one_immutable_value() -> None:
     """A datatype is a value: one instance per canonical name, frozen once built.
 
-    The snapshot is the caller's instance itself, and no field of it can be
+    Its canonical form is the caller's instance itself, and no field of it can be
     reassigned, so nothing can rename a datatype underneath a value holding it.
     """
 
     supplied = DataType["INT8"]
-    frozen = cast(QONNXDataType, QONNX_DATATYPE_SEMANTICS.freeze(supplied))
+    frozen = canonical(supplied)
     assert frozen is supplied and supplied is DataType["INT8"]
     with pytest.raises(AttributeError, match="immutable datatype value"):
         setattr(supplied, "_bitwidth", 9)
@@ -233,5 +244,5 @@ def test_equality_follows_canonical_identity() -> None:
     left = DataType["FIXED<8,4>"]
     right = DataType["FIXED<8,4>"]
     assert left is right  # one instance per canonical name
-    assert QONNX_DATATYPE_SEMANTICS.values_equal(left, right) is True
-    assert QONNX_DATATYPE_SEMANTICS.values_equal(left, DataType["FIXED<8,3>"]) is False
+    assert same(left, right, owner="test", role="test") is True
+    assert same(left, DataType["FIXED<8,3>"], owner="test", role="test") is False

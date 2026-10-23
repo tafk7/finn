@@ -250,9 +250,9 @@ _TRANSFORM: ContextVar[_Transformation | None] = ContextVar(
 
 @contextmanager
 def transformation(role: str) -> Iterator[None]:
-    """A pure value transformation (recognition, equality, a snapshot): it may transform
-    the values it is given but never read a configuration; a read refused in it fails
-    the transformation even where the adapter catches the error."""
+    """A pure value transformation (a recognition): it never reads a configuration; a
+    read refused in it fails the transformation even where the recognizer catches the
+    error."""
     context = _Transformation(role, _TRANSFORM.get())
     token = _TRANSFORM.set(context)
     try:

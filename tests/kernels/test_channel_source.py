@@ -53,6 +53,7 @@ from finn.kernels.dotp import DotpAxiKernel
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Fact, Interface, Network, NetworkError, wire
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
 
 STORED_INSTANCE = "w.source.memstream"
@@ -135,7 +136,7 @@ def stored(platform: Platform) -> Network:
             "matmul": MatMulKernel(
                 **{**KNOWN, "platform": platform},
                 x_tensor=Tensor((3, 4), INT3),
-                w_contents=WEIGHTS,
+                w_contents=IntegerTensorValue.of(WEIGHTS),
             ),
         }
     )
@@ -390,7 +391,7 @@ def test_a_source_whose_rule_is_false_refuses_the_change_that_places_it():
         "matmul": MatMulKernel(
             **KNOWN,
             x_tensor=Tensor((3, 4), INT3),
-            w_contents=(WEIGHTS, WEIGHTS),
+            w_contents=IntegerTensorValue.of((WEIGHTS, WEIGHTS)),
         ),
     }
     folding = {**FOLDING, "matmul.pe": 2, "matmul.simd": 2}
@@ -469,7 +470,7 @@ def test_a_channel_with_a_value_has_its_source_as_its_only_producer():
             ),
             "y": wire(
                 tensor=y_tensor,
-                contents=((0,) * 4,) * 3,
+                contents=IntegerTensorValue.of(((0,) * 4,) * 3),
                 producer=Interface("matmul", "y_contract"),
                 platform=FULL_DSP48E2,
             ),

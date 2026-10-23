@@ -36,11 +36,11 @@ from finn.core.space import (
     Select,
     Space,
     ValueHandle,
-    ValueSemantics,
     View,
     ViewAssessment,
     ViewKey,
     constraint,
+    default_semantics,
     derived,
     design_space,
     inspection,
@@ -53,8 +53,7 @@ class DType:
     bits: int
 
 
-DTYPE = ValueSemantics.immutable_nominal(DType)
-INT = ValueSemantics.immutable_nominal(int)
+INT = default_semantics(int)
 COST = ViewKey("cost", int)
 
 
@@ -155,10 +154,10 @@ class Fifo(Space):
 
 
 class Eltwise(Space):
-    activation: DType = Param(semantics=DTYPE)
-    weight: DType = Param(semantics=DTYPE)
+    activation: DType = Param()
+    weight: DType = Param()
 
-    @derived(a=activation, b=weight, semantics=DTYPE)
+    @derived(a=activation, b=weight)
     def result_dtype(*, a: DType, b: DType) -> QueryResult[DType]:
         return Available(DType(max(a.bits, b.bits) + 1))
 

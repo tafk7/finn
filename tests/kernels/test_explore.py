@@ -61,6 +61,7 @@ from finn.kernels.network import Fact, Interface, Network, NetworkError, Wire, d
 from finn.kernels.policies import Required
 from finn.kernels.thresholding import ThresholdingAxiKernel
 from finn.kernels.utilization import total
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import RESOURCE_NAMES, Platform, Resources
 
 
@@ -391,7 +392,7 @@ def dsp58_matmul() -> tuple[Seam, Network]:
             weights_dtype=chain.W,
             platform=FULL_DSP58,
             x_tensor=x_tensor,
-            w_contents=chain.W1,
+            w_contents=IntegerTensorValue.of(chain.W1),
         )
 
     y_tensor = design_space(first()).y_tensor

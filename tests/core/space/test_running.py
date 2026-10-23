@@ -33,21 +33,14 @@ modes, against the public API and the reference model, through the class-based o
   not with it off, and the toys' and the reference walks with it on, with no disagreement
   and no impure function; caches wrong on purpose (a read left out of each key; a width
   bound applied to the key rather than to whether an answer is kept, by the comparison and
-  by the purity check) caught; each type the cache keys by ``==`` checked against its value
-  semantics, the rules keying an enum member by type and name (an ``==`` or hash of its
-  class's own or a mixin's giving misses only) and a value class field by field checked on
-  sample classes, and nothing else keyed: no value under semantics of its own whose equality
-  is not ``==`` (two design spaces differing only in two values ``==`` holds equal and such
-  semantics tell apart answer as the public API's by that check alone), nor a value class with a
-  field annotated so.
+  by the purity check) caught; each type the cache keys by type and ``==`` checked against
+  sameness (of one type, equal by ``==``), the rules keying an enum member by type and name
+  (an ``==`` or hash of its class's own or a mixin's giving misses only) and a value class
+  field by field checked on sample classes, and nothing else keyed.
 - **Value types** (``finn.core.space.value_type``): a registered class keyed by type and
   ``==``, alone, in a tuple and as a field, apart from what its ``==`` holds equal to it
-  (a string), under the default semantics and under semantics declaring
-  ``equal=operator.eq``, and nothing before it is registered; the classes its registration
-  covers; a fact of one found again in a second design space, answering as the public API's.
-- **The facts layer's domain outcomes**, keyed as the cache keys values: a membership
-  candidate under semantics finer than ``==`` gets its own verdict, as the public API's; with the
-  semantics left out of that key, another candidate's.
+  (a string), and nothing before it is registered; the classes its registration covers; a
+  fact of one found again in a second design space, answering as the public API's.
 
 The implementations are loaded by name, as ``--implementation`` names them
 (``core.space._running_type``, a private module of these tests).
@@ -56,12 +49,9 @@ The implementations are loaded by name, as ``--implementation`` names them
 from __future__ import annotations
 
 import gc
-import importlib
 import itertools
 import math
-import operator
 import os
-import pkgutil
 import re
 import subprocess
 import sys
@@ -72,7 +62,7 @@ from dataclasses import dataclass, field
 from enum import Enum, Flag, auto
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
-from typing import Annotated, Any, cast
+from typing import Any, cast
 
 import pytest
 from support.space_oracle import Answers, Implementation, compare, forms, load, toys
@@ -124,7 +114,6 @@ from finn.core.space import (
     derived,
     design_space,
     divisors_of,
-    domain,
     inspection,
     reject,
     value_type,
@@ -138,16 +127,15 @@ from finn.core.space._running.cache import (
     PLAIN,
     NodeCache,
     enum_key,
-    trusted,
     value_class,
 )
 from finn.core.space._running.cache import key as cache_key
 from finn.core.space._running.evaluate import MembershipReadsChoice, Session
-from finn.core.space._running.value import DesignSpace, FactsLayer, hashkey
+from finn.core.space._running.value import DesignSpace, FactsLayer
 from finn.core.space._scopes import Address
 from finn.core.space._value_types import is_value_type
 from finn.core.space.occurrence import held
-from finn.core.space.semantics import default_semantics
+from finn.core.space.semantics import NotAValue, canonical, default_semantics
 
 RUNNING: Implementation = load("core.space._running_type:RUNNING")
 RUNNING_DROPPING: Implementation = load("core.space._running_type:RUNNING_DROPPING")
@@ -1561,14 +1549,11 @@ def test_the_reference_walks_hold_strictly_with_the_purity_check_over_the_cache(
 
 # -- the value types the cache keys -------------------------------------------------------------
 #
-# The cache matches values by type and ``==`` (``cache.key``): where a type's ``==`` is
-# coarser than its value semantics, the cache is wrong, not slow. So it keys only a value
-# whose choice or fact has semantics comparing by ``==`` (``cache.trusted``: the default
-# ones, or semantics declaring ``equal=operator.eq``), and among those the plain types
-# (``cache.PLAIN``), each listed here with the value
-# semantics in force and its ``==`` and hash checked against them (``answers._same_value``):
-# values equal by the semantics are ``==`` and hash alike, and values the semantics tell
-# apart are not ``==``, so their keys differ. An enum member is keyed by its type and its
+# The cache matches values by type and ``==`` (``cache.key``), which are every value's
+# semantics: two values are the same exactly when they are of one type and ``==`` holds them
+# equal (``answers._same_value``). It keys the plain types (``cache.PLAIN``), each listed here
+# with its ``==`` and hash checked against sameness: the same values hash alike, and values
+# ``==`` tells apart keep different keys. An enum member is keyed by its type and its
 # name (``cache.enum_key``), whatever its class overrides or mixes in: an equal key is the
 # same member, so an ``==`` or a hash of its own (``OwnEq``, ``OwnHash``) or a mixin's
 # (``Mixed``, an ``int`` enum) gives misses only (a combination of flags, not found by its
@@ -1576,17 +1561,12 @@ def test_the_reference_walks_hold_strictly_with_the_purity_check_over_the_cache(
 # keyed item by item; a value class (``cache.value_class``: a frozen dataclass whose ``==``
 # and hash are the generated ones) field by field, each field's value keyed in turn (an
 # enum member included: ``Moded``). The rules are checked on this module's own sample
-# classes: under the default semantics, an enum's identity and a frozen dataclass's
-# generated ``==`` are its semantics' equality, and its key is never coarser. A
-# value under semantics of its own comparing by another function (``PAIR``, ``ENCODING``,
-# ``WIDTH``) has no key, whatever its type, and neither has a value class with a field
-# annotated with them (``Labelled``): the cache cannot read a function's equality, and
-# ``WIDTH``'s is finer than ``==``. A registered value type is keyed by type and ``==``
+# classes: an enum's identity and a frozen dataclass's generated ``==`` are its equality,
+# and its key is never coarser. A registered value type is keyed by type and ``==``
 # (``value_type``, below, on a copy of the register); any other type has no key, nor has
 # an unhashable one, and nothing that read it is kept: an unlisted type is a miss, never a
-# wrong answer.
-
-NAN, OTHER_NAN = float("nan"), float("nan")
+# wrong answer. A NaN never reaches the cache from a fact or a choice (it is refused where
+# it enters, ``semantics.canonical``), and a ``-0.0`` is ``0.0`` there.
 
 
 @dataclass(frozen=True)
@@ -1614,14 +1594,6 @@ class Stream:
     dtype: Encoding
     shape: tuple[int, ...]
     rate: float
-
-
-@dataclass(frozen=True)
-class Tagged:
-    """A field left out of ``==`` (``compare=False``) is left out of the key."""
-
-    n: int
-    note: str = field(default="", compare=False)
 
 
 @dataclass(frozen=True)
@@ -1661,15 +1633,6 @@ class Bag:
     values: list[int]
 
 
-BAG = ValueSemantics(
-    Bag,
-    "bag",
-    lambda value: type(value) is Bag,
-    lambda left, right: left.values == right.values,
-    lambda value: Bag(list(value.values)),
-)
-
-
 class Grid:
     """A value like an array: ``==`` answers cell by cell, with no truth value."""
 
@@ -1691,55 +1654,11 @@ class Cells:
         raise ValueError("the truth value of a grid comparison is ambiguous")
 
 
-GRID = ValueSemantics(
-    Grid,
-    "grid",
-    lambda value: type(value) is Grid,
-    lambda left, right: left.cells == right.cells,
-    lambda value: Grid(value.cells),
-)
-
-PAIR: ValueSemantics[tuple[int, int]] = ValueSemantics(
-    tuple[int, int],
-    "pair",
-    lambda value: type(value) is tuple and len(value) == 2,
-    lambda left, right: left == right,
-    lambda value: value,
-)
-
-ENCODING = ValueSemantics.immutable_nominal(Encoding)
-
-
-@dataclass(frozen=True)
-class Width:
-    """Equal by ``bits`` alone (``note`` is left out of ``==``), and told apart by its
-    semantics (``WIDTH``) by both: semantics finer than ``==``."""
-
-    bits: int
-    note: str = field(default="", compare=False)
-
-
-WIDTH: ValueSemantics[Width] = ValueSemantics(
-    Width,
-    "width",
-    lambda value: type(value) is Width,
-    lambda left, right: (left.bits, left.note) == (right.bits, right.note),
-    lambda value: value,
-)
-
-
-@dataclass(frozen=True)
-class Labelled:
-    """A value class with a field annotated with semantics of its own: not keyed."""
-
-    width: Annotated[Width, WIDTH]
-
-
 @dataclass(frozen=True)
 class Counted:
-    """A value class with a field annotated with the default semantics: keyed."""
+    """A value class with an int field: keyed."""
 
-    count: Annotated[int, default_semantics(int)]
+    count: int
 
 
 class Mode(Enum):
@@ -1813,7 +1732,7 @@ VALUE_TYPES: dict[str, tuple[ValueSemantics[Any], tuple[object, ...]]] = {
     "None": (default_semantics(type(None)), (None,)),
     "bool": (default_semantics(bool), (False, True)),
     "int": (default_semantics(int), (0, 1, 2, -1, 10**20)),
-    "float": (default_semantics(float), (0.0, -0.0, 1.0, 0.1, math.inf, NAN, OTHER_NAN)),
+    "float": (default_semantics(float), (0.0, -0.0, 1.0, 0.1, math.inf)),
     "complex": (default_semantics(complex), (0j, complex(-0.0, 0.0), 1 + 2j)),
     "str": (default_semantics(str), ("", "a", "A", "a ")),
     "bytes": (default_semantics(bytes), (b"", b"a")),
@@ -1825,13 +1744,8 @@ VALUE_TYPES: dict[str, tuple[ValueSemantics[Any], tuple[object, ...]]] = {
         default_semantics(frozenset),
         (frozenset(), frozenset({1}), frozenset({True}), frozenset({1, 2})),
     ),
-    "pair": (PAIR, ((1, 2), (2, 1), (1, 1), (True, 2))),
     "Encoding": (
         default_semantics(Encoding),
-        (Encoding(8), Encoding(8, False), Encoding(16), Encoding(8, cast(bool, 1))),
-    ),
-    "Encoding (immutable nominal)": (
-        ENCODING,
         (Encoding(8), Encoding(8, False), Encoding(16), Encoding(8, cast(bool, 1))),
     ),
     "Spec": (
@@ -1851,11 +1765,8 @@ VALUE_TYPES: dict[str, tuple[ValueSemantics[Any], tuple[object, ...]]] = {
             Stream(Encoding(16), (1, 2), 0.0),
             Stream(Encoding(8, cast(bool, 1)), (1, 2), 0.0),
             Stream(Encoding(8), (True, 2), 0.0),
-            Stream(Encoding(8), (1, 2), NAN),
-            Stream(Encoding(8), (1, 2), OTHER_NAN),
         ),
     ),
-    "Tagged": (default_semantics(Tagged), (Tagged(1), Tagged(1, "a"), Tagged(2))),
     "Counted": (default_semantics(Counted), (Counted(1), Counted(cast(int, True)), Counted(2))),
     "Mode": (default_semantics(Mode), (Mode.FAST, Mode.SLOW, Mode.QUICK, Mode(1))),
     "Moded": (
@@ -1863,10 +1774,9 @@ VALUE_TYPES: dict[str, tuple[ValueSemantics[Any], tuple[object, ...]]] = {
         (Moded(Mode.FAST, 1), Moded(Mode.QUICK, 1), Moded(Mode.SLOW, 1), Moded(Mode.FAST, 2)),
     ),
 }
-"""Each hashable value type by name: its value semantics, and values to compare. Those
-under semantics of their own (``PAIR``, ``ENCODING``) are left unkeyed."""
+"""Each hashable value type by name: its type check, and values to compare."""
 
-VALUE_CLASSES = (Spec, Encoding, Capabilities, Stream, Tagged, Counted, Moded)
+VALUE_CLASSES = (Spec, Encoding, Capabilities, Stream, Counted, Moded)
 """The sample value classes above, each keyed by the rule."""
 
 NOT_VALUE_CLASSES: dict[str, tuple[type, object]] = {
@@ -1874,7 +1784,6 @@ NOT_VALUE_CLASSES: dict[str, tuple[type, object]] = {
     "equal by identity": (Identity, Identity(1)),
     "mutable": (Bag, Bag([1])),
     "a plain subclass": (Inherits, Inherits(True, 1)),
-    "a field with semantics of its own": (Labelled, Labelled(Width(8))),
 }
 """Classes the rule does not key, each with a value."""
 
@@ -1886,20 +1795,21 @@ OVERRIDING_ENUMS: dict[str, type[Enum]] = {
 """Enums overriding ``Enum``'s ``==`` or hash, one override of each kind: keyed all the
 same, misses only."""
 
-UNHASHABLE: dict[str, tuple[ValueSemantics[Any], tuple[object, ...]]] = {
-    "list": (default_semantics(list), ([], [1], [1, 2])),
-    "Bag": (BAG, (Bag([1]), Bag([1, 2]))),
-    "Grid": (GRID, (Grid((1,)), Grid((1, 2)))),
+UNHASHABLE: dict[str, tuple[object, ...]] = {
+    "list": ([], [1], [1, 2]),
+    "Bag": (Bag([1]), Bag([1, 2])),
+    "Grid": (Grid((1,)), Grid((1, 2))),
 }
-"""Each unhashable value type by name: never keyed."""
+"""Each unhashable type by name, with samples: never keyed (and refused where a value enters
+a design space, ``semantics.canonical``)."""
 
 HARNESS = (bool, int, str, tuple)
 """The value types the reference harness's builder gives a choice or a fact."""
 
 
 def plain_key(value: object) -> object:
-    """``value``'s key as a choice or fact of its type's default semantics holds it."""
-    return cache_key(value, default_semantics(type(value)))
+    """``value``'s key, as the cache keys it (by type and ``==``)."""
+    return cache_key(value)
 
 
 def _member(semantics: ValueSemantics[Any]) -> Address:
@@ -1908,44 +1818,38 @@ def _member(semantics: ValueSemantics[Any]) -> Address:
 
 
 @pytest.mark.parametrize("name", sorted(VALUE_TYPES))
-def test_a_value_types_equality_and_hash_agree_with_its_semantics(name: str) -> None:
-    """Under the default semantics, each sample is keyed, and in the safe direction: a key
-    hit is a value the semantics hold equal. Under semantics of their own comparing by
-    another function (``PAIR``, ``ENCODING``), none is keyed."""
+def test_a_value_types_equality_and_hash_agree_with_its_key(name: str) -> None:
+    """Each sample is keyed, and in the safe direction: a key hit is the same value (of one
+    type, equal by ``==``); values ``==`` tells apart keep different keys."""
     semantics, values = VALUE_TYPES[name]
     member = _member(semantics)
     assert all(semantics.accepts(value) for value in values)
-    if not trusted(semantics):
-        assert all(cache_key(value, semantics) is None for value in values)
     for left, right in itertools.product(values, repeat=2):
         same = _same_value(member, left, right)
-        if left is not right:  # a value is its own (a NaN is not ``==`` to itself)
+        if left is not right:
             assert (left == right) is same, (left, right)
         if same:
             assert hash(left) == hash(right), (left, right)
-        if not trusted(semantics):
-            continue
         if not same:
-            assert cache_key(left, semantics) != cache_key(right, semantics), (left, right)
-        if cache_key(left, semantics) == cache_key(right, semantics):
-            assert same, (left, right)  # a hit is never a value the semantics tell apart
-    if trusted(semantics):
-        assert all(cache_key(value, semantics) is not None for value in values)
+            assert cache_key(left) != cache_key(right), (left, right)
+        if cache_key(left) == cache_key(right):
+            assert same, (left, right)  # a hit is never a value ``==`` tells apart
+    assert all(cache_key(value) is not None for value in values)
 
 
 @pytest.mark.parametrize("name", sorted(UNHASHABLE))
 def test_an_unhashable_value_type_is_never_keyed(name: str) -> None:
-    semantics, values = UNHASHABLE[name]
-    assert all(semantics.accepts(value) for value in values)
-    assert all(cache_key(value, semantics) is None for value in values)
-    assert cache_key((1, values[0]), default_semantics(tuple)) is None
+    values = UNHASHABLE[name]
+    assert all(cache_key(value) is None for value in values)
+    assert cache_key((1, values[0])) is None
 
 
-def test_true_and_1_and_the_two_zeros_are_keyed_as_their_semantics_say() -> None:
+def test_true_and_1_and_the_two_zeros_are_keyed_as_sameness_says() -> None:
     """``True`` and ``1``: no member holds both (each type recognizes its own), and their
-    keys differ. Inside a tuple or a value class the semantics hold them equal, and the key
-    still tells them apart: a miss, never a wrong hit. ``-0.0`` and ``0.0`` are equal by
-    the semantics, and keyed alike, alone, inside a tuple and inside a value class."""
+    keys differ. Inside a tuple or a value class ``==`` holds them equal, and the key still
+    tells them apart: a miss, never a wrong hit. ``-0.0`` and ``0.0`` are the same value,
+    keyed alike, alone, inside a tuple and inside a value class; where a value enters a
+    design space ``-0.0`` is ``0.0``, and a NaN is refused (``semantics.canonical``)."""
     boolean, integer, pair = (
         VALUE_TYPES["bool"][0],
         VALUE_TYPES["int"][0],
@@ -1966,17 +1870,18 @@ def test_true_and_1_and_the_two_zeros_are_keyed_as_their_semantics_say() -> None
     )
     stream = Stream(Encoding(8), (1,), 0.0)
     assert plain_key(stream) == plain_key(Stream(Encoding(8), (1,), -0.0))
-    assert not _same_value(_member(real), NAN, OTHER_NAN) and plain_key(NAN) != plain_key(OTHER_NAN)
+    assert str(canonical(-0.0)) == "0.0" and canonical((-0.0, 1)) == (0.0, 1)
+    with pytest.raises(NotAValue, match="NaN"):
+        canonical(float("nan"))
 
 
 def test_the_cache_keys_the_types_this_test_checks_and_value_classes_by_their_rule() -> None:
     """Every plain type the cache keys by ``==`` (``cache.PLAIN``), tuples and frozen sets
-    are types whose semantics this test checks, and so are the harness's. The
-    rule (``cache.value_class``) holds for each sample value class, and for none of the
-    classes it must not key: a hand-written ``==``, equality by identity, a mutable
-    dataclass, a plain subclass of a value class, one with a field annotated with
-    semantics of its own. A value class holding a value with no key has none."""
-    checked = {semantics.type_token for semantics, _ in VALUE_TYPES.values() if trusted(semantics)}
+    are types this test checks, and so are the harness's. The rule (``cache.value_class``)
+    holds for each sample value class, and for none of the classes it must not key: a
+    hand-written ``==``, equality by identity, a mutable dataclass, a plain subclass of a
+    value class. A value class holding a value with no key has none."""
+    checked = {semantics.type_token for semantics, _ in VALUE_TYPES.values()}
     assert {*PLAIN, tuple, frozenset, *HARNESS} <= checked
     assert set(VALUE_CLASSES) <= checked
     assert all(value_class(kind) for kind in VALUE_CLASSES)
@@ -2064,12 +1969,12 @@ def test_a_value_of_a_type_not_keyed_keeps_nothing_and_a_value_class_is_found_ag
     is keyed, and found again. Both answer as the public API."""
 
     class Holds(Space):
-        rate = Param(semantics=default_semantics(HandWritten))
+        rate: HandWritten = Param()
         n: int = Param()
 
         @derived
         def total(self) -> int:
-            return cast(int, cast(Any, self.rate).lanes) * 2
+            return self.rate.lanes * 2
 
         @derived
         def double(self) -> int:
@@ -2105,9 +2010,7 @@ def test_a_value_of_a_type_not_keyed_keeps_nothing_and_a_value_class_is_found_ag
 # -- value types --------------------------------------------------------------------------
 #
 # A class its owner registers (``finn.core.space.value_type``) is keyed by type and ``==``,
-# alone, in a tuple and as a field of a value class, under semantics the cache trusts: the
-# default ones, and semantics declaring ``equal=operator.eq`` (``NAME``), not the same
-# comparison by another function (``NAME_BY_FUNCTION``). ``Name`` is equal to its text, a
+# alone, in a tuple and as a field of a value class. ``Name`` is equal to its text, a
 # string, as a QONNX datatype is equal to its name: the key tells the two apart. A class
 # derived from it in this module that keeps its ``==`` and hash is keyed as it
 # (``Spelled``); one with an ``==`` of its own (``Shouted``) is not, nor one defined in
@@ -2170,33 +2073,11 @@ class Named:
     lanes: int
 
 
-NAME: ValueSemantics[Name] = ValueSemantics(
-    Name, "name", lambda value: isinstance(value, Name), operator.eq, lambda value: value
-)
-"""Semantics of a name's own, comparing by ``==`` (``operator.eq``): trusted."""
-
-NAME_BY_FUNCTION: ValueSemantics[Name] = ValueSemantics(
-    Name,
-    "name, by a function",
-    lambda value: isinstance(value, Name),
-    lambda left, right: left == right,
-    lambda value: value,
-)
-"""The same comparison by another function: not trusted, the cache cannot read it."""
-
-
 @dataclass(frozen=True)
 class Titled:
-    """A value class whose field is annotated with ``NAME``: keyed field by field."""
+    """A value class holding a name: keyed field by field once ``Name`` is registered."""
 
-    name: Annotated[Name, NAME]
-
-
-@dataclass(frozen=True)
-class TitledByFunction:
-    """A value class whose field is annotated with ``NAME_BY_FUNCTION``: not keyed."""
-
-    name: Annotated[Name, NAME_BY_FUNCTION]
+    name: Name
 
 
 @pytest.fixture
@@ -2232,33 +2113,16 @@ def test_a_value_type_is_keyed_once_registered_and_apart_from_what_its_eq_holds_
         value_type(cast(type, one))
 
 
-@pytest.mark.usefixtures("register")
-def test_semantics_comparing_by_eq_are_trusted_for_the_types_the_cache_keys() -> None:
-    """``NAME`` declares ``operator.eq``: trusted, its values keyed, and a field annotated
-    with it keyed too. ``NAME_BY_FUNCTION`` compares alike by another function: not
-    trusted. The trust widens which semantics are keyed, not which types: a ``HandWritten``
-    under semantics declaring ``operator.eq`` still has no key."""
-    value_type(Name)
-    assert trusted(NAME) and not trusted(NAME_BY_FUNCTION)
-    assert cache_key(Name("a"), NAME) == (Name, Name("a"))
-    assert cache_key(Name("a"), NAME_BY_FUNCTION) is None
-    assert value_class(Titled) and plain_key(Titled(Name("a"))) == plain_key(Titled(Name("a")))
-    assert not value_class(TitledByFunction) and plain_key(TitledByFunction(Name("a"))) is None
-    hand = ValueSemantics(
-        HandWritten, "hand", lambda value: type(value) is HandWritten, operator.eq, lambda v: v
-    )
-    assert trusted(hand) and cache_key(HandWritten(1, 8), hand) is None
-
-
 @pytest.mark.usefixtures("register", "purity_unchecked")
 def test_a_fact_of_a_value_type_is_found_again_and_answers_as_the_public_apis() -> None:
-    """A fact holding a ``Name`` under ``NAME`` is keyed once ``Name`` is registered, and
-    what read it is found again in a second design space; a name of another text is a
-    miss. Each answers as the public API."""
+    """A fact holding a ``Name`` is keyed once ``Name`` is registered, and what read it is
+    found again in a second design space; a name of another text is a miss. Each answers as
+    the public API. A value class holding one is keyed field by field."""
     value_type(Name)
+    assert value_class(Titled) and plain_key(Titled(Name("a"))) == plain_key(Titled(Name("a")))
 
     class Greeting(Space):
-        name = Param(semantics=NAME)
+        name: Name = Param()
 
         @derived
         def length(self) -> int:
@@ -2272,197 +2136,3 @@ def test_a_fact_of_a_value_type_is_found_again_and_answers_as_the_public_apis() 
         assert compare.everything(public, made).lines() == [], text
     found = counters(running)
     assert found.hits > 0 and found.calls["derived"] == 2  # ``length`` once a text
-
-
-# -- semantics finer than ``==`` ------------------------------------------------------------
-#
-# ``Noted``'s fact is a ``Width`` under ``WIDTH``, which tells apart two widths ``==`` holds
-# equal, and derives the note. Two design spaces differing only in the note never share an
-# answer through the cache: the rule keys no value under semantics it does not trust
-# (``cache.trusted``). With that check taken out, the second design space takes the first's
-# note. A ``Labelled``, a value class whose field is annotated with ``WIDTH``, is not keyed
-# either (``cache.value_class``). Its own semantics are the default ones, its ``==`` their
-# equality: two labels differing in the note alone are one value, to the public API as to
-# the running type, and a function that answers by that note is impure (the purity check
-# says so). So no answer depends on the field check: it is checked on the key alone.
-
-
-class Noted(Space):
-    width: Width = Param(semantics=WIDTH)
-
-    @derived
-    def note(self) -> str:
-        return self.width.note
-
-    @derived
-    def bits(self) -> int:
-        return self.width.bits
-
-
-NOTED = (Width(8, "a"), Width(8, "b"))
-
-
-def _notes(
-    implementation: Implementation, shape: type[Space], fact: str, values: tuple[object, ...]
-) -> tuple[list[object], list[str]]:
-    """Each value's design space, made by ``implementation`` one after the other: its note,
-    and what tells it apart from the public API's."""
-    notes: list[object] = []
-    lines: list[str] = []
-    for value in values:
-        made = implementation.make(shape, {fact: value}, {})
-        notes.append(made.query("note"))
-        lines += compare.everything(PUBLIC.make(shape, {fact: value}, {}), made).lines()
-    return notes, lines
-
-
-def test_values_equal_but_told_apart_by_their_semantics_never_share_an_answer() -> None:
-    assert NOTED[0] == NOTED[1] and hash(NOTED[0]) == hash(NOTED[1])
-    assert not _same_value(_member(WIDTH), *NOTED)
-    assert not trusted(WIDTH) and all(cache_key(value, WIDTH) is None for value in NOTED)
-    notes, lines = _notes(RUNNING_CACHED, Noted, "width", NOTED)
-    assert notes == [Available("a"), Available("b")]
-    assert lines == []
-    running = cached()
-    _notes(running, Noted, "width", NOTED)
-    tables = cast(NodeCache, running.cache).tables()
-    assert all(not read for table in tables for sets in table.values() for read in sets)
-
-
-def engine_semantics() -> list[ValueSemantics[Any]]:
-    """Every value semantics a module of the engine holds (``finn.core.space`` and the
-    modules below it), each once."""
-    package = importlib.import_module("finn.core.space")
-    modules = [package.__name__]
-    modules += [found.name for found in pkgutil.walk_packages(package.__path__, "finn.core.space.")]
-    found: dict[int, ValueSemantics[Any]] = {}
-    for name in modules:
-        for value in vars(importlib.import_module(name)).values():
-            if isinstance(value, ValueSemantics):
-                found.setdefault(id(value), value)
-    return list(found.values())
-
-
-def test_values_equal_answers_on_the_engines_samples_as_their_equal_did_on_the_values_given() -> (
-    None
-):
-    """``values_equal`` compares each side's snapshot (``freeze``); before, it compared the
-    values as given. No answer moves: none of these semantics' ``equal`` changed, and each
-    snapshot keeps its value's equality.
-
-    The pairs: every value semantics a module of the engine holds, and those of the samples
-    above (``VALUE_TYPES``, ``UNHASHABLE``, ``WIDTH``: the default ones of each type, and
-    ``PAIR``, ``ENCODING``, ``BAG``, ``GRID``, ``WIDTH`` of their own), each over every
-    ordered pair of the samples (``NOTED``'s too) it recognizes: equal as its ``equal``
-    holds the two as given. Each sample it does not recognize, beside one it does, either
-    way round: unequal, as before."""
-    semantics = engine_semantics()
-    assert {default_semantics(bool).name, "Located"} <= {found.name for found in semantics}
-    semantics += [found for found, _ in VALUE_TYPES.values()]
-    semantics += [found for found, _ in UNHASHABLE.values()] + [WIDTH]
-    pool = [
-        value for _, values in (*VALUE_TYPES.values(), *UNHASHABLE.values()) for value in values
-    ]
-    pool += NOTED
-    pairs = 0
-    for found in semantics:
-        known = [value for value in pool if found.accepts(value)]
-        for left, right in itertools.product(known, repeat=2):
-            given = bool(found.equal(left, right))
-            assert found.values_equal(left, right) is given, (found.name, left, right)
-            pairs += 1
-        for value in (value for value in pool if known and not found.accepts(value)):
-            assert not found.values_equal(value, known[0]), (found.name, value)
-            assert not found.values_equal(known[0], value), (found.name, value)
-    assert pairs > 500
-
-
-@pytest.mark.usefixtures("purity_unchecked")
-def test_without_the_semantics_check_the_cache_answers_with_another_design_spaces_note(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The same shape with ``cache.trusted`` taken out (every semantics trusted): the second
-    design space hits the first's note, and answers unlike the public API's."""
-    monkeypatch.setattr(cache_module, "trusted", lambda semantics: True)
-    running = cached()
-    notes, lines = _notes(running, Noted, "width", NOTED)
-    assert notes == [Available("a"), Available("a")]
-    assert lines != [] and counters(running).hits > 0
-
-
-def test_a_value_class_with_a_field_of_semantics_of_its_own_is_not_keyed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``Labelled`` is not keyed, alone or in a tuple; with the field check taken out
-    (``value_class``'s answers made again), it is keyed field by field, and two labels
-    ``WIDTH`` tells apart share a key."""
-    one, other = Labelled(Width(8, "a")), Labelled(Width(8, "b"))
-    assert not value_class(Labelled) and plain_key(one) is None and plain_key((1, one)) is None
-    assert value_class(Counted) and plain_key(Counted(1)) is not None
-    with monkeypatch.context() as patched:
-        patched.setattr(cache_module, "_own_semantics", lambda annotation: False)
-        patched.setattr(cache_module, "_VALUE_CLASSES", weakref.WeakKeyDictionary())
-        assert value_class(Labelled)
-        assert plain_key(one) == plain_key(other) is not None
-
-
-# -- the facts layer's domain outcomes, keyed as the cache keys values --------------------
-#
-# ``Approved``'s choice is a ``Width`` under ``WIDTH`` (finer than ``==``), its domain holding
-# a width by its note. Its membership verdicts are kept on the facts layer by the candidate
-# and the inputs' answers, each keyed as the cache keys values (``cache.key``, under its
-# member's semantics): a candidate under semantics of its own has no key, and its verdict is
-# not kept. So two candidates ``==`` holds equal and ``WIDTH`` tells apart get their own
-# verdicts, as the public API's. With the semantics left out of that key (by type and ``==``), the
-# second takes the first's.
-
-
-class Approved(Space):
-    width: Width = Decision(
-        semantics=WIDTH, domain=domain(accepts=lambda *, candidate: candidate.note == "a")
-    )
-
-
-def _expected() -> list[object]:
-    """Each of ``NOTED`` set on ``Approved`` with nothing stored, by the public API with no
-    cache: its report's form."""
-    return [
-        forms.report(PUBLIC.make(Approved, {}, {}).change({"width": value}, []).report)
-        for value in NOTED
-    ]
-
-
-def _verdicts(
-    implementation: Implementation, expected: list[object] | None = None
-) -> tuple[list[bool], list[str]]:
-    """Each of ``NOTED`` set on ``Approved`` with nothing stored, one after the other by
-    ``implementation`` (one facts layer): whether the change is accepted, and what tells its
-    report apart from ``expected`` (the public API with no cache's, ``_expected``)."""
-    expected = _expected() if expected is None else expected
-    accepted: list[bool] = []
-    lines: list[str] = []
-    for value, form in zip(NOTED, expected):
-        made = implementation.make(Approved, {}, {}).change({"width": value}, [])
-        accepted.append(made.report.accepted)
-        if forms.report(made.report) != form:
-            lines.append(f"{value}: expected {form!r}, found {made.report!r}")
-    return accepted, lines
-
-
-def test_a_candidate_under_semantics_finer_than_eq_gets_its_own_domain_verdict() -> None:
-    assert NOTED[0] == NOTED[1] and evaluate.answer_key(_member(WIDTH), Available(NOTED[0])) is None
-    assert _verdicts(cached()) == ([True, False], [])
-    assert _verdicts(fresh()) == ([True, False], [])
-
-
-@pytest.mark.usefixtures("purity_unchecked")
-def test_without_the_semantics_in_its_key_a_candidate_takes_anothers_domain_verdict(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The reports expected are made first, with the semantics in the key: the facts layer
-    the plant reads is the same model's (its domain outcomes shared by every design space
-    of those facts)."""
-    expected = _expected()
-    monkeypatch.setattr(evaluate, "value_key", lambda value, semantics: hashkey(value))
-    accepted, lines = _verdicts(fresh(), expected)
-    assert accepted == [True, True] and len(lines) == 1

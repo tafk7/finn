@@ -5,11 +5,16 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP48E2, THRESHOLDS, controlled, set_indices, threshold_base
+from support.helpers import (
+    FULL_DSP48E2,
+    THRESHOLDS,
+    controlled,
+    integer_tensor,
+    set_indices,
+    threshold_base,
+)
 from support.refusals import refused
 
 from finn.core.space import (
@@ -70,7 +75,7 @@ def threshold(
         facts = dict(
             input_tensor=Tensor((1, channels), element),
             threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
-            thresholds=table,
+            thresholds=integer_tensor(table),
             bias=bias,
             platform=FULL_DSP48E2,
         )
@@ -207,10 +212,19 @@ def test_threshold_rejects_unsupported_profiles_and_malformed_tables() -> None:
         pe=1, ram_style="distributed", block_stages=2, ultra_stages=1
     )
     assert not report.accepted and [rule.rule for rule in report.broken] == ["depth_triggers"]
-    # The table is an integer tensor: nothing else is one.
+    # The table is an integer tensor value: a nest is none, however well formed (it makes
+    # one, ``IntegerTensorValue.of``), and a malformed nest makes none.
+    facts = dict(
+        input_tensor=Tensor((1, 2), ScalarEncoding(DataType["INT8"])),
+        threshold_dtype=DataType["INT5"],
+        bias=-1,
+        platform=FULL_DSP48E2,
+    )
+    with refused("literal-unrecognized", error=DefinitionError, message="IntegerTensorValue"):
+        ThresholdingAxiKernel(**facts, thresholds=(((-2, 0, 3), (-1, 1, 4)),))
     for malformed in ((), (((0,), (0, 1)),), (([-2, 0, 3],),)):
-        with refused("literal-unrecognized", error=DefinitionError, message="integer tensor"):
-            threshold(table=cast(IntegerTensor, malformed), pe=None)
+        with pytest.raises(TypeError, match="integer tensor"):
+            IntegerTensorValue.of(malformed)
     # PE divides the input's channels, the table's two rows; another is refused where it
     # is committed.
     for pe in (0, 3, 4, 5):
@@ -288,7 +302,7 @@ def placed_on(channels: int, table: IntegerTensor) -> ThresholdingAxiKernel:
             ),
             "activate": ThresholdingAxiKernel(
                 threshold_dtype=DataType["INT5"],
-                thresholds=table,
+                thresholds=integer_tensor(table),
                 bias=-1,
                 input_tensor=x_tensor,
                 platform=FULL_DSP48E2,

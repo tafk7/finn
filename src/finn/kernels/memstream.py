@@ -87,10 +87,7 @@ from finn.kernels.utilization import (
 )
 from finn.kernels.values.domains import Integer, admit_element, set_index_dtype
 from finn.kernels.values.semantics import (
-    INTEGER_TENSOR,
-    INTEGER_VECTOR,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
-    IntegerTensor,
+    IntegerTensorValue,
     IntegerVector,
     integer_range,
     integer_shape,
@@ -128,9 +125,9 @@ class MemStreamKernel(KernelSpace):
     id = "finnlib.memstream_axi"
     clock_domain = NATIVE_CLOCKING
 
-    dtype: QONNXDataType = Param(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    dtype: QONNXDataType = Param()
     form: Traversal = Param()
-    contents: IntegerTensor = Param(semantics=INTEGER_TENSOR)
+    contents: IntegerTensorValue = Param()
     sets: int = Param(default=1)
     # The set indices its set port reads (several sets only): a fact it is given.
     set_tensor: Tensor | None = Param(default=None)
@@ -190,7 +187,7 @@ class MemStreamKernel(KernelSpace):
     def word_bits(self) -> int:
         return self.form.lanes * self.element.bits
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def set_dtype(self) -> QONNXDataType:
         return set_index_dtype(self.sets)
 
@@ -221,7 +218,7 @@ class MemStreamKernel(KernelSpace):
             return reject("memstream-set-channel", "the set channel carries a vector of indices")
         return True
 
-    @view(semantics=INTEGER_VECTOR)
+    @view
     def image(self) -> IntegerVector | Rejected:
         """Packed words, set after set, each set in the consumer's ``form``."""
         encoding, sets, form = self.element, self.sets, self.form

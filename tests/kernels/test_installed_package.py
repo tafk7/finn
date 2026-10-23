@@ -48,6 +48,7 @@ from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.library import library_module
 from finn.kernels.port import axis
 from finn.kernels.matmul import MatMulKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import DspBlock, Fabric, Platform
 from finn.dataflow.datatypes import ordinary_integer_bounds
 from finn.dataflow.tensor import ScalarEncoding, Tensor
@@ -176,7 +177,9 @@ for memory in ("none", "memstream"):
         # Stored (k, n): the columns of the by-output rows; MatMul's, and the weight
         # channel's value.
         weights = {
-            "w_contents": ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4)),
+            "w_contents": IntegerTensorValue.of(
+                ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4))
+            ),
             "weights_dtype": DataType["INT3"],
         }
         bits = 7

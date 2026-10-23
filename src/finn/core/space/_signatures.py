@@ -24,8 +24,8 @@ from .declarations import (
 )
 from .errors import DefinitionError
 from .expressions import Expr
-from .results import Available, Inapplicable, Rejected, Unresolved, marked_value_type
-from .semantics import ValueSemantics, default_semantics
+from .results import Available, Inapplicable, Rejected, Unresolved
+from .semantics import ValueSemantics, annotation_type
 
 if TYPE_CHECKING:
     from .collection import EffectiveSpace
@@ -81,6 +81,9 @@ def output_semantics(
     hints: Mapping[str, object],
     owner: str,
 ) -> ValueSemantics[object]:
+    """The type check of a function's value: its return annotation's (``T``, ``T |
+    Rejected``, ``QueryResult[T]``; ``semantics.annotation_type``), or the ``semantics=`` a
+    view states, which the annotation must agree with."""
     annotation = hints.get("return")
     if annotation is None:
         raise DefinitionError.broken(
@@ -90,57 +93,43 @@ def output_semantics(
             declaration=owner,
         )
     answer_type = _answer_value_type(annotation)
-    semantics = cast("ValueSemantics[object] | None", declaration.semantics)
-    if answer_type is not None and semantics is None:
-        raise DefinitionError.broken(
-            "semantics-unstated",
-            _OWNER,
-            f"{owner}: QueryResult[T] returns require explicit semantics=",
-            declaration=owner,
-        )
     value_type = answer_type if answer_type is not None else annotation
-    marked_type = marked_value_type(value_type)
-    value_type = marked_type if marked_type is not None else value_type
+    value_type = _unmarked(value_type)
+    stated = cast("ValueSemantics[object] | None", declaration.semantics)
+    if stated is None:
+        return cast(ValueSemantics[object], annotation_type(value_type, owner, owner=_OWNER))
     origin = get_origin(value_type)
     nominal_type = origin if origin is not None else value_type
-    if semantics is None:
-        if getattr(nominal_type, "_is_protocol", False):
-            raise DefinitionError.broken(
-                "semantics-unstated",
-                _OWNER,
-                f"{owner}: Protocol outputs require explicit semantics=",
-                declaration=owner,
-            )
-        if origin in (Union, types.UnionType) or not isinstance(nominal_type, type):
-            raise DefinitionError.broken(
-                "semantics-unstated",
-                _OWNER,
-                f"{owner}: output annotation needs explicit semantics=",
-                declaration=owner,
-            )
-        try:
-            semantics = default_semantics(nominal_type)
-        except (TypeError, ValueError) as exc:
-            raise DefinitionError.broken(
-                "semantics-unstated", _OWNER, f"{owner}: {exc}", declaration=owner
-            ) from exc
-    token_origin = get_origin(semantics.type_token)
-    nominal_token = semantics.type_token if token_origin is None else token_origin
+    token_origin = get_origin(stated.type_token)
+    nominal_token = stated.type_token if token_origin is None else token_origin
     if (
         origin not in (Union, types.UnionType)
         and isinstance(nominal_type, type)
         and isinstance(nominal_token, type)
         and not getattr(nominal_type, "_is_protocol", False)
+        and nominal_type is not nominal_token
     ):
-        if nominal_type is not nominal_token:
-            raise DefinitionError.broken(
-                "annotation-semantics-incompatible",
-                _OWNER,
-                f"{owner}: output annotation {nominal_type.__name__} is incompatible with "
-                f"{semantics.name} semantics",
-                declaration=owner,
-            )
-    return semantics
+        raise DefinitionError.broken(
+            "annotation-semantics-incompatible",
+            _OWNER,
+            f"{owner}: output annotation {nominal_type.__name__} is incompatible with "
+            f"{stated.name} semantics",
+            declaration=owner,
+        )
+    return stated
+
+
+def _unmarked(annotation: object) -> object:
+    """``annotation`` less the non-value markers (``T | Rejected`` is ``T``; ``T | None |
+    Rejected`` is ``T | None``)."""
+    if get_origin(annotation) not in (Union, types.UnionType):
+        return annotation
+    values = tuple(
+        arg for arg in get_args(annotation) if arg not in (Inapplicable, Rejected, Unresolved)
+    )
+    if len(values) == len(get_args(annotation)):
+        return annotation
+    return values[0] if len(values) == 1 else Union[values]  # noqa: UP007
 
 
 def resolve_source(source: object, effective: EffectiveSpace, owner: str) -> ValueRef[object]:
@@ -205,8 +194,8 @@ def _annotation_accepts(annotation: object, value_type: type[object]) -> bool:
         return issubclass(value_type, origin)
     if isinstance(annotation, type):
         if getattr(annotation, "_is_protocol", False):
-            # Non-runtime Protocols cannot be checked with issubclass. The
-            # explicit adapter semantics determines admissible runtime values.
+            # Non-runtime Protocols cannot be checked with issubclass: a view's
+            # stated semantics determine admissible runtime values.
             return True
         return issubclass(value_type, annotation)
     return True

@@ -4,11 +4,12 @@
 """An integer tensor is a value its producer states: shape, range and digest; its
 integers are loaded when first read.
 
-``INTEGER_TENSOR`` snapshots nested int tuples into an ``IntegerTensorValue`` by
-one walk; a producer holding the integers in another form states the facts and
-how to load them. Recognizing a value again is a type check, equality compares
-digests, and configuring a point that holds weights reads only the stated facts:
-the integers are loaded when a memory image is packed.
+A fact or choice annotated ``IntegerTensorValue`` takes the value, never a nest:
+nested int tuples make one by one walk (``IntegerTensorValue.of``); a producer
+holding the integers in another form states the facts and how to load them.
+Recognizing a value is a type check, equality compares digests, and configuring a
+point that holds weights reads only the stated facts: the integers are loaded when
+a memory image is packed.
 """
 
 from __future__ import annotations
@@ -24,12 +25,11 @@ from qonnx.core.datatype import DataType
 from qonnx.core.ranges import TensorRange
 from support.helpers import FULL_DSP48E2, choose, matmul_point
 
-from finn.core.space import Param, Space, derived, design_space
+from finn.core.space import DefinitionError, Param, RequestError, Space, derived, design_space
 from finn.core.space.occurrence import held
+from finn.core.space.semantics import canonical
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.values.semantics import (
-    INTEGER_TENSOR,
-    IntegerTensor,
     IntegerTensorValue,
     integer_bytes,
     integer_digest,
@@ -41,20 +41,21 @@ from finn.kernels.values.semantics import (
 WEIGHTS = ((1, -2, 3), (4, 5, -6))
 
 
-def test_the_snapshot_is_a_value_made_once() -> None:
-    value = INTEGER_TENSOR.freeze(WEIGHTS)
+def test_a_nest_makes_a_value_once() -> None:
+    value = IntegerTensorValue.of(WEIGHTS)
     assert type(value) is IntegerTensorValue and value == IntegerTensorValue.of(WEIGHTS)
     assert value.shape == (2, 3)
     assert value.integers == (1, -2, 3, 4, 5, -6) and integers(value) is value.integers
     assert value.range == (-6, 5) and integer_range(value) == (-6, 5)
     assert value.digest == integer_digest((2, 3), integer_bytes((1, -2, 3, 4, 5, -6)))
-    # Freezing the value again, copying or deep-copying it, is the value itself.
-    assert INTEGER_TENSOR.freeze(value) is value
+    # Its canonical form, a copy or a deep copy of it, is the value itself.
+    assert canonical(value) is value
     assert copy.copy(value) is value and copy.deepcopy(value) is value
     restored = pickle.loads(pickle.dumps(value))
     assert type(restored) is IntegerTensorValue and restored == value
-    assert INTEGER_TENSOR.values_equal(value, WEIGHTS)
-    assert not INTEGER_TENSOR.values_equal(value, ((1, -2, 3), (4, 5, -7)))
+    # Equal by digest to the value of the same nest, to no other, and never to a nest.
+    assert value != IntegerTensorValue.of(((1, -2, 3), (4, 5, -7)))
+    assert value != WEIGHTS
     with pytest.raises(AttributeError, match="immutable"):
         value.shape = (6,)
 
@@ -69,7 +70,6 @@ def test_the_digest_is_of_shape_and_integers() -> None:
 
 @pytest.mark.parametrize("wrong", ((), ((1, 2), (3,)), [[1]], ((True,),), ((1.0,),), 3))
 def test_what_is_no_integer_tensor_is_refused(wrong: object) -> None:
-    assert not INTEGER_TENSOR.accepts(wrong)
     with pytest.raises(TypeError):
         IntegerTensorValue.of(wrong)
 
@@ -182,10 +182,9 @@ def test_a_new_configuration_reads_only_the_stated_facts() -> None:
 
 
 class Held(Space):
-    """An optional integer tensor, its semantics ``INTEGER_TENSOR`` made optional (a
-    ``T | None`` annotation): ``None`` is checked first, and only a value is snapshot."""
+    """An optional integer tensor (a ``T | None`` annotation): ``None``, or the value."""
 
-    contents: IntegerTensor | None = Param(default=None, semantics=INTEGER_TENSOR)
+    contents: IntegerTensorValue | None = Param(default=None)
 
     @derived
     def rows(self) -> int:
@@ -203,9 +202,18 @@ def test_an_optional_integer_tensor_left_out_given_none_and_given() -> None:
     assert left_out.rows == 0 and given_none.rows == 0
     assert held(left_out).ds.layer is held(given_none).ds.layer
     assert held(left_out).ds == held(given_none).ds
-    given = design_space(Held(contents=WEIGHTS))
+    given = design_space(Held(contents=IntegerTensorValue.of(WEIGHTS)))
     assert given.contents == IntegerTensorValue.of(WEIGHTS) and given.rows == 2
     assert held(given).ds.layer is not held(left_out).ds.layer
-    # The nest and its value are one fact: the snapshot makes the value.
+    # Two values of one nest are one fact.
     again = design_space(Held(contents=IntegerTensorValue.of(WEIGHTS)))
     assert held(again).ds.layer is held(given).ds.layer
+
+
+def test_a_nest_given_for_an_integer_tensor_is_refused() -> None:
+    """The annotation is the check: a nest is no ``IntegerTensorValue``, given at the call
+    or as a change of facts; ``IntegerTensorValue.of`` makes the value."""
+    with pytest.raises(DefinitionError, match="IntegerTensorValue"):
+        Held(contents=cast(IntegerTensorValue, WEIGHTS))
+    with pytest.raises(RequestError, match="contents: expected value of nominal type"):
+        design_space(Held()).with_facts({Held.contents: WEIGHTS})

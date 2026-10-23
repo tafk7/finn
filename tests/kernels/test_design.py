@@ -49,6 +49,7 @@ from finn.dataflow.steps import Step
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.channels import Channel
 from finn.kernels.matmul import MatMulKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.toolchain.launcher import host_toolchain
 
 
@@ -125,7 +126,11 @@ def carried(
     whose tensor MatMul states over the datatype they are declared in) or a tensor of
     ``w``. ``declared``: whether ``weights_dtype`` is given (as known weights state it)."""
     declares = known if declared is None else declared
-    weights = {"w_contents": W1} if known else {"w_tensor": Tensor((INPUTS, HIDDEN), w)}
+    weights = (
+        {"w_contents": IntegerTensorValue.of(W1)}
+        if known
+        else {"w_tensor": Tensor((INPUTS, HIDDEN), w)}
+    )
     stated = MatMulKernel(
         platform=FULL_DSP48E2,
         x_tensor=Tensor((ROWS, INPUTS), x),

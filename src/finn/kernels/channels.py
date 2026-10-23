@@ -79,7 +79,6 @@ from finn.core.space import (
     Param,
     Rejected,
     Select,
-    ValueSemantics,
     View,
     constraint,
     derived,
@@ -120,7 +119,7 @@ from finn.kernels.fifo import FifoKernel
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.movers import MOVER, IodmaMover, MoverContract, MoverOffer
-from finn.kernels.port import STREAM, served
+from finn.kernels.port import served
 from finn.kernels.transport import (
     AxisBeat,
     Mismatch,
@@ -131,11 +130,7 @@ from finn.kernels.transport import (
     marker_pairs,
 )
 from finn.kernels.utilization import memory_preference, memory_styles, uram_constraint
-from finn.kernels.values.semantics import (
-    INTEGER_TENSOR,
-    QONNX_DATATYPE_VALUE_SEMANTICS,
-    IntegerTensor,
-)
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
 
 # -- the labels a channel's placements keep --------------------------------------------------
@@ -154,16 +149,6 @@ OUTPUT_ADAPTER_LABEL = "output_adapter.vpc"
 
 _PLACED = {"source": SOURCE_LABEL, "output_adapter": OUTPUT_ADAPTER_LABEL}
 """Each placement's node, and the label the channel's netlist places it at."""
-
-BOUNDARY_CONTRACT: ValueSemantics[StreamContract | None] = ValueSemantics(
-    StreamContract,
-    "boundary contract",
-    lambda value: value is None or isinstance(value, StreamContract),
-    lambda left, right: left == right,
-    lambda value: value,
-)
-"""The AXIS port a channel's module presents for its side without a port; None where both
-sides have one."""
 
 
 def boundary_contract(
@@ -436,12 +421,12 @@ class Channel(KernelSpace):
     # False admits no adapter: the two sides must connect directly.
     adaptable: bool = Param(default=True)
     port: str | None = Param(default=None)
-    producer: Stream | None = Param(default=None, semantics=STREAM)
-    consumer: Stream | None = Param(default=None, semantics=STREAM)
+    producer: Stream | None = Param(default=None)
+    consumer: Stream | None = Param(default=None)
     producer_label: str | None = Param(default=None)
     consumer_label: str | None = Param(default=None)
     producer_width: int | None = Param(default=None)
-    contents: IntegerTensor | None = Param(default=None, semantics=INTEGER_TENSOR)
+    contents: IntegerTensorValue | None = Param(default=None)
     sets: int = Param(default=1)
     index_tensor: Tensor | None = Param(default=None)
     platform: Platform = Param()
@@ -481,7 +466,7 @@ class Channel(KernelSpace):
         """One period of the value in the order its consumer reads it."""
         return period(self.consumed.sequence.form)
 
-    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    @derived
     def source_dtype(self) -> QONNXDataType:
         return self.tensor.element.dtype
 
@@ -490,7 +475,7 @@ class Channel(KernelSpace):
         when=valued,
         dtype=source_dtype,
         form=source_form,
-        contents=cast("IntegerTensor", contents),
+        contents=cast("IntegerTensorValue", contents),
         sets=sets,
         set_tensor=index_tensor,
         platform=platform,
@@ -570,7 +555,7 @@ class Channel(KernelSpace):
         port = cast(str, self.port)
         return boundary_contract(port, self.tensor.element, BeatSequence(form), endpoint)
 
-    @derived(semantics=BOUNDARY_CONTRACT)
+    @derived
     def boundary(self) -> StreamContract | None:
         """The AXIS port the module presents for the side without a port
         (``boundary_contract``: ``port``, the tensor's element, and what the other side

@@ -19,7 +19,6 @@ from finn.core.space import (
     Param,
     Space,
     Unresolved,
-    ValueSemantics,
     ValueUnavailableError,
     constraint,
     derived,
@@ -173,80 +172,6 @@ def test_contextual_domain_error_is_one_primary_failure() -> None:
     assert caught.value.owner == "choice" and caught.value.role == "domain membership"
     assert isinstance(caught.value.__cause__, LookupError)
     assert caught.value.cleanup_failures == ()
-
-
-def test_public_snapshot_failure_cannot_be_caught_into_success() -> None:
-    armed = False
-
-    def snapshot(value: list[int]) -> list[int]:
-        if armed:
-            raise LookupError("snapshot failure")
-        return list(value)
-
-    semantics = ValueSemantics(
-        list, "list", lambda value: type(value) is list, lambda left, right: left == right, snapshot
-    )
-
-    class Example(Space):
-        fact: list[int] = Param(semantics=semantics)
-
-        @derived
-        def output(self) -> int:
-            try:
-                return len(self.fact)
-            except EvaluationError:
-                return 99
-
-    point = design_space(Example(fact=[1]))
-    armed = True
-    with pytest.raises(NativeEvaluationError) as caught:
-        _ = point.output
-    assert isinstance(caught.value.__cause__, LookupError)
-    assert caught.value.primary.owner == "fact"
-    assert caught.value.cleanup_failures == ()
-
-
-@pytest.mark.parametrize("hook", ("recognition", "snapshot", "equality"))
-def test_semantic_transformations_cannot_read_configuration_even_when_caught(hook: str) -> None:
-    armed = False
-
-    class Facts(Space):
-        value: int = Param()
-
-    facts = design_space(Facts(value=7))
-
-    def probe(role: str) -> None:
-        if armed and hook == role:
-            try:
-                _ = facts.value
-            except EvaluationError:
-                pass
-
-    def recognizes(value: object) -> bool:
-        probe("recognition")
-        return type(value) is list
-
-    def snapshot(value: list[int]) -> list[int]:
-        probe("snapshot")
-        return list(value)
-
-    def equal(left: list[int], right: list[int]) -> bool:
-        probe("equality")
-        return left == right
-
-    semantics = ValueSemantics(list, "list", recognizes, equal, snapshot)
-
-    class Example(Space):
-        choice: list[int] = Decision(
-            domain=domain(accepts=lambda candidate: True), semantics=semantics
-        )
-
-    point = design_space(Example()).with_choices(choice=[1])
-    armed = True
-    with pytest.raises(EvaluationError, match="pure value transformation"):
-        point.with_choices(choice=[1])
-    armed = False
-    assert point.choice == [1] and facts.value == 7
 
 
 def test_blocked_self_constraint_keeps_its_inspectable_assessment() -> None:

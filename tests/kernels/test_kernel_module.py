@@ -54,6 +54,7 @@ from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.network import Interface, Network, wire
 from finn.kernels.port import AxiStreamPort, served
 from finn.kernels.utilization import RESOURCES_SEMANTICS
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Resources
 
 INT4 = DataType["INT4"]
@@ -201,7 +202,10 @@ def test_a_control_bus_presented_without_its_port_is_refused() -> None:
 def test_a_memstream_s_bus_is_held_by_construction() -> None:
     point = design_space(
         MemStreamKernel(
-            platform=FULL_DSP48E2, dtype=INT4, form=vector_major((4,), 2), contents=(1, 2, 3, 4)
+            platform=FULL_DSP48E2,
+            dtype=INT4,
+            form=vector_major((4,), 2),
+            contents=IntegerTensorValue.of((1, 2, 3, 4)),
         )
     )
     memory = commit(point, {"ram_style": "auto", "pumped_memory": False})

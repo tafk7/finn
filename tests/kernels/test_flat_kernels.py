@@ -19,6 +19,7 @@ from support.helpers import (
     codes,
     controlled,
     in_order,
+    integer_tensor,
     nested,
     point_for,
     set_indices,
@@ -44,7 +45,7 @@ from finn.kernels.fifo import FifoKernel
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.library import library_module
 from finn.kernels.thresholding import ThresholdingAxiKernel
-from finn.kernels.values.semantics import integer_shape
+from finn.kernels.values.semantics import IntegerTensorValue, integer_shape
 from finn.toolchain.launcher import host_toolchain
 
 FINNLIB = finnlib_root()
@@ -123,6 +124,7 @@ def threshold(*, use_axilite=False, deep_pipeline=False, pe=1, channels=None, **
         platform=FULL_DSP48E2,
     )
     facts.update(changes)
+    facts["thresholds"] = integer_tensor(facts["thresholds"])
     shape = integer_shape(facts["thresholds"])
     tabled = shape is not None and len(shape) == 3
     if channels is None:
@@ -289,13 +291,14 @@ def test_a_folding_factor_outside_its_domain_is_refused_where_it_is_committed(fa
 
 
 def test_typed_integer_vectors_and_tables_reject_mutable_or_mistyped_payloads():
-    invalid_scale = eltwise(b_scale=float("nan"))
-    assert isinstance(invalid_scale.query(EltwiseKernel.native_scale), Rejected)
-    assert isinstance(invalid_scale.inspect(EltwiseKernel.netlist).accepted_result, Rejected)
-    # A table is an integer tensor: a nonempty rectangular nest of int tuples.
+    # NaN is no value: refused where the scale enters, before the kernel reads it.
+    with pytest.raises(DefinitionError, match="b_scale.*NaN is no value"):
+        eltwise(b_scale=float("nan"))
+    # A table is an integer tensor value; a nest makes one only where it is a nonempty
+    # rectangular nest of int tuples.
     for bad in ((([-2, 0, 3],),), (), (((0,), (0, 1)),)):
-        with pytest.raises(DefinitionError):
-            threshold(thresholds=bad, pe=None)
+        with pytest.raises(TypeError, match="integer tensor"):
+            IntegerTensorValue.of(bad)
 
 
 @pytest.mark.parametrize(

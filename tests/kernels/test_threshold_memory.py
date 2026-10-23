@@ -22,6 +22,7 @@ from finn.core.space import ConfigurationResult, Inapplicable, design_space, ins
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.library import library_module
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import Platform
 
 INT8 = DataType["INT8"]
@@ -38,7 +39,7 @@ def configured(count: int = 3, pe: int = 1, **memory: object) -> ThresholdingAxi
         ThresholdingAxiKernel(
             input_tensor=INPUT,
             threshold_dtype=INT8,
-            thresholds=table(count),
+            thresholds=IntegerTensorValue.of(table(count)),
             bias=0,
             platform=FULL_DSP48E2,
         )
@@ -76,7 +77,7 @@ def test_the_stage_counts_range_over_the_rtl_stages(count: int, stages: int) -> 
         ThresholdingAxiKernel(
             input_tensor=INPUT,
             threshold_dtype=INT8,
-            thresholds=table(count),
+            thresholds=IntegerTensorValue.of(table(count)),
             bias=0,
             platform=FULL_DSP48E2,
         )
@@ -188,7 +189,7 @@ def test_the_platform_narrows_the_memories_and_a_control_bus_the_axilite() -> No
             ThresholdingAxiKernel(
                 input_tensor=INPUT,
                 threshold_dtype=INT8,
-                thresholds=table(3),
+                thresholds=IntegerTensorValue.of(table(3)),
                 bias=0,
                 platform=platform,
             )

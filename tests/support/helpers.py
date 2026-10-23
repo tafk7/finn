@@ -361,7 +361,7 @@ def matmul_network(
         form=form, platform=platform, x_tensor=Tensor(shape, ScalarEncoding(activation_dtype))
     )
     if weights is not None:
-        facts |= {"w_contents": weights, "weights_dtype": weights_dtype}
+        facts |= {"w_contents": integer_tensor(weights), "weights_dtype": weights_dtype}
     else:
         facts["w_tensor"] = Tensor((k, n), ScalarEncoding(weights_dtype))
     views = _views(space_type, facts, realization)
@@ -431,6 +431,15 @@ THRESHOLDS = IntegerTensorValue.of((((-2, 0, 3), (-1, 1, 4)),))
 """One threshold table, one set of two channels of three thresholds."""
 
 
+def integer_tensor(values: IntegerTensor) -> IntegerTensorValue:
+    """An integer tensor as a fact takes it: nested int tuples made its value
+    (``IntegerTensorValue.of``), anything else as it is (the kernel's annotation refuses
+    what is no ``IntegerTensorValue``)."""
+    if type(values) is tuple and integer_shape(values) is not None:
+        return IntegerTensorValue.of(values)
+    return cast(IntegerTensorValue, values)
+
+
 def set_indices(sets: int, beats: int) -> Tensor:
     """The set indices of a kernel of ``sets`` sets: one an input beat, of ``beats``
     beats, in FinnLib's selector type (``set_index_dtype``)."""
@@ -454,7 +463,7 @@ def threshold_base(
     facts: dict[str, Any] = dict(
         input_tensor=Tensor((1, count), ScalarEncoding(resolve_qonnx_datatype_name(input_dtype))),
         threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
-        thresholds=table,
+        thresholds=integer_tensor(table),
         bias=bias,
         platform=FULL_DSP48E2,
     )

@@ -3,7 +3,8 @@
 """The rest of the public questions, each a function of a design space value: what today's
 configuration, its bound accessors and ``inspection`` answer beyond presence, validity, the
 states, the possible values, a change and a bind (``questions``). Each returns today's
-public result type, its values detached as today's are (by each member's semantics).
+public result type, its values as they are held (values are immutable), a mutable
+container a derived value or a view answers copied (``answers.handed_out``).
 
 A configuration of today's API is a design space read at one of its scopes: ``At``, the
 design space and the scope (the root, a child's, a candidate's, selected or not). What is
@@ -45,7 +46,6 @@ from ..results import (
     ViewAssessment,
     require_value,
 )
-from ..semantics import snapshot
 from .answers import _guard_result, copy_assessment, copy_result
 from .evaluate import INAPPLICABLE, Ans, Evaluation, Session, evaluation
 from .questions import presence
@@ -97,7 +97,7 @@ def _node_scope(at: At, reference: object) -> ScopeRecord | None:
 
 
 def _public(ev: Evaluation, index: Address) -> QueryResult[object]:
-    """``index``'s answer, detached by its semantics."""
+    """``index``'s answer, as a reader receives it (``answers.copy_result``)."""
     return copy_result(index, ev.result(index))
 
 
@@ -174,9 +174,7 @@ def _decision_state(ev: Evaluation, index: Address) -> QueryResult[DecisionState
         raise EvaluationError(node.owner, "decision state", "reference is not an owning decision")
     stored = ev.ds.stored
     if index in stored:
-        assert node.semantics is not None
-        held = snapshot(node.semantics, stored[index], owner=node.owner, role="decision state")
-        return Available(DecisionState(node.owner, "committed", held))
+        return Available(DecisionState(node.owner, "committed", stored[index]))
     found, answer = presence(ev, index)
     if found == "present":
         return Available(DecisionState(node.owner))
@@ -205,16 +203,7 @@ def candidates(
     found = ev.run(lambda: _candidates(ev, node))
     if isinstance(found, Available) and found.value is None:
         return None
-    if not isinstance(found, Available):
-        return cast(QueryResult[tuple[object, ...]], found)
-    semantics = node.semantics
-    assert semantics is not None
-    return Available(
-        tuple(
-            snapshot(semantics, item, owner=node.owner, role="public value snapshot")
-            for item in cast(tuple[object, ...], found.value)
-        )
-    )
+    return cast(QueryResult[tuple[object, ...]], found)
 
 
 def _candidates(ev: Evaluation, node: Address) -> QueryResult[object]:

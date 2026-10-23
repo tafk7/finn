@@ -23,16 +23,13 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
-    Annotated,
     Any,
     Generic,
     NoReturn,
     Self,
     TypeAlias,
     TypeVar,
-    Union,
     cast,
-    get_args,
     get_origin,
     get_type_hints,
     overload,
@@ -45,12 +42,12 @@ from .results import NonValue, QueryResult, marked_value_type
 from .semantics import (
     BOOL,
     STRING,
+    NotAValue,
     ValueSemantics,
-    default_semantics,
-    optional,
+    annotation_type,
+    canonical,
     recognize,
     semantics_for,
-    snapshot,
     unrecognized,
 )
 
@@ -329,59 +326,36 @@ def _unannotated(declaration: Declaration, kind: str) -> DefinitionError:
     )
 
 
-def _annotation_semantics(
-    annotation: object, explicit: ValueSemantics[Any] | None, label: str
-) -> ValueSemantics[Any]:
-    """Value semantics for an annotated value type; ``semantics=`` overrides the default.
+def _annotation_semantics(annotation: object, label: str) -> ValueSemantics[Any]:
+    """The type check a declared annotation states (``semantics.annotation_type``)."""
+    return annotation_type(annotation, label, owner=_OWNER)
 
-    A union holding ``None`` (``T | None``, ``Optional[T]``) is an optional value: its
-    semantics are ``T``'s (``semantics=`` if given, else ``T``'s default where ``T`` is one
-    class), made optional (``semantics.optional``: ``None`` checked first, by identity,
-    wherever a value meets them)."""
-    if annotation is MISSING:
-        # Declared outside a class body (a Space class built as data) with no
-        # annotation: its explicit semantics carry the value type.
-        assert explicit is not None
-        return explicit
-    if annotation is None:
-        annotation = type(None)
-    origin = get_origin(annotation)
-    if origin in (Union, types.UnionType):
-        members = get_args(annotation)
-        present = tuple(member for member in members if member is not type(None))
-        if len(present) < len(members) and present:
-            inner = present[0] if len(present) == 1 else Union[present]  # noqa: UP007
-            return optional(_annotation_semantics(inner, explicit, label))
-    nominal = origin if origin is not None else annotation
-    union = origin in (Union, types.UnionType)
-    protocol = bool(getattr(nominal, "_is_protocol", False))
-    if explicit is not None:
-        token = explicit.type_token
-        token = get_origin(token) or token
-        if (
-            not union
-            and not protocol
-            and isinstance(nominal, type)
-            and isinstance(token, type)
-            and nominal is not token
-        ):
-            raise DefinitionError.broken(
-                "annotation-semantics-incompatible",
-                _OWNER,
-                f"{label}: annotation {nominal.__qualname__} is incompatible with "
-                f"{explicit.name} semantics",
-                declaration=label,
-            )
-        return explicit
-    if union or protocol or not isinstance(nominal, type):
+
+def literal(
+    semantics: ValueSemantics[Any],
+    value: object,
+    label: str,
+    *,
+    role: str,
+    owner: str,
+    what: str = "",
+) -> object:
+    """A value written in a definition (a default, a constant, a literal bound at
+    placement), type-checked by ``semantics`` and in its canonical form
+    (``semantics.canonical``); a ``DefinitionError`` naming ``label`` where it is neither."""
+    if not recognize(semantics, value, owner=owner, role=f"{role} recognition"):
         raise DefinitionError.broken(
-            "semantics-unstated",
+            "literal-unrecognized",
             _OWNER,
-            f"{label}: the annotation {annotation!r} needs explicit semantics= (a union, "
-            "protocol or special form has no default value semantics)",
+            f"{label}: {what}{unrecognized(semantics)}",
             declaration=label,
         )
-    return default_semantics(nominal)
+    try:
+        return canonical(value)
+    except NotAValue as refusal:
+        raise DefinitionError.broken(
+            "literal-not-value", _OWNER, f"{label}: {what}{refusal}", declaration=label
+        ) from None
 
 
 def _annotated_space_type(annotation: object) -> type[Space] | None:
@@ -396,10 +370,10 @@ class Param(ValueDecl[T], Generic[T]):
     """A formal input of a Space class, supplied where a node of the class is declared.
 
     Annotate it with its value type: ``area: int = Param()``. The annotation is
-    the single source of the value type; ``semantics=`` gives custom value
-    semantics for it. Supply a formal at the call (``Room(area=12)``) or by
-    assignment (``hall.area = kitchen.area``), once, in the body that declares
-    the node.
+    the single source of the value type, and its check (``semantics.annotation_type``:
+    a class, a union of classes, ``T | None``); a value is compared by ``==``. Supply a
+    formal at the call (``Room(area=12)``) or by assignment (``hall.area = kitchen.area``),
+    once, in the body that declares the node.
 
     ``Param()`` is required: preparing a Space class in which nothing supplies it is
     a definition error. ``default=`` gives the value it takes where nobody supplies it.
@@ -412,33 +386,18 @@ class Param(ValueDecl[T], Generic[T]):
 
     default: object
     required: bool
-    explicit: ValueSemantics[T] | None
     resolved: bool
 
     @overload
-    def __new__(  # type: ignore[misc]
-        cls, *, default: None, semantics: ValueSemantics[T]
-    ) -> T | None: ...
+    def __new__(cls, *, default: T) -> T: ...  # type: ignore[misc]
 
     @overload
-    def __new__(  # type: ignore[misc]
-        cls, *, default: T, semantics: ValueSemantics[T] | None = None
-    ) -> T: ...
+    def __new__(cls) -> T: ...  # type: ignore[misc]
 
-    @overload
-    def __new__(  # type: ignore[misc]
-        cls, *, semantics: ValueSemantics[T] | None = None
-    ) -> T: ...
-
-    def __new__(cls, *, default: object = MISSING, semantics: object = None) -> Any:
-        if semantics is not None and not isinstance(semantics, ValueSemantics):
-            raise DefinitionError.broken(
-                "semantics-invalid", _OWNER, "semantics= must be a ValueSemantics"
-            )
+    def __new__(cls, *, default: object = MISSING) -> Any:
         instance = cast(Param[object], super().__new__(cls))
         object.__setattr__(instance, "_body", class_body())
-        instance.explicit = cast("ValueSemantics[object] | None", semantics)
-        instance.semantics = instance.explicit
+        instance.semantics = None
         instance.resolved = False
         instance.required = default is MISSING
         instance.default = default
@@ -452,11 +411,11 @@ class Param(ValueDecl[T], Generic[T]):
             pass  # a forward reference: resolved again when the Space class is collected
 
     def resolve(self) -> Param[T]:
-        """Read the annotation: a value type, with its semantics."""
+        """Read the annotation: a value type, and its check."""
         if self.resolved:
             return self
         annotation = declared_annotation(self, "Param")
-        if annotation is MISSING and self.explicit is None:
+        if annotation is MISSING:
             raise _unannotated(self, "Param")
         label = describe_formal(self, "Param")
         space_type = _annotated_space_type(annotation)
@@ -468,16 +427,16 @@ class Param(ValueDecl[T], Generic[T]):
                 "place the node in a class body, and give the formal the values it reads",
                 declaration=label,
             )
-        semantics = _annotation_semantics(annotation, self.explicit, label)
+        semantics = _annotation_semantics(annotation, label)
         if self.default is not MISSING:
-            if not recognize(semantics, self.default, owner=label, role="default recognition"):
-                raise DefinitionError.broken(
-                    "literal-unrecognized",
-                    _OWNER,
-                    f"{label}: invalid formal default: {unrecognized(semantics)}",
-                    declaration=label,
-                )
-            self.default = snapshot(semantics, self.default, owner=label, role="default snapshot")
+            self.default = literal(
+                semantics,
+                self.default,
+                label,
+                role="default",
+                owner=label,
+                what="invalid formal default: ",
+            )
         self.semantics = semantics
         self.resolved = True
         return self
@@ -508,22 +467,21 @@ class Param(ValueDecl[T], Generic[T]):
 
 
 class Const(ValueDecl[T], Generic[T]):
-    """A definition-owned frozen value."""
+    """A definition-owned value, of its own type, in its canonical form."""
 
-    def __init__(self, value: T, *, semantics: ValueSemantics[T] | None = None) -> None:
-        self.semantics = semantics if semantics is not None else semantics_for(type(value))
+    def __init__(self, value: T) -> None:
         label = f"Const{at(self.origin)}"
-        if not recognize(self.semantics, value, owner=label, role="constant recognition"):
-            raise DefinitionError.broken(
-                "literal-unrecognized",
-                _OWNER,
-                f"{label}: {unrecognized(self.semantics)}",
-                declaration=label,
-            )
-        self.value = snapshot(self.semantics, value, owner=label, role="constant snapshot")
+        self.semantics = _annotation_semantics(type(value), label)
+        self.value = cast(T, literal(self.semantics, value, label, role="constant", owner=label))
 
 
 Guard: TypeAlias = "ValueRef[bool] | bool | None"
+
+SEMANTICS_GONE = (
+    "semantics= is gone: the annotation is the value's type and its check, and a value is "
+    "compared by =="
+)
+"""The refusal of ``semantics=`` where a value's annotation states its type."""
 
 _RETIRED: Mapping[str, tuple[str, str]] = {
     "optional": (
@@ -539,6 +497,10 @@ _RETIRED: Mapping[str, tuple[str, str]] = {
         "decision-named",
         "a Decision belongs to the Space class that declares it: write it as a class "
         "attribute, and bind that attribute to each formal it supplies",
+    ),
+    "semantics": (
+        "decision-semantics",
+        SEMANTICS_GONE,
     ),
 }
 
@@ -561,7 +523,7 @@ def _refuse_retired(entries: tuple[object, ...], retired: Mapping[str, object]) 
     if retired:
         raise TypeError(
             f"Decision() got unexpected keyword arguments {sorted(retired)}; it takes values= "
-            "or domain=, semantics=, when= and ordered="
+            "or domain=, when= and ordered="
         )
 
 
@@ -569,7 +531,7 @@ class Decision(ValueDecl[T], Generic[T]):
     """An independently editable choice, annotated with its value type.
 
     ``finish: int = Decision(values=(1, 2, 3))`` chooses a value; the
-    annotation is its value type, ``semantics=`` gives custom value semantics.
+    annotation is its value type and its check, and a value is compared by ``==``.
     A Decision keeps value domains only: a choice among Space classes is a selector,
     ``Select`` (``heating = Select(boiler=Boiler, pump=HeatPump(cop=4), area=area)``).
     A Decision's values are its domain, whose membership reads facts only:
@@ -589,11 +551,10 @@ class Decision(ValueDecl[T], Generic[T]):
     Retired spellings, each refused with its replacement: entries
     (``Decision({...})``: ``Select``), ``optional=`` (a ``None`` case of a ``Select``),
     ``required=`` (a policy, the compiler's), ``name=`` and a Decision given at a call
-    (declare it on the class, and bind it).
+    (declare it on the class, and bind it), ``semantics=`` (the annotation).
     """
 
     domain: Domain[T]
-    explicit: ValueSemantics[T] | None
     resolved: bool
 
     @overload
@@ -602,7 +563,6 @@ class Decision(ValueDecl[T], Generic[T]):
         /,
         *,
         values: Iterable[T],
-        semantics: ValueSemantics[T] | None = None,
         when: Guard = None,
         ordered: bool = False,
     ) -> T: ...
@@ -613,7 +573,6 @@ class Decision(ValueDecl[T], Generic[T]):
         /,
         *,
         domain: Domain[T],
-        semantics: ValueSemantics[T] | None = None,
         when: Guard = None,
     ) -> T: ...
 
@@ -622,7 +581,6 @@ class Decision(ValueDecl[T], Generic[T]):
         *entries: object,
         domain: object = None,
         values: object = None,
-        semantics: object = None,
         when: object = None,
         ordered: object = None,
         **retired: object,
@@ -641,10 +599,6 @@ class Decision(ValueDecl[T], Generic[T]):
                 _OWNER,
                 "a Decision needs exactly one of domain= or values=",
             )
-        if semantics is not None and not isinstance(semantics, ValueSemantics):
-            raise DefinitionError.broken(
-                "semantics-invalid", _OWNER, "semantics= must be a ValueSemantics"
-            )
         if domain is not None and not isinstance(domain, Domain):
             raise DefinitionError.broken(
                 "domain-argument-invalid", _OWNER, "domain= must be a Domain"
@@ -657,15 +611,14 @@ class Decision(ValueDecl[T], Generic[T]):
             )
         instance = cast(Decision[object], super().__new__(cls))
         object.__setattr__(instance, "_body", class_body())
-        explicit = cast("ValueSemantics[object] | None", semantics)
-        instance.explicit = instance.semantics = explicit
+        instance.semantics = None
         instance.resolved = False
         instance.when = guard(when)
-        # The domain is bound to the value semantics when the model is linked.
+        # The domain is bound to the value's type check when the model is linked.
         instance.domain = (
             cast(Domain[object], domain)
             if domain is not None
-            else finite(cast(Iterable[object], values), explicit, ordered=ordered is True)
+            else finite(cast(Iterable[object], values), ordered=ordered is True)
         )
         return instance
 
@@ -684,11 +637,9 @@ class Decision(ValueDecl[T], Generic[T]):
         annotation = declared_annotation(self, "Decision")
         if annotation is MISSING and self.owner is None:
             return self  # still in its class body: resolved when the class is made
-        if annotation is MISSING and self.explicit is None:
+        if annotation is MISSING:
             raise _unannotated(self, "Decision")
-        self.semantics = _annotation_semantics(
-            annotation, self.explicit, describe_formal(self, "Decision")
-        )
+        self.semantics = _annotation_semantics(annotation, describe_formal(self, "Decision"))
         self.resolved = True
         return self
 
@@ -811,12 +762,17 @@ class Derived(ValueDecl[T], Generic[T]):
         self,
         function: Callable[..., T | QueryResult[T]],
         *,
-        semantics: ValueSemantics[T] | None = None,
         aliases: Mapping[str, object] | None = None,
         when: Guard = None,
     ) -> None:
+        if aliases is not None and "semantics" in aliases:
+            raise DefinitionError.broken(
+                "derived-semantics",
+                _OWNER,
+                f"derived{at(source_origin())}: {SEMANTICS_GONE} (the return annotation)",
+            )
         self.function = function
-        self.semantics = semantics
+        self.semantics: ValueSemantics[T] | None = None
         self.aliases = MappingProxyType(dict(aliases or {}))
         self.when = guard(when)
 
@@ -831,20 +787,20 @@ class _DerivedDecorator:
     def __init__(self, aliases: Mapping[str, object], when: Guard) -> None:
         self.aliases, self.when = aliases, when
 
-    def __call__(self, function: Callable[..., T | NonValue]) -> T:
+    @overload
+    def __call__(self, function: Callable[..., QueryResult[T]]) -> T: ...
+
+    @overload
+    def __call__(self, function: Callable[..., T | NonValue]) -> T: ...
+
+    def __call__(self, function: Callable[..., object]) -> object:
         # Typed as its value, like a formal: it may supply a formal in the class body.
-        # ``T | Rejected`` is typed ``T``, as its value semantics are ``T``'s.
-        return cast(T, Derived(function, aliases=self.aliases, when=self.when))
+        # ``T | Rejected`` and ``QueryResult[T]`` are typed ``T``: its value's type.
+        return Derived(function, aliases=self.aliases, when=self.when)
 
 
-class _SemanticDerivedDecorator(Generic[T]):
-    def __init__(self, semantics: ValueSemantics[T], aliases: Mapping[str, object], when: Guard):
-        self.semantics, self.aliases, self.when = semantics, aliases, when
-
-    def __call__(self, function: Callable[..., T | QueryResult[T]]) -> T:
-        return cast(
-            T, Derived(function, semantics=self.semantics, aliases=self.aliases, when=self.when)
-        )
+@overload
+def derived(function: Callable[..., QueryResult[T]], /) -> T: ...
 
 
 @overload
@@ -853,13 +809,7 @@ def derived(function: Callable[..., T | NonValue], /) -> T: ...
 
 @overload
 def derived(
-    *, semantics: ValueSemantics[T], when: ValueRef[bool] | bool | None = None, **aliases: object
-) -> _SemanticDerivedDecorator[T]: ...
-
-
-@overload
-def derived(
-    *, semantics: None = None, when: ValueRef[bool] | bool | None = None, **aliases: object
+    *, when: ValueRef[bool] | bool | None = None, **aliases: object
 ) -> _DerivedDecorator: ...
 
 
@@ -867,18 +817,19 @@ def derived(
     function: Callable[..., object] | None = None,
     /,
     *,
-    semantics: object = None,
     when: Guard = None,
     **aliases: object,
 ) -> object:
+    """A derived value: ``@derived`` on a method, or ``@derived(when=..., **aliases)``. Its
+    return annotation is its value's type and check (``T``, or ``T | Rejected``)."""
     if function is not None:
         return Derived(function, aliases=aliases, when=when)
-    if semantics is not None:
-        if not isinstance(semantics, ValueSemantics):
-            raise DefinitionError.broken(
-                "semantics-invalid", _OWNER, "semantics= must be a ValueSemantics"
-            )
-        return _SemanticDerivedDecorator(semantics, aliases, when)
+    if "semantics" in aliases:
+        raise DefinitionError.broken(
+            "derived-semantics",
+            _OWNER,
+            f"derived{at(source_origin())}: {SEMANTICS_GONE} (the return annotation)",
+        )
     return _DerivedDecorator(aliases, when)
 
 
@@ -1311,9 +1262,11 @@ def project(source: ValueRef[Any], name: str) -> Projection[Any]:
         raise AttributeError(name)
     semantics = source.semantics
     token = None if semantics is None else semantics.type_token
-    if token is None and isinstance(source, Derived) and source.function is not None:
-        # No semantics= yet: the value type the return annotation names (``T | Rejected``).
-        token = _returned_type(source.function, name)
+    # A derived value, or a node's derived value, not collected yet: the value type its
+    # return annotation names (``T | Rejected``).
+    named = source.member if isinstance(source, MemberRef) else source
+    if token is None and isinstance(named, Derived) and named.function is not None:
+        token = _returned_type(named.function, name)
     token = get_origin(token) or token
     if not isinstance(token, type):
         raise AttributeError(name)
@@ -1326,25 +1279,18 @@ def project(source: ValueRef[Any], name: str) -> Projection[Any]:
 class Projection(_Symbolic, ValueRef[T], Generic[T]):
     """An attribute of a referenced value, read in the class body (``spec.payload_bits``).
 
-    Its semantics are the attribute's class's, or the ``ValueSemantics`` its
-    annotation names (``dims: Annotated[tuple[int, ...], INTEGER_VECTOR]``).
+    Its type check is the one its attribute's annotation states
+    (``semantics.annotation_type``); none where that states no value type.
     """
 
     def __init__(self, source: ValueRef[Any], attribute: str, annotation: object) -> None:
         self.source, self.attribute = source, attribute
-        if get_origin(annotation) is Annotated:
-            named = [item for item in get_args(annotation) if isinstance(item, ValueSemantics)]
-            if named:
-                self.semantics = cast("ValueSemantics[T]", named[0])
-                return
-            annotation = get_args(annotation)[0]
-        origin = get_origin(annotation)
-        nominal = origin if origin is not None else annotation
-        self.semantics = (
-            cast("ValueSemantics[T]", default_semantics(nominal))
-            if isinstance(nominal, type)
-            else None
-        )
+        try:
+            self.semantics = cast(
+                "ValueSemantics[T]", annotation_type(annotation, attribute, owner=_OWNER)
+            )
+        except DefinitionError:
+            self.semantics = None
 
     def _describe(self) -> str:
         inner = self.source._describe() if isinstance(self.source, _Symbolic) else "value"

@@ -48,7 +48,7 @@ from finn.kernels.channels import Channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.library import LibraryModule, library_module
 from finn.kernels.network import Interface, Network, wire
-from finn.kernels.port import INTEGER_POLICY, AxiStreamPort, lane_count
+from finn.kernels.port import AxiStreamPort, lane_count
 from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.domains import Integer
 from finn.platform.capabilities import Resources
@@ -263,7 +263,7 @@ class Holding(KernelSpace):
     """A kernel of one input port, given the integer policy its hardware takes."""
 
     id = "test.holding"
-    admits: Integer | None = Param(default=None, semantics=INTEGER_POLICY)
+    admits: Integer | None = Param(default=None)
     x = AxiStreamPort(
         name="s_axis_input",
         endpoint=Endpoint.TARGET,

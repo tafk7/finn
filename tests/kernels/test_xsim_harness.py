@@ -67,6 +67,7 @@ from finn.kernels.dotp import Int8Dsp58DotpKernel
 from finn.kernels.library import library_module
 from finn.kernels.matmul import datatype_range
 from finn.kernels.thresholding import ThresholdingAxiKernel
+from finn.kernels.values.semantics import IntegerTensorValue
 from finn.platform.capabilities import DspBlock
 from finn.toolchain import xsim
 from finn.toolchain.launcher import (
@@ -139,7 +140,7 @@ def _thresholds_alone() -> Any:
     facts = dict(
         input_tensor=Tensor((1, 1), ScalarEncoding(DataType["INT4"])),
         threshold_dtype=DataType["INT4"],
-        thresholds=(((-2, 0, 3),),),
+        thresholds=IntegerTensorValue.of((((-2, 0, 3),),)),
         bias=0,
         platform=FULL_DSP48E2,
     )

@@ -11,7 +11,6 @@ from finn.core.space import (
     Decision,
     Param,
     Space,
-    ValueSemantics,
     derived,
     design_space,
     inspection,
@@ -24,16 +23,13 @@ class Payload:
     value: int
 
 
-PAYLOAD = ValueSemantics.immutable_nominal(Payload)
-
-
-def test_concurrent_reads_evaluate_one_cached_output_per_snapshot() -> None:
+def test_concurrent_reads_evaluate_one_cached_output_per_design_space() -> None:
     produced: list[ReferenceType[Payload]] = []
 
     class Example(Space):
         source: int = Param()
 
-        @derived(semantics=PAYLOAD)
+        @derived
         def output(*, source: int) -> Payload:
             payload = Payload(source)
             produced.append(ref(payload))
@@ -61,7 +57,7 @@ def test_concurrent_successors_keep_independent_commitments_and_caches() -> None
     class Example(Space):
         factor: int = Decision(values=range(16))
 
-        @derived(semantics=PAYLOAD)
+        @derived
         def output(*, factor: int) -> Payload:
             payload = Payload(factor)
             produced.append(ref(payload))
@@ -83,22 +79,19 @@ def test_concurrent_successors_keep_independent_commitments_and_caches() -> None
     assert state.value.status == "unassigned"
 
 
-def test_independent_root_bindings_remain_frozen_when_model_is_reused() -> None:
+def test_independent_root_bindings_share_the_model_and_keep_their_own_facts() -> None:
     calls: list[tuple[int, ...]] = []
 
     class Example(Space):
-        values: list[int] = Param()
+        values: tuple[int, ...] = Param()
 
         @derived
-        def total(*, values: list[int]) -> int:
-            calls.append(tuple(values))
+        def total(*, values: tuple[int, ...]) -> int:
+            calls.append(values)
             return sum(values)
 
-    original = [1, 2]
-    first = design_space(Example(values=original))
-    original.append(3)
-    second = design_space(Example(values=original))
-    original.clear()
+    first = design_space(Example(values=(1, 2)))
+    second = design_space(Example(values=(1, 2, 3)))
     assert inspection.model(first) is inspection.model(second)
     assert first.total == 3
     assert second.total == 6
