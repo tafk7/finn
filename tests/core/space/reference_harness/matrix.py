@@ -4,7 +4,8 @@
 """The acceptance matrix: every disagreement between the engine and the reference model
 expected at this commit, by the milestone that removes it. The model holds the human's
 rulings on the core types (DECISIONS SZ100) before the engine does: T4b reads views out
-(SZ100 (3)), T4c reads an optional fact left out as None (SZ100 (5)).
+(SZ100 (3)), T4c reads an optional fact left out as None (SZ100 (5)) and lists no choice
+its facts alone rule out (SZ113).
 
 Each row names the change that removes it, in one sentence, and its **witness**: the one
 test that shows it, marked with :func:`expected` (a strict expected failure raising
@@ -81,6 +82,22 @@ ROWS: tuple[Row, ...] = (
         "read: in membership, guards, bodies and lists. It never reads it as unresolved",
         "test_reference_cases::test_an_optional_fact_left_out_reads_none",
         "an unsupplied optional param reads unresolved",
+    ),
+    Row(
+        "optional-fact-one-space",
+        "T4c",
+        "The engine takes an optional fact given None as the fact left out: K(x=None) == K(), "
+        "one interned facts layer, so one design space",
+        "test_reference_cases::test_an_optional_fact_given_none_is_the_one_left_out",
+        "the engine refuses None for an optional fact's type",
+    ),
+    Row(
+        "facts-pruning",
+        "T4c",
+        "The engine leaves out of every list (states, decisions, flow, viable's keys) each choice "
+        "whose existence is false under the facts alone, unless it is stored (SZ113, SZ119 (5))",
+        "test_reference_cases::test_a_choice_the_facts_rule_out_is_in_no_list",
+        "the engine lists every choice",
     ),
 )
 

@@ -119,6 +119,21 @@ space, and is never refused for its facts (§ 16.24).
 value, in membership's list order: possible (with what moves) or impossible (with
 each refusal).
 
+**Lists** (SZ113). A choice whose existence is false under the facts alone is in no list
+of the design space: not among its states, nor its decisions, its flow or the choices
+whose possible values are listed (:meth:`Solution.listed`, :meth:`Solution.pruned`).
+Existence under the facts alone is its scope's presence read with every choice unknown
+(the configuration's facts with nothing stored): absent is false and pruned; present,
+unknown or refused stays listed (a guard refused through an input, or one reading an
+input that does not apply, is not false). Presence is the model's own, so absent
+dominates refused there too (reading 26). *A stored choice is never pruned* (SZ119 (5)):
+it stays listed, dormant where its scope is absent, and setting a pruned choice is
+accepted as dormant, so it becomes listed. Facts alone decide what is pruned, so a change
+of facts prunes and unprunes, and a change of choices only unprunes what it sets. Asked
+by name, a pruned choice still answers: its state is absent and its possible values are
+what setting each would do. Pruning moves nothing else: no validity, stored choice or
+value.
+
 **Policy is not the model's** (SZ103: default policies belong to FINN's compiler, on a
 KernelOp for its kernel's choices and at the cut for a channel's). The model states no
 ranking of a domain and no ``required`` choice, and two of its answers lose a part:
@@ -1282,6 +1297,7 @@ class Solution:
         self.configuration = configuration
         self.index = configuration.index
         self.evaluation = _Evaluation(self.index, configuration.facts, configuration.stored)
+        self._pruned: tuple[str, ...] | None = None
 
     def _choice(self, choice: str) -> None:
         if choice not in self.index.choices:
@@ -1297,7 +1313,30 @@ class Solution:
         return self.evaluation.state(choice)
 
     def states(self) -> dict[str, ChoiceState]:
-        return {name: self.state(name) for name in self.index.ordered_choices()}
+        """The listed choices' states, in order (a pruned choice is in no list)."""
+
+        return {name: self.state(name) for name in self.listed()}
+
+    def pruned(self) -> tuple[str, ...]:
+        """The choices in no list (SZ113), in order: unset, and their existence false under
+        the facts alone (their scope absent with nothing stored)."""
+
+        if self._pruned is None:
+            stored = self.configuration.stored
+            facts_alone = _Evaluation(self.index, self.configuration.facts, {})
+            self._pruned = tuple(
+                name
+                for name in self.index.ordered_choices()
+                if name not in stored
+                and facts_alone.presence(self.index.choices[name].scope).state is Presence.ABSENT
+            )
+        return self._pruned
+
+    def listed(self) -> tuple[str, ...]:
+        """The choices of the design space's lists, in order: every choice but the pruned."""
+
+        pruned = set(self.pruned())
+        return tuple(name for name in self.index.ordered_choices() if name not in pruned)
 
     def dormant(self) -> tuple[str, ...]:
         """The stored choices out of play, sorted."""

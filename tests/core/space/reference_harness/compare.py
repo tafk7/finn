@@ -46,6 +46,7 @@ from .forms import (
     DefinitionForm,
     DroppedForm,
     Form,
+    ListedForm,
     OutcomeForm,
     PossibleForm,
     RefusalForm,
@@ -288,6 +289,15 @@ def possible_form(solution: reference.Solution, path: str) -> PossibleForm:
     return PossibleForm(tuple(outcomes))
 
 
+def listed_form(solution: reference.Solution, pruning: bool = True) -> ListedForm:
+    """The choices the design space lists (SZ113): every choice but the pruned;
+    ``pruning=False``: every choice, as an implementation that has not reached T4c lists
+    them."""
+    if not pruning:
+        return ListedForm(frozenset(solution.index.choices))
+    return ListedForm(frozenset(solution.listed()))
+
+
 # --- the comparison ------------------------------------------------------------------------------
 
 
@@ -332,6 +342,18 @@ class Case:
         model = reference.Configuration(self.description, facts)
         pair = Pair(self, model, self.engine.open(facts, implementation))
         return pair.step(reference.Change(commit=stored)) if stored else pair
+
+    def check_one_space(self, left: Mapping[str, object], right: Mapping[str, object]) -> None:
+        """Whether the facts ``left`` and ``right`` make one design space: in the model, equal
+        configurations (an optional fact left out is ``None``); in the engine, one interned
+        facts layer (``Engine.one_space``)."""
+        __tracebackhide__ = True
+        same_configuration = reference.Configuration(
+            self.description, left
+        ) == reference.Configuration(self.description, right)
+        expected = AnswerForm("value", same_configuration)
+        engine = self.engine.one_space(left, right)
+        _check(self.name, f"one design space of {dict(left)} and {dict(right)}", expected, engine)
 
 
 @dataclass(frozen=True)
@@ -378,6 +400,16 @@ class Pair:
         __tracebackhide__ = True
         expected = ruled or validity_form(self.solution())
         _check(self.case.name, "validity", expected, self.engine.validity())
+
+    def check_listed(self, *, ruled: ListedForm | None = None, pruning: bool | None = None) -> None:
+        """The choices the design space lists (SZ113): pruned as the model prunes where the
+        engine's implementation has reached T4c, else every choice (``pruning`` overrides;
+        the T4c row's witness asks it pruned)."""
+        __tracebackhide__ = True
+        if pruning is None:
+            pruning = "T4c" in self.engine.reached
+        expected = ruled or listed_form(self.solution(), pruning)
+        _check(self.case.name, "the listed choices", expected, self.engine.listed())
 
     def check_possible(self, path: str, *, ruled: PossibleForm | None = None) -> None:
         """A choice's possible values, each with what setting it alone answers."""
@@ -461,6 +493,7 @@ __all__ = [
     "bind_form",
     "change_form",
     "check_definition",
+    "listed_form",
     "possible_form",
     "refusal_form",
     "rule_form",

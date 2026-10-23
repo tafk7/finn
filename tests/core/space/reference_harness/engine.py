@@ -112,6 +112,7 @@ from finn.core.space import (
     view,
 )
 from finn.core.space.edits import BrokenRule, ChangeOutcome
+from finn.core.space.occurrence import held
 
 from .forms import (
     AnswerForm,
@@ -119,6 +120,7 @@ from .forms import (
     Code,
     DefinitionForm,
     DroppedForm,
+    ListedForm,
     OutcomeForm,
     PossibleForm,
     RefusalForm,
@@ -736,7 +738,21 @@ class Engine:
         supplied = {name: value for name, value in facts.items() if not self._left_out(name, value)}
         configuration = design_space(self.root(**cast(dict[str, Any], supplied)))
         implementation = chosen(implementation)
-        return Point(self, implementation.open(configuration), implementation.name)
+        return Point(
+            self, implementation.open(configuration), implementation.name, _reached(implementation)
+        )
+
+    def one_space(self, left: Mapping[str, object], right: Mapping[str, object]) -> AnswerForm:
+        """Whether the facts ``left`` and ``right``, each given to the root as written (an
+        optional fact given ``None`` passed as ``None``, never left out), make one design
+        space: the same interned facts layer and equal design space values. Refused with
+        the definition error's code where the engine refuses either."""
+        try:
+            first = held(design_space(self.root(**cast(dict[str, Any], left)))).ds
+            second = held(design_space(self.root(**cast(dict[str, Any], right)))).ds
+        except DefinitionError:
+            return AnswerForm("refused", codes=frozenset({("definition-error", "")}))
+        return AnswerForm("value", first.layer is second.layer and first == second)
 
     def make(
         self,
@@ -752,7 +768,7 @@ class Engine:
         supplied = {name: value for name, value in facts.items() if not self._left_out(name, value)}
         implementation = chosen(implementation)
         made = implementation.make(self.root, supplied, dict(stored))
-        return Point(self, made, implementation.name)
+        return Point(self, made, implementation.name, _reached(implementation))
 
     def _left_out(self, name: str, value: object) -> bool:
         return value is None and name in self.index.optional
@@ -835,6 +851,12 @@ def definition(
     return DefinitionForm(None)
 
 
+def _reached(implementation: Implementation) -> frozenset[str]:
+    """The later milestones ``implementation`` declares it has reached (``matrix.reached``,
+    unchecked here: the matrix imports this module)."""
+    return frozenset(getattr(implementation, "milestones", frozenset()))
+
+
 @dataclass(frozen=True)
 class Point:
     """One configuration, as an implementation answers it (``answers``), asked the model's
@@ -845,6 +867,8 @@ class Point:
     answers: Answers
     #: the implementation answering (``Implementation.name``)
     implementation: str
+    #: the later milestones it declares it has reached (its ``milestones``; ``matrix.reached``)
+    reached: frozenset[str] = frozenset()
 
     def stored(self) -> dict[str, object]:
         """The committed choices, dormant ones included, by path."""
@@ -864,13 +888,20 @@ class Point:
     def _successor(self, changed: Changed) -> Point | None:
         if changed.after is None:
             return None
-        return Point(self.engine, changed.after, self.implementation)
+        return Point(self.engine, changed.after, self.implementation, self.reached)
 
     # -- the questions
 
+    def listed(self) -> ListedForm:
+        """The choices the implementation lists (``Answers.states``' keys)."""
+        return ListedForm(frozenset(path for path, _ in self.answers.states()))
+
     def state(self, path: str) -> StateForm:
-        """A choice's state (``Answers.states``)."""
-        found = dict(self.answers.states())[path]
+        """A choice's state (``Answers.states``); a choice the implementation does not list
+        (its facts alone rule it out, SZ113) is absent, as the model answers it by name."""
+        found = dict(self.answers.states()).get(path)
+        if found is None:
+            return StateForm("absent")
         if isinstance(found, inspection.Set):
             return StateForm("set", found.value)
         if isinstance(found, inspection.Waiting):

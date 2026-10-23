@@ -59,6 +59,7 @@ from core.space.reference_harness.forms import (
     AnswerForm,
     DefinitionForm,
     Form,
+    ListedForm,
     RuleForm,
     StateForm,
     ValidityForm,
@@ -605,6 +606,32 @@ def test_a_choice_the_step_sets_holds_its_value_and_kept_out_of_play_turns_dorma
     assert below(StateForm("absent"), StateForm("dormant", 2), (2,)) is None
     assert below(StateForm("open"), StateForm("set", 3), (2,)) == "set to 2, but set 3"
     assert below(StateForm("absent"), StateForm("set", 2), (2,)) == "absent, set: set"
+
+
+def test_the_listed_choices_grow_over_an_addition_only_by_what_it_sets() -> None:
+    # SZ113: an addition prunes nothing, and a pruned choice it sets is stored, so listed
+    listed_q: Question = ("listed", "")
+    before = {listed_q: ListedForm(frozenset({"pe"}))}
+    gained = {listed_q: ListedForm(frozenset({"pe", "wide.lanes"}))}
+    assert order_problems(before, gained, {"wide.lanes": 2}) == {}
+    assert order_problems(before, gained, {"pe": 1}) == {
+        listed_q: "listed, losing [], gaining unset ['wide.lanes']"
+    }
+    assert order_problems(gained, before, {}) == {
+        listed_q: "listed, losing ['wide.lanes'], gaining unset []"
+    }
+
+
+def test_a_strict_walk_that_prunes_compares_its_lists_unpruned_while_t4c_is_pending() -> None:
+    # pruning is no drawn cause (a guard over facts prunes in the strict run too): seed 16's
+    # description prunes a choice from its start, compared unpruned while T4c is pending, and
+    # pruned, so disagreeing, once T4c is taken as removed
+    tally = gate_walk(16, True)
+    assert tally.failure is None
+    assert tally.unpruned > 0
+    assert first_line(walk(16, STEPS, strict=True, without=("T4c",))) == (
+        "seed 16, step 0: the engine disagrees (listed; strict run)"
+    )
 
 
 def a_view_of_a_space_refused_by_an_addition() -> Space:

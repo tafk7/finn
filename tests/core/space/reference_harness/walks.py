@@ -103,6 +103,15 @@ to ``None``) is the model's alone: the engine cannot set an optional formal back
 unsupplied, so such a step is checked against the model's invariants and never sent to the
 engine (``Point.change`` would raise ``NotTranslatable``).
 
+**The lists** (SZ113): both sides are asked the choices a design space lists
+(``("listed", "")``), the model's leaving out each choice its facts alone rule out
+(``Solution.pruned``). Pruning is no drawn cause: a guard over facts prunes in the strict run
+too. So while T4c is pending and the implementation does not declare it reached, the model's
+lists are compared unpruned, exactly, and the configurations where that took a choice back
+are counted (``Tally.unpruned``); the T4c row's witness shows the pruning itself. An
+implementation declaring T4c is compared pruned. The per-choice questions (a choice's state,
+its possible values) are asked of every choice: a pruned choice answers them by name.
+
 **Derived selectors** (``by``, the CLI's ``--by``): the descriptions also hold selectors
 picked by a derived value (the model's reading 17, the engine's ``Select(by=...)``): one in
 the root, now and then one in case ``a`` of ``s``, now and then a chosen selector in a case
@@ -143,6 +152,7 @@ from .compare import (
     answer_form,
     bind_form,
     change_form,
+    listed_form,
     possible_form,
     rule_form,
     state_form,
@@ -154,12 +164,13 @@ from .forms import (
     ChangeForm,
     DefinitionForm,
     Form,
+    ListedForm,
     PossibleForm,
     RuleForm,
     StateForm,
     ValidityForm,
 )
-from .matrix import MILESTONES, ROWS
+from .matrix import MILESTONES, ROWS, reached
 
 #: what a call on the engine's side returns
 T = TypeVar("T")
@@ -833,20 +844,20 @@ def generate(
 
 # --- the questions --------------------------------------------------------------------------------
 
-#: a question: what is asked ("state", "answer", "rule", "validity", "possible") and of
-#: which path
+#: a question: what is asked ("state", "answer", "rule", "validity", "possible", "listed")
+#: and of which path
 Question = tuple[str, str]
 
 #: the kinds of question both sides answer, and the walk's own: a change, and the engine's
 #: refinement over an addition
-ENGINE_QUESTIONS = ("state", "answer", "rule", "validity", "possible")
+ENGINE_QUESTIONS = ("state", "answer", "rule", "validity", "possible", "listed")
 
 
 def questions(index: model.Index) -> list[Question]:
     """What both sides are asked at each configuration: each choice's state; each fact's,
     choice's, derived value's, view's and ``Members``'s answer (a fact's is always known,
     SZ100 (5): its value, or ``None`` for an optional one left out); each rule; validity;
-    each listed choice's possible values."""
+    each listed choice's possible values; the choices the design space lists (SZ113)."""
     found: list[Question] = [("state", path) for path in sorted(index.choices)]
     found += [
         ("answer", path)
@@ -858,6 +869,7 @@ def questions(index: model.Index) -> list[Question]:
     found.append(("validity", ""))
     listed = sorted(path for path, info in index.choices.items() if info.domain.listed)
     found += [("possible", path) for path in listed]
+    found.append(("listed", ""))
     return found
 
 
@@ -878,6 +890,8 @@ def model_forms(
             forms[question] = validity_form(solution)
         elif what == "possible" and possible:
             forms[question] = possible_form(solution, path)
+        elif what == "listed":
+            forms[question] = listed_form(solution)
     return forms
 
 
@@ -895,6 +909,8 @@ def engine_forms(point: Point, asked: Iterable[Question]) -> dict[Question, Form
             forms[question] = point.validity()
         elif what == "possible":
             forms[question] = point.possible(path)
+        elif what == "listed":
+            forms[question] = point.listed()
     return forms
 
 
@@ -902,6 +918,8 @@ def ask(question: Question) -> str:
     what, path = question
     if what == "validity":
         return "validity"
+    if what == "listed":
+        return "the listed choices"
     return f"the possible values of {path}" if what == "possible" else f"the {what} of {path}"
 
 
@@ -1006,13 +1024,21 @@ def order_problems(
     """Over an addition committing ``committed``: the answers that moved down the order
     (:func:`below`). ``out``: the nodes refused through their scope's presence before and
     found absent after (:func:`refused_then_absent`), whose answer may move from refused to
-    inapplicable (the model's reading 26); no other move is excused."""
+    inapplicable (the model's reading 26); no other move is excused. The listed choices
+    (SZ113) may only grow, by what the step sets: an addition prunes nothing, and a pruned
+    choice it sets is stored, so listed."""
     found: dict[Question, str] = {}
     for question, old in before.items():
         if question not in after or question[0] == "possible":
             continue
         what, path = question
         new = after[question]
+        if isinstance(old, ListedForm) and isinstance(new, ListedForm):
+            lost = old.choices - new.choices
+            gained = new.choices - old.choices - set(committed)
+            if lost or gained:
+                found[question] = f"listed, losing {sorted(lost)}, gaining unset {sorted(gained)}"
+            continue
         if (
             what == "answer"
             and path in out
@@ -1758,6 +1784,9 @@ class Tally:
     #: (``finn.core.space.bind``, never refused), where it refused what the model accepted
     compared: int = 0
     rebound: int = 0
+    #: configurations where the model prunes a choice (SZ113), their listed choices compared
+    #: unpruned: T4c pending, and the implementation not declaring it reached
+    unpruned: int = 0
     #: the run: strict (no cause drawn, every disagreement fails) or full
     strict: bool = False
     #: whether the descriptions hold selectors picked by a derived value (``by``)
@@ -1813,6 +1842,9 @@ class _Walk:
         #: the milestones whose disagreements are counted, the others failing
         self.waiting = waiting
         self.implementation = implementation
+        #: whether the listed choices are compared unpruned (SZ113): T4c pending, and the
+        #: implementation not declaring it reached
+        self.unpruned = "T4c" in waiting and "T4c" not in reached(implementation)
         self.generated, self.engine = generate(self.rng, strict, implementation, by)
         self.index = self.generated.description.validate()
         self.structure = Structure(self.index)
@@ -1928,7 +1960,8 @@ class _Walk:
         forms: Mapping[Question, Form],
         edit: model.Change,
     ) -> None:
-        """Invariant 2, with reading 26's one move (:func:`refused_then_absent`)."""
+        """Invariant 2, with reading 26's one move (:func:`refused_then_absent`). A question
+        not asked after an addition is not a move."""
         out = refused_then_absent(before.solution, solution)
         found = order_problems(before.forms, forms, edit.commit, out)
         self.invariant(
@@ -1975,6 +2008,13 @@ class _Walk:
         engine: Mapping[Question, Form],
     ) -> None:
         self.tally.compared += 1
+        forms = dict(forms)
+        if self.unpruned and ("listed", "") in forms:
+            # T4c pending: the lists as an engine that has not reached it lists them
+            solution = configuration.solve()
+            if solution.pruned():
+                forms[("listed", "")] = listed_form(solution, pruning=False)
+                self.tally.unpruned += 1
         for question in self.engine_asked:
             if not agrees(forms[question], engine[question]):
                 what, path = question
@@ -2373,7 +2413,8 @@ def table(tallies: Sequence[Tally], without: Iterable[str] = ()) -> str:
         f"invariant checks: {_counts(totals['checks'])}; binds reading refused, reporting rules "
         f"new facts broke (§ 16.24) {summed('binds_broken')}",
         f"engine's own checks: {_counts(totals['engine_checks'])}; configurations compared "
-        f"{summed('compared')}, engine rebound to the model's by a bind {summed('rebound')}",
+        f"{summed('compared')}, engine rebound to the model's by a bind {summed('rebound')}, "
+        f"lists compared unpruned while T4c is pending {summed('unpruned')}",
         f"engine disagreements ({mode}): by milestone {milestones or '-'}; by question "
         f"{_counts(totals['by_question'])}",
         f"engine errors: {summed('engine_errors')}",
