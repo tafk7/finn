@@ -91,8 +91,8 @@ from finn.core.space import (
     declared_annotation,
     derived,
     design_space,
-    space_formals,
     model_modes,
+    space_formals,
 )
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import Channel
