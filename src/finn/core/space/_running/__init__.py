@@ -6,8 +6,8 @@ every question from it, with no worlds and no early cutoff; answers are kept acr
 spaces only by the node cache a session may hold.
 
 - ``structure``: the per-model record (each formal bound by reference and its source,
-  the flow order's ranks, the interned facts layers), held weakly by the model's scope
-  records;
+  the flow order's ranks, the interned facts layers), held by the model's scope records,
+  as long as the model lives;
 - ``value``: ``FactsLayer`` (a model with its facts, and what reads facts alone) and
   ``DesignSpace`` (a layer with its stored choices), each equal and hashed by value;
 - ``evaluate``: ``Evaluation``, every answer of one design space, memoized within it
