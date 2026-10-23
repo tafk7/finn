@@ -19,6 +19,15 @@ its scope, its guard first. A ``self`` method is a plain call on a receiver read
 through the evaluation (``Reader``), the method's node its reader; what it read, in order,
 is its answer's trace.
 
+**A guard's condition** (``Evaluation.condition``). A ``when`` guard answers its
+condition, but where the condition is a derived value and no value, an input of it that
+does not apply ranks first, ahead of refused and unresolved: no value of what waits or
+refuses can make a condition over a value that does not exist hold, so its scope is
+absent, under a guard that waits too (``_holds_here``). A derived value's required inputs
+keep their own ranking (refused, then unresolved, then inapplicable, ``answers._blocked``),
+so the condition answers by it to every other reader. A ``self`` method halts at its first
+read of a non-value, so its inputs are what it read up to there.
+
 **Validity's pieces.** A piece whose guard is refused through an input counts once, at
 the highest refused guard of its chain (each guard's own guard read in turn). Counted at
 a guard above its own, the piece is that guard's owner's, keyed by the owner where the
@@ -713,9 +722,9 @@ class Evaluation:
 
     def _holds_here(self, node: Address, trace: _Tr) -> bool | None:
         """A guard's own condition, read while a guard above it waits or is refused: false
-        where its case's selector stores another case or its ``when`` reads false. The
-        guard is the reader of its condition, read past the condition's own guard where
-        the guard implies it."""
+        where its case's selector stores another case or its ``when`` reads false, or reads
+        a value that does not apply (``condition``). The guard is the reader of its
+        condition, read past the condition's own guard where the guard implies it."""
         held = self.case(node)
         if held is not None:
             selector, case = held
@@ -727,7 +736,8 @@ class Evaluation:
         if node.output is None:
             return None
         answer = self._condition(node, trace)
-        return False if isinstance(answer, Available) and answer.value is False else None
+        false = isinstance(answer, Available) and answer.value is False
+        return False if false or isinstance(answer, Inapplicable) else None
 
     def _condition(self, node: Address, trace: _Tr) -> QueryResult[object]:
         """A ``when`` guard's condition (``node``: the guard, its reader, under a guard of
@@ -740,11 +750,28 @@ class Evaluation:
             or condition.kind in _OWN_BIT
             or not implies(condition.guard, node.guard)
         ):
-            return self.read(trace, output, node).result
+            return self.condition(output, self.read(trace, output, node))
         # Past its own guard: its frame alone, the guard its reader.
         found = _FRAMES[condition.kind](self, condition, [], node)
         trace.extend(found.trace)
-        return found.result
+        return self.condition(condition, found)
+
+    def condition(self, condition: Address, found: Ans) -> QueryResult[object]:
+        """A ``when`` guard's answer from its condition's (``condition``, read at its source,
+        and ``found``, its own answer): where a derived value is the condition and waits or
+        is refused, inapplicable if one of its inputs does not apply (the module docstring,
+        "A guard's condition"). An input is read in the condition's trace, but what a method
+        read only to know whether it exists; its own guard, read first there, does not apply
+        only where the condition does not either."""
+        result = found.result
+        if condition.kind != "derived" or not isinstance(result, (Unresolved, Rejected)):
+            return result
+        absent = tuple(
+            answer
+            for index, answer in found.trace
+            if isinstance(answer, Inapplicable) and index not in found.existence
+        )
+        return Inapplicable(merged_findings(absent)) if absent else result
 
     def refused_waiting(self, guard: Address, trace: _Tr, reader: Address) -> Address | None:
         """The highest ``when`` guard in the chain of ``guard`` (which waits) refused
@@ -1094,6 +1121,14 @@ def _forward(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     return Ans(result, tuple(trace))
 
 
+def _guard(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
+    """A ``when`` guard: its condition's answer as a guard takes it (``Evaluation.condition``)."""
+    if node.output is None:
+        raise EvaluationError(node.owner, node.kind, "missing output reference")
+    found = ev.read(trace, node.output, reader)
+    return Ans(ev.condition(ev.source(node.output, reader), found), tuple(trace))
+
+
 def _select(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     assert node.selector is not None and node.selection_index is not None
     selector = ev.read(trace, node.selector, reader).result
@@ -1308,7 +1343,7 @@ _FRAMES: Mapping[str, Callable[[Evaluation, Address, _Tr, Address], Ans]] = {
     "const": _const,
     "decision": _decision,
     "alias": _forward,
-    "guard": _forward,
+    "guard": _guard,
     "select": _select,
     "view": _view,
     "validity": _validity,

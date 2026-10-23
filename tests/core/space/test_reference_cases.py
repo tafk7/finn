@@ -1271,3 +1271,107 @@ def test_a_selector_picked_by_a_value_that_does_not_apply_has_every_case_absent(
     waiting = PICKED_BY_MISSING.start({"f": 1})
     assert isinstance(waiting.solution().state("p.x.c"), Open)
     waiting.check_state("p.x.c")
+
+
+# A when over a value that does not apply beside another input is false whatever the other
+# answers: ``g`` reads ``s.a.v`` and the open choice ``k``, ``h`` reads ``s.a.v`` and ``r``, a
+# derived value over ``f`` refused for ``f > 2``. With ``s`` at ``o``, no value of ``k`` makes
+# ``g``'s condition hold, so ``g`` is absent, not waiting on ``k``; and ``h`` is absent, not
+# refused (absent dominates refused). A derived value's own inputs keep refused, then
+# unresolved, then inapplicable: only a guard ranks the input that does not apply first.
+
+MIXED = Case(
+    "a when over an input that does not apply beside another",
+    Space(
+        ("f",),
+        Scope(
+            "",
+            choices=(Choice("k", listed(1, 2)),),
+            derived=(
+                Derived("r", ("f",), lambda read: Refuse("big") if read["f"] > 2 else read["f"]),
+            ),
+            selectors=(
+                Selector("s", (Scope("a", choices=(Choice("v", listed(1, 2)),)), Scope("o"))),
+            ),
+            children=(
+                Scope(
+                    "g",
+                    when=When(("s.a.v", "k"), lambda read: read["s.a.v"] == 1 or read["k"] == 2),
+                    choices=(Choice("y", listed(1, 2)),),
+                ),
+                Scope(
+                    "h",
+                    when=When(("s.a.v", "r"), lambda read: read["s.a.v"] == 1 or read["r"] == 1),
+                    choices=(Choice("w", listed(1, 2)),),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def test_a_when_over_a_value_that_does_not_apply_beside_an_open_choice_is_false() -> None:
+    pair = MIXED.start({"f": 1}, {"s": "o"})
+    assert isinstance(pair.solution().state("g.y"), Absent)
+    pair.check_state("g.y")
+
+
+def test_a_when_over_a_value_that_does_not_apply_beside_a_refused_input_is_false() -> None:
+    pair = MIXED.start({"f": 5}, {"s": "o"})
+    assert isinstance(pair.solution().state("h.w"), Absent)
+    pair.check_state("h.w")
+
+
+# A when over a value that does not apply is false under a guard that waits too: presence is the
+# AND over the path. ``t`` waits on the open choice ``q``; its child ``u`` reads ``s.a.v`` (``s``
+# at ``o``), and ``t2``'s child ``u2`` reads ``s.a.v`` and ``q``. Both children's conditions are
+# false whatever ``q`` is, so their choices are absent, not waiting on ``q``.
+
+NESTED = Case(
+    "a when over a value that does not apply under a when that waits",
+    Space(
+        ("f",),
+        Scope(
+            "",
+            choices=(Choice("q", listed(1, 2)),),
+            selectors=(
+                Selector("s", (Scope("a", choices=(Choice("v", listed(1, 2)),)), Scope("o"))),
+            ),
+            children=(
+                Scope(
+                    "t",
+                    when=When(("q",), lambda read: read["q"] == 1),
+                    children=(
+                        Scope(
+                            "u",
+                            when=When(("s.a.v",), lambda read: read["s.a.v"] == 1),
+                            choices=(Choice("z", listed(1, 2)),),
+                        ),
+                    ),
+                ),
+                Scope(
+                    "t2",
+                    when=When(("q",), lambda read: read["q"] == 1),
+                    children=(
+                        Scope(
+                            "u2",
+                            when=When(
+                                ("s.a.v", "q"),
+                                lambda read: read["s.a.v"] == 1 or read["q"] == 2,
+                            ),
+                            choices=(Choice("z", listed(1, 2)),),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def test_a_when_over_a_value_that_does_not_apply_under_a_when_that_waits_is_false() -> None:
+    pair = NESTED.start({"f": 1}, {"s": "o"})
+    assert isinstance(pair.solution().state("t.u.z"), Absent)
+    assert isinstance(pair.solution().state("t2.u2.z"), Absent)
+    pair.check_state("t.u.z")
+    pair.check_state("t2.u2.z")
