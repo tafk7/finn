@@ -284,6 +284,29 @@ def test_fpgadataflow_ipstitch_rtlsim(mem_mode):
     assert (rtlsim_res == x).all()
 
 
+@pytest.mark.parametrize("mem_mode", MEM_MODE_PARAMS[:1])
+@pytest.mark.fpgadataflow
+@pytest.mark.vivado
+def test_fpgadataflow_ipstitch_restitch_rtlsim(mem_mode):
+    model = load_test_checkpoint_or_skip(
+        ip_stitch_model_dir + "/test_fpgadataflow_ipstitch_gen_model_%s.onnx" % mem_mode
+    )
+    model.set_metadata_prop("exec_mode", "rtlsim")
+    idt = model.get_tensor_datatype("inp")
+    ishape = model.get_tensor_shape("inp")
+    x = gen_finn_dt_tensor(idt, ishape)
+    # an ip_name starting with "v" checks that the top module name keeps it
+    rtlsim_libs = []
+    for _ in range(2):
+        model = model.transform(CreateStitchedIP(test_fpga_part, 5, ip_name="vgg_accel"))
+        assert model.get_metadata_prop("rtlsim_so") == ""
+        rtlsim_res = execute_onnx(model, {"inp": x})["outp"]
+        assert (rtlsim_res == x).all()
+        rtlsim_libs.append(model.get_metadata_prop("rtlsim_so"))
+        assert os.path.isfile(rtlsim_libs[-1])
+    assert rtlsim_libs[0] != rtlsim_libs[1]
+
+
 @pytest.mark.fpgadataflow
 def test_fpgadataflow_ipstitch_iodma_floorplan():
     model = create_one_fc_model()

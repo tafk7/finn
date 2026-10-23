@@ -41,6 +41,7 @@ from qonnx.util.basic import get_by_name, qonnx_make_model, roundup_to_integer_m
 import finn.core.onnx_exec as oxe
 from finn import xsi
 from finn.analysis.fpgadataflow.dataflow_performance import dataflow_performance
+from finn.core.rtlsim_exec import get_top_module_name
 from finn.custom_op.fpgadataflow import templates
 from finn.custom_op.fpgadataflow.hwcustomop import HWCustomOp
 from finn.custom_op.fpgadataflow.rtlbackend import RTLBackend
@@ -288,8 +289,7 @@ class FINNLoop(HWCustomOp, RTLBackend):
         vivado_stitch_proj_dir = self.get_nodeattr("code_gen_dir_ipgen")
         with open(vivado_stitch_proj_dir + "/all_verilog_srcs.txt", "r") as f:
             all_verilog_srcs = f.read().split()
-        top_module_file_name = os.path.basename(os.path.realpath(self.get_nodeattr("ipgen_path")))
-        top_module_name = top_module_file_name.strip(".v")
+        top_module_name = get_top_module_name(self.get_nodeattr("ipgen_path"))
         single_src_dir = make_build_dir("rtlsim_" + top_module_name + "_")
         trace_file = self.get_nodeattr("rtlsim_trace")
         debug = not (trace_file is None or trace_file == "")
