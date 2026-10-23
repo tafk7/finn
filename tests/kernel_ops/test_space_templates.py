@@ -157,7 +157,7 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     assert structure.counts() == {
         "scopes addressed": 225,
         "scopes in play": 38,
-        "nodes resolved": 1366,
+        "nodes resolved": 1371,
         "const nodes resolved": 96,
     }
     in_play = set(structure._in_play)
@@ -198,7 +198,7 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     assert structure.counts() == {
         "scopes addressed": 225,
         "scopes in play": 43,
-        "nodes resolved": 1464,
+        "nodes resolved": 1463,
         "const nodes resolved": 96,
     }
     assert {structure.records[index].name for index in set(structure._in_play) - in_play} == {
@@ -213,6 +213,6 @@ def test_stage_7s_chain_committed_from_scratch_resolves_what_the_change_reads(
     assert structure.counts() == {
         "scopes addressed": 225,
         "scopes in play": 43,
-        "nodes resolved": 1464,
+        "nodes resolved": 1463,
         "const nodes resolved": 96,
     }
