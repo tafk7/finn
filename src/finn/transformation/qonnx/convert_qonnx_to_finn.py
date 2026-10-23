@@ -53,7 +53,8 @@ class ConvertQONNXtoFINN(Transformation):
     """Converts QONNX dialect to FINN ONNX dialect.
     First the weights are converted using the FoldQuantWeights transformation,
     then the ConvertQuantActToMultiThreshold transformation is used to convert
-    the activations.
+    the activations. IntQuant nodes are converted as Quant nodes, and an IntQuant
+    node that is not converted stays in the graph as a Quant node.
     If incompatibilities are found a ValueError or RuntimeError is raised.
 
     The optional keyword argument `filter_function`
@@ -78,6 +79,12 @@ class ConvertQONNXtoFINN(Transformation):
         self._filter_function = filter_function
 
     def apply(self, model):
+        # QONNX registers Quant as an alias of IntQuant (the same class). The steps
+        # below, and the QONNX transformations they call, match Quant, so each
+        # IntQuant node becomes a Quant node first.
+        for node in model.graph.node:
+            if node.op_type == "IntQuant":
+                node.op_type = "Quant"
         # Extract the bias from Conv node
         model = model.transform(ExtractBiasFromConv())
         # Gemm operations are not supported by FINN, so we convert them to MatMul
