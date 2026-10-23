@@ -142,6 +142,43 @@ def _itself(value: T) -> T:
     return value
 
 
+@dataclass(frozen=True, slots=True)
+class OptionalSemantics(ValueSemantics[T]):
+    """The semantics of an optional value, ``T | None`` (``optional``): ``None``, the absent
+    value, checked first and by identity, then ``inner``'s, ``T``'s, for every other value.
+    Its type token is ``inner``'s, so a binding of a ``T`` to it (or of it to a ``T``) is
+    compatible."""
+
+    inner: ValueSemantics[T]
+
+
+def optional(inner: ValueSemantics[T]) -> OptionalSemantics[T]:
+    """``inner``'s semantics over ``inner``'s values or ``None``, where every function sees
+    ``None`` first, by identity: it recognizes ``None``, holds ``None`` equal to ``None``
+    alone, and keeps ``None`` as its own snapshot. ``inner``'s functions never see it. The
+    snapshot is ``inner``'s itself where that keeps every value as it is."""
+
+    def recognizes(value: object) -> bool:
+        return value is None or inner.recognizes(value)
+
+    def equal(left: T, right: T) -> bool:
+        if left is None or right is None:
+            return left is right
+        return inner.equal(left, right)
+
+    def detached(value: T) -> T:
+        return value if value is None else inner.snapshot(value)
+
+    return OptionalSemantics(
+        type_token=inner.type_token,
+        name=f"{inner.name} | None",
+        recognizes=recognizes,
+        equal=equal,
+        snapshot=_itself if inner.snapshot is _itself else detached,
+        inner=inner,
+    )
+
+
 BOOL = cast(ValueSemantics[object], default_semantics(bool))
 STRING = cast(ValueSemantics[object], default_semantics(str))
 
@@ -194,4 +231,11 @@ def semantics_for(value_type: type[T] | ValueSemantics[T]) -> ValueSemantics[T]:
     return value_type if isinstance(value_type, ValueSemantics) else default_semantics(value_type)
 
 
-__all__ = ["NoTruthValue", "ValueSemantics", "default_semantics", "semantics_for"]
+__all__ = [
+    "NoTruthValue",
+    "OptionalSemantics",
+    "ValueSemantics",
+    "default_semantics",
+    "optional",
+    "semantics_for",
+]

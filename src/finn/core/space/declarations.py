@@ -47,6 +47,7 @@ from .semantics import (
     STRING,
     ValueSemantics,
     default_semantics,
+    optional,
     recognize,
     semantics_for,
     snapshot,
@@ -346,7 +347,12 @@ def _unannotated(declaration: Declaration, kind: str) -> DefinitionError:
 def _annotation_semantics(
     annotation: object, explicit: ValueSemantics[Any] | None, label: str
 ) -> ValueSemantics[Any]:
-    """Value semantics for an annotated value type; ``semantics=`` overrides the default."""
+    """Value semantics for an annotated value type; ``semantics=`` overrides the default.
+
+    A union holding ``None`` (``T | None``, ``Optional[T]``) is an optional value: its
+    semantics are ``T``'s (``semantics=`` if given, else ``T``'s default where ``T`` is one
+    class), made optional (``semantics.optional``: ``None`` checked first, by identity,
+    wherever a value meets them)."""
     if annotation is MISSING:
         # Declared outside a class body (a Space class built as data) with no
         # annotation: its explicit semantics carry the value type.
@@ -355,6 +361,12 @@ def _annotation_semantics(
     if annotation is None:
         annotation = type(None)
     origin = get_origin(annotation)
+    if origin in (Union, types.UnionType):
+        members = get_args(annotation)
+        present = tuple(member for member in members if member is not type(None))
+        if len(present) < len(members) and present:
+            inner = present[0] if len(present) == 1 else Union[present]  # noqa: UP007
+            return optional(_annotation_semantics(inner, explicit, label))
     nominal = origin if origin is not None else annotation
     union = origin in (Union, types.UnionType)
     protocol = bool(getattr(nominal, "_is_protocol", False))
@@ -415,6 +427,11 @@ class Param(ValueDecl[T], Generic[T]):
     required: bool
     explicit: ValueSemantics[T] | None
     resolved: bool
+
+    @overload
+    def __new__(  # type: ignore[misc]
+        cls, *, default: None, semantics: ValueSemantics[T]
+    ) -> T | None: ...
 
     @overload
     def __new__(  # type: ignore[misc]

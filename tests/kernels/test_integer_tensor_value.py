@@ -24,9 +24,12 @@ from qonnx.core.datatype import DataType
 from qonnx.core.ranges import TensorRange
 from support.helpers import FULL_DSP48E2, choose, matmul_point
 
+from finn.core.space import Param, Space, derived, design_space
+from finn.core.space.occurrence import held
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels.values.semantics import (
     INTEGER_TENSOR,
+    IntegerTensor,
     IntegerTensorValue,
     integer_bytes,
     integer_digest,
@@ -176,3 +179,33 @@ def test_a_new_configuration_reads_only_the_stated_facts() -> None:
     assert matmul.y_tensor.element == ScalarEncoding(DataType["INT5"], TensorRange(-11, 11))
     assert loads == [1]
     assert w.source.image and loads == [1]
+
+
+class Held(Space):
+    """An optional integer tensor, its semantics ``INTEGER_TENSOR`` made optional (a
+    ``T | None`` annotation): ``None`` is checked first, and only a value is snapshot."""
+
+    contents: IntegerTensor | None = Param(default=None, semantics=INTEGER_TENSOR)
+
+    @derived
+    def rows(self) -> int:
+        return 0 if self.contents is None else integer_shape_of(self.contents)[0]
+
+
+def integer_shape_of(contents: object) -> tuple[int, ...]:
+    assert type(contents) is IntegerTensorValue
+    return contents.shape
+
+
+def test_an_optional_integer_tensor_left_out_given_none_and_given() -> None:
+    left_out, given_none = design_space(Held()), design_space(Held(contents=None))
+    assert left_out.contents is None and given_none.contents is None
+    assert left_out.rows == 0 and given_none.rows == 0
+    assert held(left_out).ds.layer is held(given_none).ds.layer
+    assert held(left_out).ds == held(given_none).ds
+    given = design_space(Held(contents=WEIGHTS))
+    assert given.contents == IntegerTensorValue.of(WEIGHTS) and given.rows == 2
+    assert held(given).ds.layer is not held(left_out).ds.layer
+    # The nest and its value are one fact: the snapshot makes the value.
+    again = design_space(Held(contents=IntegerTensorValue.of(WEIGHTS)))
+    assert held(again).ds.layer is held(given).ds.layer

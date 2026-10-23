@@ -106,7 +106,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, cast, get_args, get_type_hints
 
 from .._value_types import is_value_type
-from ..semantics import ValueSemantics, default_semantics
+from ..semantics import OptionalSemantics, ValueSemantics, default_semantics
 from .value import hashkey
 
 if TYPE_CHECKING:
@@ -156,9 +156,13 @@ def trusted(semantics: ValueSemantics[Any] | None) -> bool:
     Other semantics of a value's own (``ValueSemantics(...)`` with another ``equal``,
     ``immutable_nominal``) or none (equal by identity alone) are not, whatever their
     functions compute: the cache cannot read a function's equality, so it keys none of
-    their values."""
+    their values. Optional semantics (``semantics.optional``, a ``T | None`` annotation) are
+    trusted exactly where ``T``'s are: ``None`` is equal to ``None`` alone, and keys as the
+    plain ``None``."""
     if semantics is None:
         return False
+    if isinstance(semantics, OptionalSemantics):
+        return trusted(semantics.inner)
     if semantics.equal is operator.eq:
         return True
     return (
