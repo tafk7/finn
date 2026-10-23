@@ -6,7 +6,7 @@ from . import inspection
 from ._configuration import BoundDecision, BoundValue, Space
 from ._failure import NativeEvaluationError
 from ._nodes import space_formals
-from ._scopes import test_modes
+from ._scopes import model_modes
 from ._value_types import value_type
 from .collection import RESERVED_NAMES
 from .compiler import Model, design_space
@@ -78,7 +78,7 @@ __all__ = [
     "MISSING",
     "RESERVED_NAMES",
     # The test modes a model is made in
-    "test_modes",
+    "model_modes",
     # Graph primitives
     "Members",
     "Located",

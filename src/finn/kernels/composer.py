@@ -54,7 +54,7 @@ class a key is a path (``mm0.compute.packed.pe``); at FINN's surface it is the p
 other, and ``Names.roots`` maps each root member (a Param, a side) to (owner, fact).
 
 **The class cache.** A class is made once per structure and kept by its key
-(``structure``): the engine's test modes (``finn.core.space.test_modes``: a class keeps the
+(``structure``): the engine's test modes (``finn.core.space.model_modes``: a class keeps the
 model made in the modes asked when it was first compiled, so another mode is another
 class), each member's name and its class's identity, each channel's sides as
 (member, port) or the side's kind (a boundary's with its port), each member's facts by name
@@ -92,7 +92,7 @@ from finn.core.space import (
     derived,
     design_space,
     space_formals,
-    test_modes,
+    model_modes,
 )
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.channels import Channel
@@ -448,7 +448,7 @@ def structure(declared: PartitionDeclaration, ranked: list[str]) -> Hashable:
     """The class's key (the module docstring): the engine's test modes, each kernel's name,
     class and facts given, then each channel's name, sides and facts given, ranked."""
     return (
-        test_modes(),
+        model_modes(),
         tuple(
             (name, facts.space_type, presence(facts.arguments))
             for name, facts in declared.kernels.items()

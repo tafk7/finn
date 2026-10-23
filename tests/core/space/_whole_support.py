@@ -22,7 +22,7 @@ from typing import cast
 from core.space._line_reads import line_existence, line_infer, line_scopes
 from finn.core.space import Space
 from finn.core.space._reads import ModelReads
-from finn.core.space._scopes import Address, Argument, ScopeRecord, Scopes, test_modes
+from finn.core.space._scopes import Address, Argument, ScopeRecord, Scopes, model_modes
 from finn.core.space._template import compiled
 from finn.core.space.compiler import model_of
 from finn.core.space.declarations import Param
@@ -415,7 +415,7 @@ def differences(space_type: type[Space], *, scopes: bool = True) -> Compared:
     line_flow = line_flow_order(line, reads)
     line_readers = line_presence_readers(line, reads.methods)
 
-    permuted, _ = test_modes()
+    permuted, _ = model_modes()
     model = model_of(compiled(space_type), permuted=permuted, eager=False)
     held = model.scopes
     whole = held.whole
