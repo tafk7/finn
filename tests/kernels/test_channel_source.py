@@ -372,18 +372,28 @@ def test_a_source_whose_rule_is_false_refuses_the_change_that_places_it():
     # refused by that rule, the channel's own refusal. A strategy can be stopped by a
     # channel it does not decide, where forcing accepted the fold and left the channel
     # silently refused.
+    # The memory's output order, which the channel's sides read, refuses the same way: so
+    # do the channel's rules and guards that read its sides.
+    memory = {
+        ("memstream-set-channel", "source.selected"),
+        ("memstream-set-channel", "source.output_sequence"),
+    }
     trial = Network(members).trial(keyed(folding))
     assert set(trial.refused) == {("w", "")}
-    (why,) = trial.refused[("w", "")]
-    assert (why.code, why.owner) == ("memstream-set-channel", "source.selected")
+    assert {
+        (why.code, why.owner) for why in trial.refused[("w", "")] if why.code != "guard-refused"
+    } == memory
     # Bound with the folding stored, the channel is refused by the memory's rule.
     w = Network(members, stored=keyed(folding)).member("w")
     validity = inspection.validity(w)
     assert validity.status == "refused"
-    assert [
-        (piece.owner, {finding.code for finding in piece.result.findings})
+    assert "source.selected" in {piece.owner for piece in validity.pieces}
+    assert {
+        (finding.code, finding.owner)
         for piece in validity.pieces
-    ] == [("source.selected", {"memstream-set-channel"})]
+        for finding in piece.result.findings
+        if finding.code != "guard-refused"
+    } == memory
 
 
 @pytest.mark.parametrize(

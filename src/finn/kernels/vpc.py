@@ -59,7 +59,7 @@ class VpcKernel(KernelSpace):
     clock_domain = NATIVE_CLOCKING
 
     # The tensor whose elements it regroups, a fact, and the two sides of the conversion.
-    input_tensor: Tensor = Param(required=False)
+    input_tensor: Tensor = Param()
     arriving: BeatSequence = Param()
     leaving: BeatSequence = Param()
 

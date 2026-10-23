@@ -194,7 +194,7 @@ class InputGeneratorKernel(KernelSpace):
 
     # The tensor whose words it reorders, a fact; what arrives of it, and the order and
     # markers it presents (``leaving``: the markers it must close).
-    input_tensor: Tensor = Param(required=False)
+    input_tensor: Tensor = Param()
     arriving: BeatSequence = Param()
     leaving: BeatSequence = Param()
     platform: Platform = Param()
