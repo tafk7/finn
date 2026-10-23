@@ -79,7 +79,7 @@ class PwPolyKernel(KernelSpace):
     function: str = Param()
     platform: Platform = Param()
     # The tensor its input port reads: a fact it is given.
-    input_tensor: Tensor = Param(required=False)
+    input_tensor: Tensor = Param()
 
     @derived
     def indices(self) -> tuple[Index, ...]:

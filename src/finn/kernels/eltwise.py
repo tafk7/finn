@@ -89,8 +89,8 @@ class EltwiseKernel(KernelSpace):
 
     operation: str = Param()
     # The tensors its operand ports read: facts it is given.
-    lhs_tensor: Tensor = Param(required=False)
-    rhs_tensor: Tensor = Param(required=False)
+    lhs_tensor: Tensor = Param()
+    rhs_tensor: Tensor = Param()
     channels = extent_of(c)  # the innermost axis
     # PE elements of the innermost axis a beat: a divisor of the channels the RTL's PE
     # parameter, a 32-bit integer, holds.

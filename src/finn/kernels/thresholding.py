@@ -13,7 +13,8 @@ RTL specifies; so a threshold at the threshold dtype's minimum is refused with a
 input wider below it, which saturates to that minimum and would count it
 (``threshold-saturation``). Output is the threshold count plus bias. Runtime writes must
 preserve sorted rows. With multiple sets, each input beat requires a matching
-set-selector beat.
+set-selector beat: several sets take a tensor of set indices, and a single set none
+(``threshold-set-channel``).
 
 PE, the channels a beat, is a Decision over the divisors of the input's
 channels. The input and output walk one schedule row-major, ``c`` split by PE
@@ -227,9 +228,10 @@ class ThresholdingAxiKernel(KernelSpace):
 
     channels = extent_of(c)  # the input's channels, bound by its tensor
     pe: int = Decision(domain=divisors_of(channels))  # channels a beat
-    # Given by whoever binds it: the tensors its input ports read, and the port its
+    # Given by whoever binds it: the tensor its input port reads; with several sets, the
+    # set indices its set port reads (absent, the port is idle); and the port its
     # AXI-Lite interface is presented at when thresholds are runtime-writable.
-    input_tensor: Tensor = Param(required=False)
+    input_tensor: Tensor = Param()
     set_tensor: Tensor = Param(required=False)
     control: str = Param(required=False)
     platform: Platform = Param()
@@ -248,6 +250,23 @@ class ThresholdingAxiKernel(KernelSpace):
     def control_for_writes(self) -> bool | Rejected:
         if self.use_axilite and not self.controllable:
             return reject("threshold-control", "runtime-writable thresholds need a control bus")
+        return True
+
+    @constraint
+    def selected(self) -> bool | Rejected:
+        """Several sets take a tensor of set indices, one an input beat; a single set none.
+        FinnLib's ``rtl/nonlin/thresholding_axi.sv`` joins the two streams with several sets
+        (SETS >= 2), accepting an input beat only beside a set beat, so without a set
+        tensor it takes no beat; with one set it leaves the set port's ready undriven."""
+        placed = self.present(ThresholdingAxiKernel.set_tensor)
+        if self.shape[0] < 2:
+            if placed:
+                return reject(
+                    "threshold-set-channel", "a single threshold set takes no set channel"
+                )
+            return True
+        if not placed:
+            return reject("threshold-set-channel", "several threshold sets take a set channel")
         return True
 
     deep_pipeline: bool = Decision(values=(False, True))
@@ -466,7 +485,10 @@ class ThresholdingAxiKernel(KernelSpace):
 
     @derived
     def set_sequence(self) -> BeatSequence | Rejected:
-        """One set index for each input beat."""
+        """One set index for each input beat; several sets without their indices are
+        refused, as ``selected`` refuses them."""
+        if self.shape[0] >= 2 and not self.present(ThresholdingAxiKernel.set_tensor):
+            return reject("threshold-set-channel", "several threshold sets take a set channel")
         shape = self.set_tensor.shape
         if self.shape[0] < 2:
             return reject("threshold-set-channel", "a single threshold set takes no set channel")

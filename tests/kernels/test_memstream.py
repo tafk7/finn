@@ -152,6 +152,29 @@ def test_several_weight_sets_take_a_set_index_per_row():
     assert {"w.source.ram_style", "w.source.pumped_memory"} <= keys
 
 
+def test_several_sets_without_their_indices_refuse_the_sequences_that_read_them():
+    # Its rule refuses such a memory (``selected``); its set port's order and its output's
+    # read the indices, and refuse the same way rather than read what is not given.
+    space = design_space(
+        MemStreamKernel(
+            dtype=DataType["INT3"],
+            form=tile(4, 4, 2, 2),
+            contents=(WEIGHTS, WEIGHTS),
+            sets=2,
+            platform=FULL_DSP48E2,
+        )
+    )
+    for member, owner in (
+        (MemStreamKernel.set_sequence, "set_sequence"),
+        (MemStreamKernel.output_sequence, "output_sequence"),
+    ):
+        answer = space.query(member)
+        assert isinstance(answer, Rejected)
+        assert [(finding.code, finding.owner) for finding in answer.findings] == [
+            ("memstream-set-channel", owner)
+        ]
+
+
 def test_a_channel_s_placements_keep_the_labels_it_states_in_the_emitted_netlist():
     """A channel's source and output adapter are placements at its nodes ``source`` and
     ``output_adapter``, but its netlist places each at the label the channel states, which

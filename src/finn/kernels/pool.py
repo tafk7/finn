@@ -170,7 +170,7 @@ class PoolKernel(KernelSpace):
     stride: tuple[int, int] = Param()
     platform: Platform = Param()
     # The tensor its input port reads: a fact it is given.
-    input_tensor: Tensor = Param(required=False)
+    input_tensor: Tensor = Param()
 
     @constraint
     def geometry_supported(self) -> bool | Rejected:

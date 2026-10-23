@@ -21,6 +21,7 @@ from support.helpers import (
     in_order,
     nested,
     point_for,
+    set_indices,
     stage_tensor,
 )
 from support.refusals import refused
@@ -112,8 +113,9 @@ def eltwise(pe=2, lhs=DataType["INT3"], rhs=DataType["INT3"], **changes):
 
 def threshold(*, use_axilite=False, deep_pipeline=False, pe=1, channels=None, **changes):
     """Alone on one row of ``channels`` INT8 inputs (the table's rows; with one row shared,
-    PE of them); ``pe=None`` leaves PE open with the memories (a table of no (sets, rows,
-    thresholds) shape has no rows to commit a PE against, nor stages)."""
+    PE of them), with several sets given their set indices, one an input beat; ``pe=None``
+    leaves PE open with the memories (a table of no (sets, rows, thresholds) shape has no
+    rows to commit a PE against, nor stages)."""
     facts = dict(
         threshold_dtype=DataType["INT5"],
         thresholds=(((-2, 0, 3), (-1, 1, 4)),),
@@ -121,11 +123,14 @@ def threshold(*, use_axilite=False, deep_pipeline=False, pe=1, channels=None, **
         platform=FULL_DSP48E2,
     )
     facts.update(changes)
+    shape = integer_shape(facts["thresholds"])
+    tabled = shape is not None and len(shape) == 3
     if channels is None:
-        shape = integer_shape(facts["thresholds"])
-        rows = shape[1] if shape is not None and len(shape) == 3 else 1
+        rows = shape[1] if tabled else 1
         channels = rows if rows > 1 or pe is None else pe
     facts["input_tensor"] = operand(DataType["INT8"], (1, channels))
+    if tabled and shape[0] >= 2:
+        facts["set_tensor"] = set_indices(shape[0], channels // (pe or 1))
     factors = {} if pe is None else {"pe": pe, "ram_style": "auto", "ultra_stages": 0}
     # Runtime-writable thresholds present their bus through a control node.
     place = controlled if use_axilite else point_for

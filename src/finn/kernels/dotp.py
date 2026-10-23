@@ -183,8 +183,9 @@ class DotpAxiKernel(KernelSpace):
     # so that it is known before the results channel exists.
     result_range: tuple[int, int] = Param()
     platform: Platform = Param()
-    # The tensors its input ports read: facts its parent gives.
-    x_tensor: Tensor = Param(required=False)
+    # The tensors its input ports read: facts its parent gives, the weights' where they
+    # stream (absent, the port is idle).
+    x_tensor: Tensor = Param()
     w_tensor: Tensor = Param(required=False)
     # The extents PE and SIMD may divide, which its parent states from the operation's
     # own facts (``extents_stated``). N is the same in every datapath; the widest
@@ -204,8 +205,8 @@ class DotpAxiKernel(KernelSpace):
 
     @derived
     def x_rank(self) -> int:
-        """The activations' rank (two when none are given)."""
-        return len(self.x_tensor.shape) if self.present(DotpAxiKernel.x_tensor) else 2
+        """The activations' rank."""
+        return len(self.x_tensor.shape)
 
     @derived
     def rows_viewed(self) -> bool:
@@ -233,6 +234,14 @@ class DotpAxiKernel(KernelSpace):
         leading axis together."""
         given: dict[Index, int] = {}
         if self.windowed:
+            # A window's outputs are the weights' last axis: without the weights' tensor,
+            # nothing states them. This rests on MatMul's weights, an open question: should
+            # they become one required fact, a core's w_tensor is required and this
+            # refusal is removed, not respelled.
+            if not self.present(DotpAxiKernel.w_tensor):
+                return reject(
+                    "dotp-extents", "a window's outputs are bound by weights, and none are given"
+                )
             given |= {**self.window.extents, n: self.w_tensor.shape[-1]}
         if self.reshape_activations:
             given[m] = self.x_tensor.shape[0]
