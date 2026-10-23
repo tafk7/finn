@@ -19,10 +19,11 @@ space shares, whatever it keeps.
 - the parts of an answer about choices: ``_ordered`` (a validity's pieces in key order),
   ``_waits`` (what an unknown answer waits on, by key).
 
-A node is read for its own fields only (its key, kind, semantics, owner): its header, as
-the compiled model states it (``Linked.header``), serves. ``copy_assessment`` reads one
-edge, a view's output, on the compiled model's nodes (``Linked.nodes``), as it is read
-today.
+An address is read for its own fields (its key, kind, semantics, owner): its member
+record, as its scope reads it. ``copy_assessment`` reads one edge, a view's output, and
+follows it to its forwarding source where collapse did (``_forwarded``): a rule kept for
+``semantics=``'s lifetime, so that a view's output is copied by the semantics it was copied
+by before.
 """
 
 from __future__ import annotations
@@ -34,7 +35,6 @@ from typing import TYPE_CHECKING, TypeAlias, cast
 from finn.core.reporting.findings import Finding, FindingKind
 
 from ..errors import EvaluationError
-from ..ir import Argument, Linked, Node, NodeHeader, NodeId
 from ..results import (
     Available,
     ConstraintAssessment,
@@ -55,6 +55,7 @@ from ..semantics import equal, recognize
 from ..semantics import snapshot as snapshot_value
 
 if TYPE_CHECKING:
+    from .._scopes import Address, Argument
     from ..domains import Domain
     from ..inspection import Piece
     from ..semantics import ValueSemantics
@@ -71,11 +72,10 @@ class Called:
     result: QueryResult[object]
     assessment: Assessment | None = None
     own_refusal: bool = False
-    via: tuple[tuple[NodeId, NodeId], ...] = ()
-    existence: frozenset[NodeId] = frozenset()
+    existence: frozenset[Address] = frozenset()
 
 
-def _same_value(node: Node, left: object, right: object) -> bool:
+def _same_value(node: Address, left: object, right: object) -> bool:
     """Whether two values of ``node`` are equal by its semantics, each compared as a
     detached copy (equality may not change a held value)."""
     if left is right:
@@ -105,7 +105,7 @@ def _blocked(answers: Sequence[QueryResult[object]]) -> NonValue | None:
     return None
 
 
-def _guard_result(node: Node, answer: QueryResult[object]) -> NonValue | None:
+def _guard_result(node: Address, answer: QueryResult[object]) -> NonValue | None:
     """What a node answers under its guard's answer: nothing (it applies), inapplicable,
     or the guard's own non-value."""
     if not isinstance(answer, Available):
@@ -115,7 +115,7 @@ def _guard_result(node: Node, answer: QueryResult[object]) -> NonValue | None:
     return None if answer.value else INAPPLICABLE
 
 
-def _guard_assessment(node: Node, answer: NonValue) -> Assessment | None:
+def _guard_assessment(node: Address, answer: NonValue) -> Assessment | None:
     if node.kind == "view":
         return assess_view(answer, owner=node.key, applicability=answer)
     if node.kind == "constraint":
@@ -125,13 +125,13 @@ def _guard_assessment(node: Node, answer: NonValue) -> Assessment | None:
     return None
 
 
-def _clone(node: NodeHeader, value: object, *, owner: str, role: str) -> object:
+def _clone(node: Address, value: object, *, owner: str, role: str) -> object:
     if node.semantics is None:
         raise EvaluationError(owner, role, f"{node.key} has no value semantics")
     return snapshot_value(node.semantics, value, owner=owner, role=role)
 
 
-def public_value(node: NodeHeader, answer: Available[object]) -> object:
+def public_value(node: Address, answer: Available[object]) -> object:
     """A value as a reader receives it: detached from the answer by its semantics (a
     validity's answer is an immutable bool)."""
     if node.kind == "validity" and type(answer.value) is bool:
@@ -139,7 +139,7 @@ def public_value(node: NodeHeader, answer: Available[object]) -> object:
     return _clone(node, answer.value, owner=node.owner, role="public value snapshot")
 
 
-def _unassigned(node: Node) -> Unresolved:
+def _unassigned(node: Address) -> Unresolved:
     return Unresolved(
         (
             Finding(
@@ -152,7 +152,7 @@ def _unassigned(node: Node) -> Unresolved:
     )
 
 
-def _input_missing(node: Node) -> Unresolved:
+def _input_missing(node: Address) -> Unresolved:
     return Unresolved(
         (
             Finding(
@@ -165,7 +165,7 @@ def _input_missing(node: Node) -> Unresolved:
     )
 
 
-def _inputs_absent(node: Node, absent: list[str]) -> Rejected:
+def _inputs_absent(node: Address, absent: list[str]) -> Rejected:
     """A present choice's domain whose input does not apply: the input does not exist
     for these facts (inputs under the choice's own existence guards are present whenever
     it is, so it sits under a guard over facts that is false), and nothing the
@@ -200,11 +200,11 @@ def _guard_piece(owner: str, refusal: Rejected) -> Rejected:
     )
 
 
-def _empty_domain(node: Node) -> Rejected:
+def _empty_domain(node: Address) -> Rejected:
     return reject("domain-empty", "the domain lists no value", owner=node.owner)
 
 
-def _present(node: Node, answers: list[QueryResult[object]]) -> QueryResult[object]:
+def _present(node: Address, answers: list[QueryResult[object]]) -> QueryResult[object]:
     """The single present source: two known present ones refuse at once; else a refused
     source refuses, and while one is unresolved the answer is unresolved."""
     active = [answer for answer in answers if not isinstance(answer, Inapplicable)]
@@ -235,7 +235,7 @@ def _present(node: Node, answers: list[QueryResult[object]]) -> QueryResult[obje
     return active[0]
 
 
-def _finish(node: Node, returned: object) -> Called:
+def _finish(node: Address, returned: object) -> Called:
     """A callback's returned value as the node's answer and assessment."""
     if node.kind == "constraint":
         normalized = constraint_result(cast(bool | QueryResult[bool], returned), node.owner)
@@ -254,7 +254,7 @@ def _finish(node: Node, returned: object) -> Called:
     )
 
 
-def _finished(node: Node, returned: object) -> Called:
+def _finished(node: Address, returned: object) -> Called:
     """``_finish``, where a returned value that fails as an answer is the owner's error."""
     try:
         return _finish(node, returned)
@@ -267,7 +267,7 @@ def _finished(node: Node, returned: object) -> Called:
 # -- domains ----------------------------------------------------------------------------
 
 
-def membership_arguments(node: Node) -> tuple[Argument, ...]:
+def membership_arguments(node: Address) -> tuple[Argument, ...]:
     """A Decision's domain inputs its membership and enumeration read."""
     domain = node.domain
     if domain is None:
@@ -331,44 +331,72 @@ def _waits(result: object) -> tuple[str, ...]:
 # -- a public answer, detached -----------------------------------------------------------
 
 
-def copy_result(linked: Linked, node: NodeId, answer: QueryResult[object]) -> QueryResult[object]:
+def copy_result(node: Address, answer: QueryResult[object]) -> QueryResult[object]:
     """A public answer detached from where it was kept, by its semantics."""
     if not isinstance(answer, Available):
         return answer
-    header = linked.header(node)
-    if header.kind == "validity" and type(answer.value) is bool:
+    if node.kind == "validity" and type(answer.value) is bool:
         return answer  # an immutable bool, the pieces' AND: shared as it is
-    return Available(public_value(header, answer))
+    return Available(public_value(node, answer))
 
 
-def _copy_readiness(linked: Linked, assessment: ReadinessAssessment) -> ReadinessAssessment:
+def _copy_readiness(node: Address, assessment: ReadinessAssessment) -> ReadinessAssessment:
+    scope = node.scope
     return ReadinessAssessment(
-        {
-            key: copy_result(linked, linked.keys[key], answer)
-            for key, answer in assessment.results.items()
-        },
+        {key: copy_result(scope.find(key), answer) for key, answer in assessment.results.items()},
         assessment.result,
     )
 
 
-def copy_assessment(linked: Linked, node: NodeId, assessment: Assessment) -> Assessment:
+def _forwards(node: Address) -> bool:
+    """A pure forwarding member: an alias that only passes its source's answer on."""
+    return node.kind == "alias" and node.output is not None and node.domain is None
+
+
+def _implies(required: Address | None, guard: Address | None) -> bool:
+    if required is None:
+        return True
+    current = guard
+    while current is not None:
+        if current == required:
+            return True
+        current = current.guard
+    return False
+
+
+def _forwarded(view: Address) -> Address | None:
+    """What a view's output is copied by: its output, or, where the output is a forwarding
+    alias whose guard holds whenever the view's does, the end of its forwarding chain (each
+    hop an alias forwarding under the guard of the one before). Collapse took this hop at
+    the base; it is kept for ``semantics=``'s lifetime (an alias carries the declared
+    semantics of the member it names, which may differ from its source's) and goes with it."""
+    target = view.output
+    if target is None or not _forwards(target) or not _implies(target.guard, view.guard):
+        return target
+    current = target
+    while True:
+        output = cast("Address", current.output)
+        if not (_forwards(output) and _implies(output.guard, current.guard)):
+            return output
+        current = output
+
+
+def copy_assessment(node: Address, assessment: Assessment) -> Assessment:
     """An assessment detached from where it was kept: every value in it copied by its
     semantics (a constraint's answers are exact bools and findings, shared as they are).
-    A view's output is copied by its output node's semantics, the output as the compiled
-    model's nodes read it (``Linked.nodes``)."""
+    A view's output is copied by its output's semantics, followed to its forwarding source
+    where its guard is implied (``_forwarded``)."""
     if isinstance(assessment, ConstraintAssessment):
         return assessment
-    output_node = linked.nodes[node].output
-    output = copy_result(
-        linked, output_node if output_node is not None else node, assessment.output_result
-    )
+    output_node = _forwarded(node)
+    output = copy_result(output_node if output_node is not None else node, assessment.output_result)
     accepted = (
         output
         if assessment.accepted_result is assessment.output_result
-        else copy_result(linked, node, assessment.accepted_result)
+        else copy_result(node, assessment.accepted_result)
     )
     return ViewAssessment(
-        output, _copy_readiness(linked, assessment.readiness), assessment.validity, accepted
+        output, _copy_readiness(node, assessment.readiness), assessment.validity, accepted
     )
 
 

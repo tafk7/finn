@@ -1,64 +1,61 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""The domain rule as the line checked it, over one table holding every node: the oracle
-the composed rule (``finn.core.space._compose.check_domains``, per template) is compared
-with, on ``expand(C)``.
+"""The domain rule as the line checked it, over every address of a model whose every scope
+is made (``_line_reads.line_scopes``): the oracle the composed rule
+(``finn.core.space._compose.check_domains``, per class) is compared with.
 
 ``line_domains`` is the line's ``_reads.check_domains`` (``6d02612cc``) as it was: from the
 inputs each Decision's membership names, every value they may read is followed, but for
-the Decision's own existence guards, to the first choice met."""
+the Decision's own existence guards, to the first choice met; a method's reads are the
+per-scope inference's (``_line_reads.line_infer``)."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 
+from core.space._line_reads import line_infer, line_scopes
 from finn.core.space import Space
 from finn.core.space._compose import check_domains
-from finn.core.space._reads import ModelReads, infer
-from finn.core.space._structure import expand
-from finn.core.space._template import link_template
+from finn.core.space._reads import ModelReads
+from finn.core.space._scopes import Address, Scopes
+from finn.core.space._template import compiled
 from finn.core.space.errors import DefinitionError
-from finn.core.space.ir import LinkedModel, NodeId
 
 
-def line_domains(linked: LinkedModel) -> DefinitionError | None:
-    """The line's domain rule over a whole table: its refusal (the first Decision's, in
+def line_domains(scopes: Scopes) -> DefinitionError | None:
+    """The line's domain rule over every address: its refusal (the first Decision's, in
     declaration order), or None."""
-    return next(iter(line_refusals(linked).values()), None)
+    return next(iter(line_refusals(scopes).values()), None)
 
 
-def line_refusals(linked: LinkedModel) -> dict[str, DefinitionError]:
-    """The line's domain rule over a whole table: each Decision's refusal, by its key."""
-    reads = infer(linked)
-    nodes = linked.nodes
+def line_refusals(scopes: Scopes) -> dict[str, DefinitionError]:
+    """The line's domain rule over every address: each Decision's refusal, by its key."""
+    reads = line_infer(scopes)
     found: dict[str, DefinitionError] = {}
-    for decision in linked.decisions:
-        refusal = _refusal(linked, reads, decision)
+    for decision in scopes.decisions:
+        refusal = _refusal(reads, decision)
         if refusal is not None:
-            found[nodes[decision].key] = refusal
+            found[decision.key] = refusal
     return found
 
 
-def _refusal(linked: LinkedModel, reads: ModelReads, decision: NodeId) -> DefinitionError | None:
-    nodes = linked.nodes
-    node = nodes[decision]
-    domain = node.domain
+def _refusal(reads: ModelReads, decision: Address) -> DefinitionError | None:
+    domain = decision.domain
     if domain is None:
         return None
     named = set(domain.membership_inputs)
     own = set(reads.guards(decision))
-    came: dict[NodeId, NodeId | None] = {}
-    pending: list[NodeId] = []
-    for argument in node.domain_arguments:
+    came: dict[Address, Address | None] = {}
+    pending: list[Address] = []
+    for argument in decision.domain_arguments:
         if argument.name in named and argument.node not in came:
             came[argument.node] = None
             pending.append(argument.node)
     while pending:
-        index = pending.pop()
-        current = nodes[index]
+        current = pending.pop()
         if current.kind == "decision":
-            return _reads_choice(linked, node.key, index, came)
-        following: list[NodeId] = [
+            return _reads_choice(decision.key, current, came)
+        following: list[Address] = [
             *(argument.node for argument in current.arguments),
             *(target for _, target in current.alternatives),
             *current.constraints,
@@ -67,39 +64,39 @@ def _refusal(linked: LinkedModel, reads: ModelReads, decision: NodeId) -> Defini
             if single is not None:
                 following.append(single)
         if current.call_style == "self" and current.function is not None:
-            found = reads.methods.get(index)
+            found = reads.methods.get(current)
             if found is None:
                 return DefinitionError.broken(
                     "domain-reads-choice",
-                    node.key,
-                    f"{node.key}: its domain's membership reads {current.owner}, whose "
+                    decision.key,
+                    f"{decision.key}: its domain's membership reads {current.owner}, whose "
                     "reads its source does not fix: declare them with __reads__ (a domain "
                     "reads facts only)",
-                    declaration=node.key,
+                    declaration=decision.key,
                 )
-            following.extend(found)
+            # In address order: a set of addresses iterates by identity, which no run fixes.
+            following.extend(sorted(found))
         for dependency in following:
             if dependency in own or dependency in came:
                 continue
-            came[dependency] = index
+            came[dependency] = current
             pending.append(dependency)
     return None
 
 
 def _reads_choice(
-    linked: LinkedModel, owner: str, choice: NodeId, came: Mapping[NodeId, NodeId | None]
+    owner: str, choice: Address, came: Mapping[Address, Address | None]
 ) -> DefinitionError:
-    nodes = linked.nodes
     path: list[str] = []
-    step: NodeId | None = choice
+    step: Address | None = choice
     while step is not None:
-        path.append(nodes[step].owner)
+        path.append(step.owner)
         step = came[step]
     route = " -> ".join(reversed(dict.fromkeys(path)))
     return DefinitionError.broken(
         "domain-reads-choice",
         owner,
-        f"{owner}: its domain's membership reads the choice {nodes[choice].key} ({route}); "
+        f"{owner}: its domain's membership reads the choice {choice.key} ({route}); "
         "a domain reads facts only: state the relation as a constraint of the Space holding "
         "both",
         declaration=owner,
@@ -109,17 +106,17 @@ def _reads_choice(
 def composed_domains(space_type: type[Space]) -> DefinitionError | None:
     """The composed rule on ``space_type`` as a root: its refusal, or None."""
     try:
-        check_domains(link_template(space_type))
+        check_domains(compiled(space_type))
     except DefinitionError as error:
         return error
     return None
 
 
 def domain_differences(space_type: type[Space]) -> str | None:
-    """Where the composed rule and the line's (on ``expand``) disagree for ``space_type``:
-    one refuses and the other does not, or the composed rule refuses a Decision the line
-    does not (each stops at its first; their orders differ)."""
-    line = line_refusals(expand(space_type))
+    """Where the composed rule and the line's (over every address) disagree for
+    ``space_type``: one refuses and the other does not, or the composed rule refuses a
+    Decision the line does not (each stops at its first; their orders differ)."""
+    line = line_refusals(line_scopes(space_type))
     lane = composed_domains(space_type)
     if not line and lane is None:
         return None

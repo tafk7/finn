@@ -31,6 +31,7 @@ from finn.core.space import (
     occurrence,
 )
 from finn.core.space._running.evaluate import Ans, Session, evaluation
+from finn.core.space._scopes import Address
 
 
 @pytest.mark.usefixtures("purity_unchecked")
@@ -94,7 +95,7 @@ def test_a_successor_answers_as_a_configuration_built_from_nothing() -> None:
     assert isinstance(point.left, Packed) and point.left.pe == 4
 
 
-def _answer(point: Space, index: int) -> Ans:
+def _answer(point: Space, index: Address) -> Ans:
     """``index``'s answer in the design space ``point`` holds, in its model's session."""
     ds = occurrence.held(point).ds
     return occurrence.ask(ds.model, lambda session: evaluation(ds, session).get(index))

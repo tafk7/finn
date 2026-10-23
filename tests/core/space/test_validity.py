@@ -355,9 +355,9 @@ def test_an_inactive_view_answers_inapplicable_and_never_reads_its_spaces_validi
     access = model.resolve(point.y._scope, Port.access)
     entry = occurrence.ask(model, lambda session: evaluation(ds, session).get(access))
     assert isinstance(entry.result, Inapplicable)
-    validity = model.linked.scopes[point.y._scope].validity
+    validity = point.y._scope.validity
     read = [node for node, _ in entry.trace]
-    assert read == [ds.layer.structure.raw_nodes[access].guard]
+    assert read == [access.guard]
     assert validity not in read
     assessment = point.y.inspect(Port.access)
     assert assessment.validity == Inapplicable()

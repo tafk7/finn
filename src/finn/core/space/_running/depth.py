@@ -12,7 +12,10 @@ answers the same. A method's reader lets it pass through untouched
 
 from __future__ import annotations
 
-from ..ir import NodeId
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .._scopes import Address
 
 # How many evaluations deep a run goes on the Python stack before the depth guard
 # unwinds it. Each level through a method's read takes about a dozen Python frames.
@@ -24,7 +27,7 @@ class Deeper(BaseException):
     call it passes through is abandoned (nothing kept); the run evaluates the node first,
     then again what it abandoned. An evaluator's own guard says where (``evaluate``'s)."""
 
-    def __init__(self, node: NodeId) -> None:
+    def __init__(self, node: Address) -> None:
         super().__init__(node)
         self.node = node
 

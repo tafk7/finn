@@ -9,9 +9,9 @@ handles. Handles retain compilation, never a configuration, assignments or cache
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from ._nodes import NodeChoice, unwrap
 from .declarations import (
@@ -23,46 +23,50 @@ from .declarations import (
     ValueRef,
 )
 from .errors import RequestError
-from .ir import Choice, Linked, Node, Scope
 from .semantics import ValueSemantics
+
+if TYPE_CHECKING:
+    from ._scopes import Address, ChoiceRecord, ScopeRecord, Scopes
+    from .compiler import Model
 
 T = TypeVar("T")
 
 
 @dataclass(frozen=True, eq=False)
 class ValueHandle(ValueRef[T], Generic[T]):
-    """A value reference whose interpretation belongs to an exact compilation."""
+    """A value reference whose interpretation belongs to an exact compilation: a model and
+    one of its addresses."""
 
     _record_origin = False
-    _linked: Linked = field(repr=False)
-    _node: int = field(repr=False)
+    _model: Model[Any] = field(repr=False)
+    _node: Address = field(repr=False)
     semantics: ValueSemantics[T] | None = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        # An identity that stands for another, or none here, is no node (``holds_node``):
-        # a handle holds a node's own id, so equality and hash are by it.
-        if not self._linked.holds_node(self._node):
+        # An address that stands for another, or none of this model, is no member
+        # (``Scopes.holds_address``): a handle holds a member's own address, so equality
+        # and hash are by it.
+        if not self._model.scopes.holds_address(self._node):
             raise RequestError("handle does not identify a compiled node")
-        node = self._linked.header(self._node)  # read, not resolved
-        object.__setattr__(self, "semantics", cast(ValueSemantics[T] | None, node.semantics))
+        object.__setattr__(self, "semantics", cast(ValueSemantics[T] | None, self._node.semantics))
 
-    def _resolve(self, linked: Linked) -> int:
-        if self._linked is not linked:
+    def _resolve(self, scopes: Scopes) -> Address:
+        if self._model.scopes is not scopes:
             raise RequestError("handle belongs to a different compiled model")
         return self._node
 
     def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, ValueHandle)
-            and self._linked is other._linked
+            and self._model.scopes is other._model.scopes
             and self._node == other._node
         )
 
     def __hash__(self) -> int:
-        return hash((id(self._linked), self._node))
+        return hash(self._node)
 
     def __repr__(self) -> str:
-        return f"{type(self).__name__}({self._linked.header(self._node).key!r})"
+        return f"{type(self).__name__}({self._node.key!r})"
 
 
 @dataclass(frozen=True, eq=False, repr=False)
@@ -71,49 +75,44 @@ class DecisionHandle(ValueHandle[T], Generic[T]):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if self._linked.header(self._node).kind != "decision":
+        if self._node.kind != "decision":
             raise RequestError("a decision handle requires an owning Decision")
 
 
-def decision_key(linked: Linked, index: int) -> str:
+def decision_key(index: Address) -> str:
     """A decision's stable key is its dotted declaration path."""
-    return linked.header(index).key
+    return index.key
 
 
-def descend(scopes: Sequence[Scope], scope: int, path: Sequence[Declaration]) -> int:
+def descend(scope: ScopeRecord, path: Sequence[Declaration]) -> ScopeRecord:
     for record in path:
-        current = scopes[scope]
-        if record is current.record:
+        if record is scope.record:
             continue  # the node this scope instantiates
-        child = current.children.get(record)
+        child = scope.children.get(record)
         if child is None:
             name = record.name if record.name is not None else type(record).__name__
             raise RequestError(
-                f"node {name} is not placed in {current.name or '<root>'} of this compiled model"
+                f"node {name} is not placed in {scope.name or '<root>'} of this compiled model"
             )
         scope = child
     return scope
 
 
-def _choice(
-    scopes: Sequence[Scope], choices: Sequence[Choice], scope: int, path: Sequence[Declaration]
-) -> Choice:
-    scope = descend(scopes, scope, path[:-1])
-    index = scopes[scope].choices.get(path[-1])
-    if index is None:
+def _choice(scope: ScopeRecord, path: Sequence[Declaration]) -> ChoiceRecord:
+    scope = descend(scope, path[:-1])
+    found = scope.choices.get(path[-1])
+    if found is None:
         raise RequestError("the selector is not part of this compiled scope")
-    return choices[index]
+    return found
 
 
 def resolve_reference(
-    nodes: Sequence[Node],
-    scopes: Sequence[Scope],
-    choices: Sequence[Choice],
-    scope: int,
+    scopes: Scopes,
+    scope: ScopeRecord,
     reference: object,
     *,
     candidate: bool = False,
-) -> int:
+) -> Address:
     """Interpret a member, a symbolic reference or a choice face, never through classes.
 
     ``decision.member`` resolves to the selection linked for it, or else to the
@@ -121,34 +120,34 @@ def resolve_reference(
     names that candidate's own member.
     """
 
-    if type(scope) is not int or not 0 <= scope < len(scopes):
+    if not scopes.holds(scope):
         raise RequestError("reference scope does not belong to this model")
     if isinstance(reference, NodeChoice) and len(reference._space_path) > 1:
         # ``Site.plant.heating``: a Decision over nodes reached through a node.
-        scope = descend(scopes, scope, reference._space_path[:-1])
+        scope = descend(scope, reference._space_path[:-1])
     reference = unwrap(reference)
     try:
-        return scopes[scope].members[reference]
+        return scope.members[reference]
     except (KeyError, TypeError):
         pass
     if isinstance(reference, MemberRef):
-        target = descend(scopes, scope, reference.path)
+        target = descend(scope, reference.path)
         member = unwrap(reference.member)
         try:
-            return scopes[target].members[member]
+            return target.members[member]
         except (KeyError, TypeError) as cause:
             raise RequestError(
                 f"{member.name if isinstance(member, Declaration) else member!r} is not a "
-                f"member of {scopes[target].space_type.__qualname__}"
+                f"member of {target.space_type.__qualname__}"
             ) from cause
     if isinstance(reference, ChoiceMemberRef):
-        choice = _choice(scopes, choices, scope, reference.path)
+        choice = _choice(scope, reference.path)
         if not candidate and reference.member in choice.members:
             return choice.members[reference.member]
         found = [
-            (case, scopes[child].named_members[reference.member])
+            (case, child.named_members[reference.member])
             for case, child in choice.cases
-            if child is not None and reference.member in scopes[child].named_members
+            if child is not None and reference.member in child.named_members
         ]
         if len(found) == 1:
             # Only one candidate has the member: it is present exactly when
@@ -162,42 +161,34 @@ def resolve_reference(
             + ("" if candidate else " (or read it in a declaration, which links a selection)")
         )
     if isinstance(reference, CaseRef):
-        return _choice(scopes, choices, scope, reference.path).selector
+        return _choice(scope, reference.path).selector
     raise RequestError("reference is not a member of this compiled scope")
 
 
-def resolve_decision(
-    nodes: Sequence[Node],
-    scopes: Sequence[Scope],
-    choices: Sequence[Choice],
-    scope: int,
-    reference: object,
-    editable_aliases: Collection[int] = (),
-) -> int:
+def resolve_decision(scopes: Scopes, scope: ScopeRecord, reference: object) -> Address:
     """The owning decision a reference may edit.
 
-    A reference to a Decision member follows declared aliases of it. A
-    reference to a formal edits only a decision that formal owns: a fresh
-    decision it was bound to, possibly shared. A formal bound to another
-    member's decision is a plain alias and is not independently editable.
+    A reference to a Decision member follows declared aliases of it, hop by hop, to the
+    chain's source (transparency within its scope: each alias read as itself, its output
+    followed). A reference to a formal edits only a decision that formal owns. A formal
+    bound to another member's decision is a plain alias and is not independently editable.
     """
 
-    index = resolve_reference(nodes, scopes, choices, scope, reference, candidate=True)
+    index = resolve_reference(scopes, scope, reference, candidate=True)
     member = unwrap(reference.member) if isinstance(reference, MemberRef) else unwrap(reference)
     follow = isinstance(member, Decision) or isinstance(reference, DecisionHandle)
-    seen: set[int] = set()
-    node = nodes[index]
-    while node.kind == "alias" and node.output is not None:
-        if not follow and index not in editable_aliases:
+    seen: set[Address] = set()
+    while follow and index.kind == "alias":
+        output = index.output
+        if output is None:
             break
         if index in seen:
             raise RequestError("cyclic decision alias")
         seen.add(index)
-        index = node.output
-        node = nodes[index]
-    if node.kind != "decision":
+        index = output
+    if index.kind != "decision":
         raise RequestError(
-            f"{node.key} is not an owned Decision: a formal bound to a supplier is not "
+            f"{index.key} is not an owned Decision: a formal bound to a supplier is not "
             "independently editable"
         )
     return index

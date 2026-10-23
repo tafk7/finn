@@ -181,7 +181,7 @@ class Parity(Space):
 
 def test_same_compares_by_value_semantics_never_bare_equality() -> None:
     world = open_evaluation(Parity(), {"count": 1, "other": 1})
-    odd = world.raw[node(world, "odd")]
+    odd = node(world, "odd")
     # ``True == 1`` in Python; the bool semantics does not recognize 1.
     assert not _same_answer(odd, Available(True), Available(1))
     assert _same_answer(odd, Available(True), Available(True))
@@ -240,7 +240,7 @@ def test_values_without_a_truth_value_compare_by_their_semantics() -> None:
     again = open_evaluation(Table(table=Grid((1, 2, 3))))
     assert again.ds == world.ds
     assert open_evaluation(Table(table=Grid((3, 2, 1)))).ds != world.ds
-    table = world.raw[node(world, "table")]
+    table = node(world, "table")
     assert _same_answer(table, Available(Grid((1, 2))), Available(Grid((1, 2))))
     assert not _same_answer(table, Available(Grid((1, 2))), Available(Grid((2, 1))))
     with pytest.raises(ValueError, match="ambiguous"):

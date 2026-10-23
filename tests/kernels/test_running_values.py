@@ -84,10 +84,9 @@ import finn.kernels
 from finn.core.space import Space, ValueSemantics, ViewKey
 from finn.core.space._running.answers import _same_value
 from finn.core.space._running.cache import PLAIN, enum_key, key, trusted, value_class
-from finn.core.space._structure import Structure
+from finn.core.space._scopes import Address
 from finn.core.space._value_types import is_value_type, registered
 from finn.core.space.compiler import compile_model
-from finn.core.space.ir import Node
 from finn.core.space.occurrence import held
 from finn.core.space.semantics import default_semantics
 from finn.dataflow.datatypes import QONNXDataType
@@ -185,18 +184,16 @@ def kernel_space_classes() -> list[type[Space]]:
 
 
 @cache
-def declared() -> dict[str, dict[str, Node]]:
+def declared() -> dict[str, dict[str, Address]]:
     """Each choice's and fact's value semantics in FINN's kernels, by name: the members
     holding it (``Class.key``), each with its node."""
-    found: dict[str, dict[str, Node]] = {}
+    found: dict[str, dict[str, Address]] = {}
     for kind in kernel_space_classes():
-        linked = cast(Structure, compile_model(kind).linked)
-        for index in linked.all_nodes():
-            node = linked.raw_nodes[index]
+        for node in compile_model(kind).scopes.all_addresses():
             if node.kind in ("param", "decision"):
-                assert node.semantics is not None, (kind, linked.header(index).key)
+                assert node.semantics is not None, (kind, node.key)
                 members = found.setdefault(node.semantics.name, {})
-                members[f"{kind.__qualname__}.{linked.header(index).key}"] = node
+                members[f"{kind.__qualname__}.{node.key}"] = node
     return found
 
 
@@ -259,10 +256,9 @@ def samples() -> dict[str, list[object]]:
     network = chain()
     for name in network.members:
         current = held(network.member(name)).ds
-        linked = cast(Structure, current.model.linked)
         for values in (current.facts, current.stored):
             for index, value in values.items():
-                semantics = linked.raw_nodes[index].semantics
+                semantics = index.semantics
                 assert semantics is not None
                 found.setdefault(semantics.name, []).append(value)
     streams = cast(list[Stream], found.get("Stream", []))
@@ -277,7 +273,7 @@ def samples() -> dict[str, list[object]]:
     return found
 
 
-def semantics_of(name: str) -> tuple[Node, ValueSemantics[Any]]:
+def semantics_of(name: str) -> tuple[Address, ValueSemantics[Any]]:
     """A node holding ``name``'s values, and their semantics (one object for every member
     of that name)."""
     nodes = list(declared()[name].values())
@@ -394,7 +390,7 @@ def test_an_enum_member_is_keyed_by_type_and_name_and_a_key_hit_is_the_same_memb
     semantics hold equal; two members never share a key. An enum mixing in ``str``
     compares as its string, and is keyed alike."""
     semantics = default_semantics(kind)
-    node = cast(Node, SimpleNamespace(semantics=semantics, owner="value"))
+    node = cast(Address, SimpleNamespace(semantics=semantics, owner="value"))
     assert trusted(semantics)
     members = list(kind)
     assert len(members) >= 2, kind
@@ -692,8 +688,7 @@ def finn_semantics() -> list[ValueSemantics[Any]]:
         for name in (package, *(found.name for found in below)):
             held += vars(importlib.import_module(name)).values()
     for kind in kernel_space_classes():
-        linked = cast(Structure, compile_model(kind).linked)
-        held += [linked.raw_nodes[index].semantics for index in linked.all_nodes()]
+        held += [index.semantics for index in compile_model(kind).scopes.all_addresses()]
     found: dict[tuple[object, ...], ValueSemantics[Any]] = {}
     for value in held:
         semantics = value.semantics if isinstance(value, ViewKey) else value

@@ -13,13 +13,18 @@ and only where their choice's or fact's value semantics compare by ``==``. The c
 belongs to no design space, only grows, and may drop any entry at any time: a miss changes
 nothing but the work. So a design space answers the same with it as without it.
 
-**What it keeps.** Its tables are per model, held weakly by the model's structure (the
-object the model's record is keyed by, ``structure.record``), so a model's tables go with
-the model, and a new model never finds an old one's, whatever its ``id()``. A table is
-keyed by member, (the guards taken as holding, node), ``None`` for a design space's own
+**What it keeps.** Its tables are per model, each held by the model's scope records
+(``Model.scopes.tables``, by cache; the cache holds the models it has a table for weakly),
+so a model's tables go with the model (a dropped model's at the next full collection: the
+model, its classes and its tables hold one another), and a cache gone takes its tables with
+it; a new model never finds an old one's, whatever its ``id()``. (An address a table holds
+reaches its model through its classes: a table keyed weakly by the model elsewhere could
+never drop.) A table is keyed by member, (the
+guards taken as holding, address), ``None`` for a design space's own
 evaluation: a membership reading, made with its choice's existence guards taken as
 holding (none for a choice with no guard), is a member of its own. Each member keeps its
-read sets (the choices and facts its evaluation read, by node, sorted), and each read set
+read sets (the choices and facts its evaluation read, by address, sorted: addresses are
+ordered by their scope's position, then their member's number), and each read set
 the answers (``evaluate.Ans``, with their trace and their read set) by the values read:
 each value by ``key`` (type and ``==`` under semantics it trusts; a tuple or frozen set
 item by item, a value class field by field), a choice or fact not given as such.
@@ -101,11 +106,11 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, cast, get_args, get_type_hints
 
 from .._value_types import is_value_type
-from ..ir import NodeId
 from ..semantics import ValueSemantics, default_semantics
 from .value import hashkey
 
 if TYPE_CHECKING:
+    from .._scopes import Address, Scopes
     from .evaluate import Ans, Evaluation
 
 PLAIN: tuple[type, ...] = (type(None), bool, int, float, complex, str, bytes)
@@ -113,8 +118,10 @@ PLAIN: tuple[type, ...] = (type(None), bool, int, float, complex, str, bytes)
 
 _NOT_GIVEN = ("not given",)
 
-Member = tuple[frozenset[NodeId] | None, NodeId]
-ReadSet = tuple[NodeId, ...]
+Member = tuple["frozenset[Address] | None", "Address"]
+ReadSet = tuple["Address", ...]
+# A model's table: by member, read set, the values read.
+Table = dict[Member, dict[ReadSet, dict[object, "Ans"]]]
 
 WIDE = 32
 """The most reads a kept answer's read set holds, by default (``NodeCache(wide=...)``)."""
@@ -260,7 +267,7 @@ class NodeCache:
     """A node cache in one mode (see the module docstring): ``lookup`` before a member is
     evaluated, ``keep`` after."""
 
-    __slots__ = ("wide", "bound", "drop", "seed", "_random", "_tables")
+    __slots__ = ("wide", "bound", "drop", "seed", "_random", "_models", "__weakref__")
 
     def __init__(
         self,
@@ -281,10 +288,9 @@ class NodeCache:
         self.drop = drop
         self.seed = seed
         self._random = random.Random(seed)
-        # by model structure (weakly), member, read set, the values read
-        self._tables: weakref.WeakKeyDictionary[
-            object, dict[Member, dict[ReadSet, dict[object, Ans]]]
-        ] = weakref.WeakKeyDictionary()
+        # the models it holds a table for (each table held by its model's scope records:
+        # by member, read set, the values read)
+        self._models: weakref.WeakSet[Scopes] = weakref.WeakSet()
 
     @property
     def mode(self) -> str:
@@ -298,17 +304,21 @@ class NodeCache:
 
     def models(self) -> int:
         """How many models' tables are alive (for the tests of their lifetime)."""
-        return len(self._tables)
+        return len(self._models)
 
     def holds(self, ev: Evaluation) -> bool:
         """Whether the cache holds a table for ``ev``'s model."""
-        return ev.linked in self._tables
+        return self in ev.scopes.tables
+
+    def tables(self) -> list[Table]:
+        """Its tables, every live model's."""
+        return [cast("Table", scopes.tables[self]) for scopes in list(self._models)]
 
     def answers(self) -> int:
         """How many answers are kept, every model's."""
         return sum(
             len(answers)
-            for table in self._tables.values()
+            for table in self.tables()
             for sets in table.values()
             for answers in sets.values()
         )
@@ -319,7 +329,7 @@ class NodeCache:
     def _values(self, ev: Evaluation, read: ReadSet) -> tuple[object, ...] | None:
         """``ev``'s values of ``read``, each keyed (``key``) by its choice's or fact's
         semantics; ``None`` where one has no key."""
-        facts, stored, nodes = ev.ds.facts, ev.ds.stored, ev.raw
+        facts, stored = ev.ds.facts, ev.ds.stored
         ev.counters.hashed += len(read)
         parts: list[object] = []
         for index in read:
@@ -329,17 +339,17 @@ class NodeCache:
             if value is _NOT_GIVEN:
                 parts.append(_NOT_GIVEN)
                 continue
-            part = key(value, nodes[index].semantics)
+            part = key(value, index.semantics)
             if part is None:
                 return None
             parts.append(part)
         return tuple(parts)
 
-    def lookup(self, ev: Evaluation, index: NodeId) -> Ans | None:
+    def lookup(self, ev: Evaluation, index: Address) -> Ans | None:
         """The answer kept for ``index`` in ``ev`` under one of its member's read sets,
         by ``ev``'s values of that set; ``None`` (a miss) where none is."""
         ev.counters.lookups += 1
-        table = self._tables.get(ev.linked)
+        table = cast("Table | None", ev.scopes.tables.get(self))
         if table is None:
             return None
         sets = table.get((ev.assumed, index))
@@ -361,7 +371,7 @@ class NodeCache:
             return found
         return None
 
-    def keep(self, ev: Evaluation, index: NodeId, found: Ans) -> None:
+    def keep(self, ev: Evaluation, index: Address, found: Ans) -> None:
         """``found``, ``index``'s answer in ``ev``, kept by ``ev``'s values of its read
         set (nothing kept where the set holds more than ``wide`` reads, or a value has no
         key)."""
@@ -372,9 +382,10 @@ class NodeCache:
         values = self._values(ev, read)
         if values is None or self._drops():
             return
-        table = self._tables.get(ev.linked)
+        table = cast("Table | None", ev.scopes.tables.get(self))
         if table is None:
-            table = self._tables[ev.linked] = {}
+            table = ev.scopes.tables[self] = {}
+            self._models.add(ev.scopes)
         member = (ev.assumed, index)
         sets = table.get(member)
         if sets is None:

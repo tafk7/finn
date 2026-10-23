@@ -9,8 +9,9 @@ failure), resolution of what it reads, ``present()`` (whether a node is present,
 input supplied: a source applies, its value never read), and the receivers below it
 (``child``, ``candidate``, ``selected_candidate``, ``root``).
 
-The reader reads the compiled model alone: its structure's scopes, choices and headers
-(``model.linked``), its resolution (``model.resolve``), and what each method may read, the
+The reader reads the compiled model alone: its scope records, their choices and the
+addresses' member records (``model.scopes``), its resolution (``model.resolve``), and what
+each method may read, the
 model's per-class record's inferred reads (``per_class.PerClass.reads``). How a read is
 answered is the evaluator's: a reader of an evaluation says how a member's value and
 answer are read (``_read_value``, ``_value``, ``_answer``) and whether a source applies
@@ -34,37 +35,37 @@ from .._failure import (
 from .._nodes import NodeDecl, unwrap
 from ..declarations import Param, declared_path
 from ..errors import EvaluationError, RequestError
-from ..ir import Choice, Linked, Node, NodeId
 from ..references import descend
 from ..results import Available, Inapplicable, QueryResult, Unresolved
 from .depth import Deeper
 
 if TYPE_CHECKING:
+    from .._scopes import Address, ChoiceRecord, ScopeRecord
     from ..compiler import Model
 
 
-def scope_choice(linked: Linked, scope: int, decision: object) -> Choice:
-    """The Choice of a Decision over nodes in compiled scope ``scope``."""
+def scope_choice(scope: ScopeRecord, decision: object) -> ChoiceRecord:
+    """A Decision over nodes of scope ``scope``, there."""
     try:
-        return linked.choices[linked.scopes[scope].choices[unwrap(decision)]]
+        return scope.choices[unwrap(decision)]
     except (KeyError, TypeError) as error:
         raise RequestError("the selector is not part of this compiled scope") from error
 
 
 class MethodReader:
     """The reads of one running ``self`` method (see the module docstring). ``model``: the
-    compiled model it reads; ``node``: the method's node; ``call``: its call. ``trace``:
+    compiled model it reads; ``node``: the method's address; ``call``: its call. ``trace``:
     what it read, in order, with the answers it got (the evaluator's reads record them)."""
 
     __slots__ = ("model", "node", "call", "trace", "existence", "valued")
 
-    def __init__(self, model: Model[Space], node: Node, call: Call) -> None:
+    def __init__(self, model: Model[Space], node: Address, call: Call) -> None:
         self.model = model
         self.node = node
         self.call = call
-        self.trace: list[tuple[NodeId, QueryResult[object]]] = []
-        self.existence: set[NodeId] = set()
-        self.valued: set[NodeId] = set()
+        self.trace: list[tuple[Address, QueryResult[object]]] = []
+        self.existence: set[Address] = set()
+        self.valued: set[Address] = set()
 
     # -- the read boundary -------------------------------------------------------------
 
@@ -84,12 +85,12 @@ class MethodReader:
         if self.call.abandoned is not None:
             raise self.call.abandoned
 
-    def _check(self, index: NodeId) -> None:
+    def _check(self, index: Address) -> None:
         """A read the method's source does not name is its failure."""
-        allowed = self.model.per_class.reads.methods.get(self.node.index)
+        allowed = self.model.per_class.reads.methods.get(self.node)
         if allowed is None or index in allowed:
             return
-        member = self.model.linked.header(index).key
+        member = index.key
         error = EvaluationError(
             self.node.owner,
             "read-undeclared",
@@ -106,17 +107,17 @@ class MethodReader:
         non-value halts the method."""
         raise NotImplementedError
 
-    def _answer(self, index: NodeId) -> QueryResult[object]:
+    def _answer(self, index: Address) -> QueryResult[object]:
         """``index``'s answer, checked and recorded, read to know whether something exists;
         a non-value does not halt."""
         raise NotImplementedError
 
-    def _value(self, index: NodeId) -> object:
+    def _value(self, index: Address) -> object:
         """``index``'s value, recorded and detached; a non-value halts the method (in
         cleanup, after a failure, it is a cleanup read)."""
         raise NotImplementedError
 
-    def _source_applies(self, index: NodeId) -> bool | NodeId:
+    def _source_applies(self, index: Address) -> bool | Address:
         """Whether a source applies at ``index``, or the presence node still undecided."""
         raise NotImplementedError
 
@@ -141,7 +142,7 @@ class MethodReader:
             raise RequestError(
                 "present() takes a node (a child or a selector's case) or a value input"
             )
-        presence = self.model.linked.scopes[target].guard
+        presence = target.guard
         if presence is None:
             return True
         answer = self._answer(presence)
@@ -153,7 +154,7 @@ class MethodReader:
             return False
         return bool(self._value(presence))  # undecided: halts like any value read
 
-    def _node_scope(self, point: Space, reference: object) -> int | None:
+    def _node_scope(self, point: Space, reference: object) -> ScopeRecord | None:
         """For a node reference, the node's scope; ``None`` for anything else."""
         if not isinstance(reference, Space):
             return None
@@ -163,12 +164,10 @@ class MethodReader:
         *outer, last = path
         if not isinstance(last, NodeDecl):
             return None
-        scopes = self.model.linked.scopes
-        holder = descend(scopes, point._scope, outer)
-        scope = scopes[holder]
-        if last is scope.record:
+        holder = descend(point._scope, outer)
+        if last is holder.record:
             return holder
-        target = scope.children.get(last)
+        target = holder.children.get(last)
         if target is None:
             raise RequestError("node is not part of this compiled scope")
         return target
@@ -182,7 +181,7 @@ class MethodReader:
         self._value(applies)  # undecided: halts like any value read
         raise AssertionError("an undecided presence read halts")
 
-    def _holds(self, guard: NodeId) -> bool | NodeId:
+    def _holds(self, guard: Address) -> bool | Address:
         """Whether a guard holds (inapplicable: it does not), or the guard while undecided."""
         answer = self._answer(guard)
         if isinstance(answer, Available):
@@ -192,14 +191,13 @@ class MethodReader:
     def child(self, point: Space, record: object) -> Space:
         """A child node's receiver."""
         self._enter()
-        scope = self.model.linked.scopes[point._scope]
-        child_scope = scope.children.get(record)
+        child_scope = point._scope.children.get(record)
         if child_scope is None:
             raise RequestError("child node is not part of this compiled scope")
         return receiver(self, child_scope)
 
-    def _choice(self, scope: int, decision: object) -> Choice:
-        return scope_choice(self.model.linked, scope, decision)
+    def _choice(self, scope: ScopeRecord, decision: object) -> ChoiceRecord:
+        return scope_choice(scope, decision)
 
     def selected_candidate(self, point: Space, decision: object) -> Space | None:
         """The receiver of the candidate a Decision over nodes selects, or ``None``."""
@@ -227,7 +225,7 @@ class MethodReader:
     def root(self, point: Space) -> Space:
         """The root's receiver."""
         self._enter()
-        return point if point._scope == 0 else receiver(self, 0)
+        return point if point._scope.parent is None else receiver(self, self.model.scopes.root)
 
 
 def _unsupplied(answer: Unresolved) -> bool:
@@ -235,9 +233,9 @@ def _unsupplied(answer: Unresolved) -> bool:
     return bool(findings) and all(finding.code == "input-unsupplied" for finding in findings)
 
 
-def receiver(reader: MethodReader, scope: int) -> Space:
+def receiver(reader: MethodReader, scope: ScopeRecord) -> Space:
     """A Space of ``scope``'s class reading through ``reader``: a method's ``self``."""
-    space_type = reader.model.linked.scopes[scope].space_type
+    space_type = scope.space_type
     made = object.__new__(space_type)
     object.__setattr__(made, "_held", reader)
     object.__setattr__(made, "_scope", scope)

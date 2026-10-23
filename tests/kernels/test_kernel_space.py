@@ -39,8 +39,8 @@ from finn.core.space import (
     required,
     view,
 )
-from finn.core.space._reads import infer, summary
-from finn.core.space._structure import expand
+from finn.core.space._reads import summary
+from finn.core.space.compiler import compile_model
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Endpoint, Signal
@@ -105,8 +105,8 @@ def test_a_fifo_s_own_statements_and_answers_are_views_read_by_fixed_names() -> 
     reads = cast(Any, FifoKernel.netlist).function.__reads__
     assert {"parameters", "clocking", "input_stream", "output_stream"} <= set(reads)
     for space_type in (FifoKernel, ChannelFifo):
-        table = expand(space_type)
-        assert summary(table, infer(table))["dynamic"] == 0
+        model = compile_model(space_type)
+        assert summary(model.scopes, model.per_class.reads)["dynamic"] == 0
 
 
 # -- a kernel with members --------------------------------------------------------------------

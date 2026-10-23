@@ -38,8 +38,9 @@ from finn.core.space import (
     inspection,
     reject,
 )
+from finn.core.space._scopes import Address
 from finn.core.space.edits import ConfigurationResult
-from finn.core.space.ir import NodeId, NodeKind
+from finn.core.space.ir import NodeKind
 from support.space_oracle import NO_FACTS, Answers, Changed, Implementation
 
 
@@ -192,7 +193,7 @@ class Public:
         ev = evaluation(made.ds, made.session)
         for index in made.ds.stored:
 
-            def checked(index: NodeId = index) -> QueryResult[bool]:
+            def checked(index: Address = index) -> QueryResult[bool]:
                 return questions.check(ev, index)
 
             found = ev.run(checked)

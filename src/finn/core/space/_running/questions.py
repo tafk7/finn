@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from ..edits import BrokenRule, ChangeOutcome
 from ..inspection import (
@@ -33,7 +33,6 @@ from ..inspection import (
     Viable,
     Waiting,
 )
-from ..ir import Node, NodeId
 from ..results import (
     Available,
     ConstraintAssessment,
@@ -50,6 +49,9 @@ from .per_class import flow_below as _flow
 from .structure import record
 from .value import DesignSpace, FactsLayer
 
+if TYPE_CHECKING:
+    from .._scopes import Address, ScopeRecord
+
 _MISSING = object()
 HOLDS: QueryResult[bool] = Available(True)
 REMOVE = object()
@@ -61,7 +63,7 @@ Presence = Literal["present", "absent", "unknown"]
 # -- presence, validity, states ---------------------------------------------------------
 
 
-def presence(ev: Evaluation, index: NodeId) -> tuple[Presence, QueryResult[object]]:
+def presence(ev: Evaluation, index: Address) -> tuple[Presence, QueryResult[object]]:
     """Whether ``index`` is present: its existence guards read outermost first."""
     guards = ev.inferred.guards(index)
     if not guards:
@@ -83,20 +85,20 @@ def presence(ev: Evaluation, index: NodeId) -> tuple[Presence, QueryResult[objec
     return "absent", answer
 
 
-def placed(ev: Evaluation, index: NodeId) -> Evaluation:
+def placed(ev: Evaluation, index: Address) -> Evaluation:
     """Where the choice ``index``'s values are checked and listed: its membership reading
     (as if it existed), its guard read here first, to place the check. The reading answers
     the same whatever the guard answers (a domain reads facts only); a failure in the
     guard, a dependency cycle through the choice among them, is met there first."""
-    guard = ev.raw[index].guard
+    guard = index.guard
     if guard is not None:
         ev.result(guard)
     return ev.membership(index)
 
 
-def check(ev: Evaluation, index: NodeId, value: object = _MISSING) -> QueryResult[bool]:
+def check(ev: Evaluation, index: Address, value: object = _MISSING) -> QueryResult[bool]:
     """A value's type check (the stored one by default), where it is placed (``placed``)."""
-    node = ev.raw[index]
+    node = index
     reading = placed(ev, index)
     if node.domain is None:
         return HOLDS
@@ -111,30 +113,30 @@ def _refuses(result: QueryResult[bool]) -> bool:
 
 
 def _pieces_in(
-    ev: Evaluation, index: NodeId, wanted: type[object], answer: QueryResult[Any] | None = None
+    ev: Evaluation, index: Address, wanted: type[object], answer: QueryResult[Any] | None = None
 ) -> list[Piece]:
-    linked = ev.linked
+    keys = ev.scopes.keys
     found: list[Piece] = []
     entry = ev.get(index)
     assessment = entry.assessment
     if not isinstance(assessment, ConstraintAssessment) or not assessment.results:
         held = entry.result if answer is None else answer
         if isinstance(held, (Rejected, Unresolved)) and isinstance(held, wanted):
-            found.append(Piece(linked.scopes[ev.raw[index].scope].name, held))
+            found.append(Piece(index.scope.name, held))
         return found
     for key, result in assessment.results.items():
         if isinstance(result, Inapplicable):
             continue
-        piece = linked.keys[key]
-        if linked.header(piece).kind == "validity":
+        piece = keys[key]
+        if piece.kind == "validity":
             found.extend(_pieces_in(ev, piece, wanted, result))
         elif isinstance(result, (Rejected, Unresolved)) and isinstance(result, wanted):
             found.append(Piece(key, result))
     return found
 
 
-def validity(ev: Evaluation, scope: int = 0) -> Validity:
-    index = cast(NodeId, ev.linked.scopes[scope].validity)
+def validity(ev: Evaluation, scope: ScopeRecord | None = None) -> Validity:
+    index = (ev.scopes.root if scope is None else scope).validity
     answer = cast(QueryResult[bool], ev.result(index))
     if isinstance(answer, Rejected):
         return Validity("refused", _ordered(_pieces_in(ev, index, Rejected)), answer)
@@ -143,7 +145,7 @@ def validity(ev: Evaluation, scope: int = 0) -> Validity:
     return Validity("valid", (), answer)
 
 
-def state_of(ev: Evaluation, index: NodeId) -> ChoiceState:
+def state_of(ev: Evaluation, index: Address) -> ChoiceState:
     found, guard = presence(ev, index)
     stored = ev.ds.stored
     if index not in stored:
@@ -159,23 +161,23 @@ def state_of(ev: Evaluation, index: NodeId) -> ChoiceState:
     return Waiting(value, _waits(read)) if isinstance(read, Unresolved) else Set(value)
 
 
-def states(ev: Evaluation, scope: int = 0) -> tuple[tuple[str, ChoiceState], ...]:
-    """Every choice's state, in the flow order (today's, from the templates)."""
-    header = ev.linked.header
-    return tuple((header(i).key, state_of(ev, i)) for i in _flow(ev.model, scope))
+def states(ev: Evaluation, scope: ScopeRecord | None = None) -> tuple[tuple[str, ChoiceState], ...]:
+    """Every choice's state, in the flow order (today's, from the compiled forms)."""
+    at = ev.scopes.root if scope is None else scope
+    return tuple((i.key, state_of(ev, i)) for i in _flow(ev.model, at))
 
 
 # -- pairs, origins, standing -----------------------------------------------------------
 
 PieceId = tuple[str, bool]
-Pairs = Mapping[PieceId, Mapping[NodeId, Rejected]]
+Pairs = Mapping[PieceId, Mapping["Address", Rejected]]
 
 
-def pairs(ev: Evaluation) -> dict[PieceId, dict[NodeId, Rejected]]:
+def pairs(ev: Evaluation) -> dict[PieceId, dict[Address, Rejected]]:
     """Each false piece of the root's validity with each origin it is false through."""
-    linked, raw = ev.linked, ev.raw
-    root = cast(NodeId, linked.scopes[0].validity)
-    found: dict[PieceId, dict[NodeId, Rejected]] = {}
+    keys = ev.scopes.keys
+    root = ev.scopes.root.validity
+    found: dict[PieceId, dict[Address, Rejected]] = {}
     if not isinstance(ev.result(root), Rejected):
         return found
     pending = [root]
@@ -186,8 +188,8 @@ def pairs(ev: Evaluation) -> dict[PieceId, dict[NodeId, Rejected]]:
         for key, answer in assessment.results.items():
             if not isinstance(answer, Rejected):
                 continue
-            index = linked.keys[key]
-            node = raw[index]
+            index = keys[key]
+            node = index
             if node.guard is not None and isinstance(ev.result(node.guard), Rejected):
                 found[(key, True)] = _origins(ev, (node.guard,))
             elif node.kind == "validity":
@@ -199,8 +201,8 @@ def pairs(ev: Evaluation) -> dict[PieceId, dict[NodeId, Rejected]]:
     return found
 
 
-def _domain_origins(ev: Evaluation, index: NodeId, answer: Rejected) -> dict[NodeId, Rejected]:
-    inputs = [(a.node, ev.result(a.node)) for a in membership_arguments(ev.raw[index])]
+def _domain_origins(ev: Evaluation, index: Address, answer: Rejected) -> dict[Address, Rejected]:
+    inputs = [(a.node, ev.result(a.node)) for a in membership_arguments(index)]
     if not any(isinstance(result, Inapplicable) for _, result in inputs):
         refused = [node for node, result in inputs if isinstance(result, Rejected)]
         if refused:
@@ -208,11 +210,11 @@ def _domain_origins(ev: Evaluation, index: NodeId, answer: Rejected) -> dict[Nod
     return {index: answer}
 
 
-def _origins(ev: Evaluation, starts: Sequence[NodeId]) -> dict[NodeId, Rejected]:
+def _origins(ev: Evaluation, starts: Sequence[Address]) -> dict[Address, Rejected]:
     """Following what each refused node read that answered refused, to the nodes refused
     on their own values (never into a view's Space validity)."""
-    found: dict[NodeId, Rejected] = {}
-    seen: set[NodeId] = set()
+    found: dict[Address, Rejected] = {}
+    seen: set[Address] = set()
     pending = list(reversed(tuple(starts)))
     while pending:
         index = pending.pop()
@@ -225,7 +227,7 @@ def _origins(ev: Evaluation, starts: Sequence[NodeId]) -> dict[NodeId, Rejected]
         if entry.own_refusal:
             found[index] = entry.result
             continue
-        node = ev.raw[index]
+        node = index
         space = node.constraints[0] if node.kind == "view" else None
         pending.extend(
             dep
@@ -235,20 +237,19 @@ def _origins(ev: Evaluation, starts: Sequence[NodeId]) -> dict[NodeId, Rejected]
     return found
 
 
-def standing(ev: Evaluation, origin: NodeId, named: frozenset[NodeId]) -> tuple[str, ...]:
+def standing(ev: Evaluation, origin: Address, named: frozenset[Address]) -> tuple[str, ...]:
     """The stored choices standing in an origin's way: those it read as values here,
     through derived values and views' bodies, less those ``named`` and those deciding
     whether it exists."""
-    raw = ev.raw
-    node = raw[origin]
+    node = origin
     if node.kind == "decision":
         return ()
     deciders = _deciders(ev, origin)
-    read: set[NodeId] = set()
+    read: set[Address] = set()
     if node.kind == "present":
         for target, answer in ev.get(origin).trace:
             if not isinstance(answer, Inapplicable) and target != node.guard:
-                read |= {i for i in _deciders(ev, target) if raw[i].kind == "decision"}
+                read |= {i for i in _deciders(ev, target) if i.kind == "decision"}
     else:
         pending, seen = [origin], {origin}
         while pending:
@@ -257,26 +258,22 @@ def standing(ev: Evaluation, origin: NodeId, named: frozenset[NodeId]) -> tuple[
                 if dependency in seen:
                     continue
                 seen.add(dependency)
-                kind = raw[dependency].kind
+                kind = dependency.kind
                 if kind == "decision":
                     read.add(dependency)
                 elif kind not in ("param", "const", "validity"):
                     pending.append(dependency)
     stored = ev.ds.stored
     return tuple(
-        sorted(
-            ev.linked.header(i).key
-            for i in read
-            if i in stored and i not in named and i not in deciders
-        )
+        sorted(i.key for i in read if i in stored and i not in named and i not in deciders)
     )
 
 
-def _value_reads(ev: Evaluation, index: NodeId) -> Sequence[NodeId]:
+def _value_reads(ev: Evaluation, index: Address) -> Sequence[Address]:
     """What ``index`` read here as values: its trace, less its own guard (read first),
     what it read only to know whether something exists, a view's Space validity and a
     selection's selector."""
-    spec = ev.raw[index]
+    spec = index
     entry = ev.get(index)
     trace = entry.trace
     if spec.guard is not None and trace and trace[0][0] == spec.guard:
@@ -289,17 +286,17 @@ def _value_reads(ev: Evaluation, index: NodeId) -> Sequence[NodeId]:
     return [dep for dep, _ in trace if dep not in skipped]
 
 
-def _deciders(ev: Evaluation, index: NodeId) -> set[NodeId]:
+def _deciders(ev: Evaluation, index: Address) -> set[Address]:
     """The choices and facts deciding whether ``index`` exists: everything its guard's
     evaluation read here, through anything."""
-    guard = ev.raw[index].guard
+    guard = index.guard
     if guard is None:
         return set()
-    found: set[NodeId] = set()
+    found: set[Address] = set()
     pending, seen = [guard], {guard}
     while pending:
         current = pending.pop()
-        node = ev.raw[current]
+        node = current
         if node.kind in ("decision", "param"):
             found.add(current)
             if node.kind == "param":
@@ -312,25 +309,21 @@ def _deciders(ev: Evaluation, index: NodeId) -> set[NodeId]:
 
 
 def newly_false(
-    before: Callable[[], Pairs], after: Evaluation, named: frozenset[NodeId]
+    before: Callable[[], Pairs], after: Evaluation, named: frozenset[Address]
 ) -> tuple[BrokenRule, ...]:
     held_after = pairs(after)
     if not held_after:
         return ()
     held_before = before()
-    found: dict[NodeId, Rejected] = {}
+    found: dict[Address, Rejected] = {}
     for piece, origins in held_after.items():
         held = held_before.get(piece, {})
         for index, result in origins.items():
             if index not in held:
                 found.setdefault(index, result)
-    header = after.linked.header
     return tuple(
         sorted(
-            (
-                BrokenRule(header(i).owner, result, standing(after, i, named))
-                for i, result in found.items()
-            ),
+            (BrokenRule(i.owner, result, standing(after, i, named)) for i, result in found.items()),
             key=lambda rule: rule.rule,
         )
     )
@@ -357,18 +350,18 @@ class Report:
 
 
 def moved(
-    before: Evaluation, after: Evaluation, sources: set[NodeId]
+    before: Evaluation, after: Evaluation, sources: set[Address]
 ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     """The stored choices put dormant and brought into play, and the open choices brought
     into presence, by presence before and after, in the flow order (only the choices
     whose presence may read what moved: today's presence readers)."""
     model = after.model
-    linked = after.linked
+    scopes = after.scopes
     candidates = {c for source in sources for c in model.per_class.presence_readers(source)}
-    dormant: list[NodeId] = []
-    in_play: list[NodeId] = []
-    opened: list[NodeId] = []
-    for index in sorted(candidates, key=linked.ranks.__getitem__):
+    dormant: list[Address] = []
+    in_play: list[Address] = []
+    opened: list[Address] = []
+    for index in sorted(candidates, key=scopes.position):
         now = presence(after, index)[0]
         if now == "unknown":
             continue
@@ -378,16 +371,15 @@ def moved(
                 dormant.append(index)
         elif presence(before, index)[0] != "present":
             (in_play if stored else opened).append(index)
-    key = linked.header
     return (
-        tuple(key(i).key for i in dormant),
-        tuple(key(i).key for i in in_play),
-        tuple(key(i).key for i in opened),
+        tuple(i.key for i in dormant),
+        tuple(i.key for i in in_play),
+        tuple(i.key for i in opened),
     )
 
 
 def _moved_from(
-    before: Evaluation, after: Evaluation, facts: set[NodeId]
+    before: Evaluation, after: Evaluation, facts: set[Address]
 ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     held, stored = before.ds.stored, after.ds.stored
     sources = set(facts) | {
@@ -400,10 +392,10 @@ def _moved_from(
 
 def _instantiate(
     ds: DesignSpace,
-    facts: Mapping[NodeId, object],
-    stored: Mapping[NodeId, object],
+    facts: Mapping[Address, object],
+    stored: Mapping[Address, object],
     session: Session,
-) -> tuple[DesignSpace, dict[NodeId, QueryResult[bool]]]:
+) -> tuple[DesignSpace, dict[Address, QueryResult[bool]]]:
     """The design space of ``facts`` (their layer) with the ``stored`` values of their
     type there."""
     layer = FactsLayer.of(ds.model, facts)
@@ -417,11 +409,11 @@ def _instantiate(
     return made, checks
 
 
-def _same(left: Mapping[NodeId, object], right: Mapping[NodeId, object]) -> bool:
+def _same(left: Mapping[Address, object], right: Mapping[Address, object]) -> bool:
     return left.keys() == right.keys() and all(left[i] is right[i] for i in left)
 
 
-def _equal(node: Node, left: object, right: object, role: str, *, detach: bool) -> bool:
+def _equal(node: Address, left: object, right: object, role: str, *, detach: bool) -> bool:
     """Whether two values of ``node`` are equal by its semantics, in ``role``: a fact's
     ("parameter equality") as given, a choice's ("configuration equality") each detached
     first, so equality cannot change a stored value (today's assignment's)."""
@@ -435,7 +427,7 @@ def _equal(node: Node, left: object, right: object, role: str, *, detach: bool) 
     return equal(semantics, left, right, owner=node.owner, role=role)
 
 
-def _stored(node: Node, value: object, old: object) -> object:
+def _stored(node: Address, value: object, old: object) -> object:
     """A choice's ``value`` as stored: the held object ``old`` where the two are equal by
     the choice's semantics (so nothing reads it anew), else ``value``."""
     if old is not _MISSING and _equal(node, value, old, "configuration equality", detach=True):
@@ -445,34 +437,29 @@ def _stored(node: Node, value: object, old: object) -> object:
 
 def change(
     ds: DesignSpace,
-    facts: Mapping[NodeId, object],
-    requests: Sequence[tuple[NodeId, object]],
+    facts: Mapping[Address, object],
+    requests: Sequence[tuple[Address, object]],
     session: Session,
 ) -> Report:
     """``facts`` (by root formal) and ``requests`` ((choice, value or ``REMOVE``), in order)
     as one change of ``ds``: today's assignment, step for step, on values."""
-    linked = ds.model.linked
-    nodes = ds.layer.structure.raw_nodes
     values = prepare(
-        linked,
         {
             **{i: (v, "parameter") for i, v in facts.items()},
             **{i: (v, "choice") for i, v in requests if v is not REMOVE},
         },
     )
     held_facts, held = ds.facts, ds.stored
-    given: dict[NodeId, object] = {}
-    changed: set[NodeId] = set()
+    given: dict[Address, object] = {}
+    changed: set[Address] = set()
     for i in facts:
         old = held_facts.get(i, _MISSING)
-        if old is not _MISSING and _equal(
-            nodes[i], old, values[i], "parameter equality", detach=False
-        ):
+        if old is not _MISSING and _equal(i, old, values[i], "parameter equality", detach=False):
             given[i] = old
         else:
             given[i] = values[i]
             changed.add(i)
-    reached, rechecked = ds, cast("dict[NodeId, QueryResult[bool]]", {})
+    reached, rechecked = ds, cast("dict[Address, QueryResult[bool]]", {})
     if changed:
         reached, rechecked = _instantiate(ds, {**held_facts, **given}, held, session)
     before = reached.stored
@@ -481,10 +468,10 @@ def change(
         if value is REMOVE:
             stored.pop(i, None)
         else:
-            stored[i] = _stored(nodes[i], values[i], before.get(i, _MISSING))
+            stored[i] = _stored(i, values[i], before.get(i, _MISSING))
 
-    def owner(index: NodeId) -> str:
-        return linked.header(index).owner
+    def owner(index: Address) -> str:
+        return index.owner
 
     fact_outcomes = [ChangeOutcome(owner(i), HOLDS, "unchanged") for i in facts]
     if not changed and _same(stored, held):
@@ -531,14 +518,12 @@ def change(
     return Report(after_ds, tuple(published), made_false, *moves)
 
 
-def bind(ds: DesignSpace, saved: Sequence[tuple[NodeId, object]], session: Session) -> Report:
+def bind(ds: DesignSpace, saved: Sequence[tuple[Address, object]], session: Session) -> Report:
     """``ds``'s facts with exactly the ``saved`` choices, each of its type there; never
     refused; its report read against the facts with nothing stored."""
-    linked = ds.model.linked
-    nodes = ds.layer.structure.raw_nodes
-    values = prepare(linked, {i: (v, "choice") for i, v in saved})
+    values = prepare({i: (v, "choice") for i, v in saved})
     held = ds.stored
-    kept_values = {i: _stored(nodes[i], values[i], held.get(i, _MISSING)) for i, _ in saved}
+    kept_values = {i: _stored(i, values[i], held.get(i, _MISSING)) for i, _ in saved}
     empty = ds.with_stored({}) if held else ds
     made, checks = _instantiate(empty, ds.facts, kept_values, session)
     if _same(made.stored, held):
@@ -546,18 +531,16 @@ def bind(ds: DesignSpace, saved: Sequence[tuple[NodeId, object]], session: Sessi
     after = evaluation(made, session)
     broken = newly_false(lambda: pairs(evaluation(empty, session)), after, frozenset())
     outcomes = tuple(
-        ChangeOutcome(
-            linked.header(i).owner, checks[i], "changed" if i in made.stored else "dropped"
-        )
+        ChangeOutcome(i.owner, checks[i], "changed" if i in made.stored else "dropped")
         for i, _ in saved
     )
     return Report(made, outcomes, broken, *_moved_from(evaluation(empty, session), after, set()))
 
 
-def viable(ds: DesignSpace, index: NodeId, session: Session) -> Viable:
+def viable(ds: DesignSpace, index: Address, session: Session) -> Viable:
     """One choice's listed values, each tried alone as a change would set it."""
     ev = evaluation(ds, session)
-    node = ev.raw[index]
+    node = index
     reading = placed(ev, index)
     listed = ev.run(lambda: reading.listed(node, []))
     if not isinstance(listed, Available) or listed.value is None:

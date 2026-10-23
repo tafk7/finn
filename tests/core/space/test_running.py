@@ -144,9 +144,8 @@ from finn.core.space._running.cache import (
 from finn.core.space._running.cache import key as cache_key
 from finn.core.space._running.evaluate import MembershipReadsChoice, Session
 from finn.core.space._running.value import DesignSpace, FactsLayer, hashkey
-from finn.core.space._structure import Structure
+from finn.core.space._scopes import Address
 from finn.core.space._value_types import is_value_type
-from finn.core.space.ir import Node
 from finn.core.space.occurrence import held
 from finn.core.space.semantics import default_semantics
 
@@ -926,14 +925,15 @@ def test_a_dropped_model_takes_its_record_layers_and_tables_with_it_when_its_id_
         space_class = _shape(number)
         configuration = design_space(space_class())
         model = inspection.model(configuration)
-        identity = id(model.linked)
+        identity = id(model.scopes)
         if identity in dead:
             assert dead[identity]() is None
             # a new model at a dead one's id: its record only what opening it made (its
             # facts layer), and no table until it is first read
-            opened = structure._RECORDS.get(model.linked)
+            opened = cast("structure.Record | None", model.scopes.record)
             assert opened is not None and opened._ranks is None
-            assert not opened._bound and not opened._within
+            assert not opened._bound
+            assert not model.scopes.tables
             assert list(opened.layers.values()) == [held(configuration).ds.layer]
             assert cache.models() == 0
             reused = (space_class, configuration)
@@ -942,8 +942,10 @@ def test_a_dropped_model_takes_its_record_layers_and_tables_with_it_when_its_id_
             answers = implementation.make(space_class, {}, {"a": 2, "b": 1, "inner.pe": 2})
             assert answers.validity().status in ("valid", "refused")
             layers.append(weakref.ref(cast(Any, answers).ds.layer))
-        assert cache.models() == 1
-        dead[identity] = weakref.ref(model.linked)
+        assert cache.models() == 1 and cache in model.scopes.tables
+        # The model's scope records, its record and its tables are freed with its class,
+        # the cache that holds a table of it still alive.
+        dead[identity] = weakref.ref(model.scopes)
         del space_class, configuration, model, answers
         gc.collect()
     assert reused is not None, "no id was reused in 400 models"
@@ -967,6 +969,43 @@ def test_a_dropped_model_takes_its_record_layers_and_tables_with_it_when_its_id_
         found = compare.walk(lambda: design_space(space_class()), {}, 0, 12, PUBLIC, implementation)
         assert found.lines() == []
     assert counters(running).hits > hits
+
+
+def test_a_cache_freed_while_its_model_lives_leaves_no_table_behind() -> None:
+    """A model's tables are held by its scope records, keyed weakly by the cache: a cache
+    gone (at the next full collection) takes its table with it, the model kept."""
+    space_class = _shape(1)
+    model = inspection.model(design_space(space_class()))
+    running = cached()
+    answers = running.make(space_class, {}, {"a": 2, "b": 1, "inner.pe": 2})
+    assert answers.validity().status in ("valid", "refused")
+    cache = cast(NodeCache, running.cache)
+    assert cache.models() == 1 and cache in model.scopes.tables
+    del running, answers, cache
+    gc.collect()
+    assert not model.scopes.tables
+
+
+def test_dynamic_classes_dropped_after_use_leave_no_model_and_no_table() -> None:
+    """Several Space classes of their own, each asked with one cache and dropped: once
+    collected, no class, model or scope records of them is left, and the cache holds a
+    table for none of them."""
+    gc.collect()
+    running = cached()
+    cache = cast(NodeCache, running.cache)
+    gone: list[weakref.ref[Any]] = []
+    for number in range(6):
+        space_class = _shape(number)
+        answers = running.make(space_class, {}, {"a": 2, "b": 1, "inner.pe": 2})
+        assert answers.validity().status in ("valid", "refused")
+        model = inspection.model(design_space(space_class()))
+        gone += [weakref.ref(space_class), weakref.ref(model.scopes)]
+        assert cache.models() >= 1 and cache in model.scopes.tables
+        del space_class, answers, model
+    assert cache.models() >= 1  # a dropped model's tables go at the next full collection
+    gc.collect()
+    assert all(item() is None for item in gone)
+    assert cache.models() == 0 and cache.answers() == 0
 
 
 def test_a_facts_layer_is_interned_while_a_design_space_holds_it() -> None:
@@ -1036,7 +1075,7 @@ def test_with_a_cache_the_depth_guard_keeps_nothing_for_an_abandoned_node() -> N
     assert first.query("value_300") == Available(300)
     assert counters(running).restarts > 0
     origin = cast(Any, first).ds.node("value_0")
-    tables = list(cache._tables.values())
+    tables = cache.tables()
     read_sets = {read for table in tables for sets in table.values() for read in sets}
     assert read_sets == {(origin,)}
     assert running.open(design_space(LINE(value_0=1))).query("value_300") == Available(301)  # type: ignore[call-arg]
@@ -1066,10 +1105,10 @@ def test_a_membership_reading_that_reads_a_decision_is_an_error_naming_both(
         g = Inside(width=w, when=on)
 
     model = cast(Any, inspection.model(design_space(Reads())))
-    ds = DesignSpace(FactsLayer.of(model, {}), {model.linked.keys["w"]: 4})
+    ds = DesignSpace(FactsLayer.of(model, {}), {model.scopes.find("w"): 4})
     ev = evaluate.evaluation(ds, Session())
     with pytest.raises(NativeEvaluationError) as raised:
-        questions.check(ev, model.linked.keys["g.pe"], 2)
+        questions.check(ev, model.scopes.find("g.pe"), 2)
     error = raised.value.primary
     assert isinstance(error, MembershipReadsChoice)
     assert (error.choice, error.decision) == ("g.pe", "w")
@@ -1088,7 +1127,7 @@ def test_a_membership_reading_of_a_choice_with_no_guard_that_reads_a_decision_is
         pe: int = Decision(domain=divisors_of(w))
 
     model = cast(Any, inspection.model(design_space(Unguarded())))
-    keys = model.linked.keys
+    keys = model.scopes.keys
     ds = DesignSpace(FactsLayer.of(model, {}), {keys["w"]: 4})
     ev = evaluate.evaluation(ds, Session())
     reading = ev.membership(keys["pe"])
@@ -1116,7 +1155,7 @@ def test_a_membership_reading_of_a_choice_with_no_guard_that_reads_a_decision_is
 def test_a_choice_in_a_case_picked_by_a_choice_reads_its_cases_guard_as_holding(f: int) -> None:
     point = design_space(PickedByAChoice(f=f))
     model = cast(Any, inspection.model(point))
-    keys = model.linked.keys
+    keys = model.scopes.keys
     ds = DesignSpace(FactsLayer.of(model, {keys["f"]: f}), {})
     ev = evaluate.evaluation(ds, Session())
     reading = ev.membership(keys["sel.a.z"])
@@ -1158,7 +1197,7 @@ def test_a_choice_outside_the_case_reading_its_value_reads_the_picker_and_is_an_
     assert [finding.code for finding in refused.value.findings] == ["domain-reads-choice"]
     monkeypatch.setattr(_compose, "check_domains", lambda template: None)
     model = cast(Any, inspection.model(design_space(outside()(f=2))))  # type: ignore[call-arg]
-    keys = model.linked.keys
+    keys = model.scopes.keys
     ds = DesignSpace(FactsLayer.of(model, {keys["f"]: 2}), {keys["x"]: 0})
     ev = evaluate.evaluation(ds, Session())
     assert ev.membership(keys["w"]).assumed == frozenset()
@@ -1282,7 +1321,7 @@ def test_a_member_wider_than_the_width_is_never_kept_and_is_evaluated_at_each_lo
         assert compare.everything(public, answers).lines() == []
     ds = cast(Any, answers).ds
     total, twice = ds.node("total"), ds.node("twice")
-    (table,) = cache._tables.values()
+    (table,) = cache.tables()
     kept = {index for _, index in table}
     assert twice in kept and total not in kept
     assert all(len(read) <= 1 for sets in table.values() for read in sets)
@@ -1335,7 +1374,7 @@ def test_a_hit_leaves_the_evaluation_as_evaluating_would() -> None:
     stored = {"kitchen.finish": 2, "want_garage": True}
     warm, cold = cached(), cached()
     before = cast(Any, warm.make(House, {"budget": 100}, stored)).ds
-    nodes = sorted(set(cast(Structure, before.model.linked).keys.values()))
+    nodes = sorted(before.model.scopes.all_addresses())
     for index in nodes:
         evaluate.evaluation(before, warm.session).get(index)
     again = cast(Any, warm.make(House, {"budget": 100}, stored)).ds
@@ -1861,9 +1900,9 @@ def plain_key(value: object) -> object:
     return cache_key(value, default_semantics(type(value)))
 
 
-def _member(semantics: ValueSemantics[Any]) -> Node:
+def _member(semantics: ValueSemantics[Any]) -> Address:
     """A member holding values of ``semantics``, as ``_same_value`` reads it."""
-    return cast(Node, SimpleNamespace(semantics=semantics, owner="value"))
+    return cast(Address, SimpleNamespace(semantics=semantics, owner="value"))
 
 
 @pytest.mark.parametrize("name", sorted(VALUE_TYPES))
@@ -2284,7 +2323,7 @@ def test_values_equal_but_told_apart_by_their_semantics_never_share_an_answer() 
     assert lines == []
     running = cached()
     _notes(running, Noted, "width", NOTED)
-    tables = cast(NodeCache, running.cache)._tables.values()
+    tables = cast(NodeCache, running.cache).tables()
     assert all(not read for table in tables for sets in table.values() for read in sets)
 
 

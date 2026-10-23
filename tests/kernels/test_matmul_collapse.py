@@ -1,20 +1,23 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""MatMulKernel with and without collapsed forwarding: its decision keys are the same.
+"""MatMulKernel's decision keys, and their order, whatever order its scopes are made in.
 
-Collapse rewrites the compiled form's forwarding edges only. A MatMul, as a network binds
-it, keeps its decision keys and their order whether its forwarding aliases are collapsed or
-not (the compiled forms, read without evaluating either).
+A MatMul, as a network binds it, lists the same decision keys in the same order (the flow
+order, ties by declaration) on a model of its own whose scopes are made by demand, in the
+permuted order (reversed by path) and eagerly: nothing orders by when a scope was made (read
+without evaluating any).
 """
 
-from typing import Any
+from typing import Any, cast
 
-from core.space._collapse_support import compiled
+import pytest
 from qonnx.core.datatype import DataType
 from support.helpers import FULL_DSP48E2, matmul_point
 
-from finn.core.space import Model, Space, inspection
+from finn.core.space import inspection
+from finn.core.space._template import compiled
+from finn.core.space.compiler import model_of
 from finn.kernels.matmul import MatMulKernel
 
 FACTS = dict(
@@ -29,25 +32,21 @@ FACTS = dict(
 WEIGHTS = ((-4, 0, 3, -1), (-3, 1, 2, -2), (-2, 2, 1, -3), (-1, 3, 0, -4))
 
 
-def _facts(case: str) -> dict[str, Any]:
-    return {**FACTS, "weights": WEIGHTS} if case == "memstream-fifo" else FACTS
-
-
-def _kernel(case: str, *, collapsed: bool) -> Model[Space]:
-    """The MatMul's model as the network binds it, compiled afresh."""
-    network = matmul_point(**_facts(case))
+def test_matmul_decision_keys_and_their_order_whatever_order_its_scopes_are_made_in() -> None:
+    network = matmul_point(**cast(dict[str, Any], FACTS), weights=WEIGHTS)
     point = network.member("matmul")
-    facts = {
-        name: getattr(point, name)
-        for name in ("x_tensor", "w_tensor", "w_contents", "weights_dtype")
-        if point.present(getattr(MatMulKernel, name))
-    }
-    return compiled(MatMulKernel(platform=FULL_DSP48E2, **facts), collapsed=collapsed)
-
-
-def test_collapse_keeps_matmul_decision_keys() -> None:
-    collapsed = _kernel("memstream-fifo", collapsed=True)
-    plain = _kernel("memstream-fifo", collapsed=False)
-    assert [item.key for item in inspection.decisions(collapsed)] == [
-        item.key for item in inspection.decisions(plain)
+    assert isinstance(point, MatMulKernel)  # bound as the network binds it
+    form = compiled(MatMulKernel)
+    found = [
+        [item.key for item in inspection.decisions(model_of(form, permuted=p, eager=e))]
+        for p, e in ((False, False), (True, False), (False, True))
     ]
+    assert len(found[0]) > 1
+    assert found[1] == found[0] and found[2] == found[0]
+
+
+@pytest.mark.parametrize("permuted", [False, True])
+def test_matmul_decisions_are_its_scope_records_decisions(permuted: bool) -> None:
+    model = model_of(compiled(MatMulKernel), permuted=permuted)
+    keys = [item.key for item in inspection.decisions(model)]
+    assert sorted(keys) == sorted(address.key for address in model.scopes.decisions)

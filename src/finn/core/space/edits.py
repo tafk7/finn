@@ -12,6 +12,7 @@ from .results import QueryResult, Rejected
 
 if TYPE_CHECKING:
     from ._configuration import Space
+    from ._scopes import Address, ScopeRecord
 
 T_co = TypeVar("T_co", covariant=True)
 S = TypeVar("S", bound="Space")
@@ -19,11 +20,12 @@ S = TypeVar("S", bound="Space")
 
 @dataclass(frozen=True, slots=True)
 class Change(Generic[T_co]):
-    """One typed choice patch tied to the exact configuration it changes."""
+    """One typed choice patch tied to the exact configuration it changes: its Decision's
+    scope record and address."""
 
     base: object = field(repr=False)
-    scope: int
-    node: int
+    scope: ScopeRecord
+    node: Address
     value: T_co | None = field(default=None, repr=False)
     remove: bool = False
 
