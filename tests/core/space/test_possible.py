@@ -12,7 +12,7 @@ until a change sets it. A successor takes from its base what its change does not
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from support.space_cores import CORES, Packed, Stub, built, commit
@@ -37,7 +37,7 @@ from finn.core.space import (
     reject,
 )
 from finn.core.space._running.evaluate import Ans, Session, evaluation
-from finn.core.space._structure import Structure
+from finn.core.space._scopes import Address
 
 
 def unassigned(answer: object) -> bool:
@@ -275,14 +275,14 @@ def test_a_successor_keeps_what_its_change_does_not_reach_whichever_order_declar
         design_space(space(width=7)),
         {"a.compute": "limited", "b.compute": "limited", "a.burst": 1, "b.burst": 1},
     )
-    structure = cast(Structure, inspection.model(base).linked)
-    nodes = tuple(structure.all_nodes())
+    nodes = tuple(inspection.model(base).scopes.all_addresses())
 
-    def answers(point: Any) -> dict[int, Ans]:
-        """Every node's answer in the design space ``point`` holds, in its model's session."""
+    def answers(point: Any) -> dict[Address, Ans]:
+        """Every member's answer in the design space ``point`` holds, in its model's
+        session."""
         ds = occurrence.held(point).ds
 
-        def every(session: Session) -> dict[int, Ans]:
+        def every(session: Session) -> dict[Address, Ans]:
             ev = evaluation(ds, session)
             return {index: ev.get(index) for index in nodes}
 
@@ -294,11 +294,7 @@ def test_a_successor_keeps_what_its_change_does_not_reach_whichever_order_declar
         """Whether every answer under ``prefix`` is the base's own: a hit in the model's
         cache is the answer kept, put into the evaluation as it is."""
         found = answers(point)
-        return all(
-            found[index] is held[index]
-            for index in nodes
-            if structure.header(index).key.startswith(prefix)
-        )
+        return all(found[index] is held[index] for index in nodes if index.key.startswith(prefix))
 
     # Outside a and b, nothing of theirs is evaluated again.
     unreached = commit(base, {"other.size": 2})
@@ -313,7 +309,7 @@ def test_a_successor_keeps_what_its_change_does_not_reach_whichever_order_declar
         with ds.model.lock:
             want = evaluation(ds, Session())
             for index in nodes:
-                assert got[index].result == want.result(index), structure.header(index).key
+                assert got[index].result == want.result(index), index.key
 
 
 @pytest.mark.usefixtures("purity_unchecked")

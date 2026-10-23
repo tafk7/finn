@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from support.refusals import refused
@@ -52,8 +52,7 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
 
     model = compile_model(Example)
     assert calls == []
-    nodes = model.linked.nodes
-    cycles = nodes[model.resolve(0, Example.cycles)]
+    cycles = model.resolve(model.root, Example.cycles)
     assert {argument.name for argument in cycles.arguments} == {"extent", "lanes"}
     # The dependency order is the eager form's (a model's structure resolves on demand).
     table = expand(Example)
@@ -63,9 +62,9 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
         for node in table.nodes
         for dependency in node.dependencies
     )
-    assert model.linked.parameters == (model.resolve(0, Example.extent),)
-    assert model.linked.decisions == (model.resolve(0, Example.lanes),)
-    assert nodes[model.resolve(0, Example.result)].semantics is not None
+    assert model.scopes.parameters == (model.resolve(model.root, Example.extent),)
+    assert model.scopes.decisions == (model.resolve(model.root, Example.lanes),)
+    assert model.resolve(model.root, Example.result).semantics is not None
 
 
 def test_placement_literals_are_frozen_once_per_declaration_and_reads_stay_detached() -> None:
@@ -140,21 +139,20 @@ def test_self_invocation_is_preserved_for_nested_functions_and_view_outputs() ->
         child = Child(source=4)
 
     model = compile_model(Parent)
-    nodes = model.linked.nodes
-    child_scope = model.linked.scopes[0].children[node_record(Parent.child)]
-    scalar = nodes[model.resolve(child_scope, Child.scalar)]
-    supported = nodes[model.resolve(child_scope, Child.supported)]
-    physical = nodes[model.resolve(child_scope, Child.physical)]
+    child_scope = model.root.children[node_record(Parent.child)]
+    scalar = model.resolve(child_scope, Child.scalar)
+    supported = model.resolve(child_scope, Child.supported)
+    physical = model.resolve(child_scope, Child.physical)
     assert physical.output is not None
-    for node in (scalar, supported, nodes[physical.output]):
+    for node in (scalar, supported, physical.output):
         assert node.call_style == "self"
-        assert node.scope == child_scope
+        assert node.scope is child_scope
         assert node.arguments == ()
     # A view's dependencies: its output, and its Space's validity, which reads the constraint.
-    validity = model.linked.scopes[child_scope].validity
+    validity = child_scope.validity
     assert set(physical.dependencies) == {validity, physical.output}
-    assert validity is not None and supported.index in nodes[validity].dependencies
-    explicit = nodes[model.resolve(child_scope, Child.explicit)]
+    assert supported in validity.dependencies
+    explicit = model.resolve(child_scope, Child.explicit)
     assert explicit.call_style == "explicit"
     assert len(explicit.arguments) == 1
     assert explicit.arguments[0].node == model.resolve(child_scope, Child.source)
@@ -176,10 +174,10 @@ def test_function_and_value_views_have_an_explicit_raw_output() -> None:
 
     model = compile_model(Example)
     for declaration in (Example.value_view, Example.function_view):
-        node = model.linked.nodes[model.resolve(0, declaration)]
+        node = model.resolve(model.root, declaration)
         assert node.kind == "view"
         assert node.output is not None
-        assert model.linked.nodes[node.output].kind == "derived"
+        assert node.output.kind == "derived"
 
 
 def test_a_transitive_triangle_is_acyclic_and_cycles_name_only_their_members() -> None:
@@ -235,8 +233,8 @@ def test_twenty_thousand_dependencies_compile_and_evaluate_iteratively() -> None
         )
     space_type = cast(type[Space], type("Deep", (Space,), members))
     model = compile_model(space_type)
-    last = model.resolve(0, members["value20000"])
-    assert len(model.linked.nodes[last].dependencies) == 1
+    last = model.resolve(model.root, members["value20000"])
+    assert len(last.dependencies) == 1
     # Every member, and the Space's validity node (no pieces: no constraint, no Decision),
     # in the eager form's dependency order (a model's structure resolves on demand).
     table = expand(space_type)
@@ -259,14 +257,14 @@ def test_compiled_handles_do_not_follow_later_class_rebinding() -> None:
         Example.value = replacement  # type: ignore[assignment]
     new = compile_model(Example)
 
-    old_semantics = old.linked.nodes[old.resolve(0, original)].semantics
+    old_semantics = old.resolve(old.root, original).semantics
     assert old_semantics is not None and old_semantics.type_token is int
     assert new is old
     with pytest.raises(RequestError, match="compiled scope"):
-        old.resolve(0, replacement)
-    assert new.resolve(0, original) == old.resolve(0, original)
+        old.resolve(old.root, replacement)
+    assert new.resolve(new.root, original) == old.resolve(old.root, original)
     with pytest.raises(RequestError, match="scope"):
-        old.resolve(1, original)
+        old.resolve(cast(Any, 1), original)
 
 
 def test_inherited_dependencies_bind_to_overrides_without_mutating_base() -> None:
@@ -282,11 +280,11 @@ def test_inherited_dependencies_bind_to_overrides_without_mutating_base() -> Non
 
     original = compile_model(Base)
     child = compile_model(Child)
-    assert child.resolve(0, Base.size) == child.resolve(0, Child.size)
-    original_node = original.linked.nodes[original.resolve(0, Base.size)]
-    child_node = child.linked.nodes[child.resolve(0, Child.size)]
+    assert child.resolve(child.root, Base.size) == child.resolve(child.root, Child.size)
+    original_node = original.resolve(original.root, Base.size)
+    child_node = child.resolve(child.root, Child.size)
     assert (original_node.value, child_node.value) == (4, 8)
-    assert child.linked.nodes[child.resolve(0, Base.doubled)].arguments[0].node == child_node.index
+    assert child.resolve(child.root, Base.doubled).arguments[0].node == child_node
 
 
 def test_compile_snapshots_values_domains_and_callback_references() -> None:
@@ -312,15 +310,15 @@ def test_compile_snapshots_values_domains_and_callback_references() -> None:
     assert declared.candidates() == ([1, 3], [2])
     Example.calculated.function = second
     new = compile_model(Example)
-    old_constant = old.linked.nodes[old.resolve(0, Example.constant)]
-    old_choice = old.linked.nodes[old.resolve(0, Example.choice)]
-    old_function = old.linked.nodes[old.resolve(0, Example.calculated)]
+    old_constant = old.resolve(old.root, Example.constant)
+    old_choice = old.resolve(old.root, Example.choice)
+    old_function = old.resolve(old.root, Example.calculated)
     assert old_constant.value == [1]
     assert old_choice.domain is not None and old_choice.domain.candidates is not None
     assert old_choice.domain.candidates() == ([1], [2])
     assert old_function.function is first
     assert new is old
-    assert new.linked.nodes[new.resolve(0, Example.calculated)].function is first
+    assert new.resolve(new.root, Example.calculated).function is first
 
 
 def test_a_foreign_value_reference_is_a_definition_error() -> None:
@@ -347,9 +345,9 @@ def test_domain_binding_is_validated_without_invocation() -> None:
 
     model = compile_model(Example)
     assert calls == []
-    assert model.linked.nodes[model.resolve(0, Example.choice)].domain_arguments[
-        0
-    ].node == model.resolve(0, Example.maximum)
+    assert model.resolve(model.root, Example.choice).domain_arguments[0].node == model.resolve(
+        model.root, Example.maximum
+    )
 
     class WrongSignature(Space):
         maximum: int = Param()
@@ -422,5 +420,5 @@ def test_generic_alias_adapter_tokens_keep_identity_for_input_and_output_annotat
     point = design_space(Example(source=(1, 2)))
     assert inspection.model(point) is model  # plain root values stay runtime inputs
     assert point.result == (1, 2, 3)
-    semantics = model.linked.nodes[model.resolve(0, Example.result)].semantics
+    semantics = model.resolve(model.root, Example.result).semantics
     assert semantics is not None and semantics.type_token is token

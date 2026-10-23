@@ -8,7 +8,7 @@ Some questions read every choice of a model, the cases not selected included: th
 facts read: ``PerClass.flow``, the order of ``inspection.decisions`` and ``states``,
 and of a change's lists), and the **presence readers** (for each choice and fact, the
 choices whose presence may read it: what a change may move). Each is answered here from
-the classes' compiled forms and the scopes' records (``_structure``): no node is resolved.
+the classes' compiled forms and the scopes' records (``_scopes``): no member is evaluated.
 
 **What each walks.** A choice's **upstream** is the first choices met on every way back
 from its existence guards, its domain's inputs and the formals of its scope and of every
@@ -30,7 +30,8 @@ bindings), and what it reaches out of the class, which it reports as **exits**
 method's subtree is one summary per class too.
 
 **Per scope, composition.** A summary's finds are addressed in the scope it is read at
-(``Structure.reach`` and ``member``: a scope's record, no node); each exit is followed
+(``ScopeRecord.reach`` and ``member_address``: a scope's record, no member read); each exit
+is followed
 into the placing scope's binding (``_compose.lift``: a literal, a default or an
 unsupplied formal ends at the guard the scope is placed under; a reference continues
 there), by that class's summaries, up to the root, where a formal is a fact. Composed per
@@ -46,7 +47,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from heapq import heapify, heappop, heappush
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from ._compose import (
     ROOT,
@@ -63,11 +64,14 @@ from ._compose import (
     slot,
 )
 from ._reads import _Dynamic, _Found, _Ref, _TemplateInference
-from .ir import NodeId, Placed, Placing
+from .ir import Placed, Placing
 
 if TYPE_CHECKING:
-    from ._structure import ScopeRecord, Structure
+    from ._scopes import Address, ScopeRecord, Scopes
     from ._template import Compiled
+
+# A choice in the flow order's algorithms: an address (a table's node id, in the tests).
+N = TypeVar("N")
 
 # The two walks: a choice's upstream, a guard's reach.
 Walk = Literal["upstream", "reach"]
@@ -339,11 +343,11 @@ class Flow:
     """The model's choices in the flow order (``order``), and its loops (``loops``: each
     set of choices reading one another, in declaration order)."""
 
-    order: tuple[NodeId, ...]
-    loops: tuple[tuple[NodeId, ...], ...]
+    order: tuple[Any, ...]
+    loops: tuple[tuple[Any, ...], ...]
 
 
-def flow_order(decisions: Sequence[NodeId], reading: Mapping[NodeId, frozenset[NodeId]]) -> Flow:
+def flow_order(decisions: Sequence[N], reading: Mapping[N, frozenset[N]]) -> Flow:
     """The choices ``decisions`` (in declaration order) in the flow order, each after the
     choices it reads (``reading``), ties in declaration order. Kahn's algorithm orders them,
     the next ready choice the first declared. Choices that read one another (a loop) are
@@ -355,8 +359,8 @@ def flow_order(decisions: Sequence[NodeId], reading: Mapping[NodeId, frozenset[N
     members = {loop[0]: loop for loop in loops}
     # The graph over units (a loop's first member stands for it): each unit's readers,
     # and how many units it waits on.
-    readers: dict[NodeId, set[NodeId]] = {}
-    waiting: dict[NodeId, set[NodeId]] = {}
+    readers: dict[N, set[N]] = {}
+    waiting: dict[N, set[N]] = {}
     for decision in decisions:
         own = unit.get(decision, decision)
         waits = waiting.setdefault(own, set())
@@ -368,7 +372,7 @@ def flow_order(decisions: Sequence[NodeId], reading: Mapping[NodeId, frozenset[N
     count = {node: len(waits) for node, waits in waiting.items()}
     ready = [(ranks[node], node) for node, waits in count.items() if not waits]
     heapify(ready)
-    order: list[NodeId] = []
+    order: list[N] = []
     while ready:
         _, node = heappop(ready)
         order.extend(members.get(node, (node,)))
@@ -380,20 +384,20 @@ def flow_order(decisions: Sequence[NodeId], reading: Mapping[NodeId, frozenset[N
 
 
 def _loops(
-    decisions: Sequence[NodeId],
-    reading: Mapping[NodeId, frozenset[NodeId]],
-    ranks: Mapping[NodeId, int],
-) -> tuple[tuple[NodeId, ...], ...]:
+    decisions: Sequence[N],
+    reading: Mapping[N, frozenset[N]],
+    ranks: Mapping[N, int],
+) -> tuple[tuple[N, ...], ...]:
     """The sets of choices that read one another (strongly connected, more than one), each
     in declaration order (``ranks``), the sets by their first member's (Tarjan's
     algorithm, without recursion; each choice's reads taken in declaration order)."""
-    index: dict[NodeId, int] = {}
-    low: dict[NodeId, int] = {}
-    stack: list[NodeId] = []
-    on_stack: set[NodeId] = set()
-    found: list[tuple[NodeId, ...]] = []
+    index: dict[N, int] = {}
+    low: dict[N, int] = {}
+    stack: list[N] = []
+    on_stack: set[N] = set()
+    found: list[tuple[N, ...]] = []
 
-    def sources(node: NodeId) -> Iterator[NodeId]:
+    def sources(node: N) -> Iterator[N]:
         return iter(sorted(reading[node], key=ranks.__getitem__))
 
     for root in decisions:
@@ -420,7 +424,7 @@ def _loops(
                 parent = frames[-1][0]
                 low[parent] = min(low[parent], low[node])
             if low[node] == index[node]:
-                component: list[NodeId] = []
+                component: list[N] = []
                 while True:
                     member = stack.pop()
                     on_stack.discard(member)
@@ -437,59 +441,56 @@ def _loops(
 
 class Whole:
     """A model's answers to the questions about its whole design space, composed from its
-    classes' summaries per scope (see the module docstring). Its structure's lock is held
+    classes' summaries per scope (see the module docstring). Its scope records' lock is held
     while it is asked."""
 
-    def __init__(self, structure: Structure) -> None:
-        self.structure = structure
+    def __init__(self, scopes: Scopes) -> None:
+        self.scopes = scopes
         inference = _TemplateInference()
         self.walks: dict[Walk, _Walks] = {
             "upstream": _Walks("upstream", inference),
             "reach": _Walks("reach", inference),
         }
-        self._placements: dict[int, Placement] = {}
-        self._up: dict[tuple[int, Exit, Walk], tuple[frozenset[NodeId], bool]] = {}
-        self._formals: dict[int, frozenset[NodeId]] = {}
+        self._placements: dict[ScopeRecord, Placement] = {}
+        self._up: dict[tuple[ScopeRecord, Exit, Walk], tuple[frozenset[Address], bool]] = {}
+        self._formals: dict[ScopeRecord, frozenset[Address]] = {}
         self._flow: Flow | None = None
-        self._positions: dict[NodeId, int] | None = None
-        self._readers: tuple[dict[NodeId, tuple[NodeId, ...]], tuple[NodeId, ...]] | None = None
+        self._positions: dict[Address, int] | None = None
+        self._readers: tuple[dict[Address, tuple[Address, ...]], tuple[Address, ...]] | None = None
 
     def placement(self, record: ScopeRecord) -> Placement:
         """How ``record``'s class is placed there (``_compose.Placement``)."""
-        found = self._placements.get(record.index)
+        found = self._placements.get(record)
         if found is None:
-            parent = record.parent
-            found = ROOT if parent is None else self._slot(record).placement
-            self._placements[record.index] = found
+            found = ROOT if record.parent is None else self._slot(record).placement
+            self._placements[record] = found
         return found
 
-    def _slot(self, record: ScopeRecord) -> _Slot:
+    @staticmethod
+    def _slot(record: ScopeRecord) -> _Slot:
         """The slot ``record``'s scope is placed at, of its parent's compiled form."""
         parent = cast("ScopeRecord", record.parent)
-        compiled = self.structure.compiled_of(parent)
-        return slot(compiled, compiled.slot_of_stub[cast(int, record.stub)])
+        return slot(parent.compiled, cast(int, record.slot))
 
     # -- composition
 
     def reached(
         self, record: ScopeRecord, starts: Iterable[tuple[Ref, Mode]], walk: Walk
-    ) -> tuple[frozenset[NodeId], bool]:
+    ) -> tuple[frozenset[Address], bool]:
         """What the walk ``walk`` from ``starts`` (refs of ``record``'s compiled form) finds
-        in the design space, by ``NodeId``; and whether it reads every choice and fact."""
-        compiled = self.structure.compiled_of(record)
-        summary = self.walks[walk].gathered(compiled, self.placement(record), starts)
+        in the design space, by address; and whether it reads every choice and fact."""
+        summary = self.walks[walk].gathered(record.compiled, self.placement(record), starts)
         return self._composed(record, summary, walk)
 
     def _composed(
         self, record: ScopeRecord, summary: Summary, walk: Walk
-    ) -> tuple[frozenset[NodeId], bool]:
+    ) -> tuple[frozenset[Address], bool]:
         if summary.every:
             return frozenset(), True
-        structure = self.structure
-        found: set[NodeId] = set()
+        found: set[Address] = set()
         for steps, node in summary.found:
-            at = structure.reach(record, steps)
-            index = None if at is None else structure.member(at, node)
+            at = record.reach(steps)
+            index = None if at is None else at.member_address(node)
             if index is not None:
                 found.add(index)
         for exit in summary.exits:
@@ -499,72 +500,72 @@ class Whole:
             found |= more
         return frozenset(found), False
 
-    def _exit(self, record: ScopeRecord, exit: Exit, walk: Walk) -> tuple[frozenset[NodeId], bool]:
+    def _exit(self, record: ScopeRecord, exit: Exit, walk: Walk) -> tuple[frozenset[Address], bool]:
         """What a walk reaching ``exit`` out of ``record``'s class finds above it: at the root
         a formal is a fact; else the exit followed into the placing class."""
-        key = (record.index, exit, walk)
+        key = (record, exit, walk)
         held = self._up.get(key)
         if held is not None:
             return held
         parent = record.parent
         if parent is None:
-            found: tuple[frozenset[NodeId], bool] = (frozenset(), False)
+            found: tuple[frozenset[Address], bool] = (frozenset(), False)
             if walk == "reach" and exit[0] == "formal":
-                fact = self.structure.ident(record, record.template.formals[exit[1]])
+                fact = record.canonical(record.compiled.formals[exit[1]])
                 found = (frozenset(() if fact is None else (fact,)), False)
         else:
             found = self.reached(parent, lift(self._slot(record), (exit,)), walk)
         self._up[key] = found
         return found
 
-    def _start(self, index: NodeId) -> tuple[ScopeRecord, Ref]:
-        """Where a walk from ``index`` starts: its scope and record, or, for a formal its
+    @staticmethod
+    def _start(index: Address) -> tuple[ScopeRecord, Ref]:
+        """Where a walk from ``index`` starts: its scope and member, or, for a formal its
         placing class binds, the exit it is there."""
-        record, node = self.structure.canonical(index)
-        name = record.template.formal_names.get(node)
+        record, member = index
+        name = record.compiled.formal_names.get(member)
         if name is not None and record.parent is not None:
             return record, ("formal", name, "r")
-        return record, self.structure.compiled_of(record).record_of[node]
+        return record, member
 
     # -- the flow order
 
-    def formals(self, scope: int) -> frozenset[NodeId]:
+    def formals(self, scope: ScopeRecord) -> frozenset[Address]:
         """The choices the formals of ``scope`` and of every enclosing scope read."""
         found = self._formals.get(scope)
         if found is None:
-            record = self.structure.records[scope]
-            own: set[NodeId] = set()
-            for name in record.template.formals:
-                own |= self._exit(record, ("formal", name, "r"), "upstream")[0]
-            outer = frozenset() if record.parent is None else self.formals(record.parent.index)
+            own: set[Address] = set()
+            for name in scope.compiled.formals:
+                own |= self._exit(scope, ("formal", name, "r"), "upstream")[0]
+            outer = frozenset() if scope.parent is None else self.formals(scope.parent)
             found = self._formals[scope] = frozenset(own) | outer
         return found
 
-    def upstream(self, decision: NodeId) -> frozenset[NodeId]:
+    def upstream(self, decision: Address) -> frozenset[Address]:
         """The choices ``decision``'s presence, its list or its Space's facts read: the
         first on every way back from its existence guards, its domain's inputs and its
         scopes' formals."""
-        head = self.structure.header(decision)
-        compiled = self.structure.compiled_of(head.record)
-        spec = compiled.records[compiled.record_of[head.node]]
+        record, member = decision
+        compiled = record.compiled
+        spec = compiled.records[member]
         starts: list[tuple[Ref, Mode]] = [
             (compiled.ref(edge), "r") for _, edge in spec.domain_arguments
         ]
         if spec.guard is not None:
             starts.append((compiled.ref(spec.guard), "r"))
-        found = self.reached(head.record, starts, "upstream")[0] | self.formals(head.scope)
+        found = self.reached(record, starts, "upstream")[0] | self.formals(record)
         return found - {decision}
 
     def flow(self) -> Flow:
         """The model's choices in the flow order (``flow_order``), with its loops."""
         if self._flow is None:
-            with self.structure.lock:
-                decisions = self.structure.decisions
+            with self.scopes.lock:
+                decisions = self.scopes.decisions
                 reading = {decision: self.upstream(decision) for decision in decisions}
                 self._flow = flow_order(decisions, reading)
         return self._flow
 
-    def position(self, decision: NodeId) -> int:
+    def position(self, decision: Address) -> int:
         """A choice's place in the flow order (``KeyError`` for anything else)."""
         if self._positions is None:
             order = self.flow().order
@@ -573,24 +574,23 @@ class Whole:
 
     # -- presence readers
 
-    def readers(self, source: NodeId) -> tuple[NodeId, ...]:
+    def readers(self, source: Address) -> tuple[Address, ...]:
         """The choices whose presence may read the choice or fact ``source``: those whose
         guards (their own and every enclosing one's) may read it, through what each guard
         reaches; a guard reaching a dynamic method may read every choice and fact. In
         declaration order, those of every source last."""
         if self._readers is None:
-            with self.structure.lock:
+            with self.scopes.lock:
                 self._readers = self._all_readers()
         specific, everywhere = self._readers
         return (*specific.get(source, ()), *everywhere)
 
-    def _all_readers(self) -> tuple[dict[NodeId, tuple[NodeId, ...]], tuple[NodeId, ...]]:
-        structure = self.structure
-        reaches: dict[NodeId, tuple[frozenset[NodeId], bool]] = {}
-        specific: dict[NodeId, list[NodeId]] = {}
-        everywhere: list[NodeId] = []
-        for decision in structure.decisions:
-            guard = structure.header(decision).guard
+    def _all_readers(self) -> tuple[dict[Address, tuple[Address, ...]], tuple[Address, ...]]:
+        reaches: dict[Address, tuple[frozenset[Address], bool]] = {}
+        specific: dict[Address, list[Address]] = {}
+        everywhere: list[Address] = []
+        for decision in self.scopes.decisions:
+            guard = decision.guard
             if guard is None:
                 continue
             found = reaches.get(guard)

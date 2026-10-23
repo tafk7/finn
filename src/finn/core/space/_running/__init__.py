@@ -6,12 +6,12 @@ every question from it, with no worlds and no early cutoff; answers are kept acr
 spaces only by the node cache a session may hold.
 
 - ``structure``: the per-model record (each formal bound by reference and its source,
-  each scope's ancestors, the flow order's ranks, the interned facts layers), held weakly
-  by the model's structure;
+  the flow order's ranks, the interned facts layers), held weakly by the model's scope
+  records;
 - ``value``: ``FactsLayer`` (a model with its facts, and what reads facts alone) and
   ``DesignSpace`` (a layer with its stored choices), each equal and hashed by value;
 - ``evaluate``: ``Evaluation``, every answer of one design space, memoized within it
-  only; each node kind's frame; the receiver a ``self`` method reads through; the depth
+  only; each member kind's frame; the receiver a ``self`` method reads through; the depth
   guard; failure completion; the ``Session`` (each question's run, the counters, and the
   seam for a node cache);
 - ``questions``: presence, validity, states, pairs and their origins, standing, a change
@@ -27,10 +27,11 @@ spaces only by the node cache a session may hold.
 - ``answers``, ``receiver``, ``depth``, ``purity``, ``facts``, ``requests``: how an
   answer is formed and detached, the method reader, the depth guard, the purity check's
   switch, the facts' preparation and a design space opened on them, and the public
-  request forms as node ids.
+  request forms as addresses.
 
-It reads the per-class compiled form through the model's structure (each node as its
-template resolves it, never collapsed), and the per-class record (``per_class``).
+It reads each class's compiled form through the model's scope records, by address (each
+member record read through its scope, its edges mapped when read, never collapsed:
+``_scopes``), and the per-class record (``per_class``).
 
 One run of a model at a time: the public layer asks each question under the model's lock
 (``occurrence.ask``), and the model's node cache is written under the same lock; different

@@ -19,20 +19,19 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
-from ..ir import NodeId
 from .answers import _same_value
 from .structure import record
 
 if TYPE_CHECKING:
     from .._configuration import Space
-    from .._structure import Structure
+    from .._scopes import Address, Scopes
     from ..compiler import Model
     from .answers import Called
 
 
-def _frozen(mapping: Mapping[NodeId, object]) -> Mapping[NodeId, object]:
+def _frozen(mapping: Mapping[Address, object]) -> Mapping[Address, object]:
     return MappingProxyType(dict(mapping))
 
 
@@ -66,33 +65,28 @@ def _exact(value: object) -> object:
     return None
 
 
-def _part(values: Mapping[NodeId, object]) -> frozenset[tuple[NodeId, object]]:
+def _part(values: Mapping[Address, object]) -> frozenset[tuple[Address, object]]:
     return frozenset((key, _exact(value)) for key, value in values.items())
 
 
-def _raw(model: Model[Space]) -> Any:
-    """The model's nodes as its structure resolves them, nothing collapsed."""
-    return cast("Structure", model.linked).raw_nodes
-
-
-def _same(nodes: Any, mine: Mapping[NodeId, object], theirs: Mapping[NodeId, object]) -> bool:
+def _same(mine: Mapping[Address, object], theirs: Mapping[Address, object]) -> bool:
     """The same keys, each value equal by its member's semantics."""
     if mine.keys() != theirs.keys():
         return False
-    return all(_same_value(nodes[key], mine[key], theirs[key]) for key in mine)
+    return all(_same_value(key, mine[key], theirs[key]) for key in mine)
 
 
 class FactsLayer:
-    """A compiled Space class with its facts (root formals given, by node), and what reads
+    """A compiled Space class with its facts (root formals given, by address), and what reads
     them alone: the membership readings (``evaluate.Evaluation.membership``, kept on the
     layer's design space with nothing stored, ``bare``) and the domains' outcomes
-    (``outcomes``, by node, purpose and the answers of their inputs). Equal by value: the
+    (``outcomes``, by address, purpose and the answers of their inputs). Equal by value: the
     same model, each fact equal by its member's semantics. Made by ``of``, interned per
     model."""
 
     __slots__ = ("model", "facts", "outcomes", "_bare", "_hash", "__weakref__")
 
-    def __init__(self, model: Model[Space], facts: Mapping[NodeId, object]) -> None:
+    def __init__(self, model: Model[Space], facts: Mapping[Address, object]) -> None:
         self.model = model
         self.facts = _frozen(facts)
         self.outcomes: dict[object, Called] = {}
@@ -100,7 +94,7 @@ class FactsLayer:
         self._hash = hash((model, _part(self.facts)))
 
     @staticmethod
-    def of(model: Model[Space], facts: Mapping[NodeId, object]) -> FactsLayer:
+    def of(model: Model[Space], facts: Mapping[Address, object]) -> FactsLayer:
         """The layer of ``model`` with ``facts``: the one the model's record holds for
         facts with the same hash keys and equal by value, else a new one, interned there
         (unhashable facts give a new layer each time, equal by value all the same)."""
@@ -109,7 +103,7 @@ class FactsLayer:
         hashable = all(part[1] is not None for part in key)
         if hashable:
             found = layers.get(key)
-            if found is not None and _same(_raw(model), found.facts, facts):
+            if found is not None and _same(found.facts, facts):
                 return found
         made = FactsLayer(model, facts)
         if hashable and key not in layers:
@@ -117,8 +111,8 @@ class FactsLayer:
         return made
 
     @property
-    def structure(self) -> Structure:
-        return cast("Structure", self.model.linked)
+    def scopes(self) -> Scopes:
+        return self.model.scopes
 
     @property
     def bare(self) -> DesignSpace:
@@ -136,7 +130,7 @@ class FactsLayer:
         return (
             other.model == self.model
             and other._hash == self._hash
-            and _same(_raw(self.model), self.facts, other.facts)
+            and _same(self.facts, other.facts)
         )
 
     def __hash__(self) -> int:
@@ -148,12 +142,12 @@ class FactsLayer:
 
 @dataclass(frozen=True, eq=False)
 class DesignSpace:
-    """A design space: its facts layer and its stored choices (by Decision node, dormant
+    """A design space: its facts layer and its stored choices (by Decision, dormant
     ones included). Equality is by value: an equal layer and the same stored keys, each
     value equal by its member's semantics."""
 
     layer: FactsLayer
-    stored: Mapping[NodeId, object]
+    stored: Mapping[Address, object]
     # What an evaluation of it answered (``evaluate.Evaluation``), by session and the
     # guards it takes as holding: never part of the value.
     evaluations: dict[object, Any] = field(default_factory=dict, repr=False, compare=False)
@@ -168,7 +162,7 @@ class DesignSpace:
         return self.layer.model
 
     @property
-    def facts(self) -> Mapping[NodeId, object]:
+    def facts(self) -> Mapping[Address, object]:
         return self.layer.facts
 
     def __eq__(self, other: object) -> bool:
@@ -179,23 +173,23 @@ class DesignSpace:
         return (
             other._hash == self._hash
             and other.layer == self.layer
-            and _same(_raw(self.model), self.stored, other.stored)
+            and _same(self.stored, other.stored)
         )
 
     def __hash__(self) -> int:
         return self._hash
 
-    def with_stored(self, stored: Mapping[NodeId, object]) -> DesignSpace:
+    def with_stored(self, stored: Mapping[Address, object]) -> DesignSpace:
         return DesignSpace(self.layer, stored)
 
     # -- addresses: (scope path, member) as today's keys spell them
 
-    def node(self, key: str) -> NodeId:
-        """The node a key addresses (``"mm1.pe"``: scope path, member)."""
-        return self.model.linked.keys[key]
+    def node(self, key: str) -> Address:
+        """The address a key names (``"mm1.pe"``: scope path, member)."""
+        return self.model.scopes.find(key)
 
-    def key(self, node: NodeId) -> str:
-        return self.model.linked.header(node).key
+    def key(self, node: Address) -> str:
+        return node.key
 
 
 __all__ = ["DesignSpace", "FactsLayer", "hashkey"]

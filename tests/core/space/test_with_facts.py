@@ -20,7 +20,7 @@ binding.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from support.space_cores import CORES
@@ -55,7 +55,7 @@ from finn.core.space import (
     supplied,
 )
 from finn.core.space._running.evaluate import Ans, Session, evaluation
-from finn.core.space._structure import Structure
+from finn.core.space._scopes import Address
 from finn.core.space.edits import ConfigurationResult
 from finn.core.space.inspection import Absent, Dormant, Open, Set, Waiting
 
@@ -196,7 +196,7 @@ class Pair(Space):
 
 def test_other_facts_keep_what_read_none_of_the_changed_formals() -> None:
     point = replay(design_space(Pair(left=10, right=8)), {"a.compute": "packed"})
-    keys = inspection.model(point).linked.keys
+    keys = inspection.model(point).scopes.keys
     held = {formal: answer(point, keys[formal]) for formal in ("left", "right")}
 
     moved = point.with_facts({Pair.right: 12})
@@ -284,8 +284,8 @@ def test_facts_and_choices_change_together_and_the_formals_must_be_the_roots() -
     assert moved.left == 12 and isinstance(moved.a.compute, Stub)
     with pytest.raises(RequestError, match="a.width is not an exposed parameter"):
         point.with_facts({Pair.a.width: 12})
-    linked = inspection.model(point).linked
-    twice = ValueHandle[object](linked, linked.keys["left"])
+    model = inspection.model(point)
+    twice = ValueHandle[object](model, model.scopes.find("left"))
     with pytest.raises(RequestError, match="duplicate fact for left"):
         point.with_facts({Pair.left: 12, twice: 14})
 
@@ -613,7 +613,7 @@ class Waits(Space):
     lanes: int = Decision(domain=divisors_of(extent))
 
 
-def answer(point: Space, index: int) -> Ans:
+def answer(point: Space, index: Address) -> Ans:
     """``index``'s answer in the design space ``point`` holds, in its model's session."""
     ds = occurrence.held(point).ds
     return occurrence.ask(ds.model, lambda session: evaluation(ds, session).get(index))
@@ -623,11 +623,10 @@ def answers(point: Space, *, cached: bool = True) -> list[tuple[str, object]]:
     """Every node's answer in the design space ``point`` holds, by key: in its model's
     session, or (``cached`` false) in a session of its own with no cache."""
     ds = occurrence.held(point).ds
-    structure = cast(Structure, ds.model.linked)
 
     def every(session: Session) -> list[tuple[str, object]]:
         ev = evaluation(ds, session)
-        return [(structure.header(i).key, ev.result(i)) for i in structure.all_nodes()]
+        return [(i.key, ev.result(i)) for i in ds.model.scopes.all_addresses()]
 
     if cached:
         return occurrence.ask(ds.model, every)

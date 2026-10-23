@@ -43,7 +43,6 @@ from .declarations import (
 )
 from .edits import Change, ChangeRequest, ConfigurationResult
 from .errors import ConfigurationError, EvaluationError, RequestError
-from .ir import NodeId
 from .results import (
     Available,
     ConstraintAssessment,
@@ -56,6 +55,7 @@ if TYPE_CHECKING:
     from ._running.evaluate import Session
     from ._running.questions import Report
     from ._running.surface import At
+    from ._scopes import Address
 
 T = TypeVar("T")
 S = TypeVar("S", bound=Space)
@@ -110,7 +110,7 @@ def model_of(point: Space) -> Model[Space]:
 def place(at: At) -> Space:
     """The Space object of ``at``: its scope's Space class, holding the design space read
     at that scope."""
-    space_type = at.ds.model.linked.scopes[at.scope].space_type
+    space_type = at.scope.space_type
     instance = object.__new__(space_type)
     object.__setattr__(instance, "_held", at)
     object.__setattr__(instance, "_scope", at.scope)
@@ -133,7 +133,7 @@ def ask(model: Model[Space], question: Callable[[Session], A]) -> A:
         return question(model.per_class.session())
 
 
-def opened(model: Model[S], parameters: Mapping[NodeId, object]) -> S:
+def opened(model: Model[S], parameters: Mapping[Address, object]) -> S:
     """The design space of ``model`` over ``parameters`` (by root formal), every choice
     open, read at its root: all root inputs checked, recognized and frozen before any
     evaluation (``_running.facts.open``)."""
@@ -142,7 +142,7 @@ def opened(model: Model[S], parameters: Mapping[NodeId, object]) -> S:
 
     compiled = cast(Model[Space], model)
     with compiled.lock:
-        return cast(S, place(At(open_facts(compiled, parameters), 0)))
+        return cast(S, place(At(open_facts(compiled, parameters), compiled.scopes.root)))
 
 
 # -- reading a design space -----------------------------------------------------------------
@@ -209,7 +209,7 @@ def decision_state(point: Space, reference: object) -> QueryResult[DecisionState
     return ask(at.ds.model, lambda session: surface.decision_state(at, reference, session))
 
 
-def decision_index(point: Space, reference: object) -> NodeId:
+def decision_index(point: Space, reference: object) -> Address:
     return held(point).ds.model.decision(point._scope, reference)
 
 
@@ -251,7 +251,7 @@ def root(point: Space) -> Space:
     if reader is not None:  # a method reads through the evaluation it runs in
         return reader.root(point)
     at = _driver(point)
-    return point if point._scope == 0 else place(surface.root(at))
+    return point if point._scope.parent is None else place(surface.root(at))
 
 
 def child(point: Space, record: Declaration) -> Space:
@@ -310,9 +310,9 @@ def clear(point: Space, reference: object) -> Change[object]:
     return requests.clear(held(point), reference)
 
 
-def _normalized(at: At, items: Sequence[Change[object]]) -> list[tuple[NodeId, object]]:
+def _normalized(at: At, items: Sequence[Change[object]]) -> list[tuple[Address, object]]:
     """The requests as the running type's change takes them: each choice set (to its
-    value) or cleared (``REMOVE``), in order, by node."""
+    value) or cleared (``REMOVE``), in order, by address."""
     from ._running import questions, requests
 
     return [

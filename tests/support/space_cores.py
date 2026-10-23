@@ -65,8 +65,7 @@ def built(point: Any, choices: Mapping[str, object]) -> Any:
     change to it would be refused). Each value must be of its choice's type, dormant ones
     included."""
     at = occurrence.held(point)
-    keys = at.ds.model.linked.keys
-    saved = [(keys[key], value) for key, value in choices.items()]
+    saved = [(at.ds.node(key), value) for key, value in choices.items()]
     with at.ds.model.lock:
         report = questions.bind(at.ds.layer.bare, saved, Session())
     for outcome in report.outcomes:

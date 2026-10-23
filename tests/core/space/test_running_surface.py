@@ -65,7 +65,7 @@ from finn.core.space._running import surface as S
 from finn.core.space._running.evaluate import Evaluation, Session
 from finn.core.space._running.facts import prepare_values
 from finn.core.space._running.value import DesignSpace
-from finn.core.space._structure import PERMUTE
+from finn.core.space._scopes import PERMUTE, Address, ScopeRecord
 from finn.core.space.occurrence import held
 from finn.core.space.references import ValueHandle
 from finn.core.space.results import ConstraintAssessment
@@ -364,10 +364,9 @@ def _kernel() -> type[Space]:
 
 
 def _by_key(point: Space, evidence: object) -> object:
-    """``evidence`` (a ``QueryEvidence``) with every node named by its key, so two models'
-    numberings compare: each node's key, answer, the keys it read in order, its presence,
-    state, selector and guard flags, and the keys it read through."""
-    linked = held(point).ds.model.linked
+    """``evidence`` (a ``QueryEvidence``) with every node named by its key, so two models
+    compare: each node's key, answer, the keys it read in order, its presence, state,
+    selector and guard flags, and the keys it read through."""
     found = cast(Any, evidence)
     return (
         found.query.key,
@@ -376,7 +375,7 @@ def _by_key(point: Space, evidence: object) -> object:
             (
                 node.declaration.key,
                 node.result,
-                tuple(linked.header(each._node).key for each in node.dependencies),
+                tuple(each._node.key for each in node.dependencies),
                 node.input_presence,
                 node.decision_state,
                 node.selector,
@@ -397,11 +396,11 @@ def _reads_unordered(point: Space, evidence: object) -> object:
     )
 
 
-def _handle(point: Space, key: str | int) -> ValueHandle[object]:
-    """The node at ``key``, or the validity of the scope at that index."""
-    linked = held(point).ds.model.linked
-    index = linked.keys[key] if isinstance(key, str) else linked.scopes[key].validity
-    return ValueHandle[object](linked, cast(int, index))
+def _handle(point: Space, key: str | ScopeRecord) -> ValueHandle[object]:
+    """The member at ``key``, or the validity of a scope."""
+    model = held(point).ds.model
+    index = model.scopes.find(key) if isinstance(key, str) else key.validity
+    return ValueHandle[object](model, index)
 
 
 FACTS = {"given": {"width": 12, "depth": 3}, "missing": {"width": 12}}
@@ -409,9 +408,9 @@ FACTS = {"given": {"width": 12, "depth": 3}, "missing": {"width": 12}}
 
 
 def _explained(facts: dict[str, int]) -> tuple[Space, dict[str, object], dict[str, object]]:
-    """A fresh ``Kernel`` with ``facts``, made in the numbering the environment asks for:
-    its configuration, and each question's evidence, with no cache and through the public
-    API."""
+    """A fresh ``Kernel`` with ``facts``, its scopes made in the order the environment asks
+    for: its values, and each question's evidence, with no cache and through the
+    public API."""
     kernel = _kernel()
     point = design_space(kernel(**cast(Any, facts)))
     running = Running()
@@ -421,7 +420,7 @@ def _explained(facts: dict[str, int]) -> tuple[Space, dict[str, object], dict[st
         for case in ("packed", "plain")
     }
     asked = {
-        "the root's validity": _handle(point, 0),
+        "the root's validity": _handle(point, held(point).ds.model.root),
         "packed's validity": _handle(point, cases["packed"]),
         "plain's validity": _handle(point, cases["plain"]),
         "a piece inside a case": _handle(point, "style.packed.fits"),
@@ -434,9 +433,8 @@ def _explained(facts: dict[str, int]) -> tuple[Space, dict[str, object], dict[st
 
 def _reads(point: Space, evidence: object) -> dict[str, list[str]]:
     """Each evidence node's reads, in order, by key."""
-    linked = held(point).ds.model.linked
     return {
-        node.declaration.key: [linked.header(each._node).key for each in node.dependencies]
+        node.declaration.key: [each._node.key for each in node.dependencies]
         for node in cast(Any, evidence).nodes
     }
 
@@ -460,18 +458,19 @@ def test_evidence_of_a_choice_of_unknown_presence_holds_what_its_list_read(
 
 
 @pytest.mark.parametrize("facts", sorted(FACTS))
-def test_evidence_of_a_choice_of_unknown_presence_is_the_same_in_a_permuted_numbering(
+def test_evidence_of_a_choice_of_unknown_presence_is_the_same_in_a_permuted_order(
     facts: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The same questions on a model numbered downward, each block in reverse
-    (``FINN_SPACE_PERMUTE``): every answer's evidence, by key, the default numbering's."""
+    """The same questions on a model whose scopes are made in the permuted order
+    (``FINN_SPACE_PERMUTE``: reversed by path): every answer's evidence, by key, the default
+    order's. Addresses are ordered by path, so the two formals with one source are named in
+    one order whichever scope was made first."""
     point, mine, _ = _explained(FACTS[facts])
     with monkeypatch.context() as permuted:
         permuted.setenv(PERMUTE, "1")  # read when the model is made
         other, theirs, _ = _explained(FACTS[facts])
-    ids = [held(each).ds.model.linked.keys["style.plain.depth"] for each in (point, other)]
-    width = [held(each).ds.model.linked.keys["style.plain.width"] for each in (point, other)]
-    assert (ids[0] < width[0]) != (ids[1] < width[1])  # the two facts' ids in either order
+    made = [[r.path for r in held(each).ds.model.scopes.records()] for each in (point, other)]
+    assert made[0] != made[1]  # the scopes made in another order
     for what, evidence in mine.items():
         assert _by_key(point, evidence) == _by_key(other, theirs[what]), what
 
@@ -499,7 +498,7 @@ class Opened:
     ds: DesignSpace | None = None
     session: Session | None = None
 
-    def node(self, key: str) -> int:
+    def node(self, key: str) -> Address:
         assert self.ds is not None
         return self.ds.node(key)
 
@@ -523,8 +522,7 @@ class Opened:
 
     def _reference(self, key: str) -> object:
         assert self.ds is not None
-        linked = self.ds.model.linked
-        return ValueHandle[object](linked, linked.keys[key])
+        return ValueHandle[object](self.ds.model, self.ds.node(key))
 
     def kept(self, key: str) -> bool:
         """Whether ``key``'s answer is kept (in the evaluation's memo)."""
@@ -537,11 +535,8 @@ class Opened:
     def changed(self, choices: Mapping[str, object]) -> Opened:
         """The same facts with ``choices`` stored (others kept)."""
         assert self.ds is not None
-        linked = self.ds.model.linked
         values = dict(self.ds.stored)
-        values.update(
-            prepare_values(linked, {linked.keys[k]: v for k, v in choices.items()}, "choice")
-        )
+        values.update(prepare_values({self.ds.node(k): v for k, v in choices.items()}, "choice"))
         return Opened(self.way, ds=self.ds.with_stored(values), session=self.session)
 
 

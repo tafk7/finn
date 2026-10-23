@@ -419,9 +419,9 @@ def test_a_selections_type_where_its_choice_never_applies_is_never_observed() ->
     point = design_space(PlacesThrough())
     assert isinstance(point.off.query(Through.width), Inapplicable)
     assert isinstance(point.off.query(Through.source), Inapplicable)
-    linked = inspection.model(point).linked
-    on = linked.nodes[linked.keys["on.source.$member.width"]]
-    off = linked.nodes[linked.keys["off.source.$member.width"]]
+    keys = inspection.model(point).scopes.keys
+    on = keys["on.source.$member.width"]
+    off = keys["off.source.$member.width"]
     assert off.alternatives == () and on.alternatives != ()
     assert off.semantics is on.semantics is not None
 

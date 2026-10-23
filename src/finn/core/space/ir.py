@@ -1,14 +1,12 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""Immutable linked representation shared by compilation and evaluation.
+"""Immutable records shared by compilation and evaluation.
 
-A node (``Node``) is one occurrence of a member in a placed scope. A model's structure
-(``_structure``) resolves each when it is read; a table (``LinkedModel``) stores every one
-(``_structure.expand``'s, or one built by hand). The engine reads either through
-``Linked``. Node
-references (``NodeId``) describe potential edges; the evaluator records demanded edges
-separately for every cached result.
+A node (``Node``) is a template's (``_template``), or one occurrence of a member in a
+placed scope of a table (``LinkedModel``: ``_structure.expand``'s, read by the tests' line
+oracles; ``Linked`` reads it), its references node ids (``NodeId``). A model reads neither:
+it reads each class's compiled form by address (``_scopes``).
 
 A Space class's compiled form (``_template.Compiled``) holds its members (``Member``),
 numbered within the class, their references edges (``Edge``): to a member of the class

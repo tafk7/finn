@@ -30,16 +30,14 @@ there. A selection the candidates share is owned by the choice: a finding's owne
 choice's key (``_allocate.shared_members``); where the choice never applies it has no
 candidates, and its first reader owns it, as any other.
 
-The structure is the model's linked view (``ir.Linked``): what the engine reads of a
-linked model, with the same names and meanings (``nodes``, ``scopes``, ``choices``,
-``keys``, ``selector_choices``, ``editable_aliases``, ``forward``, ``parameters``,
-``decisions``, ``ranks``; ``header`` and ``whole``). The questions about the whole design
-space are answered from templates and scope records, resolving no node: ``decisions``
-(every choice, in declaration order), ``whole`` (the flow order, which ``ranks`` gives
-positions in, and the presence readers: ``_whole``), ``header`` (a node as its template
-states it), ``subtree``. A ``for`` over ``nodes``, ``scopes`` or ``choices`` addresses the
-whole design space, and over ``nodes`` resolves it. Addressing and resolution write shared
-state, under the model's lock.
+The engine no longer reads a structure: a model reads its members by address, on its scope
+records keyed by path (``_scopes``), which also answer the questions about its whole design
+space. A structure remains only for ``expand``, the eager table the tests' line oracles
+read, until it goes with them: it lists ``nodes``, ``scopes``, ``choices``, ``keys``,
+``selector_choices``, ``editable_aliases``, ``forward``, ``parameters`` and ``decisions``,
+and ``header`` and ``subtree``. A ``for`` over ``nodes``, ``scopes`` or ``choices``
+addresses the whole design space, and over ``nodes`` resolves it. Addressing and
+resolution write shared state, under its lock.
 
 ``NodeId``s follow the order scopes are addressed, so nothing may order by them; two test
 modes, read when a model is made, show it: ``FINN_SPACE_PERMUTE=1`` allocates the blocks
@@ -78,7 +76,6 @@ from .ir import (
 from .semantics import STRING, ValueSemantics
 
 if TYPE_CHECKING:
-    from ._whole import Flow, Whole
     from .domains import Domain
 
 _OWNER = "space.structure"
@@ -192,7 +189,6 @@ class Structure:
         self._in_play: set[int] = set()
         self._headers: dict[NodeId, Header] = {}
         self._decisions: tuple[NodeId, ...] | None = None
-        self._whole: Whole | None = None
         self.nodes = _Nodes(self)
         self.raw_nodes = _RawNodes(self)
         self.scopes = _Scopes(self)
@@ -201,7 +197,6 @@ class Structure:
         self.selector_choices = _SelectorChoices(self)
         self.editable_aliases = _EditableAliases(self)
         self.forward = _Forward(self)
-        self.ranks = _Ranks(self)
         with self.lock:
             root_scope = self._make(root, None, None)
             self.parameters: tuple[NodeId, ...] = tuple(
@@ -948,26 +943,6 @@ class Structure:
             return frozenset(inside)
 
     @property
-    def whole(self) -> Whole:
-        """Its answers to the questions about the whole design space (``_whole``), from its
-        templates."""
-        if self._whole is None:
-            from ._whole import Whole  # noqa: PLC0415 - a cycle
-
-            with self.lock:
-                if self._whole is None:
-                    self._whole = Whole(self)
-        return self._whole
-
-    def flow(self) -> Flow:
-        """Its choices in the flow order, with its loops (``_whole.Whole.flow``)."""
-        return self.whole.flow()
-
-    def readers(self, source: NodeId) -> tuple[NodeId, ...]:
-        """The choices whose presence may read ``source`` (``_whole.Whole.readers``)."""
-        return self.whole.readers(source)
-
-    @property
     def decisions(self) -> tuple[NodeId, ...]:
         """Every decision in declaration order (``rank``), from its templates: every scope
         addressed, no node resolved."""
@@ -1513,19 +1488,6 @@ class _SelectorChoices(_Lookup):
                 yield index
 
 
-class _Ranks(_Lookup):
-    """A decision's place in the flow order (``Structure.flow``): what ``_assign`` orders
-    the choices it reports by. Asking it answers the flow order (once per model)."""
-
-    def __getitem__(self, index: object) -> int:
-        if type(index) is not int:
-            raise KeyError(index)
-        return self._structure.whole.position(index)
-
-    def __iter__(self) -> Iterator[NodeId]:
-        return iter(self._structure.flow().order)
-
-
 class _EditableAliases(Collection[NodeId]):
     """Formals supplied by a named shared Decision; iterating reads the whole space."""
 
@@ -1646,33 +1608,7 @@ def materialize(structure: Structure, *, collapsed: bool = True) -> LinkedModel:
             choices,
             frozenset(number[index] for index in ids if structure.editable(index)),
             tuple(number[structure.source(index)] if collapsed else number[index] for index in ids),
-            _Renumbered(structure, number),
         )
-
-
-class _Renumbered:
-    """A structure's answers to the questions about its whole design space, in a table's
-    numbering (``materialize``)."""
-
-    def __init__(self, structure: Structure, number: Mapping[NodeId, int]) -> None:
-        self._structure = structure
-        self._number = number
-        self._back = {position: index for index, position in number.items()}
-
-    def flow(self) -> Flow:
-        from ._whole import Flow  # noqa: PLC0415 - a cycle
-
-        found, number = self._structure.flow(), self._number
-        return Flow(
-            tuple(number[index] for index in found.order),
-            tuple(tuple(number[index] for index in loop) for loop in found.loops),
-        )
-
-    def readers(self, source: NodeId) -> tuple[NodeId, ...]:
-        held = self._back.get(source)
-        if held is None:
-            return ()
-        return tuple(self._number[index] for index in self._structure.readers(held))
 
 
 __all__ = ["EAGER", "PERMUTE", "ScopeRecord", "Structure", "expand", "materialize", "modes"]

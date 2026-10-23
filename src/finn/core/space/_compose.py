@@ -4,7 +4,7 @@
 """What crosses a slot, checked per class and composed per placement.
 
 A Space class is compiled once (``_template``: its compiled form, ``Compiled``) and placed
-as scopes (``_structure``). Three checks read across the slots a class places, and each is
+as scopes (``_scopes``). Three checks read across the slots a class places, and each is
 composed here from what one compiled form says of itself, never by copying a placement. A
 walk over a compiled form reads its records (members, and the records it writes for the
 Spaces it places); an edge into a placed Space (``ir.Placed``) is followed there, what it

@@ -30,7 +30,7 @@ from support.space_oracle.public import PUBLIC
 
 from finn.core.space import Decision, Param, Space, bind, derived, design_space
 from finn.core.space._reads import infer
-from finn.core.space._structure import Structure, expand
+from finn.core.space._structure import expand
 from finn.core.space.occurrence import held
 
 RUNNING: Implementation = load("core.space._running_type:RUNNING")
@@ -87,25 +87,21 @@ def _asked(implementation: Implementation, point: Space) -> forms.Form:
         return forms.raised(error)
 
 
-def test_the_chain_is_collapsed_past_the_middle_alias_under_its_own_implied_guard() -> None:
-    linked = cast(Structure, held(design_space(Top())).ds.model.linked)
-    keys = linked.keys
+def test_the_chain_reads_through_the_middle_alias_under_its_own_implied_guard() -> None:
+    keys = held(design_space(Top())).ds.model.scopes.keys
     first, middle, end = keys["mid.inner.x"], keys["mid.b"], keys["mid.leaf.v"]
-    raw = linked.raw_nodes
-    assert (raw[first].output, raw[middle].output) == (middle, end)
-    assert raw[middle].guard == keys["mid.$guard"]
-    guard = raw[first].guard
-    assert guard is not None and raw[guard].guard == keys["mid.$guard"]  # implied by it
-    assert linked.nodes[first].output == end  # collapse goes past the middle alias
+    assert (first.output, middle.output) == (middle, end)
+    assert middle.guard == keys["mid.$guard"]
+    guard = first.guard
+    assert guard is not None and guard.guard == keys["mid.$guard"]  # implied by it
 
 
-def test_what_present_may_read_names_every_guard_on_the_chain_as_resolved() -> None:
+def test_what_present_may_read_names_every_guard_on_the_chain_as_read() -> None:
     model = held(design_space(Top())).ds.model
-    linked = model.linked
-    keys = linked.keys
+    keys = model.scopes.keys
     allowed = model.per_class.reads.methods[keys["mid.inner.has"]]
     assert allowed is not None
-    found = sorted(linked.header(index).key for index in allowed)
+    found = sorted(index.key for index in allowed)
     assert found == ["mid.$guard", "mid.inner.$guard", "mid.leaf.$guard"]
 
 

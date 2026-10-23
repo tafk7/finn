@@ -1,18 +1,15 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 """Templates (``_template``): each Space class's own scope compiled once, the Spaces it
-places stubs; a model's structure (``_structure``), its scopes made when addressed and its
-nodes resolved when read; and the eager expansion, ``expand(C)``: every node of the design
-space in one table, from templates.
+places stubs; and a model's scope records (``_scopes``), each made when reached, keyed by
+path, its members read by address.
 
-A structure fully resolved, in either numbering, equals ``expand(C)`` in a canonical form
-by key (``_templates_support``); that both are the line's one table of every placement was
-checked, when templates replaced it, against digests taken from that table. Here the
-engine's corpus: every
-Space class the space tests and the engine's support modules define, and the classes
-below for the edge cases. The kernels, the rest of the test support, the Chain's members
-and stage 7's chain are the kernel tree's (``kernel_ops/test_space_templates``): this tree
-imports the engine only.
+A model's scope records read whole read alike made by demand, in the permuted order
+(reversed by path) and eagerly, in a canonical form by key (``_templates_support``). Here
+the engine's corpus: every Space class the space tests and the engine's support modules
+define, and the classes below for the edge cases. The kernels, the rest of the test
+support, the Chain's members and stage 7's chain are the kernel tree's
+(``kernel_ops/test_space_templates``): this tree imports the engine only.
 """
 
 from __future__ import annotations
@@ -22,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from core.space._templates_support import assert_expands, defined, links
+from core.space._templates_support import assert_reads_alike, defined, links
 from core.space._toys_support import Boiler, HeatPump, House, Room, Thermostat
 from finn.core.space import (
     Decision,
@@ -39,16 +36,18 @@ from finn.core.space import (
     supplied,
     view,
 )
-from finn.core.space._structure import EAGER, PERMUTE, Structure, expand
-from finn.core.space._template import Template, link_template
+from finn.core.space._scopes import EAGER, PERMUTE, Address, ScopeRecord, Scopes
+from finn.core.space._template import Template, compiled, link_template
+from finn.core.space.compiler import compile_model, model_of
 from finn.core.space.errors import RequestError
+from finn.core.space.occurrence import held
 from finn.core.space.references import DecisionHandle, ValueHandle
 from finn.core.space.results import Unresolved
 
 HERE = Path(__file__).resolve().parent
 
 
-def test_the_space_tests_classes_resolve_as_they_expand() -> None:
+def test_the_space_tests_classes_read_alike_in_any_order_their_scopes_are_made_in() -> None:
     modules = [f"core.space.{path.stem}" for path in sorted(HERE.glob("*.py"))] + [
         "support.space_cores",
         "support.space_pipeline",
@@ -56,7 +55,7 @@ def test_the_space_tests_classes_resolve_as_they_expand() -> None:
     ]
     classes = [space_type for space_type in defined(modules) if links(space_type)]
     assert len(classes) > 150
-    assert_expands(classes)
+    assert_reads_alike(classes)
 
 
 # -- the edge cases -------------------------------------------------------------------------------
@@ -265,40 +264,42 @@ EDGE_CASES = (
 
 
 @pytest.mark.parametrize("space_type", EDGE_CASES, ids=lambda space_type: space_type.__name__)
-def test_an_edge_case_resolves_as_it_expands(space_type: type[Space]) -> None:
-    assert_expands([space_type])
+def test_an_edge_case_reads_alike_in_any_order_its_scopes_are_made_in(
+    space_type: type[Space],
+) -> None:
+    assert_reads_alike([space_type])
 
 
 def test_a_decision_bound_into_children_is_the_class_own() -> None:
     template = link_template(BoundIntoChildren)
     assert {template.nodes[index].key for index in template.contributed} == set()
-    linked = expand(BoundIntoChildren)
-    assert linked.nodes[linked.keys["width"]].scope == 0
-    assert linked.nodes[linked.keys["depth"]].scope == 0
+    scopes = compile_model(BoundIntoChildren).scopes
+    assert scopes.find("width").scope is scopes.root
+    assert scopes.find("depth").scope is scopes.root
 
 
 def test_a_selection_read_by_several_templates_is_one_owned_in_its_choices_template() -> None:
-    linked = expand(ReadsLater)
-    assert linked.nodes[linked.keys["first.pump.$member.cop"]].owner == "first.cop"
+    scopes = compile_model(ReadsLater).scopes
+    assert scopes.find("first.pump.$member.cop").owner == "first.cop"
     # The line: "earlier", the parent's member, lowered before the child's.
-    assert linked.nodes[linked.keys["second.pump.$member.cop"]].owner == "second.cop"
-    (choice,) = (choice for choice in linked.choices if choice.key == "second.pump")
-    assert choice.members == {"cop": linked.keys["second.pump.$member.cop"]}
+    assert scopes.find("second.pump.$member.cop").owner == "second.cop"
+    (choice,) = (choice for choice in scopes.choices() if choice.key == "second.pump")
+    assert choice.members == {"cop": scopes.find("second.pump.$member.cop")}
     # Read by the parent alone: owned by its reader there.
-    through = expand(ReadsThroughAChild)
-    assert through.nodes[through.keys["heater.pump.$member.cop"]].owner == "cop"
+    through = compile_model(ReadsThroughAChild).scopes
+    assert through.find("heater.pump.$member.cop").owner == "cop"
 
 
 def test_a_choice_never_applies_where_its_formal_is_unsupplied() -> None:
-    linked = expand(SuppliedOnceAndNot)
-    assert linked.nodes[linked.keys["stored.source"]].kind == "decision"
-    assert linked.nodes[linked.keys["streamed.source"]].kind == "const"
-    assert not any(key.startswith("streamed.source.") for key in linked.keys if "$" not in key)
+    scopes = compile_model(SuppliedOnceAndNot).scopes
+    assert scopes.find("stored.source").kind == "decision"
+    assert scopes.find("streamed.source").kind == "const"
+    assert not any(key.startswith("streamed.source.") for key in scopes.keys if "$" not in key)
     # Its template compiled the candidates once, and records the formal.
     source, cache = link_template(Edge).choices
     assert source.never_formal == cache.never_formal == "contents"
     assert [case for case, stub in source.cases if stub is not None] == ["memory", "fetch"]
-    assert linked.nodes[linked.keys["streamed.cache.$member.lanes"]].alternatives == ()
+    assert scopes.find("streamed.cache.$member.lanes").alternatives == ()
 
 
 # -- templates: once per class, and their sizes --------------------------------------------------
@@ -323,7 +324,7 @@ def test_a_class_placed_many_times_is_compiled_once(monkeypatch: pytest.MonkeyPa
     stubs = [scope for scope in template.scopes[1:] if scope.parent == 0]
     assert len(stubs) == 8
     assert {id(link_template(stub.space_type)) for stub in stubs} == {id(link_template(Room))}
-    assert len(expand(Many).scopes) == 9
+    assert len(compile_model(Many).scopes.ordered()) == 9
 
 
 def test_a_template_counts_its_own_nodes_by_kind() -> None:
@@ -341,22 +342,22 @@ def test_a_template_counts_its_own_nodes_by_kind() -> None:
     assert len(link_template(Room).nodes) == len(link_template(Room).keys)
 
 
-# -- the structure: scopes made when addressed, nodes resolved when read -----------------------
+# -- the scope records: made when reached, members read by address ------------------------------
 
 
-def test_keys_are_matched_against_stub_names_never_split_on_dots() -> None:
-    structure = Structure(link_template(Dotted))  # nothing addressed but the root
+def test_keys_are_matched_against_slot_names_never_split_on_dots() -> None:
+    scopes = Scopes(compiled(Dotted))  # nothing made but the root
     # The case guard of ``compute.packed.packed.compute`` belongs to the scope that places
     # it: splitting the key at its last dot names the candidate's scope instead.
-    guard = structure.keys["compute.packed.packed.compute.$selected"]
-    assert structure.scopes[structure.nodes[guard].scope].name == "compute.packed"
-    kw = structure.keys["compute.packed.packed.compute.kw"]
-    assert structure.scopes[structure.nodes[kw].scope].name == "compute.packed.packed.compute"
+    guard = scopes.find("compute.packed.packed.compute.$selected")
+    assert guard.scope.name == "compute.packed"
+    kw = scopes.find("compute.packed.packed.compute.kw")
+    assert kw.scope.name == "compute.packed.packed.compute"
     for permuted in (False, True):
-        whole = Structure(link_template(Dotted), permuted=permuted)
-        assert all(whole.keys[node.key] == node.index for node in whole.nodes)
+        whole = Scopes(compiled(Dotted), permuted=permuted)
+        assert all(whole.find(node.key) is node for node in whole.all_addresses())
     with pytest.raises(KeyError):
-        structure.keys["compute.packed.packed.compute"]  # a scope, no node
+        scopes.find("compute.packed.packed.compute")  # a scope, no member
 
 
 def test_a_design_space_read_for_one_value_makes_part_of_a_composite(
@@ -367,48 +368,63 @@ def test_a_design_space_read_for_one_value_makes_part_of_a_composite(
     point = design_space(Street())
     kitchen = point.house0.kitchen  # type: ignore[attr-defined]
     assert isinstance(kitchen.query(Room.cost), Unresolved)  # its finish is open
-    structure = inspection.model(point).structure
-    assert structure is not None
-    read = structure.counts()
+    scopes = inspection.model(point).scopes
+    made = scopes.counts()["scopes made"]
     # The root's Scope places its four houses; the house read places its own; nothing of
     # the other three houses is placed.
-    names = {record.name for record in structure.records}
+    names = {record.name for record in scopes.records()}
     assert "house0.kitchen" in names and not any(name.startswith("house1.") for name in names)
-    structure.resolve_all()
-    whole = structure.counts()
-    table = expand(Street)
-    assert whole == {
-        "scopes addressed": len(table.scopes),
-        "scopes in play": len(table.scopes),
-        "nodes resolved": len(table.nodes),
-        "const nodes resolved": sum(1 for node in table.nodes if node.kind == "const"),
-    }
-    # The kitchen's scope alone has a node resolved: its cost, what that reads, and its
+    # The kitchen's scope alone has a member evaluated: its cost, what that reads, and its
     # validity's pieces are none of the other houses'.
-    assert read == {
-        "scopes addressed": 12,
-        "scopes in play": 1,
-        "nodes resolved": 5,
-        "const nodes resolved": 1,
+    ds = held(point).ds
+    evaluated = {index for ev in ds.evaluations.values() for index in ev.memo}
+    assert {index.standing.name for index in evaluated} == {"house0.kitchen"}
+    assert (made, len(evaluated)) == (12, 5)
+    scopes.read_all()
+    whole = scopes.counts()
+    assert {key: whole[key] for key in ("scopes made", "members read")} == {
+        "scopes made": len(scopes.ordered()),
+        "members read": sum(len(record.compiled.records) for record in scopes.ordered())
+        - sum(
+            1
+            for record in scopes.ordered()
+            for member in range(len(record.compiled.records))
+            if record.canonical(member) != Address(record, member)
+        ),
     }
 
 
-def test_an_identity_standing_for_another_is_no_node() -> None:
-    structure = Structure(link_template(Room))
-    guard = link_template(Room).placement_guard  # the root's own placement: no guard
-    with pytest.raises(IndexError):
-        structure.nodes[guard]
-    with pytest.raises(RequestError):
-        ValueHandle(structure, guard)
+def _another(space_type: type[Space], key: str) -> Address:
+    """``key``'s address in a model of ``space_type`` of its own (another model's)."""
+    return model_of(compiled(space_type)).scopes.find(key)
+
+
+def test_a_handle_names_an_address_of_its_model() -> None:
+    """A handle holds an address of its model: one of another model, or a member number
+    past its class's count, is refused; a handle of another model resolves in none."""
+    model = model_of(compiled(Room))
+    root = model.root
+    own = model.scopes.parameters[0]
+    for address in (Address(root, len(root.compiled.records)), _another(Room, own.key)):
+        for kind in (ValueHandle, DecisionHandle):
+            with pytest.raises(RequestError, match="handle does not identify"):
+                kind(model, address)
+    other = model_of(compiled(Room))
+    stale = ValueHandle[object](other, other.scopes.find(own.key))
+    with pytest.raises(RequestError, match="belongs to a different compiled model"):
+        model.resolve(root, stale)
+    assert ValueHandle[object](model, own) == ValueHandle[object](model, Address(root, own[1]))
 
 
 @pytest.mark.parametrize("permuted", [False, True])
-def test_a_change_names_a_node_of_an_addressed_scope(
+def test_a_change_names_an_address_of_a_scope_of_its_model(
     monkeypatch: pytest.MonkeyPatch, permuted: bool
 ) -> None:
-    """A change's scope and node are asked of the model (``holds_scope``, ``holds_node``),
-    the same in either numbering: an identity in an addressed scope's block that stands
-    for another, or outside every block, names no node; a scope not addressed, none."""
+    """A change's scope and address are asked of the model (``holds``, ``holds_address``),
+    the same in either order of making scopes: a record a class writes for a Space it
+    places (a formal's binding, a selection) stands for an address elsewhere and is none;
+    a member number past the count, an address or a scope record of another model, and a
+    record at a path the model did not make, name nothing of it."""
     monkeypatch.delenv(EAGER, raising=False)
     if permuted:
         monkeypatch.setenv(PERMUTE, "1")
@@ -421,41 +437,46 @@ def test_a_change_names_a_node_of_an_addressed_scope(
         cop = View(heater.pump.cop)  # type: ignore[union-attr]
 
     point = design_space(Reads())
-    structure = inspection.model(point).structure
-    assert structure is not None and structure.permuted is permuted
+    scopes = inspection.model(point).scopes
+    assert scopes.permuted is permuted
     handles = {item.key: item.reference for item in inspection.decisions(point)}
     change = point.field(handles["heater.heating"]).change("boiler")
     assert point.try_with_choices(change).accepted
-    # The root's block: its imports and its children's formals' bindings stand for nodes
-    # of the children's scopes.
-    root = structure.records[0]
-    block = [structure._id(root, node) for node in range(len(root.template.nodes))]
-    standing = [index for index in block if not structure.holds_node(index)]
-    assert len(standing) >= 2
-    ends = [(record.base, record.base + len(record.template.nodes)) for record in structure.records]
-    outside = [min(start for start, _ in ends) - 1, max(end for _, end in ends)]
-    assert not any(structure.holds_node(index) for index in outside)
-    for index in (*standing, *outside):
+    root = scopes.root
+    standing = [
+        Address(root, record)
+        for record in root.compiled.written
+        if root.canonical(record) != Address(root, record)
+    ]
+    assert standing
+    elsewhere = _another(Reads, "heater.heating")
+    for address in (
+        *standing,
+        Address(root, len(root.compiled.records)),
+        Address(root, -1),
+        elsewhere,
+        Address(change.node.scope, len(change.node.scope.compiled.records)),
+    ):
+        assert not scopes.holds_address(address)
         with pytest.raises(RequestError, match="change node does not belong"):
-            point.try_with_choices(replace(change, node=index))
-    assert not structure.holds_scope(len(structure.records))
-    with pytest.raises(RequestError, match="change scope does not belong"):
-        point.try_with_choices(replace(change, scope=len(structure.records)))
-    # ``len(nodes)``: the identities allocated, one block per addressed scope.
-    assert len(structure.nodes) == sum(end - start for start, end in ends)
+            point.try_with_choices(replace(change, node=address))
+    stray = ScopeRecord(scopes.registry, root.compiled.slots[0].compiled, root, 0)
+    for scope in (elsewhere.scope, stray):
+        assert not scopes.holds(scope)
+        with pytest.raises(RequestError, match="change scope does not belong"):
+            point.try_with_choices(replace(change, scope=scope))
 
 
 @pytest.mark.parametrize("permuted", [False, True])
-def test_an_identity_standing_for_a_decision_is_refused_beside_its_own(
+def test_a_decision_named_by_another_models_address_is_refused_beside_its_own(
     monkeypatch: pytest.MonkeyPatch, permuted: bool
 ) -> None:
-    """A choice has one identity. An id that stands for a decision (an import of a child's
-    Decision) is refused wherever an identity is
-    keyed by: a change naming it, alone or beside the decision's own id, is a
-    ``RequestError`` (never followed into the decision, so never two changes of one
-    choice, nor one choice stored under two ids), in a bind as in a change; and no handle
-    is made from it, so a handle's equality and hash, and ``Model.resolve`` and
-    ``decision`` of one, are by the decision's own id."""
+    """A choice has one address. The same decision's address in another model of the
+    class, or an address past its class's count, is refused wherever an address is keyed
+    by: a change naming it, alone or beside the decision's own, is a ``RequestError``
+    (never two changes of one choice, nor one choice stored under two addresses), in a
+    bind as in a change; and no handle is made from it, so a handle's equality and hash,
+    and ``Model.resolve`` and ``decision`` of one, are by the decision's own address."""
     if permuted:
         monkeypatch.setenv(PERMUTE, "1")
     else:
@@ -467,34 +488,29 @@ def test_an_identity_standing_for_a_decision_is_refused_beside_its_own(
 
     point = design_space(Standing())
     model = inspection.model(point)
-    structure = model.structure
-    assert structure is not None and structure.permuted is permuted
+    assert model.scopes.permuted is permuted
     handles = {item.key: item.reference for item in inspection.decisions(point)}
-    root = structure.records[0]
-    standing: dict[str, int] = {}
-    for node in range(len(root.template.nodes)):
-        index, own = structure._id(root, node), structure.ident(root, node)
-        if own is not None and own != index and structure.nodes[own].kind == "decision":
-            standing[structure.nodes[own].key] = index
-    assert set(standing) == {"fetcher.lanes"}
     for key, value in (("fetcher.lanes", 2),):
         change = point.field(handles[key]).change(value)
         assert point.try_with_choices(change).accepted
         assert model.decision(change.scope, handles[key]) == change.node
-        index = standing[key]
-        # Named by the scope the decision is in, or by the scope whose block holds the id.
-        for other in (replace(change, node=index), replace(change, node=index, scope=0)):
-            for batch in ((other,), (change, other), (other, change)):
-                with pytest.raises(RequestError, match="change node does not belong"):
-                    point.try_with_choices(*batch)
-                with pytest.raises(RequestError, match="change node does not belong"):
-                    bind(point, *batch)
-        for kind in (ValueHandle, DecisionHandle):
-            with pytest.raises(RequestError, match="handle does not identify"):
-                kind(structure, index)
+        scope = change.node.scope
+        for address in (_another(Standing, key), Address(scope, len(scope.compiled.records))):
+            # Named by the scope the decision is in, or by the root's.
+            for other in (
+                replace(change, node=address),
+                replace(change, node=address, scope=model.root),
+            ):
+                for batch in ((other,), (change, other), (other, change)):
+                    with pytest.raises(RequestError, match="change node does not belong"):
+                        point.try_with_choices(*batch)
+                    with pytest.raises(RequestError, match="change node does not belong"):
+                        bind(point, *batch)
+            for kind in (ValueHandle, DecisionHandle):
+                with pytest.raises(RequestError, match="handle does not identify"):
+                    kind(model, address)
 
 
 def test_resolution_takes_the_models_lock() -> None:
     model = inspection.model(House)
-    assert model.structure is not None
-    assert model.lock is model.per_class.lock is model.structure.lock
+    assert model.lock is model.per_class.lock is model.scopes.lock

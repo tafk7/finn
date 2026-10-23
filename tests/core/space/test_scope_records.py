@@ -20,12 +20,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from core.space._templates_support import _name, _stable, defined, links
 
+from core.space._templates_support import _name, _stable, defined, links
 from finn.core.space import Decision, Param, Select, Space, derived, supplied
+from finn.core.space._running.evaluate import evaluation
 from finn.core.space._scopes import Address, Scopes, existence
 from finn.core.space._structure import Structure
 from finn.core.space._template import compiled, link_template
+from finn.core.space.compiler import model_of
+from finn.core.space.occurrence import held, opened
 
 HERE = Path(__file__).resolve().parent
 
@@ -284,3 +287,35 @@ def test_an_address_existence_guards_are_its_own_then_its_placements(permuted: b
     assert [guard.key for guard in guards] == [
         guard.key for guard in existence(Scopes(compiled(Outer)).find("pick.wide.extra"))
     ]
+
+
+READ = ("leaf.bits", "left.bits", "chosen", "pick.wide.extra", "$validity")
+
+
+@pytest.mark.parametrize("permuted", [False, True])
+def test_two_design_spaces_of_one_model_share_its_addresses_and_its_cache(permuted: bool) -> None:
+    """Two design spaces of one model, equal in value, built through changes in different
+    orders and read in different orders (each making scopes as it reaches them), read the
+    same address objects: the model's scope records, one per path. So the model's cache,
+    keyed by address, hits across them."""
+    model = model_of(compiled(Outer), permuted=permuted)  # a model of its own, fresh
+    start = opened(model, {model.scopes.parameters[0]: 3})
+    one = start.with_choices({Outer.pick: "wide"}).with_choices({Outer.leaf.lanes: 2})
+    other = start.with_choices({Outer.leaf.lanes: 2}).with_choices({Outer.pick: "wide"})
+    first, second = held(one).ds, held(other).ds
+    assert first == second and first is not second
+    session = model.per_class.session()
+    with model.lock:
+        ev = evaluation(first, session)
+        for key in READ:
+            ev.get(first.node(key))
+        hits = session.counters.hits
+        again = evaluation(second, session)
+        for key in reversed(READ):
+            again.get(second.node(key))
+    assert session.counters.hits > hits  # the cache hit across them
+    mine = {address.key: address for address in ev.memo}
+    theirs = {address.key: address for address in again.memo}
+    assert set(theirs) <= set(mine)
+    assert all(theirs[key] is mine[key] for key in theirs)
+    assert all(first.node(key) is second.node(key) for key in READ)

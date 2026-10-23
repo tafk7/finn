@@ -189,9 +189,8 @@ def _check_configuration_mutation(point: Space, name: str) -> None:
 
     driver_only("configuration mutation")
     current = getattr(point, "_held", None)
-    scope_index = getattr(point, "_scope", None)
-    if current is not None and type(scope_index) is int:
-        scope = model_of(point).linked.scopes[scope_index]
+    scope = getattr(point, "_scope", None)
+    if current is not None and scope is not None and model_of(point).scopes.holds(scope):
         if name in scope.named_members or name in scope.named_children:
             raise AttributeError(f"{name} is an immutable configuration field; use with_choices()")
 
@@ -204,9 +203,10 @@ class Space(metaclass=SpaceMeta):
     """
 
     when: _When = _when_field(default=None, kw_only=True)
-    # A design space read at a scope (``_running.surface.At``), or a method's reader.
+    # A design space read at a scope (``_running.surface.At``), or a method's reader; the
+    # scope's record (``_scopes.ScopeRecord``).
     _held: ClassVar[object]
-    _scope: ClassVar[int]
+    _scope: ClassVar[Any]
     # A key maps to one view or derived value (a derived value is typed as its value).
     exports: ClassVar[Mapping[ViewKey[Any], object]] = MappingProxyType({})
 

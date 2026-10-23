@@ -56,6 +56,7 @@ Both give the same keys and answers.
 from __future__ import annotations
 
 import os
+import weakref
 from collections import deque
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import replace
@@ -72,6 +73,7 @@ if TYPE_CHECKING:
     from ._configuration import Space
     from ._nodes import NodeDecl
     from ._template import Compiled
+    from ._whole import Flow, Whole
     from .domains import Domain
 
 _OWNER = "space.structure"
@@ -316,12 +318,14 @@ class _Registry:
     nothing of the model's ``Scopes``, so that an address kept anywhere (a cache's answer)
     keeps the model's scope records, never the object the model's tables are keyed by."""
 
-    __slots__ = ("lock", "permuted", "records", "merged", "made", "written_keys")
+    __slots__ = ("lock", "permuted", "records", "merged", "made", "written_keys", "evaluated")
 
     def __init__(self, lock: RLock, permuted: bool) -> None:
         self.lock = lock
         self.permuted = permuted
         self.records: dict[tuple[int, ...], ScopeRecord] = {}
+        # Every address an evaluation of the model evaluated (``Scopes.counts``).
+        self.evaluated: set[Address] = set()
         self.merged: dict[tuple[ScopeRecord, int, str], tuple[Address, str | None] | None] = {}
         self.made: dict[tuple[object, ...], Member] = {}
         self.written_keys: dict[int, Mapping[str, int]] = {}
@@ -960,8 +964,12 @@ class ChoiceRecord:
 
 class Scopes:
     """A model's scope records, keyed by path, and the questions about its whole design
-    space (see the module docstring). The model holds it for its life; the model's tables
-    (its per-model record, a node cache's) are keyed weakly by it."""
+    space (see the module docstring). The model holds it for its life, and it holds the
+    model's tables: the running type's per-model record (``record``) and each node cache's
+    table (``tables``, keyed weakly by the cache). They live exactly as long as the model (a
+    dropped model's go at the next full collection: the model, its classes and its tables
+    hold one another): what they hold (addresses) reaches the model through its classes, so
+    no table keyed weakly by the model elsewhere could ever drop."""
 
     __slots__ = (
         "compiled",
@@ -969,7 +977,10 @@ class Scopes:
         "root",
         "parameters",
         "keys",
+        "record",
+        "tables",
         "_decisions",
+        "_whole",
         "__weakref__",
     )
 
@@ -984,7 +995,13 @@ class Scopes:
         self.compiled = compiled
         self.registry = _Registry(RLock() if lock is None else lock, permuted)
         self._decisions: tuple[Address, ...] | None = None
+        self._whole: Whole | None = None
         self.keys = _Keys(self)
+        # The running type's per-model record (``_running.structure.Record``), and each
+        # node cache's table for this model, keyed weakly by the cache
+        # (``_running.cache.NodeCache``): a cache gone takes its tables with it.
+        self.record: Any = None
+        self.tables: weakref.WeakKeyDictionary[object, Any] = weakref.WeakKeyDictionary()
         with self.lock:
             self.root = ScopeRecord(self.registry, compiled, None, None)
             self.registry.records[()] = self.root
@@ -997,6 +1014,11 @@ class Scopes:
     @property
     def lock(self) -> RLock:
         return self.registry.lock
+
+    @property
+    def permuted(self) -> bool:
+        """Whether its scopes are made in the permuted order (``PERMUTE``)."""
+        return self.registry.permuted
 
     # -- scopes
 
@@ -1081,15 +1103,26 @@ class Scopes:
         )
 
     def counts(self) -> dict[str, int]:
-        """What is made so far: scopes, and members read."""
+        """What is made and evaluated so far: scopes made, scopes with a member evaluated
+        (in play), members read (their records resolved: key, kind, edges), members
+        evaluated, and how many of those are constants."""
         with self.lock:
             records = tuple(self.registry.records.values())
+            evaluated = self.registry.evaluated
             return {
                 "scopes made": len(records),
+                "scopes in play": len({address.standing for address in evaluated}),
                 "members read": sum(
                     1 for record in records for read in record._reads if read is not None
                 ),
+                "members evaluated": len(evaluated),
+                "constants evaluated": sum(1 for address in evaluated if address.kind == "const"),
             }
+
+    def in_play(self) -> frozenset[ScopeRecord]:
+        """The scopes with a member evaluated so far."""
+        with self.lock:
+            return frozenset(address.standing for address in self.registry.evaluated)
 
     # -- keys
 
@@ -1163,6 +1196,29 @@ class Scopes:
                             found.append(address)
                 self._decisions = tuple(sorted(found, key=self.rank))
             return self._decisions
+
+    @property
+    def whole(self) -> Whole:
+        """Its answers to the questions about the whole design space (``_whole``)."""
+        if self._whole is None:
+            from ._whole import Whole  # noqa: PLC0415 - a cycle
+
+            with self.lock:
+                if self._whole is None:
+                    self._whole = Whole(self)
+        return self._whole
+
+    def flow(self) -> Flow:
+        """Its choices in the flow order, with its loops (``_whole.Whole.flow``)."""
+        return self.whole.flow()
+
+    def readers(self, source: Address) -> tuple[Address, ...]:
+        """The choices whose presence may read ``source`` (``_whole.Whole.readers``)."""
+        return self.whole.readers(source)
+
+    def position(self, decision: Address) -> int:
+        """A choice's place in the flow order (``KeyError`` for anything else)."""
+        return self.whole.position(decision)
 
     # -- statistics
 

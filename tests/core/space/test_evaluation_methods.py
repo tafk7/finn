@@ -98,8 +98,7 @@ def test_a_method_records_each_read_with_its_answer() -> None:
     world = open_evaluation(Outer(width=4), {"leaf.lanes": 2})
     found = entry(world, "through_child")
     assert found.result == Available(12)
-    header = world.linked.header
-    assert [header(index).key for index, _ in found.trace] == ["leaf.bits", "leaf.width"]
+    assert [index.key for index, _ in found.trace] == ["leaf.bits", "leaf.width"]
     cached = evaluation(world.ds, Session(cache=NodeCache()))
     assert cached.get(node(world, "through_child")).reads == {
         node(world, "width"),
@@ -113,7 +112,7 @@ def test_a_candidates_member_reads_its_selector_first() -> None:
     chosen = open_evaluation(Outer(width=4), {"mode": "wide"})
     found = entry(chosen, "through_choice")
     assert found.result == Available(4)
-    assert [chosen.linked.header(index).key for index, _ in found.trace][0] == "mode"
+    assert [index.key for index, _ in found.trace][0] == "mode"
 
 
 @pytest.mark.parametrize(("enabled", "expected"), ((None, None), (False, False), (True, True)))

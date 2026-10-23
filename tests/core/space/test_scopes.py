@@ -185,7 +185,7 @@ def test_two_thousand_guarded_scopes_compile_and_query_iteratively() -> None:
             f"Layer{depth}", {"enabled": enabled, "inner": space_type(when=enabled)}
         )
     model = inspection.model(space_type)
-    assert sum(1 for _ in model.linked.scopes) == 2_001  # every scope addressed
+    assert len(model.scopes.ordered()) == 2_001  # every scope made
     leaf = design_space(space_type())
     for _ in range(2_000):
         leaf = cast(Space, getattr(leaf, "inner"))

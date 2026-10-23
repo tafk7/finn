@@ -35,9 +35,9 @@ it is linked; the domain rule, from the root's compiled form, when a model is ma
 (``compiler.compile_model``). Read inference (``_reads``) and the questions about the whole
 design space (``_whole``) walk the compiled forms too.
 
-A model's structure (``_structure``) places templates as scopes, made when addressed, and
-resolves each node of a scope from its template when read; ``_structure.expand`` is the
-eager form, every scope placed and every node resolved, into one table.
+A model places compiled forms as scopes (``_scopes``: scope records keyed by path, made when
+reached), each member read by address through its scope; ``_structure.expand``, the tests'
+eager table, still places templates.
 """
 
 from __future__ import annotations
@@ -101,7 +101,7 @@ class TemplateChoice:
     where it never applies needs (``never_formal`` unsupplied there): the selector's
     value there, every selection made for it (node -> member) and those its candidates
     share, and each read of a member through it. A selection there has no alternatives
-    and keeps the type the template checked its readers against (``_structure``)."""
+    and keeps the type the template checked its readers against (``_scopes``)."""
 
     index: int
     key: str

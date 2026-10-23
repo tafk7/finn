@@ -26,12 +26,13 @@ scope's, innermost first. The **domain rule** (a domain's membership reads facts
 is checked from the inference per template when a model is made
 (``_compose.check_domains``).
 
-A model's structure resolves its nodes on demand, so there the inference is per class:
-each function's paths resolve against its class's compiled form once, and a node's reads,
-existence guards and case guards are found for it when first asked (``_TemplateInference``,
-``_Mapping``). The questions about the whole design space (the flow order, the presence
-readers) walk the same reads per class (``_whole``). ``summary``, a diagnostic, reads every
-node.
+A model reads its members by address, made on demand, so there the inference is per class:
+each function's paths resolve against its class's compiled form once, and an address's
+reads, existence guards and case guards are found for it when first asked
+(``_TemplateInference``, ``_Mapping``). The questions about the whole design space (the flow
+order, the presence readers) walk the same reads per class (``_whole``). ``summary``, a
+diagnostic, reads every address. A table (``ir.LinkedModel``, ``_structure.expand``'s) is
+inferred all at once, by its node ids.
 """
 
 from __future__ import annotations
@@ -44,10 +45,10 @@ from dataclasses import dataclass, field
 from types import CodeType, MappingProxyType
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
+from ._scopes import Address, ScopeRecord, Scopes, existence
 from .ir import Argument, Linked, LinkedModel, Node, NodeId, Placing
 
 if TYPE_CHECKING:
-    from ._structure import ScopeRecord, Structure
     from ._template import Compiled
 
 # A path from a receiver: the attribute names read in order (``self.x.contract``).
@@ -65,12 +66,13 @@ class ModelReads:
     each guard that holds where a selector is one of its cases (a candidate's
     selection), with that selector and case."""
 
-    methods: Mapping[NodeId, frozenset[NodeId] | None]
-    unresolved: Mapping[NodeId, tuple[str, ...]]
-    existence: Mapping[NodeId, tuple[NodeId, ...]]
-    cases: Mapping[NodeId, tuple[NodeId, str]] = field(default_factory=dict)
+    # A model's by address; a table's by node id.
+    methods: Mapping[Any, frozenset[Any] | None]
+    unresolved: Mapping[Any, tuple[str, ...]]
+    existence: Mapping[Any, tuple[Any, ...]]
+    cases: Mapping[Any, tuple[Any, str]] = field(default_factory=dict)
 
-    def guards(self, node: NodeId) -> tuple[NodeId, ...]:
+    def guards(self, node: Any) -> tuple[Any, ...]:
         """The guards deciding whether ``node`` exists, innermost first."""
         return self.existence.get(node, ())
 
@@ -750,95 +752,121 @@ class _TemplateInference:
 
 
 class _Mapping:
-    """A structure's inferred reads, mapped to ``NodeId``s node by node on first ask: each
+    """A model's inferred reads, by address, found address by address on first ask: each
     ``self`` method's reads (``methods``) and the paths that named nothing compiled
-    (``unresolved``), each guarded node's existence guards, and each case guard."""
+    (``unresolved``), each guarded address's existence guards, and each case guard."""
 
-    def __init__(self, structure: Structure) -> None:
-        self.structure = structure
+    def __init__(self, scopes: Scopes) -> None:
+        self.scopes = scopes
         self.inference = _TemplateInference()
-        self.methods: dict[NodeId, tuple[frozenset[NodeId] | None, tuple[str, ...]]] = {}
-        self.existence: dict[NodeId, tuple[NodeId, ...]] = {}
-        self.cases: dict[NodeId, tuple[NodeId, str] | None] = {}
+        self.methods: dict[Address, tuple[frozenset[Address] | None, tuple[str, ...]]] = {}
+        self.existence: dict[Address, tuple[Address, ...]] = {}
+        self.cases: dict[Address, tuple[Address, str] | None] = {}
 
-    def method(self, index: NodeId) -> tuple[frozenset[NodeId] | None, tuple[str, ...]]:
-        """A ``self`` method's reads in its scope (``KeyError`` for any other node)."""
+    def method(self, index: Address) -> tuple[frozenset[Address] | None, tuple[str, ...]]:
+        """A ``self`` method's reads in its scope (``KeyError`` for any other address)."""
         held = self.methods.get(index)
         if held is not None:
             return held
-        structure = self.structure
-        with structure.lock:
-            node = structure.nodes[index]
-            if node.call_style != "self" or node.function is None:
+        with self.scopes.lock:
+            function = index.function
+            if index.call_style != "self" or function is None:
                 raise KeyError(index)
-            record = structure.records[node.scope]
-            found = self.inference.reads(node.function, structure.compiled_of(record))
+            record = index.scope
+            found = self.inference.reads(function, record.compiled)
             held = self.methods[index] = self._map(record, found)
             return held
 
     def _map(
         self, record: ScopeRecord, found: _Found
-    ) -> tuple[frozenset[NodeId] | None, tuple[str, ...]]:
-        structure = self.structure
-        nodes: set[NodeId] = set()
+    ) -> tuple[frozenset[Address] | None, tuple[str, ...]]:
+        nodes: set[Address] = set()
         missing: list[str] = []
         for item in found:
             if isinstance(item, _Dynamic):
-                if structure.reach(record, item.when) is not None:
+                if record.reach(item.when) is not None:
                     return None, ()
             elif isinstance(item, _Missing):
-                if structure.reach(record, item.when) is not None and not any(
-                    structure.reach(record, unless) is not None for unless in item.unless
+                if record.reach(item.when) is not None and not any(
+                    record.reach(unless) is not None for unless in item.unless
                 ):
                     missing.append(item.text)
             else:
-                at = structure.reach(record, item.steps)
-                index = None if at is None else structure.member(at, item.node)
+                at = record.reach(item.steps)
+                index = None if at is None else at.member_address(item.node)
                 if index is not None:
                     self._add(index, item.sources, nodes)
         return frozenset(nodes), tuple(dict.fromkeys(missing))
 
-    def _add(self, index: NodeId, sources: bool, found: set[NodeId]) -> None:
+    def _add(self, index: Address, sources: bool, found: set[Address]) -> None:
         if sources:
-            _sources(self.structure, index, found)
+            _address_sources(self.scopes, index, found)
         else:
             found.add(index)
 
-    def guards(self, index: NodeId) -> tuple[NodeId, ...]:
+    def guards(self, index: Address) -> tuple[Address, ...]:
         held = self.existence.get(index)
         if held is None:
-            with self.structure.lock:
-                held = self.existence[index] = existence_guards(self.structure, index)
+            with self.scopes.lock:
+                held = self.existence[index] = existence(index)
         return held
 
-    def case(self, index: NodeId) -> tuple[NodeId, str] | None:
-        """The selector and case a guard holds at (``case_guards``), found for this node."""
+    def case(self, index: Address) -> tuple[Address, str] | None:
+        """The selector and case a guard holds at (``case_guards``), found for this
+        address."""
         if index in self.cases:
             return self.cases[index]
-        structure = self.structure
-        with structure.lock:
-            found: tuple[NodeId, str] | None = None
-            node = structure.nodes[index]
-            if node.kind == "derived" and len(node.arguments) == 1:
-                (argument,) = node.arguments
-                choice = structure.selector_choices.get(argument.node)
-                if argument.name == "selected" and choice is not None:
-                    found = structure.case_of(choice, index)
+        scopes = self.scopes
+        with scopes.lock:
+            found: tuple[Address, str] | None = None
+            if index.kind == "derived":
+                arguments = index.arguments
+                if len(arguments) == 1:
+                    (argument,) = arguments
+                    choice = scopes.selector_choice(argument.node)
+                    if argument.name == "selected" and choice is not None:
+                        found = scopes.case_of(choice, index)
             self.cases[index] = found
             return found
 
 
-def _sources(linked: Linked, index: NodeId, found: set[NodeId]) -> None:
+def _address_sources(scopes: Scopes, index: Address, found: set[Address]) -> None:
     """What decides whether a value input is supplied at ``index`` (``present``): the
-    guards and selectors on the way to its source, every alias on the way walked as
-    resolved, so each one's guard is named. A method's reader reads them so, an alias
-    collapse goes past (its guard implied by its reader's) included: a structure's nodes
-    as resolved (``raw_nodes``); a table's, its edges and the aliases collapse took them
-    past (``Node.via``), which are the same."""
-    if isinstance(linked, LinkedModel):
-        nodes: Sequence[Node] = linked.nodes
-    else:
-        nodes = cast("Structure", linked).raw_nodes
+    guards and selectors on the way to its source, every alias on the way walked as read,
+    so each one's guard is named."""
+    pending, seen = [index], set()
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        guard = current.guard
+        if guard is not None:
+            found.add(guard)
+        kind = current.kind
+        if kind == "param":
+            found.add(current)
+        elif kind in ("alias", "guard", "view"):
+            output = current.output
+            if output is not None:
+                pending.append(output)
+        elif kind == "select":
+            selector = current.selector
+            if selector is not None:
+                found.add(selector)
+                pending.extend(target for _, target in current.alternatives)
+        elif kind == "present":
+            pending.extend(target for _, target in current.alternatives)
+    if scopes.selector_choice(index) is not None:
+        found.add(index)
+
+
+def _sources(linked: Linked, index: NodeId, found: set[NodeId]) -> None:
+    """What decides whether a value input is supplied at ``index`` (``present``), in a
+    table: the guards and selectors on the way to its source, every alias on the way walked,
+    and the aliases collapse took the table past (``Node.via``), so each one's guard is
+    named."""
+    nodes: Sequence[Node] = linked.nodes
     pending, seen = [index], set()
     while pending:
         current = pending.pop()
@@ -870,27 +898,27 @@ def _followed(node: Node) -> list[NodeId]:
     return [*targets, *(alias for alias, source in node.via if source in ends)]
 
 
-class _Lazy(Mapping[NodeId, Any]):
-    """A mapping of a structure's inferred reads, answered node by node; iterating it reads
-    the whole design space."""
+class _Lazy(Mapping[Address, Any]):
+    """A mapping of a model's inferred reads, answered address by address; iterating it
+    reads the whole design space."""
 
     def __init__(self, mapping: _Mapping) -> None:
         self._mapping = mapping
 
-    def _get(self, index: NodeId) -> Any:
+    def _get(self, index: Address) -> Any:
         raise NotImplementedError
 
-    def __getitem__(self, index: NodeId) -> Any:
-        if type(index) is not int:
+    def __getitem__(self, index: Address) -> Any:
+        if not isinstance(index, Address):
             raise KeyError(index)
         try:
             return self._get(index)
         except IndexError as cause:
             raise KeyError(index) from cause
 
-    def __iter__(self) -> Iterator[NodeId]:
-        found: list[NodeId] = []
-        for index in tuple(self._mapping.structure.all_nodes()):
+    def __iter__(self) -> Iterator[Address]:
+        found: list[Address] = []
+        for index in tuple(self._mapping.scopes.all_addresses()):
             try:
                 self._get(index)
             except KeyError:
@@ -903,12 +931,12 @@ class _Lazy(Mapping[NodeId, Any]):
 
 
 class _Methods(_Lazy):
-    def _get(self, index: NodeId) -> frozenset[NodeId] | None:
+    def _get(self, index: Address) -> frozenset[Address] | None:
         return self._mapping.method(index)[0]
 
 
 class _Unresolved(_Lazy):
-    def _get(self, index: NodeId) -> tuple[str, ...]:
+    def _get(self, index: Address) -> tuple[str, ...]:
         found = self._mapping.method(index)[1]
         if not found:
             raise KeyError(index)
@@ -916,31 +944,29 @@ class _Unresolved(_Lazy):
 
 
 class _Existence(_Lazy):
-    def _get(self, index: NodeId) -> tuple[NodeId, ...]:
-        if self._mapping.structure.header(index).guard is None:
+    def _get(self, index: Address) -> tuple[Address, ...]:
+        if index.guard is None:
             raise KeyError(index)
         return self._mapping.guards(index)
 
 
 class _Cases(_Lazy):
-    def _get(self, index: NodeId) -> tuple[NodeId, str]:
+    def _get(self, index: Address) -> tuple[Address, str]:
         found = self._mapping.case(index)
         if found is None:
             raise KeyError(index)
         return found
 
 
-def _structure_reads(structure: Structure) -> ModelReads:
-    mapping = _Mapping(structure)
+def _scope_reads(scopes: Scopes) -> ModelReads:
+    mapping = _Mapping(scopes)
     return ModelReads(_Methods(mapping), _Unresolved(mapping), _Existence(mapping), _Cases(mapping))
 
 
 def existence_guards(linked: Linked, node: NodeId) -> tuple[NodeId, ...]:
-    """The guards deciding whether ``node`` exists, innermost first: its own guard, and
-    each guard that one is evaluated under (an enclosing scope's ``when``, a candidate's
-    selection), to the root. Read from the nodes' headers (``Linked.header``): a guard's
-    identity, never a node resolved, so finding them resolves nothing of a scope that is
-    absent."""
+    """The guards deciding whether ``node`` of a table exists, innermost first: its own
+    guard, and each guard that one is evaluated under (an enclosing scope's ``when``, a
+    candidate's selection), to the root (a model's: ``_scopes.existence``)."""
     found: list[NodeId] = []
     current = linked.header(node).guard
     while current is not None:
@@ -967,15 +993,15 @@ def case_guards(linked: Linked) -> dict[NodeId, tuple[NodeId, str]]:
     return found
 
 
-def infer(linked: Linked) -> ModelReads:
-    """What every ``self`` method of ``linked`` may read, every node's existence guards,
-    and which of them are a selector's cases. A model's structure (``_structure``) answers
-    them node by node when first asked, from its templates (``_Mapping``); a table
+def infer(linked: Scopes | Linked) -> ModelReads:
+    """What every ``self`` method may read, every member's existence guards, and which of
+    them are a selector's cases. A model's scope records answer them address by address
+    when first asked, from its compiled forms (``_Mapping``); a table
     (``_structure.expand``'s, or one built by hand) all at once."""
+    if isinstance(linked, Scopes):
+        return _scope_reads(linked)
     if not isinstance(linked, LinkedModel):
-        from ._structure import Structure  # noqa: PLC0415 - a cycle
-
-        return _structure_reads(cast(Structure, linked))
+        raise TypeError("infer takes a model's scope records or a table")
     inference = _Inference(linked)
     methods: dict[NodeId, frozenset[NodeId] | None] = {}
     unresolved: dict[NodeId, tuple[str, ...]] = {}
@@ -998,15 +1024,20 @@ def infer(linked: Linked) -> ModelReads:
     )
 
 
-def summary(linked: Linked, reads: ModelReads) -> dict[str, object]:
+def summary(linked: Scopes | Linked, reads: ModelReads) -> dict[str, object]:
     """A diagnostic: how many ``self`` methods there are, which are dynamic (by Space class),
     and the paths that named nothing compiled."""
     dynamic: dict[str, set[str]] = {}
     for index, found in reads.methods.items():
         if found is None:
-            node = linked.nodes[index]
-            owner = linked.scopes[node.scope].space_type.__qualname__
-            dynamic.setdefault(owner, set()).add(node.key.rsplit(".", 1)[-1])
+            if isinstance(linked, Scopes):
+                owner = index.scope.space_type.__qualname__
+                key = index.key
+            else:
+                node = linked.nodes[index]
+                owner = linked.scopes[node.scope].space_type.__qualname__
+                key = node.key
+            dynamic.setdefault(owner, set()).add(key.rsplit(".", 1)[-1])
     return {
         "methods": len(reads.methods),
         "dynamic": sum(1 for found in reads.methods.values() if found is None),

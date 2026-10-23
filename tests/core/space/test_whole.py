@@ -1,6 +1,6 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""The questions about a whole design space, answered from templates (``_whole``): the
+"""The questions about a whole design space, answered from compiled forms (``_whole``): the
 flow order and its loops, the presence readers, ``inspection``'s decisions, choices,
 members and statistics, the scopes below a scope.
 
@@ -9,7 +9,7 @@ Each equals the line's answer (``6d02612cc``: its algorithms over one table of e
 tests and the engine's support modules define and for the classes below, which take the
 ways the corpus does not (a name the placing Space owns read by a method; a dynamic
 method's subtree holding formals, a fresh Decision and a named shared Decision; a validity
-piece reached by a guard); and answering it resolves no node. The kernels, the Chain's
+piece reached by a guard); and answering it evaluates no member. The kernels, the Chain's
 members and stage 7's chain are the kernel tree's (``kernel_ops/test_space_templates``).
 """
 
@@ -31,11 +31,8 @@ from finn.core.space import (
     inspection,
     view,
 )
-from finn.core.space._structure import Structure
-from finn.core.space._template import link_template
-from finn.core.space.compiler import Model
-from finn.core.space.errors import RequestError
-from finn.core.space.ir import Linked, LinkedModel, Node
+from finn.core.space._template import compiled
+from finn.core.space.compiler import model_of
 
 HERE = Path(__file__).resolve().parent
 
@@ -149,36 +146,25 @@ def test_a_dynamic_method_reads_its_scopes_subtree_and_what_its_placing_space_ow
         assert keys.index(read) < keys.index("later")
 
 
-# -- answered from templates: nothing resolved ---------------------------------------------------
+# -- answered from compiled forms: nothing evaluated ---------------------------------------------
 
 
-def test_the_flow_order_the_readers_and_the_lists_resolve_no_node() -> None:
-    structure = Structure(link_template(PlacesDynamic))
-    model = Model(PlacesDynamic, cast(Linked, structure), structure.lock)
+def test_the_flow_order_the_readers_and_the_lists_evaluate_no_member() -> None:
+    model = model_of(compiled(PlacesDynamic))  # a model of its own: nothing asked yet
     inspection.decisions(model)
     inspection.choices(model)
     inspection.members(model)
     inspection.statistics(model)
-    for source in (*structure.parameters, *structure.decisions):
+    scopes = model.scopes
+    for source in (*scopes.parameters, *scopes.decisions):
         model.per_class.presence_readers(source)
-    counts = structure.counts()
-    assert counts["nodes resolved"] == 0
-    assert counts["scopes addressed"] == 3
+    assert model.per_class._session is None  # no question ran: nothing evaluated
+    assert scopes.counts()["scopes made"] == 3
 
 
-def test_ranks_are_places_in_the_flow_order() -> None:
+def test_positions_are_places_in_the_flow_order() -> None:
     point = design_space(PlacesDynamic())
-    structure = inspection.model(point).structure
-    assert structure is not None
+    scopes = inspection.model(point).scopes
     flow = inspection.model(point).per_class.flow()
-    assert [structure.ranks[index] for index in flow] == list(range(len(flow)))
-    assert list(structure.ranks) == list(flow)
-
-
-def test_a_table_built_by_hand_answers_no_whole_design_space_question() -> None:
-    table = LinkedModel((Node(0, 0, "x", "decision"),), (), (0,), (), (0,), {"x": 0})
-    model = Model(Space, table)
-    with pytest.raises(RequestError, match="no question about its whole design space"):
-        model.per_class.flow()
-    with pytest.raises(RequestError, match="no question about its whole design space"):
-        model.per_class.presence_readers(0)
+    assert [scopes.position(index) for index in flow] == list(range(len(flow)))
+    assert list(scopes.flow().order) == list(flow)

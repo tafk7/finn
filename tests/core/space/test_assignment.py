@@ -70,11 +70,8 @@ def held_pairs(point: Space) -> set[tuple[str, str]]:
     """Each false piece of the root's validity with each origin it is false through, by
     the piece's key and the origin's owner."""
     ds = held(point).ds
-    header = ds.model.linked.header
     found = ask(ds.model, lambda session: pairs(evaluation(ds, session)))
-    return {
-        (piece, header(origin).owner) for (piece, _), origins in found.items() for origin in origins
-    }
+    return {(piece, origin.owner) for (piece, _), origins in found.items() for origin in origins}
 
 
 # -- the canon's two examples -------------------------------------------------------------

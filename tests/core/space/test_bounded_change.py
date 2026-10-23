@@ -15,8 +15,6 @@ recomputation does, and answers as one.
 
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
 from support.space_cores import chain
 from support.space_pipeline import Meter, Pipeline, Probe
@@ -41,7 +39,6 @@ from finn.core.space import (
     supplied,
 )
 from finn.core.space._running.evaluate import Session, evaluation
-from finn.core.space._structure import Structure
 from finn.core.space.inspection import candidate
 
 
@@ -104,18 +101,16 @@ def decisions_read(point: Space, reference: object) -> set[str]:
     ds = occurrence.held(point).ds
     index = ds.model.resolve(point._scope, reference)
     found = occurrence.ask(ds.model, lambda session: evaluation(ds, session).get(index))
-    header = ds.model.linked.header
-    return {header(i).key for i in found.reads if header(i).kind == "decision"}
+    return {i.key for i in found.reads if i.kind == "decision"}
 
 
 def _every(point: Space) -> None:
     """Every node of the design space ``point`` holds evaluated, in its model's session."""
     ds = occurrence.held(point).ds
-    structure = cast(Structure, ds.model.linked)
 
     def every(session: Session) -> None:
         ev = evaluation(ds, session)
-        for index in structure.all_nodes():
+        for index in ds.model.scopes.all_addresses():
             ev.get(index)
 
     occurrence.ask(ds.model, every)

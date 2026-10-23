@@ -6,8 +6,9 @@ An ``Evaluation`` is one design space's answers: a node's answer is its frame's 
 node kind), each node evaluated once and kept in the evaluation's memo, which dies with
 the design space. Nothing is taken from another design space but by the session's node
 cache, where it holds one: no worlds, no entries taken from a parent, no early cutoff.
-Every node is read as the model's structure resolves it (``raw_nodes``): no collapsed node
-is read anywhere.
+Every address is read as its scope reads its member record, each edge mapped through the
+scope when it is read (``_scopes``): no node is built per placement, and nothing is
+collapsed.
 
 **Reading a node** (``Evaluation.read``) names its reader: the node being evaluated, or,
 for a ``when``'s condition read past its guard, that guard. A formal bound by reference
@@ -96,9 +97,9 @@ from .._failure import (
     remember_exception,
     remember_failure,
 )
+from .._scopes import implies
 from ..errors import EvaluationError, ValueUnavailableError
 from ..graph import Located
-from ..ir import Node, NodeId, guard_implies
 from ..results import (
     Available,
     ConstraintAssessment,
@@ -139,10 +140,10 @@ from .structure import Record, record
 from .value import DesignSpace
 
 if TYPE_CHECKING:
-    from .._structure import Structure
+    from .._scopes import Address, Scopes
 
 T = TypeVar("T")
-Trace = tuple[tuple[NodeId, QueryResult[object]], ...]
+Trace = tuple[tuple["Address", QueryResult[object]], ...]
 Assessment = ViewAssessment[object] | ConstraintAssessment
 TRUE: QueryResult[object] = Available(True)
 INAPPLICABLE = Inapplicable()
@@ -164,9 +165,9 @@ class Ans:
     trace: Trace = ()
     assessment: Assessment | None = None
     own_refusal: bool = False
-    existence: frozenset[NodeId] = frozenset()
+    existence: frozenset[Address] = frozenset()
     # the choices and facts it read, through anything (kept only where a node cache is on)
-    reads: frozenset[NodeId] = frozenset()
+    reads: frozenset[Address] = frozenset()
 
 
 class MembershipReadsChoice(EvaluationError):
@@ -189,7 +190,7 @@ class Deeper(depth.Deeper):
     the node first, then again what it abandoned. The depth guard's ``depth.Deeper``, so
     that a method's reader passes it through."""
 
-    def __init__(self, ev: Evaluation, node: NodeId) -> None:
+    def __init__(self, ev: Evaluation, node: Address) -> None:
         BaseException.__init__(self, node)
         self.ev = ev
         self.node = node
@@ -199,9 +200,9 @@ class NodeCache(Protocol):
     """A cache of answers across design spaces: ``lookup`` gives an answer kept for the
     same reads, or ``None``; ``keep`` offers one, with its ``reads``."""
 
-    def lookup(self, ev: Evaluation, index: NodeId) -> Ans | None: ...
+    def lookup(self, ev: Evaluation, index: Address) -> Ans | None: ...
 
-    def keep(self, ev: Evaluation, index: NodeId, found: Ans) -> None: ...
+    def keep(self, ev: Evaluation, index: Address, found: Ans) -> None: ...
 
 
 @dataclass
@@ -230,7 +231,7 @@ class Counters:
         self.calls[kind] = self.calls.get(kind, 0) + 1
 
 
-_Key = tuple["Evaluation", NodeId]
+_Key = tuple["Evaluation", "Address"]
 
 
 @dataclass(eq=False)
@@ -247,7 +248,7 @@ class Session:
     # the context the run's authored calls copy (``None``: no run under way)
     context: Context | None = None
     # what each evaluation in flight read, innermost last (where a cache is on)
-    stack: list[set[NodeId]] = field(default_factory=list)
+    stack: list[set[Address]] = field(default_factory=list)
     # what the depth guard abandoned, to be asked again, oldest first
     pending: dict[_Key, None] = field(default_factory=dict)
     failures: dict[_Key, Failure] = field(default_factory=dict)
@@ -308,7 +309,7 @@ class Session:
 
 
 def evaluation(
-    ds: DesignSpace, session: Session, assumed: frozenset[NodeId] | None = None
+    ds: DesignSpace, session: Session, assumed: frozenset[Address] | None = None
 ) -> Evaluation:
     """The evaluation of ``ds`` in ``session`` (one per design space value, session and
     guards taken as holding: ``None`` for the design space's own, a frozen set for a
@@ -388,7 +389,7 @@ def invoke(
     return cast(_Returned | _Halted, outcome)
 
 
-def answer_key(node: Node, answer: QueryResult[object]) -> object:
+def answer_key(node: Address, answer: QueryResult[object]) -> object:
     """``node``'s answer as a key: a value as the node cache keys it under ``node``'s value
     semantics (``cache.key``), a non-value by its variant and findings; ``None`` where it
     has no key (semantics of its own, a type not keyed, unhashable findings)."""
@@ -416,7 +417,7 @@ def _same_findings(left: QueryResult[object], right: QueryResult[object]) -> boo
         return False
 
 
-def _same_answer(node: Node, left: QueryResult[object], right: QueryResult[object]) -> bool:
+def _same_answer(node: Address, left: QueryResult[object], right: QueryResult[object]) -> bool:
     """Whether two answers of ``node`` are the same: the same object, or values equal by
     its value semantics (``answers._same_value``), or non-values of one variant with equal
     findings."""
@@ -441,7 +442,7 @@ def _same_bool(left: QueryResult[Any], right: QueryResult[Any]) -> bool:
     return _same_findings(left, right)
 
 
-def _same_assessment(node: Node, left: Assessment | None, right: Assessment | None) -> bool:
+def _same_assessment(node: Address, left: Assessment | None, right: Assessment | None) -> bool:
     """Two assessments of ``node``: a constraint's pieces and result, each exactly; a
     view's output and accepted result by its semantics, and its validity."""
     if left is right:
@@ -461,7 +462,7 @@ def _same_assessment(node: Node, left: Assessment | None, right: Assessment | No
     return False
 
 
-def _same_outcome(node: Node, left: QueryResult[object], right: QueryResult[object]) -> bool:
+def _same_outcome(node: Address, left: QueryResult[object], right: QueryResult[object]) -> bool:
     """Two outcomes of a choice's domain: listed values each by the choice's semantics, a
     bool or nothing listed exactly, a non-value's findings (today's)."""
     if left is right:
@@ -476,7 +477,7 @@ def _same_outcome(node: Node, left: QueryResult[object], right: QueryResult[obje
     return type(one) is type(other) and one == other
 
 
-_Tr = list[tuple[NodeId, QueryResult[object]]]
+_Tr = list[tuple["Address", QueryResult[object]]]
 
 
 class Evaluation:
@@ -486,35 +487,36 @@ class Evaluation:
     guards taken as holding, none for a choice with no guard."""
 
     def __init__(
-        self, ds: DesignSpace, session: Session, assumed: frozenset[NodeId] | None = None
+        self, ds: DesignSpace, session: Session, assumed: frozenset[Address] | None = None
     ) -> None:
         self.ds = ds
         self.session = session
         self.counters = session.counters
         self.model = ds.model
-        self.linked: Structure = ds.layer.structure
-        self.raw = self.linked.raw_nodes  # each node as resolved, nothing collapsed
+        self.scopes: Scopes = ds.model.scopes
+        # every address an evaluation of the model evaluated (``Scopes.counts``)
+        self.evaluated = self.scopes.registry.evaluated
         self.inferred = ds.model.per_class.reads  # inferred reads, existence and case guards
         self.record: Record = record(ds.model)
         self.assumed = assumed
-        self.memo: dict[NodeId, Ans] = {}
-        self.active: dict[NodeId, None] = {}
+        self.memo: dict[Address, Ans] = {}
+        self.active: dict[Address, None] = {}
         # a membership reading: the choice whose membership is being read
-        self.asking: NodeId | None = None
+        self.asking: Address | None = None
 
     # -- reading
 
-    def source(self, index: NodeId, reader: Node) -> NodeId:
+    def source(self, index: Address, reader: Address) -> Address:
         """What ``reader`` reads when it reads ``index`` (``structure.Record.source``)."""
-        return self.record.source(self.linked, index, reader.scope)
+        return self.record.source(index, reader.standing)
 
-    def note(self, reads: frozenset[NodeId] | set[NodeId]) -> None:
+    def note(self, reads: frozenset[Address] | set[Address]) -> None:
         """What the node being evaluated read (where a node cache is on)."""
         stack = self.session.stack
         if stack:
             stack[-1].update(reads)
 
-    def get(self, index: NodeId) -> Ans:
+    def get(self, index: Address) -> Ans:
         """``index``'s answer here: its memo's, else evaluated (a run of its own where
         none is under way)."""
         found = self.memo.get(index)
@@ -526,7 +528,7 @@ class Evaluation:
             return self.session.run(lambda: self._get(index))
         return self._get(index)
 
-    def _get(self, index: NodeId) -> Ans:
+    def _get(self, index: Address) -> Ans:
         found = self.memo.get(index)
         if found is not None:
             if self.session.cache is not None:
@@ -550,7 +552,7 @@ class Evaluation:
                 return found
         return self._compute(index)
 
-    def _compute(self, index: NodeId, hit: Ans | None = None) -> Ans:
+    def _compute(self, index: Address, hit: Ans | None = None) -> Ans:
         """``index`` evaluated here: its answer published in the memo and offered to the
         cache. Under the purity check, a node the depth guard abandoned is evaluated again
         and compared; with ``hit`` (a cache hit, under the purity check), evaluated only
@@ -566,7 +568,7 @@ class Evaluation:
         self.active[index] = None
         if cache is not None:
             session.stack.append(set())
-        read: set[NodeId] | None = None
+        read: set[Address] | None = None
         outer = sys.exception()
         try:
             found = self._evaluate(index)
@@ -592,8 +594,7 @@ class Evaluation:
             session.failures[key] = failing.failure
             raise
         except BaseException as cause:
-            node = self.raw[index]
-            failure = from_exception(cause, owner=node.owner, role=node.kind, outer=outer)
+            failure = from_exception(cause, owner=index.owner, role=index.kind, outer=outer)
             session.failures[key] = failure
             raise Failing(failure) from cause
         finally:
@@ -605,32 +606,32 @@ class Evaluation:
             self.note(read)
         return found
 
-    def _again(self, index: NodeId, held: Ans, found: Ans) -> None:
+    def _again(self, index: Address, held: Ans, found: Ans) -> None:
         """The purity check: ``found``, ``index`` evaluated again on the same reads,
         answers as ``held`` by the member's value semantics; else its function is impure."""
-        node = self.raw[index]
+        node = index
         if not (
             _same_answer(node, held.result, found.result)
             and _same_assessment(node, held.assessment, found.assessment)
         ):
             raise EvaluationError(node.owner, node.kind, _IMPURE)
 
-    def _cycle(self, index: NodeId) -> Failure:
+    def _cycle(self, index: Address) -> Failure:
         """A dependency cycle: ``index`` read while it is being evaluated (on the Python
         stack, or abandoned to the run's own)."""
-        path = [f"{ev.raw[item].owner} ({ev.raw[item].kind})" for ev, item in self.session.pending]
-        path += [f"{self.raw[item].owner} ({self.raw[item].kind})" for item in self.active]
-        owner = self.raw[index].owner
+        path = [f"{item.owner} ({item.kind})" for _, item in self.session.pending]
+        path += [f"{item.owner} ({item.kind})" for item in self.active]
+        owner = index.owner
         return Failure(EvaluationError(owner, "dependency cycle", " -> ".join((*path, owner))))
 
-    def result(self, index: NodeId) -> QueryResult[object]:
+    def result(self, index: Address) -> QueryResult[object]:
         return self.get(index).result
 
     def run(self, demand: Callable[[], T]) -> T:
         """``demand`` as its session's run (``Session.run``)."""
         return self.session.run(demand)
 
-    def read(self, trace: _Tr, index: NodeId, reader: Node) -> Ans:
+    def read(self, trace: _Tr, index: Address, reader: Address) -> Ans:
         """``reader``'s read of ``index``: its answer, at its source where the formal is
         transparent to the reader, recorded in ``trace``."""
         index = self.source(index, reader)
@@ -638,13 +639,13 @@ class Evaluation:
         trace.append((index, found.result))
         return found
 
-    def sources(self, trace: Trace | _Tr) -> list[tuple[NodeId, QueryResult[object]]]:
+    def sources(self, trace: Trace | _Tr) -> list[tuple[Address, QueryResult[object]]]:
         """The choices and facts what ``trace`` records read here, through anything, each
         with its answer here, in key order (scope path, member): a function of the value,
         the same in every numbering and process. (Today's lists them in the order its model
         first read them in the process, a history a value does not hold.)"""
-        found: dict[NodeId, QueryResult[object]] = {}
-        seen: set[NodeId] = set()
+        found: dict[Address, QueryResult[object]] = {}
+        seen: set[Address] = set()
         pending = [iter(trace)]
         while pending:
             step = next(pending[-1], None)
@@ -655,13 +656,13 @@ class Evaluation:
             if index in seen:
                 continue
             seen.add(index)
-            if self.raw[index].kind in _OWN_BIT:
+            if index.kind in _OWN_BIT:
                 found[index] = answer
             else:
                 pending.append(iter(self.get(index).trace))
-        return sorted(found.items(), key=lambda item: self.linked.header(item[0]).key)
+        return sorted(found.items(), key=lambda item: item[0].key)
 
-    def membership(self, index: NodeId) -> Evaluation:
+    def membership(self, index: Address) -> Evaluation:
         """Where the choice ``index``'s membership is read as if it existed: its facts
         layer with nothing stored, its existence guards (if any) taken as holding."""
         guards = frozenset(self.inferred.guards(index))
@@ -669,21 +670,22 @@ class Evaluation:
         found.asking = index
         return found
 
-    def _reads_choice(self, decision: NodeId) -> None:
+    def _reads_choice(self, decision: Address) -> None:
         """A membership reading reading a decision: the domain rule broken."""
         if self.assumed is not None:
-            choice = self.raw[self.asking].key if self.asking is not None else "?"
-            raise MembershipReadsChoice(choice, self.raw[decision].key)
+            choice = self.asking.key if self.asking is not None else "?"
+            raise MembershipReadsChoice(choice, decision.key)
 
-    def case(self, index: NodeId) -> tuple[NodeId, str] | None:
+    def case(self, index: Address) -> tuple[Address, str] | None:
         return self.inferred.cases.get(index)
 
     # -- a node
 
-    def _evaluate(self, index: NodeId) -> Ans:
-        node = self.raw[index]
+    def _evaluate(self, index: Address) -> Ans:
+        node = index
         if self.assumed and index in self.assumed:
             return Ans(TRUE)
+        self.evaluated.add(index)
         self.counters.evaluated += 1
         self.counters.by_kind[node.kind] = self.counters.by_kind.get(node.kind, 0) + 1
         trace: _Tr = []
@@ -707,12 +709,12 @@ class Evaluation:
                 return Ans(inactive, tuple(trace), _guard_assessment(node, inactive))
         return _FRAMES[node.kind](self, node, trace, node)
 
-    def _holds_here(self, node: Node, trace: _Tr) -> bool | None:
+    def _holds_here(self, node: Address, trace: _Tr) -> bool | None:
         """A guard's own condition, read while a guard above it waits or is refused: false
         where its case's selector stores another case or its ``when`` reads false. The
         guard is the reader of its condition, read past the condition's own guard where
         the guard implies it."""
-        held = self.case(node.index)
+        held = self.case(node)
         if held is not None:
             selector, case = held
             self._reads_choice(selector)
@@ -725,16 +727,16 @@ class Evaluation:
         answer = self._condition(node, trace)
         return False if isinstance(answer, Available) and answer.value is False else None
 
-    def _condition(self, node: Node, trace: _Tr) -> QueryResult[object]:
+    def _condition(self, node: Address, trace: _Tr) -> QueryResult[object]:
         """A ``when`` guard's condition (``node``: the guard, its reader, under a guard of
         its own), read past the condition's own guard where the guard implies it."""
         assert node.output is not None and node.guard is not None
         output = self.source(node.output, node)
-        condition = self.raw[output]
+        condition = output
         if (
             condition.guard is None
             or condition.kind in _OWN_BIT
-            or not guard_implies(self.raw, condition.guard, node.guard)
+            or not implies(condition.guard, node.guard)
         ):
             return self.read(trace, output, node).result
         # Past its own guard: its frame alone, the guard its reader.
@@ -742,17 +744,17 @@ class Evaluation:
         trace.extend(found.trace)
         return found.result
 
-    def refused_waiting(self, guard: NodeId, trace: _Tr, reader: Node) -> NodeId | None:
+    def refused_waiting(self, guard: Address, trace: _Tr, reader: Address) -> Address | None:
         """The highest ``when`` guard in the chain of ``guard`` (which waits) refused
         through an input below a guard that waits, or ``None``: climbing from ``guard``
         while each guard waits, a ``when`` guard whose own condition, read past its guard,
         is refused. What it guards waits, on what the guard above it waits on (refused
         takes effect once all above it holds); where nothing above waits, the guard
         answers refused, and the refused guard's piece counts (``_guard_refused``)."""
-        found: NodeId | None = None
+        found: Address | None = None
         index = guard
-        while (outer := self.raw[index].guard) is not None:
-            node = self.raw[index]
+        while (outer := index.guard) is not None:
+            node = index
             if (
                 node.kind == "guard"
                 and node.output is not None
@@ -773,7 +775,7 @@ class Evaluation:
         return compute()
 
     def domain_outcome(
-        self, key: tuple[NodeId, str], kind: str, inputs: Trace, compute: Callable[[], Called]
+        self, key: tuple[Address, str], kind: str, inputs: Trace, compute: Callable[[], Called]
     ) -> QueryResult[object]:
         """A domain's outcome, kept on the facts layer by its inputs' answers (a domain
         reads facts only, so every design space of the layer shares it): each answer keyed
@@ -787,7 +789,7 @@ class Evaluation:
             if held is not None:
                 if self.session.verifying:
                     again = self.authored(kind, compute).result
-                    node = self.raw[key[0]]
+                    node = key[0]
                     if not _same_outcome(node, held.result, again):
                         raise EvaluationError(node.owner, kind, _IMPURE)
                 return held.result
@@ -799,13 +801,13 @@ class Evaluation:
     def _outcome_key(self, inputs: Trace) -> tuple[object, ...] | None:
         """A domain outcome's inputs as the facts layer keeps it by (``answer_key``, each
         under its node's semantics); ``None`` where one has no key."""
-        local = tuple(answer_key(self.raw[index], answer) for index, answer in inputs)
+        local = tuple(answer_key(index, answer) for index, answer in inputs)
         return None if any(part is None for part in local) else local
 
-    def call_explicit(self, node: Node, answers: list[QueryResult[object]]) -> Called:
+    def call_explicit(self, node: Address, answers: list[QueryResult[object]]) -> Called:
         arguments = {
             argument.name: _clone(
-                self.raw[argument.node],
+                argument.node,
                 cast(Available[object], answer).value,
                 owner=node.owner,
                 role="dependency snapshot",
@@ -821,7 +823,7 @@ class Evaluation:
         )
         return _finished(node, cast(_Returned, outcome).value)
 
-    def call_method(self, node: Node, reader: Node) -> tuple[Called, Trace]:
+    def call_method(self, node: Address, reader: Address) -> tuple[Called, Trace]:
         call = Call(node.owner, node.kind)
         receiver = Reader(self, node, call, reader)
         outcome = invoke(
@@ -836,18 +838,18 @@ class Evaluation:
             called = Called(blocked, _guard_assessment(node, blocked), existence=existence)
         else:
             done = _finished(node, outcome.value)
-            called = Called(done.result, done.assessment, done.own_refusal, (), existence)
+            called = Called(done.result, done.assessment, done.own_refusal, existence)
         return called, tuple(receiver.trace)
 
     # -- domains (each read by the choice it belongs to)
 
     def domain_inputs(
-        self, node: Node, trace: _Tr
+        self, node: Address, trace: _Tr
     ) -> tuple[tuple[QueryResult[object], ...], NonValue | None]:
         arguments = membership_arguments(node)
         answers = tuple(self.read(trace, argument.node, node).result for argument in arguments)
         absent = [
-            self.raw[argument.node].owner
+            argument.node.owner
             for argument, answer in zip(arguments, answers)
             if isinstance(answer, Inapplicable)
         ]
@@ -858,11 +860,11 @@ class Evaluation:
         )
 
     def domain_values(
-        self, node: Node, answers: tuple[QueryResult[object], ...]
+        self, node: Address, answers: tuple[QueryResult[object], ...]
     ) -> dict[str, object]:
         return {
             argument.name: _clone(
-                self.raw[argument.node],
+                argument.node,
                 cast(Available[object], answer).value,
                 owner=node.owner,
                 role="dependency snapshot",
@@ -870,12 +872,14 @@ class Evaluation:
             for argument, answer in zip(membership_arguments(node), answers)
         }
 
-    def _inputs(self, node: Node, answers: tuple[QueryResult[object], ...]) -> Trace:
+    def _inputs(self, node: Address, answers: tuple[QueryResult[object], ...]) -> Trace:
         return tuple(
             (argument.node, answer) for argument, answer in zip(membership_arguments(node), answers)
         )
 
-    def type_check(self, node: Node, value: Available[object], trace: _Tr) -> QueryResult[object]:
+    def type_check(
+        self, node: Address, value: Available[object], trace: _Tr
+    ) -> QueryResult[object]:
         """Whether ``node``'s domain holds ``value`` here."""
         domain, semantics = node.domain, node.semantics
         assert domain is not None and semantics is not None
@@ -894,13 +898,11 @@ class Evaluation:
             )
             return Called(cast(QueryResult[object], cast(_Returned, outcome).value))
 
-        inputs = ((node.index, value), *self._inputs(node, answers))
-        return self.domain_outcome(
-            (node.index, "membership"), "domain membership", inputs, membership
-        )
+        inputs = ((node, value), *self._inputs(node, answers))
+        return self.domain_outcome((node, "membership"), "domain membership", inputs, membership)
 
     def _enumerate(
-        self, node: Node, answers: tuple[QueryResult[object], ...]
+        self, node: Address, answers: tuple[QueryResult[object], ...]
     ) -> QueryResult[object]:
         domain, semantics = node.domain, node.semantics
         assert domain is not None and semantics is not None
@@ -916,13 +918,13 @@ class Evaluation:
             return Called(cast(QueryResult[object], cast(_Returned, outcome).value))
 
         return self.domain_outcome(
-            (node.index, "enumeration"),
+            (node, "enumeration"),
             "domain enumeration",
             self._inputs(node, answers),
             enumerate_,
         )
 
-    def _list(self, node: Node, answers: tuple[QueryResult[object], ...]) -> Called:
+    def _list(self, node: Address, answers: tuple[QueryResult[object], ...]) -> Called:
         domain, semantics = node.domain, node.semantics
         assert domain is not None and semantics is not None
         listed = self._enumerate(node, answers)
@@ -937,7 +939,7 @@ class Evaluation:
             listed = Available(cast(_Returned, kept).value)
         return Called(listed)
 
-    def listed(self, node: Node, trace: _Tr) -> QueryResult[object]:
+    def listed(self, node: Address, trace: _Tr) -> QueryResult[object]:
         """A choice's listed values here (``Available(None)``: membership only)."""
         domain = node.domain
         assert domain is not None
@@ -947,13 +949,13 @@ class Evaluation:
         if domain.candidates is None:
             return Available(None)
         return self.domain_outcome(
-            (node.index, "listing"),
+            (node, "listing"),
             "domain listing",
             self._inputs(node, answers),
             lambda: self._list(node, answers),
         )
 
-    def lists_a_value(self, node: Node, trace: _Tr) -> QueryResult[object]:
+    def lists_a_value(self, node: Address, trace: _Tr) -> QueryResult[object]:
         """Whether a listed domain lists a value here: from its list where it was made,
         else membership asked up to the first value it holds."""
         domain, semantics = node.domain, node.semantics
@@ -963,14 +965,12 @@ class Evaluation:
             return blocked
         inputs = self._inputs(node, answers)
         local = self._outcome_key(inputs)
-        made = (
-            None if local is None else self.ds.layer.outcomes.get(((node.index, "listing"), local))
-        )
+        made = None if local is None else self.ds.layer.outcomes.get(((node, "listing"), local))
         if made is not None:
             found = made.result
             if self.session.verifying:  # the kept list, made again and compared
                 found = self.domain_outcome(
-                    (node.index, "listing"),
+                    (node, "listing"),
                     "domain listing",
                     inputs,
                     lambda: self._list(node, answers),
@@ -993,7 +993,7 @@ class Evaluation:
             )
             return Called(Available(cast(_Returned, kept).value))
 
-        return self.domain_outcome((node.index, "lists a value"), "domain listing", inputs, lists)
+        return self.domain_outcome((node, "lists a value"), "domain listing", inputs, lists)
 
 
 # -- the receiver a method reads through ------------------------------------------------
@@ -1002,21 +1002,21 @@ class Evaluation:
 class Reader(MethodReader):
     """A method's reads, on an evaluation: the method reader (``receiver.MethodReader``:
     resolution, the read check, ``present``, candidates), each read answered by the
-    evaluation from the raw nodes and recorded in order. ``reader``: the node whose scope
+    evaluation from the addresses and recorded in order. ``reader``: the node whose scope
     decides which formals bound by reference it reads at their source (the method's node,
     or the guard a ``when``'s condition is read for)."""
 
     __slots__ = ("ev", "reader")
 
-    def __init__(self, ev: Evaluation, node: Node, call: Call, reader: Node) -> None:
+    def __init__(self, ev: Evaluation, node: Address, call: Call, reader: Address) -> None:
         super().__init__(ev.model, node, call)
         self.ev = ev
         self.reader = reader
 
-    def _source(self, index: NodeId) -> NodeId:
+    def _source(self, index: Address) -> Address:
         return self.ev.source(index, self.reader)
 
-    def _take(self, index: NodeId) -> Any:
+    def _take(self, index: Address) -> Any:
         """``index``'s answer, recorded. A failure met is the call's (its primary, or a
         cleanup failure) and is raised in the method; the depth guard abandons it."""
         try:
@@ -1040,16 +1040,16 @@ class Reader(MethodReader):
         self.valued.add(index)
         return self._value(index)
 
-    def _answer(self, index: NodeId) -> QueryResult[object]:
+    def _answer(self, index: Address) -> QueryResult[object]:
         self._check(index)
         index = self._source(index)
         self.existence.add(index)
         return cast(QueryResult[object], self._take(index).result)
 
-    def _value(self, index: NodeId) -> object:
+    def _value(self, index: Address) -> object:
         index = self._source(index)
         answer = self._take(index).result
-        node = self.ev.raw[index]
+        node = index
         if isinstance(answer, Available):
             return public_value(node, answer)
         self.call.blocked[index] = answer
@@ -1057,9 +1057,9 @@ class Reader(MethodReader):
             self.call.failure.add(CleanupFailure(node.owner, "cleanup read", result=answer))
         raise ValueUnavailableError(answer, context=node.owner)
 
-    def _source_applies(self, index: NodeId) -> bool | NodeId:
+    def _source_applies(self, index: Address) -> bool | Address:
         index = self._source(index)
-        node = self.ev.raw[index]
+        node = index
         if node.guard is not None:
             holds = self._holds(node.guard)
             if holds is not True:
@@ -1067,13 +1067,13 @@ class Reader(MethodReader):
         if node.kind == "param":
             return isinstance(self._answer(index), Available)
         if node.kind in ("alias", "guard", "view"):
-            return self._source_applies(cast(NodeId, node.output))
+            return self._source_applies(cast("Address", node.output))
         if node.kind == "select":
-            selector = cast(NodeId, node.selector)
+            selector = cast("Address", node.selector)
             case = self._answer(selector)
             if not isinstance(case, Available):
                 return False if isinstance(case, Inapplicable) else selector
-            target = cast(Mapping[str, NodeId], node.selection_index).get(cast(str, case.value))
+            target = cast("Mapping[str, Address]", node.selection_index).get(cast(str, case.value))
             return False if target is None else self._source_applies(target)
         if node.kind == "present":
             answers = [self._source_applies(target) for _, target in node.alternatives]
@@ -1086,41 +1086,41 @@ class Reader(MethodReader):
 # -- frames: each kind of node (``reader``: whose scope its reads are made from) ----------
 
 
-def _param(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
+def _param(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     if ev.session.cache is not None:
-        ev.note({node.index})
-    if node.index in ev.ds.facts:
-        return Ans(Available(ev.ds.facts[node.index]), tuple(trace))
+        ev.note({node})
+    if node in ev.ds.facts:
+        return Ans(Available(ev.ds.facts[node]), tuple(trace))
     return Ans(_input_missing(node), tuple(trace))
 
 
-def _const(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
+def _const(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     return Ans(Available(node.value), tuple(trace))
 
 
-def _decision(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
-    ev._reads_choice(node.index)
+def _decision(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
+    ev._reads_choice(node)
     if ev.session.cache is not None:
-        ev.note({node.index})
-    if node.index not in ev.ds.stored:
+        ev.note({node})
+    if node not in ev.ds.stored:
         return Ans(_unassigned(node), tuple(trace))
-    value: Available[object] = Available(ev.ds.stored[node.index])
+    value: Available[object] = Available(ev.ds.stored[node])
     if node.domain is None:
         return Ans(value, tuple(trace))
     # its stored value checked as every membership is: read as if the choice existed
-    check = ev.membership(node.index).type_check(node, value, trace)
+    check = ev.membership(node).type_check(node, value, trace)
     if isinstance(check, Available) and check.value is True:
         return Ans(value, tuple(trace))
     return Ans(check, tuple(trace))
 
 
-def _forward(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
+def _forward(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     if node.output is None:
         raise EvaluationError(node.owner, node.kind, "missing output reference")
     return Ans(ev.read(trace, node.output, reader).result, tuple(trace))
 
 
-def _select(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
+def _select(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     assert node.selector is not None and node.selection_index is not None
     selector = ev.read(trace, node.selector, reader).result
     if not isinstance(selector, Available):
@@ -1131,9 +1131,9 @@ def _select(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
     return Ans(ev.read(trace, target, reader).result, tuple(trace))
 
 
-def _waiting(ev: Evaluation, index: NodeId) -> dict[str, QueryResult[object]]:
+def _waiting(ev: Evaluation, index: Address) -> dict[str, QueryResult[object]]:
     """The pieces still unresolved in the refused Space whose validity is ``index``."""
-    keys, found = ev.linked.keys, {}
+    keys, found = ev.scopes.keys, {}
     pending = [index]
     while pending:
         assessment = ev.get(pending.pop()).assessment
@@ -1142,12 +1142,12 @@ def _waiting(ev: Evaluation, index: NodeId) -> dict[str, QueryResult[object]]:
         for key, answer in assessment.results.items():
             if isinstance(answer, Unresolved):
                 found[key] = cast(QueryResult[object], answer)
-            elif isinstance(answer, Rejected) and ev.raw[keys[key]].kind == "validity":
+            elif isinstance(answer, Rejected) and keys[key].kind == "validity":
                 pending.append(keys[key])
     return found
 
 
-def _view(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
+def _view(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     assert node.output is not None and len(node.constraints) == 1
     output = ev.read(trace, node.output, reader).result
     validity = ev.read(trace, node.constraints[0], reader).result
@@ -1156,7 +1156,7 @@ def _view(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
         output,
         owner=node.key,
         validity=cast(QueryResult[bool], validity),
-        validity_owner=ev.linked.header(node.constraints[0]).key,
+        validity_owner=node.constraints[0].key,
         waiting=waiting,
     )
     return Ans(view.accepted_result, tuple(trace), view)
@@ -1165,16 +1165,15 @@ def _view(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
 Piece = tuple[str, QueryResult[bool]]
 
 
-def _validity(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
+def _validity(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     """Kleene's AND of a Space's pieces, a placed Space's read from its guard first; a
     piece whose guard is refused through an input counted once, at the highest refused
     guard of its chain (``_guard_refused``), and one refused below a guard that waits,
     unknown, at the highest such ``when`` (``_guard_waiting``)."""
-    linked = ev.linked
     answers: dict[str, QueryResult[bool]] = {}
-    guards: set[NodeId] = set()
+    guards: set[Address] = set()
     for index in node.constraints:
-        header = linked.header(index)
+        header = index
         placed: Ans | None = None
         if header.kind == "validity" and header.guard is not None:
             placed = ev.read(trace, header.guard, reader)
@@ -1185,7 +1184,7 @@ def _validity(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
             if isinstance(held, Available) and held.value is False:
                 answers[header.key] = INAPPLICABLE
                 continue
-        piece = ev.raw[index]
+        piece = index
         if piece.kind == "decision":
             found = _choice_piece(ev, piece, trace, reader, guards)
             if found is not None:
@@ -1204,7 +1203,7 @@ def _validity(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
         if isinstance(answer, (Inapplicable, Rejected)) and piece.guard is not None:
             guard = placed if placed is not None else ev.read(trace, piece.guard, reader)
             if isinstance(guard.result, Rejected):
-                owner = linked.scopes[piece.scope].name if piece.kind == "validity" else piece.owner
+                owner = piece.scope.name if piece.kind == "validity" else piece.owner
                 counted = _guard_refused(ev, piece, owner, trace, reader, guards)
                 if counted is not None:
                     answers[counted[0]] = counted[1]
@@ -1215,16 +1214,16 @@ def _validity(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
 
 
 def _guard_refused(
-    ev: Evaluation, piece: Node, owner: str, trace: _Tr, reader: Node, guards: set[NodeId]
+    ev: Evaluation, piece: Address, owner: str, trace: _Tr, reader: Address, guards: set[Address]
 ) -> Piece | None:
     """The guard piece of ``piece``, whose guard is refused through an input: counted
     once, at the highest refused guard of its chain, or ``None`` where that guard is
     counted already. Counted at a guard above its own, it is that guard's owner's, keyed
     by the owner where the owner is a node (a selector: its cases' pieces are its one
     piece)."""
-    top = cast(NodeId, piece.guard)
+    top = cast("Address", piece.guard)
     found = ev.read(trace, top, reader).result
-    while (outer := ev.raw[top].guard) is not None:
+    while (outer := top.guard) is not None:
         above = ev.read(trace, outer, reader).result
         if not isinstance(above, Rejected):
             break
@@ -1234,14 +1233,14 @@ def _guard_refused(
     guards.add(top)
     key = piece.key
     if top != piece.guard:
-        owner = ev.raw[top].owner
-        if owner in ev.linked.keys:
+        owner = top.owner
+        if owner in ev.scopes.keys:
             key = owner
     return key, _guard_piece(owner, cast(Rejected, found))
 
 
 def _guard_waiting(
-    ev: Evaluation, piece: Node, top: NodeId, trace: _Tr, reader: Node, guards: set[NodeId]
+    ev: Evaluation, piece: Address, top: Address, trace: _Tr, reader: Address, guards: set[Address]
 ) -> Piece | None:
     """The piece of ``piece``, below ``top``, a ``when`` refused through an input below a
     guard that waits (``Evaluation.refused_waiting``): unknown, waiting on what the guard
@@ -1252,15 +1251,15 @@ def _guard_waiting(
     guards.add(top)
     key = piece.key
     if top != piece.guard:
-        owner = ev.raw[top].owner
-        if owner in ev.linked.keys:
+        owner = top.owner
+        if owner in ev.scopes.keys:
             key = owner
-    above = cast(NodeId, ev.raw[top].guard)
+    above = cast("Address", top.guard)
     return key, cast(QueryResult[bool], ev.read(trace, above, reader).result)
 
 
 def _choice_piece(
-    ev: Evaluation, piece: Node, trace: _Tr, reader: Node, guards: set[NodeId]
+    ev: Evaluation, piece: Address, trace: _Tr, reader: Address, guards: set[Address]
 ) -> Piece | None:
     """A choice's piece by key, or ``None`` where it is no piece: a guard refused through
     an input (``_guard_refused``), or refused below a guard that waits
@@ -1283,7 +1282,7 @@ def _choice_piece(
     if waiting is not None:
         # Presence unknown: its list as if it existed. What that list read there (the
         # choices and facts, through anything) is traced as it answered there, as today's.
-        reading = ev.membership(piece.index)
+        reading = ev.membership(piece)
         read: _Tr = []
         listed = reading.lists_a_value(piece, read)
         trace.extend(reading.sources(read))
@@ -1298,7 +1297,7 @@ def _choice_piece(
     return piece.key, cast(QueryResult[bool], listed)
 
 
-def _graph(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
+def _graph(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     if node.kind == "present":
         answers = [ev.read(trace, target, reader).result for _, target in node.alternatives]
         several = sum(1 for answer in answers if isinstance(answer, Available)) > 1
@@ -1317,7 +1316,7 @@ def _graph(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
     return Ans(blocked if blocked is not None else Available(tuple(located)), tuple(trace))
 
 
-def _callback(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
+def _callback(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     if node.function is None:
         raise EvaluationError(node.owner, node.kind, "missing callback")
     if node.call_style == "self":
@@ -1334,7 +1333,7 @@ def _callback(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
     return Ans(called.result, tuple(trace), called.assessment, called.own_refusal)
 
 
-_FRAMES: Mapping[str, Callable[[Evaluation, Node, _Tr, Node], Ans]] = {
+_FRAMES: Mapping[str, Callable[[Evaluation, Address, _Tr, Address], Ans]] = {
     "param": _param,
     "const": _const,
     "decision": _decision,

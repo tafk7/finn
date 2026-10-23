@@ -63,11 +63,10 @@ def test_static_alternatives_and_demanded_evidence_are_separate() -> None:
     # Static dependencies (transitively, through the generated selection) name
     # every alternative; nothing is evaluated to find them.
     model = inspection.model(Root)
-    linked = model.linked
-    pending = list(linked.nodes[model.resolve(0, output)].dependencies)
+    pending = list(model.resolve(model.root, output).dependencies)
     static: set[str] = set()
     while pending:
-        node = linked.nodes[pending.pop()]
+        node = pending.pop()
         if node.key not in static:
             static.add(node.key)
             pending.extend(node.dependencies)

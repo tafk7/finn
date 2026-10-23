@@ -1,6 +1,6 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""What each method may read, inferred from its source, and each node's existence guards.
+"""What each method may read, inferred from its source, and each address's existence guards.
 
 The evaluation core checks every read a ``self`` method makes against these reads
 (``finn.core.space._reads``), so each way a method reads its Space is pinned here: a
@@ -15,9 +15,9 @@ from __future__ import annotations
 from typing import cast
 
 from finn.core.space import Decision, Param, Select, Space, constraint, derived, view
-from finn.core.space._reads import ModelReads, existence_guards, infer, summary
+from finn.core.space._reads import ModelReads, infer, summary
+from finn.core.space._scopes import Address, Scopes, existence
 from finn.core.space.compiler import compile_model
-from finn.core.space.ir import Linked
 
 
 class Leaf(Space):
@@ -88,18 +88,18 @@ class Outer(Space):
         return width
 
 
-def _model() -> tuple[Linked, ModelReads]:
-    linked = compile_model(Outer).linked
+def _model() -> tuple[Scopes, ModelReads]:
+    linked = compile_model(Outer).scopes
     return linked, infer(linked)
 
 
-def _keys(linked: Linked, nodes: frozenset[int] | None) -> set[str]:
+def _keys(nodes: frozenset[Address] | None) -> set[str]:
     assert nodes is not None
-    return {linked.nodes[index].key for index in nodes}
+    return {index.key for index in nodes}
 
 
-def _reads(linked: Linked, reads: ModelReads, key: str) -> set[str]:
-    return _keys(linked, reads.methods[linked.keys[key]])
+def _reads(linked: Scopes, reads: ModelReads, key: str) -> set[str]:
+    return _keys(reads.methods[linked.keys[key]])
 
 
 def test_member_child_and_candidate_paths() -> None:
@@ -124,7 +124,7 @@ def test_getattr_with_a_name_the_source_or_its_module_fixes() -> None:
         members = {"__annotations__": {"width": int}, "width": Param(), "value": derived(read)}
         return cast(type[Space], type("Closure", (Space,), members))
 
-    linked = compile_model(make("width")).linked
+    linked = compile_model(make("width")).scopes
     assert _reads(linked, infer(linked), "value") == {"width"}
 
 
@@ -166,7 +166,7 @@ class PlacesMutual(Space):
 def test_helpers_calling_each_other_each_read_what_both_read() -> None:
     """Inferred once per template and function, a helper cycle closes on what both read:
     each method's reads are the union, wherever it is reached first."""
-    linked = compile_model(Mutual).linked
+    linked = compile_model(Mutual).scopes
     reads = infer(linked)
     assert (
         _reads(linked, reads, "by_first")
@@ -176,7 +176,7 @@ def test_helpers_calling_each_other_each_read_what_both_read() -> None:
             "lanes",
         }
     )
-    linked = compile_model(PlacesMutual).linked
+    linked = compile_model(PlacesMutual).scopes
     reads = infer(linked)
     assert _reads(linked, reads, "through") == {"inner.width", "inner.lanes"}
     assert _reads(linked, reads, "inner.by_first") == {"inner.width", "inner.lanes"}
@@ -195,7 +195,7 @@ def test_every_branch_is_a_possible_read() -> None:
 def test_explicit_functions_name_their_inputs_and_are_not_inferred() -> None:
     linked, reads = _model()
     assert linked.keys["explicit"] not in reads.methods
-    assert all(linked.nodes[index].call_style == "self" for index in reads.methods)
+    assert all(index.call_style == "self" for index in reads.methods)
 
 
 def test_dynamic_methods_and_declared_reads() -> None:
@@ -218,7 +218,7 @@ def test_dynamic_methods_and_declared_reads() -> None:
         "declared": derived(declared),
         "handed_on": derived(handed_on),
     }
-    linked = compile_model(cast(type[Space], type("Dynamic", (Space,), members))).linked
+    linked = compile_model(cast(type[Space], type("Dynamic", (Space,), members))).scopes
     reads = infer(linked)
     assert reads.methods[linked.keys["computed"]] is None
     assert reads.methods[linked.keys["handed_on"]] is None
@@ -254,7 +254,7 @@ class Aliased(Space):
 
 
 def test_a_local_bound_once_to_a_path_reads_through_that_path() -> None:
-    linked = compile_model(Aliased).linked
+    linked = compile_model(Aliased).scopes
     reads = infer(linked)
     assert _reads(linked, reads, "through_a_local") == {"leaf.bits", "leaf.width"}
     assert _reads(linked, reads, "through_a_local_selection") == {
@@ -276,7 +276,7 @@ def test_unresolved_paths_are_kept_as_a_diagnostic() -> None:
         def capped(self) -> int:
             return min(self.width, self.LIMIT)
 
-    linked = compile_model(Constants).linked
+    linked = compile_model(Constants).scopes
     reads = infer(linked)
     assert _reads(linked, reads, "capped") == {"width"}
     assert reads.unresolved[linked.keys["capped"]] == ("LIMIT",)
@@ -286,12 +286,12 @@ def test_unresolved_paths_are_kept_as_a_diagnostic() -> None:
 def test_existence_guards_innermost_first() -> None:
     linked, reads = _model()
     lanes = linked.keys["guarded.lanes"]
-    assert [linked.nodes[index].key for index in reads.guards(lanes)] == ["guarded.$guard"]
+    assert [index.key for index in reads.guards(lanes)] == ["guarded.$guard"]
     span = linked.keys["mode.wide.span"]
     # A candidate's member exists while its case is selected.
-    assert [linked.nodes[index].key for index in reads.guards(span)] == ["mode.wide.$selected"]
+    assert [index.key for index in reads.guards(span)] == ["mode.wide.$selected"]
     assert reads.guards(linked.keys["width"]) == ()
-    assert existence_guards(linked, span) == reads.guards(span)
+    assert existence(span) == reads.guards(span)
 
 
 def test_nested_guards_reach_the_root() -> None:
@@ -307,9 +307,9 @@ def test_nested_guards_reach_the_root() -> None:
         on: bool = Param()
         middle = Middle(on=on, when=on)
 
-    linked = compile_model(Top).linked
-    guards = existence_guards(linked, linked.keys["middle.inner.value"])
-    assert [linked.nodes[index].key for index in guards] == [
+    linked = compile_model(Top).scopes
+    guards = existence(linked.keys["middle.inner.value"])
+    assert [index.key for index in guards] == [
         "middle.inner.value.$guard",
         "middle.inner.$guard",
         "middle.$guard",
@@ -326,7 +326,7 @@ def test_a_chain_of_closures_is_inferred_from_one_parse() -> None:
     members: dict[str, object] = {"__annotations__": {"value_0": int}, "value_0": Param()}
     for index in range(1, 2_001):
         members[f"value_{index}"] = step(f"value_{index - 1}")
-    linked = compile_model(cast(type[Space], type("Chain", (Space,), members))).linked
+    linked = compile_model(cast(type[Space], type("Chain", (Space,), members))).scopes
     reads = infer(linked)
     for index in range(1, 2_001):
         assert _reads(linked, reads, f"value_{index}") == {f"value_{index - 1}"}

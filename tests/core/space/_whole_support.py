@@ -9,8 +9,8 @@ inspection's lists) are compared with, on ``expand(C)``.
 inference (``_reads.infer`` of a table); ``line_decisions``, ``line_choices``,
 ``line_members``, ``line_scope_set`` and ``line_statistics`` are the line's
 ``inspection`` lists over that table and that flow order. ``differences`` compares them, by
-key, with what a model's structure answers from its templates, and checks that answering
-resolved no node."""
+key, with what a model's scope records answer from its compiled forms, and checks that
+answering ran no question."""
 
 from __future__ import annotations
 
@@ -21,9 +21,10 @@ from typing import cast
 
 from finn.core.space import Space
 from finn.core.space._reads import ModelReads, infer
-from finn.core.space._structure import Structure, expand, modes
-from finn.core.space._template import link_template
-from finn.core.space.compiler import Model
+from finn.core.space._scopes import modes
+from finn.core.space._structure import expand
+from finn.core.space._template import compiled
+from finn.core.space.compiler import model_of
 from finn.core.space.declarations import Param
 from finn.core.space.inspection import (
     ChoiceInfo,
@@ -34,7 +35,7 @@ from finn.core.space.inspection import (
     members,
     statistics,
 )
-from finn.core.space.ir import Argument, Linked, LinkedModel, NodeId
+from finn.core.space.ir import Argument, LinkedModel, NodeId
 
 # -- the line's flow order and presence readers (``_reads``, 6d02612cc) ----------------------
 
@@ -405,7 +406,7 @@ def _member_fields(item: NodeInfo) -> object:
 
 
 def _key(handle: object) -> str:
-    return cast(Linked, handle._linked).header(handle._node).key  # type: ignore[attr-defined]
+    return cast(str, handle._node.key)  # type: ignore[attr-defined]
 
 
 @dataclass(frozen=True)
@@ -420,12 +421,13 @@ class Compared:
 
 
 def differences(space_type: type[Space], *, scopes: bool = True) -> Compared:
-    """Where a fresh model's structure, answering from its templates, differs from the
-    line's answers over ``expand(space_type)``: the flow order, its loops, the presence
+    """Where a fresh model's scope records, answering from its compiled forms, differ from
+    the line's answers over ``expand(space_type)``: the flow order, its loops, the presence
     readers, ``inspection``'s decisions (below each scope, with ``scopes``), choices and
-    members, the scopes below each scope, and the statistics; that answering resolved a
-    node; and, apart, each method whose inferred reads per template gained a read against
-    the line's per-scope inference (``gained``, by the method's key)."""
+    members, the scopes below each scope, and the statistics; that answering ran a question;
+    and, apart, each method whose inferred reads per class gained a read against the line's
+    per-scope inference (``gained``, by the method's key)."""
+    scopes_below = scopes
     table = expand(space_type)
     reads = infer(table)
     line_flow = line_flow_order(table, reads)
@@ -433,9 +435,9 @@ def differences(space_type: type[Space], *, scopes: bool = True) -> Compared:
     keys = table.nodes
 
     permuted, _ = modes()
-    structure = Structure(link_template(space_type), permuted=permuted)
-    model = Model(space_type, cast(Linked, structure), structure.lock)
-    whole = structure.whole
+    model = model_of(compiled(space_type), permuted=permuted, eager=False)
+    held = model.scopes
+    whole = held.whole
     found: list[str] = []
 
     def compare(name: str, line: object, lane: object) -> None:
@@ -446,19 +448,16 @@ def differences(space_type: type[Space], *, scopes: bool = True) -> Compared:
     compare(
         "flow order",
         [keys[index].key for index in line_flow.order],
-        [structure.header(index).key for index in flow.order],
+        [index.key for index in flow.order],
     )
     compare(
         "loops",
         [[keys[index].key for index in loop] for loop in line_flow.loops],
-        [[structure.header(index).key for index in loop] for loop in flow.loops],
+        [[index.key for index in loop] for loop in flow.loops],
     )
-    sources = [*structure.parameters, *structure.decisions]
+    sources = [*held.parameters, *held.decisions]
     lane_readers = {
-        structure.header(source).key: sorted(
-            structure.header(reader).key for reader in whole.readers(source)
-        )
-        for source in sources
+        source.key: sorted(reader.key for reader in whole.readers(source)) for source in sources
     }
     line_sources = {*table.parameters, *table.decisions}
     compare(
@@ -476,24 +475,20 @@ def differences(space_type: type[Space], *, scopes: bool = True) -> Compared:
     )
     compare("choices", line_choices(table, 0), [_choice_fields(item) for item in choices(model)])
     compare("members", line_members(table, 0), [_member_fields(item) for item in members(model)])
-    by_name = {record.name: record.index for record in structure.records}
-    if scopes:
+    by_name = {record.name: record for record in held.ordered()}
+    if scopes_below:
         for scope in table.scopes:
             line_below = line_scope_set(table, scope.index)
-            lane_below = structure.subtree(by_name[scope.name])
+            lane_below = held.subtree(by_name[scope.name])
             compare(
                 f"scopes below {scope.name!r}",
                 sorted(table.scopes[below].name for below in line_below),
-                sorted(structure.records[below].name for below in lane_below),
+                sorted(below.name for below in lane_below),
             )
             compare(
                 f"decisions below {scope.name!r}",
                 [keys[at].key for at in line_flow.order if keys[at].scope in line_below],
-                [
-                    structure.header(at).key
-                    for at in flow.order
-                    if structure.header(at).scope in lane_below
-                ],
+                [at.key for at in flow.order if at.scope in lane_below],
             )
     stats = statistics(model)
     compare(
@@ -508,48 +503,22 @@ def differences(space_type: type[Space], *, scopes: bool = True) -> Compared:
             stats.owning_decisions,
         ),
     )
-    compare("nodes resolved", 0, structure.counts()["nodes resolved"])
+    # Answering from the compiled forms ran no question: no session, nothing evaluated.
+    compare("a session made", None, model.per_class._session)
 
-    # Each header is the node resolved (every node, now resolved).
-    for node in structure.nodes:
-        head = structure.header(node.index)
-        compare(
-            f"header {node.key}",
-            (
-                node.key,
-                node.scope,
-                node.kind,
-                node.semantics,
-                node.source_owner,
-                node.origin,
-                node.domain,
-                node.guard,
-            ),
-            (
-                head.key,
-                head.scope,
-                head.kind,
-                head.semantics,
-                head.source_owner,
-                head.origin,
-                head.domain,
-                head.guard,
-            ),
-        )
-
-    # Each method's reads, per template against the line's per scope.
-    lane_reads = infer(structure)
+    # Each method's reads, per class against the line's per scope.
+    lane_reads = model.per_class.reads
     gained: dict[str, list[str]] = {}
     for node in table.nodes:
         if node.call_style != "self" or node.function is None:
             continue
         line_found = reads.methods.get(node.index)
-        lane_found = lane_reads.methods.get(structure.keys[node.key])
+        lane_found = lane_reads.methods.get(held.find(node.key))
         if line_found is None or lane_found is None:
             compare(f"dynamic {node.key}", line_found is None, lane_found is None)
             continue
         line_keys = {keys[index].key for index in line_found}
-        lane_keys = {structure.header(index).key for index in lane_found}
+        lane_keys = {index.key for index in lane_found}
         more = sorted(lane_keys - line_keys)
         if more:
             gained[node.key] = more

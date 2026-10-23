@@ -39,7 +39,6 @@ from finn.core.space import (
 from finn.core.space._running import evaluate, receiver
 from finn.core.space._running.evaluate import Session, evaluation
 from finn.core.space._running.value import DesignSpace
-from finn.core.space._structure import Structure
 from finn.core.space.errors import RequestError
 from finn.core.space.occurrence import held
 from finn.core.space.results import QueryResult
@@ -155,10 +154,9 @@ def _members(ds: DesignSpace) -> dict[str, object]:
     """Every member's answer, trace and reads made only to know whether something exists,
     in a session of its own (no cache): what each method read, in order."""
     ev = evaluation(ds, Session())
-    linked = cast(Structure, ds.model.linked)
     found: dict[str, object] = {}
-    for index in tuple(linked.all_nodes()):
-        key = linked.header(index).key
+    for index in tuple(ds.model.scopes.all_addresses()):
+        key = index.key
         try:
             got = ev.get(index)
         except Exception as error:  # noqa: BLE001 - a raise is the answer compared
@@ -205,10 +203,10 @@ def test_the_methods_read_through_every_part_of_the_reader() -> None:
 
 def test_a_scope_choice_names_a_decision_over_nodes_of_its_scope() -> None:
     point = toys.TOYS["house"].make()
-    linked = held(point).ds.model.linked
+    root = held(point).ds.model.root
     heating = type(point).heating  # type: ignore[attr-defined]
-    found = receiver.scope_choice(linked, 0, heating)
+    found = receiver.scope_choice(root, heating)
     assert found.key == "heating"
     for decision in (object(), None, [1]):
         with pytest.raises(RequestError, match="not part of this compiled scope"):
-            receiver.scope_choice(linked, 0, decision)
+            receiver.scope_choice(root, decision)

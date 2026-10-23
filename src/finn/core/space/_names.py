@@ -15,16 +15,16 @@ child's stub (``Table.imported``), and a deeper path goes through nested stubs
 selection its candidates share in the child's template, or else makes one in the stub;
 each read through a choice is recorded (``_table.Read``). A selection several templates
 make for one scope is one node where they are placed, owned in the choice's own template
-where it reads it (``_structure``).
+where it reads it (``_scopes``).
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
 from typing import cast
 
-from ._nodes import NodeDecision, NodeDecl, unwrap
+from ._nodes import NodeChoice, NodeDecision, NodeDecl, unwrap
 from ._table import ChoiceDraft, ExpressionTask, Read, Table, member_key
 from .declarations import (
     CaseRef,
@@ -37,8 +37,7 @@ from .declarations import (
 )
 from .errors import DefinitionError, RequestError
 from .expressions import INTEGER_SEMANTICS, Expr
-from .ir import Argument
-from .references import resolve_reference
+from .ir import Argument, Scope
 from .semantics import ValueSemantics
 
 _OWNER = "space.names"
@@ -49,6 +48,46 @@ def _attribute(name: str) -> Callable[..., object]:
         return getattr(value, name)
 
     return attribute
+
+
+def _in_table(scopes: Sequence[Scope], scope: int, reference: object) -> int:
+    """A member, a member through placed nodes, or a choice face through a node, in a
+    table being linked (its scopes; no choice is reachable here: ``IndexError``)."""
+    if isinstance(reference, NodeChoice) and len(reference._space_path) > 1:
+        scope = _descend_table(scopes, scope, reference._space_path[:-1])
+    reference = unwrap(reference)
+    try:
+        return scopes[scope].members[reference]
+    except (KeyError, TypeError):
+        pass
+    if isinstance(reference, MemberRef):
+        target = _descend_table(scopes, scope, reference.path)
+        member = unwrap(reference.member)
+        try:
+            return scopes[target].members[member]
+        except (KeyError, TypeError) as cause:
+            raise RequestError(
+                f"{member.name if isinstance(member, Declaration) else member!r} is not a "
+                f"member of {scopes[target].space_type.__qualname__}"
+            ) from cause
+    if isinstance(reference, (ChoiceMemberRef, CaseRef)):
+        raise IndexError("no choice is reachable while a table is linked")
+    raise RequestError("reference is not a member of this compiled scope")
+
+
+def _descend_table(scopes: Sequence[Scope], scope: int, path: Sequence[Declaration]) -> int:
+    for record in path:
+        current = scopes[scope]
+        if record is current.record:
+            continue  # the node this scope instantiates
+        child = current.children.get(record)
+        if child is None:
+            name = record.name if record.name is not None else type(record).__name__
+            raise RequestError(
+                f"node {name} is not placed in {current.name or '<root>'} of this compiled model"
+            )
+        scope = child
+    return scope
 
 
 class Names:
@@ -168,7 +207,7 @@ class Names:
     @staticmethod
     def read_through(choice: ChoiceDraft, member: str, read: Read) -> None:
         """A read of ``decision.member`` through an own choice (its owner where several
-        templates read it: ``_structure``; the reads in declaration order:
+        templates read it: ``_scopes``; the reads in declaration order:
         ``_template``)."""
         choice.readers.setdefault(member, []).append(read)
 
@@ -178,7 +217,7 @@ class Names:
         the stub; else one made in the stub, over the candidates' members (none where the
         choice never applies at the stub: typed as ``choice_member`` types it there). Where
         the templates are placed, the selections made for one member in one scope are one
-        node (``_structure``)."""
+        address (``_scopes``)."""
         read = Read(owner, self.table.applying)
         template = self.table.stub(target).template
         index = template.choice_index.get(decision)
@@ -326,7 +365,7 @@ class Names:
         try:
             # Choices freeze after lowering, which still links their members: none is
             # reachable here.
-            return resolve_reference(self.table.nodes, self.table.scopes, (), scope, source)
+            return _in_table(self.table.scopes, scope, source)
         except (RequestError, IndexError) as cause:
             raise DefinitionError.broken(
                 "reference-not-in-scope",
