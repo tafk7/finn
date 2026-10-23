@@ -9,17 +9,16 @@ may give its root facts and the change the dump makes on it.
 The boundary is the shape of S1's boundary (the collapse tests' ``Outer``,
 ``core.space.test_collapse``): a formal read from outside its scope while that scope is
 absent. ``outside``'s width is bound to ``guarded.leaf.width``, and ``guarded`` is placed
-only when ``enabled``; with ``enabled`` false, today's answer for ``outside.width`` is
-inapplicable (PROPOSAL § 4.2: a formal bound by reference answers within its scope). A
-later implementation must answer it as today's does.
+only when ``enabled``; with ``enabled`` false, the answer for ``outside.width`` is
+inapplicable (a formal bound by reference answers within its scope).
 
 **The missing-fact shapes** (``WaitingMembership``, ``AcceptedWaiting``, ``ThreeDeep``).
 Each opens with its optional fact (``Param(required=False)``) left unsupplied, and a walk
-gives it in a facts change. Today's engine reads such a fact unresolved, so what reads it
+gives it in a facts change. The engine reads such a fact unresolved, so what reads it
 waits: a choice's membership, a choice set meanwhile (accepted, waiting), a rule three
-scopes down. The reference model reads an optional fact left out as ``None`` (SZ100 (5),
-milestone T4c) and no longer has these shapes, so they are kept here: today's engine
-answers them until T4c, and T1's evaluator must answer them as today's does.
+scopes down. The reference model reads an optional fact left out as ``None`` (milestone
+T4c) and no longer has these shapes, so they are kept here: the engine answers them so
+until T4c.
 
 Engine-only: this module imports ``finn.core.space`` and the engine's own toys.
 """

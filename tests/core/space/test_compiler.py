@@ -369,7 +369,7 @@ def test_domain_binding_is_validated_without_invocation() -> None:
         compile_model(ForeignDomain)
 
 
-@pytest.mark.parametrize("name", ["query", "field", "with_choices", "root", "_state"])
+@pytest.mark.parametrize("name", ["query", "field", "with_choices", "root", "_held"])
 def test_reserved_names_are_not_declarations(name: str) -> None:
     with refused("name-reserved", error=DefinitionError, message="reserved"):
         compile_model(type("Reserved", (Space,), {name: Const(1)}))

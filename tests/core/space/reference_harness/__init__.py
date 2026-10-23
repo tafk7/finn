@@ -9,7 +9,7 @@ description as an engine Space and asks it the model's questions, each answered 
 engine's own reading in the model's terms (everything that depends on how the engine is
 authored or asked is there); :mod:`.compare` puts the model's answers in the same form
 (:mod:`.forms`) and compares them, the engine's side as the harness's default implementation
-answers (:mod:`.implementation`: today's engine unless a session names another) wherever a
+answers (:mod:`.implementation`: the public API unless a session names another) wherever a
 test names none; :mod:`.matrix` records every disagreement a pending
 milestone still expects, by the milestone that removes it (none: the engine core's and the
 facts-instance milestones are accepted, and the engine agrees with the model); :mod:`.walks`

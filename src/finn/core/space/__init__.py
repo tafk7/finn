@@ -3,7 +3,6 @@
 """Typed design-space authoring, immutable specialization and public services."""
 
 from . import inspection
-from ._assign import bind
 from ._configuration import BoundDecision, BoundValue, Space
 from ._failure import NativeEvaluationError
 from ._value_types import value_type
@@ -36,6 +35,7 @@ from .errors import (
 )
 from .extensions import composite
 from .graph import Located
+from .occurrence import bind
 from .references import DecisionHandle, ValueHandle
 from .results import (
     Available,

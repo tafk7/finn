@@ -77,7 +77,7 @@ has no key either.
 The check is made where the semantics are: a value's semantics are its choice's or fact's
 (``Param(semantics=...)``, an annotation's), not its type's, and one class may be held by
 one member under the default semantics and by another under its own. So ``key`` is given
-the semantics of the choice or fact read (the node's, as ``_world._same_value`` reads it),
+the semantics of the choice or fact read (the node's, as ``answers._same_value`` reads it),
 and ``value_class`` checks what a class itself declares: its fields' annotations, its
 ``==`` and hash. The facts layer keys the domains' outcomes by the same
 ``key`` (``evaluate.Evaluation.domain_outcome``).
@@ -87,7 +87,8 @@ lookup and at keep; an answer too wide to keep is not hashed), the answers not k
 their width, the members holding a read set, the read sets kept, and the most read sets
 one member held at once.
 
-Single-threaded, as the evaluator is: nothing here takes a lock.
+Nothing here takes a lock: the model's cache is written under the model's lock, which the
+public layer takes around each question (``occurrence.ask``).
 """
 
 from __future__ import annotations
@@ -210,7 +211,7 @@ def enum_key(member: Enum) -> object:
 
     Why it is safe: a type and a name found among its members are one member, so an equal
     key means the same member, which equals itself under any reflexive ``==`` (and
-    ``_world._same_value`` holds a value the same as itself). An ``==`` of the class's own or
+    ``answers._same_value`` holds a value the same as itself). An ``==`` of the class's own or
     a mixin's (``class E(int, Enum)`` compares as an ``int``) can only make different
     members equal, and these keep different keys: a miss, never a wrong hit. The key hashes
     the name, a ``str``: it does not trust an overridden ``__hash__``."""

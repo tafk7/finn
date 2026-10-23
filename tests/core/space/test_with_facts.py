@@ -20,7 +20,7 @@ binding.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from support.space_cores import CORES
@@ -54,6 +54,8 @@ from finn.core.space import (
     reject,
     supplied,
 )
+from finn.core.space._running.evaluate import Ans, Session, evaluation
+from finn.core.space._structure import Structure
 from finn.core.space.edits import ConfigurationResult
 from finn.core.space.inspection import Absent, Dormant, Open, Set, Waiting
 
@@ -173,12 +175,10 @@ def test_an_evaluation_records_the_formals_it_read_beside_its_decisions() -> Non
             return self.wide * self.lanes
 
     point = design_space(Plate(wide=3, tall=4)).with_choices(lanes=2)
-    current = occurrence.state(point)
-    keys = current.linked.keys
+    ds = occurrence.held(point).ds
 
     def read(key: str) -> set[str]:
-        entry = current.world.entry(keys[key])
-        return {current.linked.nodes[i].key for i in current.evaluator.bits.nodes(entry.reads)}
+        return {ds.key(i) for i in answer(point, ds.node(key)).reads}
 
     assert read("across") == {"wide"}
     assert read("both") == {"wide", "tall"}  # through the evaluation it read
@@ -196,16 +196,16 @@ class Pair(Space):
 
 def test_other_facts_keep_what_read_none_of_the_changed_formals() -> None:
     point = replay(design_space(Pair(left=10, right=8)), {"a.compute": "packed"})
-    before = occurrence.state(point)
-    keys = before.linked.keys
-    held = {formal: before.world.entry(keys[formal]) for formal in ("left", "right")}
+    keys = inspection.model(point).linked.keys
+    held = {formal: answer(point, keys[formal]) for formal in ("left", "right")}
 
     moved = point.with_facts({Pair.right: 12})
-    after = occurrence.state(moved)
+    after = occurrence.held(moved).ds
     assert dict(after.facts) == {keys["left"]: 10, keys["right"]: 12}
-    # What read only the left formal is the base's own, and what read the right is found again.
-    assert after.world.entry(keys["left"]) is held["left"]
-    assert after.world.entry(keys["right"]) is not held["right"]
+    # What read only the left formal is the base's own (a hit in the model's cache), and
+    # what read the right is found again.
+    assert answer(moved, keys["left"]) is held["left"]
+    assert answer(moved, keys["right"]) is not held["right"]
     assert (moved.a.width, moved.b.width) == (10, 12)
 
 
@@ -215,7 +215,11 @@ def read(point: Space, reference: Any) -> object:
     return answer.value
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_other_facts_evaluate_what_read_a_changed_formal_and_only_that() -> None:
+    """Other facts evaluate again what read a changed formal, and only that. The test
+    counts work, so it runs with the purity check off: the check runs every cache hit's
+    function again."""
     calls: list[str] = []
 
     class Plate(Space):
@@ -526,13 +530,7 @@ def test_a_choice_under_a_selector_whose_case_the_facts_refuse_answers_as_from_n
     n = reference_of(point, "compute.closed.n")
     moved = point.try_with_facts({}, {n: 3}, {Gate.other: 2})
     assert moved.accepted
-    got, want = occurrence.state(moved.instance), occurrence.state(fresh(moved.instance))
-    wrong = [
-        node.key
-        for node in got.linked.nodes
-        if got.world.result(node.index) != want.world.result(node.index)
-    ]
-    assert not wrong
+    assert answers(moved.instance) == answers(fresh(moved.instance), cached=False)
 
 
 # -- a choice under a selector still open ------------------------------------------------------
@@ -615,10 +613,26 @@ class Waits(Space):
     lanes: int = Decision(domain=divisors_of(extent))
 
 
-def answers(point: Space) -> list[tuple[str, object]]:
-    """Every node's answer in ``point``'s configuration, by key."""
-    current = occurrence.state(point)
-    return [(node.key, current.world.result(node.index)) for node in current.linked.nodes]
+def answer(point: Space, index: int) -> Ans:
+    """``index``'s answer in the design space ``point`` holds, in its model's session."""
+    ds = occurrence.held(point).ds
+    return occurrence.ask(ds.model, lambda session: evaluation(ds, session).get(index))
+
+
+def answers(point: Space, *, cached: bool = True) -> list[tuple[str, object]]:
+    """Every node's answer in the design space ``point`` holds, by key: in its model's
+    session, or (``cached`` false) in a session of its own with no cache."""
+    ds = occurrence.held(point).ds
+    structure = cast(Structure, ds.model.linked)
+
+    def every(session: Session) -> list[tuple[str, object]]:
+        ev = evaluation(ds, session)
+        return [(structure.header(i).key, ev.result(i)) for i in structure.all_nodes()]
+
+    if cached:
+        return occurrence.ask(ds.model, every)
+    with ds.model.lock:
+        return every(Session())
 
 
 def codes(result: object) -> set[str]:
@@ -627,8 +641,10 @@ def codes(result: object) -> set[str]:
 
 
 def same_design_space(left: Space, right: Space) -> None:
-    """Two configurations of one model with the same facts, stored choices and answers."""
-    got, want = occurrence.state(left), occurrence.state(right)
+    """Two design spaces of one model, equal (the same facts and stored choices), with the
+    same answers."""
+    got, want = occurrence.held(left).ds, occurrence.held(right).ds
+    assert got == want
     assert dict(got.facts) == dict(want.facts)
     assert dict(got.stored) == dict(want.stored)
     assert answers(left) == answers(right)

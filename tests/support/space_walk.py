@@ -1,17 +1,18 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""A seeded random walk of changes over one configuration, each step checked against a
+"""A seeded random walk of changes over one design space, each step checked against a
 recomputation.
 
-A successor built by ``try_with_choices`` takes what its world can from its base's
-(the entries that read nothing the change touched, others kept by early cutoff) and
-shares the model's memo of authored functions. A recomputation shares nothing of the
-history: the configuration of the same model, facts and stored choices (dormant ones
-included), built directly in a world of its own. A configuration is its facts and stored
-choices, so the two must answer alike: every step compares the successor with its
-recomputation (the stored choices, every node's answer and the choices and facts each
-read, and the validity), and the step's report with the report of the same change on
-the recomputation of its base: accepted or refused, the values refused or dropped, the
+A successor published by ``try_with_choices`` is answered in its model's one session,
+whose node cache keeps answers across every design space of the model. A recomputation
+shares nothing of that: the design space of the same model, facts and stored choices
+(dormant ones included), bound from nothing, and evaluated in a session of its own (no
+cache for a change; a fresh, empty cache where the choices and facts each answer read
+are compared). A design space is its facts and stored choices, so the two must answer
+alike: every step compares the successor with its recomputation (the stored choices,
+every node's answer and the choices and facts each read, and the validity), and the
+step's report with the report of the same change on the recomputation of its base,
+asked of the running type directly: accepted or refused, the values refused or dropped, the
 rules broken with the choices standing in each one's way, and the choices put dormant,
 brought into play and opened. A step of choices that sets a new value and is accepted
 holds no false piece through an origin its base did not hold it through. A step that
@@ -44,17 +45,17 @@ from typing import cast
 from finn.core.space import (
     Available,
     DecisionHandle,
-    Rejected,
     Space,
     ValueHandle,
     inspection,
     occurrence,
 )
-from finn.core.space._assign import check as type_check
-from finn.core.space._assign import placed
-from finn.core.space._origins import pairs
-from finn.core.space._state import State
-from finn.core.space._world import World, listed_values
+from finn.core.space._running import questions
+from finn.core.space._running.cache import NodeCache
+from finn.core.space._running.evaluate import Session, evaluation
+from finn.core.space._running.surface import At
+from finn.core.space._running.value import DesignSpace
+from finn.core.space._structure import Structure
 from finn.core.space.edits import Change, ConfigurationResult
 from finn.core.space.ir import NodeId
 
@@ -70,22 +71,43 @@ def same(left: object, right: object) -> bool:
         return repr(left) == repr(right)
 
 
+def _rebound(ds: DesignSpace, session: Session | None = None) -> DesignSpace:
+    """The design space of ``ds``'s facts and stored choices bound from nothing (the facts'
+    design space with nothing stored): a design space equal to ``ds``, another object. No
+    rule refuses it (a design space is its facts and stored choices); each stored value
+    must pass its type check there. Bound in ``session``, or in a session of its own with
+    no cache."""
+    if not ds.stored:
+        return ds
+    with ds.model.lock:
+        saved = list(ds.stored.items())
+        report = questions.bind(ds.layer.bare, saved, Session() if session is None else session)
+    dropped = [o.owner for o in report.outcomes if o.status == "dropped"]
+    assert not dropped and report.published is not None, dropped
+    return report.published
+
+
 def fresh(point: Space) -> Space:
-    """The recomputation: the configuration of ``point``'s model, facts and stored
-    choices, built directly in a world of its own (no rule is checked: a configuration is
-    its facts and stored choices); each stored value must pass its type check there."""
-    current = occurrence.state(point)
-    world = World.start(current.evaluator, dict(current.facts), dict(current.stored))
-    for index in world.stored:
-        found = type_check(world, index)
-        assert not isinstance(found, Rejected), (current.linked.nodes[index].key, found)
-    return occurrence.attach(State(current.model, world), point._scope)
+    """The recomputation: the design space of ``point``'s model, facts and stored choices,
+    bound from nothing in a session of its own with no cache (``_rebound``), read at
+    ``point``'s scope. A design space equal to ``point``'s: a test asks it in a session of
+    its own to evaluate it from nothing."""
+    at = occurrence.held(point)
+    return occurrence.place(At(_rebound(at.ds), at.scope))
+
+
+def _pairs(ds: DesignSpace) -> dict[tuple[str, bool], dict[NodeId, object]]:
+    with ds.model.lock:
+        return cast(
+            "dict[tuple[str, bool], dict[NodeId, object]]",
+            questions.pairs(evaluation(ds, Session())),
+        )
 
 
 def held(point: Space) -> set[tuple[str, NodeId]]:
     """Each false piece of the root's validity with each origin it is false through."""
-    world = occurrence.state(point).world
-    return {(piece, origin) for (piece, _), found in pairs(world).items() for origin in found}
+    found = _pairs(occurrence.held(point).ds)
+    return {(piece, origin) for (piece, _), origins in found.items() for origin in origins}
 
 
 @dataclass(frozen=True)
@@ -135,9 +157,10 @@ class _Walk:
         self.everything = everything
         self.rng = random.Random(seed)
         self.point = start
-        linked = occurrence.state(start).linked
+        linked = inspection.model(start).linked
+        self.linked = linked
         self.handles = {i: DecisionHandle[object](linked, i) for i in linked.decisions}
-        self.keys = {i: linked.nodes[i].key for i in linked.decisions}
+        self.keys = {i: linked.header(i).key for i in linked.decisions}
         # The root formals a step may change, and the values it may give them.
         self.formals = {linked.keys[key]: tuple(values) for key, values in (facts or {}).items()}
         self.by_facts = facts is not None
@@ -147,10 +170,16 @@ class _Walk:
 
     # -- drawing ------------------------------------------------------------------------
 
-    def listed(self, current: State, index: NodeId) -> tuple[object, ...]:
+    def listed(self, ds: DesignSpace, index: NodeId) -> tuple[object, ...]:
         """A choice's listed values here (its domain over the facts, as if it existed),
         whatever its presence; none where they cannot be listed."""
-        found = listed_values(placed(current.world, index), index)
+
+        def ask(session: Session) -> object:
+            ev = evaluation(ds, session)
+            node = ev.raw[index]
+            return ev.run(lambda: questions.placed(ev, index).listed(node, []))
+
+        found = occurrence.ask(ds.model, ask)
         if isinstance(found, Available) and found.value:
             return tuple(cast(tuple[object, ...], found.value))
         return ()
@@ -158,7 +187,7 @@ class _Walk:
     def draw(self, point: Space) -> Draw | None:
         """A Decision, stored or open, set to another of its listed values or (a fifth
         of the stored draws) cleared."""
-        current = occurrence.state(point)
+        current = occurrence.held(point).ds
         stored = dict(current.stored)
         pool = list(self.keys)  # declaration order (never by NodeId: ids follow addressing)
         for _ in range(200):
@@ -174,14 +203,14 @@ class _Walk:
 
     def draw_fact(self, point: Space) -> dict[NodeId, object]:
         """A root formal set to another of the values the walk was given for it."""
-        current = occurrence.state(point)
+        current = occurrence.held(point).ds
         index = self.rng.choice(list(self.formals))  # in the order the walk was given them
         options = [v for v in self.formals[index] if not same(v, current.facts.get(index))]
         return {index: self.rng.choice(options)} if options else {}
 
     def describe(self, drawn: Draw) -> str:
-        nodes = occurrence.state(self.point).linked.nodes
-        parts = [f"fact {nodes[i].key} = {value!r}" for i, value in drawn.facts.items()]
+        header = self.linked.header
+        parts = [f"fact {header(i).key} = {value!r}" for i, value in drawn.facts.items()]
         parts += [f"{self.keys[i]} = {value!r}" for i, value in drawn.values.items()]
         parts += [f"clear {self.keys[i]}" for i in drawn.clear]
         return "; ".join(parts)
@@ -191,18 +220,25 @@ class _Walk:
         values = {self.handles[i]: value for i, value in drawn.values.items()}
         if not self.by_facts:
             return point.try_with_choices(values, *changes)
-        linked = occurrence.state(point).linked
+        linked = self.linked
         facts = {ValueHandle[object](linked, i): value for i, value in drawn.facts.items()}
         return point.try_with_facts(facts, values, *changes)
 
-    def oracle(self, base: Space, drawn: Draw) -> ConfigurationResult[Space]:
-        """The same change on the recomputation of its base."""
-        return self.apply(fresh(base), drawn)
+    def oracle(self, base: Space, drawn: Draw) -> questions.Report:
+        """The same change on the recomputation of its base, asked of the running type in
+        a session of its own with no cache: the values set, in order, then the clears."""
+        ds = _rebound(occurrence.held(base).ds)
+        requests: list[tuple[NodeId, object]] = [
+            *drawn.values.items(),
+            *((i, questions.REMOVE) for i in drawn.clear),
+        ]
+        with ds.model.lock:
+            return questions.change(ds, dict(drawn.facts), requests, Session())
 
     def sets(self, base: Space, drawn: Draw) -> bool:
         """Whether a change sets a new value: a fact or a choice to a value it does not
         have (a clear, or a commit of the value stored, sets nothing)."""
-        current = occurrence.state(base)
+        current = occurrence.held(base).ds
         missing = object()
         return any(
             not same(current.facts.get(i, missing), v) for i, v in drawn.facts.items()
@@ -217,7 +253,7 @@ class _Walk:
         )
 
     def compare_reports(
-        self, got: ConfigurationResult[Space], want: ConfigurationResult[Space]
+        self, got: ConfigurationResult[Space], want: ConfigurationResult[Space] | questions.Report
     ) -> None:
         if got.accepted != want.accepted:
             self.differ(f"accepted {got.accepted}, recomputation {want.accepted}", ())
@@ -245,44 +281,52 @@ class _Walk:
 
     def compare_successor(self, successor: Space) -> None:
         """The successor against its recomputation: the stored choices; every node it
-        holds an entry for (every node, ``everything``), its answer, and the choices and
-        facts it read, no fewer than the recomputation's; and the validity."""
+        holds an answer for in its model's session (every node, ``everything``), its
+        answer, and the choices and facts it read, no fewer than the recomputation's (read
+        in a session of its own, with a fresh cache, so that each answer records them); and
+        the validity."""
         tallies = self.report.tallies
-        recomputed = fresh(successor)
-        got, want = occurrence.state(successor), occurrence.state(recomputed)
+        at = occurrence.held(successor)
+        model = at.ds.model
+        recomputed = _rebound(at.ds)
         keys = self.keys
-        if not same(dict(got.stored), dict(want.stored)):
-            self.differ("stored choices", (keys[i] for i in set(got.stored) ^ set(want.stored)))
-        nodes = got.linked.nodes
-        if self.everything:
-            for node in nodes:
-                got.world.entry(node.index)
+        if not same(dict(at.ds.stored), dict(recomputed.stored)):
+            mine, theirs = at.ds.stored, recomputed.stored
+            self.differ("stored choices", (keys[i] for i in set(mine) ^ set(theirs)))
+        header = self.linked.header
         wrong: list[str] = []
         unread: list[str] = []
-        for i in sorted(got.world.cache):
-            tallies.nodes_compared += 1
-            entry = got.world.cache[i]
-            try:
-                other = want.world.entry(i)
-            except Exception as error:  # noqa: BLE001 - the recomputation failed where the successor held an answer
-                wrong.append(f"{nodes[i].key} (recomputation raised {error!r})")
-                continue
-            if not same(entry.result, other.result):
-                wrong.append(nodes[i].key)
-            elif other.reads & ~entry.reads:
-                unread.append(nodes[i].key)
+        with model.lock:
+            got = evaluation(at.ds, model.per_class.session())
+            if self.everything:
+                for index in cast(Structure, self.linked).all_nodes():
+                    got.get(index)
+            want = evaluation(recomputed, Session(cache=NodeCache()))
+            for i in sorted(got.memo):
+                tallies.nodes_compared += 1
+                entry = got.memo[i]
+                try:
+                    other = want.get(i)
+                except Exception as error:  # noqa: BLE001 - the recomputation failed where the successor held an answer
+                    wrong.append(f"{header(i).key} (recomputation raised {error!r})")
+                    continue
+                if not same(entry.result, other.result):
+                    wrong.append(header(i).key)
+                elif other.reads - entry.reads:
+                    unread.append(header(i).key)
+            expected = questions.validity(want, at.scope)
         if wrong:
             self.differ("answers", wrong)
         if unread:
             self.differ("reads", unread)
-        if not same(inspection.validity(successor), inspection.validity(recomputed)):
+        if not same(inspection.validity(successor), expected):
             self.differ("validity", ())
 
     def compare_made_false(self, base: Space, result: ConfigurationResult[Space]) -> None:
         """An accepted facts step's rules broken against the origins through which its
         successor holds a false piece its base did not."""
-        nodes = occurrence.state(base).linked.nodes
-        new = {nodes[origin].owner for _, origin in held(result.instance) - held(base)}
+        header = self.linked.header
+        new = {header(origin).owner for _, origin in held(result.instance) - held(base)}
         reported = {rule.rule for rule in result.broken}
         if new != reported:
             self.differ("rules made false by the facts", new ^ reported)
@@ -296,12 +340,12 @@ class _Walk:
         if not self.sets(facts.instance, Draw(drawn.values)):
             return
         self.report.tallies.batches += 1
-        nodes = occurrence.state(base).linked.nodes
+        header = self.linked.header
         added = held(result.instance) - held(facts.instance)
         if added:
             self.differ(
                 "a pair its choices add to its facts' design space, accepted",
-                {nodes[origin].owner for _, origin in added},
+                {header(origin).owner for _, origin in added},
             )
 
     # -- the walk -----------------------------------------------------------------------
@@ -359,10 +403,10 @@ def walk(
     everything: bool = True,
     facts: Mapping[str, Sequence[object]] | None = None,
 ) -> Report:
-    """``steps`` seeded changes from ``start`` (a configuration), each checked against a
+    """``steps`` seeded changes from ``start`` (a design space), each checked against a
     recomputation. A step is accepted or refused as its change is; the walk continues
     from the successor of an accepted one. ``everything``: each successor answers every
-    node before the comparison, so that what it answers from inherited entries is
+    node before the comparison, so that what it answers from the model's cache is
     compared too; otherwise only the nodes the change and the comparison evaluated are
     (a whole Space of many nodes). ``facts``: the root formals a step may change, by key,
     with the values it may give each; every step is then a ``try_with_facts`` and its

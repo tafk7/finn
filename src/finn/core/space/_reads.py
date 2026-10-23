@@ -39,12 +39,12 @@ from __future__ import annotations
 import ast
 import inspect
 import textwrap
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import CodeType, MappingProxyType
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
-from .ir import Argument, Linked, LinkedModel, NodeId
+from .ir import Argument, Linked, LinkedModel, Node, NodeId
 
 if TYPE_CHECKING:
     from ._structure import ScopeRecord, Structure
@@ -510,8 +510,7 @@ class _Inference:
 # template they are reached through) to references relative to the scope it runs in, once per
 # template and function (``_TemplateInference``); a node's reads are those references mapped
 # to ``NodeId``s in its scope when first asked (``_Mapping``). What a placement decides (a
-# candidate of a choice that never applies there; a named shared Decision its placing
-# template owns in the scope) is decided when mapped.
+# candidate of a choice that never applies there) is decided when mapped.
 
 
 @dataclass(frozen=True, slots=True)
@@ -530,13 +529,6 @@ class _Place:
             (*self.steps, stub), link_template(self.template.scopes[stub].space_type), self
         )
 
-    def contributed(self, name: str) -> int | None:
-        """A named shared Decision the template above owns here, by name (a node of that
-        template); None for the scope itself (its placing template is known when mapped)."""
-        if self.above is None:
-            return None
-        return self.above.template.scopes[self.steps[-1]].named_members.get(name)
-
 
 @dataclass(frozen=True, slots=True)
 class _Ref:
@@ -546,19 +538,6 @@ class _Ref:
     steps: tuple[int, ...]
     node: int
     sources: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class _Contributed:
-    """A name of the method's own scope that no member of its template has: a named shared
-    Decision its placing template may own there (``presence``: as ``present()`` reads it);
-    else what the class attribute of that name gives (``helper``), or a path naming
-    nothing compiled (``text``)."""
-
-    name: str
-    presence: bool
-    helper: Callable[..., object] | None
-    text: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -577,7 +556,7 @@ class _Dynamic:
     when: tuple[int, ...] = ()
 
 
-_Item: TypeAlias = "_Ref | _Contributed | _Missing | _Dynamic"
+_Item: TypeAlias = "_Ref | _Missing | _Dynamic"
 # What a function may read, relative to its template, in source order.
 _Found: TypeAlias = "tuple[_Item, ...]"
 
@@ -650,26 +629,8 @@ class _TemplateInference:
         for prefix, name in sorted(uses.calls):
             self._call(place, prefix, name, items, helpers)
         for helper, at in helpers:
-            items.extend(self._composed(at, self.reads(helper, at.template)))
+            items.extend(_prefixed(at.steps, item) for item in self.reads(helper, at.template))
         return tuple(items)
-
-    def _composed(self, at: _Place, more: _Found) -> list[_Item]:
-        """A helper's reads at ``at``, relative to the method's scope. A name of the
-        helper's own scope that its placing template may own is decided here where that
-        template is known (``at`` below the method's scope), else when mapped."""
-        found: list[_Item] = []
-        for item in more:
-            if not isinstance(item, _Contributed) or at.above is None:
-                found.append(_prefixed(at.steps, item))
-                continue
-            node = at.contributed(item.name)
-            if node is not None:
-                found.append(_Ref(at.above.steps, node, item.presence))
-            elif item.helper is not None:
-                found.extend(self._composed(at, self.reads(item.helper, at.template)))
-            elif item.text is not None:
-                found.append(_Missing(item.text, at.steps))
-        return found
 
     def _scopes(self, place: _Place, path: Path, items: list[_Item]) -> list[_Place] | None:
         """The places ``path`` (child and selector names) reaches from ``place``, adding
@@ -712,15 +673,6 @@ class _TemplateInference:
             return True
         index = template.named_members.get(name)
         if index is None:
-            if place.above is None:
-                # The scope itself: its placing template may own a named shared Decision.
-                held = self._helper(template, name)
-                items.append(_Contributed(name, False, held, None if held else text))
-                return True
-            contributed = place.contributed(name)
-            if contributed is not None:
-                items.append(_Ref(place.above.steps, contributed))
-                return True
             held = self._helper(template, name)
             if held is None:
                 return False
@@ -794,13 +746,6 @@ class _TemplateInference:
             if index is not None:
                 items.append(_Ref(at.steps, index, sources=True))
                 known.append(at.steps)
-            elif at.above is None:
-                # The scope itself (``reached`` is it alone): decided when mapped.
-                items.append(_Contributed(name, True, None, text))
-                return
-            elif (contributed := at.contributed(name)) is not None:
-                items.append(_Ref(at.above.steps, contributed, sources=True))
-                known.append(at.steps)
         items.append(_Missing(text, (), tuple(known)))
 
 
@@ -846,31 +791,11 @@ class _Mapping:
                     structure.walk(record, unless) is not None for unless in item.unless
                 ):
                     missing.append(item.text)
-            elif isinstance(item, _Ref):
+            else:
                 at = structure.walk(record, item.steps)
                 index = None if at is None else structure.ident(at, item.node)
                 if index is not None:
                     self._add(index, item.sources, nodes)
-            else:
-                parent = record.parent
-                node = (
-                    None
-                    if parent is None
-                    else parent.template.scopes[cast(int, record.stub)].named_members.get(item.name)
-                )
-                index = None if node is None else structure.ident(cast("ScopeRecord", parent), node)
-                if index is not None:
-                    self._add(index, item.presence, nodes)
-                elif item.helper is not None:
-                    more, unresolved = self._map(
-                        record, self.inference.reads(item.helper, record.template)
-                    )
-                    if more is None:
-                        return None, ()
-                    nodes |= more
-                    missing.extend(unresolved)
-                elif item.text is not None:
-                    missing.append(item.text)
         return frozenset(nodes), tuple(dict.fromkeys(missing))
 
     def _add(self, index: NodeId, sources: bool, found: set[NodeId]) -> None:
@@ -904,8 +829,16 @@ class _Mapping:
 
 
 def _sources(linked: Linked, index: NodeId, found: set[NodeId]) -> None:
-    """What decides whether a value input is supplied at ``index`` (``present``)."""
-    nodes = linked.nodes
+    """What decides whether a value input is supplied at ``index`` (``present``): the
+    guards and selectors on the way to its source, every alias on the way walked as
+    resolved, so each one's guard is named. A method's reader reads them so, an alias
+    collapse goes past (its guard implied by its reader's) included: a structure's nodes
+    as resolved (``raw_nodes``); a table's, its edges and the aliases collapse took them
+    past (``Node.via``), which are the same."""
+    if isinstance(linked, LinkedModel):
+        nodes: Sequence[Node] = linked.nodes
+    else:
+        nodes = cast("Structure", linked).raw_nodes
     pending, seen = [index], set()
     while pending:
         current = pending.pop()
@@ -919,13 +852,22 @@ def _sources(linked: Linked, index: NodeId, found: set[NodeId]) -> None:
             found.add(current)
         elif node.kind in ("alias", "guard", "view") and node.output is not None:
             pending.append(node.output)
+            pending.extend(alias for alias, source in node.via if source == node.output)
         elif node.kind == "select" and node.selector is not None:
             found.add(node.selector)
-            pending.extend(target for _, target in node.alternatives)
+            pending.extend(_followed(node))
         elif node.kind == "present":
-            pending.extend(target for _, target in node.alternatives)
+            pending.extend(_followed(node))
     if index in linked.selector_choices:
         found.add(index)
+
+
+def _followed(node: Node) -> list[NodeId]:
+    """A selection's or a ``present`` node's alternatives, and each alias collapse took
+    one of them past (a table's)."""
+    targets = [target for _, target in node.alternatives]
+    ends = set(targets)
+    return [*targets, *(alias for alias, source in node.via if source in ends)]
 
 
 class _Lazy(Mapping[NodeId, Any]):

@@ -1,24 +1,19 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 """The running type's answers to the public questions the oracle's interface does not ask
-(``finn.core.space._running.surface``), and its failure completion, each against today's
-engine.
+(``finn.core.space._running.surface``), asked in a session of its own with no cache, against
+the public API's (its model's session, the node cache on); and its failure completion.
 
-- **Every question, everywhere**: on FINN's toys (each opened, after its change, and with
-  other facts), the house at each heating case, the evidence tests' shapes, selectors
-  chosen and picked by a derived value (given as a binding's argument, picked by a choice),
-  every member's answer (``query``), its value and its answer through its bound accessor
-  (``field``), its evidence (``explain``), every view's and constraint's assessment
-  (``inspect``), every Decision's state and candidates, and at every scope its children's
-  presence and configurations, its value inputs' presence, each candidate's configuration
-  and the selected one: each as today's engine answers it.
-- **Failure completion** (today's ``test_native_cleanup`` and ``test_world_failures``),
-  each case asked both ways, today's world and the running type, and held to the same
-  assertions: cleanup runs and may read; the first failure is primary and sticky; later
-  ones are its cleanup failures, in order; a cancellation keeps its identity; failures are
-  kept for one run only, and an answer that failed is kept nowhere; an interruption at
-  each of the evaluator's own points (before a call, a read inside a method, publishing an
-  answer, recording a failure, delivering one) completes as today's does at its own.
+- **The surface**: evidence read through a formal at its source, its values detached; a
+  design space at a scope (a child, a candidate, the root); the selected candidate of a
+  chosen and of a picked selector; the evidence of a choice whose presence is unknown,
+  the facts its list read in key order, the same in a permuted numbering.
+- **Failure completion** (``test_native_cleanup``'s cases at the evaluator's own points):
+  cleanup runs and may read; the first failure is primary and sticky; later ones are its
+  cleanup failures, in order; a cancellation keeps its identity; failures are kept for one
+  run only, and an answer that failed is kept nowhere; an interruption at each of the
+  evaluator's own points (before a call, a read inside a method, publishing an answer,
+  recording a failure, delivering one) completes the run.
 """
 
 from __future__ import annotations
@@ -32,16 +27,13 @@ from types import FrameType
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-from support.space_oracle import toys
-from support.space_oracle.today import TodayAnswers
 
+from core.space._evaluation_support import source_line
 from core.space._running_shapes import ByArgument, PickedByAChoice
 from core.space._running_type import Running
 from core.space._toys_support import Boiler, House
-from core.space._world_support import open_world, source_line
 from finn.core.space import (
     Available,
-    BoundDecision,
     Const,
     Decision,
     EvaluationError,
@@ -56,7 +48,6 @@ from finn.core.space import (
     View,
     ViewKey,
     _failure,
-    _world,
     bind,
     constraint,
     derived,
@@ -72,10 +63,10 @@ from finn.core.space._failure import NativeEvaluationError, cancellation_details
 from finn.core.space._running import evaluate
 from finn.core.space._running import surface as S
 from finn.core.space._running.evaluate import Evaluation, Session
+from finn.core.space._running.facts import prepare_values
 from finn.core.space._running.value import DesignSpace
 from finn.core.space._structure import PERMUTE
-from finn.core.space._world import World
-from finn.core.space.occurrence import prepare_values, state
+from finn.core.space.occurrence import held
 from finn.core.space.references import ValueHandle
 from finn.core.space.results import ConstraintAssessment
 
@@ -103,133 +94,6 @@ def _outcome(ask: Callable[[], object]) -> object:
         return ("answers", _form(ask()))
     except (EvaluationError, ValueUnavailableError) as error:
         return ("raises", type(error), str(error))
-
-
-def _disagreements(point: Space) -> tuple[list[str], int]:
-    """Every surface question asked of ``point`` by today's engine and of its design space
-    by the running type: each one answered otherwise, and how many were asked."""
-    running = Running()
-    at = S.At(cast(Any, running.open(point)).ds)
-    session = running.session
-    found: list[str] = []
-    asked = 0
-
-    def check(what: str, today: Callable[[], object], mine: Callable[[], object]) -> None:
-        nonlocal asked
-        asked += 1
-        held, answered = _outcome(today), _outcome(mine)
-        if held != answered:
-            found.append(f"{what}: today {held!r}, running {answered!r}")
-
-    for info in inspection.members(point):
-        reference, key = info.reference, info.key
-        bound, field = point.field(reference), S.field(at, reference, session)
-        check(
-            f"query {key}", lambda: point.query(reference), lambda: S.query(at, reference, session)
-        )
-        check(f"value {key}", bound.get, field.get)
-        check(f"bound query {key}", bound.query, field.query)
-        check(
-            f"bound kind {key}",
-            lambda: isinstance(bound, BoundDecision),
-            lambda: isinstance(field, S.DecisionField),
-        )
-        check(
-            f"explain {key}",
-            lambda: inspection.explain(point, reference),
-            lambda: S.explain(at, reference, session),
-        )
-        if info.kind in ("view", "constraint"):
-            check(
-                f"inspect {key}",
-                lambda: point.inspect(reference),
-                lambda: S.inspect(at, reference, session),
-            )
-    for decision in inspection.decisions(point):
-        held = cast(BoundDecision[object], point.field(decision.reference))
-        mine = cast(S.DecisionField, S.field(at, decision.reference, session))
-        check(f"state {decision.key}", lambda: held.state, lambda: mine.state)
-        check(f"candidates {decision.key}", held.candidates, mine.candidates)
-    today = TodayAnswers(point)
-    choices = inspection.choices(point)
-    for name in today.scopes():
-        configuration = today.configuration(name)
-        here = S.At(at.ds, configuration._scope)
-        kind = type(configuration)
-        scope = at.ds.model.linked.scopes[configuration._scope]
-        for child in scope.named_children:
-            node = getattr(kind, child)
-            check(
-                f"present {name}:{child}",
-                lambda: configuration.present(node),
-                lambda: S.present(here, node, session),
-            )
-            check(
-                f"query {name}:{child}",
-                lambda: configuration.query(node),
-                lambda: S.query(here, node, session),
-            )
-        for member in scope.named_members:
-            formal = getattr(kind, member, None)
-            if isinstance(formal, Param):
-                check(
-                    f"present {name}:{member}",
-                    lambda: configuration.present(formal),
-                    lambda: S.present(here, formal, session),
-                )
-        for choice in choices:
-            if choice.scope != name:
-                continue
-            attribute = choice.key.rpartition(".")[2]
-            decision = getattr(kind, attribute)
-            check(
-                f"selected {choice.key}",
-                lambda: getattr(configuration, attribute),
-                lambda: S.selected_candidate(here, decision, session),
-            )
-            for case in choice.cases:
-                check(
-                    f"candidate {choice.key}.{case.name}",
-                    lambda: inspection.candidate(configuration, decision, case.name),
-                    lambda: S.candidate(here, decision, case.name),
-                )
-    return found, asked
-
-
-def _toy_points() -> Iterator[tuple[str, Space]]:
-    for name, toy in sorted(toys.TOYS.items()):
-        point = toy.make()
-        yield name, point
-        decisions = {info.key: info.reference for info in inspection.decisions(point)}
-        report = point.try_with_choices({decisions[key]: v for key, v in toy.change.items()})
-        assert report.accepted, name
-        yield f"{name}, changed", report.instance
-        if toy.facts:
-            key, values = sorted(toy.facts.items())[0]
-            members = {info.key: info.reference for info in inspection.members(point)}
-            given = point.try_with_facts({members[key]: values[-1]})
-            assert given.accepted, name
-            yield f"{name}, other facts", given.instance
-
-
-TOY_POINTS = dict(_toy_points())
-
-
-@pytest.mark.parametrize("name", sorted(TOY_POINTS))
-def test_every_surface_question_on_the_toys_answers_as_today(name: str) -> None:
-    found, asked = _disagreements(TOY_POINTS[name])
-    assert found == [] and asked > 10
-
-
-@pytest.mark.parametrize("heating", [None, "boiler", "heat_pump"])
-def test_every_surface_question_on_the_house_at_each_heating_case_answers_as_today(
-    heating: str | None,
-) -> None:
-    point = design_space(House(budget=100))
-    if heating is not None:
-        point = point.with_choices({House.heating: heating, House.want_garage: True})
-    found, asked = _disagreements(point)
-    assert found == [] and asked > 100
 
 
 # The evidence tests' shapes (``test_evidence``), and the selectors of ``_running_shapes``:
@@ -378,16 +242,10 @@ SHAPES: dict[str, Callable[[], Space]] = {
 }
 
 
-@pytest.mark.parametrize("name", sorted(SHAPES))
-def test_every_surface_question_on_the_evidence_shapes_answers_as_today(name: str) -> None:
-    found, asked = _disagreements(SHAPES[name]())
-    assert found == [] and asked > 5
-
-
 def test_evidence_reads_through_a_formal_at_its_source_and_detaches_its_values() -> None:
     """The house's thermostat's cost reads its ``kw`` at its source (a formal bound by
-    reference, read within its scope): named in ``via``, as today's evidence names the alias
-    it went past. The evidence's values are copies."""
+    reference, read within its scope): named in ``via``, with no cache as through the public
+    API. The evidence's values are copies."""
     point = design_space(House(budget=100)).with_choices({House.heating: "boiler"})
     running = Running()
     at = S.At(cast(Any, running.open(point)).ds)
@@ -420,10 +278,10 @@ def test_a_configuration_is_its_design_space_at_a_scope() -> None:
     assert S.query(at, House.kitchen, running.session) == Available(kitchen)
     assert kitchen.scope == point.kitchen._scope and S.root(kitchen) == at
     boiler = S.candidate(at, House.heating, "boiler")
-    today = inspection.candidate(point, House.heating, "boiler")
-    assert boiler is not None and today is not None and boiler.scope == today._scope
-    assert S.query(boiler, Boiler.kw, running.session) == today.query(Boiler.kw)
-    assert isinstance(today.query(Boiler.kw), Unresolved)  # its case is open
+    public = inspection.candidate(point, House.heating, "boiler")
+    assert boiler is not None and public is not None and boiler.scope == public._scope
+    assert S.query(boiler, Boiler.kw, running.session) == public.query(Boiler.kw)
+    assert isinstance(public.query(Boiler.kw), Unresolved)  # its case is open
     with pytest.raises(ValueUnavailableError):
         S.selected_candidate(at, House.heating, running.session)
     assert S.query(at, House.garage, running.session) == point.query(House.garage)
@@ -438,7 +296,8 @@ def test_the_selected_candidate_of_a_chosen_and_a_picked_selector(
     x: int | None, chosen: str | None
 ) -> None:
     """The candidate a selector selects, a chosen one (``chosen``) and one picked by a
-    derived value (``picked``, ``Select(by=)``), each as today's: open, it raises as a value
+    derived value (``picked``, ``Select(by=)``), with no cache as through the public API:
+    open, it raises as a value
     unavailable; its ``None`` case selected, ``None``; else its case's configuration, the
     one ``candidate`` names."""
     point = design_space(ByArgument())
@@ -453,27 +312,25 @@ def test_the_selected_candidate_of_a_chosen_and_a_picked_selector(
     at = S.At(cast(Any, running.open(point)).ds)
     picked = None if x is None else ("direct", "lane", "stage")[x]
     for decision, case in ((ByArgument.chosen, chosen), (ByArgument.picked, picked)):
-        today = _outcome(lambda: occurrence.selected_candidate(point, decision))
-        assert _outcome(lambda: S.selected_candidate(at, decision, running.session)) == today
+        public = _outcome(lambda: occurrence.selected_candidate(point, decision))
+        assert _outcome(lambda: S.selected_candidate(at, decision, running.session)) == public
         if case is None:
-            assert isinstance(today, tuple) and today[:2] == ("raises", ValueUnavailableError)
+            assert isinstance(public, tuple) and public[:2] == ("raises", ValueUnavailableError)
         elif case == "direct":
-            assert today == ("answers", None)
+            assert public == ("answers", None)
         else:
             named = inspection.candidate(point, decision, case)
-            assert named is not None and today == ("answers", ("configuration", named._scope))
+            assert named is not None and public == ("answers", ("configuration", named._scope))
 
 
 # -- evidence for a choice whose presence is unknown ---------------------------------------
 #
 # With ``style`` open, each case's choice is a piece read from its list as if it existed:
-# what that list read (the facts, through anything) is in validity's evidence, as today's
-# has it. Asked of the root's validity, each case's validity, a piece and a choice inside a
-# case. ``plain``'s list reads two facts, ``depth`` first: the running type gives them in key
-# order (scope path, member), the same in every numbering and process, today's in the order
-# its model first read them, a history (here ``width``, which ``packed``'s list read before).
-# That order is a named break: today's evidence is the running type's but for the order of
-# those reads. A permuted model's evidence is the default one's.
+# what that list read (the facts, through anything) is in validity's evidence. Asked of the
+# root's validity, each case's validity, a piece and a choice inside a case. ``plain``'s
+# list reads two facts, ``depth`` first: they are given in key order (scope path, member),
+# the same in every numbering and process (never the order a model first read them, a
+# history). A permuted model's evidence is the default one's.
 
 
 def _kernel() -> type[Space]:
@@ -510,7 +367,7 @@ def _by_key(point: Space, evidence: object) -> object:
     """``evidence`` (a ``QueryEvidence``) with every node named by its key, so two models'
     numberings compare: each node's key, answer, the keys it read in order, its presence,
     state, selector and guard flags, and the keys it read through."""
-    linked = state(point).linked
+    linked = held(point).ds.model.linked
     found = cast(Any, evidence)
     return (
         found.query.key,
@@ -542,7 +399,7 @@ def _reads_unordered(point: Space, evidence: object) -> object:
 
 def _handle(point: Space, key: str | int) -> ValueHandle[object]:
     """The node at ``key``, or the validity of the scope at that index."""
-    linked = state(point).linked
+    linked = held(point).ds.model.linked
     index = linked.keys[key] if isinstance(key, str) else linked.scopes[key].validity
     return ValueHandle[object](linked, cast(int, index))
 
@@ -553,7 +410,8 @@ FACTS = {"given": {"width": 12, "depth": 3}, "missing": {"width": 12}}
 
 def _explained(facts: dict[str, int]) -> tuple[Space, dict[str, object], dict[str, object]]:
     """A fresh ``Kernel`` with ``facts``, made in the numbering the environment asks for:
-    its configuration, and each question's evidence, the running type's and today's."""
+    its configuration, and each question's evidence, with no cache and through the public
+    API."""
     kernel = _kernel()
     point = design_space(kernel(**cast(Any, facts)))
     running = Running()
@@ -570,13 +428,13 @@ def _explained(facts: dict[str, int]) -> tuple[Space, dict[str, object], dict[st
         "a choice inside a case": _handle(point, "style.plain.simd"),
     }
     mine = {what: S.explain(at, reference, running.session) for what, reference in asked.items()}
-    today = {what: inspection.explain(point, reference) for what, reference in asked.items()}
-    return point, cast(dict[str, object], mine), cast(dict[str, object], today)
+    public = {what: inspection.explain(point, reference) for what, reference in asked.items()}
+    return point, cast(dict[str, object], mine), cast(dict[str, object], public)
 
 
 def _reads(point: Space, evidence: object) -> dict[str, list[str]]:
     """Each evidence node's reads, in order, by key."""
-    linked = state(point).linked
+    linked = held(point).ds.model.linked
     return {
         node.declaration.key: [linked.header(each._node).key for each in node.dependencies]
         for node in cast(Any, evidence).nodes
@@ -584,25 +442,21 @@ def _reads(point: Space, evidence: object) -> dict[str, list[str]]:
 
 
 @pytest.mark.parametrize(
-    ("facts", "plain", "today"),
-    [("given", ["depth", "width"], ["width", "depth"]), ("missing", ["depth"], ["depth"])],
+    ("facts", "plain"),
+    [("given", ["depth", "width"]), ("missing", ["depth"])],
     ids=["given", "missing"],
 )
 def test_evidence_of_a_choice_of_unknown_presence_holds_what_its_list_read(
-    facts: str, plain: list[str], today: list[str]
+    facts: str, plain: list[str]
 ) -> None:
-    point, mine, todays = _explained(FACTS[facts])
+    point, mine, public = _explained(FACTS[facts])
     for what, evidence in mine.items():
-        assert _reads_unordered(point, evidence) == _reads_unordered(point, todays[what]), what
-        if plain == today:
-            assert evidence == todays[what], what
+        assert evidence == public[what], what
     read = _reads(point, mine["the root's validity"])
     # each case's piece: its guard, then the facts its list read in key order (``plain``'s
     # halts on a missing ``depth``), then the rest of its validity
     assert read["style.packed.$validity"][:2] == ["style.packed.$selected", "width"], read
     assert read["style.plain.$validity"] == ["style.plain.$selected", *plain], read
-    held = _reads(point, todays["the root's validity"])
-    assert held["style.plain.$validity"] == ["style.plain.$selected", *today], held
 
 
 @pytest.mark.parametrize("facts", sorted(FACTS))
@@ -615,8 +469,8 @@ def test_evidence_of_a_choice_of_unknown_presence_is_the_same_in_a_permuted_numb
     with monkeypatch.context() as permuted:
         permuted.setenv(PERMUTE, "1")  # read when the model is made
         other, theirs, _ = _explained(FACTS[facts])
-    ids = [state(each).linked.keys["style.plain.depth"] for each in (point, other)]
-    width = [state(each).linked.keys["style.plain.width"] for each in (point, other)]
+    ids = [held(each).ds.model.linked.keys["style.plain.depth"] for each in (point, other)]
+    width = [held(each).ds.model.linked.keys["style.plain.width"] for each in (point, other)]
     assert (ids[0] < width[0]) != (ids[1] < width[1])  # the two facts' ids in either order
     for what, evidence in mine.items():
         assert _by_key(point, evidence) == _by_key(other, theirs[what]), what
@@ -632,22 +486,20 @@ def no_call_is_left_active() -> Iterator[None]:
     assert _failure.current() is None
 
 
-WAYS = ("today", "running")
+WAYS = ("running",)
+"""The ways a failure case is asked: the running type's evaluation, in a session of its own."""
 
 
 @dataclass
 class Opened:
-    """One design space opened one way: today's world (as today's failure tests open one)
-    or the running type's design space, its evaluation and session."""
+    """One design space opened: the running type's design space, its evaluation and
+    session."""
 
     way: str
-    world: World | None = None
     ds: DesignSpace | None = None
     session: Session | None = None
 
     def node(self, key: str) -> int:
-        if self.world is not None:
-            return self.world.evaluator.linked.keys[key]
         assert self.ds is not None
         return self.ds.node(key)
 
@@ -658,23 +510,14 @@ class Opened:
 
     def read(self, key: str) -> None:
         """Ask ``key``'s answer (a failure raises)."""
-        if self.world is not None:
-            self.world.entry(self.node(key))
-        else:
-            self.evaluation.get(self.node(key))
+        self.evaluation.get(self.node(key))
 
     def answer(self, key: str) -> object:
-        if self.world is not None:
-            return self.world.result(self.node(key))
         assert self.ds is not None and self.session is not None
         return S.query(S.At(self.ds), self._reference(key), self.session)
 
     def value(self, key: str) -> object:
-        """``key`` read as a value (the running type: through ``surface.value``)."""
-        if self.world is not None:
-            result = self.world.result(self.node(key))
-            assert isinstance(result, Available), result
-            return result.value
+        """``key`` read as a value (through ``surface.value``)."""
         assert self.ds is not None and self.session is not None
         return S.value(S.At(self.ds), self._reference(key), self.session)
 
@@ -684,27 +527,15 @@ class Opened:
         return ValueHandle[object](linked, linked.keys[key])
 
     def kept(self, key: str) -> bool:
-        """Whether ``key``'s answer is kept (today's world's entries; the running type's
-        evaluation's memo)."""
-        if self.world is not None:
-            return self.node(key) in self.world.cache
+        """Whether ``key``'s answer is kept (in the evaluation's memo)."""
         return self.node(key) in self.evaluation.memo
 
     def calls(self, kind: str) -> int:
-        if self.world is not None:
-            return self.world.evaluator.counters.calls.get(kind, 0)
         assert self.session is not None
         return self.session.counters.calls.get(kind, 0)
 
     def changed(self, choices: Mapping[str, object]) -> Opened:
         """The same facts with ``choices`` stored (others kept)."""
-        if self.world is not None:
-            linked = self.world.evaluator.linked
-            values = dict(self.world.stored)
-            values.update(
-                prepare_values(linked, {linked.keys[k]: v for k, v in choices.items()}, "choice")
-            )
-            return Opened(self.way, world=self.world.successor(stored=values))
         assert self.ds is not None
         linked = self.ds.model.linked
         values = dict(self.ds.stored)
@@ -715,8 +546,6 @@ class Opened:
 
 
 def opened(way: str, declaration: Space, choices: Mapping[str, object] | None = None) -> Opened:
-    if way == "today":
-        return Opened(way, world=open_world(declaration, choices))
     running = Running()
     ds = cast(Any, running.open(design_space(declaration))).ds
     made = Opened(way, ds=ds, session=running.session)
@@ -1049,22 +878,13 @@ def test_cancellation_cleanup_keeps_earlier_programmer_failure(way: str) -> None
     assert secondary is not None and secondary.__cause__ is original
 
 
-# Interruptions at the evaluator's own points: today's (``_world``) and the running type's
-# (``_running.evaluate``), each the same point of its own evaluator.
+# Interruptions at the evaluator's own points (``_running.evaluate``).
 
 POINTS: dict[tuple[str, str], tuple[Callable[..., object], str]] = {
-    ("today", "before-call"): (_world._authored, "outcome = run.context.copy().run("),
     ("running", "before-call"): (evaluate.invoke, "outcome = context.copy().run("),
-    ("today", "suspended-read"): (_world.MethodReader._take, "entry = self.world._get(index)"),
     ("running", "suspended-read"): (evaluate.Reader._take, "found = self.ev.get(index)"),
-    ("today", "publish"): (World._get, "return self.cache.setdefault(node, entry)"),
     ("running", "publish"): (Evaluation._compute, "self.memo[index] = found\nexcept Deeper:"),
-    ("today", "record"): (World._get, "run.failures[key] = failing.failure"),
     ("running", "record"): (Evaluation._compute, "session.failures[key] = failing.failure"),
-    ("today", "delivery"): (
-        _world.MethodReader._take,
-        "remember_failure(self.call, failing.failure)",
-    ),
     ("running", "delivery"): (
         evaluate.Reader._take,
         "remember_failure(self.call, failing.failure)",
@@ -1072,9 +892,9 @@ POINTS: dict[tuple[str, str], tuple[Callable[..., object], str]] = {
 }
 """Each interruption point, by way: the function and the line (by a marker in it)."""
 
-NODE = {"today": "node", "running": "index"}
-"""The name each way's evaluating function (``World._get``, ``Evaluation._compute``) gives
-the node it evaluates."""
+NODE = {"running": "index"}
+"""The name the evaluating function (``Evaluation._compute``) gives the node it
+evaluates."""
 
 
 def _interrupt_at(
@@ -1104,7 +924,7 @@ def _interrupt_at(
 
 def _line(function: Callable[..., object], marker: str) -> int:
     """The line of ``function``'s source where ``marker`` (its lines in a row) starts,
-    once (``_world_support.source_line``, for a marker of more than one line)."""
+    once (``_evaluation_support.source_line``, for a marker of more than one line)."""
     first, *rest = marker.split("\n")
     if not rest:
         return source_line(function, first)
@@ -1508,8 +1328,8 @@ def test_a_failure_in_another_design_space_runs_its_readers_cleanup(way: str) ->
     assert caught.value.primary.owner == "inner" and events == [1, 3]
 
 
-def test_a_failure_is_kept_for_its_run_only_and_raised_by_a_question_as_today() -> None:
-    """A failure is raised by every question that reaches it, as today's driver raises it,
+def test_a_failure_is_kept_for_its_run_only_and_raised_by_every_question() -> None:
+    """A failure is raised by every question that reaches it, as the public API raises it,
     and kept for its run only: each question runs the function again."""
     starts: list[int] = []
 

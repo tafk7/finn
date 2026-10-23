@@ -11,7 +11,7 @@ optional fact left out) and counted under that milestone while it is pending; an
 unattributed one fails its walk. ``--without MILESTONE`` takes its rows as removed, so its
 disagreements fail their walks (its engine walked as if it had removed them). ``--strict``
 draws neither cause, and every disagreement fails. ``--implementation module:attribute``
-(or a registered name; ``today`` by default) names the implementation compared with the
+(or a registered name; ``public`` by default) names the implementation compared with the
 model, asked through ``support.space_oracle``'s interface; the summary names it. ``--by``
 draws selectors picked by a derived value too (the model's reading 17). It exits 1
 when a walk failed. The walks are imported by their command alone, so the matrix prints
@@ -47,7 +47,7 @@ def main(argv: list[str]) -> int:
     )
     walks.add_argument(
         "--implementation",
-        default="today",
+        default="public",
         help="the implementation compared with the model: a registered name, or "
         "module:attribute (support.space_oracle.load)",
     )

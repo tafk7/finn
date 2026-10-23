@@ -8,9 +8,9 @@
     python -m support.space_oracle walk TARGET --seeds A-B --steps N --against M:A
         [--implementation M:A] [--permuted]
 
-``dump`` writes every station of ``TARGET`` (``targets.TARGETS``: toys, chain-8,
+``dump`` writes every station of ``TARGET`` (``targets.TARGETS``: toys, chain-4, chain-8,
 chain-64; and tfc, which the entry adds) in its canonical form by key (``forms``), as one
-implementation answers it (today's by default): each design space, and its change's report
+implementation answers it (the public API by default): each design space, and its change's report
 and successor. The file's first line is its header: the commit of the tree ``finn`` is imported from
 (``git rev-parse HEAD``, and whether its ``src`` has changes), the implementation, the
 target and the numbering. ``--permuted`` sets ``FINN_SPACE_PERMUTE=1`` before any model
@@ -18,7 +18,7 @@ is made.
 
 ``diff`` prints every disagreement of two dumps by key, their headers apart, and exits 1
 on any. ``walk`` walks every station of ``TARGET`` with each seed, ``--implementation``
-(today's by default) against ``--against``, and exits 1 on any disagreement.
+(the public API by default) against ``--against``, and exits 1 on any disagreement.
 """
 
 from __future__ import annotations
@@ -139,7 +139,7 @@ def main(argv: list[str] | None = None, targets: Targets = None) -> int:
     made = commands.add_parser("dump", help="a target's answers by key, to a file")
     made.add_argument("target")
     made.add_argument("out", type=Path)
-    made.add_argument("--implementation", default="today")
+    made.add_argument("--implementation", default="public")
     made.add_argument("--permuted", action="store_true")
     compared = commands.add_parser("diff", help="two dumps' disagreements by key")
     compared.add_argument("first", type=Path)
@@ -149,7 +149,7 @@ def main(argv: list[str] | None = None, targets: Targets = None) -> int:
     walked.add_argument("--seeds", type=_seeds, default=_seeds("0-1"))
     walked.add_argument("--steps", type=int, default=20)
     walked.add_argument("--against", required=True)
-    walked.add_argument("--implementation", default="today")
+    walked.add_argument("--implementation", default="public")
     walked.add_argument("--permuted", action="store_true")
     args = parser.parse_args(argv)
     if getattr(args, "permuted", False):

@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 """What a successor keeps of its base's evaluations.
 
-A successor's world is made from its base's: it takes each entry that read nothing the
-change touched (the choices it sets, replaces or clears, the facts it changes), and
-finds the rest again, keeping an answer where everything it read answers the same
-(early cutoff). Each answers as a configuration built from nothing with the same
-choices does, evidence included. What lies outside the change's reach is not evaluated
-again, and what lies inside it is: the tests that count calls assert both.
+A successor is answered in its model's session, whose node cache keeps every answer with
+the choices and facts it read: an answer that read nothing the change touched (the choices
+it sets, replaces or clears, the facts it changes) is found there, and the rest is
+evaluated again. Each answers as a design space bound from nothing with the same choices
+does, evidence included. What lies outside the change's reach is not evaluated again, and
+what lies inside it is: the tests that count calls assert both.
 """
 
 from __future__ import annotations
@@ -30,9 +30,13 @@ from finn.core.space import (
     inspection,
     occurrence,
 )
+from finn.core.space._running.evaluate import Ans, Session, evaluation
 
 
+@pytest.mark.usefixtures("purity_unchecked")
 def test_a_successor_keeps_what_its_change_does_not_reach_and_derives_the_rest() -> None:
+    """A successor derives again only what its change reaches. The test counts work, so it
+    runs with the purity check off: the check runs every cache hit's function again."""
     calls: list[str] = []
 
     class Room(Space):
@@ -90,20 +94,28 @@ def test_a_successor_answers_as_a_configuration_built_from_nothing() -> None:
     assert isinstance(point.left, Packed) and point.left.pe == 4
 
 
+def _answer(point: Space, index: int) -> Ans:
+    """``index``'s answer in the design space ``point`` holds, in its model's session."""
+    ds = occurrence.held(point).ds
+    return occurrence.ask(ds.model, lambda session: evaluation(ds, session).get(index))
+
+
 @pytest.mark.parametrize("stages_first", [True, False])
 def test_a_change_to_one_stage_keeps_what_read_the_far_stages(stages_first: bool) -> None:
     # A hop far down the chain reads only its own stages: a change to the first stage
-    # leaves its entry to the successor as it was, and it answers as one built from nothing.
+    # leaves its answer to the successor as it was (found in the model's cache), and it
+    # answers as one bound from nothing.
     point = design_space(chain(8, stages_first=stages_first)())
-    base = occurrence.state(point)
-    keys, nodes = base.linked.keys, base.linked.nodes
-    far = base.world.entry(keys["h5.narrow"])  # waits on an open stage
+    ds = occurrence.held(point).ds
+    narrow = ds.node("h5.narrow")
+    far = _answer(point, narrow)  # waits on an open stage
     assert isinstance(far.result, Unresolved)
-    assert {nodes[i].key for i in base.evaluator.bits.nodes(far.reads)} == {"s5.size"}
+    assert {ds.key(i) for i in far.reads} == {"s5.size"}
     wide = commit(point, {"s0.size": 2})
-    assert occurrence.state(wide).world.entry(keys["h5.narrow"]) is far
-    built = occurrence.state(recomputed(wide))
-    assert built.world.result(keys["h5.narrow"]) == far.result
+    assert _answer(wide, narrow) is far
+    built = occurrence.held(recomputed(wide)).ds
+    with ds.model.lock:
+        assert evaluation(built, Session()).result(narrow) == far.result
 
 
 @pytest.mark.usefixtures("purity_unchecked")
@@ -131,13 +143,17 @@ def test_a_change_does_not_evaluate_the_guard_of_a_choice_it_does_not_reach() ->
 
     base = commit(design_space(Guarded(width=3)), {"compute": "packed", "depth": 1})
     guards.clear()
-    # The change reaches neither ``depth`` nor its guard: the successor takes the guard's
-    # entry from its base, and asks nothing again.
+    # The change reaches neither ``depth`` nor its guard: the successor finds the guard's
+    # answer in the model's node cache, and asks nothing again.
     glossy = commit(base, {"finish": "gloss"})
     assert guards == [] and glossy.depth == 1
-    assert inspection.explain(glossy, Guarded.depth) == inspection.explain(
-        recomputed(glossy), Guarded.depth
-    )
-    # Built from nothing, the guard's method is answered by the model's memo: it read the
-    # same core.
-    assert guards == []
+    built = recomputed(glossy)
+    # Built from nothing, in a session of its own with no cache (a recomputation shares
+    # nothing with the model's cache), its bind calls the guard's method again: once to
+    # check ``depth``'s stored value (its guard read first), once for what the bind moved
+    # (``depth``'s presence).
+    assert guards == ["packed", "packed"]
+    assert inspection.explain(glossy, Guarded.depth) == inspection.explain(built, Guarded.depth)
+    # Asked through the public API, the design space built is the successor's: found in
+    # the model's node cache.
+    assert guards == ["packed", "packed"]

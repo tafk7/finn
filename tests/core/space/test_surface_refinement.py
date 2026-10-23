@@ -26,7 +26,9 @@ from finn.core.space import (
     derived,
     design_space,
     domain,
+    inspection,
 )
+from finn.core.space._running.evaluate import evaluation
 from finn.core.space.compiler import compile_model
 from finn.core.space.errors import (
     ConfigurationError,
@@ -34,7 +36,7 @@ from finn.core.space.errors import (
     RequestError,
     ValueUnavailableError,
 )
-from finn.core.space.occurrence import state
+from finn.core.space.occurrence import ask, held
 
 
 def test_concurrent_configures_share_one_preparation() -> None:
@@ -46,8 +48,8 @@ def test_concurrent_configures_share_one_preparation() -> None:
     model = compile_model(Example)
     explicit = design_space(Example(value=20))
     assert all(type(instance) is Example for instance in (*instances, explicit))
-    assert all(state(instance).model is model for instance in (*instances, explicit))
-    assert len({id(state(instance)) for instance in instances}) == len(instances)
+    assert all(inspection.model(instance) is model for instance in (*instances, explicit))
+    assert len({id(held(instance)) for instance in instances}) == len(instances)
     assert sorted(instance.value for instance in instances) == list(range(16))
 
 
@@ -331,9 +333,9 @@ def test_replacement_reuses_frozen_facts_keeps_views_lazy_and_drops_what_it_reac
     assert first.result == 2
     revised = first.with_choices(choice=2)
     assert calls == [1]
-    assert state(revised).world.facts is state(first).world.facts
-    linked = state(revised).linked
-    kept = {linked.nodes[index].key for index in state(revised).world.cache}
+    ds = held(revised).ds
+    assert ds.layer is held(first).ds.layer
+    kept = {ds.key(index) for index in ask(ds.model, lambda session: evaluation(ds, session).memo)}
     # What read the replaced choice is not kept; the change read the root's validity (for
     # the rules it might break), and nothing else.
     assert kept <= {"source", "choice", "$validity"}

@@ -55,6 +55,7 @@ from finn.core.space import (
     reject,
     view,
 )
+from finn.core.space._running.evaluate import evaluation
 from finn.core.space.inspection import Piece, Validity
 
 
@@ -349,13 +350,14 @@ def test_an_inactive_view_answers_inapplicable_and_never_reads_its_spaces_validi
     point = design_space(Leaf())
     assert inspection.validity(point).status == "valid"
     assert point.extents == 4
-    current = occurrence.state(point)
-    access = current.model.resolve(point.y._scope, Port.access)
-    entry = current.world.entry(access)
+    ds = occurrence.held(point).ds
+    model = ds.model
+    access = model.resolve(point.y._scope, Port.access)
+    entry = occurrence.ask(model, lambda session: evaluation(ds, session).get(access))
     assert isinstance(entry.result, Inapplicable)
-    validity = current.linked.scopes[point.y._scope].validity
+    validity = model.linked.scopes[point.y._scope].validity
     read = [node for node, _ in entry.trace]
-    assert read == [current.linked.nodes[access].guard]
+    assert read == [ds.layer.structure.raw_nodes[access].guard]
     assert validity not in read
     assessment = point.y.inspect(Port.access)
     assert assessment.validity == Inapplicable()
@@ -746,12 +748,11 @@ class Listed(Space):
 
 def test_a_choices_type_check_reads_only_its_domains_inputs() -> None:
     point = design_space(Listed(limit=4, other=1)).with_choices(x=1)
-    current = occurrence.state(point)
+    ds = occurrence.held(point).ds
     index = occurrence.decision_index(point, Listed.x)
-    entry = current.world.entry(index)
+    entry = occurrence.ask(ds.model, lambda session: evaluation(ds, session).get(index))
     assert entry.result == Available(1)
-    keys = {current.linked.nodes[item].key for item in current.evaluator.bits.nodes(entry.reads)}
-    assert keys == {"x", "limit"}
+    assert {ds.key(item) for item in entry.reads} == {"x", "limit"}
 
 
 def test_a_value_the_domains_membership_rejects_is_refused_at_the_change() -> None:

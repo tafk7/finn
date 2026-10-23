@@ -160,7 +160,7 @@ def test_the_flow_order_the_readers_and_the_lists_resolve_no_node() -> None:
     inspection.members(model)
     inspection.statistics(model)
     for source in (*structure.parameters, *structure.decisions):
-        model.evaluator.presence_readers(source)
+        model.per_class.presence_readers(source)
     counts = structure.counts()
     assert counts["nodes resolved"] == 0
     assert counts["scopes addressed"] == 3
@@ -170,7 +170,7 @@ def test_ranks_are_places_in_the_flow_order() -> None:
     point = design_space(PlacesDynamic())
     structure = inspection.model(point).structure
     assert structure is not None
-    flow = inspection.model(point).evaluator.flow()
+    flow = inspection.model(point).per_class.flow()
     assert [structure.ranks[index] for index in flow] == list(range(len(flow)))
     assert list(structure.ranks) == list(flow)
 
@@ -179,6 +179,6 @@ def test_a_table_built_by_hand_answers_no_whole_design_space_question() -> None:
     table = LinkedModel((Node(0, 0, "x", "decision"),), (), (0,), (), (0,), {"x": 0})
     model = Model(Space, table)
     with pytest.raises(RequestError, match="no question about its whole design space"):
-        model.evaluator.flow()
+        model.per_class.flow()
     with pytest.raises(RequestError, match="no question about its whole design space"):
-        model.evaluator.presence_readers(0)
+        model.per_class.presence_readers(0)

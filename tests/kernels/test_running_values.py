@@ -22,7 +22,7 @@ miss, never a wrong answer.
   each read with its member's semantics, and values made here of the types the Chain does
   not hold (``made``). Each verdict holds on them.
 - **The safe direction**, on every pair of samples of one name: a key hit is a value the
-  semantics hold equal (``_world._same_value``).
+  semantics hold equal (``_running.answers._same_value``).
 - **The enums** the samples hold, at any depth (``ENUMS``): each listed, every member
   equal to itself (an equal key is the same member, so the safe direction needs a
   reflexive ``==``), and every pair of its members checked in the safe direction.
@@ -82,13 +82,13 @@ from support.helpers import full_platform, in_order, stage_tensor
 
 import finn.kernels
 from finn.core.space import Space, ValueSemantics, ViewKey
+from finn.core.space._running.answers import _same_value
 from finn.core.space._running.cache import PLAIN, enum_key, key, trusted, value_class
 from finn.core.space._structure import Structure
 from finn.core.space._value_types import is_value_type, registered
-from finn.core.space._world import _same_value
 from finn.core.space.compiler import compile_model
 from finn.core.space.ir import Node
-from finn.core.space.occurrence import state
+from finn.core.space.occurrence import held
 from finn.core.space.semantics import default_semantics
 from finn.dataflow.datatypes import QONNXDataType
 from finn.dataflow.gemm import Form, Window
@@ -258,9 +258,9 @@ def samples() -> dict[str, list[object]]:
     found: dict[str, list[object]] = {}
     network = chain()
     for name in network.members:
-        current = state(network.member(name))
+        current = held(network.member(name)).ds
         linked = cast(Structure, current.model.linked)
-        for values in (current.world.facts, current.world.stored):
+        for values in (current.facts, current.stored):
             for index, value in values.items():
                 semantics = linked.raw_nodes[index].semantics
                 assert semantics is not None

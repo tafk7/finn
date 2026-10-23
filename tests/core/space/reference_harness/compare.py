@@ -19,8 +19,8 @@ asks compares one answer:
 
 The engine's side is an implementation of the engine's public questions
 (``support.space_oracle``), the harness's default by default (``implementation.default``:
-today's engine unless a session names another): ``Case.start(..., implementation=)`` names
-another, such as a planted fault (``support.space_oracle.today.Planted``), which a hand
+the public API unless a session names another): ``Case.start(..., implementation=)`` names
+another, such as a planted fault (``support.space_oracle.public.Planted``), which a hand
 case must then report by question.
 
 A disagreement raises :class:`Disagreement`, an ``AssertionError`` naming the case, the

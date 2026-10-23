@@ -497,4 +497,4 @@ def test_an_identity_standing_for_a_decision_is_refused_beside_its_own(
 def test_resolution_takes_the_models_lock() -> None:
     model = inspection.model(House)
     assert model.structure is not None
-    assert model.lock is model.evaluator.lock is model.structure.lock
+    assert model.lock is model.per_class.lock is model.structure.lock

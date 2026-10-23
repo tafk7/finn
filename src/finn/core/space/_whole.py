@@ -5,8 +5,8 @@
 
 Some questions read every choice of a model, the cases not selected included: the
 **flow order** (each choice after every choice its presence, its list or its Space's
-facts read: ``Evaluator.flow``, the order of ``inspection.decisions`` and ``states``,
-and of ``_assign``'s lists), and the **presence readers** (for each choice and fact, the
+facts read: ``PerClass.flow``, the order of ``inspection.decisions`` and ``states``,
+and of a change's lists), and the **presence readers** (for each choice and fact, the
 choices whose presence may read it: what a change may move). Each is answered here from
 templates and the scopes' records (``_structure``): no node is resolved.
 
@@ -26,14 +26,14 @@ with the template: what it finds there (choices; for a reach, facts too), what i
 in the Spaces it places (an import continued in the child's template by the child's
 summary, and what that reaches out of the child followed into this template's
 bindings), and what it reaches out of the template, which it reports as **exits**
-(``_compose.Exit``: one of its formals, the guard it is placed under, a name its placing
-template owns in it). A dynamic method's subtree is one summary per template too.
+(``_compose.Exit``: one of its formals, or the guard it is placed under). A dynamic
+method's subtree is one summary per template too.
 
 **Per scope, composition.** A summary's finds are addressed in the scope it is read at
 (``Structure.walk`` and ``ident``: a scope's record, no node); each exit is followed
 into the placing scope's binding (``_compose.lift``: a literal, a default or an
 unsupplied formal ends at the guard the scope is placed under; a reference continues
-there; a fresh Decision is a choice found; a named shared Decision's use is its owner),
+there),
 by that template's summaries, up to the root, where a formal is a fact. Composed per
 scope and exit once.
 
@@ -63,7 +63,7 @@ from ._compose import (
     path,
     slot,
 )
-from ._reads import _Contributed, _Dynamic, _Found, _Ref, _TemplateInference
+from ._reads import _Dynamic, _Found, _Ref, _TemplateInference
 from .ir import NodeId
 
 if TYPE_CHECKING:
@@ -160,9 +160,8 @@ class _Walks:
     def subtree(self, template: Template, at: Placement) -> Summary:
         """The upstream walk from every node of the scope ``template`` is placed as at
         ``at`` and of the scopes below it (what a dynamic method of that scope may read):
-        its own nodes and those its placing template writes for it (its formals' bindings,
-        the named shared Decisions owned in it), and each placed Space's subtree. Found
-        once."""
+        its own nodes and those its placing template writes for it (its formals' bindings),
+        and each placed Space's subtree. Found once."""
         held = cast(dict[Placement, Summary], template.composed.setdefault("whole.subtree", {}))
         found = held.get(at)
         if found is None:
@@ -172,8 +171,6 @@ class _Walks:
                 for node in range(len(template.nodes))
                 if node != template.placement_guard
             ]
-            # The named shared Decisions its placing template owns in it.
-            union.exits.add(("vcontrib",))
             for stub in template.index.placed:
                 child = slot(template, stub)
                 if child.requires in at.never:
@@ -299,20 +296,10 @@ class _Walks:
 
     def _dynamic(self, template: Template, at: Placement, items: _Found) -> bool:
         """Whether a method's reads are not fixed at ``at`` (as ``_compose``'s domain rule
-        reads them): a dynamic read placed there, or one of a helper a name of its own
-        scope stands for where the placing template owns nothing of that name."""
-        for item in items:
-            if isinstance(item, _Dynamic):
-                if _placed(template, at, item.when):
-                    return True
-            elif (
-                isinstance(item, _Contributed)
-                and item.name not in at.owned
-                and item.helper is not None
-                and self._dynamic(template, at, self.inference.reads(item.helper, template))
-            ):
-                return True
-        return False
+        reads them): a dynamic read placed there."""
+        return any(
+            isinstance(item, _Dynamic) and _placed(template, at, item.when) for item in items
+        )
 
     def _reads(
         self,
@@ -323,8 +310,7 @@ class _Walks:
         push: _Push,
     ) -> None:
         """A method's inferred reads at ``at``, walked on (``_reads._Mapping``'s mapping, by
-        template): a node, read as ``present()`` reads it where its source asks presence; a
-        name its placing template owns in its scope, as an exit; a helper's reads."""
+        template): a node, read as ``present()`` reads it where its source asks presence."""
         for item in items:
             if isinstance(item, _Ref):
                 mode: Mode = "S" if item.sources else "r"
@@ -335,13 +321,6 @@ class _Walks:
                     union.add(found)
                     for lifted_item in lifted:
                         push(*lifted_item)
-            elif isinstance(item, _Contributed):
-                if item.name in at.owned:
-                    union.exits.add(("owned", item.name, "S" if item.presence else "r"))
-                elif item.helper is not None:
-                    self._reads(
-                        template, at, self.inference.reads(item.helper, template), union, push
-                    )
 
 
 def _placed(template: Template, at: Placement, steps: Sequence[int]) -> bool:

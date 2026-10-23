@@ -432,8 +432,8 @@ LAYERS: tuple[Layer, ...] = (
         ("pytest",),
         "tests/kernels",
     ),
-    # The engine's purity check off for a test that counts the calls its memo saves
-    # (_world.check_purity), which every tree's conftests import.
+    # The engine's purity check off for a test that counts the calls its cache saves
+    # (its switch, _running.purity's), which every tree's conftests import.
     Layer("tests.purity", ("support.purity",), ("space",), ("pytest",), "tests/core/space"),
     # The tests of the lower layers use only those layers and this table
     # (_typeshed: stubs named under TYPE_CHECKING).

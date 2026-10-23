@@ -10,17 +10,17 @@ This is the adapter to the engine. Everything that depends on how the engine is
 this file alone. The implementation answers each question itself, in the model's terms: no
 legacy form, and no answer the adapter computes in its place.
 
-- **The implementation.** The description is authored once, as Space classes (today's
+- **The implementation.** The description is authored once, as Space classes (the public
   API: ``composite``, ``design_space``); every implementation reads the same classes.
   ``Engine.open`` opens the design space with an ``Implementation`` of the class-based
   oracle's interface (``support.space_oracle``; by default the harness's,
-  ``implementation.default``: today's engine, ``today.TODAY``, unless a session names
+  ``implementation.default``: the public API, ``public.PUBLIC``, unless a session names
   another), ``Engine.make`` has it build one from nothing (``Implementation.make``, the
   walks' cold build), and ``Point`` asks every question of what it opens, an ``Answers``, by key,
-  never of ``inspection`` or the configuration itself. So a prototype or T1's evaluator is
+  never of ``inspection`` or the configuration itself. So another implementation is
   compared with the model by naming it (``walks.walk(..., implementation=)``, the CLI's
   ``--implementation module:attribute``) or by making it the default (pytest's
-  ``--space-implementation module:attribute``), and a planted fault (``today.Planted``)
+  ``--space-implementation module:attribute``), and a planted fault (``public.Planted``)
   shows that the comparison is live.
 
 - **Spelling.** A rule of the description is a constraint in the model, and in the engine
@@ -33,7 +33,7 @@ legacy form, and no answer the adapter computes in its place.
   ``getattr(self, name)``. A view carries no rule. A domain with a membership predicate is
   a ``domain(accepts=, candidates=)``: membership is the model's whole membership, the
   enumeration the listed values.
-- **Questions**, each the implementation's own answer (``Answers``; today's through
+- **Questions**, each the implementation's own answer (``Answers``; the public API's through
   ``inspection`` and the point's public API):
 
   - a choice's state is ``Answers.states``' (set, waiting with what it waits on,
@@ -46,7 +46,7 @@ legacy form, and no answer the adapter computes in its place.
     failed check's, as an assignment refusal's), and its ``BrokenRule``s as the rules the
     published design space holds newly false (as a refusal's rules: origin, codes,
     standing). Drops and rules compare as sets;
-  - a bind (``Answers.bind``; today's ``finn.core.space.bind``) of saved choices under a
+  - a bind (``Answers.bind``; the public ``finn.core.space.bind``) of saved choices under a
     design space's facts, in the same form as an accepted change, read against the facts
     with nothing stored whatever the receiver stores: what it drops (its old value the
     saved one), the rules the kept choices break, and what it moves;
@@ -68,7 +68,7 @@ selector reads its case's name); a selector picked by a derived value (the model
 by binding the selector itself (a binding to a selector reads its case's name); a child's
 guard is a derived member ``when-<name>``. Facts
 are the root's formals (SZ100 (5)): a required fact is ``Param()``, an optional one
-``Param(required=False)``, left unsupplied where the model reads ``None`` (today's engine
+``Param(required=False)``, left unsupplied where the model reads ``None`` (the engine
 reads it unresolved: T4c's row). A ``Members`` is the
 engine's ``Members(KEY)``, a key of its own, each entry its child's value export of that key
 (``exports = {KEY: derived}``); each entry is in a child or a case placed by the
@@ -732,7 +732,7 @@ class Engine:
         """The configuration with ``facts`` and nothing committed, as ``implementation``
         answers it (the harness's default by default, ``implementation.default``): an
         optional fact the model reads ``None`` left unsupplied. The design space is built by
-        today's API, the common input every implementation opens."""
+        the public API, the common input every implementation opens."""
         supplied = {name: value for name, value in facts.items() if not self._left_out(name, value)}
         configuration = design_space(self.root(**cast(dict[str, Any], supplied)))
         implementation = chosen(implementation)
@@ -811,7 +811,7 @@ def definition(
     when building the Space, or when ``implementation`` is asked (the harness's default by
     default; its validity, every rule and every view of the configuration with ``facts``),
     is ``"cycle"``; a domain whose membership reads a choice, refused at compile, is
-    ``"domain-reads-choice"``; otherwise ``None``. (Today's engine has no ``"view-read-in"``:
+    ``"domain-reads-choice"``; otherwise ``None``. (The engine has no ``"view-read-in"``:
     it builds a Space reading a view in, T4b's row.)"""
     try:
         engine = build(description, spelling, unchecked=True)

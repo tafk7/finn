@@ -5,11 +5,11 @@
 A Space's validity reads a placed Space's piece from the guard its placing scope places it
 under first, and where that guard does not hold, the placed Space is absent: its validity is
 neither read nor resolved, and the piece answers inapplicable, as the placed Space's
-validity would (``_world._validity``). A choice's presence reads its guards outermost first,
-from the nodes' headers, so a choice in an absent scope is found absent from the guard its
-placing scope places it under, its own node and guard not resolved (``_state.presence``).
-Answers, refusals and early cutoff stay as they were; stage 7's chain is the kernel tree's
-(``kernel_ops/test_space_templates``)."""
+validity would (``_running.evaluate``'s validity frame). A choice's presence reads its
+guards outermost first, from the nodes' headers, so a choice in an absent scope is found
+absent from the guard its placing scope places it under, its own node and guard not
+resolved (``_running.questions.presence``). Answers and refusals stay as they were; stage
+7's chain is the kernel tree's (``kernel_ops/test_space_templates``)."""
 
 from __future__ import annotations
 
@@ -32,10 +32,13 @@ from finn.core.space import (
     inspection,
     reject,
 )
-from finn.core.space._state import bind, presence
+from finn.core.space._running import facts, questions
+from finn.core.space._running.answers import INAPPLICABLE
+from finn.core.space._running.evaluate import Ans, Session, evaluation
+from finn.core.space._running.value import DesignSpace
 from finn.core.space._structure import EAGER, Structure
-from finn.core.space._world import INAPPLICABLE
-from finn.core.space.occurrence import state
+from finn.core.space.ir import NodeId
+from finn.core.space.occurrence import ask, held
 
 
 class Fast(Space):
@@ -99,6 +102,12 @@ def _handles(point: Space) -> dict[str, Any]:
     return {item.key: item.reference for item in inspection.decisions(point)}
 
 
+def _answer(point: Space, index: int) -> Ans:
+    """``index``'s answer in the design space ``point`` holds, in its model's session."""
+    ds = held(point).ds
+    return ask(ds.model, lambda session: evaluation(ds, session).get(index))
+
+
 def test_an_absent_placed_spaces_validity_is_read_from_its_guard() -> None:
     blank = _blank()
     structure = _structure(blank)
@@ -114,10 +123,10 @@ def test_an_absent_placed_spaces_validity_is_read_from_its_guard() -> None:
     assert validity is not None
     guard = structure.find("compute.fast.$selected")
     fast = structure.find("compute.fast.$validity")
-    world = state(slow).world
-    read = [index for index, _ in world.entry(validity).trace]
+    found = _answer(slow, validity)
+    read = [index for index, _ in found.trace]
     assert guard in read and fast not in read
-    assessment = world.entry(validity).assessment
+    assessment = found.assessment
     assert isinstance(assessment, ConstraintAssessment)
     assert isinstance(assessment.results["compute.fast.$validity"], Inapplicable)
     assert fast not in structure._raw
@@ -142,8 +151,7 @@ def test_a_placed_space_selected_later_is_read_and_refuses_as_before() -> None:
     assert inspection.validity(back).status == "valid"
     validity = structure.scopes[0].validity
     assert validity is not None
-    world = state(back).world
-    read = [index for index, _ in world.entry(validity).trace]
+    read = [index for index, _ in _answer(back, validity).trace]
     assert structure.find("compute.fast.$validity") not in read
     assert inspection.validity(fast.with_choices({handles["compute.fast.lanes"]: 1})).status == (
         "valid"
@@ -168,19 +176,29 @@ def test_presence_reads_the_guards_outermost_first() -> None:
     own = structure.header(deep).guard  # its ``when``, a node of the absent scope
     assert own is not None
     selector = structure.find("compute")
-    open_world = bind(model, {}).world
-    slow = open_world.successor(stored={selector: "slow"})
+    opened = facts.open(model, {})
+
+    def changed(requests: dict[NodeId, object]) -> DesignSpace:
+        report = questions.change(opened, {}, list(requests.items()), Session())
+        assert report.published is not None
+        return report.published
+
+    def presence(ds: DesignSpace, index: NodeId) -> tuple[str, object]:
+        ev = evaluation(ds, Session())
+        return ev.run(lambda: questions.presence(ev, index))
+
+    slow = changed({selector: "slow"})
     # Absent from the case's guard: neither its node nor its own guard resolved.
     assert presence(slow, deep) == ("absent", INAPPLICABLE)
     assert "compute.gated" not in _in_play(structure)
     assert deep not in structure._raw and own not in structure._raw
     # What its own guard answers, read now: the same answer, the same object.
-    assert slow.result(own) is INAPPLICABLE
+    assert evaluation(slow, Session()).result(own) is INAPPLICABLE
     # Where the case's guard holds or waits, its own guard decides, as before.
     lanes = structure.find("compute.gated.lanes")
-    narrow = open_world.successor(stored={selector: "gated", lanes: 1})
+    narrow = changed({selector: "gated", lanes: 1})
     assert presence(narrow, deep) == ("absent", Available(False))
-    wide = open_world.successor(stored={selector: "gated", lanes: 2})
+    wide = changed({selector: "gated", lanes: 2})
     assert presence(wide, deep) == ("present", Available(True))
-    found, answer = presence(open_world, deep)
+    found, answer = presence(opened, deep)
     assert found == "unknown" and not isinstance(answer, (Available, Inapplicable))

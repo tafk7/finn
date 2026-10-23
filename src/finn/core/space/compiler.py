@@ -40,8 +40,8 @@ from .ir import Linked
 from .references import ValueHandle, resolve_decision, resolve_reference
 
 if TYPE_CHECKING:
+    from ._running.per_class import PerClass
     from ._structure import Structure
-    from ._world import Evaluator
 
 _OWNER = "space.compiler"
 
@@ -55,9 +55,10 @@ class Model(Generic[S]):
     addressed, each node resolved from its template when read (``_structure.Structure``;
     a table built by hand, in tests). What is read of its structure alone (inspection's
     Decisions below a scope) is kept with it (``_read``). ``lock`` is the model's one lock:
-    resolution and every configuration's evaluation take it. Its ``evaluator`` is what
-    every configuration of it shares: what each ``self`` method may read, inferred from its
-    source as its nodes are read, the memo of authored functions (``_world.Evaluator``)."""
+    resolution and every public question about a design space of it take it. Its
+    ``per_class`` record is what the running type reads once per model: the inferred
+    reads, the flow order, the presence readers and the model's one session, in which every
+    public question runs (``_running.per_class.PerClass``)."""
 
     space_type: type[S]
     linked: Linked
@@ -65,12 +66,12 @@ class Model(Generic[S]):
     _read: dict[tuple[str, int], object] = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
-    evaluator: Evaluator = field(init=False, repr=False, compare=False)
+    per_class: PerClass = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        from ._world import Evaluator
+        from ._running.per_class import PerClass
 
-        object.__setattr__(self, "evaluator", Evaluator(cast("Model[Space]", self)))
+        object.__setattr__(self, "per_class", PerClass(cast("Model[Space]", self)))
 
     @property
     def structure(self) -> Structure | None:
@@ -255,7 +256,7 @@ def design_space(node: S) -> S:
     configuration of the space, narrowed with ``with_choices``.
     """
 
-    from .occurrence import bind  # noqa: PLC0415 - keep compilation evaluator-independent
+    from .occurrence import opened  # noqa: PLC0415 - keep compilation evaluator-independent
 
     record = root_record(node)
     formals = space_formals(record.space_type)
@@ -278,7 +279,7 @@ def design_space(node: S) -> S:
             findings=error.findings,
         ) from error
     record.freeze("design_space() took it as a root")
-    return cast(S, bind(model, root_parameters(model, record)))
+    return cast(S, opened(model, root_parameters(model, record)))
 
 
 __all__ = ["Model", "compile_model", "design_space"]

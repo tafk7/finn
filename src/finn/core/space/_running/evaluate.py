@@ -38,11 +38,11 @@ as for any other. That is a definition the compile check should have refused, ne
 case to fall back on.
 
 **Depth.** Evaluation recurses on the Python stack up to ``DEPTH`` evaluations in flight
-(today's guard, ``_world.DEPTH``). Past it, ``Deeper`` unwinds to the outermost read
+(``depth.DEPTH``). Past it, ``Deeper`` unwinds to the outermost read
 (``Session.run``), which evaluates the deep node first, then asks again what it
 abandoned: authored functions are pure, so asking again answers the same.
 
-**Failures** complete as today's engine completes them (``_failure``'s contract). Each
+**Failures** complete by ``_failure``'s contract. Each
 question is one **run** (``Session.run``, a driver's demand): its authored calls each run
 in a copy of the context the driver entered with, never in their reader's. An authored
 function raising is its owner's failure, never kept by the memo or a cache. A failure
@@ -65,13 +65,14 @@ guards taken as holding. A node abandoned by the depth guard, or failing, keeps 
 
 **The purity check.** The node cache, the domains' outcomes kept on the facts layer and
 the depth guard's restart all rest on purity. The check tests it (``Session.verifying``:
-the session's ``verify``, or today's switch, ``_world.check_purity``, read each time): a
-cache hit is evaluated anyway, a kept domain outcome computed again, and a node the depth
-guard abandoned evaluated again once it completes; where the two answers differ by the
+the session's ``verify``, or the process's switch, ``purity.check_purity``, read each
+time): a cache hit is evaluated anyway, a kept domain outcome computed again, and a node the
+depth guard abandoned evaluated again once it completes; where the two answers differ by the
 member's value semantics (the result, and the assessment where there is one), the
 function is impure, its ``EvaluationError``, today's.
 
-Single-threaded: an evaluation, its session and the model's record take no lock.
+An evaluation, its session and the model's record take no lock: the public layer asks each
+question under the model's lock (``occurrence.ask``), one run of a model at a time.
 """
 
 from __future__ import annotations
@@ -82,7 +83,6 @@ from contextvars import Context, copy_context
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
 
-from .. import _world as W
 from .._collapse import guard_implies
 from .._failure import (
     ACTIVE,
@@ -113,7 +113,29 @@ from ..results import (
     assess_view,
     merged_findings,
 )
+from . import depth, purity
+from .answers import (
+    Called,
+    _blocked,
+    _clone,
+    _empty_domain,
+    _finished,
+    _first_member,
+    _guard_assessment,
+    _guard_piece,
+    _guard_result,
+    _input_missing,
+    _inputs_absent,
+    _listed_members,
+    _present,
+    _same_value,
+    _unassigned,
+    membership_arguments,
+    public_value,
+)
 from .cache import key as value_key
+from .receiver import MethodReader
+from .receiver import receiver as _receiver
 from .structure import Record, record
 from .value import DesignSpace
 
@@ -128,7 +150,7 @@ INAPPLICABLE = Inapplicable()
 _MISSING = object()
 _OWN_BIT = ("param", "decision")
 _CANCELLATIONS = (KeyboardInterrupt, SystemExit, GeneratorExit)
-DEPTH = W.DEPTH
+DEPTH = depth.DEPTH
 """How many evaluations may be in flight on the Python stack before the depth guard
 unwinds (today's)."""
 
@@ -162,11 +184,11 @@ class MembershipReadsChoice(EvaluationError):
         self.decision = decision
 
 
-class Deeper(W.Deeper):
+class Deeper(depth.Deeper):
     """The depth guard: ``node`` was demanded in ``ev`` with ``DEPTH`` evaluations in
     flight. Everything it passes through is abandoned (nothing kept); the run evaluates
-    the node first, then again what it abandoned. Today's ``Deeper``, so that a method's
-    reader passes it through as today's does."""
+    the node first, then again what it abandoned. The depth guard's ``depth.Deeper``, so
+    that a method's reader passes it through."""
 
     def __init__(self, ev: Evaluation, node: NodeId) -> None:
         BaseException.__init__(self, node)
@@ -219,7 +241,7 @@ class Session:
     abandoned, the failures met in it) and, where one is given, a node cache."""
 
     cache: NodeCache | None = None
-    # the purity check on, whatever today's switch says
+    # the purity check on, whatever the process's switch says
     verify: bool = False
     counters: Counters = field(default_factory=Counters)
     depth: int = 0
@@ -240,10 +262,10 @@ class Session:
 
     @property
     def verifying(self) -> bool:
-        """Whether the purity check is on: this session's ``verify``, or today's switch
-        (``_world.check_purity``, on from the start where ``FINN_SPACE_CHECK_PURITY`` is
-        1), read each time it is asked."""
-        return self.verify or W._PURITY
+        """Whether the purity check is on: this session's ``verify``, or the process's
+        switch (``purity.check_purity``, on from the start where ``FINN_SPACE_CHECK_PURITY``
+        is 1), read each time it is asked."""
+        return self.verify or purity._PURITY
 
     def run(self, demand: Callable[[], T]) -> T:
         """``demand``, a driver's question, as one run (inside a run, a part of it): past
@@ -397,14 +419,14 @@ def _same_findings(left: QueryResult[object], right: QueryResult[object]) -> boo
 
 def _same_answer(node: Node, left: QueryResult[object], right: QueryResult[object]) -> bool:
     """Whether two answers of ``node`` are the same: the same object, or values equal by
-    its value semantics (``_world._same_value``), or non-values of one variant with equal
+    its value semantics (``answers._same_value``), or non-values of one variant with equal
     findings."""
     if left is right:
         return True
     if type(left) is not type(right):
         return False
     if isinstance(left, Available):
-        return W._same_value(node, left.value, cast(Available[object], right).value)
+        return _same_value(node, left.value, cast(Available[object], right).value)
     return _same_findings(left, right)
 
 
@@ -451,7 +473,7 @@ def _same_outcome(node: Node, left: QueryResult[object], right: QueryResult[obje
         return _same_findings(left, right)
     one, other = left.value, cast(Available[object], right).value
     if type(one) is tuple and type(other) is tuple:
-        return len(one) == len(other) and all(W._same_value(node, a, b) for a, b in zip(one, other))
+        return len(one) == len(other) and all(_same_value(node, a, b) for a, b in zip(one, other))
     return type(one) is type(other) and one == other
 
 
@@ -473,7 +495,7 @@ class Evaluation:
         self.model = ds.model
         self.linked: Structure = ds.layer.structure
         self.raw = self.linked.raw_nodes  # each node as resolved, nothing collapsed
-        self.inferred = ds.model.evaluator.reads  # inferred reads, existence and case guards
+        self.inferred = ds.model.per_class.reads  # inferred reads, existence and case guards
         self.record: Record = record(ds.model)
         self.assumed = assumed
         self.memo: dict[NodeId, Ans] = {}
@@ -668,7 +690,7 @@ class Evaluation:
         trace: _Tr = []
         if node.guard is not None:
             guard = self.read(trace, node.guard, node)
-            inactive = W._guard_result(node, guard.result)
+            inactive = _guard_result(node, guard.result)
             if isinstance(inactive, (Unresolved, Rejected)) and (
                 node.kind == "guard" or self.case(index) is not None
             ):
@@ -683,7 +705,7 @@ class Evaluation:
                 and isinstance(inactive, Unresolved)
                 and self.refused_waiting(node.guard, trace, node) is None
             ):
-                return Ans(inactive, tuple(trace), W._guard_assessment(node, inactive))
+                return Ans(inactive, tuple(trace), _guard_assessment(node, inactive))
         return _FRAMES[node.kind](self, node, trace, node)
 
     def _holds_here(self, node: Node, trace: _Tr) -> bool | None:
@@ -746,13 +768,13 @@ class Evaluation:
 
     # -- authored functions
 
-    def authored(self, kind: str, compute: Callable[[], W.Called]) -> W.Called:
+    def authored(self, kind: str, compute: Callable[[], Called]) -> Called:
         """An authored function's outcome, counted by kind."""
         self.counters.call(kind)
         return compute()
 
     def domain_outcome(
-        self, key: tuple[NodeId, str], kind: str, inputs: Trace, compute: Callable[[], W.Called]
+        self, key: tuple[NodeId, str], kind: str, inputs: Trace, compute: Callable[[], Called]
     ) -> QueryResult[object]:
         """A domain's outcome, kept on the facts layer by its inputs' answers (a domain
         reads facts only, so every design space of the layer shares it): each answer keyed
@@ -781,9 +803,9 @@ class Evaluation:
         local = tuple(answer_key(self.raw[index], answer) for index, answer in inputs)
         return None if any(part is None for part in local) else local
 
-    def call_explicit(self, node: Node, answers: list[QueryResult[object]]) -> W.Called:
+    def call_explicit(self, node: Node, answers: list[QueryResult[object]]) -> Called:
         arguments = {
-            argument.name: W._clone(
+            argument.name: _clone(
                 self.raw[argument.node],
                 cast(Available[object], answer).value,
                 owner=node.owner,
@@ -798,24 +820,24 @@ class Evaluation:
             (),
             arguments,
         )
-        return W._finished(node, cast(_Returned, outcome).value)
+        return _finished(node, cast(_Returned, outcome).value)
 
-    def call_method(self, node: Node, reader: Node) -> tuple[W.Called, Trace]:
+    def call_method(self, node: Node, reader: Node) -> tuple[Called, Trace]:
         call = Call(node.owner, node.kind)
         receiver = Reader(self, node, call, reader)
         outcome = invoke(
             self.session,
             call,
             cast(Callable[..., object], node.function),
-            (W.receiver(receiver, node.scope),),
+            (_receiver(receiver, node.scope),),
         )
         existence = frozenset(receiver.existence - receiver.valued)
         if isinstance(outcome, _Halted):
-            blocked = cast(NonValue, W._blocked(outcome.results))
-            called = W.Called(blocked, W._guard_assessment(node, blocked), existence=existence)
+            blocked = cast(NonValue, _blocked(outcome.results))
+            called = Called(blocked, _guard_assessment(node, blocked), existence=existence)
         else:
-            done = W._finished(node, outcome.value)
-            called = W.Called(done.result, done.assessment, done.own_refusal, (), existence)
+            done = _finished(node, outcome.value)
+            called = Called(done.result, done.assessment, done.own_refusal, (), existence)
         return called, tuple(receiver.trace)
 
     # -- domains (each read by the choice it belongs to)
@@ -823,7 +845,7 @@ class Evaluation:
     def domain_inputs(
         self, node: Node, trace: _Tr
     ) -> tuple[tuple[QueryResult[object], ...], NonValue | None]:
-        arguments = W.membership_arguments(node)
+        arguments = membership_arguments(node)
         answers = tuple(self.read(trace, argument.node, node).result for argument in arguments)
         absent = [
             self.raw[argument.node].owner
@@ -831,8 +853,8 @@ class Evaluation:
             if isinstance(answer, Inapplicable)
         ]
         if absent:
-            return answers, W._inputs_absent(node, absent)
-        return answers, W._blocked(
+            return answers, _inputs_absent(node, absent)
+        return answers, _blocked(
             [answer for answer in answers if not isinstance(answer, Available)]
         )
 
@@ -840,19 +862,18 @@ class Evaluation:
         self, node: Node, answers: tuple[QueryResult[object], ...]
     ) -> dict[str, object]:
         return {
-            argument.name: W._clone(
+            argument.name: _clone(
                 self.raw[argument.node],
                 cast(Available[object], answer).value,
                 owner=node.owner,
                 role="dependency snapshot",
             )
-            for argument, answer in zip(W.membership_arguments(node), answers)
+            for argument, answer in zip(membership_arguments(node), answers)
         }
 
     def _inputs(self, node: Node, answers: tuple[QueryResult[object], ...]) -> Trace:
         return tuple(
-            (argument.node, answer)
-            for argument, answer in zip(W.membership_arguments(node), answers)
+            (argument.node, answer) for argument, answer in zip(membership_arguments(node), answers)
         )
 
     def type_check(self, node: Node, value: Available[object], trace: _Tr) -> QueryResult[object]:
@@ -863,8 +884,8 @@ class Evaluation:
         if blocked is not None:
             return blocked
 
-        def membership() -> W.Called:
-            candidate = W._clone(node, value.value, owner=node.owner, role="domain candidate")
+        def membership() -> Called:
+            candidate = _clone(node, value.value, owner=node.owner, role="domain candidate")
             outcome = invoke(
                 self.session,
                 Call(node.owner, "domain membership"),
@@ -872,7 +893,7 @@ class Evaluation:
                 (candidate, self.domain_values(node, answers)),
                 {"semantics": semantics, "owner": node.owner},
             )
-            return W.Called(cast(QueryResult[object], cast(_Returned, outcome).value))
+            return Called(cast(QueryResult[object], cast(_Returned, outcome).value))
 
         inputs = ((node.index, value), *self._inputs(node, answers))
         return self.domain_outcome(
@@ -885,7 +906,7 @@ class Evaluation:
         domain, semantics = node.domain, node.semantics
         assert domain is not None and semantics is not None
 
-        def enumerate_() -> W.Called:
+        def enumerate_() -> Called:
             outcome = invoke(
                 self.session,
                 Call(node.owner, "domain enumeration"),
@@ -893,7 +914,7 @@ class Evaluation:
                 (self.domain_values(node, answers),),
                 {"semantics": semantics, "owner": node.owner},
             )
-            return W.Called(cast(QueryResult[object], cast(_Returned, outcome).value))
+            return Called(cast(QueryResult[object], cast(_Returned, outcome).value))
 
         return self.domain_outcome(
             (node.index, "enumeration"),
@@ -902,7 +923,7 @@ class Evaluation:
             enumerate_,
         )
 
-    def _list(self, node: Node, answers: tuple[QueryResult[object], ...]) -> W.Called:
+    def _list(self, node: Node, answers: tuple[QueryResult[object], ...]) -> Called:
         domain, semantics = node.domain, node.semantics
         assert domain is not None and semantics is not None
         listed = self._enumerate(node, answers)
@@ -910,12 +931,12 @@ class Evaluation:
             kept = invoke(
                 self.session,
                 Call(node.owner, "domain membership"),
-                W._listed_members,
+                _listed_members,
                 (domain, listed.value, self.domain_values(node, answers)),
                 {"semantics": semantics, "owner": node.owner},
             )
             listed = Available(cast(_Returned, kept).value)
-        return W.Called(listed)
+        return Called(listed)
 
     def listed(self, node: Node, trace: _Tr) -> QueryResult[object]:
         """A choice's listed values here (``Available(None)``: membership only)."""
@@ -957,21 +978,21 @@ class Evaluation:
                 )
             return Available(found.value != ()) if isinstance(found, Available) else found
 
-        def lists() -> W.Called:
+        def lists() -> Called:
             enumerated = self._enumerate(node, answers)
             if not isinstance(enumerated, Available):
-                return W.Called(enumerated)
+                return Called(enumerated)
             values = cast(tuple[object, ...], enumerated.value)
             if domain._finite_values is not None or not values:
-                return W.Called(Available(bool(values)))
+                return Called(Available(bool(values)))
             kept = invoke(
                 self.session,
                 Call(node.owner, "domain membership"),
-                W._first_member,
+                _first_member,
                 (domain, values, self.domain_values(node, answers)),
                 {"semantics": semantics, "owner": node.owner},
             )
-            return W.Called(Available(cast(_Returned, kept).value))
+            return Called(Available(cast(_Returned, kept).value))
 
         return self.domain_outcome((node.index, "lists a value"), "domain listing", inputs, lists)
 
@@ -979,27 +1000,17 @@ class Evaluation:
 # -- the receiver a method reads through ------------------------------------------------
 
 
-class _World:
-    """What ``MethodReader`` reads of the world it runs in: the model's evaluator (its
-    structure, inferred reads and resolution), nothing of a world."""
-
-    __slots__ = ("evaluator",)
-
-    def __init__(self, evaluator: W.Evaluator) -> None:
-        self.evaluator = evaluator
-
-
-class Reader(W.MethodReader):
-    """A method's reads, on an evaluation: today's reader (resolution, the read check,
-    ``present``, candidates), each read answered by the evaluation from the raw nodes and
-    recorded in order. ``reader``: the node whose scope decides which formals bound by
-    reference it reads at their source (the method's node, or the guard a ``when``'s
-    condition is read for)."""
+class Reader(MethodReader):
+    """A method's reads, on an evaluation: the method reader (``receiver.MethodReader``:
+    resolution, the read check, ``present``, candidates), each read answered by the
+    evaluation from the raw nodes and recorded in order. ``reader``: the node whose scope
+    decides which formals bound by reference it reads at their source (the method's node,
+    or the guard a ``when``'s condition is read for)."""
 
     __slots__ = ("ev", "reader")
 
     def __init__(self, ev: Evaluation, node: Node, call: Call, reader: Node) -> None:
-        super().__init__(cast(W.World, _World(ev.model.evaluator)), node, call)
+        super().__init__(ev.model, node, call)
         self.ev = ev
         self.reader = reader
 
@@ -1041,7 +1052,7 @@ class Reader(W.MethodReader):
         answer = self._take(index).result
         node = self.ev.raw[index]
         if isinstance(answer, Available):
-            return W.public_value(node, answer)
+            return public_value(node, answer)
         self.call.blocked[index] = answer
         if self.call.failure is not None:
             self.call.failure.add(CleanupFailure(node.owner, "cleanup read", result=answer))
@@ -1081,7 +1092,7 @@ def _param(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
         ev.note({node.index})
     if node.index in ev.ds.facts:
         return Ans(Available(ev.ds.facts[node.index]), tuple(trace))
-    return Ans(W._input_missing(node), tuple(trace))
+    return Ans(_input_missing(node), tuple(trace))
 
 
 def _const(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
@@ -1093,7 +1104,7 @@ def _decision(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
     if ev.session.cache is not None:
         ev.note({node.index})
     if node.index not in ev.ds.stored:
-        return Ans(W._unassigned(node), tuple(trace))
+        return Ans(_unassigned(node), tuple(trace))
     value: Available[object] = Available(ev.ds.stored[node.index])
     if node.domain is None:
         return Ans(value, tuple(trace))
@@ -1227,7 +1238,7 @@ def _guard_refused(
         owner = ev.raw[top].owner
         if owner in ev.linked.keys:
             key = owner
-    return key, W._guard_piece(owner, cast(Rejected, found))
+    return key, _guard_piece(owner, cast(Rejected, found))
 
 
 def _guard_waiting(
@@ -1266,7 +1277,7 @@ def _choice_piece(
             if top is not None:
                 return _guard_waiting(ev, piece, top, trace, reader, guards)
             waiting = answer
-        elif W._guard_result(piece, answer) is not None:
+        elif _guard_result(piece, answer) is not None:
             return None
     if piece.domain is None or piece.domain.candidates is None:
         return None
@@ -1284,7 +1295,7 @@ def _choice_piece(
         return piece.key, waiting
     listed = ev.lists_a_value(piece, trace)
     if isinstance(listed, Available):
-        return None if listed.value else (piece.key, W._empty_domain(piece))
+        return None if listed.value else (piece.key, _empty_domain(piece))
     return piece.key, cast(QueryResult[bool], listed)
 
 
@@ -1292,7 +1303,7 @@ def _graph(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
     if node.kind == "present":
         answers = [ev.read(trace, target, reader).result for _, target in node.alternatives]
         several = sum(1 for answer in answers if isinstance(answer, Available)) > 1
-        return Ans(W._present(node, answers), tuple(trace), own_refusal=several)
+        return Ans(_present(node, answers), tuple(trace), own_refusal=several)
     located: list[Located[object]] = []
     failures: list[QueryResult[object]] = []
     for (name, target), member in zip(node.alternatives, cast(tuple[str, ...], node.value)):
@@ -1303,7 +1314,7 @@ def _graph(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
             located.append(Located(name or None, member, answer.value))
         else:
             failures.append(answer)
-    blocked = W._blocked(failures)
+    blocked = _blocked(failures)
     return Ans(blocked if blocked is not None else Available(tuple(located)), tuple(trace))
 
 
@@ -1317,9 +1328,9 @@ def _callback(ev: Evaluation, node: Node, trace: _Tr, reader: Node) -> Ans:
             called.result, (*trace, *read), called.assessment, called.own_refusal, called.existence
         )
     answers = [ev.read(trace, argument.node, reader).result for argument in node.arguments]
-    blocked = W._blocked([answer for answer in answers if not isinstance(answer, Available)])
+    blocked = _blocked([answer for answer in answers if not isinstance(answer, Available)])
     if blocked is not None:
-        return Ans(blocked, tuple(trace), W._guard_assessment(node, blocked))
+        return Ans(blocked, tuple(trace), _guard_assessment(node, blocked))
     called = ev.authored(node.kind, lambda: ev.call_explicit(node, answers))
     return Ans(called.result, tuple(trace), called.assessment, called.own_refusal)
 

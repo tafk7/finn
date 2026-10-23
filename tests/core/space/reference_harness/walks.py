@@ -69,7 +69,7 @@ implementation's ``make``: the model configuration's facts, as the walk gives th
 walked configuration's stored choices. An engine error always fails.
 
 **The implementation compared** (``walk(..., implementation=)``, the CLI's
-``--implementation module:attribute``; today's engine, ``support.space_oracle.today.TODAY``,
+``--implementation module:attribute``; the public API, ``support.space_oracle.public.PUBLIC``,
 by default, whatever the harness's default is) is asked every question through the
 class-based oracle's interface (``support.space_oracle.Answers``; ``engine.Point``). The
 summary and every failure name it. Every permanent check holds for every implementation:
@@ -88,7 +88,7 @@ not reached (SZ100 (3), (5)), each a pending milestone of the matrix with one ro
   (``engine.definition``; counted once, and the generator draws again: built, or refused
   as a cycle, see :func:`generate`); T4c, a question
   whose subject reaches an optional fact left out (:meth:`Structure.reach`; a fact's own
-  answer, ``None`` in the model and unresolved in today's engine, reaches the fact itself;
+  answer, ``None`` in the model and unresolved in the engine, reaches the fact itself;
   validity, possible values, a change, a bind and refinement reach the whole description).
   One attributed to a pending milestone (:func:`pending`) is **counted, not failed**, tallied
   by question and by milestone; one with no cause fails the walk, and so does one whose
@@ -127,12 +127,12 @@ from typing import Any, TypeVar
 
 from support.space_oracle import Implementation
 
-# The walks default to today's engine itself, never to the harness's default
+# The walks default to the public API itself, never to the harness's default
 # (``implementation.default``, a session's ``--space-implementation``): their tests pin
-# today's engine by design (each asserts it walked "today"), and another implementation's
+# the public API by design (each asserts it walked "public"), and another implementation's
 # walks name it explicitly (``walk(..., implementation=)``, the CLI's ``--implementation``),
-# as the running type's run in its own tests.
-from support.space_oracle.today import TODAY
+# as the public API with no cache's run in its own tests.
+from support.space_oracle.public import PUBLIC
 
 from core.space import reference as model
 from core.space.reference.model import same
@@ -781,7 +781,7 @@ def _join(scope: str, name: str) -> str:
 def generate(
     rng: random.Random,
     strict: bool = False,
-    implementation: Implementation = TODAY,
+    implementation: Implementation = PUBLIC,
     by: bool = False,
 ) -> tuple[Generated, Engine]:
     """A description and its engine, drawn until one has two to six value choices, is a
@@ -792,7 +792,7 @@ def generate(
     A description the model refuses as ``view-read-in`` (SZ100 (3); drawn only when not
     ``strict``) is checked against the engine's ``definition`` (``implementation`` asked)
     before it is drawn again: each is kept in ``read_in``, with what the engine answered,
-    and each the engine answers otherwise is counted under T4b. Today's engine never answers
+    and each the engine answers otherwise is counted under T4b. The engine never answers
     ``view-read-in``: it builds such a description, or, for a rule on a view of its own
     Space, refuses it as a dependency cycle, a definition error of another kind. The cycle
     case is T4b's too (agreed in review): under the ruling it is ``view-read-in``, and T4b
@@ -1753,7 +1753,7 @@ class Tally:
     #: the engine's own permanent checks run, by name
     engine_checks: Counter[str] = field(default_factory=Counter)
     #: the implementation compared (``Implementation.name``)
-    implementation: str = TODAY.name
+    implementation: str = PUBLIC.name
     #: configurations compared with the engine; the engine took the model's by a bind
     #: (``finn.core.space.bind``, never refused), where it refused what the model accepted
     compared: int = 0
@@ -1804,7 +1804,7 @@ class _Walk:
         steps: int,
         strict: bool,
         waiting: tuple[str, ...],
-        implementation: Implementation = TODAY,
+        implementation: Implementation = PUBLIC,
         by: bool = False,
     ) -> None:
         self.rng = random.Random(seed)
@@ -2180,7 +2180,7 @@ class _Walk:
         try:
             for text, form in self.generated.read_in:
                 # T4b (SZ100 (3)): the model refuses a view read in; an engine answering
-                # otherwise (today's: it builds it, or calls it a cycle) disagrees
+                # otherwise (it builds it, or calls it a cycle) disagrees
                 expected = DefinitionForm("view-read-in")
                 if not agrees(expected, form):
                     self.disagree(
@@ -2290,7 +2290,7 @@ def walk(
     steps: int,
     without: Iterable[str] = (),
     strict: bool = False,
-    implementation: Implementation = TODAY,
+    implementation: Implementation = PUBLIC,
     by: bool = False,
 ) -> Tally:
     """One seeded walk of ``steps`` changes (DESIGN § 6). ``strict``: the generator draws
@@ -2299,7 +2299,7 @@ def walk(
     description the model refuses as ``view-read-in``) or T4c (its question reaching an
     optional fact left out), and counted under that pending milestone; an unattributed one,
     or one whose milestone is not pending (``without``: its rows taken as removed), fails
-    the walk. ``implementation`` is the one compared with the model (today's engine by
+    the walk. ``implementation`` is the one compared with the model (the public API by
     default), asked through ``support.space_oracle``'s interface. ``by``: the descriptions
     hold selectors picked by a derived value too (:class:`_Draw`). It never raises: a
     failure is in ``Tally.failure``."""

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """Two cores sharing a ``width``, the helper that commits choices on a point by key, the
-one that builds a configuration directly from stored choices (``built``), and a chain
+one that binds a design space's facts with exactly the stored choices given (``built``), and a chain
 whose changes reach far (``chain``), which the possible values' tests, the successor's
 tests and the bounded change's walks share."""
 
@@ -19,8 +19,12 @@ from finn.core.space import (
     constraint,
     divisors_of,
     inspection,
+    occurrence,
     reject,
 )
+from finn.core.space._running import questions
+from finn.core.space._running.evaluate import Session
+from finn.core.space._running.surface import At
 
 
 class Packed(Space):
@@ -54,24 +58,22 @@ def commit(point: Any, choices: dict[str, object]) -> Any:
 
 
 def built(point: Any, choices: Mapping[str, object]) -> Any:
-    """The configuration of ``point``'s facts and these stored choices (by key), built
-    directly, as a saved graph is, not by a change: no rule is checked, so one that breaks
-    a rule reads refused (a change to it would be refused). Each value must be of its
-    choice's type, dormant ones included."""
-    from finn.core.space._assign import check  # noqa: PLC0415
-    from finn.core.space._state import State, prepare  # noqa: PLC0415
-    from finn.core.space._world import World  # noqa: PLC0415
-    from finn.core.space.occurrence import attach, state  # noqa: PLC0415
-
-    current = state(point)
-    keys = current.linked.keys
-    values = {keys[key]: (value, "choice") for key, value in choices.items()}
-    world = World.start(current.evaluator, current.world.facts, prepare(current.linked, values))
-    for index in world.stored:
-        found = check(world, index)
-        if isinstance(found, Rejected):
-            raise ValueError(f"{current.linked.nodes[index].key} is not of its type: {found}")
-    return attach(State(current.model, world), point._scope)
+    """The design space of ``point``'s facts with exactly these stored choices (by key),
+    read at ``point``'s scope: bound as a saved graph is (``questions.bind``, in a session
+    of its own with no cache: a recomputation sharing nothing with the model's session),
+    not reached by a change, so no rule is checked: one that breaks a rule reads refused (a
+    change to it would be refused). Each value must be of its choice's type, dormant ones
+    included."""
+    at = occurrence.held(point)
+    keys = at.ds.model.linked.keys
+    saved = [(keys[key], value) for key, value in choices.items()]
+    with at.ds.model.lock:
+        report = questions.bind(at.ds.layer.bare, saved, Session())
+    for outcome in report.outcomes:
+        if outcome.status == "dropped":
+            raise ValueError(f"{outcome.owner} is not of its type: {outcome.result}")
+    assert report.published is not None
+    return occurrence.place(At(report.published, at.scope))
 
 
 class Stage(Space):
