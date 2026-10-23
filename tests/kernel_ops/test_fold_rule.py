@@ -247,6 +247,34 @@ def test_a_kernel_choice_beside_a_cleared_channel_choice_refuses_nothing() -> No
     assert dict(done.network.states(["hidden"]))[DEPTH] == inspection.Open(())
 
 
+def test_a_choice_cleared_twice_in_a_run_is_reported_by_its_first_clearing() -> None:
+    """In one run, the FIFO's style in ``ultra`` is cleared by taking the UltraRAM away and
+    set again (``auto``); the UltraRAM given back and the FIFO made deeper than block RAM
+    addresses, taking the UltraRAM away again clears the style a second time, beside the
+    depth, and sets it ``auto`` again. The run reports the style cleared, by its first
+    clearing (``ultra`` before it, ``uram-absent``): it ends in another value than it held
+    before the run's first clearing."""
+    network = boarded(ULTRA)
+    seam = Seam(FULL_DSP48E2)
+    changes = (NO_URAM, keyed({"board.uram": True}), {DEPTH: DEEP}, NO_URAM)
+
+    def search(opened: Partition, _: Mapping[tuple[str, str], object]) -> Partition:
+        for change in changes:
+            done = seam.set(opened, change)
+            assert isinstance(done, Accepted), done
+            if STYLE in done.cleared:
+                assert done.settled[STYLE] == "auto"
+            opened = done.network
+        return opened
+
+    found = seam.run(network, (), search, "twice", restore=False)
+    assert dict(found.states(["hidden"]))[STYLE] == inspection.Set("auto")
+    (run,) = seam.runs
+    assert [f.code for f in run.cleared[STYLE]] == ["uram-absent"]
+    assert [f.code for f in run.cleared[DEPTH]] == ["fifo-capacity"]
+    assert run.settled == {STYLE: "auto"}
+
+
 def test_a_fifo_newly_in_play_leaves_its_depth_open_and_its_style_set_by_policy() -> None:
     """A change that places the hidden channel's FIFO brings its choices into play: the
     seam sets its style by the cut's policy (``auto``) and leaves its depth, required,

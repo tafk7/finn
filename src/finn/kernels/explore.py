@@ -403,15 +403,16 @@ class Restored(Generic[S]):
 @dataclass
 class Run:
     """What one strategy's run through the seam did (``Seam.run``): the strategy's name,
-    every key it reopened (its scope, the stored choices among it), those whose prior
-    value it restored (``kept``), those it set by their policy where the prior value is
-    refused (``by_policy``: "set by <strategy>, its policy"), those it left open with why
+    every key it reopened (its scope, the stored choices among it), those whose prior value
+    it restored (``kept``), those it set by their policy where the prior value is refused
+    (``by_policy``: "set by <strategy>, its policy"), those it left open with why
     (``unset``); and what the fold rule did for its changes (``Seam.set``), the strategy's,
     as the network it returns holds it: each stored channel choice the seam cleared,
-    standing in the way of a change, that does not hold its earlier value there, with the
-    findings of the rules it stood in the way of (``cleared``); and each channel choice
-    the seam set by the cut's policy, cleared or brought into play by a change, that holds
-    the value it set there (``settled``). A key a later change of the run names is the
+    standing in the way of a change, that does not hold there the value it held before its
+    first clearing in the run, with the findings of the rules it first stood in the way of
+    (``cleared``: a key cleared twice is reported by its first clearing); and each channel
+    choice the seam set by the cut's policy, cleared or brought into play by a change, that
+    holds the value it set there (``settled``). A key a later change of the run names is the
     change's, in neither."""
 
     strategy: str
@@ -642,8 +643,10 @@ class Seam:
             self._cleared.pop(key, None)
             self._settled.pop(key, None)
         if cleared:
+            # A key cleared again in the run keeps its first clearing: its value before it.
             stored = network.chosen({key[0] for key in cleared})
-            self._cleared.update({key: (stored.get(key), why) for key, why in cleared.items()})
+            for key, why in cleared.items():
+                self._cleared.setdefault(key, (stored.get(key), why))
         self._settled.update(settled)
         return Accepted(reached, cleared, settled, unsettled)
 
