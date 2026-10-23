@@ -235,7 +235,6 @@ def test_native_rtl_pin_names_directions_and_widths(factory, tmp_path):
         lambda: eltwise(lhs=DataType["FLOAT32"], platform=FULL_DSP48E2),
         lambda: threshold(thresholds=(((2, 1),),)),
         lambda: threshold(thresholds=(((0, 20),),)),
-        lambda: threshold(threshold_dtype=DataType["UINT5"]),
         lambda: threshold(bias=1 << 31),
         lambda: threshold(bias=-10),
     ],
@@ -254,6 +253,9 @@ def test_unsupported_cases_are_refused_without_constructing_invalid_interfaces(f
             lambda: threshold(use_axilite=True, thresholds=(((0, 1),), ((0, 1),))),
             "threshold-config-sets",
         ),
+        # Thresholds of another signedness than the input, never written: the table is in
+        # their type, which the RTL compares in the input's.
+        (lambda: threshold(threshold_dtype=DataType["UINT5"]), "threshold-type"),
     ],
 )
 def test_committing_a_choice_that_breaks_a_rule_is_refused_naming_it(factory, code):

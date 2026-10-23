@@ -7,9 +7,13 @@
 sorted. Its shape owns SETS, C and N: C is the RTL's number of threshold rows,
 which it applies round-robin over the flat input stream. A table has one row for
 each channel, or one row shared by every channel (C = 1: each PE lane keeps one
-copy of it, and a runtime write reaches every lane). The input is sign/zero
-extended or saturated to the threshold dtype before comparison, as the native
-RTL specifies; so a threshold at the threshold dtype's minimum is refused with an
+copy of it, and a runtime write reaches every lane). The table's type, WT
+(``table_dtype``), is the type its memories hold. Never written, the table is its
+initial values, in their type (``threshold_dtype``, a fact); runtime-writable, it holds
+whatever a host sets, a value fixed only while the accelerator is idle, so its type is
+sized from the input's datatype, never from the initial values (``threshold_table_dtype``).
+The input is sign/zero extended or saturated to the table's type before comparison, as
+the native RTL specifies; so a threshold at that type's minimum is refused with an
 input wider below it, which saturates to that minimum and would count it
 (``threshold-saturation``). Output is the threshold count plus bias. Runtime writes must
 preserve sorted rows. With multiple sets, each input beat requires a matching
@@ -152,6 +156,18 @@ def stage_style(depth: int, depth_trigger_bram: int, depth_trigger_uram: int) ->
     if depth_trigger_bram and depth >= depth_trigger_bram:
         return "block"
     return "distributed" if depth_trigger_bram else "auto"
+
+
+def threshold_table_dtype(least: int, most: int, *, signed: bool) -> QONNXDataType:
+    """The type of a threshold table over ``[least, most]``: with ``signed`` (a signed
+    input's table) or a value below 0, an INT of a sign bit over the larger magnitude's
+    bits, at least two; otherwise the UINT of ``most``'s bits. Both owners of a table's
+    type size it here: the KernelOp from its initial values (``stored_thresholds``), the
+    kernel from the values a host may write (``table_dtype``)."""
+    if signed or least < 0:
+        magnitude = max((-least - 1).bit_length() if least < 0 else 0, most.bit_length())
+        return resolve_qonnx_datatype_name(f"INT{max(magnitude + 1, 2)}")
+    return resolve_qonnx_datatype_name(f"UINT{max(most.bit_length(), 1)}")
 
 
 def thresholding_resources(
@@ -327,14 +343,38 @@ class ThresholdingAxiKernel(KernelSpace):
         """The input's element type: its tensor's."""
         return self.input_element.dtype
 
+    @derived(semantics=QONNX_DATATYPE_VALUE_SEMANTICS)
+    def table_dtype(self) -> QONNXDataType:
+        """The table's type, WT, which its memories hold and the input is compared in.
+        Never written (``use_axilite`` False), the table is its initial values, and its
+        type is theirs, ``threshold_dtype``. Runtime-writable, a host may set any
+        threshold a comparison tells apart, over the input's clipped range ``[min, max +
+        1]``; a set value is sized from its datatype, never from the initial values, so
+        the type holds that range and ``threshold_dtype``'s, signed where either is (an
+        ``INT4`` input over ``UINT5`` thresholds: ``INT6``). It holds the input's minimum,
+        so no input saturates (``saturation_supported``)."""
+        given = self.threshold_dtype
+        if not self.use_axilite:
+            return given
+        try:
+            low, high = ordinary_integer_bounds(self.input_dtype)
+            least, most = ordinary_integer_bounds(given)
+        except DatatypeError:
+            return given  # not integers: types_supported refuses them
+        signed = self.input_dtype.signed() or given.signed()
+        return threshold_table_dtype(min(low, least), max(high + 1, most), signed=signed)
+
     @constraint
     def types_supported(self) -> bool | Rejected:
-        a, t = self.input_dtype, self.threshold_dtype
-        for dtype in (a, t):
+        """Integer input and thresholds, and a table of the input's signedness: the RTL
+        compares both in it (``SIGNED``). The types are facts; the table's, read last,
+        follows ``use_axilite``."""
+        a = self.input_dtype
+        for dtype in (a, self.threshold_dtype):
             admitted = Integer().check(dtype)
             if isinstance(admitted, Rejected):
                 return admitted
-        if a.signed() != t.signed():
+        if a.signed() != self.table_dtype.signed():
             return reject(
                 "threshold-type", "input and threshold encodings must have the same signedness"
             )
@@ -357,18 +397,18 @@ class ThresholdingAxiKernel(KernelSpace):
 
     @constraint
     def saturation_supported(self) -> bool | Rejected:
-        """thresholding_axi saturates an input wider than its thresholds to their type
+        """thresholding_axi saturates an input wider than its table to the table's type
         (``genNarrow``): an input below the type's minimum compares as that minimum,
         which a threshold equal to it counts, though the input is below it."""
         try:
             least = ordinary_integer_bounds(self.input_dtype)[0]
-            floor = ordinary_integer_bounds(self.threshold_dtype)[0]
+            floor = ordinary_integer_bounds(self.table_dtype)[0]
         except DatatypeError:
             return True  # not integers: types_supported refuses them
         if least < floor and integer_range(self.thresholds)[0] == floor:
             return reject(
                 "threshold-saturation",
-                f"a threshold at {self.threshold_dtype.name}'s minimum {floor} counts every "
+                f"a threshold at {self.table_dtype.name}'s minimum {floor} counts every "
                 f"{self.input_dtype.name} input below it, which the RTL saturates to it",
             )
         return True
@@ -404,7 +444,7 @@ class ThresholdingAxiKernel(KernelSpace):
     def config_bus(self) -> Bus | Rejected:
         """The AXI-Lite configuration bus, present in every configuration."""
         (_, rows, count), pe = self.shape, self.pe
-        bits = self.threshold_dtype.bitwidth()
+        bits = self.table_dtype.bitwidth()
         cf, cpe = max(1, rows // pe), min(rows, pe)
         address_bits = (
             sum((value - 1).bit_length() for value in (cf, cpe, count, (bits + 31) // 32)) + 2
@@ -474,7 +514,7 @@ class ThresholdingAxiKernel(KernelSpace):
         return thresholding_resources(
             pe=self.pe,
             wi=self.input_dtype.bitwidth(),
-            wt=self.threshold_dtype.bitwidth(),
+            wt=self.table_dtype.bitwidth(),
             stage_depths=[self.stage_depth(stage) for stage in range(self.stages)],
             depth_trigger_bram=bram,
             depth_trigger_uram=uram,
@@ -539,8 +579,8 @@ class ThresholdingAxiKernel(KernelSpace):
 
     @view
     def thresholds_file(self) -> GeneratedData:
-        """The table as ``THRESHOLDS_FILE``, ``$readmemh`` words of WT bits, named by its
-        contents: a parameter literal over 10**6 bits stops Vivado.
+        """The table as ``THRESHOLDS_FILE``, ``$readmemh`` words of WT bits (``table_dtype``),
+        named by its contents: a parameter literal over 10**6 bits stops Vivado.
 
         Its layout is the one ``thresholding.sv`` reads (``genInitFile``): per set and
         row fold (folds rounded up to a power of two with several sets), per PE lane
@@ -548,7 +588,7 @@ class ThresholdingAxiKernel(KernelSpace):
         Padding words are 0: the RTL masks every comparison beyond N.
         """
         flat, (sets, rows, count) = integers(self.thresholds), self.shape
-        pe, bits = self.pe, self.threshold_dtype.bitwidth()
+        pe, bits = self.pe, self.table_dtype.bitwidth()
         folds, lanes = max(1, rows // pe), min(rows, pe)
 
         def padded(value: int) -> int:
@@ -569,7 +609,7 @@ class ThresholdingAxiKernel(KernelSpace):
     @view
     def parameters(self) -> dict[str, int | str]:
         sets, rows, count = self.shape
-        a, bits = self.input_dtype, self.threshold_dtype.bitwidth()
+        a, bits = self.input_dtype, self.table_dtype.bitwidth()
         return {
             "WI": a.bitwidth(),
             "WT": bits,
@@ -595,9 +635,10 @@ class ThresholdingAxiKernel(KernelSpace):
         address (the row's channel fold, its lane, the threshold), its bits in 32-bit words
         low first, the last of which commits it (FinnLib's ``axilite``). Rows are
         channels, ``c = fold * lanes + lane``, ``lanes`` the effective PE (min(C, PE)); a
-        shared row (C = 1) is written once and reaches every lane."""
+        shared row (C = 1) is written once and reaches every lane. Each word is the
+        threshold in the table's type (``table_dtype``)."""
         (_, rows, count), pe = self.shape, self.pe
-        bits = self.threshold_dtype.bitwidth()
+        bits = self.table_dtype.bitwidth()
         lanes, words = min(rows, pe), (bits + 31) // 32
         index_bits, lane_bits = (count - 1).bit_length(), (lanes - 1).bit_length()
         word_bits = (words - 1).bit_length()
@@ -639,4 +680,9 @@ class ThresholdingAxiKernel(KernelSpace):
     )
 
 
-__all__ = ["ThresholdingAxiKernel", "stage_style", "thresholding_resources"]
+__all__ = [
+    "ThresholdingAxiKernel",
+    "stage_style",
+    "threshold_table_dtype",
+    "thresholding_resources",
+]
