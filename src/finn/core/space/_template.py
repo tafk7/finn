@@ -36,8 +36,7 @@ it is linked; the domain rule, from the root's compiled form, when a model is ma
 design space (``_whole``) walk the compiled forms too.
 
 A model places compiled forms as scopes (``_scopes``: scope records keyed by path, made when
-reached), each member read by address through its scope; ``_structure.expand``, the tests'
-eager table, still places templates.
+reached), each member read by address through its scope.
 """
 
 from __future__ import annotations
@@ -51,7 +50,6 @@ from typing import Any, TypeAlias, cast
 from . import _compose
 from ._allocate import allocate
 from ._check import check
-from ._collapse import collapse
 from ._configuration import Space
 from ._lower import lower
 from ._nodes import NodeDecision, NodeDecl, slot_declaration
@@ -120,7 +118,7 @@ class TemplateChoice:
 
 @dataclass(frozen=True, slots=True)
 class TemplateIndex:
-    """What placing a template as scopes looks up, found once from it (``_structure``).
+    """What its compiled form looks up of a template, found once from it (``_Compiling``).
 
     ``selections``: each own selection (``decision.member`` through an own choice) ->
     (the choice, the member), and back (``own_selection``); ``stub_selections``: each
@@ -152,8 +150,7 @@ class Template:
 
     Node keys are local (``area``, ``kitchen.$guard``, ``kitchen.area`` for a formal's
     binding in stub ``kitchen``); ``placement_guard`` stands for the guard the own scope
-    is placed under. The nodes are lowered and checked, not collapsed: ``forward`` is
-    collapse's forwarding inside the template only.
+    is placed under. The nodes are lowered and checked, in dependency order (``order``).
     """
 
     space_type: type[Space]
@@ -184,7 +181,6 @@ class Template:
     structure: tuple[tuple[str, int], ...]
     selectors: Mapping[int, int]
     order: tuple[int, ...]
-    forward: tuple[int, ...]
     keys: Mapping[str, int]
     # What placing it as scopes looks up (``TemplateIndex``).
     index: TemplateIndex
@@ -752,7 +748,6 @@ def _compile(space_type: type[Space]) -> Template:
     _compose.check_placements(table)
     order = _compose.order(table)
     check(table, order)
-    forward = collapse(list(table.nodes), order)
     nodes = tuple(table.nodes)
     keys = {node.key: node.index for node in nodes}
     if len(keys) != len(nodes):
@@ -809,7 +804,6 @@ def _compile(space_type: type[Space]) -> Template:
         tuple(structure),
         _frozen({choice.selector: choice.index for choice in table.choice_drafts}),
         order,
-        forward,
         _frozen(keys),
         _index(scopes, choices, tuple(structure), value_members, tuple(table.named), table),
     )

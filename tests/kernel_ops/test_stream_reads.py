@@ -7,10 +7,11 @@ A port lowers into members of its kernel (``finn.kernels.port``): ``<p>_element`
 ``<p>_stream`` and ``<p>_access`` (a kernel with children serves its child's, ``<p>_stream``).
 For every kernel of a partition's network built as one Space (``support.one_space``: stage 7's
 chain of eight kernels, and TFC's partition from its cut body), every such member at any
-depth below it, and each of its existence guards (``_reads.existence_guards``): the reads the
+depth below it, and each of its existence guards (``_scopes.existence``): the reads the
 engine infers (``_reads.infer``: a method's, the model's reads, not its source) and each
-node's own edges (its arguments, guard, binding, selector and cases), followed through every
-node reached and through each formal to its binding in the placing Space, all lie inside the
+member's own edges (its arguments, guard, binding, selector and cases), followed through
+every address reached and through each formal to its binding in the placing Space (every
+scope of a model of the partition made, ``_line_reads.line_scopes``), all lie inside the
 kernel's own subtree (its members, its children at any depth and the selectors that choose
 them), the partition's facts (the root's formals) or literals. A neighbour's value of any
 kind, or a channel's, fails, naming the member and the path read.
@@ -28,6 +29,7 @@ from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar
 
 import pytest
+from core.space._line_reads import line_scopes
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from support.one_space import chain_space, one_space
@@ -43,9 +45,8 @@ from finn.core.space import (
     reject,
     view,
 )
-from finn.core.space._reads import ModelReads, existence_guards, infer
-from finn.core.space._structure import expand
-from finn.core.space.ir import LinkedModel, NodeId
+from finn.core.space._reads import ModelReads, infer
+from finn.core.space._scopes import Address, Scopes, existence
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
@@ -74,50 +75,44 @@ def lowered(space_type: type[Space]) -> Iterator[str]:
             yield f"{name}_stream"
 
 
-def kernels(table: LinkedModel) -> list[str]:
+def kernels(scopes: Scopes) -> list[str]:
     """The kernels the root places, by name: its children that are kernels, not channels."""
-    root = table.scopes[0]
     return sorted(
         name
-        for name, scope in root.named_children.items()
-        if issubclass(table.scopes[scope].space_type, KernelSpace)
-        and not issubclass(table.scopes[scope].space_type, Channel)
+        for name, scope in scopes.root.named_children.items()
+        if issubclass(scope.space_type, KernelSpace) and not issubclass(scope.space_type, Channel)
     )
 
 
-def _inside(table: LinkedModel, kernel: str, node: NodeId) -> bool:
+def _inside(kernel: str, node: Address) -> bool:
     """Whether ``node`` is ``kernel``'s own, a partition's fact (a root formal) or a literal."""
-    found = table.nodes[node]
-    if found.key.startswith(f"{kernel}."):
+    if node.key.startswith(f"{kernel}."):
         return True
-    return found.scope == 0 and found.kind in ("param", "const")
+    return node.standing.parent is None and node.kind in ("param", "const")
 
 
-def outside(
-    table: LinkedModel, reads: ModelReads, kernel: str, start: NodeId
-) -> list[tuple[str, ...]]:
-    """Each path from ``start`` to a node outside ``kernel`` (``_inside``), following every
-    node's edges and each method's inferred reads; a dynamic method fails as one."""
-    parent: dict[NodeId, NodeId | None] = {start: None}
+def outside(reads: ModelReads, kernel: str, start: Address) -> list[tuple[str, ...]]:
+    """Each path from ``start`` to an address outside ``kernel`` (``_inside``), following
+    every member's edges and each method's inferred reads; a dynamic method fails as one."""
+    parent: dict[Address, Address | None] = {start: None}
     pending = [start]
     found: list[tuple[str, ...]] = []
 
-    def path(node: NodeId) -> tuple[str, ...]:
+    def path(node: Address) -> tuple[str, ...]:
         keys: list[str] = []
-        current: NodeId | None = node
+        current: Address | None = node
         while current is not None:
-            keys.append(table.nodes[current].key)
+            keys.append(current.key)
             current = parent[current]
         return tuple(reversed(keys))
 
     while pending:
         index = pending.pop()
-        if not _inside(table, kernel, index):
+        if not _inside(kernel, index):
             found.append(path(index))
             continue
-        node = table.nodes[index]
-        following = list(node.dependencies)
-        if node.call_style == "self" and node.function is not None:
+        following = list(index.dependencies)
+        if index.call_style == "self" and index.function is not None:
             method = reads.methods.get(index)
             if method is None:
                 found.append((*path(index), "<dynamic>"))
@@ -130,14 +125,14 @@ def outside(
     return found
 
 
-def check(table: LinkedModel, reads: ModelReads) -> tuple[dict[str, int], list[str]]:
+def check(scopes: Scopes, reads: ModelReads) -> tuple[dict[str, int], list[str]]:
     """Every port member of each kernel at any depth, with its existence guards: the number
     checked by kernel, and each read outside its kernel, ``member: path``."""
     checked: dict[str, int] = {}
     failures: list[str] = []
-    for kernel in kernels(table):
+    for kernel in kernels(scopes):
         checked[kernel] = 0
-        for scope in table.scopes:
+        for scope in scopes.ordered():
             if scope.name != kernel and not scope.name.startswith(f"{kernel}."):
                 continue
             for member in lowered(scope.space_type):
@@ -145,17 +140,16 @@ def check(table: LinkedModel, reads: ModelReads) -> tuple[dict[str, int], list[s
                 if node is None:
                     continue
                 checked[kernel] += 1
-                for start in (node, *existence_guards(table, node)):
+                for start in (node, *existence(node)):
                     failures.extend(
-                        f"{table.nodes[node].key}: {' -> '.join(path)}"
-                        for path in outside(table, reads, kernel, start)
+                        f"{node.key}: {' -> '.join(path)}" for path in outside(reads, kernel, start)
                     )
     return checked, failures
 
 
 def _checked(whole: type[Space]) -> tuple[dict[str, int], list[str]]:
-    table = expand(whole)
-    return check(table, infer(table))
+    scopes = line_scopes(whole)
+    return check(scopes, infer(scopes))
 
 
 def test_stage_7s_chain_s_ports_read_only_their_own_kernels() -> None:
@@ -209,18 +203,13 @@ class Given(KernelSpace):
     )
 
 
-def _with_read(reads: ModelReads, method: NodeId, read: NodeId) -> ModelReads:
+def _with_read(reads: ModelReads, method: Address, read: Address) -> ModelReads:
     """``reads`` with ``method`` reading ``read`` too."""
-    methods: Mapping[NodeId, frozenset[NodeId] | None] = {
+    methods: Mapping[Address, frozenset[Address] | None] = {
         **dict(reads.methods.items()),
         method: frozenset({*(reads.methods[method] or ()), read}),
     }
     return dataclasses.replace(reads, methods=methods)
-
-
-def _key(table: LinkedModel, key: str) -> NodeId:
-    (found,) = [node.index for node in table.nodes if node.key == key]
-    return found
 
 
 def _reader(read: Any) -> type[Space]:
@@ -245,11 +234,11 @@ def test_a_stream_reading_its_sibling_directly_fails() -> None:
             "a": Given(tensor=TENSOR, sequence=SEQUENCE),
         },
     )
-    table = expand(whole)
-    reads = infer(table)
-    assert check(table, reads)[1] == []
-    read = _with_read(reads, _key(table, "a.x_stream"), _key(table, "b.x_stream"))
-    _, failures = check(table, read)
+    scopes = line_scopes(whole)
+    reads = infer(scopes)
+    assert check(scopes, reads)[1] == []
+    read = _with_read(reads, scopes.find("a.x_stream"), scopes.find("b.x_stream"))
+    _, failures = check(scopes, read)
     assert failures == ["a.x_stream: a.x_stream -> b.x_stream"]
 
 
@@ -259,8 +248,8 @@ def test_a_stream_reading_a_formal_bound_to_its_sibling_s_value_fails() -> None:
         "bound",
         {"b": neighbour, "a": Given(tensor=TENSOR, sequence=neighbour.x_stream.sequence)},
     )
-    table = expand(whole)
-    _, failures = check(table, infer(table))
+    scopes = line_scopes(whole)
+    _, failures = check(scopes, infer(scopes))
     assert failures, "a's stream reads its sibling through its formal"
     assert all(failure.startswith("a.x_stream: a.x_stream -> a.sequence") for failure in failures)
     assert any("b.x_stream" in failure for failure in failures), failures

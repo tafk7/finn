@@ -12,9 +12,9 @@ template (``template_of``, linked first); a deeper path goes through nested stub
 Allocation (``_allocate``) creates the scopes, a node for every member and the tasks
 that lower them; lowering (``_lower``, resolving references through ``_names``) gives
 each node its payload, reserving the nodes a reference needs; the checks composed
-across slots (``_compose``) order it, ``_check`` validates the semantics and
-``_collapse`` finds the forwarding inside it. ``_template.link_template`` runs them in
-that order and freezes the table into a ``Template``. The table holds what crosses a
+across slots (``_compose``) order it and ``_check`` validates the semantics.
+``_template.link_template`` runs them in that order and freezes the table into a
+``Template``. The table holds what crosses a
 phase; what a phase keeps for itself stays in that phase.
 """
 

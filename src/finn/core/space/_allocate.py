@@ -364,7 +364,7 @@ class _Allocation:
         names no case; a guard ``<key>.$known`` holds wherever that value is known (refused
         where it refuses); and each case guard reads the value inside that guard, by an
         argument named ``picked`` so it is never taken for a chosen selector's case guard
-        (``_reads.case_guards``). A refused picker is one piece, in the selector's name:
+        (``_scopes.Scopes.case_of``). A refused picker is one piece, in the selector's name:
         a piece is counted at the highest refused guard of its chain (``_running.evaluate``)."""
         key = member_key(scope.name, name)
         guard = self.table.guarded(

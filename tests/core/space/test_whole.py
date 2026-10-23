@@ -4,8 +4,8 @@
 flow order and its loops, the presence readers, ``inspection``'s decisions, choices,
 members and statistics, the scopes below a scope.
 
-Each equals the line's answer (``6d02612cc``: its algorithms over one table of every node,
-``core.space._whole_support``) on ``expand(C)``, by key, for every Space class the space
+Each equals the line's answer (``6d02612cc``: its algorithms over every address of a model
+whose every scope is made, ``core.space._whole_support``), by key, for every Space class the space
 tests and the engine's support modules define and for the classes below, which take the
 ways the corpus does not (a name the placing Space owns read by a method; a dynamic
 method's subtree holding formals, a fresh Decision and a named shared Decision; a validity
@@ -36,9 +36,10 @@ from finn.core.space.compiler import model_of
 
 HERE = Path(__file__).resolve().parent
 
-# The methods whose reads, inferred per template, gained a read against the line's per
-# scope: two helpers calling each other (``test_reads``), each reading what both read (the
-# line kept what it found first while the cycle was open, in the order it met them).
+# The methods whose reads, inferred per class, gained a read against the inference per
+# scope (``core.space._line_reads``): two helpers calling each other (``test_reads``), each
+# reading what both read (the line kept what it found first while the cycle was open, in
+# the order it met them).
 GAINED = {
     "Mutual": {"by_second": ["width"]},
     "PlacesMutual": {"inner.by_first": ["inner.lanes"]},

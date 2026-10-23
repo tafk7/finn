@@ -8,25 +8,24 @@ was made; an address is (scope, member), equal and hashed by the scope record's 
 the member's number, ordered by the scope's breadth-first position, then the member's number.
 Each address reads its member record through its scope, its edges mapped when read.
 
-The claim pinned here: every key the model's structure resolved is an address, reading the
-same fields and edges by key, and every scope and choice reads the same, by demand, made in
-the permuted order and made eagerly; a key names its address; any order of making scopes
-gives the same records and addresses.
+The claim pinned here: a key names its address, by demand, made in the permuted order and
+made eagerly; any order of making scopes gives the same records and addresses; an address is
+equal and ordered as stated; a formal bound by reference has its own address; and two
+design spaces of one model read the same addresses (whether every scope and key reads alike
+in every mode is ``test_templates``').
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from core.space._templates_support import _name, _stable, defined, links
+from core.space._templates_support import defined, links
 from finn.core.space import Decision, Param, Select, Space, derived, supplied
 from finn.core.space._running.evaluate import evaluation
 from finn.core.space._scopes import Address, Scopes, existence
-from finn.core.space._structure import Structure
-from finn.core.space._template import compiled, link_template
+from finn.core.space._template import compiled
 from finn.core.space.compiler import model_of
 from finn.core.space.occurrence import held, opened
 
@@ -71,109 +70,8 @@ class Holds(Space):
     missing = Gated()
 
 
-def _old(space_type: type[Space]) -> dict[str, object]:
-    """The structure's raw nodes, scopes and choices by key."""
-    structure = Structure(link_template(space_type))
-    records = structure.records
-
-    def key(index: int | None) -> str | None:
-        return None if index is None else structure.raw(index).key
-
-    found: dict[str, object] = {}
-    for index in list(structure.all_nodes()):
-        node = structure.raw(index)
-        found["node " + node.key] = (
-            *_fields(node, key),
-            records[node.scope].name,
-        )
-    for index in range(len(records)):
-        scope = structure.scope(index)
-        found["scope " + scope.name] = (
-            None if scope.parent is None else records[scope.parent].name,
-            scope.space_type,
-            key(scope.guard),
-            key(scope.validity),
-            sorted((name, key(member)) for name, member in scope.named_members.items()),
-            sorted((name, records[child].name) for name, child in scope.named_children.items()),
-            {(id(member), key(index)) for member, index in scope.members.items()},
-            {(id(child), records[index].name) for child, index in scope.children.items()},
-            {(id(choice), structure.choice(index).key) for choice, index in scope.choices.items()},
-            id(scope.record),
-        )
-    for index in range(len(structure._choice_owners)):
-        choice = structure.choice(index)
-        found["choice " + choice.key] = (
-            records[choice.scope].name,
-            key(choice.selector),
-            key(choice.guard),
-            tuple((case, None if c is None else records[c].name) for case, c in choice.cases),
-            sorted((member, key(index)) for member, index in choice.members.items()),
-        )
-    found["decisions"] = [key(index) for index in structure.decisions]
-    found["parameters"] = [key(index) for index in structure.parameters]
-    found["statistics"] = structure.statistics()
-    return found
-
-
-def _fields(node: Any, key: Any) -> tuple[object, ...]:
-    return (
-        node.kind,
-        node.owner,
-        node.origin,
-        None if node.semantics is None else node.semantics.name,
-        key(node.guard),
-        tuple((argument.name, key(argument.node)) for argument in node.arguments),
-        tuple((argument.name, key(argument.node)) for argument in node.domain_arguments),
-        key(node.output),
-        key(node.selector),
-        tuple(key(target) for target in node.constraints),
-        tuple((label, key(target)) for label, target in node.alternatives),
-        _stable(node.value),
-        _stable(node.domain),
-        node.required,
-        _name(node.function),
-        node.call_style,
-    )
-
-
-def _new(scopes: Scopes) -> dict[str, object]:
-    """The scope records' addresses, scopes and choices by key."""
-
-    def key(address: Address | None) -> str | None:
-        return None if address is None else address.key
-
-    found: dict[str, object] = {}
-    for address in list(scopes.all_addresses()):
-        found["node " + address.key] = (*_fields(address, key), address.standing.name)
-    for scope in scopes.ordered():
-        found["scope " + scope.name] = (
-            None if scope.parent is None else scope.parent.name,
-            scope.space_type,
-            key(scope.guard),
-            key(scope.validity),
-            sorted((name, key(member)) for name, member in scope.named_members.items()),
-            sorted((name, child.name) for name, child in scope.named_children.items()),
-            {(id(member), key(address)) for member, address in scope.members.items()},
-            {(id(child), record.name) for child, record in scope.children.items()},
-            {(id(choice), record.key) for choice, record in scope.choices.items()},
-            id(scope.record),
-        )
-    for choice in scopes.choices():
-        found["choice " + choice.key] = (
-            choice.scope.name,
-            key(choice.selector),
-            key(choice.guard),
-            tuple((case, None if c is None else c.name) for case, c in choice.cases),
-            sorted((member, key(address)) for member, address in choice.members.items()),
-        )
-    found["decisions"] = [key(address) for address in scopes.decisions]
-    found["parameters"] = [key(address) for address in scopes.parameters]
-    found["statistics"] = scopes.statistics()
-    return found
-
-
-def _differences(space_type: type[Space]) -> list[str]:
-    held = _old(space_type)
+def _unfound(space_type: type[Space]) -> list[str]:
+    """Each address of ``space_type``'s model its key does not find, in each mode."""
     found: list[str] = []
     for mode in ({}, {"permuted": True}, {"eager": True}):
         scopes = Scopes(
@@ -181,22 +79,13 @@ def _differences(space_type: type[Space]) -> list[str]:
             permuted=mode.get("permuted", False),
             eager=mode.get("eager", False),
         )
-        got = _new(scopes)
-        for entry in sorted(held.keys() | got.keys()):
-            if held.get(entry) != got.get(entry):
-                found.append(
-                    f"{space_type.__qualname__} {mode}: {entry}\n"
-                    f"  structure: {held.get(entry)}\n  scopes: {got.get(entry)}"
-                )
-                if len(found) == 3:
-                    return found
         for address in scopes.all_addresses():
             if scopes.find(address.key) is not address:
                 found.append(f"{space_type.__qualname__} {mode}: {address.key} finds no address")
-    return found
+    return found[:3]
 
 
-def test_the_space_tests_classes_read_by_address_as_their_structure_resolved_them() -> None:
+def test_the_space_tests_classes_find_each_address_by_its_key() -> None:
     modules = [f"core.space.{path.stem}" for path in sorted(HERE.glob("*.py"))] + [
         "support.space_cores",
         "support.space_pipeline",
@@ -204,7 +93,7 @@ def test_the_space_tests_classes_read_by_address_as_their_structure_resolved_the
     ]
     classes = [space_type for space_type in defined(modules) if links(space_type)]
     assert len(classes) > 150
-    failures = [entry for space_type in classes for entry in _differences(space_type)]
+    failures = [entry for space_type in classes for entry in _unfound(space_type)]
     assert not failures, "\n".join(failures)
 
 

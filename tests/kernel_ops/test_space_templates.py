@@ -5,7 +5,7 @@ class the kernels, the KernelOps and the test support define, of the Chain's mem
 stage 7's chain of eight kernels as one Space, read whole, alike by demand, permuted and
 eager, by key (``core.space._templates_support``; the engine's own corpus and edge cases
 are ``core.space.test_templates``); their domain rule, composed per class, equal to the
-line's on ``expand`` (``core.space._domains_support``); and their answers to the questions
+line's over every address (``core.space._domains_support``); and their answers to the questions
 about the whole design space, from compiled forms, equal to the line's
 (``core.space._whole_support``; the engine's are ``core.space.test_whole``)."""
 

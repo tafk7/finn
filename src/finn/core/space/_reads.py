@@ -31,8 +31,7 @@ each function's paths resolve against its class's compiled form once, and an add
 reads, existence guards and case guards are found for it when first asked
 (``_TemplateInference``, ``_Mapping``). The questions about the whole design space (the flow
 order, the presence readers) walk the same reads per class (``_whole``). ``summary``, a
-diagnostic, reads every address. A table (``ir.LinkedModel``, ``_structure.expand``'s) is
-inferred all at once, by its node ids.
+diagnostic, reads every address.
 """
 
 from __future__ import annotations
@@ -40,13 +39,13 @@ from __future__ import annotations
 import ast
 import inspect
 import textwrap
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
-from types import CodeType, MappingProxyType
+from types import CodeType
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 from ._scopes import Address, ScopeRecord, Scopes, existence
-from .ir import Argument, Linked, LinkedModel, Node, NodeId, Placing
+from .ir import Placing
 
 if TYPE_CHECKING:
     from ._template import Compiled
@@ -57,7 +56,7 @@ Path = tuple[str, ...]
 
 @dataclass(frozen=True, slots=True)
 class ModelReads:
-    """What every node of one model may read, found once from the model and its source.
+    """What every member of one model may read, found from the model and its source.
 
     ``methods``: each ``self`` method's possible reads (``None``: dynamic, anything of its
     Space). ``unresolved``: paths a method reads that name nothing compiled (a class
@@ -66,13 +65,12 @@ class ModelReads:
     each guard that holds where a selector is one of its cases (a candidate's
     selection), with that selector and case."""
 
-    # A model's by address; a table's by node id.
-    methods: Mapping[Any, frozenset[Any] | None]
-    unresolved: Mapping[Any, tuple[str, ...]]
-    existence: Mapping[Any, tuple[Any, ...]]
-    cases: Mapping[Any, tuple[Any, str]] = field(default_factory=dict)
+    methods: Mapping[Address, frozenset[Address] | None]
+    unresolved: Mapping[Address, tuple[str, ...]]
+    existence: Mapping[Address, tuple[Address, ...]]
+    cases: Mapping[Address, tuple[Address, str]] = field(default_factory=dict)
 
-    def guards(self, node: Any) -> tuple[Any, ...]:
+    def guards(self, node: Address) -> tuple[Address, ...]:
         """The guards deciding whether ``node`` exists, innermost first."""
         return self.existence.get(node, ())
 
@@ -331,188 +329,15 @@ def _uses(function: Callable[..., object]) -> _Uses:
     return uses
 
 
-class _Inference:
-    """The reads of every ``self`` method of one model, helpers followed in the scope they
-    are reached through."""
-
-    def __init__(self, linked: Linked) -> None:
-        self.linked = linked
-        self.uses: dict[int, _Uses] = {}
-        # A function's reads in a scope, and the paths that resolved to nothing.
-        self.found: dict[tuple[int, int], tuple[frozenset[NodeId] | None, tuple[str, ...]]] = {}
-        self.visiting: set[tuple[int, int]] = set()
-
-    def _uses_of(self, function: Callable[..., object]) -> _Uses:
-        key = id(function)
-        found = self.uses.get(key)
-        if found is None:
-            found = self.uses[key] = _uses(function)
-        return found
-
-    def reads(
-        self, function: Callable[..., object], scope: int
-    ) -> tuple[frozenset[NodeId] | None, tuple[str, ...]]:
-        """What ``function`` may read when its receiver is at ``scope``, and the paths that
-        name nothing compiled; ``None`` for a dynamic function."""
-        key = (id(function), scope)
-        held = self.found.get(key)
-        if held is not None:
-            return held
-        if key in self.visiting:
-            return frozenset(), ()  # a helper reached again through itself adds nothing
-        self.visiting.add(key)
-        try:
-            result = self._reads(function, scope)
-        finally:
-            self.visiting.discard(key)
-        self.found[key] = result
-        return result
-
-    def _reads(
-        self, function: Callable[..., object], scope: int
-    ) -> tuple[frozenset[NodeId] | None, tuple[str, ...]]:
-        uses = self._uses_of(function)
-        if uses.dynamic:
-            return None, ()
-        found: set[NodeId] = set()
-        missing: list[str] = []
-        helpers: list[tuple[Callable[..., object], int]] = []
-        for path in sorted(uses.paths):
-            if not self._resolve(scope, path, found, helpers):
-                missing.append(".".join(path))
-        for path in sorted(uses.present):
-            if not self._presence(scope, path, found):
-                missing.append(f"present({'.'.join(path)})")
-        for prefix, name in sorted(uses.calls):
-            if not self._call(scope, prefix, name, found, helpers):
-                missing.append(".".join((*prefix, name)) + "()")
-        for helper, at in helpers:
-            more, unresolved = self.reads(helper, at)
-            if more is None:
-                return None, ()
-            found |= more
-            missing.extend(unresolved)
-        return frozenset(found), tuple(missing)
-
-    def _scopes(self, scope: int, path: Path, found: set[NodeId]) -> list[int] | None:
-        """The scopes ``path`` (child and selector names) reaches from ``scope``, adding the
-        selectors it reads on the way; ``None`` where a name is no child or selector."""
-        reached = [scope]
-        for name in path:
-            following: list[int] = []
-            for at in reached:
-                item = self.linked.scopes[at]
-                if name in item.named_children:
-                    following.append(item.named_children[name])
-                    continue
-                selector = item.named_members.get(name)
-                choice = None if selector is None else self.linked.selector_choices.get(selector)
-                if selector is None or choice is None:
-                    return None
-                found.add(selector)
-                following.extend(case for _, case in self.linked.choices[choice].cases if case)
-            reached = following
-        return reached
-
-    def _resolve(
-        self,
-        scope: int,
-        path: Path,
-        found: set[NodeId],
-        helpers: list[tuple[Callable[..., object], int]],
-    ) -> bool:
-        """Add the nodes ``path`` may read from ``scope``. A path's name that is a property
-        or a method of the Space class there is followed as a helper. False where the
-        first name names nothing (a class constant)."""
-        item = self.linked.scopes[scope]
-        name, rest = path[0], path[1:]
-        if name in item.named_children:
-            if rest:
-                self._resolve(item.named_children[name], rest, found, helpers)
-            return True
-        index = item.named_members.get(name)
-        if index is None:
-            return self._attribute(scope, name, helpers)
-        found.add(index)
-        choice = self.linked.selector_choices.get(index)
-        if choice is not None and rest:
-            for _, case in self.linked.choices[choice].cases:
-                if case is not None:
-                    self._resolve(case, rest, found, helpers)
-        return True
-
-    def _attribute(
-        self, scope: int, name: str, helpers: list[tuple[Callable[..., object], int]]
-    ) -> bool:
-        """A name of the Space class itself: a property or a method is a helper read in
-        ``scope``; anything else reads nothing of the Space."""
-        held = inspect.getattr_static(self.linked.scopes[scope].space_type, name, None)
-        if isinstance(held, property) and held.fget is not None:
-            helpers.append((held.fget, scope))
-            return True
-        if inspect.isfunction(held):
-            helpers.append((held, scope))
-            return True
-        return False
-
-    def _call(
-        self,
-        scope: int,
-        prefix: Path,
-        name: str,
-        found: set[NodeId],
-        helpers: list[tuple[Callable[..., object], int]],
-    ) -> bool:
-        """``self.<prefix>.<name>(...)``: a helper method of the Space reached through
-        ``prefix``, read in that scope. A static or class method reads nothing of it."""
-        reached = self._scopes(scope, prefix, found)
-        if reached is None:
-            # A method of a value read through the path: the path is a read.
-            return self._resolve(scope, prefix, found, helpers) if prefix else False
-        known = False
-        for at in reached:
-            held = inspect.getattr_static(self.linked.scopes[at].space_type, name, None)
-            if isinstance(held, (staticmethod, classmethod)):
-                known = True
-            elif inspect.isfunction(held):
-                helpers.append((held, at))
-                known = True
-        return known
-
-    def _presence(self, scope: int, path: Path, found: set[NodeId]) -> bool:
-        """Add what ``present()`` reads of the last name of ``path``: a child's guard; for a
-        value input, the guards and selectors on the way to its source (what
-        ``occurrence.present`` reads)."""
-        reached = self._scopes(scope, path[:-1], found)
-        if reached is None:
-            return False
-        name = path[-1]
-        known = False
-        for at in reached:
-            item = self.linked.scopes[at]
-            if name in item.named_children:
-                guard = self.linked.scopes[item.named_children[name]].guard
-                if guard is not None:
-                    found.add(guard)
-                known = True
-                continue
-            index = item.named_members.get(name)
-            if index is None:
-                continue
-            known = True
-            _sources(self.linked, index, found)
-        return known
-
-
 # -- read inference per class ---------------------------------------------------------------
 #
-# A model's structure (``_structure``) resolves its nodes on demand, so what a method may read
-# is inferred per class: each ``self`` function's paths resolve against the compiled form of
-# the class it runs in (its own members, its slots, through each case's class, helpers
-# followed in the class they are reached through) to references relative to the scope it runs
-# in, once per class and function (``_TemplateInference``); a node's reads are those
-# references mapped to ``NodeId``s in its scope when first asked (``_Mapping``). What a
-# placement decides (a candidate of a choice that never applies there) is decided when mapped.
+# A model reads its members by address, made on demand, so what a method may read is inferred
+# per class: each ``self`` function's paths resolve against the compiled form of the class it
+# runs in (its own members, its slots, through each case's class, helpers followed in the
+# class they are reached through) to references relative to the scope it runs in, once per
+# class and function (``_TemplateInference``); an address's reads are those references mapped
+# to addresses in its scope when first asked (``_Mapping``). What a placement decides (a
+# candidate of a choice that never applies there) is decided when mapped.
 
 
 @dataclass(frozen=True, slots=True)
@@ -812,8 +637,8 @@ class _Mapping:
         return held
 
     def case(self, index: Address) -> tuple[Address, str] | None:
-        """The selector and case a guard holds at (``case_guards``), found for this
-        address."""
+        """The selector and case a guard holds at (``Scopes.case_of``: a case's scope is
+        placed under it, and it reads the selector alone), found for this address."""
         if index in self.cases:
             return self.cases[index]
         scopes = self.scopes
@@ -859,43 +684,6 @@ def _address_sources(scopes: Scopes, index: Address, found: set[Address]) -> Non
             pending.extend(target for _, target in current.alternatives)
     if scopes.selector_choice(index) is not None:
         found.add(index)
-
-
-def _sources(linked: Linked, index: NodeId, found: set[NodeId]) -> None:
-    """What decides whether a value input is supplied at ``index`` (``present``), in a
-    table: the guards and selectors on the way to its source, every alias on the way walked,
-    and the aliases collapse took the table past (``Node.via``), so each one's guard is
-    named."""
-    nodes: Sequence[Node] = linked.nodes
-    pending, seen = [index], set()
-    while pending:
-        current = pending.pop()
-        if current in seen:
-            continue
-        seen.add(current)
-        node = nodes[current]
-        if node.guard is not None:
-            found.add(node.guard)
-        if node.kind == "param":
-            found.add(current)
-        elif node.kind in ("alias", "guard", "view") and node.output is not None:
-            pending.append(node.output)
-            pending.extend(alias for alias, source in node.via if source == node.output)
-        elif node.kind == "select" and node.selector is not None:
-            found.add(node.selector)
-            pending.extend(_followed(node))
-        elif node.kind == "present":
-            pending.extend(_followed(node))
-    if index in linked.selector_choices:
-        found.add(index)
-
-
-def _followed(node: Node) -> list[NodeId]:
-    """A selection's or a ``present`` node's alternatives, and each alias collapse took
-    one of them past (a table's)."""
-    targets = [target for _, target in node.alternatives]
-    ends = set(targets)
-    return [*targets, *(alias for alias, source in node.via if source in ends)]
 
 
 class _Lazy(Mapping[Address, Any]):
@@ -963,81 +751,24 @@ def _scope_reads(scopes: Scopes) -> ModelReads:
     return ModelReads(_Methods(mapping), _Unresolved(mapping), _Existence(mapping), _Cases(mapping))
 
 
-def existence_guards(linked: Linked, node: NodeId) -> tuple[NodeId, ...]:
-    """The guards deciding whether ``node`` of a table exists, innermost first: its own
-    guard, and each guard that one is evaluated under (an enclosing scope's ``when``, a
-    candidate's selection), to the root (a model's: ``_scopes.existence``)."""
-    found: list[NodeId] = []
-    current = linked.header(node).guard
-    while current is not None:
-        found.append(current)
-        current = linked.header(current).guard
-    return tuple(found)
-
-
-def case_guards(linked: Linked) -> dict[NodeId, tuple[NodeId, str]]:
-    """Each guard that holds where a selector is one of its cases (the node a case's scope
-    is guarded by, directly or under its ``when``: it reads the selector alone), with
-    that selector and case."""
-    found: dict[NodeId, tuple[NodeId, str]] = {}
-    for choice in linked.choices:
-        selected = (Argument("selected", choice.selector),)
-        for case, scope in choice.cases:
-            guard = None if scope is None else linked.scopes[scope].guard
-            while guard is not None:
-                node = linked.nodes[guard]
-                if node.kind == "derived" and node.arguments == selected:
-                    found[guard] = (choice.selector, case)
-                    break
-                guard = node.guard
-    return found
-
-
-def infer(linked: Scopes | Linked) -> ModelReads:
+def infer(scopes: Scopes) -> ModelReads:
     """What every ``self`` method may read, every member's existence guards, and which of
-    them are a selector's cases. A model's scope records answer them address by address
-    when first asked, from its compiled forms (``_Mapping``); a table
-    (``_structure.expand``'s, or one built by hand) all at once."""
-    if isinstance(linked, Scopes):
-        return _scope_reads(linked)
-    if not isinstance(linked, LinkedModel):
-        raise TypeError("infer takes a model's scope records or a table")
-    inference = _Inference(linked)
-    methods: dict[NodeId, frozenset[NodeId] | None] = {}
-    unresolved: dict[NodeId, tuple[str, ...]] = {}
-    existence: dict[NodeId, tuple[NodeId, ...]] = {}
-    for node in linked.nodes:
-        if node.guard is not None:
-            existence[node.index] = existence_guards(linked, node.index)
-        if node.call_style != "self" or node.function is None:
-            continue
-        reads, missing = inference.reads(node.function, node.scope)
-        # A method reading itself keeps that read: it is a cycle, found when it runs.
-        methods[node.index] = reads
-        if missing:
-            unresolved[node.index] = tuple(dict.fromkeys(missing))
-    return ModelReads(
-        MappingProxyType(methods),
-        MappingProxyType(unresolved),
-        MappingProxyType(existence),
-        MappingProxyType(case_guards(linked)),
-    )
+    them are a selector's cases: a model's scope records answer them address by address
+    when first asked, from its compiled forms (``_Mapping``)."""
+    if not isinstance(scopes, Scopes):
+        raise TypeError("infer takes a model's scope records")
+    return _scope_reads(scopes)
 
 
-def summary(linked: Scopes | Linked, reads: ModelReads) -> dict[str, object]:
+def summary(scopes: Scopes, reads: ModelReads) -> dict[str, object]:
     """A diagnostic: how many ``self`` methods there are, which are dynamic (by Space class),
     and the paths that named nothing compiled."""
+    del scopes  # each address names its own class
     dynamic: dict[str, set[str]] = {}
     for index, found in reads.methods.items():
         if found is None:
-            if isinstance(linked, Scopes):
-                owner = index.scope.space_type.__qualname__
-                key = index.key
-            else:
-                node = linked.nodes[index]
-                owner = linked.scopes[node.scope].space_type.__qualname__
-                key = node.key
-            dynamic.setdefault(owner, set()).add(key.rsplit(".", 1)[-1])
+            owner = index.scope.space_type.__qualname__
+            dynamic.setdefault(owner, set()).add(index.key.rsplit(".", 1)[-1])
     return {
         "methods": len(reads.methods),
         "dynamic": sum(1 for found in reads.methods.values() if found is None),
@@ -1049,8 +780,6 @@ def summary(linked: Scopes | Linked, reads: ModelReads) -> dict[str, object]:
 __all__ = [
     "ModelReads",
     "Path",
-    "case_guards",
-    "existence_guards",
     "infer",
     "summary",
 ]

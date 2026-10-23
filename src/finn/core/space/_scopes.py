@@ -288,8 +288,8 @@ class _SelectionIndex(Mapping[str, Address]):
 
 
 def implies(required: Address | None, guard: Address | None) -> bool:
-    """Whether ``required`` holds whenever ``guard`` does: it is ``guard`` or an outer guard
-    (``ir.guard_implies`` over addresses)."""
+    """Whether ``required`` holds whenever ``guard`` does: it is ``guard`` or an outer
+    guard."""
     if required is None:
         return True
     current = guard

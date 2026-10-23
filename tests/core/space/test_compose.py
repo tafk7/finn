@@ -7,10 +7,11 @@ Each case states what the line (``6d02612cc``: one table of every placement, its
 check over it and its domain rule, ``_reads.check_domains``) answered, and the composed
 check answers the same: the same code, the same Decision, the same members (keys relative
 to the template the cycle is found in). The domain rule is also compared with the line's,
-run on ``expand(C)`` (``_domains_support``), on every Space class of the space tests and
-their support, and on random composites (``_compose_support``). The refusals the
-templates make that the line did not are named, each with its fix; so are the
-selection's type where its choice never applies and a selection's owner."""
+run over every address of a model of the class (``_domains_support``), on every Space
+class of the space tests and their support, and on random composites
+(``_compose_support``). The refusals the templates make that the line did not are named,
+each with its fix; so are the selection's type where its choice never applies and a
+selection's owner."""
 
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ from support.refusals import refused
 
 from core.space._compose_support import composite_space
 from core.space._domains_support import domain_differences, line_refusals
+from core.space._line_reads import line_scopes
 from core.space._templates_support import defined
 from finn.core.space import (
     Available,
@@ -41,7 +43,6 @@ from finn.core.space import (
     view,
 )
 from finn.core.space._compose import domain_refusals
-from finn.core.space._structure import expand
 from finn.core.space._template import compiled, link_template
 from finn.core.space.compiler import compile_model
 from finn.core.space.errors import DefinitionError
@@ -133,7 +134,7 @@ def test_a_walk_back_into_the_decisions_own_scope_keeps_its_existence_guards() -
     # The line: compiles (walked without the case guard as an existence guard, the
     # selector would be read).
     compile_model(Reenters)
-    assert not line_refusals(expand(Reenters))
+    assert not line_refusals(line_scopes(Reenters))
 
 
 def test_the_domain_rule_composed_equals_the_lines_on_the_corpus() -> None:
@@ -159,13 +160,14 @@ def test_the_domain_rule_composed_equals_the_lines_on_the_corpus() -> None:
 @pytest.mark.parametrize("seed", range(80))
 def test_the_domain_rule_composed_equals_the_lines_on_random_composites(seed: int) -> None:
     """Every Decision either refuses: the composed rule's refusals (all of them, a
-    diagnostic) are the line's, on ``expand``."""
+    diagnostic) are the line's, over every address."""
     space_type = composite_space(seed)
     try:
         link_template(space_type)
     except DefinitionError:
         return  # a cycle, refused alike (the cases above)
-    assert set(domain_refusals(compiled(space_type))) == set(line_refusals(expand(space_type)))
+    line = line_refusals(line_scopes(space_type))
+    assert set(domain_refusals(compiled(space_type))) == set(line)
 
 
 # -- cycles through a slot ---------------------------------------------------------------------
@@ -369,7 +371,7 @@ def test_an_expression_a_candidate_shares_with_another_reader_is_placed_for_each
     assert cast(Lanes, chosen.operand_on.source).total == 5
     # Where the choice applies, each reader has its own node of the projection (the line
     # had the candidate's alone, ``source.a.lanes.$project.0``).
-    keys = set(expand(SharedOperand).keys)
+    keys = set(line_scopes(SharedOperand).keys)
     assert {"source.a.lanes.$project.0", "total.$project.1"} <= keys
 
 
@@ -462,7 +464,7 @@ class Owned(Space):
 
 
 def test_a_selections_owner_is_its_first_reader_in_declaration_order() -> None:
-    linked = expand(Owned)
-    assert linked.nodes[linked.keys["unit.$member.ok"]].owner == "first"
+    scopes = line_scopes(Owned)
+    assert scopes.find("unit.$member.ok").owner == "first"
     # A selection the candidates share: the choice's key.
-    assert linked.nodes[linked.keys["heat.$member.cop"]].owner == "heat"
+    assert scopes.find("heat.$member.cop").owner == "heat"

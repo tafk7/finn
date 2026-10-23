@@ -12,7 +12,7 @@ from support.refusals import refused
 
 from finn.core.space import Space, default_semantics, design_space, inspection
 from finn.core.space._nodes import node_record
-from finn.core.space._structure import expand
+from finn.core.space._template import compiled, link_template
 from finn.core.space.compiler import compile_model
 from finn.core.space.declarations import (
     Const,
@@ -54,12 +54,13 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
     assert calls == []
     cycles = model.resolve(model.root, Example.cycles)
     assert {argument.name for argument in cycles.arguments} == {"extent", "lanes"}
-    # The dependency order is the eager form's (a model's structure resolves on demand).
-    table = expand(Example)
-    position = {index: offset for offset, index in enumerate(table.order)}
+    # The class's own dependency order (its template's: a model reads its members by
+    # address, on demand).
+    template = link_template(Example)
+    position = {index: offset for offset, index in enumerate(template.order)}
     assert all(
         position[dependency] < position[node.index]
-        for node in table.nodes
+        for node in template.nodes
         for dependency in node.dependencies
     )
     assert model.scopes.parameters == (model.resolve(model.root, Example.extent),)
@@ -235,11 +236,12 @@ def test_twenty_thousand_dependencies_compile_and_evaluate_iteratively() -> None
     model = compile_model(space_type)
     last = model.resolve(model.root, members["value20000"])
     assert len(last.dependencies) == 1
-    # Every member, and the Space's validity node (no pieces: no constraint, no Decision),
-    # in the eager form's dependency order (a model's structure resolves on demand).
-    table = expand(space_type)
-    assert len(table.order) == 20_002
-    assert table.order[-2:] == (table.keys["value20000"], table.scopes[0].validity)
+    # Every member, and the Space's validity (no pieces: no constraint, no Decision), in
+    # the class's own dependency order (its template's, read as its compiled records).
+    template, form = link_template(space_type), compiled(space_type)
+    order = [form.record_of[node] for node in template.order if node in form.record_of]
+    assert len(order) == len(form.records) == 20_002
+    assert order[-2:] == [form.keys["value20000"], form.validity]
     assert design_space(space_type()).query(cast(Derived[int], members["value20000"])) == Available(
         20_000
     )
