@@ -6,9 +6,10 @@ stations: a design space, opened by the public API, and the change made on it.
 - ``toys``: FINN's own toy Spaces (``toys.TOYS``: the house, the pipeline, a chain of
   stages, the boundary of a formal read from outside its scope, and the three shapes of
   an optional fact left out), each opened and changed once;
-- ``chain-4``, ``chain-8``, ``chain-64``: stage 7's chain of 4, 8 or 64 kernels
-  (``support.one_space``), configured with what conversion and the cut stored
-  (``commit``), then the middle MatMul's ``pe`` set to 2;
+- ``chain-4``, ``chain-8``, ``chain-64``: stage 7's chain of 4, 8 or 64 kernels, composed
+  (``support.one_space``: ``finn.kernels.composer``'s class with its facts), configured
+  with what conversion and the cut stored (``commit``), then the middle MatMul's ``pe``
+  set to 2;
 - ``tfc``: TFC's partition after the cut and after each of seven strategy sequences, in
   ``tfc_target`` (it reads FINN's builder), joined to these by the tool's entry.
 
@@ -24,7 +25,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
-from finn.core.space import Space, design_space, inspection
+from finn.core.space import Space, inspection
+from finn.kernels.composer import Composed, clear_classes
 from finn.kernels.configure import commit
 from support.one_space import chain_space
 from support.space_oracle import Implementation, forms
@@ -65,15 +67,18 @@ def _middle(names: Sequence[str]) -> str:
 
 def chain(kernels: int) -> list[Station]:
     """Stage 7's chain of ``kernels`` kernels, configured as conversion and the cut store
-    it, then the middle MatMul's ``pe`` set to 2."""
-    whole, stored = chain_space(kernels // 2)
+    it, then the middle MatMul's ``pe`` set to 2. Its class is made afresh: the composer
+    keeps a class, and its model, by structure, and a model reads the test modes
+    (``FINN_SPACE_PERMUTE``, ``FINN_SPACE_EAGER``) when it is made."""
+    clear_classes()
+    composed, stored = chain_space(kernels // 2)
     middle = _middle([f"mm{layer}" for layer in range(kernels // 2)])
-    return [_partition(f"chain-{kernels}", whole, stored, kernels, middle, change=True)]
+    return [_partition(f"chain-{kernels}", composed, stored, kernels, middle, change=True)]
 
 
 def _partition(
     label: str,
-    whole: type[Space],
+    composed: Composed,
     stored: Mapping[str, object],
     kernels: int,
     middle: str,
@@ -81,7 +86,7 @@ def _partition(
     change: bool = False,
 ) -> Station:
     def make() -> Space:
-        return commit(design_space(whole()), stored)
+        return commit(composed.design_space(), stored)
 
     viable: Sequence[str] | None = forms.ALL
     if kernels > WIDEST:

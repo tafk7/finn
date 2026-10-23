@@ -40,9 +40,9 @@ again in every design space that asks it. Every value FINN's kernels hold is key
 enums (``Form``, a beat sequence's repetition, a channel's steps, a channel side's kind, a
 transport's endpoint and marker kinds, and the platform's DSP block and fabric, which mix in
 ``str``), the QONNX datatypes, alone and inside a ``Tensor``, a channel's side (a port's
-stream inside it) and a stream contract, and the integer tensors. Stage 7's chain, made one
-Space by ``support.one_space``, holds no root facts (its kernels' facts are constants of its
-class) and stores only str, int and bool choices.
+stream inside it) and a stream contract, and the integer tensors. Stage 7's chain, composed
+as one Space by ``support.one_space`` (``finn.kernels.composer``), holds its members' facts
+as root Params (each a value above) and stores only str, int and bool choices.
 """
 
 from __future__ import annotations

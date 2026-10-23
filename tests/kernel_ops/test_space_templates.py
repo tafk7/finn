@@ -23,13 +23,14 @@ from support.one_space import chain_space
 
 import finn.custom_op
 import finn.kernels
-from finn.core.space import Space, design_space, inspection
+from finn.core.space import Space, inspection
 from finn.core.space._running.evaluate import evaluation
 from finn.core.space._scopes import EAGER, Address, ScopeRecord
 from finn.core.space._template import link_template
 from finn.core.space.compiler import compile_model
 from finn.core.space.occurrence import ask, held
 from finn.core.space.results import Available, QueryResult, Unresolved
+from finn.kernels.composer import clear_classes
 from finn.kernels.configure import commit
 from finn.kernels.matmul import MatMulKernel
 
@@ -60,7 +61,11 @@ def test_the_kernels_read_alike_in_any_order_their_scopes_are_made_in() -> None:
 
 def test_the_kernels_domains_compose_as_the_line_checked_them() -> None:
     modules = [f"support.{path.stem}" for path in sorted(SUPPORT.glob("*.py"))]
-    classes = [*_kernels(), *(cls for cls in defined(modules) if links(cls)), chain_space(4)[0]]
+    classes = [
+        *_kernels(),
+        *(cls for cls in defined(modules) if links(cls)),
+        chain_space(4)[0].space_type,
+    ]
     differences = [found for found in map(domain_differences, classes) if found is not None]
     assert not differences, "\n".join(differences)
 
@@ -72,7 +77,7 @@ def test_the_chains_members_read_alike_in_any_order_their_scopes_are_made_in() -
 
 
 def test_stage_7s_chain_of_eight_kernels_reads_alike_in_any_order_its_scopes_are_made_in() -> None:
-    whole, _ = chain_space(4)
+    whole = chain_space(4)[0].space_type
     assert_reads_alike([whole])
     templates = reached(link_template(whole))
     # Fifteen classes, and the composite (a port is a declaration of its kernel, no class).
@@ -108,7 +113,7 @@ def test_the_kernels_and_the_test_support_answer_as_the_line() -> None:
 
 
 def test_stage_7s_chain_of_eight_kernels_answers_as_the_line() -> None:
-    whole, _ = chain_space(4)
+    whole = chain_space(4)[0].space_type
     # The choices compared: each MatMul's folding is its own, not each core's; each
     # channel's source's two (absent without a value) and its one adapter memory, and no
     # source, mover or output adapter selector, nor an input adapter's, which its steps
@@ -120,8 +125,9 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv(EAGER, raising=False)  # the eager test mode makes everything at once
-    whole, stored = chain_space(4)
-    point = design_space(whole())
+    clear_classes()  # a model of its own: the composer keeps one class per structure
+    composed, _ = chain_space(4)
+    point = composed.design_space()
     scopes = inspection.model(point).scopes
     assert isinstance(point.mm0.query(MatMulKernel.cycles), Unresolved)  # type: ignore[attr-defined]
     read = scopes.counts()
@@ -134,8 +140,12 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # ``viable`` and the change (the structure's nodes resolved were 1366 (96) and 1464 (96),
 # 1371 and 1463 since T4c's piece 1 placed the required inputs' ports by construction).
 # 1153 (96) and 1224 (96) before each channel side became one value: each port bound now
-# evaluates its label and its side, and the channels' label constants are gone.
-EVALUATED = ((1180, 80), (1259, 80))
+# evaluates its label and its side, and the channels' label constants are gone. 1180 (80)
+# and 1259 (80) before the composer: each fact a member is given is a Param at the root
+# now (59 constants of the members evaluated become 59 root Params evaluated), and each
+# kernel's side a channel takes is a derived value at the root, the side labelled below its
+# member (20 evaluated).
+EVALUATED = ((1200, 21), (1279, 21))
 
 
 def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
@@ -155,8 +165,9 @@ def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(
     output adapters of the channels beside it, ``a1`` and ``h2``, which read its ports'
     streams)."""
     monkeypatch.delenv(EAGER, raising=False)
-    whole, stored = chain_space(4)
-    point = design_space(whole())
+    clear_classes()  # a model of its own: the composer keeps one class per structure
+    composed, stored = chain_space(4)
+    point = composed.design_space()
     scopes = inspection.model(point).scopes
     committed = commit(point, stored)
     counted = scopes.counts()

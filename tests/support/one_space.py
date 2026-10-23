@@ -1,16 +1,18 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""A partition's network as one Space: its kernels' declarations and its channels, as one
-composite class.
+"""A partition's network as one Space: the composer's (``finn.kernels.composer``) class,
+from the declaration this module reads off the shell's network.
 
-``one_space`` reads a model of KernelOps whose channel choices are stored (the cut's, or
-``make_cut_choices``'): each node's kernel declared from its facts
-(``KernelOp.facts``), each channel from the shell's wiring (``in_shell``), its facts read
-from the kernels' declarations (``channel_facts``: a port's side, ``Interface``; a value a
-kernel states, ``Fact``), and the values conversion and the cut
-stored, by key. ``mlp`` is stage 7's
-synthetic chain, and ``chain_space`` that chain as one Space.
+``declaration`` reads a model of KernelOps whose channel choices are stored (the cut's, or
+``make_cut_choices``'), as FINN's graph layer will: each node's kernel by its facts
+(``KernelOp.facts``), each channel from the shell's wiring (``in_shell``: a port's side,
+``Interface``, as the kernel's ``Port``; a value a kernel states, ``Fact``, as ``Stated``;
+a side no port is wired to as its source where a kernel states its value, else as the
+boundary, ``Side.boundary`` of the wire's ``port`` and ``mover_offer``), and the values
+conversion and the cut stored, by key. ``one_space`` composes it (``compose``): the class
+with its facts, and the stored values by path. ``mlp`` is stage 7's synthetic chain, and
+``chain_space`` that chain composed.
 
 A test helper, imported as ``support.one_space``.
 """
@@ -25,12 +27,19 @@ from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
 
-from finn.core.space import Space, composite
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.shell import in_shell, make_cut_choices
-from finn.kernels.channels import Channel
+from finn.kernels.composer import (
+    ChannelDeclaration,
+    Composed,
+    Key,
+    PartitionDeclaration,
+    Port,
+    Stated,
+    compose,
+)
 from finn.kernels.movers import MoverOffer
-from finn.kernels.network import Fact, Interface, Network
+from finn.kernels.network import Fact, Interface, Wire
 from finn.kernels.sides import Side
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
@@ -85,54 +94,58 @@ def mlp(layers: int) -> ModelWrapper:
     return model
 
 
-def channel_facts(net: Network, channel: str, members: dict[str, Any]) -> dict[str, Any]:
-    """Channel ``channel``'s facts as ``net`` wires them, each bound to the member of
-    ``members`` (the declarations of one Space) it is read from, never a view: a port's
-    side (``Interface``: ``x_side``, its stream, its label, ``compute.packed.x``, and on an
-    output port its word width); a value a kernel states (``Fact``). A side no port is wired
-    to is the channel's source where a kernel states its value (``contents``), else the
-    boundary (``Side.boundary``: the wire's ``port`` and ``mover_offer``)."""
-    given: dict[str, Any] = {}
-    wired = dict(net.wiring(channel).facts)
-    port, offers = cast(str, wired.pop("port", None)), wired.pop("mover_offer", ())
-    for fact, value in wired.items():
+def channel_declaration(wired: Wire) -> ChannelDeclaration:
+    """A channel as the network's ``wired`` declares it: a port (``Interface``) as its
+    kernel's ``Port``, a value a kernel states (``Fact``) as ``Stated``; a side no port is
+    wired to is the channel's source where a kernel states its value (``contents``), else
+    the boundary (``Side.boundary``: the wire's ``port`` and ``mover_offer``)."""
+    facts = dict(wired.facts)
+    port, offers = cast(str, facts.pop("port", None)), facts.pop("mover_offer", ())
+    sides: dict[str, Port | Side] = {}
+    given: dict[str, object] = {}
+    for fact, value in facts.items():
         if isinstance(value, Interface):
-            given[fact] = getattr(members[value.member], f"{value.port}_side")
+            sides[fact] = Port(value.member, value.port)
         elif isinstance(value, Fact):
-            given[fact] = getattr(members[value.member], value.name)
+            given[fact] = Stated(value.member, value.name)
         else:
             given[fact] = value
-    if "contents" in given and "producer" not in given:
-        given["producer"] = Side.source()
+    if "contents" in given and "producer" not in sides:
+        sides["producer"] = Side.source()
     for side in ("producer", "consumer"):
-        if side not in given:
-            given[side] = Side.boundary(port, cast("tuple[MoverOffer, ...]", offers))
-    return given
+        if side not in sides:
+            sides[side] = Side.boundary(port, cast("tuple[MoverOffer, ...]", offers))
+    return ChannelDeclaration(sides["producer"], sides["consumer"], given)
 
 
-def one_space(model: ModelWrapper, name: str) -> tuple[type[Space], dict[str, object]]:
-    """``model``'s KernelOps, their channel choices stored, as one Space named ``name``
-    (its kernels' declarations and the channels from the shell's wiring), and the values
-    conversion and the cut stored, by key."""
+def declaration(model: ModelWrapper) -> tuple[PartitionDeclaration, dict[Key, object]]:
+    """``model``'s KernelOps, their channel choices stored, as a partition's declaration
+    (each node's kernel by its facts, in graph order; each channel as the shell's network
+    wires it, ranked), and the values conversion and the cut stored, by (owner, key)."""
     nodes = list(model.graph.node)
     net = in_shell(model, nodes)
-    members: dict[str, Any] = {}
-    for node in nodes:
-        facts = kernel_op(model, node).facts()
-        members[node.name] = facts.space_type(**cast("dict[str, Any]", dict(facts.arguments)))
-    for channel in net.channels:
-        members[channel] = Channel(**channel_facts(net, channel, members))
-    stored = {f"{member}.{key}": value for (member, key), value in net.chosen().items()}
-    return composite(name, members), stored
+    kernels = {node.name: kernel_op(model, node).facts() for node in nodes}
+    channels = {name: channel_declaration(net.wiring(name)) for name in net.channels}
+    return PartitionDeclaration(kernels, channels), net.chosen()
 
 
-def chain_space(layers: int) -> tuple[type[Space], dict[str, object]]:
+def one_space(model: ModelWrapper) -> tuple[Composed, dict[str, object]]:
+    """``model``'s KernelOps, their channel choices stored, composed as one Space
+    (``declaration``, ``compose``: its class, names and facts), and the values conversion
+    and the cut stored, by path."""
+    declared, stored = declaration(model)
+    composed = compose(declared)
+    return composed, {composed.names.path(key): value for key, value in stored.items()}
+
+
+def chain_space(layers: int) -> tuple[Composed, dict[str, object]]:
     """Stage 7's chain of ``2 * layers`` kernels (``mlp``) for the ZU3EG at 5 ns, converted
-    and its channel choices made, as one Space (``one_space``), and its stored values."""
+    and its channel choices made, composed as one Space (``one_space``), and its stored
+    values."""
     target = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)
     model = mlp(layers).transform(ToKernelOps(target)).transform(InferKernelTensors())
     make_cut_choices(model)
-    return one_space(model, f"templates_chain_{2 * layers}")
+    return one_space(model)
 
 
-__all__ = ["chain_space", "channel_facts", "mlp", "one_space"]
+__all__ = ["chain_space", "channel_declaration", "declaration", "mlp", "one_space"]

@@ -153,8 +153,7 @@ def _checked(whole: type[Space]) -> tuple[dict[str, int], list[str]]:
 
 
 def test_stage_7s_chain_s_ports_read_only_their_own_kernels() -> None:
-    whole, _ = chain_space(4)
-    checked, failures = _checked(whole)
+    checked, failures = _checked(chain_space(4)[0].space_type)
     assert not failures, "\n".join(failures)
     # Each MatMul's three served streams, and its two cores' three ports each (element,
     # stream, access where it binds); each thresholding's three ports.
@@ -163,8 +162,7 @@ def test_stage_7s_chain_s_ports_read_only_their_own_kernels() -> None:
 
 
 def test_tfc_s_partition_s_ports_read_only_their_own_kernels(tfc: ModelWrapper) -> None:
-    whole, _ = one_space(tfc, "tfc_partition")
-    checked, failures = _checked(whole)
+    checked, failures = _checked(one_space(tfc)[0].space_type)
     assert not failures, "\n".join(failures)
     assert len(checked) == len(tfc.graph.node)
     assert all(count > 0 for count in checked.values()), checked

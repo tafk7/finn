@@ -15,20 +15,16 @@ its kernel's ``compute``, as the engine's own examples do in
 
 from __future__ import annotations
 
-from typing import Any, cast
-
 import numpy as np
 from onnx import TensorProto, helper
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
 from qonnx.util.basic import qonnx_make_model
-from support.one_space import channel_facts
+from support.one_space import one_space
 from support.space_walk import check, walk
 
-from finn.core.space import Space, composite, design_space
-from finn.custom_op.kernels.base import kernel_op
-from finn.custom_op.kernels.shell import in_shell, make_cut_choices
-from finn.kernels.channels import Channel
+from finn.core.space import Space
+from finn.custom_op.kernels.shell import make_cut_choices
 from finn.kernels.configure import commit
 from finn.platform.resolve import resolve_target
 from finn.transformation.kernels import InferKernelTensors, ToKernelOps
@@ -81,25 +77,15 @@ def mlp(layers: int) -> ModelWrapper:
 
 
 def whole_space(layers: int) -> Space:
-    """The chain's kernels and channels as one Space, kernels first, with the choices
-    conversion and the cut store committed (``make_cut_choices``: what the cut does to
-    a body)."""
+    """The chain's kernels and channels composed as one Space, kernels first
+    (``support.one_space``), with the choices conversion and the cut store committed
+    (``make_cut_choices``: what the cut does to a body)."""
     target = resolve_target(part="xczu3eg-sbva484-1-e", period_ns=5.0)
     model = mlp(layers).transform(ToKernelOps(target)).transform(InferKernelTensors())
-    nodes = list(model.graph.node)
     made = make_cut_choices(model)
     assert not (made.stale or made.late or made.unset), made
-    net = in_shell(model, nodes)
-    declared: dict[str, Any] = {}
-    for node in nodes:
-        facts = kernel_op(model, node).facts()
-        declared[node.name] = facts.space_type(**cast("dict[str, Any]", dict(facts.arguments)))
-    channels: dict[str, object] = {}
-    for name in net.channels:
-        channels[name] = Channel(**channel_facts(net, name, declared))
-    whole = composite(f"chain_{2 * layers}", {**declared, **channels})
-    stored = {f"{owner}.{key}": value for (owner, key), value in net.chosen().items()}
-    return commit(design_space(whole()), stored)
+    composed, stored = one_space(model)
+    return commit(composed.design_space(), stored)
 
 
 def test_eight_kernels_answer_as_a_recomputation() -> None:
