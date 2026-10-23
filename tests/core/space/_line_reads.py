@@ -274,7 +274,7 @@ def line_infer(scopes: Scopes) -> ModelReads:
         function = index.function
         if index.call_style != "self" or function is None:
             continue
-        reads, missing = inference.reads(function, index.standing)
+        reads, missing = inference.reads(function, index.scope)
         # A method reading itself keeps that read: it is a cycle, found when it runs.
         methods[index] = reads
         if missing:

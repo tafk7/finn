@@ -157,7 +157,7 @@ class _Upstream:
         if found is None:
             inside = line_scope_set(self.held, scope)
             found = self.below[scope] = tuple(
-                index for index in self.every if index.standing in inside
+                index for index in self.every if index.scope in inside
             )
         return found
 
@@ -165,7 +165,7 @@ class _Upstream:
         found = self.reached(
             (*self.reads.guards(decision), *self.inputs(decision.domain_arguments))
         )
-        return (found | self.formals(decision.standing)) - {decision}
+        return (found | self.formals(decision.scope)) - {decision}
 
     @staticmethod
     def inputs(arguments: tuple[Argument, ...]) -> tuple[Address, ...]:
@@ -199,7 +199,7 @@ class _Upstream:
             pending.extend(index.dependencies)
             if index.call_style == "self" and index.function is not None:
                 read = methods.get(index)
-                pending.extend(self.subtree(index.standing) if read is None else read)
+                pending.extend(self.subtree(index.scope) if read is None else read)
         return frozenset(found)
 
 
@@ -266,7 +266,7 @@ def line_decisions(scopes: Scopes, flow: tuple[Address, ...], scope: ScopeRecord
     included = line_scope_set(scopes, scope)
     found: list[object] = []
     for index in flow:
-        at = index.standing
+        at = index.scope
         if at not in included:
             continue
         choice = scopes.selector_choice(index)
@@ -321,7 +321,7 @@ def line_members(scopes: Scopes, scope: ScopeRecord) -> list[object]:
                 index.key,
                 index.key,
                 index.kind,
-                index.standing.name,
+                index.scope.name,
                 index.owner,
                 index.source_owner is not None,
                 None if index.guard is None else index.guard.key,
@@ -476,7 +476,7 @@ def differences(space_type: type[Space], *, scopes: bool = True) -> Compared:
             )
             compare(
                 f"decisions below {scope.name!r}",
-                [at.key for at in line_flow.order if at.standing in line_below],
+                [at.key for at in line_flow.order if at.scope in line_below],
                 [at.key for at in flow.order if at.scope in lane_below],
             )
     stats = statistics(model)

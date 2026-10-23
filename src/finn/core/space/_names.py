@@ -17,8 +17,8 @@ scope; a formal this class binds by reference is the record it writes for it. A
 ``decision.member`` read through a placed Space's choice reads the selection its candidates
 share there, or else one this class makes for it, a record it writes; each read through a
 choice is recorded (``_table.Read``). A selection several classes make for one scope is one
-address where they are placed, owned in the choice's own class where it reads it
-(``_scopes``).
+address where they are placed, in the choice's scope (``_scopes``); its owner is always the
+choice's key.
 """
 
 from __future__ import annotations
@@ -211,7 +211,7 @@ class Names:
             "select",
             None,
             guard=choice.guard,
-            source_owner=owner,
+            source_owner=choice.key,  # a selection's owner is its choice's key
         )
         self.table.nodes[node] = replace(
             self.table.nodes[node], selector=choice.selector, alternatives=tuple(alternatives)
@@ -294,7 +294,7 @@ class Names:
             "select",
             semantics,
             guard=self.table.lift(target, compiled.ref(choice.guard)),
-            source_owner=owner,
+            source_owner=member_key(self.table.name(target), choice.key),
         )
         self.table.nodes[node] = replace(
             self.table.nodes[node],

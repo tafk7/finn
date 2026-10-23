@@ -102,10 +102,10 @@ class ReadsItself(Space):
 
 
 class ReadsLater(Space):
-    """A selection read by the child and by the parent: one node, owned in the child's
-    template, where its choice is (the line's one table owned it by its first reader as
-    it was lowered: the child's member before the parent's expression, the parent's
-    member before the child's)."""
+    """A selection read by the child and by the parent: one address, in the child's scope,
+    where its choice is, owned by the choice's key (the line's one table owned it by its
+    first reader as it was lowered: the child's member before the parent's expression, the
+    parent's member before the child's)."""
 
     first = ReadsItself()
     second = ReadsItself()
@@ -278,16 +278,29 @@ def test_a_decision_bound_into_children_is_the_class_own() -> None:
     assert scopes.find("depth").scope is scopes.root
 
 
-def test_a_selection_read_by_several_templates_is_one_owned_in_its_choices_template() -> None:
-    scopes = compile_model(ReadsLater).scopes
-    assert scopes.find("first.pump.$member.cop").owner == "first.cop"
-    # The line: "earlier", the parent's member, lowered before the child's.
-    assert scopes.find("second.pump.$member.cop").owner == "second.cop"
-    (choice,) = (choice for choice in scopes.choices() if choice.key == "second.pump")
-    assert choice.members == {"cop": scopes.find("second.pump.$member.cop")}
-    # Read by the parent alone: owned by its reader there.
-    through = compile_model(ReadsThroughAChild).scopes
-    assert through.find("heater.pump.$member.cop").owner == "cop"
+@pytest.mark.parametrize("permuted", [False, True])
+def test_a_selection_read_by_several_classes_is_one_address_in_its_choices_scope(
+    permuted: bool,
+) -> None:
+    """Read by the choice's own class and by a class above, or by a class above alone: one
+    address, a member of the choice's scope, its owner the choice's key (SZ95 (2); the line
+    owned them by their first reader, ``first.cop``, ``second.cop``, ``cop``)."""
+    scopes = Scopes(compiled(ReadsLater), permuted=permuted)
+    for name in ("first", "second"):
+        found = scopes.find(f"{name}.pump.$member.cop")
+        assert found.owner == f"{name}.pump"
+        assert found.scope is scopes.root.named_children[name]
+        (choice,) = (choice for choice in scopes.choices() if choice.key == f"{name}.pump")
+        assert choice.members == {"cop": found}
+    # Read by the class above alone: a member of the choice's scope numbered after its
+    # class's records, reading the record the class above writes.
+    through = Scopes(compiled(ReadsThroughAChild), permuted=permuted)
+    found = through.find("heater.pump.$member.cop")
+    heater = through.root.named_children["heater"]
+    assert found.owner == "heater.pump"
+    assert found.scope is heater and found.member >= len(heater.compiled.records)
+    assert found.held.scope is through.root and found.held != found
+    assert through.holds_address(found) and not through.holds_address(found.held)
 
 
 def test_a_choice_never_applies_where_its_formal_is_unsupplied() -> None:
@@ -362,7 +375,7 @@ def test_a_design_space_read_for_one_value_makes_part_of_a_composite(
     # validity's pieces are none of the other houses'.
     ds = held(point).ds
     evaluated = {index for ev in ds.evaluations.values() for index in ev.memo}
-    assert {index.standing.name for index in evaluated} == {"house0.kitchen"}
+    assert {index.scope.name for index in evaluated} == {"house0.kitchen"}
     assert (made, len(evaluated)) == (12, 5)
     scopes.read_all()
     whole = scopes.counts()
@@ -439,7 +452,10 @@ def test_a_change_names_an_address_of_a_scope_of_its_model(
         Address(root, len(root.compiled.records)),
         Address(root, -1),
         elsewhere,
-        Address(change.node.scope, len(change.node.scope.compiled.records)),
+        Address(
+            change.node.scope,
+            len(change.node.scope.compiled.records) + len(change.node.scope.selections),
+        ),
     ):
         assert not scopes.holds_address(address)
         with pytest.raises(RequestError, match="change node does not belong"):

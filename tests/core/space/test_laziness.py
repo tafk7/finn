@@ -98,7 +98,7 @@ def _evaluated(point: Space | DesignSpace) -> set[Address]:
 
 def _in_play(point: Space | DesignSpace) -> set[str]:
     """The scopes with a member evaluated in the design space ``point`` holds."""
-    return {index.standing.name for index in _evaluated(point)}
+    return {index.scope.name for index in _evaluated(point)}
 
 
 def _handles(point: Space) -> dict[str, Any]:

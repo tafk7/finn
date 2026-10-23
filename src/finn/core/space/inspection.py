@@ -196,7 +196,7 @@ def _node_info(model: Model[Space], index: Address) -> NodeInfo:
         reference,
         node.key,
         node.kind,
-        node.standing.name,
+        node.scope.name,
         node.owner,
         node.source_owner is not None,
         None if node.guard is None else ValueHandle[bool](model, node.guard),
@@ -212,11 +212,11 @@ def _decision_info(model: Model[Space], index: Address) -> DecisionInfo[object]:
     return DecisionInfo(
         DecisionHandle[object](model, index),
         decision_key(index),
-        node.standing.name,
+        node.scope.name,
         node.owner,
         choice is not None,
         () if choice is None else tuple(name for name, _ in choice.cases),
-        node.standing.space_type,
+        node.scope.space_type,
         choice is None and node.domain is not None and node.domain.ordered,
         node.domain is not None and node.domain.candidates is not None,
     )

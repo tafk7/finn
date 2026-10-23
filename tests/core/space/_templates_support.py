@@ -70,7 +70,7 @@ def canonical(scopes: Scopes) -> dict[str, object]:
             node.required,
             _name(node.function),
             node.call_style,
-            node.standing.name,
+            node.scope.name,
         )
     for scope in scopes.ordered():
         found["scope " + scope.name] = (

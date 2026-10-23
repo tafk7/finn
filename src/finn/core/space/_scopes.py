@@ -24,9 +24,11 @@ placement (``ScopeRecord.canonical``) is
 - the binding by reference a placing class writes for a child's formal: the child's formal
   (a formal bound by reference has an address of its own, and reads through its binding);
 - a selection of a choice's member, made by the choice's own class or by a class above it:
-  one address whoever makes it (``ScopeRecord.selection``): the selection the candidates
-  share, where the choice applies; else its first reader's, in the choice's own class, else
-  in the nearest class above that reads it;
+  one address whoever makes it, a member of the choice's scope (``ScopeRecord.selection``):
+  the selection the candidates share, where the choice applies; else the class's own, where
+  it reads it; else, where only a class above reads it, a member numbered after the class's
+  records (``ScopeRecord.selections``, fixed by the compiled forms on its path), reading the
+  record of the nearest class above that reads it. Its owner is always the choice's key;
 - none, for a member that exists only where a Decision over nodes applies, where it never
   does.
 
@@ -138,14 +140,14 @@ class Address(tuple["ScopeRecord", int]):
         return self[1]
 
     @property
-    def standing(self) -> ScopeRecord:
-        """The scope it stands in: its own, but for a selection a class above makes, the
-        choice's scope."""
+    def held(self) -> Address:
+        """The record it reads, as the address of that record where it is written: itself,
+        but for a selection only a class above makes, that class's record (its edges mapped
+        there)."""
         scope, member = self
-        chosen = scope.compiled.chooses.get(member)
-        if chosen is None:
-            return scope
-        return cast(ScopeRecord, scope.reach(chosen[0]))
+        if member < len(scope.compiled.records):
+            return self
+        return cast(Address, scope.merged(*scope.selections[member - len(scope.compiled.records)]))
 
     def _read(self) -> _Read:
         scope, member = self
@@ -314,7 +316,7 @@ def existence(address: Address) -> tuple[Address, ...]:
 
 class _Registry:
     """What a model's scope records share: the model's lock, the mode, the records by path,
-    the selections' addresses and owners, and the member records made per shape. It holds
+    the selections' addresses, and the member records made per shape. It holds
     nothing of the model's ``Scopes``, so that an address kept anywhere (a cache's answer)
     keeps the model's scope records, never the object the model's tables are keyed by."""
 
@@ -326,7 +328,7 @@ class _Registry:
         self.records: dict[tuple[int, ...], ScopeRecord] = {}
         # Every address an evaluation of the model evaluated (``Scopes.counts``).
         self.evaluated: set[Address] = set()
-        self.merged: dict[tuple[ScopeRecord, int, str], tuple[Address, str | None] | None] = {}
+        self.merged: dict[tuple[ScopeRecord, int, str], Address | None] = {}
         self.made: dict[tuple[object, ...], Member] = {}
         self.written_keys: dict[int, Mapping[str, int]] = {}
 
@@ -357,6 +359,8 @@ class ScopeRecord:
         "_guard",
         "_view",
         "_choices",
+        "selections",
+        "_numbers",
     )
 
     def __init__(
@@ -391,9 +395,29 @@ class ScopeRecord:
             and (binding := bindings.get(choice.never_formal)) is not None
             and binding.kind == "unsupplied"
         )
+        # The selections the classes above may make in its class's choices, (choice, member)
+        # in order: each a member of the scope numbered after its class's records, the same
+        # whatever has been made or read (fixed by the compiled forms on its path).
+        found: set[tuple[int, str]] = set()
+        if parent is not None:
+            steps: tuple[int, ...] = (cast(int, slot),)
+            above: ScopeRecord | None = parent
+            while above is not None:
+                found.update(
+                    (choice, member)
+                    for (path, choice, member) in above.compiled.chosen
+                    if path == steps
+                )
+                if above.parent is not None:
+                    steps = (cast(int, above.slot), *steps)
+                above = above.parent
+        self.selections: tuple[tuple[int, str], ...] = tuple(sorted(found))
+        self._numbers = {
+            pair: len(compiled.records) + number for number, pair in enumerate(self.selections)
+        }
         self._children: dict[int, ScopeRecord | None] = {}
         self._addresses: dict[int, Address] = {}
-        self._reads: list[_Read | None] = [None] * len(compiled.records)
+        self._reads: list[_Read | None] = [None] * (len(compiled.records) + len(found))
         self._guard: Address | None = _UNSET
         self._view: tuple[Any, ...] | None = None
         self._choices: dict[int, ChoiceRecord] = {}
@@ -495,6 +519,8 @@ class ScopeRecord:
         """What record ``member`` of its class stands for here (see the module docstring);
         None where its placement excludes it."""
         compiled = self.compiled
+        if member >= len(compiled.records):  # a selection a class above makes
+            return self.selection(*self.selections[member - len(compiled.records)])
         if member in compiled.written:
             bound = compiled.binds.get(member)
             if bound is not None:  # a binding by reference: the child's formal
@@ -523,15 +549,19 @@ class ScopeRecord:
         return self.canonical(ref)
 
     def selection(self, choice: int, member: str) -> Address | None:
-        """The one address of ``decision.member`` through its choice ``choice``: the
-        selection its candidates share, where the choice applies; else its class's, where it
-        reads it (its first reader there); else the nearest class above's that reads it.
-        None where nothing reads it."""
-        found = self.merged(choice, member)
-        return None if found is None else found[0]
+        """The one address of ``decision.member`` through its choice ``choice``, a member of
+        this scope (the choice's): the selection its candidates share, where the choice
+        applies; else its class's, where it reads it; else, where only a class above reads
+        it, the member it is numbered here (``selections``), reading the record of the
+        nearest class above that reads it. None where nothing reads it."""
+        held = self.merged(choice, member)
+        if held is None or held[0] is self:
+            return held
+        return self.address(self._numbers[(choice, member)])
 
-    def merged(self, choice: int, member: str) -> tuple[Address, str | None] | None:
-        """``selection``'s address, and its owner's key where its first reader owns it."""
+    def merged(self, choice: int, member: str) -> Address | None:
+        """The record ``selection``'s address reads, as its address where it is written
+        (this class's, or the nearest class above's that reads it), found once."""
         registry = self.registry
         key = (self, choice, member)
         if key in registry.merged:
@@ -541,26 +571,24 @@ class ScopeRecord:
                 registry.merged[key] = self._merge(choice, member)
             return registry.merged[key]
 
-    def _merge(self, choice: int, member: str) -> tuple[Address, str | None] | None:
+    def _merge(self, choice: int, member: str) -> Address | None:
         compiled = self.compiled
         spec = compiled.choices[choice]
         own = compiled.own_selection.get((choice, member))
         if own is not None:
             if own in spec.shared and choice not in self.never:
                 # A selection its candidates share, unless dropped for disagreeing types.
-                return (self.address(own), None) if spec.members.get(member) == own else None
-            owner = _reader(self, spec.readers.get(member, ()))
-            if owner is not None:
-                return self.address(own), owner
+                return self.address(own) if spec.members.get(member) == own else None
+            if _read_here(self, spec.readers.get(member, ())):
+                return self.address(own)
         # The classes above: each that reaches the scope through its slots.
         path: tuple[int, ...] = (cast(int, self.slot),)
         above = self.parent
         while above is not None:
             record = above.compiled.chosen.get((path, choice, member))
             if record is not None and above.compiled.slots[path[0]].requires not in above.never:
-                owner = _reader(above, above.compiled.chosen_reads[record])
-                if owner is not None:
-                    return above.address(record), owner
+                if _read_here(above, above.compiled.chosen_reads[record]):
+                    return above.address(record)
             if above.parent is None:
                 break
             path = (cast(int, above.slot), *path)
@@ -659,6 +687,10 @@ class ScopeRecord:
     def _resolve(self, index: int) -> _Read:
         compiled = self.compiled
         registry = self.registry
+        if index >= len(compiled.records):
+            # A selection only a class above makes: its record there, read there.
+            held = cast(Address, self.merged(*self.selections[index - len(compiled.records)]))
+            return held[0].read(held[1])
         member = compiled.records[index]
         key = member_key(self.name, member.key)
         formal = compiled.formal_names.get(index)
@@ -696,7 +728,7 @@ class ScopeRecord:
             # A reference: the record the placing class writes for it, read there.
             written = parent.compiled.records[cast(int, binding.node)]
             return written, parent, key, _owned(parent, written)
-        owner = self._selection_owner(index)
+        owner = _owned(self, member)
         selection = compiled.selections.get(index)
         if selection is not None and selection[0] in self.never:
             # ``decision.member`` through a choice that never applies here: no
@@ -755,28 +787,7 @@ class ScopeRecord:
                     ("members", id(compiled), index, alternatives),
                     lambda: replace(member, alternatives=alternatives, value=values),
                 )
-        if owner is None:
-            owner = _owned(self, member)
         return member, self, key, owner
-
-    def _selection_owner(self, index: int) -> str | None:
-        """The owner of a selection record whose address it is here (its first reader's,
-        where it owns it): None for anything else."""
-        compiled = self.compiled
-        selection = compiled.selections.get(index)
-        scope: ScopeRecord | None = self
-        if selection is None:
-            chosen = compiled.chooses.get(index)
-            if chosen is None:
-                return None
-            scope = self.reach(chosen[0])
-            selection = chosen[1:]
-            if scope is None:
-                return None
-        found = cast(ScopeRecord, scope).merged(*selection)
-        if found is None or found[0] != self.address(index):
-            return None
-        return found[1]
 
     def _dropped(self, edge: Edge) -> bool:
         """Whether an edge reads below a candidate of a choice that never applies here."""
@@ -898,12 +909,9 @@ class ScopeRecord:
         return found
 
 
-def _reader(record: ScopeRecord, reads: Sequence[Read]) -> str | None:
-    """The first read of ``reads`` that exists at ``record``: its owner's key."""
-    for read in reads:
-        if read.requires not in record.never:
-            return member_key(record.name, read.owner)
-    return None
+def _read_here(record: ScopeRecord, reads: Sequence[Read]) -> bool:
+    """Whether a read of ``reads`` exists at ``record`` (a selection exists where read)."""
+    return any(read.requires not in record.never for read in reads)
 
 
 def _owned(record: ScopeRecord, member: Member) -> str | None:
@@ -1037,7 +1045,7 @@ class Scopes:
         if not isinstance(address, Address) or not self.holds(address[0]):
             return False
         scope, member = address
-        if type(member) is not int or not 0 <= member < len(scope.compiled.records):
+        if type(member) is not int or not 0 <= member < len(scope._reads):
             return False
         return scope.canonical(member) == address
 
@@ -1069,7 +1077,7 @@ class Scopes:
         with self.lock:
             found: list[Address] = []
             for record in self.ordered():
-                for member in range(len(record.compiled.records)):
+                for member in range(len(record._reads)):
                     address = record.canonical(member)
                     if address is not None and address[0] is record and address[1] == member:
                         found.append(address)
@@ -1111,7 +1119,7 @@ class Scopes:
             evaluated = self.registry.evaluated
             return {
                 "scopes made": len(records),
-                "scopes in play": len({address.standing for address in evaluated}),
+                "scopes in play": len({address.scope for address in evaluated}),
                 "members read": sum(
                     1 for record in records for read in record._reads if read is not None
                 ),
@@ -1122,7 +1130,7 @@ class Scopes:
     def in_play(self) -> frozenset[ScopeRecord]:
         """The scopes with a member evaluated so far."""
         with self.lock:
-            return frozenset(address.standing for address in self.registry.evaluated)
+            return frozenset(address.scope for address in self.registry.evaluated)
 
     # -- keys
 
@@ -1248,8 +1256,8 @@ class Scopes:
         nodes = edges = decisions = 0
         for member in range(len(compiled.records)):
             address = record.canonical(member)
-            if address is None or address[0] is not record or address[1] != member:
-                continue
+            if address is None or address.held != record.address(member):
+                continue  # counted where its record is written (a selection made here too)
             nodes += 1
             if member in compiled.formal_names and record.parent is not None:
                 continue  # counted by its placing class, where its binding is written

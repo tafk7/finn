@@ -508,7 +508,7 @@ class Evaluation:
 
     def source(self, index: Address, reader: Address) -> Address:
         """What ``reader`` reads when it reads ``index`` (``structure.Record.source``)."""
-        return self.record.source(index, reader.standing)
+        return self.record.source(index, reader.scope)
 
     def note(self, reads: frozenset[Address] | set[Address]) -> None:
         """What the node being evaluated read (where a node cache is on)."""

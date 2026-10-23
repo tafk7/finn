@@ -88,7 +88,7 @@ def _inside(kernel: str, node: Address) -> bool:
     """Whether ``node`` is ``kernel``'s own, a partition's fact (a root formal) or a literal."""
     if node.key.startswith(f"{kernel}."):
         return True
-    return node.standing.parent is None and node.kind in ("param", "const")
+    return node.scope.parent is None and node.kind in ("param", "const")
 
 
 def outside(reads: ModelReads, kernel: str, start: Address) -> list[tuple[str, ...]]:

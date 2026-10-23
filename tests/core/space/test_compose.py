@@ -448,8 +448,9 @@ class Boiler(Space):
 
 
 class Owned(Space):
-    """``unit.ok`` is read by ``first``'s guard and by ``second``: ``second`` is lowered
-    first (members before guards), ``first`` is declared first."""
+    """``unit.ok``, a member one candidate has, is read by ``first``'s guard and by
+    ``second`` (``second`` lowered first, ``first`` declared first); ``heat.cop`` is a member
+    both candidates have."""
 
     unit: Pump | None = Select(none=None, pump=Pump(ok=True))
 
@@ -458,13 +459,15 @@ class Owned(Space):
         return 1
 
     second = View(cast(Any, unit).ok)
-    # Read through a choice its candidates share: the choice owns it.
+    # Read through a choice its candidates share.
     heat: Pump | Boiler = Select(pump=Pump(ok=True), boiler=Boiler(ok=False))
     seen = View(heat.cop)
 
 
-def test_a_selections_owner_is_its_first_reader_in_declaration_order() -> None:
+def test_a_selections_owner_is_its_choices_key() -> None:
+    """Whoever reads it, and whether one candidate has the member or several share it: the
+    owner of a selection is its choice's key (SZ95 (2); the line owned one candidate's by
+    its first reader in declaration order, ``first``)."""
     scopes = line_scopes(Owned)
-    assert scopes.find("unit.$member.ok").owner == "first"
-    # A selection the candidates share: the choice's key.
+    assert scopes.find("unit.$member.ok").owner == "unit"
     assert scopes.find("heat.$member.cop").owner == "heat"

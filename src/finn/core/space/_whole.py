@@ -522,7 +522,7 @@ class Whole:
     def _start(index: Address) -> tuple[ScopeRecord, Ref]:
         """Where a walk from ``index`` starts: its scope and member, or, for a formal its
         placing class binds, the exit it is there."""
-        record, member = index
+        record, member = index.held
         name = record.compiled.formal_names.get(member)
         if name is not None and record.parent is not None:
             return record, ("formal", name, "r")

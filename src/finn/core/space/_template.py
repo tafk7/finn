@@ -101,7 +101,7 @@ class CompiledChoice:
     (records), and what a placement where it never applies needs (``never_formal``
     unsupplied there): the candidates' classes, the selector's value there, every selection
     made for it (record -> member) and those its candidates share, each read of a member
-    through it (in the class's declaration order), and the shared members dropped for their
+    through it (in the order lowered), and the shared members dropped for their
     candidates' disagreeing types. A selection where it never applies has no alternatives
     and keeps the type the class checked its readers against (``_scopes``)."""
 
@@ -133,7 +133,7 @@ class Compiled:
     walk reads each edge as ``ref`` says. ``order``: its records in dependency order.
 
     ``binds``, ``chooses`` and ``chosen_reads`` read each written record back: what it is
-    written for, and a selection's reads (whose first, where it exists, owns it).
+    written for, and a selection's reads (where one exists at a placement, the selection does).
 
     ``slots``: the Spaces it places, in placement order (structure order, candidates in case
     order). Its own maps, by record and slot: ``formals``, ``members``,
@@ -429,7 +429,7 @@ class _Freezing:
             path, choice, member = table.chooses[record]
             chosen[(path, choice, member)] = record
             written[record] = path[0]
-            chosen_reads[record] = _declared(table, table.chosen_reads.get(record, []))
+            chosen_reads[record] = tuple(table.chosen_reads.get(record, ()))
         structure: list[tuple[str, int]] = []
         for name, declaration in own.effective.members.items():
             kind = table.kinds[space_type][name]
@@ -551,7 +551,7 @@ class _Freezing:
             next(iter(decision.candidates)),
             _frozen(draft.selects),
             frozenset(draft.shared),
-            _frozen({member: _declared(table, reads) for member, reads in draft.readers.items()}),
+            _frozen({member: tuple(reads) for member, reads in draft.readers.items()}),
             frozenset(draft.dropped),
         )
 
@@ -584,14 +584,6 @@ def _ref(
             # A formal this class binds by reference: the record it writes for it.
             return cast(int, slot.bindings[formal].node)
     return placed
-
-
-def _declared(table: Table, reads: list[Read]) -> tuple[Read, ...]:
-    """Reads of a selection in the class's declaration order: by the member of its own scope
-    each reader belongs to (a key's first segment: a member's name has none), in member
-    order; reads of one member in the order they were lowered."""
-    members = {name: position for position, name in enumerate(table.kinds[table.space_type])}
-    return tuple(sorted(reads, key=lambda read: members[read.owner.split(".", 1)[0]]))
 
 
 __all__ = [
