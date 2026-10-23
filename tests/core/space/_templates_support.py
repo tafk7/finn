@@ -7,9 +7,9 @@ classes a set of modules defines.
 
 Every address, scope and choice reads the same whichever order the scopes were made in:
 keys, kinds, owners, edges by key, scopes by path, choices by key, the decisions in
-declaration order. That the scope records read as the structure they replaced resolved
-(itself checked, when templates replaced it, against digests of the line's one table of
-every placement) is ``test_scope_records``'."""
+declaration order. (That the scope records read as the structure they replaced resolved was
+checked when they replaced it, as that structure had been against digests of the line's
+one table of every placement.)"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from collections.abc import Iterable, Iterator
 
 from finn.core.space import Space
 from finn.core.space._scopes import Address, Scopes
-from finn.core.space._template import Template, compiled, link_template
+from finn.core.space._template import Compiled, compiled
 from finn.core.space.domains import Domain
 from finn.core.space.errors import DefinitionError
 
@@ -153,24 +153,22 @@ def defined(names: Iterable[str]) -> Iterator[type[Space]]:
 
 
 def links(space_type: type[Space]) -> bool:
-    """Whether its template links (a class that is a refusal's case does not)."""
+    """Whether it compiles (a class that is a refusal's case does not)."""
     try:
-        link_template(space_type)
+        compiled(space_type)
     except DefinitionError:
         return False
     return True
 
 
-def reached(template: Template) -> dict[type[Space], Template]:
-    """Every template reached from ``template``, by class."""
-    found: dict[type[Space], Template] = {}
-    pending = [template]
+def reached(form: Compiled) -> dict[type[Space], Compiled]:
+    """Every compiled form reached from ``form`` through its slots, by class."""
+    found: dict[type[Space], Compiled] = {}
+    pending = [form]
     while pending:
         current = pending.pop()
         if current.space_type in found:
             continue
         found[current.space_type] = current
-        pending.extend(
-            link_template(scope.space_type) for scope in current.scopes[1:] if scope.parent == 0
-        )
+        pending.extend(slot.compiled for slot in current.slots)
     return found

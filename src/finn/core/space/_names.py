@@ -1,7 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""What an authored reference names in a template's own scope, as a node of its table.
+"""What an authored reference names in a class being compiled, as a record of its table or
+an edge out of the class (``ir.NodeRef``).
 
 A member, a path of records (``kitchen.area``), a Decision over nodes' case or
 member (``heating.kw``), a projection (``spec.payload_bits``) and an integer
@@ -9,13 +10,15 @@ expression each resolve to one node; those that need one get it reserved here, o
 and source. ``members_candidates`` lists the exports ``Members`` reads (views and derived
 values), named as the reading scope sees them.
 
-A reference into a child resolves in the child's template: its node is imported into the
-child's stub (``Table.imported``), and a deeper path goes through nested stubs
-(``Table.nested``). A ``decision.member`` read through a child's choice reads the
-selection its candidates share in the child's template, or else makes one in the stub;
-each read through a choice is recorded (``_table.Read``). A selection several templates
-make for one scope is one node where they are placed, owned in the choice's own template
-where it reads it (``_scopes``).
+A reference into a placed Space resolves in that class's compiled form, at a place
+(``_table.Place``: a slot, and the slots of the placed classes below it) and is an edge out
+of the class (``Table.lift``): a member through the slots, or a selection in a choice's
+scope; a formal this class binds by reference is the record it writes for it. A
+``decision.member`` read through a placed Space's choice reads the selection its candidates
+share there, or else one this class makes for it, a record it writes; each read through a
+choice is recorded (``_table.Read``). A selection several classes make for one scope is one
+address where they are placed, owned in the choice's own class where it reads it
+(``_scopes``).
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from dataclasses import replace
 from typing import cast
 
 from ._nodes import NodeChoice, NodeDecision, NodeDecl, unwrap
-from ._table import ChoiceDraft, ExpressionTask, Read, Table, member_key
+from ._table import ChoiceDraft, ExpressionTask, Place, Read, ScopeDraft, Table, member_key
 from .declarations import (
     CaseRef,
     ChoiceMemberRef,
@@ -37,7 +40,7 @@ from .declarations import (
 )
 from .errors import DefinitionError, RequestError
 from .expressions import INTEGER_SEMANTICS, Expr
-from .ir import Argument, Scope
+from .ir import Argument, NodeRef
 from .semantics import ValueSemantics
 
 _OWNER = "space.names"
@@ -50,34 +53,35 @@ def _attribute(name: str) -> Callable[..., object]:
     return attribute
 
 
-def _in_table(scopes: Sequence[Scope], scope: int, reference: object) -> int:
+def _in_table(drafts: Sequence[ScopeDraft], scope: int, reference: object) -> int:
     """A member, a member through placed nodes, or a choice face through a node, in a
-    table being linked (its scopes; no choice is reachable here: ``IndexError``)."""
+    class being compiled (its own scope's drafts; no choice is reachable here:
+    ``IndexError``)."""
     if isinstance(reference, NodeChoice) and len(reference._space_path) > 1:
-        scope = _descend_table(scopes, scope, reference._space_path[:-1])
+        scope = _descend_table(drafts, scope, reference._space_path[:-1])
     reference = unwrap(reference)
     try:
-        return scopes[scope].members[reference]
+        return drafts[scope].members[reference]
     except (KeyError, TypeError):
         pass
     if isinstance(reference, MemberRef):
-        target = _descend_table(scopes, scope, reference.path)
+        target = _descend_table(drafts, scope, reference.path)
         member = unwrap(reference.member)
         try:
-            return scopes[target].members[member]
+            return drafts[target].members[member]
         except (KeyError, TypeError) as cause:
             raise RequestError(
                 f"{member.name if isinstance(member, Declaration) else member!r} is not a "
-                f"member of {scopes[target].space_type.__qualname__}"
+                f"member of {drafts[target].effective.space_type.__qualname__}"
             ) from cause
     if isinstance(reference, (ChoiceMemberRef, CaseRef)):
         raise IndexError("no choice is reachable while a table is linked")
     raise RequestError("reference is not a member of this compiled scope")
 
 
-def _descend_table(scopes: Sequence[Scope], scope: int, path: Sequence[Declaration]) -> int:
+def _descend_table(drafts: Sequence[ScopeDraft], scope: int, path: Sequence[Declaration]) -> int:
     for record in path:
-        current = scopes[scope]
+        current = drafts[scope]
         if record is current.record:
             continue  # the node this scope instantiates
         child = current.children.get(record)
@@ -104,20 +108,24 @@ class Names:
         self.projections: dict[tuple[int, Projection[object], int | None], int] = {}
         self.choice_member_nodes: dict[tuple[int, str], int] = {}
         self.placed_scopes: dict[int, tuple[int, ...]] = {}
-        # Selections made in a stub's choice, by (stub, choice, member).
-        self.stub_choice_members: dict[tuple[int, int, str], int] = {}
+        # Selections made in a placed Space's choice, by (where, choice, member).
+        self.placed_choice_members: dict[tuple[Place, int, str], int] = {}
 
-    def members_candidates(self, scope: int, key: ViewKey[object]) -> list[tuple[str, str, int]]:
-        """Each child node's export of ``key``: (its name, the key's name, its node)."""
+    def members_candidates(
+        self, scope: int, key: ViewKey[object]
+    ) -> list[tuple[str, str, NodeRef]]:
+        """Each child node's export of ``key``: (its name, the key's name, its member)."""
 
-        result: list[tuple[str, str, int]] = []
+        result: list[tuple[str, str, NodeRef]] = []
+        prefix = self.table.drafts[scope].name
         for child in self.placed(scope):
-            name = self.table.local_name(scope, child)
-            template = self.table.stub(child).template
-            exported = template.members.get(key)
+            name = self.table.drafts[child].name
+            name = name[len(prefix) + 1 :] if prefix else name
+            compiled = self.table.placing(child).compiled
+            exported = compiled.members.get(key)
             if exported is not None:
-                self.check_export(child, key, template.nodes[exported].kind)
-                result.append((name, key.name, self.table.imported(child, exported)))
+                self.check_export(child, key, compiled.records[exported].kind)
+                result.append((name, key.name, self.table.lift(Place(child), exported)))
         return result
 
     def placed(self, scope: int) -> tuple[int, ...]:
@@ -151,14 +159,23 @@ class Names:
         self.expression_counts[owner] = number + 1
         return number
 
-    def choice_member(self, scope: int, source: ChoiceMemberRef, *, owner: str) -> int:
+    def _in_slot(self, place: Place) -> bool:
+        """Whether ``place`` is a placed Space's scope (else the class's own)."""
+        return self.table.drafts[place.draft].placed is not None
+
+    def _name(self, place: Place) -> str:
+        if self._in_slot(place):
+            return self.table.name(place)
+        return self.table.drafts[place.draft].name
+
+    def choice_member(self, scope: int, source: ChoiceMemberRef, *, owner: str) -> NodeRef:
         """``decision.member``: select the selected candidate's member, by name."""
 
         target = self.descend(scope, source.path[:-1], owner=owner)
         decision = source.path[-1]
-        if self.table.drafts[target].stub is not None:
-            return self.stub_choice_member(target, decision, source.member, owner=owner)
-        index = self.table.drafts[target].choices.get(decision)
+        if self._in_slot(target):
+            return self.placed_choice_member(target, decision, source.member, owner=owner)
+        index = self.table.drafts[target.draft].choices.get(decision)
         if index is None:
             raise DefinitionError.broken(
                 "node-decision-not-placed",
@@ -174,11 +191,11 @@ class Names:
         cached = self.choice_member_nodes.get(identity)
         if cached is not None:
             return cached
-        alternatives: list[tuple[str, int]] = []
+        alternatives: list[tuple[str, NodeRef]] = []
         for case, child in choice.cases:
             if child is None:
                 continue
-            member = self.table.stub_named(child, source.member)
+            member = self.table.named_at(Place(child), source.member)
             if member is not None:
                 alternatives.append((case, member))
         if not alternatives:
@@ -189,7 +206,7 @@ class Names:
                 declaration=owner,
             )
         node = self.table.reserve(
-            target,
+            target.draft,
             f"{choice.key}.$member.{source.member}",
             "select",
             None,
@@ -207,20 +224,21 @@ class Names:
     @staticmethod
     def read_through(choice: ChoiceDraft, member: str, read: Read) -> None:
         """A read of ``decision.member`` through an own choice (its owner where several
-        templates read it: ``_scopes``; the reads in declaration order:
-        ``_template``)."""
+        classes read it: ``_scopes``; the reads in declaration order: ``_template``)."""
         choice.readers.setdefault(member, []).append(read)
 
-    def stub_choice_member(self, target: int, decision: object, member: str, *, owner: str) -> int:
-        """``decision.member`` through a child's choice. The selection its
-        candidates share in the child's template, imported, where the choice applies at
-        the stub; else one made in the stub, over the candidates' members (none where the
-        choice never applies at the stub: typed as ``choice_member`` types it there). Where
-        the templates are placed, the selections made for one member in one scope are one
-        address (``_scopes``)."""
+    def placed_choice_member(
+        self, target: Place, decision: object, member: str, *, owner: str
+    ) -> NodeRef:
+        """``decision.member`` through a placed Space's choice. The selection its candidates
+        share in that class, where the choice applies at ``target``; else one this class
+        makes for it, over the candidates' members (none where the choice never applies at
+        ``target``: typed as ``choice_member`` types it there). Where the classes are
+        placed, the selections made for one member in one scope are one address
+        (``_scopes``)."""
         read = Read(owner, self.table.applying)
-        template = self.table.stub(target).template
-        index = template.choice_index.get(decision)
+        compiled = self.table.compiled_at(target)
+        index = compiled.choice_index.get(decision)
         if index is None:
             raise DefinitionError.broken(
                 "node-decision-not-placed",
@@ -228,10 +246,10 @@ class Names:
                 f"{owner}: the selector is not placed here",
                 declaration=owner,
             )
-        choice = template.choices[index]
-        key = member_key(self.table.drafts[target].name, f"{choice.key}.$member.{member}")
+        choice = compiled.choices[index]
+        key = member_key(self.table.name(target), f"{choice.key}.$member.{member}")
         if member in choice.dropped:
-            # Its template dropped it, unread, for its candidates' disagreeing types.
+            # Its class dropped it, unread, for its candidates' disagreeing types.
             raise DefinitionError.broken(
                 "alternatives-semantics-incompatible",
                 _OWNER,
@@ -241,18 +259,18 @@ class Names:
         never = self.table.never_at(target, choice)
         existing = choice.members.get(member)
         if existing is not None and existing in choice.shared and not never:
-            return self.table.imported(target, existing)
+            return self.table.lift(target, existing)
         identity = (target, index, member)
-        cached = self.stub_choice_members.get(identity)
+        cached = self.placed_choice_members.get(identity)
         if cached is not None:
-            self.table.stub_reads[cached].append(read)
+            self.table.chosen_reads[cached].append(read)
             return cached
-        alternatives: list[tuple[str, int]] = []
+        alternatives: list[tuple[str, NodeRef]] = []
         if not never:
-            for case, child in choice.cases:
-                if child is None:
+            for case, slot in choice.cases:
+                if slot is None:
                     continue
-                found = self.table.stub_named(self.table.nested(target, child, owner=owner), member)
+                found = self.table.named_at(self.table.below(target, slot, owner=owner), member)
                 if found is not None:
                     alternatives.append((case, found))
         semantics: ValueSemantics[object] | None = None
@@ -271,46 +289,48 @@ class Names:
                 )
             semantics = declared[0]
         node = self.table.reserve(
-            target,
+            target.draft,
             key,
             "select",
             semantics,
-            guard=self.table.imported(target, choice.guard),
+            guard=self.table.lift(target, compiled.ref(choice.guard)),
             source_owner=owner,
         )
         self.table.nodes[node] = replace(
             self.table.nodes[node],
-            selector=self.table.imported(target, choice.selector),
+            selector=self.table.lift(target, choice.selector),
             alternatives=tuple(alternatives),
         )
-        self.stub_choice_members[identity] = node
-        self.table.stub_selects[node] = identity
-        self.table.stub_reads[node] = [read]
+        self.placed_choice_members[identity] = node
+        self.table.chooses[node] = (self.table.path(target), index, member)
+        self.table.chosen_reads[node] = [read]
         return node
 
-    def descend(self, scope: int, path: Iterable[Declaration], *, owner: str) -> int:
+    def descend(self, scope: int, path: Iterable[Declaration], *, owner: str) -> Place:
+        place = Place(scope)
         for record in path:
-            draft = self.table.drafts[scope]
-            if record is draft.record:
-                continue
-            child: int | None
-            if draft.stub is not None:
-                slot = draft.stub.template.children.get(record)
-                child = None if slot is None else self.table.nested(scope, slot, owner=owner)
+            if record is self.table.record(place):
+                continue  # the node this scope instantiates
+            in_slot = self._in_slot(place)
+            child: Place | None
+            if in_slot:
+                slot = self.table.compiled_at(place).children.get(record)
+                child = None if slot is None else self.table.below(place, slot, owner=owner)
             else:
-                child = draft.children.get(record)
+                found = self.table.drafts[place.draft].children.get(record)
+                child = None if found is None else Place(found)
             if child is None:
                 raise DefinitionError.broken(
                     "reference-not-placed",
                     _OWNER,
                     f"{owner}: {getattr(record, 'describe', lambda: record.name)()} is not "
-                    f"placed in {self.table.drafts[scope].name or '<root>'}",
+                    f"placed in {self._name(place) or '<root>'}",
                     declaration=owner,
                 )
-            scope = child
-        return scope
+            place = child
+        return place
 
-    def reference(self, scope: int, source: object, *, owner: str) -> int:
+    def reference(self, scope: int, source: object, *, owner: str) -> NodeRef:
         source = unwrap(source)
         if isinstance(source, Expr) and source.owner is None:
             return self.expression(scope, source, owner=owner)
@@ -320,34 +340,40 @@ class Names:
             return self.choice_member(scope, source, owner=owner)
         if isinstance(source, CaseRef) and source.owner is None:
             target = self.descend(scope, source.path[:-1], owner=owner)
-            stub = self.table.drafts[target].stub
-            if stub is not None:
-                found = stub.template.choice_index.get(source.path[-1])
-                if found is not None:
-                    selector = stub.template.choices[found].selector
-                    return self.table.imported(target, selector)
-            index = self.table.drafts[target].choices.get(source.path[-1])
-            if index is None:
-                raise DefinitionError.broken(
-                    "node-decision-not-placed",
-                    _OWNER,
-                    f"{owner}: the selector is not placed here",
-                    declaration=owner,
-                )
-            return self.table.choice_drafts[index].selector
+            index: int | None
+            if self._in_slot(target):
+                compiled = self.table.compiled_at(target)
+                index = compiled.choice_index.get(source.path[-1])
+                if index is not None:
+                    return self.table.lift(target, compiled.choices[index].selector)
+            else:
+                index = self.table.drafts[target.draft].choices.get(source.path[-1])
+                if index is not None:
+                    return self.table.choice_drafts[index].selector
+            raise DefinitionError.broken(
+                "node-decision-not-placed",
+                _OWNER,
+                f"{owner}: the selector is not placed here",
+                declaration=owner,
+            )
         if isinstance(source, MemberRef) and source.owner is None:
             target = self.descend(scope, source.path, owner=owner)
             member = unwrap(source.member)
+            in_slot = self._in_slot(target)
             try:
-                if self.table.drafts[target].stub is not None:
-                    return self.table.stub_member(target, member)
-                return self.table.drafts[target].members[member]
+                if in_slot:
+                    return self.table.member_at(target, member)
+                return self.table.drafts[target.draft].members[member]
             except (KeyError, TypeError) as cause:
+                space_type = (
+                    self.table.compiled_at(target).space_type
+                    if in_slot
+                    else self.table.drafts[target.draft].effective.space_type
+                )
                 raise DefinitionError.broken(
                     "reference-names-no-member",
                     _OWNER,
-                    f"{owner}: {source!r} names no member of "
-                    f"{self.table.drafts[target].effective.space_type.__qualname__}",
+                    f"{owner}: {source!r} names no member of {space_type.__qualname__}",
                     declaration=owner,
                 ) from cause
         try:
@@ -365,7 +391,7 @@ class Names:
         try:
             # Choices freeze after lowering, which still links their members: none is
             # reachable here.
-            return _in_table(self.table.scopes, scope, source)
+            return _in_table(self.table.drafts, scope, source)
         except (RequestError, IndexError) as cause:
             raise DefinitionError.broken(
                 "reference-not-in-scope",

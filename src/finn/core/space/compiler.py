@@ -158,10 +158,10 @@ def _definition_classes(space_types: tuple[type[Space], ...]) -> tuple[type[Spac
 
 def compile_model(space_type: type[S]) -> Model[S]:
     """The canonical model of a Space class whose formals are all runtime inputs: its
-    compiled form, placed as scopes on demand (``_scopes``). Its templates are linked first
-    (each checked, with the cycles through the Spaces it places), each with its class's
-    compiled form; then the domain rule, composed per class on the compiled forms up to this
-    root (``_compose``)."""
+    compiled form, placed as scopes on demand (``_scopes``). Its class is compiled first
+    (checked, with the cycles through the Spaces it places, each compiled before it); then
+    the domain rule, composed per class on the compiled forms up to this root
+    (``_compose``)."""
 
     if not isinstance(space_type, type) or not issubclass(space_type, Space):
         raise DefinitionError.broken(

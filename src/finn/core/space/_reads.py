@@ -23,7 +23,7 @@ The evaluator checks every read a method makes against its inferred reads, so th
 inference is held to what methods actually do. Each node's **existence guards** are
 here too: the guards that decide whether it exists, its own and every enclosing
 scope's, innermost first. The **domain rule** (a domain's membership reads facts only)
-is checked from the inference per template when a model is made
+is checked from the inference per class when a model is made
 (``_compose.check_domains``).
 
 A model reads its members by address, made on demand, so there the inference is per class:
@@ -383,7 +383,7 @@ class _Dynamic:
 
 
 _Item: TypeAlias = "_Ref | _Missing | _Dynamic"
-# What a function may read, relative to its template, in source order.
+# What a function may read, relative to the scope it runs in, in source order.
 _Found: TypeAlias = "tuple[_Item, ...]"
 
 _DYNAMIC: tuple[_Dynamic] = (_Dynamic(),)

@@ -144,7 +144,7 @@ class ModelStatistics:
 
     Authored declarations count effective members once in every instantiated
     scope (a Decision over nodes is one member), plus each placed node
-    (including every candidate). Reused templates therefore count at every
+    (including every candidate). Reused classes therefore count at every
     placement. A fresh binding replaces its child formal and is counted once;
     generated output, guard and select nodes are excluded.
     """

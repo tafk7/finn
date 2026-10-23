@@ -1,8 +1,8 @@
 # Copyright (C) 2026, Advanced Micro Devices, Inc.
 # SPDX-License-Identifier: BSD-3-Clause
-"""Templates (``_template``): each Space class's own scope compiled once, the Spaces it
-places stubs; and a model's scope records (``_scopes``), each made when reached, keyed by
-path, its members read by address.
+"""Compiled forms (``_template``): each Space class compiled once, the Spaces it places
+slots; and a model's scope records (``_scopes``), each made when reached, keyed by path,
+its members read by address.
 
 A model's scope records read whole read alike made by demand, in the permuted order
 (reversed by path) and eagerly, in a canonical form by key (``_templates_support``). Here
@@ -37,7 +37,7 @@ from finn.core.space import (
     view,
 )
 from finn.core.space._scopes import EAGER, PERMUTE, Address, ScopeRecord, Scopes
-from finn.core.space._template import Template, compiled, link_template
+from finn.core.space._template import Compiled, compiled
 from finn.core.space.compiler import compile_model, model_of
 from finn.core.space.errors import RequestError
 from finn.core.space.occurrence import held
@@ -271,8 +271,8 @@ def test_an_edge_case_reads_alike_in_any_order_its_scopes_are_made_in(
 
 
 def test_a_decision_bound_into_children_is_the_class_own() -> None:
-    template = link_template(BoundIntoChildren)
-    assert {template.nodes[index].key for index in template.contributed} == set()
+    form = compiled(BoundIntoChildren)
+    assert {"width", "depth"} <= set(form.keys)  # members of the class itself
     scopes = compile_model(BoundIntoChildren).scopes
     assert scopes.find("width").scope is scopes.root
     assert scopes.find("depth").scope is scopes.root
@@ -295,14 +295,14 @@ def test_a_choice_never_applies_where_its_formal_is_unsupplied() -> None:
     assert scopes.find("stored.source").kind == "decision"
     assert scopes.find("streamed.source").kind == "const"
     assert not any(key.startswith("streamed.source.") for key in scopes.keys if "$" not in key)
-    # Its template compiled the candidates once, and records the formal.
-    source, cache = link_template(Edge).choices
+    # Its class compiled the candidates once, and records the formal.
+    source, cache = compiled(Edge).choices
     assert source.never_formal == cache.never_formal == "contents"
-    assert [case for case, stub in source.cases if stub is not None] == ["memory", "fetch"]
+    assert [case for case, slot in source.cases if slot is not None] == ["memory", "fetch"]
     assert scopes.find("streamed.cache.$member.lanes").alternatives == ()
 
 
-# -- templates: once per class, and their sizes --------------------------------------------------
+# -- compiled forms: once per class ---------------------------------------------------------------
 
 
 # One class placed many times.
@@ -310,36 +310,20 @@ Many = composite("Many", {f"room{area}": Room(area=area) for area in range(1, 9)
 
 
 def test_a_class_placed_many_times_is_compiled_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    compiled: list[type[Space]] = []
+    made: list[type[Space]] = []
     original = _template._compile
 
-    def counted(space_type: type[Space]) -> Template:
-        compiled.append(space_type)
+    def counted(space_type: type[Space]) -> Compiled:
+        made.append(space_type)
         return original(space_type)
 
     monkeypatch.setattr(_template, "_compile", counted)
-    template = link_template(Many)
-    assert compiled.count(Many) <= 1 and compiled.count(Room) <= 1
-    assert link_template(Many) is template
-    stubs = [scope for scope in template.scopes[1:] if scope.parent == 0]
-    assert len(stubs) == 8
-    assert {id(link_template(stub.space_type)) for stub in stubs} == {id(link_template(Room))}
+    form = compiled(Many)
+    assert made.count(Many) <= 1 and made.count(Room) <= 1
+    assert compiled(Many) is form
+    assert len(form.slots) == 8
+    assert {id(slot.compiled) for slot in form.slots} == {id(compiled(Room))}
     assert len(compile_model(Many).scopes.ordered()) == 9
-
-
-def test_a_template_counts_its_own_nodes_by_kind() -> None:
-    template = link_template(BoundIntoChildren)
-    assert template.counts() == {
-        "guard": 1,
-        "validity": 1,
-        "decision": 2,
-        # Each formal bound to one of the class's Decisions: an alias of it.
-        "alias": 4,
-        "import": 3,
-    }
-    # The literals 1 and 4 are values on their stubs, not nodes.
-    assert link_template(BoundIntoChildren).scopes[2].bindings["first"].value == 1
-    assert len(link_template(Room).nodes) == len(link_template(Room).keys)
 
 
 # -- the scope records: made when reached, members read by address ------------------------------

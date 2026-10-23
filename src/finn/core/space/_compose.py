@@ -10,16 +10,16 @@ walk over a compiled form reads its records (members, and the records it writes 
 Spaces it places); an edge into a placed Space (``ir.Placed``) is followed there, what it
 reaches out of that Space lifted back through the slot (``lift``).
 
-- **Cycles** (``order``). A template's dependency order runs over its table's nodes, with
-  an edge from each import to what its target reaches in the child: the formals it
-  reaches by structural edges (each followed to the placing template's binding: its node,
-  or the guard the scope is placed under for a literal or a default) and the guard the
-  child is placed under, through any depth (``exits``, on the child's compiled form). A
-  cycle through a child is found once, in the placing class's table, and named by that
-  table's keys: its own nodes, its imports and bindings, and the members of the Spaces it
-  places on the way, as the one table of every placement named them, relative to the
-  class (a cycle at two levels sharing nodes: the inner class's is found first, as that
-  class is linked first).
+- **Cycles** (``order``). A class's dependency order runs over its records and the edges
+  out of it, with an edge from each edge out to what its target reaches in the placed
+  Space: the formals it reaches by structural edges (each followed to the placing class's
+  binding: its record, or the guard the scope is placed under for a literal or a default)
+  and the guard the child is placed under, through any depth (``exits``, on the child's
+  compiled form). A cycle through a child is found once, in the placing class, and named
+  by keys relative to it: its own records, the members its edges name, and the members of
+  the Spaces it places on the way, as the one table of every placement named them (a
+  cycle at two levels sharing members: the inner class's is found first, as that class is
+  compiled first).
 - **Placements** (``check_placement``). Where a placing class leaves a formal unsupplied,
   a Decision over nodes guarded by ``supplied`` of it never applies: what exists only
   where it applies is not placed, and a record that still reads it is refused
@@ -57,7 +57,7 @@ from ._ordering import cyclic, dependency_order
 from ._reads import _Dynamic, _Missing, _Ref, _TemplateInference
 from ._table import Binding, Table, member_key
 from .errors import DefinitionError
-from .ir import Placed, Placing, forwards
+from .ir import Placed, Placing, Selected, forwards
 
 if TYPE_CHECKING:
     from ._template import Compiled
@@ -123,43 +123,27 @@ def slot(compiled: Compiled, index: int) -> _Slot:
     return cast(_Slot, found)
 
 
-def _table_slot(table: Table, stub: int) -> _Slot:
-    """A placed stub of a table being linked, as a slot (its bindings and guard nodes of
-    the table)."""
-    from ._template import compiled  # noqa: PLC0415 - a cycle
-
-    draft = table.drafts[stub]
-    held = table.stub(stub)
-    child = compiled(held.template.space_type)
+def _table_slot(table: Table, draft: int) -> _Slot:
+    """A slot of a class being compiled (its bindings and guard references of the class)."""
+    held = table.placing(draft)
     return _Slot(
-        child,
-        placement(child, held.bindings),
+        held.compiled,
+        placement(held.compiled, held.bindings),
         held.bindings,
-        cast(int, draft.guard),
+        cast("int | Placing", table.drafts[draft].guard),
         held.requires,
     )
 
 
-def _table_descent(table: Table, node: int) -> tuple[_Slot, tuple[int, ...], int]:
-    """An import of a table being linked, as a walk reads it: the slot of its placed stub,
-    the slots below it to the class holding its target (each nested stub's), and the
-    target's record there."""
-    steps: list[int] = []
-    stub = table.nodes[node].scope
-    while True:
-        draft = table.drafts[stub]
-        if draft.parent == 0:
-            break
-        steps.append(cast(int, table.stub(stub).slot))
-        stub = cast(int, draft.parent)
-    held = _table_slot(table, stub)
-    current = held.compiled
-    slots: list[int] = []
-    for nested in reversed(steps):
-        index = current.slot_of_stub[nested]
-        slots.append(index)
-        current = current.slots[index].compiled
-    return held, tuple(slots), current.record_of[table.imports[node]]
+def _table_descent(table: Table, edge: Placed | Selected) -> tuple[_Slot, tuple[int, ...], int]:
+    """An edge out of a class being compiled, as a walk reads it: its slot, the slots below
+    it to the class holding its target, and the target's record there."""
+    held = _table_slot(table, table.slot_drafts[edge.path[0]])
+    steps = edge.path[1:]
+    if isinstance(edge, Selected):
+        reached = held.compiled.reached(steps)
+        return held, steps, reached.own_selection[(edge.choice, edge.member)]
+    return held, steps, edge.member
 
 
 # -- a class at a placement -----------------------------------------------------------------
@@ -399,48 +383,53 @@ def _up(
 
 
 def order(table: Table) -> tuple[int, ...]:
-    """The dependency order of a table being linked, with each import's edges to what its
-    target reaches out of the child (``exits``, on the child's compiled form). A cycle is
-    ``cyclic-dependency``, named by the table's keys: its own nodes, its imports and
-    bindings, and the members of the Spaces it places on the way (``_named``)."""
+    """The dependency order of a class being compiled: its records, and each edge out of it
+    (``Table.edges``) with its edges to what its target reaches out of the placed Space
+    (``exits``, on the placed classes' compiled forms), each in the order it was made; the
+    records' order is returned. A cycle is ``cyclic-dependency``, named by keys relative to
+    the class: its own records, the members its edges name, and the members of the Spaces
+    it places on the way (``_named``)."""
+    vertices = table.vertices
+    position = {vertex: index for index, vertex in enumerate(vertices)}
     dependencies: list[tuple[int, ...]] = []
-    for node in table.nodes:
-        found = list(node.dependencies)
-        if node.kind == "import":
-            held, steps, target = _table_descent(table, node.index)
-            found.extend(cast(int, ref) for ref, _ in _up(held, steps, target))
-        dependencies.append(tuple(dict.fromkeys(found)))
-    names = tuple(node.key for node in table.nodes)
+    names: list[str] = []
+    for vertex in vertices:
+        found: list[Any]
+        if isinstance(vertex, int):
+            node = table.nodes[vertex]
+            found = list(node.dependencies)
+            names.append(node.key)
+        else:
+            held, steps, target = _table_descent(table, vertex)
+            found = [ref for ref, _ in _up(held, steps, target)]
+            names.append(table.edge_name(vertex))
+        # The guard the class is placed under is no vertex: it reads nothing of the class.
+        dependencies.append(
+            tuple(dict.fromkeys(position[ref] for ref in found if not isinstance(ref, Placing)))
+        )
     try:
-        return dependency_order(tuple(dependencies), names)
+        ordered = dependency_order(tuple(dependencies), tuple(names))
     except DefinitionError as error:
-        index = {name: position for position, name in enumerate(names)}
+        index = {name: at for at, name in enumerate(names)}
         cycles: list[tuple[str, ...]] = []
         for finding in error.findings:
             members = cast(tuple[str, ...], dict(finding.details)["members"])
-            nodes = {index[member] for member in members}
+            at = {index[member] for member in members}
             named = set(members)
-            for member in nodes:
-                if table.nodes[member].kind == "import":
-                    held, steps, target = _table_descent(table, member)
-                    stub = _table_placed(table, member)
+            for member in at:
+                vertex = vertices[member]
+                if not isinstance(vertex, int):
+                    held, steps, target = _table_descent(table, vertex)
                     named |= _named(
                         held,
                         steps,
                         target,
-                        table.drafts[stub].name,
-                        lambda ref: ref in nodes,
+                        table.drafts[table.slot_drafts[vertex.path[0]]].name,
+                        lambda ref: isinstance(ref, int) and position.get(ref) in at,
                     )
             cycles.append(tuple(sorted(named)))
         raise cyclic(cycles) from None
-
-
-def _table_placed(table: Table, node: int) -> int:
-    """The placed stub an import of a table being linked is below."""
-    stub = table.nodes[node].scope
-    while table.drafts[stub].parent != 0:
-        stub = cast(int, table.drafts[stub].parent)
-    return stub
+    return tuple(cast(int, vertices[at]) for at in ordered if isinstance(vertices[at], int))
 
 
 def _named(
@@ -452,8 +441,8 @@ def _named(
 ) -> set[str]:
     """The keys (under ``name``, the placed scope's) of the members on the ways from
     ``target`` (a record of the class ``steps`` reach from ``held``'s) back to a reference
-    of the placing class that ``wanted`` accepts: what a cycle through an import passes
-    through inside the Spaces placed, as the one table of every placement named it."""
+    of the placing class that ``wanted`` accepts: what a cycle through an edge out of the
+    class passes through inside the Spaces placed, as the one table of every placement named it."""
     child, at = held.compiled, held.placement
 
     def reaches(ref: Ref) -> bool:
@@ -509,14 +498,12 @@ def _named(
 
 
 def check_placements(table: Table) -> None:
-    """Each Space a table being linked places where a Decision over nodes of it never
+    """Each Space a class being compiled places where a Decision over nodes of it never
     applies: no record it places there reads what is not placed (``check_placement``)."""
-    for draft in table.drafts:
-        if draft.parent != 0:
-            continue
-        held = _table_slot(table, draft.index)
+    for draft in table.slot_drafts:
+        held = _table_slot(table, draft)
         if held.placement.never:
-            check_placement(held.compiled, held.placement, table.local_name(0, draft.index))
+            check_placement(held.compiled, held.placement, table.drafts[draft].name)
 
 
 def check_placement(compiled: Compiled, at: Placement, name: str) -> None:
@@ -615,7 +602,7 @@ class _Outcome:
     refusal: _Refusal | None = None
     exits: dict[Exit, tuple[str, ...]] = field(default_factory=dict)
     reentered: bool = False
-    # ``_enter``'s: what the exits stand for in the template above, to read there.
+    # ``_enter``'s: what the exits stand for in the class above, to read there.
     lifted: list[_Push] = field(default_factory=list)
 
 

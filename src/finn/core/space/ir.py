@@ -3,8 +3,9 @@
 
 """Immutable records shared by compilation and evaluation.
 
-A node (``Node``) is a node of a template (``_template``), its references the template's
-node numbers. A model reads each class's compiled form by address (``_scopes``).
+A node (``Node``) is a record of a Space class while it is compiled (``_table``): its
+references are the class's own records, by number, or edges out of the class
+(``NodeRef``). A model reads each class's compiled form by address (``_scopes``).
 
 A Space class's compiled form (``_template.Compiled``) holds its members (``Member``),
 numbered within the class, their references edges (``Edge``): to a member of the class
@@ -15,15 +16,13 @@ choice's member, in the choice's own scope (``Selected``).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
-from types import MappingProxyType
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, TypeAlias
 
 from .semantics import ValueSemantics
 
 if TYPE_CHECKING:
-    from ._configuration import Space
     from .domains import Domain
 
 NodeKind = Literal[
@@ -39,16 +38,18 @@ NodeKind = Literal[
     "validity",
     "present",
     "members",
-    # A template's reference into a child Space: a node of the child class's template
-    # (``_template``); never a member of a compiled form.
-    "import",
 ]
+
+# A node's reference while its class is compiled: a record of the class (its number), a
+# member of a Space it places (``Placed``), a selection in a placed Space's choice
+# (``Selected``), or the guard the class is placed under (``Placing``).
+NodeRef: TypeAlias = "int | Placed | Selected | Placing"
 
 
 @dataclass(frozen=True, slots=True)
 class Argument:
     name: str
-    node: int
+    node: NodeRef
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +59,7 @@ class Node:
     key: str
     kind: NodeKind
     semantics: ValueSemantics[object] | None = None
-    guard: int | None = None
+    guard: NodeRef | None = None
     arguments: tuple[Argument, ...] = ()
     function: Callable[..., object] | None = None
     call_style: Literal["explicit", "self"] = "explicit"
@@ -67,13 +68,13 @@ class Node:
     required: bool = True
     domain: Domain[object] | None = None
     domain_arguments: tuple[Argument, ...] = ()
-    output: int | None = None
+    output: NodeRef | None = None
     # A view: its Space's validity node. A validity node: its pieces, in order: the
     # Space's constraints, its Decisions (each a piece only where its domain lists no
     # value, or its guard is refused), and its placed Spaces' validity nodes.
-    constraints: tuple[int, ...] = ()
-    alternatives: tuple[tuple[str, int], ...] = ()
-    selector: int | None = None
+    constraints: tuple[NodeRef, ...] = ()
+    alternatives: tuple[tuple[str, NodeRef], ...] = ()
+    selector: NodeRef | None = None
     source_owner: str | None = None
     origin: str | None = None
 
@@ -83,9 +84,9 @@ class Node:
         return self.source_owner if self.source_owner is not None else self.key
 
     @property
-    def dependencies(self) -> tuple[int, ...]:
+    def dependencies(self) -> tuple[NodeRef, ...]:
         """Known structural/explicit edges; self-method reads are observed at runtime."""
-        refs = [arg.node for arg in (*self.arguments, *self.domain_arguments)]
+        refs: list[NodeRef] = [arg.node for arg in (*self.arguments, *self.domain_arguments)]
         if self.guard is not None:
             refs.append(self.guard)
         if self.output is not None:
@@ -198,31 +199,3 @@ class Member:
         refs.extend(self.constraints)
         refs.extend(edge for _, edge in self.alternatives)
         return tuple(dict.fromkeys(refs))
-
-
-@dataclass(frozen=True, slots=True)
-class Scope:
-    index: int
-    parent: int | None
-    name: str
-    space_type: type[Space]
-    members: Mapping[object, int]
-    children: Mapping[object, int] = field(default_factory=dict)
-    named_members: Mapping[str, int] = field(default_factory=dict)
-    named_children: Mapping[str, int] = field(default_factory=dict)
-    guard: int | None = None
-    choices: Mapping[object, int] = field(default_factory=dict)
-    # The node declaration instantiated here (None for a Space class compiled alone).
-    record: object = None
-    # The node answering this Space's validity (``kind == "validity"``).
-    validity: int | None = None
-
-    def __post_init__(self) -> None:
-        for attr in (
-            "members",
-            "children",
-            "named_members",
-            "named_children",
-            "choices",
-        ):
-            object.__setattr__(self, attr, MappingProxyType(dict(getattr(self, attr))))

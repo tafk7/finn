@@ -84,8 +84,7 @@ def _choice(form: Compiled, key: str) -> int:
     return found
 
 
-def test_compiled_once_per_class_with_its_template_and_cached_on_the_class() -> None:
-    template = link_template(Top)
+def test_compiled_once_per_class_and_cached_on_the_class() -> None:
     form = compiled(Top)
     assert compiled(Top) is form
     assert Top.__dict__["_space_compiled"] is form
@@ -93,11 +92,11 @@ def test_compiled_once_per_class_with_its_template_and_cached_on_the_class() -> 
     # Each placed class's compiled form is its own, shared by every slot placing it.
     leaves = [slot.compiled for slot in form.slots if slot.space_type is Leaf]
     assert len(leaves) == 2 and all(leaf is compiled(Leaf) for leaf in leaves)
-    # Its records are its template's nodes but its imports and the guard it is placed under.
-    kept = [node.index for node in template.nodes if node.kind != "import"]
-    kept.remove(template.placement_guard)
-    assert form.nodes == tuple(kept)
-    assert "import" not in {record.kind for record in form.records}
+    # Its records are its own members and what it writes for the Spaces it places, numbered
+    # within the class; its dependency order holds each once.
+    assert [record.index for record in form.records] == list(range(len(form.records)))
+    assert sorted(form.order) == list(range(len(form.records)))
+    assert link_template(Top) is form
 
 
 def test_slots_in_placement_order_with_their_bindings_and_guards() -> None:

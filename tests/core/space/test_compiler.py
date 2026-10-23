@@ -12,7 +12,7 @@ from support.refusals import refused
 
 from finn.core.space import Space, default_semantics, design_space, inspection
 from finn.core.space._nodes import node_record
-from finn.core.space._template import compiled, link_template
+from finn.core.space._template import compiled
 from finn.core.space.compiler import compile_model
 from finn.core.space.declarations import (
     Const,
@@ -26,6 +26,7 @@ from finn.core.space.declarations import (
 )
 from finn.core.space.domains import divisors_of, domain
 from finn.core.space.errors import DefinitionError, RequestError
+from finn.core.space.ir import Local
 from finn.core.space.results import Available
 from finn.core.space.semantics import ValueSemantics
 
@@ -54,14 +55,15 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
     assert calls == []
     cycles = model.resolve(model.root, Example.cycles)
     assert {argument.name for argument in cycles.arguments} == {"extent", "lanes"}
-    # The class's own dependency order (its template's: a model reads its members by
+    # The class's own dependency order (its compiled form's: a model reads its members by
     # address, on demand).
-    template = link_template(Example)
-    position = {index: offset for offset, index in enumerate(template.order)}
+    form = compiled(Example)
+    position = {index: offset for offset, index in enumerate(form.order)}
     assert all(
-        position[dependency] < position[node.index]
-        for node in template.nodes
-        for dependency in node.dependencies
+        position[dependency.member] < position[record.index]
+        for record in form.records
+        for dependency in record.dependencies
+        if isinstance(dependency, Local)
     )
     assert model.scopes.parameters == (model.resolve(model.root, Example.extent),)
     assert model.scopes.decisions == (model.resolve(model.root, Example.lanes),)
@@ -237,11 +239,10 @@ def test_twenty_thousand_dependencies_compile_and_evaluate_iteratively() -> None
     last = model.resolve(model.root, members["value20000"])
     assert len(last.dependencies) == 1
     # Every member, and the Space's validity (no pieces: no constraint, no Decision), in
-    # the class's own dependency order (its template's, read as its compiled records).
-    template, form = link_template(space_type), compiled(space_type)
-    order = [form.record_of[node] for node in template.order if node in form.record_of]
-    assert len(order) == len(form.records) == 20_002
-    assert order[-2:] == [form.keys["value20000"], form.validity]
+    # the class's own dependency order.
+    form = compiled(space_type)
+    assert len(form.order) == len(form.records) == 20_002
+    assert form.order[-2:] == (form.keys["value20000"], form.validity)
     assert design_space(space_type()).query(cast(Derived[int], members["value20000"])) == Available(
         20_000
     )
