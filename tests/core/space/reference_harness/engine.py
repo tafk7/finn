@@ -669,7 +669,11 @@ class _Builder:
                 )
         for path in self.externals[scope]:
             members[_input(path)] = self.member(scope, _input(path))
-            annotations[_input(path)] = self.value_type(path)
+            # an optional fact's input is optional too: its formal takes the None it reads
+            input_type = self.value_type(path)
+            annotations[_input(path)] = (
+                cast(Any, input_type) | None if path in index.optional else input_type
+            )
         if scope in self.spelling.guarded_selectors:
             members[OWN_GUARD] = self.member(scope, OWN_GUARD)
         for path in mine:

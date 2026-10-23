@@ -13,7 +13,7 @@ from typing import Any, Optional, cast
 
 import pytest
 
-from finn.core.space import Param, Space, derived, design_space
+from finn.core.space import Available, Param, Rejected, Space, derived, design_space
 from finn.core.space._running.cache import key as cache_key
 from finn.core.space._running.cache import trusted
 from finn.core.space.errors import DefinitionError, RequestError
@@ -142,3 +142,42 @@ def test_explicit_optional_semantics_are_trusted_as_their_own_are() -> None:
     semantics = _semantics(Parity, "bit")
     assert isinstance(semantics, OptionalSemantics) and semantics.inner is EVEN
     assert not trusted(semantics) and cache_key(None, semantics) is None
+
+
+# devi's probe (E2's review): an optional fact left out, bound to a child's required formal
+# of the same type, with no guard. The binding is a definition (the two types are
+# compatible); the formal recognizes the value it is bound to by its own type, so ``None``
+# never flows in: the formal is refused at itself (``formal-value``), and a derived value
+# reading it is refused through it, where before both raised.
+
+
+class Needs(Space):
+    rate: int = Param()
+
+    @derived
+    def doubled(self) -> int:
+        return self.rate * 2
+
+
+class Office(Space):
+    rate: int | None = Param(default=None)
+    child = Needs(rate=rate)  # type: ignore[arg-type]  # the engine's check, not mypy's
+
+
+def _codes(result: object) -> set[tuple[str, str]]:
+    assert isinstance(result, Rejected)
+    return {(finding.code, finding.owner) for finding in result.findings}
+
+
+def test_an_optional_fact_left_out_is_refused_at_the_required_formal_it_is_bound_to() -> None:
+    left_out = design_space(Office())
+    rate = left_out.child.query(Needs.rate)
+    assert _codes(rate) == {("formal-value", "child.rate")}
+    assert isinstance(rate, Rejected) and rate.findings[0].details == (("value type", "NoneType"),)
+    assert _codes(left_out.child.query(Needs.doubled)) == {("formal-value", "child.rate")}
+
+
+def test_an_optional_fact_given_reads_through_the_required_formal_it_is_bound_to() -> None:
+    given = design_space(Office(rate=5))
+    assert given.child.query(Needs.rate) == Available(5)
+    assert given.child.query(Needs.doubled) == Available(10)

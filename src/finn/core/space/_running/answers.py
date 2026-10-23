@@ -50,7 +50,7 @@ from ..results import (
     owned_result,
     reject,
 )
-from ..semantics import equal, recognize
+from ..semantics import equal, recognize, unrecognized
 from ..semantics import snapshot as snapshot_value
 
 if TYPE_CHECKING:
@@ -166,6 +166,23 @@ def _inputs_absent(node: Address, absent: list[str]) -> Rejected:
                 details=(("input", owner),),
             )
             for owner in absent
+        )
+    )
+
+
+def _formal_value(node: Address, value: object) -> Rejected:
+    """A formal bound to a value its own type does not hold (a ``T`` formal bound to a
+    ``T | None`` fact left out): refused at the formal, naming the value's type."""
+    assert node.semantics is not None
+    return Rejected(
+        (
+            Finding(
+                FindingKind.REJECTION,
+                "formal-value",
+                node.owner,
+                f"the value bound to the formal is not its type: {unrecognized(node.semantics)}",
+                details=(("value type", type(value).__name__),),
+            ),
         )
     )
 

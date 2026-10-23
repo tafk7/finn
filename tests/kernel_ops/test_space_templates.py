@@ -140,7 +140,9 @@ def test_stage_7s_chain_read_for_one_value_makes_part_of_it(
 # ``set_tensor``), and the 15 producers' word widths (``y_data_width`` of each MatMul and
 # its core, ``output_data_width`` of each thresholding) that a channel's ``sides`` reads
 # as values where it asked their presence (16 after ``viable``: the trial's int8 core's).
-EVALUATED = ((1208, 136), (1280, 136))
+# Then 1208 and 1280: four more, each weight channel's ``source.contents``, a required
+# formal bound to the channel's optional ``contents``, read as itself to check its value.
+EVALUATED = ((1212, 136), (1284, 136))
 
 
 def test_stage_7s_chain_committed_from_scratch_evaluates_what_the_change_reads(

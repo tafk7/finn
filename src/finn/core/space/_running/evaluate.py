@@ -113,6 +113,7 @@ from ..results import (
     assess_view,
     merged_findings,
 )
+from ..semantics import recognize
 from . import depth, purity
 from .answers import (
     Called,
@@ -121,6 +122,7 @@ from .answers import (
     _empty_domain,
     _finished,
     _first_member,
+    _formal_value,
     _guard_assessment,
     _guard_piece,
     _guard_result,
@@ -134,7 +136,7 @@ from .answers import (
 from .cache import key as value_key
 from .receiver import MethodReader
 from .receiver import receiver as _receiver
-from .structure import Record, record
+from .structure import Record, narrows, record
 from .value import DesignSpace
 
 if TYPE_CHECKING:
@@ -1089,7 +1091,15 @@ def _decision(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans
 def _forward(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
     if node.output is None:
         raise EvaluationError(node.owner, node.kind, "missing output reference")
-    return Ans(ev.read(trace, node.output, reader).result, tuple(trace))
+    result = ev.read(trace, node.output, reader).result
+    if isinstance(result, Available) and narrows(node):
+        # a formal taking fewer values than it is bound to: its own type checks the value
+        semantics = node.semantics
+        assert semantics is not None
+        if not recognize(semantics, result.value, owner=node.owner, role="formal recognition"):
+            refused = _formal_value(node, result.value)
+            return Ans(refused, tuple(trace), own_refusal=True)
+    return Ans(result, tuple(trace))
 
 
 def _select(ev: Evaluation, node: Address, trace: _Tr, reader: Address) -> Ans:
