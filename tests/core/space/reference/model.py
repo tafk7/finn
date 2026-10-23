@@ -272,9 +272,9 @@ kept as its label; the text here is the rule.
     it names none (an origin of kind ``"derived"``, the selector's own); refused through
     ``d`` where ``d`` refuses. A picker never answers "nothing": ``None`` names no case (a
     case that places nothing does). A case is present where the value names it and its
-    holding scope is present; absent where it names another case; unknown while the value
-    waits (or reads an input that does not apply: a picker is no ``when``, so reading 27 is
-    not its rule, and it waits there), so the pieces of the
+    holding scope is present; absent where it names another case, or where the value does
+    not apply (it picks no case: reading 27); unknown while the value
+    waits, so the pieces of the
     rules inside are unknown, as under an open chosen selector (reading 13); and not in
     play where the value refuses, as under a guard refused through an input (reading 8):
     one ``GUARD`` piece, owned by and in the selector's own name, its cases adding none,
@@ -309,6 +309,8 @@ kept as its label; the text here is the rule.
     guard waiting; one refused refuses it through the input (reading 26 where a scope above
     is absent too). Where the input's absence follows from the facts alone, so does the
     scope's, and its unset choices leave the lists (pruning); a stored one stays dormant.
+    *A derived selector's picker* is the same case: a value that does not apply picks no
+    case, so every case is absent (reading 17), not waiting on the picker.
 """
 
 from __future__ import annotations
@@ -672,10 +674,9 @@ class _Evaluation:
 
     def picked(self, picker: str, case: str | None) -> _Presence:
         """A derived selector's part in its case's presence (reading 17): present where its
-        value names the case, absent where it names another, unknown while it waits (or
-        reads an input that does not apply: a picker is no ``when``, reading 27 aside),
-        refused where it refuses (through
-        its input, or naming no case)."""
+        value names the case, absent where it names another or does not apply (it picks no
+        case: reading 27), unknown while it waits, refused where it refuses (through its
+        input, or naming no case)."""
 
         answer = self.read(picker)
         if isinstance(answer, Known):
@@ -684,7 +685,7 @@ class _Evaluation:
             return _Presence(Presence.UNKNOWN, frozenset(answer.waits))
         if isinstance(answer, Refused):
             return _Presence(Presence.REFUSED, guards=(picker,), reasons=answer.reasons)
-        return _Presence(Presence.UNKNOWN, frozenset({picker}))
+        return _ABSENT  # reading 27: a value that does not apply picks no case
 
     def _presence(self, scope: str) -> _Presence:
         if self.index.scopes[scope].parent is None:

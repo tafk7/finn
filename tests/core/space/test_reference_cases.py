@@ -1232,3 +1232,42 @@ def test_a_when_over_a_value_the_facts_make_not_apply_is_pruned() -> None:
     assert "m.z" in present.solution().listed()
     present.check_listed()
     present.check_state("m.z")
+
+
+# A selector picked by a derived value that does not apply picks no case: ``p`` is picked by
+# ``s.a.v``, and with ``s`` at its other case ``o`` that value does not exist, so both of ``p``'s
+# cases are absent, not waiting on the picker. With ``s`` open, they wait on it.
+
+PICKED_BY_MISSING = Case(
+    "a selector picked by a value that does not apply",
+    Space(
+        ("f",),
+        Scope(
+            "",
+            selectors=(
+                Selector("s", (Scope("a", choices=(Choice("v", listed("x", "z")),)), Scope("o"))),
+                Selector(
+                    "p",
+                    (
+                        Scope("x", choices=(Choice("c", listed(1, 2)),)),
+                        Scope("z", choices=(Choice("d", listed(1, 2)),)),
+                    ),
+                    by="s.a.v",
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def test_a_selector_picked_by_a_value_that_does_not_apply_has_every_case_absent() -> None:
+    pair = PICKED_BY_MISSING.start({"f": 1}, {"s": "o"})
+    solution = pair.solution()
+    assert isinstance(solution.state("p.x.c"), Absent)
+    assert isinstance(solution.state("p.z.d"), Absent)
+    pair.check_state("p.x.c")
+    pair.check_state("p.z.d")
+    pair.check_answer("p")
+    waiting = PICKED_BY_MISSING.start({"f": 1})
+    assert isinstance(waiting.solution().state("p.x.c"), Open)
+    waiting.check_state("p.x.c")
