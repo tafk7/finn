@@ -431,6 +431,12 @@ THRESHOLDS = IntegerTensorValue.of((((-2, 0, 3), (-1, 1, 4)),))
 """One threshold table, one set of two channels of three thresholds."""
 
 
+def set_indices(sets: int, beats: int) -> Tensor:
+    """The set indices of a kernel of ``sets`` sets: one an input beat, of ``beats``
+    beats, in FinnLib's selector type (``set_index_dtype``)."""
+    return Tensor((beats,), ScalarEncoding(set_index_dtype(sets)))
+
+
 def threshold_base(
     *,
     table: IntegerTensor = THRESHOLDS,
@@ -438,22 +444,23 @@ def threshold_base(
     input_dtype: str = "INT8",
     threshold_dtype: str = "INT5",
     channels: int | None = None,
+    set_tensor: Tensor | None = None,
 ) -> ThresholdingAxiKernel:
     """A thresholding's design space on one row of ``channels`` inputs of ``input_dtype``
-    (the table's rows by default), its choices open."""
+    (the table's rows by default), given ``set_tensor`` where several sets take one, its
+    choices open."""
     shape = integer_shape(table)
     count = channels if channels is not None else (shape[1] if shape and len(shape) == 3 else 1)
-    return design_space(
-        ThresholdingAxiKernel(
-            input_tensor=Tensor(
-                (1, count), ScalarEncoding(resolve_qonnx_datatype_name(input_dtype))
-            ),
-            threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
-            thresholds=table,
-            bias=bias,
-            platform=FULL_DSP48E2,
-        )
+    facts: dict[str, Any] = dict(
+        input_tensor=Tensor((1, count), ScalarEncoding(resolve_qonnx_datatype_name(input_dtype))),
+        threshold_dtype=resolve_qonnx_datatype_name(threshold_dtype),
+        thresholds=table,
+        bias=bias,
+        platform=FULL_DSP48E2,
     )
+    if set_tensor is not None:
+        facts["set_tensor"] = set_tensor
+    return design_space(ThresholdingAxiKernel(**facts))
 
 
 def stage_tensor(word_bits: int, words: int = 6, lanes: int = 1) -> Tensor:

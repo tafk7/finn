@@ -9,7 +9,7 @@ from typing import cast
 
 import pytest
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP48E2, THRESHOLDS, controlled, threshold_base
+from support.helpers import FULL_DSP48E2, THRESHOLDS, controlled, set_indices, threshold_base
 from support.refusals import refused
 
 from finn.core.space import (
@@ -44,17 +44,21 @@ def threshold(
     axilite: bool = False,
     deep: bool = False,
 ) -> ThresholdingAxiKernel:
-    """On one row of channels, the table's rows (with one row shared, PE of them). PE is
-    committed as a choice; ``None`` leaves it open."""
+    """On one row of channels, the table's rows (with one row shared, PE of them); with
+    several sets, given their set indices, one an input beat. PE is committed as a choice;
+    ``None`` leaves it open."""
     shape = integer_shape(table)
     rows = shape[1] if shape is not None and len(shape) == 3 else 1
+    sets = shape[0] if shape is not None and len(shape) == 3 else 1
     channels = rows if rows > 1 or pe is None else pe
+    set_tensor = None if sets < 2 else set_indices(sets, channels // (pe or 1))
     base = threshold_base(
         table=table,
         bias=bias,
         input_dtype=input_dtype,
         threshold_dtype=threshold_dtype,
         channels=channels,
+        set_tensor=set_tensor,
     )
     factors: dict[str, object] = {} if pe is None else {"pe": pe}
     if pe is not None:
@@ -70,6 +74,8 @@ def threshold(
             bias=bias,
             platform=FULL_DSP48E2,
         )
+        if set_tensor is not None:
+            facts["set_tensor"] = set_tensor
         return controlled(
             ThresholdingAxiKernel, facts, use_axilite=True, deep_pipeline=deep, **factors
         )
@@ -124,6 +130,31 @@ def test_threshold_sets_present_a_selector_bus_and_refuse_axilite_addressing() -
     # refused by that rule.
     with pytest.raises(ValueError, match="threshold-config-sets"):
         threshold(table=table, axilite=True)
+
+
+def test_a_set_port_that_does_not_match_the_sets_is_refused_both_ways() -> None:
+    """Several sets accept an input beat only beside a set beat, so without set indices
+    the hardware takes no beat; a single set leaves the set port's ready undriven."""
+    two_sets = (((-2, 0, 3), (-1, 1, 4)), ((-3, 0, 5), (-2, 0, 6)))
+    pieces = []
+    for space in (
+        threshold_base(table=two_sets),
+        threshold_base(set_tensor=set_indices(1, 2)),
+    ):
+        validity = inspection.validity(space)
+        assert validity.status == "refused"
+        pieces += [
+            (piece.owner, finding.code, finding.message)
+            for piece in validity.pieces
+            for finding in piece.result.findings
+        ]
+    assert pieces == [
+        ("selected", "threshold-set-channel", "several threshold sets take a set channel"),
+        ("selected", "threshold-set-channel", "a single threshold set takes no set channel"),
+    ]
+    # Given its set indices, the two sets stand.
+    given = threshold_base(table=two_sets, set_tensor=set_indices(2, 2))
+    assert inspection.validity(given).status != "refused"
 
 
 def test_threshold_partial_dtype_query_does_not_adopt_implementation_decisions() -> None:

@@ -13,7 +13,8 @@ RTL specifies; so a threshold at the threshold dtype's minimum is refused with a
 input wider below it, which saturates to that minimum and would count it
 (``threshold-saturation``). Output is the threshold count plus bias. Runtime writes must
 preserve sorted rows. With multiple sets, each input beat requires a matching
-set-selector beat.
+set-selector beat: several sets take a tensor of set indices, and a single set none
+(``threshold-set-channel``).
 
 PE, the channels a beat, is a Decision over the divisors of the input's
 channels. The input and output walk one schedule row-major, ``c`` split by PE
@@ -249,6 +250,23 @@ class ThresholdingAxiKernel(KernelSpace):
     def control_for_writes(self) -> bool | Rejected:
         if self.use_axilite and not self.controllable:
             return reject("threshold-control", "runtime-writable thresholds need a control bus")
+        return True
+
+    @constraint
+    def selected(self) -> bool | Rejected:
+        """Several sets take a tensor of set indices, one an input beat; a single set none.
+        FinnLib's ``rtl/nonlin/thresholding_axi.sv`` joins the two streams with several sets
+        (SETS >= 2), accepting an input beat only beside a set beat, so without a set
+        tensor it takes no beat; with one set it leaves the set port's ready undriven."""
+        placed = self.present(ThresholdingAxiKernel.set_tensor)
+        if self.shape[0] < 2:
+            if placed:
+                return reject(
+                    "threshold-set-channel", "a single threshold set takes no set channel"
+                )
+            return True
+        if not placed:
+            return reject("threshold-set-channel", "several threshold sets take a set channel")
         return True
 
     deep_pipeline: bool = Decision(values=(False, True))
