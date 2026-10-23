@@ -13,7 +13,9 @@ refused as a value type where it is annotated, and as a value where it enters.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 import pytest
 from support.refusals import refused
@@ -128,3 +130,102 @@ def test_the_canonical_form_at_the_boundary() -> None:
 
     # What a design space holds is a value: its own ``==`` holds it equal to itself.
     assert held(signed).ds == held(signed.with_facts({Meter.rate: -0.0})).ds
+
+
+# -- E4's fixes (devi's review): the output copy, a tuple subclass, an init=False field ------
+
+
+class Listed(NamedTuple):
+    name: str
+    items: list[int]
+
+
+@dataclass(frozen=True)
+class Holding:
+    items: list[int]
+
+
+class Outputs(Space):
+    count: int = Param()
+
+    @derived
+    def holding(self) -> Holding:
+        return Holding(list(range(self.count)))
+
+    @derived
+    def listed(self) -> Listed:
+        return Listed("a", list(range(self.count)))
+
+    @derived
+    def nested(self) -> tuple[Holding, ...]:
+        return (Holding(list(range(self.count))),)
+
+
+def test_an_answer_holding_a_mutable_value_anywhere_is_handed_out_as_a_copy() -> None:
+    """A derived value answering a frozen dataclass, a named tuple or a tuple of dataclasses
+    holding a list is handed out as a copy, walked as the canonical form walks a value: no
+    reader changes what the design space holds."""
+    point = design_space(Outputs(count=2))
+    readers: tuple[Callable[[], list[int]], ...] = (
+        lambda: point.holding.items,
+        lambda: point.listed.items,
+        lambda: point.nested[0].items,
+    )
+    for read in readers:
+        read().append(99)
+        assert read() == [0, 1]
+
+
+class Bare(tuple[float, ...]):
+    """A tuple subclass with no ``_make``: it cannot be rebuilt from its items."""
+
+    __slots__ = ()
+
+
+class Signed(NamedTuple):
+    value: float
+
+
+class Bin(Space):
+    bare: object | None = Param(default=None)
+    signed: Signed | None = Param(default=None)
+
+
+def test_a_tuple_subclass_is_rebuilt_in_its_canonical_form_or_refused_naming_it() -> None:
+    """A named tuple holding ``-0.0`` is rebuilt (``_make``) holding ``0.0``; a tuple subclass
+    with no ``_make`` holding ``-0.0`` cannot be, and is refused, naming its class. Holding
+    nothing that changes, it is taken as it is."""
+    point = design_space(Bin(signed=Signed(-0.0)))
+    signed = point.signed
+    assert type(signed) is Signed and not negative(signed.value)
+    with refused("literal-not-value", error=DefinitionError, message="Bin.bare.*a Bare is"):
+        Bin(bare=Bare((1.0, -0.0)))
+    with pytest.raises(RequestError, match="^bare: a Bare is a tuple subclass"):
+        point.with_facts({Bin.bare: Bare((-0.0,))})
+    kept = design_space(Bin(bare=Bare((1.0, 0.0)))).bare
+    assert type(kept) is Bare and kept == (1.0, 0.0)
+
+
+@dataclass(frozen=True)
+class Negated:
+    """A value class with a field its own ``__post_init__`` sets (``init=False``)."""
+
+    value: float
+    negated: float = field(init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "negated", -self.value)
+
+
+class Mirror(Space):
+    held: Negated = Param()
+
+
+def test_a_field_not_given_at_init_is_taken_in_its_canonical_form() -> None:
+    """A value class's ``init=False`` field holding ``-0.0`` holds ``0.0`` in the design space,
+    whether its ``init`` fields change too or not."""
+    for given in (Negated(0.0), Negated(-0.0)):
+        point = design_space(Mirror(held=given))
+        assert not negative(point.held.value) and not negative(point.held.negated)
+        changed = point.with_facts({Mirror.held: given})
+        assert not negative(changed.held.negated)

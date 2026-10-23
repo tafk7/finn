@@ -26,7 +26,9 @@ refused (``==`` does not hold it equal to itself); a mutable value is refused (a
 dict, a set, a bytearray, any mutable sequence, mapping or set, a dataclass that is not
 frozen, a class without a hash), and so is a dataclass leaving a field out of ``==``. A
 registered value type (``value_type``) and an enum member are taken as they are: their
-owners state them immutable.
+owners state them immutable. A tuple subclass is rebuilt by its ``_make`` (a named tuple's);
+one without is refused where an item changes. A frozen dataclass is rebuilt where a field
+changes, a field its ``__init__`` does not take (``init=False``) set on the rebuilt value.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ import math
 import types
 import weakref
 from collections.abc import Callable, MutableMapping, MutableSequence, MutableSet
+from copy import copy
 from dataclasses import dataclass
 from enum import Enum
 from typing import (
@@ -313,7 +316,12 @@ def _items(value: tuple[object, ...]) -> tuple[object, ...]:
     if kind is tuple:
         return tuple(items)
     make = getattr(kind, "_make", None)
-    return cast(tuple[object, ...], make(items)) if make is not None else value
+    if make is None:
+        raise NotAValue(
+            f"a {kind.__qualname__} is a tuple subclass with no _make: its items' canonical "
+            "form cannot be rebuilt"
+        )
+    return cast(tuple[object, ...], make(items))
 
 
 def _members(value: frozenset[object]) -> frozenset[object]:
@@ -350,20 +358,72 @@ def _refused_class(kind: type) -> str | None:
 
 
 def _fields(value: object) -> object:
+    """A frozen dataclass's fields in their canonical form: rebuilt (``replace``) where a
+    field its ``__init__`` takes changes; a field it does not take (``init=False``) is read
+    again on what was rebuilt and set in place on the new value where it changes."""
     kind = type(value)
     refused = _refused_class(kind)
     if refused is not None:
         raise NotAValue(refused)
-    changed: dict[str, object] = {}
-    for item in dataclasses.fields(cast(Any, value)):
-        held = getattr(value, item.name)
-        try:
-            found = canonical(held)
-        except NotAValue as refusal:
-            raise NotAValue(f"{kind.__qualname__}.{item.name}: {refusal}") from None
-        if found is not held and item.init:
-            changed[item.name] = found
-    return dataclasses.replace(cast(Any, value), **changed) if changed else value
+    fields = dataclasses.fields(cast(Any, value))
+    given: dict[str, object] = {}
+    for item in fields:
+        found = _field(value, item.name)
+        if item.init and found is not getattr(value, item.name):
+            given[item.name] = found
+    rebuilt = dataclasses.replace(cast(Any, value), **given) if given else value
+    rest: dict[str, object] = {}
+    for item in fields:
+        if not item.init:
+            found = _field(rebuilt, item.name)
+            if found is not getattr(rebuilt, item.name):
+                rest[item.name] = found
+    if not rest:
+        return rebuilt
+    rebuilt = copy(rebuilt) if rebuilt is value else rebuilt
+    for name, found in rest.items():
+        object.__setattr__(rebuilt, name, found)
+    return rebuilt
+
+
+def _field(value: object, name: str) -> object:
+    """The field ``name`` of ``value`` in its canonical form, a refusal naming it."""
+    try:
+        return canonical(getattr(value, name))
+    except NotAValue as refusal:
+        raise NotAValue(f"{type(value).__qualname__}.{name}: {refusal}") from None
+
+
+_FIELD_NAMES: weakref.WeakKeyDictionary[type, tuple[str, ...]] = weakref.WeakKeyDictionary()
+"""A dataclass's field names, made once (``holds_mutable``)."""
+
+
+def holds_mutable(value: object) -> bool:
+    """Whether ``value`` holds a mutable value anywhere the canonical form walks (a tuple's
+    items, a tuple subclass's included, a frozen set's members, a dataclass's fields): a
+    list, a dict, a set, a bytearray, any mutable sequence, mapping or set, or a dataclass
+    that is not frozen. An answer that does is handed out as a copy
+    (``answers.handed_out``). A registered value type and an enum member hold none."""
+    kind = type(value)
+    if kind in _ATOMS or kind is float:
+        return False
+    if isinstance(value, _MUTABLE):
+        return True
+    if isinstance(value, Enum) or is_value_type(kind):
+        return False
+    if isinstance(value, (tuple, frozenset)):
+        return any(holds_mutable(item) for item in cast("tuple[object, ...]", value))
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        params = getattr(kind, "__dataclass_params__", None)
+        if params is None or not params.frozen:
+            return True
+        names = _FIELD_NAMES.get(kind)
+        if names is None:
+            names = _FIELD_NAMES[kind] = tuple(
+                item.name for item in dataclasses.fields(cast(Any, value))
+            )
+        return any(holds_mutable(getattr(value, name)) for name in names)
+    return False
 
 
 def semantics_for(value_type: type[T] | ValueSemantics[T]) -> ValueSemantics[T]:
@@ -378,6 +438,7 @@ __all__ = [
     "annotation_type",
     "canonical",
     "default_semantics",
+    "holds_mutable",
     "optional",
     "same",
     "semantics_for",

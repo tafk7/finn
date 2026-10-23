@@ -48,7 +48,7 @@ from ..results import (
     owned_result,
     reject,
 )
-from ..semantics import recognize, same, unrecognized
+from ..semantics import holds_mutable, recognize, same, unrecognized
 
 if TYPE_CHECKING:
     from .._scopes import Address, Argument
@@ -107,25 +107,15 @@ def _guard_assessment(node: Address, answer: NonValue) -> Assessment | None:
     return None
 
 
-_CONTAINERS = (dict, list, set, bytearray)
-
-
-def _holds_container(value: object) -> bool:
-    if isinstance(value, _CONTAINERS):
-        return True
-    kind = type(value)
-    if kind is tuple or kind is frozenset:
-        return any(_holds_container(item) for item in cast("tuple[object, ...]", value))
-    return False
-
-
 def handed_out(value: object) -> object:
-    """``value`` as a reader receives it: the value itself, which is immutable, but a mutable
-    container a derived value or a view answers (a dict, a list, a set, a bytearray, or a
-    tuple or frozen set holding one: a kernel's ``parameters``) is a copy of it, so no reader
-    changes what the design space holds. A fact, a choice or a constant never holds one: the
-    canonical form refuses it where it enters (``semantics.canonical``)."""
-    return deepcopy(value) if _holds_container(value) else value
+    """``value`` as a reader receives it: the value itself, which is immutable, but an answer
+    of a derived value or a view holding a mutable value anywhere the canonical form walks
+    (a dict, a list, a set, a bytearray, a dataclass that is not frozen; itself, or in a
+    tuple, a named tuple, a frozen set or a frozen dataclass: a kernel's ``parameters``,
+    ``semantics.holds_mutable``) is a copy of it, so no reader changes what the design space
+    holds. A fact, a choice or a constant never holds one: the canonical form refuses it
+    where it enters (``semantics.canonical``)."""
+    return deepcopy(value) if holds_mutable(value) else value
 
 
 def public_value(node: Address, answer: Available[object]) -> object:
