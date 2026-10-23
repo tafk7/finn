@@ -150,17 +150,24 @@ def load_sim_obj(sim_out_dir, out_so_relative_path, tracefile=None, simkernel_so
         simkernel_so = get_simkernel_so()
     oldcwd = os.getcwd()
     os.chdir(sim_out_dir)
-    sim = SimEngine(simkernel_so, out_so_relative_path, "finnxsi_rtlsim.log", tracefile)
-    if tracefile:
-        sim.top.trace_all()
-    os.chdir(oldcwd)
+    try:
+        sim = SimEngine(simkernel_so, out_so_relative_path, "finnxsi_rtlsim.log", tracefile)
+        if tracefile:
+            try:
+                sim.top.trace_all()
+            except BaseException:
+                # not close_rtlsim: it would drive sim_finish and run a cycle
+                sim.top.close()
+                raise
+    finally:
+        os.chdir(oldcwd)
     return sim
 
 
 def reset_rtlsim(
     sim, rst_name="ap_rst_n", active_low=True, clk_name="ap_clk", clk2x_name="ap_clk2x", n_cycles=16
 ):
-    sim.do_reset()
+    sim.do_reset(n_cycles=n_cycles)
     sim.run()
 
 

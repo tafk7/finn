@@ -10,6 +10,7 @@
 #############################################################################
 
 import numpy as np
+import operator
 import xsi
 
 
@@ -18,11 +19,15 @@ class SimEngine:
     # Life Cycle
     def __init__(self, kernel, design, log=None, wdb=None):
         top = xsi.Design(xsi.Kernel(kernel), design, log, wdb)
-        clk = top.getPort("ap_clk")
-        clk2x = top.getPort("ap_clk2x")
-        for p in top.ports():
-            if p.isInput():
-                p.clear().write_back()
+        try:
+            clk = top.getPort("ap_clk")
+            clk2x = top.getPort("ap_clk2x")
+            for p in top.ports():
+                if p.isInput():
+                    p.clear().write_back()
+        except BaseException:
+            top.close()
+            raise
 
         def half_cycle_2x(run_first):
             # Complete one slow half-cycle while the fast clock goes high->low.
@@ -141,8 +146,12 @@ class SimEngine:
 
     # ------------------------------------------------------------------------
     # Standard Tasks
-    def do_reset(self):
-        "Schedule a reset sequence."
+    def do_reset(self, n_cycles=16):
+        "Schedule a reset sequence that holds reset for n_cycles clock cycles."
+        # reset stays asserted unless n_cycles is a positive integer
+        n_cycles = operator.index(n_cycles)
+        if n_cycles < 1:
+            raise ValueError(f"n_cycles must be a positive integer, got {n_cycles!r}")
 
         class Reset:
             def __init__(self, top):
@@ -155,9 +164,9 @@ class SimEngine:
 
                 if cnt == 0:
                     return {self.rst_n: "0"}
-                if cnt < 16:
+                if cnt < n_cycles:
                     return {}
-                if cnt == 16:
+                if cnt == n_cycles:
                     return {self.rst_n: "1"}
                 return None
 
