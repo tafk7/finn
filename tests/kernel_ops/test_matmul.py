@@ -182,7 +182,13 @@ def test_a_stored_choice_its_facts_rule_out_is_found_by_key_and_kept_dormant() -
     states = dict(inspection.states(point))
     assert states["realization"] == inspection.Dormant("dense")
     assert point.compute.pe == 2  # the rest of the stored choices are bound as before
-    with refused("choice-unknown", error=KernelOpError):
+    with refused(
+        "choices-refused",
+        error=KernelOpError,
+        message="not-a-decision",
+        keys=("typo",),
+        node="first",
+    ):
         op(model).point({"typo": 1})
 
 
