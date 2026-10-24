@@ -368,12 +368,13 @@ def test_a_design_space_read_for_one_value_makes_part_of_a_composite(
     # the other three houses is placed.
     names = {record.name for record in scopes.records()}
     assert "house0.kitchen" in names and not any(name.startswith("house1.") for name in names)
-    # The kitchen's scope alone has a member evaluated: its cost, what that reads, and its
-    # validity's pieces are none of the other houses'.
+    # The kitchen's scope alone has a member evaluated: its cost (a derived value) and what
+    # that reads, ``area`` and ``finish``: three. (As a view, its cost also evaluated its
+    # output record and the scope's validity: five.)
     ds = held(point).ds
     evaluated = {index for ev in ds.evaluations.values() for index in ev.memo}
     assert {index.scope.name for index in evaluated} == {"house0.kitchen"}
-    assert (made, len(evaluated)) == (12, 5)
+    assert (made, len(evaluated)) == (12, 3)
     scopes.read_all()
     whole = scopes.counts()
     assert {key: whole[key] for key in ("scopes made", "members read")} == {

@@ -28,7 +28,7 @@ from finn.core.space import Available, Rejected, inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import PRODUCER, declaration, network
 from finn.kernels import fifo_sizing
-from finn.kernels.base import RESOURCES
+from finn.kernels.base import KernelSpace
 from finn.kernels.channels import Channel, OuterHops
 from finn.kernels.composer import ChannelDeclaration, PartitionDeclaration
 from finn.kernels.partition import Partition, partition
@@ -213,7 +213,7 @@ def test_a_downstream_neighbour_brings_the_input_chain_it_needs_into_the_slice()
         assert part.member(name).query(Channel.input_chain) == Available("input_gen")
         assert part.neighbours(name) == whole.neighbours(name)
         assert part.hops(name) == whole.hops(name)
-        assert part.query(name, RESOURCES) == whole.query(name, RESOURCES)
+        assert part.query(name, KernelSpace.resources) == whole.query(name, KernelSpace.resources)
         assert fifo_sizing.size(part.member(name), part.neighbours(name), 1024) == (
             fifo_sizing.size(whole.member(name), whole.neighbours(name), 1024)
         )

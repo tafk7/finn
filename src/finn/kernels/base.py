@@ -34,10 +34,11 @@ from its netlist (``finn.kernels.library.library_module``). **``Kernel``** is wh
 reader of any kernel's design point asks: a ``typing.Protocol`` of the four answers, read
 out, and nothing else (its docstring).
 
-**What it reaches of its members**: their answers, through ``Members`` over their exports
-(``netlists``, ``controls``, ``member_cycles``, ``member_buffering``,
-``member_resources``), read by its views alone. A parent reaches only its present members,
-one refused member refusing the answer.
+**What it reaches of its members**: their answers, through ``Members`` over the member each
+states (``netlists``, ``controls`` over ``bus_control``, ``member_cycles`` over
+``Timed.cycles``, ``member_buffering``, ``member_resources``), read by its views alone. A
+parent reaches only its present members, one refused member refusing the answer; a member
+answering inapplicable (a kernel declaring no control bus, a FIFO's cycles) is left out.
 
 **Its declarations** (``finn.kernels.declaration``): its stream ports
 (``finn.kernels.port``), the ports it presents for its members
@@ -57,23 +58,25 @@ held (``kernel-pins``). The base binds its indices' extents from its ports' read
 tensors (``extents``), from which it states schedules (``bound_schedule``) and shapes
 (``spanned``).
 
-**The definition checks**, when a class is made: its ``id`` (``kernel-id-invalid``); a
-declaration lowering to a member the class declares itself (``declaration-member-taken``);
-at most one library module (``library-module-repeated``) and one control bus
-(``control-bus-repeated``); constant sources provide the module
-(``library-module-unprovided``). A class leaving a ``required()`` member unmet is a base of
-kernels (the dot-product cores'), not placed, and the checks below pass it by. A kernel
-with a module states a stream port (``module-ports-unplaced``) and its ``resource_use``
-(``module-resources-unstated``), and places no kernel (``module-places-kernels``). A kernel
-stating a stream port binds a module (``port-unbound``): a port's pins are its module's,
-and a kernel with children presents its children's ports (``served``).
+**The definition checks**, when a class is made: at most one control bus
+(``control-bus-repeated``, before any declaration is lowered); a declaration lowering to a
+member the class declares itself (``declaration-member-taken``); its ``id``
+(``kernel-id-invalid``); at most one library module (``library-module-repeated``); constant
+sources provide the module (``library-module-unprovided``). A class leaving a ``required()``
+member unmet is a base of kernels (the dot-product cores'), not placed, and the checks below
+pass it by. A kernel with a module states a stream port (``module-ports-unplaced``) and its
+``resource_use`` (``module-resources-unstated``), and places no kernel
+(``module-places-kernels``). A kernel stating a stream port binds a module
+(``port-unbound``): a port's pins are its module's, and a kernel with children presents its
+children's ports (``served``).
 
 Every constraint of a kernel and of its present members counts toward its validity
 (``inspection.validity``). A kernel states one contract per stream port: a view
 ``<name>_contract`` of a ``PortContract`` (a module's port's, labelled ``x``; a member's,
-labelled below it: MatMul's ``compute.packed.x``). Every kernel exports its netlist
-(``NETLIST``), its control bus's ``Control`` (``CONTROL``) where it declares one, and what
-an exploration ranks by: ``CYCLES``, ``BUFFERING`` and ``RESOURCES``.
+labelled below it: MatMul's ``compute.packed.x``). Every kernel states
+its netlist (``netlist``), its control bus's ``Control`` (``bus_control``) where it declares
+one, and what an exploration ranks by: ``cycles``, ``buffering`` and ``resources``; a reader
+asks a kernel for each by name (``KernelSpace.netlist``, ``Timed.cycles``).
 """
 
 from __future__ import annotations
@@ -88,9 +91,6 @@ from finn.core.space import (
     Members,
     Rejected,
     Space,
-    ValueSemantics,
-    ViewKey,
-    default_semantics,
     derived,
     reject,
     view,
@@ -100,43 +100,12 @@ from finn.dataflow.schedule import Access, Affine, Index, Refused, Schedule, bin
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Clocking
 from finn.kernels.artifacts.module import BusExport, Fragment, Link, merge
-from finn.kernels.control import CONTROL, ControlBus, presented
+from finn.kernels.control import Control, ControlBus, presented
 from finn.kernels.declaration import KernelDeclaration, Product, declarations, declared_reads
 from finn.kernels.library import LibraryModule
 from finn.kernels.transport import StreamContract
-from finn.kernels.utilization import RESOURCES_SEMANTICS, total
+from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
-
-
-def _frozen(name: str, *kinds: type) -> ValueSemantics[object]:
-    """A frozen build value's check: an instance of one of ``kinds`` (compared by ``==``, as
-    every value is)."""
-    return ValueSemantics(kinds[0], name, lambda value: isinstance(value, kinds))
-
-
-NETLIST_SEMANTICS = cast("ValueSemantics[Fragment]", _frozen("netlist", Fragment))
-NETLIST = ViewKey("netlist", NETLIST_SEMANTICS)
-"""A kernel's or a channel's netlist (``finn.kernels.artifacts.module.Fragment``), labelled
-relative to itself; whatever holds it (a network, a kernel with children) merges it
-under its node."""
-
-BOUNDARY = ViewKey("boundary", default_semantics(tuple))
-"""A channel's AXIS bus on its network's boundary: one, or none when both of its sides are
-kernels' ports."""
-
-CYCLES = ViewKey("cycles", default_semantics(int))
-"""The clock cycles a frame takes through a kernel or a channel: a kernel binding a module
-the most beats any of its ports carries; a kernel with children's its slowest member's."""
-
-BUFFERING = ViewKey("buffering", default_semantics(int))
-"""The bits a channel's stages hold between its sides: a stage's its own (an
-``input_gen``'s buffer, a FIFO's depth); a kernel with children's, a channel's among
-them, the sum over its members."""
-
-RESOURCES = ViewKey("resources", RESOURCES_SEMANTICS)
-"""What a kernel or a channel uses of the device (``finn.platform.capabilities.Resources``):
-a kernel binding a module its own statement; a kernel with children's, a channel's among
-them, the sum over its members."""
 
 
 class Kernel(Protocol):
@@ -191,10 +160,6 @@ class PortContract:
     def under(self, member: str) -> PortContract:
         """The contract as seen from where ``member`` is held."""
         return PortContract(f"{member}.{self.label}" if self.label else member, self.contract)
-
-
-PORT_CONTRACT = default_semantics(PortContract)
-"""A ``PortContract``'s value semantics: a frozen value, compared by value."""
 
 
 NATIVE_CLOCKING = Clocking(clock="clk", reset="rst", active_low=False)
@@ -322,7 +287,26 @@ def _made(member: object) -> bool:
     return bool(getattr(getattr(member, "function", None), "_spanning", False))
 
 
-class KernelSpace(Space):
+class Timed(Space):
+    """A Space stating the clock cycles a frame takes through it: its view ``cycles``.
+
+    The base of what a channel's ``cycles`` counts: ``KernelSpace`` and the movers derive
+    from it, and ``member_cycles`` collects ``Timed.cycles`` of the members of a kernel.
+    A member that takes none a channel counts (``ChannelFifo``) states ``cycles`` guarded
+    to answer inapplicable, which ``Members`` leaves out.
+
+    Its own ``cycles`` is the one a class stating none would answer: a refusal, so that a
+    ``Timed`` class that is placed without stating its cycles is never taken to take none.
+    Every class placed states its own.
+    """
+
+    @view
+    def cycles(self) -> int | Rejected:
+        """The clock cycles a frame takes through it: what a class stating none refuses."""
+        return reject("timed-cycles", f"{type(self).__qualname__} states no cycles")
+
+
+class KernelSpace(Timed):
     """A kernel: the design space of its hardware, binding a library module or placing
     kernels, never both (the module docstring). ``id`` names it, a nonempty string.
 
@@ -330,17 +314,9 @@ class KernelSpace(Space):
     ``_buffering``, ``_resources``) and made for each class when it is made, reading the
     class's declarations by the names their lowering fixes (``_spanning``). A class may
     state one itself, calling these. Its members' answers it reaches through ``Members``
-    over their exports, which only these views read."""
+    over the member each states, which only these views read."""
 
     id: ClassVar[str] = ""
-
-    # -- what it reaches of its members: their answers, read by its views only ------------
-
-    netlists = Members(NETLIST)
-    controls = Members(CONTROL)
-    member_cycles = Members(CYCLES)
-    member_buffering = Members(BUFFERING)
-    member_resources = Members(RESOURCES)
 
     # Its declarations (``declarations``), by name, in the order they are declared, and its
     # library module among them, by name (None: it binds none).
@@ -349,6 +325,21 @@ class KernelSpace(Space):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
+        # Counted before lowering: each bus lowers to the same members, which would collide
+        # first and hide the refusal.
+        buses = [
+            name
+            for name, declaration in declarations(cls, KernelSpace).items()
+            if isinstance(declaration, ControlBus)
+        ]
+        if len(buses) > 1:
+            raise DefinitionError.broken(
+                "control-bus-repeated",
+                "KernelSpace",
+                f"{cls.__qualname__} declares the control buses {buses}: a kernel presents "
+                "one at most",
+                declaration=cls.__qualname__,
+            )
         _lower(cls)
         if type(cls.id) is not str or not cls.id:
             raise DefinitionError.broken(
@@ -371,17 +362,6 @@ class KernelSpace(Space):
                 "a kernel binds one at most",
                 declaration=cls.__qualname__,
             )
-        buses = [name for name, declaration in found.items() if isinstance(declaration, ControlBus)]
-        if len(buses) > 1:
-            raise DefinitionError.broken(
-                "control-bus-repeated",
-                "KernelSpace",
-                f"{cls.__qualname__} declares the control buses {buses}: a kernel presents "
-                "one at most",
-                declaration=cls.__qualname__,
-            )
-        if buses:
-            cls.exports = {**cls.exports, CONTROL: getattr(cls, f"{buses[0]}_control")}
         cls._module = modules[0] if modules else None
         _spanning(cls, KernelSpace, _KERNEL_SPANS)
         if unmet_required(cls):
@@ -511,7 +491,7 @@ class KernelSpace(Space):
         buffers (a FIFO, an ``input_gen``), which states its own."""
         return 0
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources:
         """What it uses of the device itself: nothing; a kernel with a module states its
         own (a refusal where it has no model of it, never nothing)."""
@@ -581,12 +561,25 @@ class KernelSpace(Space):
         """``resources``: its own ``resource_use`` and its members'."""
         return total((self.resource_use, *(item.value for item in self.member_resources)))
 
-    @view(semantics=NETLIST_SEMANTICS)
+    @view
     @declared_reads("netlists", "controls")
     def netlist(self) -> Fragment | Rejected:
         """Its netlist, labelled relative to itself: its module at the empty label (``under``
         names it by its node where it is held), its members' under theirs."""
         return KernelSpace._netlist(self)
+
+    @derived
+    def declares_bus(self) -> bool:
+        """Whether it declares a control bus (presented or not): False here, True in a
+        class declaring one (``ControlBus.lower``)."""
+        return False
+
+    @view(when=declares_bus)
+    def bus_control(self) -> Control | Rejected:
+        """The control bus it declares: a ``Control``, presenting nothing while the bus is
+        not presented. A kernel declaring none answers inapplicable; one declaring a bus
+        reads that bus's own view here (``ControlBus.lower``)."""
+        return reject("kernel-control", f"{type(self).__qualname__} declares no control bus")
 
     @view
     @declared_reads("member_cycles")
@@ -601,19 +594,20 @@ class KernelSpace(Space):
         """The bits it and its members hold between a channel's sides."""
         return KernelSpace._buffering(self)
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     @declared_reads("resource_use", "member_resources")
     def resources(self) -> Resources:
         """What it and its members use of the device."""
         return KernelSpace._resources(self)
 
-    # A kernel adding exports of its own extends these: ``{**KernelSpace.exports, KEY: ...}``.
-    exports = {
-        NETLIST: netlist,
-        CYCLES: cycles,
-        BUFFERING: buffering,
-        RESOURCES: resources,
-    }
+    # -- what it reaches of its members: their answers, read by its views only ------------
+    # Each ``Members`` names the member it reads, so it follows the views it names.
+
+    netlists = Members(netlist)
+    controls = Members(bus_control)
+    member_cycles = Members(Timed.cycles)
+    member_buffering = Members(buffering)
+    member_resources = Members(resources)
 
 
 _KERNEL_SPANS = (
@@ -622,7 +616,7 @@ _KERNEL_SPANS = (
         KernelSpace._netlist,
         ("netlists", "controls"),
         ("module", "pins", "held"),
-        view(semantics=NETLIST_SEMANTICS),
+        view,
     ),
     _Span("cycles", KernelSpace._cycles, ("member_cycles",), ("beats",), view),
     _Span("buffering", KernelSpace._buffering, ("held_bits", "member_buffering"), (), view),
@@ -631,7 +625,7 @@ _KERNEL_SPANS = (
         KernelSpace._resources,
         ("resource_use", "member_resources"),
         (),
-        view(semantics=RESOURCES_SEMANTICS),
+        view,
     ),
 )
 """A kernel's answers: each spans its declarations."""
@@ -655,16 +649,10 @@ def extent_of(index: Index) -> int:
 
 
 __all__ = [
-    "BOUNDARY",
-    "BUFFERING",
-    "CYCLES",
     "Kernel",
     "KernelSpace",
     "NATIVE_CLOCKING",
-    "NETLIST",
-    "PORT_CONTRACT",
     "PortContract",
-    "RESOURCES",
     "extent_of",
     "merged",
 ]

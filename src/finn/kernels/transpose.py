@@ -31,7 +31,6 @@ from finn.kernels.fifo import fifo_resources
 from finn.kernels.library import LibraryModule
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import (
-    RESOURCES_SEMANTICS,
     auto_unstated,
     memory,
     memory_preference,
@@ -183,7 +182,7 @@ class TransposeKernel(KernelSpace):
         signals=("odat", "ovld", "ordy"),
     )
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources | Rejected:
         if self.ram_style == "auto":
             return auto_unstated("the transpose's pages")

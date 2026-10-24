@@ -12,9 +12,10 @@ the classes' compiled forms and the scopes' records (``_scopes``): no member is 
 
 **What each walks.** A choice's **upstream** is the first choices met on every way back
 from its existence guards, its domain's inputs and the formals of its scope and of every
-enclosing one: a way ends at a choice, a fact and a Space's validity (a view's Space is
-not followed), and follows a node's dependencies and a method's inferred reads (a
-dynamic method's: every node of its scope and of the scopes below it). A guard's
+enclosing one: a way ends at a choice, a fact and a Space's validity (reached only by a
+dynamic method's every node: views are read out, so no other way leads to it), and follows
+a node's dependencies and a method's inferred reads (a dynamic method's: every node of its
+scope and of the scopes below it). A guard's
 **reach** is every choice and fact on every way back from it, through choices too (a
 dynamic method's: every choice and fact).
 
@@ -205,7 +206,7 @@ class _Walks:
                 if upstream:
                     continue
             elif upstream and spec.kind == "validity":
-                continue
+                continue  # reached only as a start of a dynamic method's subtree walk
             for ref in fields(compiled, node).dependencies():
                 push(ref)
             if spec.call_style == "self" and spec.function is not None:

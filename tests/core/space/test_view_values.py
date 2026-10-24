@@ -5,9 +5,10 @@
 On a configuration ``point.kitchen.cost`` is the accepted value (a read of a
 view that is not accepted raises ``ValueUnavailableError`` carrying its
 result): refused with its Space, and answering while its Space is open. On a
-declaration ``kitchen.cost`` is a reference to that value: it supplies a formal.
-Assessment and query are explicit calls on the configuration:
-``point.inspect(Hall.total)`` and ``point.query(Hall.total)``.
+declaration ``kitchen.cost`` is a reference to that value, read by another view and
+by nothing else: a view is read out, so a formal is supplied by a derived value
+(``kitchen.price``), never by a view. Assessment and query are explicit calls on the
+configuration: ``point.inspect(Hall.total)`` and ``point.query(Hall.total)``.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from support.refusals import refused
 from support.space_cores import built
 
 import finn.core.space as space
@@ -22,6 +24,7 @@ from finn.core.space import (
     Available,
     BoundValue,
     Decision,
+    DefinitionError,
     Inapplicable,
     Param,
     Rejected,
@@ -47,9 +50,11 @@ class Room(Space):
     def small_enough(self) -> bool | Rejected:
         return True if self.area <= 30 else reject("too-large", f"area {self.area} exceeds 30")
 
-    @view
-    def cost(self) -> int:
+    @derived
+    def price(self) -> int:
         return self.area * self.finish
+
+    cost = View(price)
 
 
 class Hall(Space):
@@ -58,8 +63,8 @@ class Hall(Space):
     dining = Room(area=16)
     garage = Room(area=30, when=want_garage)
     hall = Room()
-    hall.area = kitchen.cost  # a view's accepted value supplies a formal
-    annex = Room(area=dining.cost)  # at the call, too
+    hall.area = kitchen.price  # a derived value supplies a formal
+    annex = Room(area=dining.price)  # at the call, too
     doubled = View(kitchen.cost * 2)  # an expression over a view reference
     checked = View(dining.area)
 
@@ -120,7 +125,7 @@ def test_an_unaccepted_view_read_raises_carrying_its_result() -> None:
     assert isinstance(absent.value.result, Inapplicable)
 
 
-def test_a_view_read_inside_a_computation_blocks_like_any_read() -> None:
+def test_a_derived_value_read_inside_a_computation_blocks_like_any_read() -> None:
     calls: list[str] = []
 
     class Reader(Space):
@@ -130,7 +135,7 @@ def test_a_view_read_inside_a_computation_blocks_like_any_read() -> None:
         @derived
         def sum_of_costs(self) -> int:
             calls.append("started")
-            value = self.kitchen.cost + self.dining.cost
+            value = self.kitchen.price + self.dining.price
             calls.append("finished")
             return value
 
@@ -140,7 +145,7 @@ def test_a_view_read_inside_a_computation_blocks_like_any_read() -> None:
 
     base = design_space(Reader())
     assert isinstance(base.query(Reader.sum_of_costs), Unresolved)
-    assert calls == ["started"]  # halted at the first unavailable view read
+    assert calls == ["started"]  # halted at the first unavailable read
     # The Space is valid (an open choice is no piece): the view waits on its output alone.
     assessment = base.inspect(Reader.total)
     assert assessment.validity == Available(True)
@@ -153,13 +158,13 @@ def test_a_view_read_inside_a_computation_blocks_like_any_read() -> None:
     assert calls[-1] == "finished"
 
 
-def test_a_view_reference_supplies_a_formal_by_assignment_and_at_the_call() -> None:
+def test_a_derived_value_supplies_a_formal_by_assignment_and_at_the_call() -> None:
     base = design_space(Hall())
-    assert isinstance(base.hall.query(Room.area), Unresolved)  # waits for kitchen.cost
+    assert isinstance(base.hall.query(Room.area), Unresolved)  # waits for kitchen.price
     point = chosen()
-    assert point.hall.area == 24  # hall.area = kitchen.cost
-    assert point.annex.area == 16  # Room(area=dining.cost)
-    # A formal supplied by a refused view is refused with the view's refusal.
+    assert point.hall.area == 24  # hall.area = kitchen.price
+    assert point.annex.area == 16  # Room(area=dining.price)
+    # The formal answers where the hall is refused; its view is refused with it.
     big = too_large(hall=2)
     assert big.hall.area == 36 and isinstance(big.query(Hall.hall.cost), Rejected)
 
@@ -216,13 +221,10 @@ def test_inspect_and_query_are_explicit_calls_on_the_configuration() -> None:
 
 
 def test_a_views_own_name_in_its_class_body_is_its_declaration() -> None:
-    # In its own body a view is the declaration (View[T]): it may be exported or
-    # wrapped, and at runtime it supplies a formal like any reference. Statically it
-    # is not the T a formal takes.
+    # In its own body a view is the declaration (View[T]): it may be wrapped, but it
+    # supplies no formal: a view is read out, so a binding to it is refused. Statically
+    # it is not the T a formal takes.
     class Plaque(Space):
-        """A child with no constraint: a constraint of it reading a view of its parent
-        would close a dependency cycle (the parent's validity counts the child's)."""
-
         area: int = Param()
 
     class Wing(Space):
@@ -232,12 +234,22 @@ def test_a_views_own_name_in_its_class_body_is_its_declaration() -> None:
         def doubled(self) -> int:
             return 2 * self.kitchen.cost
 
-        annex = Plaque(area=cast(int, doubled))
         checked = View(doubled)
 
     point = design_space(Wing()).with_choices({Wing.kitchen.finish: 1})
-    assert point.annex.area == 24
     assert point.checked == 24
+
+    class Fed(Space):
+        kitchen = Room(area=12)
+
+        @view
+        def doubled(self) -> int:
+            return 2 * self.kitchen.cost
+
+        annex = Plaque(area=cast(int, doubled))
+
+    with refused("view-read-in", error=DefinitionError):
+        design_space(Fed())
 
 
 def test_the_callable_view_surface_is_gone() -> None:

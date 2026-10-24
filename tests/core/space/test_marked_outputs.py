@@ -24,16 +24,16 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
-    ValueSemantics,
     View,
     constraint,
-    default_semantics,
     derived,
     design_space,
     reject,
+    view,
 )
 from finn.core.space.collection import collect_space
 from finn.core.space.errors import DefinitionError
+from finn.core.space.semantics import ValueSemantics, default_semantics
 
 
 @dataclass(frozen=True)
@@ -93,6 +93,39 @@ def test_a_derived_value_states_no_semantics() -> None:
             @derived(semantics=default_semantics(Point))
             def point(self) -> Point | Rejected:
                 return Point(1)
+
+
+def test_a_view_states_no_semantics() -> None:
+    """A view's check is its return annotation's, or its source's for ``View(source)``."""
+    with refused("view-semantics", error=DefinitionError, message="semantics= is gone"):
+
+        class Explicit(Space):
+            @view(semantics=default_semantics(Point))
+            def point(self) -> Point | Rejected:
+                return Point(1)
+
+    with refused("view-semantics", error=DefinitionError, message="semantics= is gone"):
+
+        class Guarded(Space):
+            enabled: bool = Param()
+
+            @view(semantics=default_semantics(Point), when=enabled)
+            def point(self) -> Point | Rejected:
+                return Point(1)
+
+    class Stated(Space):
+        n: int = Param()
+
+        @view
+        def point(self) -> Point | Rejected:
+            return Point(self.n)
+
+        again = View(point)
+        plain = View(n)
+
+    assert semantics_of(Stated, "point").type_token is Point
+    assert semantics_of(Stated, "again").type_token is Point
+    assert semantics_of(Stated, "plain").type_token is int
 
 
 def test_a_value_semantics_in_annotated_metadata_is_refused() -> None:

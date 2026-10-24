@@ -28,7 +28,6 @@ from .declarations import (
     Param,
     ValueRef,
     View,
-    ViewKey,
     class_namespace,
     declared_annotation,
     describe_formal,
@@ -52,7 +51,6 @@ RESERVED_NAMES = frozenset(
         "with_choices",
         "_held",
         "_scope",
-        "exports",
         "when",
         "_space_path",
     }
@@ -66,7 +64,6 @@ class EffectiveSpace:
     functions: Mapping[str, BoundFunction]
     semantics: Mapping[Declaration, ValueSemantics[object]]
     aliases: Mapping[Declaration, str]
-    exports: Mapping[ViewKey[object], Declaration]
     guards: Mapping[Declaration, ValueRef[bool]] = field(
         default_factory=lambda: MappingProxyType({})
     )
@@ -206,6 +203,7 @@ def _collect_semantics(
                 function_decl, hints_for(function, owner), owner
             )
         elif isinstance(declaration, (ValueRef, View)) and declaration.semantics is not None:
+            # a fact's annotation, a value-authored view's source's (a function states its own)
             semantics[declaration] = declaration.semantics
         for prior in inherited[name][:-1]:
             if isinstance(prior, (NodeDecl, NodeDecision)) and isinstance(
@@ -277,81 +275,12 @@ def _collect_guards(effective: EffectiveSpace) -> Mapping[Declaration, ValueRef[
     return MappingProxyType(guards)
 
 
-def _exported(
-    effective: EffectiveSpace, key: ViewKey[object], declaration: object, label: str
-) -> View[object] | Derived[object]:
-    """The member an export names: a view (a product, read as its accepted value) or a
-    derived value (read as the value, whatever the Space's validity)."""
-    space_type, members = effective.space_type, effective.members
-    if not isinstance(declaration, Declaration) or declaration not in effective.aliases:
-        raise DefinitionError.broken(
-            "export-not-member",
-            _OWNER,
-            f"{space_type.__qualname__}: export {label} is not a member",
-            declaration=space_type.__qualname__,
-        )
-    resolved = members[effective.aliases[declaration]]
-    if not isinstance(resolved, (View, Derived)):
-        raise DefinitionError.broken(
-            "export-kind-invalid",
-            _OWNER,
-            f"{space_type.__qualname__}: export {label} has the wrong kind",
-            declaration=space_type.__qualname__,
-        )
-    exported_semantics = effective.semantics.get(resolved)
-    if exported_semantics is None and isinstance(resolved, View) and resolved.source is not None:
-        exported_semantics = source_semantics(resolved.source, effective)
-    if exported_semantics is not None and not key.semantics.is_compatible_with(exported_semantics):
-        raise DefinitionError.broken(
-            "export-semantics-incompatible",
-            _OWNER,
-            f"{space_type.__qualname__}: export {label} has incompatible semantics",
-            declaration=space_type.__qualname__,
-        )
-    return resolved
-
-
-def _collect_exports(
-    effective: EffectiveSpace, declared_exports: object
-) -> Mapping[ViewKey[object], Declaration]:
-    """The exports: one view or derived value for each key."""
-    space_type = effective.space_type
-    exports: dict[ViewKey[object], Declaration] = {}
-    if not isinstance(declared_exports, Mapping):
-        raise DefinitionError.broken(
-            "exports-invalid",
-            _OWNER,
-            f"{space_type.__qualname__}: exports must map typed keys to declarations",
-            declaration=space_type.__qualname__,
-        )
-    export_names: set[str] = set()
-    for key, declaration in declared_exports.items():
-        if not isinstance(key, ViewKey):
-            raise DefinitionError.broken(
-                "view-key-required",
-                _OWNER,
-                f"{space_type.__qualname__}: an export needs a ViewKey",
-                declaration=space_type.__qualname__,
-            )
-        if key.name in export_names:
-            raise DefinitionError.broken(
-                "export-key-duplicate",
-                _OWNER,
-                f"{space_type.__qualname__}: duplicate export key {key.name}",
-                declaration=space_type.__qualname__,
-            )
-        export_names.add(key.name)
-        exports[key] = _exported(effective, key, declaration, key.name)
-    return MappingProxyType(exports)
-
-
 def collect_space(space_type: type[Space]) -> EffectiveSpace:
     """Collect one scope and snapshot its signatures; child linking is separate."""
     if not isinstance(space_type, type) or not issubclass(space_type, Space):
         raise DefinitionError.broken(
             "not-a-space", _OWNER, "collect_space expects a Space subclass"
         )
-    namespace = class_namespace(space_type)
     annotation_namespace = _annotation_namespace(space_type)
     hint_cache: dict[int, dict[str, object]] = {}
 
@@ -375,7 +304,6 @@ def collect_space(space_type: type[Space]) -> EffectiveSpace:
         MappingProxyType({}),
         MappingProxyType(semantics),
         MappingProxyType(aliases),
-        MappingProxyType({}),
     )
     functions: dict[str, BoundFunction] = {}
     for name, declaration in members.items():
@@ -392,10 +320,8 @@ def collect_space(space_type: type[Space]) -> EffectiveSpace:
             inferred = source_semantics(declaration, preliminary)
             if inferred is not None:
                 semantics[declaration] = inferred
-    exports = _collect_exports(preliminary, namespace.get("exports", {}))
     return replace(
         preliminary,
         functions=MappingProxyType(functions),
         guards=_collect_guards(preliminary),
-        exports=exports,
     )

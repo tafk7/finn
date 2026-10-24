@@ -25,7 +25,7 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
 from finn.kernels.artifacts.abi import Endpoint
-from finn.kernels.base import NETLIST, PORT_CONTRACT, KernelSpace, PortContract
+from finn.kernels.base import KernelSpace, PortContract
 from finn.kernels.channels import Channel, boundary_contract
 from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.memstream import MemStreamKernel
@@ -96,8 +96,8 @@ def test_each_channel_owns_its_refusal_and_independent_refusals_are_all_visible(
     # A source traversing four elements cannot carry an eight-element tensor.
     wide = Tensor((8,), INT4)
     point = constants(first=wide, second=wide)
-    assert isinstance(point.query("first", NETLIST), Rejected)
-    assert isinstance(point.query("second", NETLIST), Rejected)
+    assert isinstance(point.query("first", KernelSpace.netlist), Rejected)
+    assert isinstance(point.query("second", KernelSpace.netlist), Rejected)
     refusal = module_of(point, "constants")
     assert isinstance(refusal, Rejected)
     # Each finding keeps its owner, the channel's own declaration; the partition names the
@@ -180,7 +180,7 @@ class Replaying(Space):
     def port_side(self) -> Side:
         return Side.kernel(self.port_stream, "port")
 
-    @view(semantics=PORT_CONTRACT)
+    @view
     def port_contract(self) -> PortContract:
         return PortContract("port", replaying())
 

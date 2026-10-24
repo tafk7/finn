@@ -24,7 +24,6 @@ from finn.core.space import (
     Space,
     Unresolved,
     View,
-    ViewKey,
     composite,
     derived,
     design_space,
@@ -34,8 +33,6 @@ from finn.core.space import (
 )
 from finn.core.space.errors import RequestError
 from finn.core.space.references import DecisionHandle, ValueHandle
-
-PHYSICAL = ViewKey("physical", int)
 
 
 @pytest.mark.usefixtures("purity_unchecked")

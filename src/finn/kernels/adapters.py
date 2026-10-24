@@ -74,14 +74,7 @@ from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import Tensor
 from finn.dataflow.traversal import BeatSequence
 from finn.kernels.artifacts.module import Leaf
-from finn.kernels.base import (
-    BUFFERING,
-    CYCLES,
-    NETLIST,
-    RESOURCES,
-    KernelSpace,
-    PortContract,
-)
+from finn.kernels.base import KernelSpace, PortContract
 from finn.kernels.declaration import declared_reads
 from finn.kernels.input_generator import Generate, InputGeneratorKernel, generated
 from finn.kernels.library import library_module
@@ -282,13 +275,6 @@ class StreamAdapter(KernelSpace):
             presented: PortContract = kernel.output_contract
             found.append(Stage(library_module(kernel), given.contract, presented.contract, label))
         return tuple(found)
-
-    exports = {
-        NETLIST: KernelSpace.netlist,
-        CYCLES: KernelSpace.cycles,
-        BUFFERING: KernelSpace.buffering,
-        RESOURCES: KernelSpace.resources,
-    }
 
 
 class InputAdapter(StreamAdapter):

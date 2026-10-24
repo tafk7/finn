@@ -55,7 +55,8 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
     cycles = model.resolve(model.root, Example.cycles)
     assert {argument.name for argument in cycles.arguments} == {"extent", "lanes"}
     # The class's own dependency order (its compiled form's: a model reads its members by
-    # address, on demand).
+    # address, on demand). A view's edge to its Space's validity is not in it: a view is
+    # read out, and that edge closes no cycle.
     form = compiled(Example)
     position = {index: offset for offset, index in enumerate(form.order)}
     assert all(
@@ -63,6 +64,7 @@ def test_compile_links_forward_dependencies_without_executing_callbacks() -> Non
         for record in form.records
         for dependency in record.dependencies
         if isinstance(dependency, Local)
+        and not (record.kind == "view" and dependency in record.constraints)
     )
     assert model.scopes.parameters == (model.resolve(model.root, Example.extent),)
     assert model.scopes.decisions == (model.resolve(model.root, Example.lanes),)

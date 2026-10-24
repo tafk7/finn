@@ -65,7 +65,7 @@ from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
 from finn.kernels.artifacts.abi import Pin
 from finn.kernels.artifacts.module import Composed, Held, Leaf, ProducerIdentity
-from finn.kernels.base import CYCLES, KernelSpace
+from finn.kernels.base import KernelSpace, Timed
 from finn.kernels.channels import Channel
 from finn.kernels.composer import (
     ChannelDeclaration,
@@ -216,7 +216,7 @@ def built(network: Partition, stem: str) -> Composed:
 
 def cycles_of(network: Partition) -> QueryResult[int]:
     """The most cycles a frame any member of ``network`` takes, once each states its own."""
-    found = [network.query(name, CYCLES) for name in network.members]
+    found = [network.query(name, Timed.cycles) for name in network.members]
     waiting = [answer for answer in found if not isinstance(answer, Available)]
     if waiting:
         return waiting[0]

@@ -102,7 +102,6 @@ from finn.kernels.control import ControlBus
 from finn.kernels.library import LibraryModule
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import (
-    RESOURCES_SEMANTICS,
     Fit,
     auto_unstated,
     memory,
@@ -496,7 +495,7 @@ class ThresholdingAxiKernel(KernelSpace):
             )
         return self.bound_schedule(self.indices, {c: self.pe})
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources | Rejected:
         flat, count = integers(self.thresholds), self.shape[2]
         first = flat[:count]

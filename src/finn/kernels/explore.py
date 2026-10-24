@@ -89,7 +89,7 @@ from collections.abc import Callable, Collection, Hashable, Iterable, Mapping, S
 from dataclasses import dataclass, field
 from itertools import product
 from math import floor
-from typing import Any, Generic, Protocol, TypeVar
+from typing import Any, Generic, Protocol, TypeVar, overload
 
 from finn.core.reporting.findings import Finding, FindingKind, Refusal
 from finn.core.space import (
@@ -100,10 +100,10 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
-    ViewKey,
+    View,
     inspection,
 )
-from finn.kernels.base import BUFFERING, CYCLES, RESOURCES
+from finn.kernels.base import KernelSpace, Timed
 from finn.kernels.channels import ChannelFifo, Neighbours
 from finn.kernels.composer import Key
 from finn.kernels.configure import refusal
@@ -161,7 +161,7 @@ class Composition(Protocol):
     (``finn.kernels.partition.Partition``; the graph binds one in its shell,
     ``finn.custom_op.kernels.shell.in_shell``, and a test declares one by hand). Its
     members by name, ranked, its channels among
-    them, and per member its point, its exports, its Decisions, every choice's state, the
+    them, and per member its point, its Decisions, every choice's state, the
     possible values of those asked, what is open and stored, its validity, and a change
     (``trial``); per channel the ports beside it (``neighbours``, whose paces FIFO sizing
     reads); its own statement of what it uses, where it makes one (``own_resources``); the
@@ -191,7 +191,11 @@ class Composition(Protocol):
 
     def owner(self, name: str) -> Owner: ...
 
-    def query(self, name: str, key: ViewKey[T]) -> QueryResult[T]: ...
+    @overload
+    def query(self, name: str, member: View[T]) -> QueryResult[T]: ...
+
+    @overload
+    def query(self, name: str, member: T) -> QueryResult[T]: ...
 
     def waits(self, name: str, answer: object) -> tuple[Key, ...]: ...
 
@@ -1117,8 +1121,9 @@ class Seam:
         return found
 
     def cost(self, network: Composition, members: Iterable[str] | None = None) -> Cost:
-        """Each member's cycles a frame, buffering and resources, read from its exports
-        (only ``members``' when named), one member at a time, so a member that waits
+        """Each member's cycles a frame, buffering and resources (``Timed.cycles``,
+        ``KernelSpace.buffering``, ``KernelSpace.resources``; only ``members``' when named),
+        one member at a time, so a member that waits
         hides no other."""
         cycles: dict[str, int] = {}
         buffering: dict[str, int] = {}
@@ -1127,15 +1132,15 @@ class Seam:
         resources: dict[str, Resources] = {}
         unstated: dict[str, tuple[Finding, ...]] = {}
         for name in network.members if members is None else members:
-            held = network.query(name, BUFFERING)
+            held = network.query(name, KernelSpace.buffering)
             if isinstance(held, Available):
                 buffering[name] = held.value
-            used = network.query(name, RESOURCES)
+            used = network.query(name, KernelSpace.resources)
             if isinstance(used, Available):
                 resources[name] = used.value
             else:
                 unstated[name] = _findings_of(used)
-            answer = network.query(name, CYCLES)
+            answer = network.query(name, Timed.cycles)
             if isinstance(answer, Available):
                 cycles[name] = answer.value
             elif isinstance(answer, Unresolved):
@@ -1156,7 +1161,7 @@ class Seam:
                 return Stated(own.value, {})
             if isinstance(own, Unresolved):
                 return own.findings
-        answers = {name: network.query(name, RESOURCES) for name in network.members}
+        answers = {name: network.query(name, KernelSpace.resources) for name in network.members}
         waiting = [answer for answer in answers.values() if isinstance(answer, Unresolved)]
         if own is None and waiting:
             return tuple(dict.fromkeys(f for answer in waiting for f in answer.findings))

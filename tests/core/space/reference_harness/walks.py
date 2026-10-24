@@ -77,22 +77,25 @@ the binds through ``Answers.bind``, and the check against one built from nothing
 ``Implementation.make`` (history independence, which T1 claims by construction and its
 cache could break), so none is skipped.
 
-**Two runs, and attribution by cause** (DESIGN § 6). The model holds a ruling the engine has
-not reached (SZ100 (3)), a pending milestone of the matrix with one row.
+**Two runs, and attribution by cause** (DESIGN § 6). Where the model holds a ruling the engine
+has not reached, a pending milestone of the matrix says so (none is pending now: the
+engine agrees with the model everywhere the walks reach).
 
-- The **strict** run (``strict=True``, ``--strict``) draws neither cause: no view in a
-  rule's pool, every fact given at the start, no unset. Every disagreement fails the walk.
-- The **full** run (the default) draws both. A disagreement is attributed by its cause,
-  computed from the description, never the engine's answers: T4b, a description the model
-  refuses as ``view-read-in`` that the engine takes otherwise (``engine.definition``;
-  counted once, and the generator draws again: built, or refused as a cycle, see
-  :func:`generate`). One attributed to a pending milestone (:func:`pending`) is **counted,
-  not failed**, tallied by question and by milestone; every other one fails the walk, and so
-  does one whose milestone is not pending (``--without``: its rows taken as removed).
-  Refinement on the engine side (its answers over an addition, in the same order) is a
-  disagreement like any other where the model holds. Where the engine refuses a change the
-  model accepts, the engine side takes the model's configuration by a bind, which is never
-  refused.
+- The **strict** run (``strict=True``, ``--strict``) draws what the full run adds: no view
+  in a rule's pool, every fact given at the start, no unset. Every disagreement fails the
+  walk.
+- The **full** run (the default) draws them. A description with a rule reading a view in
+  is one the model refuses as ``view-read-in`` and the engine must refuse so
+  (``engine.definition``; checked once, and the generator draws again: see
+  :func:`generate`), so the full run walks the check as well. A disagreement is attributed
+  by its cause, computed from the description, never the engine's answers. One attributed
+  to a pending milestone (:func:`pending`) is **counted, not failed**, tallied by question
+  and by milestone; every other one fails the walk, and so does one whose milestone is not
+  pending (``--without``: its rows taken as removed). With no milestone pending, every
+  disagreement fails. Refinement on the engine side (its answers over an addition, in the
+  same order) is a disagreement like any other where the model holds. Where the engine
+  refuses a change the model accepts, the engine side takes the model's configuration by a
+  bind, which is never refused.
 
 Facts are drawn required or optional (SZ100 (5)): every required fact is given from the
 start, an optional one now and then left out, reading ``None``, and now and then unset (set
@@ -190,7 +193,7 @@ class Generated:
     skipped: Counter[str] = field(default_factory=Counter)
     #: the descriptions drawn before it that read a view in (SZ100 (3)), which the model
     #: refuses as no definition: each one's text and what the engine's ``definition``
-    #: answered (T4b's disagreements; the full run's alone)
+    #: answered (it must be ``view-read-in`` too; the full run's alone)
     read_in: tuple[tuple[str, DefinitionForm], ...] = ()
 
 
@@ -617,7 +620,9 @@ class _Draw:
             views = (model.View("v", reads, _capped(reads, k, "too-big")),)
             self.lines.append(f"{indent}view v: {' + '.join(reads)}, refused 'too-big' past {k}")
         pool = [*readable, *(item.name for item in over_facts), *(i for i in self.ints if "." in i)]
-        # a view read in (SZ100 (3)): a descendant's, or the rules' own Space's; never strict
+        # a view read in (SZ100 (3)): a descendant's, or the rules' own Space's. Drawn in the
+        # full run only, so the strict run's descriptions stay as they were; the engine must
+        # refuse each as the model does (``generate`` asks it)
         if self.guard_view is not None and rng.random() < 0.5 and not self.strict:
             pool.append(self.guard_view)
         if views and rng.random() < 0.2 and not self.strict:
@@ -796,12 +801,9 @@ def generate(
     A description the model refuses as ``view-read-in`` (SZ100 (3); drawn only when not
     ``strict``) is checked against the engine's ``definition`` (``implementation`` asked)
     before it is drawn again: each is kept in ``read_in``, with what the engine answered,
-    and each the engine answers otherwise is counted under T4b. The engine never answers
-    ``view-read-in``: it builds such a description, or, for a rule on a view of its own
-    Space, refuses it as a dependency cycle, a definition error of another kind. The cycle
-    case is T4b's too (agreed in review): under the ruling it is ``view-read-in``, and T4b
-    is the change that makes the engine answer so. ``by``: derived selectors too
-    (:class:`_Draw`)."""
+    and the walk fails on each the engine answers otherwise: a rule reading a view of
+    its own Space too is ``view-read-in``, not a dependency cycle. ``by``: derived
+    selectors too (:class:`_Draw`)."""
     skipped: Counter[str] = Counter()
     read_in: list[tuple[str, DefinitionForm]] = []
     while True:
@@ -2138,8 +2140,9 @@ class _Walk:
         started = time.perf_counter()
         try:
             for text, form in self.generated.read_in:
-                # T4b (SZ100 (3)): the model refuses a view read in; an engine answering
-                # otherwise (it builds it, or calls it a cycle) disagrees
+                # SZ100 (3): the model refuses a view read in; an engine answering otherwise
+                # (it builds it, or calls it a cycle) disagrees, with no milestone to count
+                # it under
                 expected = DefinitionForm("view-read-in")
                 if not agrees(expected, form):
                     self.disagree(
@@ -2147,7 +2150,7 @@ class _Walk:
                         "the definition, drawn before this description:\n" + text,
                         expected,
                         form,
-                        "T4b",
+                        None,
                     )
             configuration = model.Configuration(self.generated.description, self.generated.facts)
             point = self.on_engine(
@@ -2242,14 +2245,13 @@ def walk(
     by: bool = False,
 ) -> Tally:
     """One seeded walk of ``steps`` changes (DESIGN § 6). ``strict``: the generator draws
-    neither cause (no view read in, every fact given, no unset) and every disagreement fails
-    the walk. Otherwise, the full run: a disagreement attributed to T4b (a description the
-    model refuses as ``view-read-in``) is counted under that pending milestone; any other,
-    or one whose milestone is not pending (``without``: its rows taken as removed), fails
-    the walk. ``implementation`` is the one compared with the model (the public API by
-    default), asked through ``support.space_oracle``'s interface. ``by``: the descriptions
-    hold selectors picked by a derived value too (:class:`_Draw`). It never raises: a
-    failure is in ``Tally.failure``."""
+    no view read in, gives every fact and unsets none, and every disagreement fails the
+    walk. Otherwise, the full run: a disagreement attributed to a pending milestone is
+    counted under it; any other, or one whose milestone is not pending (``without``: its rows
+    taken as removed), fails the walk (none is pending now). ``implementation`` is the one
+    compared with the model (the public API by default), asked through
+    ``support.space_oracle``'s interface. ``by``: the descriptions hold selectors picked by a
+    derived value too (:class:`_Draw`). It never raises: a failure is in ``Tally.failure``."""
     return _Walk(seed, steps, strict, pending(without), implementation, by).run()
 
 

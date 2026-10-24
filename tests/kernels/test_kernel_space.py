@@ -33,7 +33,6 @@ from finn.core.space import (
     Rejected,
     Unresolved,
     View,
-    default_semantics,
     design_space,
     divisors_of,
     required,
@@ -41,25 +40,18 @@ from finn.core.space import (
 )
 from finn.core.space._reads import summary
 from finn.core.space.compiler import compile_model
+from finn.core.space.semantics import default_semantics
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.dataflow.traversal import BeatSequence, vector_major
 from finn.kernels.artifacts.abi import Direction, Endpoint, Signal
 from finn.kernels.artifacts.contributions import Contribution, CopiedSource
 from finn.kernels.artifacts.module import Fragment, Held
-from finn.kernels.base import (
-    BUFFERING,
-    CYCLES,
-    NATIVE_CLOCKING,
-    NETLIST,
-    RESOURCES,
-    KernelSpace,
-)
+from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
 from finn.kernels.channels import ChannelFifo
 from finn.kernels.declaration import KernelDeclaration, is_member
 from finn.kernels.fifo import FifoKernel, fifo_resources
 from finn.kernels.library import LibraryModule, library_module
 from finn.kernels.port import native_stream, served
-from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.platform.capabilities import Resources
 
 TENSOR = Tensor((4, 1), ScalarEncoding(DataType["INT4"]))
@@ -79,13 +71,13 @@ def test_a_fifo_answers_its_netlist_cycles_buffering_and_resources() -> None:
     assert point.cycles == 6
     assert point.buffering == 8 * 13
     assert point.resources == fifo_resources(8, 13, "auto", fabric=FULL_DSP48E2.fabric)
-    for key, value in (
-        (NETLIST, point.netlist),
-        (CYCLES, 6),
-        (BUFFERING, 8 * 13),
-        (RESOURCES, point.resources),
+    for member, value in (
+        (FifoKernel.netlist, point.netlist),
+        (FifoKernel.cycles, 6),
+        (FifoKernel.buffering, 8 * 13),
+        (FifoKernel.resources, point.resources),
     ):
-        assert point.query(FifoKernel.exports[key]) == Available(value)
+        assert point.query(member) == Available(value)
 
 
 def test_a_fifo_s_answers_wait_on_its_choices_and_refuse_with_it() -> None:
@@ -126,7 +118,7 @@ class Stage(KernelSpace):
     def parameters(self) -> dict[str, int | str]:
         return {"WIDTH": 4}
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources:
         return Resources(lut=3)
 
@@ -237,9 +229,9 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
         return type(name, (KernelSpace,), body)
 
     port = native_stream("input", Endpoint.TARGET, TENSOR, ARRIVING)
-    kernel("Complete", input=port, resource_use=view(semantics=RESOURCES_SEMANTICS)(resource_use))
+    kernel("Complete", input=port, resource_use=view(resource_use))
     with refused("module-ports-unplaced", error=DefinitionError, message="Portless declares no"):
-        kernel("Portless", resource_use=view(semantics=RESOURCES_SEMANTICS)(resource_use))
+        kernel("Portless", resource_use=view(resource_use))
     with refused(
         "module-places-kernels",
         error=DefinitionError,
@@ -248,7 +240,7 @@ def test_a_kernel_with_a_module_states_its_ports_and_resources_and_places_no_ker
         kernel(
             "Nesting",
             input=native_stream("input", Endpoint.TARGET, TENSOR, ARRIVING),
-            resource_use=view(semantics=RESOURCES_SEMANTICS)(resource_use),
+            resource_use=view(resource_use),
             inner=Stage(input_tensor=TENSOR, arriving=ARRIVING),
         )
     with refused("module-resources-unstated", error=DefinitionError, message="states no"):
@@ -298,7 +290,7 @@ def test_a_kernel_stating_a_stream_port_binds_a_module() -> None:
         def parameters(self) -> dict[str, int | str]:
             return {}
 
-        @view(semantics=RESOURCES_SEMANTICS)
+        @view
         def resource_use(self) -> Resources:
             return Resources()
 
@@ -332,7 +324,7 @@ class Sourced(Based):
     def sources(self) -> tuple[Contribution, ...]:
         return (PROBE,)
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources:
         return Resources()
 
@@ -364,7 +356,7 @@ class Forgetful(Deep):
     def parameters(self) -> dict[str, int | str]:
         return {}
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources:
         return Resources()
 

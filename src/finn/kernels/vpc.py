@@ -35,7 +35,7 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, KernelSpace
 from finn.kernels.library import LibraryModule
 from finn.kernels.port import native_stream
-from finn.kernels.utilization import RESOURCES_SEMANTICS, Fit
+from finn.kernels.utilization import Fit
 from finn.platform.capabilities import Resources
 
 
@@ -97,7 +97,7 @@ class VpcKernel(KernelSpace):
     # Its lanes and element come from its ports, positive by construction: the RTL
     # refuses nothing they present, so it states no constraint of its own.
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources:
         return vpc_resources(w=self.element_bits, pi=self.lanes_in, po=self.lanes_out)
 

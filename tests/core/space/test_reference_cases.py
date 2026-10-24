@@ -34,7 +34,7 @@ from core.space.reference import (
     membership,
     nothing,
 )
-from core.space.reference_harness import Case, Pair, Spelling, check_definition, expected
+from core.space.reference_harness import Case, Pair, Spelling, check_definition
 
 
 def divisors(extent: int) -> tuple[int, ...]:
@@ -659,7 +659,7 @@ def test_new_facts_putting_a_stored_choices_membership_input_out_of_play_drop_it
 # -- 6. Members: standing is what the origin's evaluation read (SZ100 (6)) ----------------------
 #
 # RUNNING § 2.2's House: the annex ``g`` (present while ``x >= 2``) and each room of ``s``
-# state a derived value ``e`` of their own choice, exported to the root's ``m``. The
+# state a derived value ``e`` of their own choice, which the root's ``m`` reads. The
 # scullery refuses ``q = 3``; the annex's ``e`` reads its shed's ``z``, inapplicable while
 # the shed (present while ``g.c >= 2``) is absent. ``small`` asks the rooms' sum to be at
 # most 4; ``fitted`` reads ``x``, the annex's guard's read, beside ``m`` (§ 16.22).
@@ -766,8 +766,7 @@ def test_a_choice_read_beside_members_stands_though_it_decides_an_entrys_existen
 # -- 7. views are read out (SZ100 (3)) ------------------------------------------------------------
 #
 # A stage presents its storage as a view; the parent's rule reads it. Only a view reads a
-# view, so the model refuses the definition (``view-read-in``); the public API builds it
-# and answers, until T4b.
+# view, so the model refuses the definition (``view-read-in``); so does the public API.
 
 
 def storage_stage(name: str) -> Scope:
@@ -795,9 +794,69 @@ READ_IN = Space(
 )
 
 
-@expected("view-read-in")
 def test_a_rule_reading_a_view_is_no_definition() -> None:
     check_definition("a rule reading its children's views", READ_IN)
+
+
+# The same ruling for each other reader, each its own row. A derived value, a ``when`` guard
+# and a domain read a child's view, a rule's form above.
+
+
+def read_in_root(**root: Any) -> Space:
+    return Space(
+        (),
+        Scope(
+            "",
+            children=(storage_stage("first"), *root.pop("children", ())),
+            **root,
+        ),
+    )
+
+
+READ_IN_DERIVED = read_in_root(
+    derived=(Derived("stored", ("first.storage",), lambda read: read["first.storage"]),),
+)
+
+
+def test_a_derived_value_reading_a_view_is_no_definition() -> None:
+    check_definition("a derived value reading a child's view", READ_IN_DERIVED)
+
+
+READ_IN_GUARD = read_in_root(
+    children=(
+        Scope(
+            "second",
+            choices=(Choice("depth", listed(1, 2, 4)),),
+            when=When(("first.storage",), lambda read: read["first.storage"] > 8),
+        ),
+    ),
+)
+
+
+def test_a_guard_reading_a_view_is_no_definition() -> None:
+    check_definition("a guard reading a sibling's view", READ_IN_GUARD)
+
+
+# A view over a fact alone: a domain reading it reads no choice, so the model's refusal here
+# is ``view-read-in`` alone (where the view reads a choice, the engine too refuses it as
+# ``view-read-in``, not ``domain-reads-choice``: the check runs first).
+READ_IN_DOMAIN = Space(
+    ("n",),
+    Scope(
+        "",
+        choices=(
+            Choice(
+                "depth",
+                membership(lambda value, read: value <= read["first.size"], ("first.size",)),
+            ),
+        ),
+        children=(Scope("first", views=(View("size", ("n",), lambda read: 2 * read["n"]),)),),
+    ),
+)
+
+
+def test_a_domain_reading_a_view_is_no_definition() -> None:
+    check_definition("a domain reading a child's view", READ_IN_DOMAIN, facts={"n": 2})
 
 
 # -- 8. an optional fact left out is None (SZ100 (5)) ---------------------------------------------

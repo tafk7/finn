@@ -46,8 +46,8 @@ from .semantics import (
     ValueSemantics,
     annotation_type,
     canonical,
+    default_semantics,
     recognize,
-    semantics_for,
     unrecognized,
 )
 
@@ -849,7 +849,7 @@ class Constraint(_MemberOfNode, Declaration):
     constraint of a present Space counts toward the Space's validity
     (``inspection.validity``); a constraint whose ``when=`` does not hold counts as
     true. A constraint reads values (formals, choices, derived values, a child's
-    value export), never a view of its own Space or of an ancestor: that view's
+    derived value), never a view of its own Space or of an ancestor: that view's
     answer reads this constraint, a dependency cycle."""
 
     def __init__(
@@ -936,7 +936,6 @@ class View(Declaration, Generic[T]):
         cls,
         function: Callable[..., T | QueryResult[T]],
         *,
-        semantics: ValueSemantics[T] | None,
         aliases: Mapping[str, object],
         when: Guard = None,
     ) -> View[T]:
@@ -944,7 +943,7 @@ class View(Declaration, Generic[T]):
         result.source = None
         result.function = function
         result.aliases = MappingProxyType(dict(aliases))
-        result.semantics = semantics
+        result.semantics = None
         result.when = guard(when)
         return result
 
@@ -969,21 +968,18 @@ class _ViewDecorator:
     def __init__(self, aliases: Mapping[str, object], when: Guard) -> None:
         self.aliases, self.when = aliases, when
 
-    def __call__(self, function: Callable[..., T | NonValue]) -> View[T]:
-        return View.from_function(function, semantics=None, aliases=self.aliases, when=self.when)
+    @overload
+    def __call__(self, function: Callable[..., QueryResult[T]]) -> View[T]: ...
+
+    @overload
+    def __call__(self, function: Callable[..., T | NonValue]) -> View[T]: ...
+
+    def __call__(self, function: Callable[..., object]) -> View[Any]:
+        return View.from_function(function, aliases=self.aliases, when=self.when)
 
 
-class _SemanticViewDecorator(Generic[T]):
-    def __init__(self, semantics: ValueSemantics[T], decorator: _ViewDecorator) -> None:
-        self.semantics, self.decorator = semantics, decorator
-
-    def __call__(self, function: Callable[..., T | QueryResult[T]]) -> View[T]:
-        return View.from_function(
-            function,
-            semantics=self.semantics,
-            aliases=self.decorator.aliases,
-            when=self.decorator.when,
-        )
+@overload
+def view(function: Callable[..., QueryResult[T]], /) -> View[T]: ...
 
 
 @overload
@@ -991,55 +987,29 @@ def view(function: Callable[..., T | NonValue], /) -> View[T]: ...
 
 
 @overload
-def view(
-    *,
-    semantics: ValueSemantics[T],
-    when: ValueRef[bool] | bool | None = None,
-    **aliases: object,
-) -> _SemanticViewDecorator[T]: ...
-
-
-@overload
-def view(
-    *,
-    semantics: None = None,
-    when: ValueRef[bool] | bool | None = None,
-    **aliases: object,
-) -> _ViewDecorator: ...
+def view(*, when: ValueRef[bool] | bool | None = None, **aliases: object) -> _ViewDecorator: ...
 
 
 def view(
     function: Callable[..., object] | None = None,
     /,
     *,
-    semantics: object = None,
     when: Guard = None,
     **aliases: object,
 ) -> object:
+    """A view: ``@view`` on a method, or ``@view(when=..., **aliases)``. Its return
+    annotation is its value's type and check (``T``, or ``T | Rejected``)."""
+    if "semantics" in aliases:
+        raise DefinitionError.broken(
+            "view-semantics",
+            _OWNER,
+            f"view{at(source_origin())}: {SEMANTICS_GONE} (the return annotation, or the "
+            "source of a View)",
+        )
     decorator = _ViewDecorator(aliases, when)
     if function is not None:
         return decorator(function)
-    if semantics is not None:
-        if not isinstance(semantics, ValueSemantics):
-            raise DefinitionError.broken(
-                "semantics-invalid", _OWNER, "semantics= must be a ValueSemantics"
-            )
-        return _SemanticViewDecorator(semantics, decorator)
     return decorator
-
-
-class ViewKey(Generic[T_co]):
-    """A typed export contract independent of a concrete Space class: see ``Members``.
-
-    A Space class's ``exports`` maps a key to a view (a product, read as its
-    accepted value) or to a derived value (read as the value, whatever the
-    exporting Space's validity)."""
-
-    def __init__(self, name: str, value_type: type[T_co] | ValueSemantics[T_co]) -> None:
-        self.name, self.semantics = local_name(name, "export name"), semantics_for(value_type)
-
-    def __repr__(self) -> str:
-        return f"ViewKey({self.name!r})"
 
 
 # -- Symbolic references ---------------------------------------------------------------
@@ -1084,7 +1054,7 @@ class _Symbolic:
         from ._configuration import Space
         from ._nodes import NodeChoice
 
-        if isinstance(other, (Declaration, ViewKey, Space, NodeChoice)):
+        if isinstance(other, (Declaration, Space, NodeChoice)):
             return False
         self._misuse("equality comparison with a value")
 
@@ -1334,22 +1304,40 @@ class CaseRef(ValueDecl[str]):
 
 
 class Members(ValueDecl[tuple[Located[T], ...]], Generic[T]):
-    """Every present child node exporting ``key``, as ``Located`` values in
+    """Every present child node reading ``Base.member``, as ``Located`` values in
     declaration order.
 
-    Each entry is ``Located(node=<child name>, member=<key name>, value=<export>)``.
-    A view export answers its accepted value (refused with its Space); a value
-    export (a derived value) answers its value. One refused entry refuses the
+    ``Members(Base.member)`` ranges over the children whose class is ``Base`` or derives
+    from it, each read at its member of that name (so a subclass's override is the one
+    read): ``Located(node=<child name>, member=<member name>, value=<member>)``. The
+    member is a view or a derived value of ``Base``, spelled ``Base.member`` from
+    outside it, or ``Members(member)`` in ``Base``'s own body after the member is
+    declared. ``Base`` and the name are those of the class that declares the member,
+    resolved when the class holding the ``Members`` is compiled.
+
+    A view answers its accepted value (refused with its Space); a derived value answers
+    its value. An entry that is inapplicable is left out. One refused entry refuses the
     whole, else one unresolved leaves it unresolved.
     """
 
-    def __init__(self, key: ViewKey[T]) -> None:
-        if not isinstance(key, ViewKey):
+    @overload
+    def __init__(self, member: View[T]) -> None: ...
+
+    @overload
+    def __init__(self, member: T) -> None: ...  # a derived value: a class reads it as its value
+
+    def __init__(self, member: object) -> None:
+        from .expressions import Expr
+
+        if not isinstance(member, (View, Derived, Expr)):
             raise DefinitionError.broken(
-                "view-key-required", _OWNER, f"{type(self).__name__} requires a ViewKey"
+                "members-member-invalid",
+                _OWNER,
+                f"{type(self).__name__} requires a view or a derived value of a Space "
+                f"class, not {type(member).__name__}",
             )
-        self.key = key
-        self.semantics = cast("ValueSemantics[tuple[Located[T], ...]]", semantics_for(tuple))
+        self.member: View[T] | ValueRef[T] = cast("View[T] | ValueRef[T]", member)
+        self.semantics = cast("ValueSemantics[tuple[Located[T], ...]]", default_semantics(tuple))
 
 
 __all__ = [
@@ -1368,7 +1356,6 @@ __all__ = [
     "ValueDecl",
     "ValueRef",
     "View",
-    "ViewKey",
     "constraint",
     "derived",
     "required",

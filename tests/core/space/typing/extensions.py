@@ -15,7 +15,6 @@ from finn.core.space import (
     QueryResult,
     Space,
     View,
-    ViewKey,
     composite,
     derived,
     design_space,
@@ -47,7 +46,6 @@ Doubled = composite(
     "Doubled",
     {"doubled": computed, "answered": answered, "complete": complete},
     base=Shape,
-    exports={ViewKey("complete", int): complete},
 )
 assert_type(Doubled, type[Shape])
 assert_type(composite("Plain", {}), type[Space])

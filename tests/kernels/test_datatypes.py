@@ -25,10 +25,9 @@ import pytest
 from qonnx.core.datatype import BaseDataType, DataType
 from support.refusals import refused
 
-from finn.core.space import ValueSemantics
 from finn.core.space._running.cache import key
 from finn.core.space._value_types import is_value_type
-from finn.core.space.semantics import annotation_type, canonical, same
+from finn.core.space.semantics import ValueSemantics, annotation_type, canonical, same
 from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,

@@ -3,7 +3,7 @@
 
 """The kernels' cost model, in the platform's resource units
 (``finn.platform.capabilities.Resources``): what a configuration uses of the part
-(``finn.kernels.base.RESOURCES``).
+(``finn.kernels.base.KernelSpace.resources``).
 
 A leaf states its own use from its RTL's parameters: the counts its RTL fixes
 exactly (DSP slices, the memory primitives an array maps to) and its LUTs and
@@ -42,9 +42,7 @@ from finn.core.space import (
     Constraint,
     Domain,
     Rejected,
-    ValueSemantics,
     constraint,
-    default_semantics,
     domain,
     reject,
 )
@@ -56,10 +54,6 @@ CHARACTERISED = "xczu3eg-sbva484-1-i, Vivado 2025.2, out of context at 5 ns"
 SHELL_CHARACTERISED = "out of context, Vivado 2025.2, xczu3eg/xczu7ev"
 """Where the shell's statements (its movers' and its static region's) were characterised:
 each IP synthesized on its own, which overstates what the placed shell uses."""
-
-
-RESOURCES_SEMANTICS: ValueSemantics[Resources] = default_semantics(Resources)
-"""Resources as Space values: compared by value, shared without a copy (frozen)."""
 
 
 def total(items: Iterable[Resources]) -> Resources:
@@ -390,7 +384,6 @@ __all__ = [
     "BLOCK_FIRST_BITS",
     "MEMORY_STYLES",
     "PRIMITIVES",
-    "RESOURCES_SEMANTICS",
     "SHELL_CHARACTERISED",
     "Fit",
     "Primitives",

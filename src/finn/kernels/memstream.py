@@ -76,7 +76,6 @@ from finn.kernels.control import ControlBus
 from finn.kernels.library import LibraryModule
 from finn.kernels.port import AxiStreamPort
 from finn.kernels.utilization import (
-    RESOURCES_SEMANTICS,
     Fit,
     auto_unstated,
     memory,
@@ -308,7 +307,7 @@ class MemStreamKernel(KernelSpace):
             return BeatSequence(self.form.repeated(self.set_tensor.size))
         return BeatSequence(self.form, Repetition.CYCLIC)
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources | Rejected:
         if self.ram_style == "auto":
             return auto_unstated("the memstream's table")

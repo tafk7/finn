@@ -22,11 +22,8 @@ from finn.core.space import (
     RequestError,
     Select,
     Space,
-    ValueSemantics,
     View,
-    ViewKey,
     constraint,
-    default_semantics,
     derived,
     design_space,
     inspection,
@@ -43,6 +40,7 @@ from finn.core.space._signatures import BoundArgument, validate_argument
 from finn.core.space.collection import collect_space
 from finn.core.space.compiler import compile_model
 from finn.core.space.declarations import Declaration, MemberRef, ValueRef
+from finn.core.space.semantics import ValueSemantics, default_semantics
 
 
 def decl(value: object) -> Declaration:
@@ -133,12 +131,7 @@ def test_value_and_function_views_are_distinct_declarations_with_same_type() -> 
     assert Example.detached.source is Example.value
 
 
-def test_node_member_alias_and_typed_view_exports() -> None:
-    # Exports are ViewKeys to views and derived values. A formal is refused as the
-    # wrong kind; it is exported through a View or a derived value.
-    width = ViewKey("width", int)
-    physical = ViewKey("physical", int)
-
+def test_node_member_alias_and_typed_views() -> None:
     class Child(Space):
         extent: int = Param()
 
@@ -147,16 +140,6 @@ def test_node_member_alias_and_typed_view_exports() -> None:
             return extent
 
         width_view = View(extent)
-        exports = {width: width_view, physical: result}
-
-    class ValueExport(Space):
-        extent: int = Param()
-        exports = {width: extent}
-
-    with refused(
-        "export-kind-invalid", error=DefinitionError, message="export width has the wrong kind"
-    ):
-        collect_space(ValueExport)
 
     # The parent declares the formal and binds it to the child.
     class Parent(Space):
@@ -167,9 +150,6 @@ def test_node_member_alias_and_typed_view_exports() -> None:
         def total(*, size: int) -> int:
             return size * 2
 
-    collected = collect_space(Child)
-    assert collected.exports[width] is Child.width_view
-    assert collected.exports[physical] is Child.result
     dependency = collect_space(Parent).functions["total"].dependencies[0].source
     assert dependency.semantics is not None and dependency.semantics.type_token is int
     # The child's member, by reference (statically a reference is typed as its value).
@@ -396,7 +376,7 @@ def test_duplicate_declaration_reuse_is_attributable() -> None:
     assert "Duplicate.two" in str(error)
 
 
-def test_unbound_late_declarations_and_bad_exports_are_rejected() -> None:
+def test_unbound_late_declarations_are_rejected() -> None:
     class Example(Space):
         pass
 
@@ -405,15 +385,6 @@ def test_unbound_late_declarations_and_bad_exports_are_rejected() -> None:
         "declaration-unbound", error=DefinitionError, message="not bound at class creation"
     ):
         collect_space(Example)
-    wrong = type(
-        "WrongExport",
-        (Space,),
-        {"__annotations__": {"value": int}, "value": Param()},
-    )
-    wrong_member = cast(Declaration, vars(wrong)["value"])
-    setattr(wrong, "exports", {ViewKey("physical", int): wrong_member})
-    with refused("export-kind-invalid", error=DefinitionError):
-        collect_space(wrong)
 
 
 def test_definition_constants_are_values_and_decision_domain_contract() -> None:
@@ -662,8 +633,6 @@ def test_when_is_an_authoring_control_argument() -> None:
 
 
 def test_linked_child_types_are_inferred_without_mutating_declarations() -> None:
-    boolean_view = ViewKey("admitted", bool)
-
     class Child(Space):
         size: int = Param()
 
@@ -672,7 +641,6 @@ def test_linked_child_types_are_inferred_without_mutating_declarations() -> None
             raise AssertionError("must not execute")
 
         admitted = View(enabled)
-        exports = {boolean_view: admitted}
 
     class Parent(Space):
         child = Child(size=1)
@@ -682,7 +650,6 @@ def test_linked_child_types_are_inferred_without_mutating_declarations() -> None
             raise AssertionError("must not execute")
 
         copied = View(child.admitted)
-        exports = {boolean_view: copied}
 
     model = compile_model(Parent)
     semantics = model.resolve(model.root, Parent.copied).semantics

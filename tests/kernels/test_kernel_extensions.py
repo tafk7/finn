@@ -15,7 +15,6 @@ from finn.core.space import (
     Param,
     Rejected,
     View,
-    ViewKey,
     composite,
     constraint,
     derived,
@@ -56,6 +55,7 @@ def test_kernel_identity_is_validated_at_class_creation() -> None:
     empty = design_space(Empty())
     assert views(empty) == [
         "buffering",
+        "bus_control",
         "cycles",
         "held_bits",
         "netlist",
@@ -151,7 +151,6 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
     pins = derived(plain_pins)
     admitted = constraint(narrow)
     ports = View(pins)
-    key = ViewKey("ports", Pins)
     word = composite(
         "IntegerWord",
         {
@@ -164,7 +163,6 @@ def test_composite_extends_kernel_with_typed_optional_views_and_independent_node
         },
         base=InterfaceKernel,
         annotations={"dtype": QONNXDataType, "lanes": int},
-        exports={key: ports},
     )
     assert issubclass(word, InterfaceKernel) and word.id == InterfaceKernel.id
 

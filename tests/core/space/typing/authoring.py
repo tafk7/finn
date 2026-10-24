@@ -38,9 +38,7 @@ from finn.core.space import (
     ValueHandle,
     View,
     ViewAssessment,
-    ViewKey,
     constraint,
-    default_semantics,
     derived,
     design_space,
     inspection,
@@ -53,20 +51,18 @@ class DType:
     bits: int
 
 
-INT = default_semantics(int)
-COST = ViewKey("cost", int)
-
-
 class Room(Space):
     area: int = Param()
     label: str | None = Param(default=None)
     finish: int = Decision(values=(1, 2, 3))
 
-    @view
-    def cost(self) -> int:
+    @derived
+    def price(self) -> int:
         return self.area * self.finish
 
-    exports = {COST: cost}
+    @view
+    def cost(self) -> int:
+        return self.price
 
 
 class Boiler(Space):
@@ -97,7 +93,7 @@ class House(Space):
     maybe: Boiler | None = Select(none=None, boiler=Boiler(kw=3))
     thermostat = Thermostat(kw=heating.kw)
     hall.area = kitchen.area  # typed by the annotation: an int reference
-    costs = Members(COST)
+    costs = Members(Room.cost)
     which: str = derived(case=heating)(_case_name)  # a binding reads the case's name
 
     # References in a class body are typed as the values they stand for.
@@ -161,7 +157,7 @@ class Eltwise(Space):
     def result_dtype(*, a: DType, b: DType) -> QueryResult[DType]:
         return Available(DType(max(a.bits, b.bits) + 1))
 
-    @view(semantics=INT)
+    @view
     def physical(*, result_dtype: DType) -> QueryResult[int]:
         return Available(result_dtype.bits)
 
@@ -255,7 +251,7 @@ class Board(Space):
     kernel = Kernel(spec=Spec(4, 8))
     spare = Kernel(spec=Spec(4, 8))
     lobby = Room(area=1)
-    stages = Room(area=lobby.cost)  # a view's accepted value supplies a formal
+    stages = Room(area=lobby.price)  # a derived value supplies a formal
 
 
 def keys(board: Board, house: House) -> None:
@@ -278,9 +274,10 @@ class Wing(Space):
     kitchen = Room(area=12)
     dining = Room(area=16)
     hall = Room()
-    hall.area = kitchen.cost  # a view reference supplies a formal, typed int
-    study = Room(area=dining.cost)
+    hall.area = kitchen.price  # a derived value reference supplies a formal, typed int
+    study = Room(area=dining.price)
     assert_type(kitchen.cost, int)
+    assert_type(kitchen.price, int)
 
     @view
     def total(self) -> int:

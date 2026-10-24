@@ -15,8 +15,7 @@ T = TypeVar("T")
 @dataclass(frozen=True, slots=True)
 class Located(Generic[T]):
     """A value and where it lives: ``node`` is the child's declaration name in the
-    Space that read it (None for that Space itself); ``member`` names the member
-    or export key."""
+    Space that read it (None for that Space itself); ``member`` names the member."""
 
     node: str | None
     member: str

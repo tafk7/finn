@@ -46,7 +46,6 @@ from finn.kernels.artifacts.contributions import CopiedSource
 from finn.kernels.base import NATIVE_CLOCKING, KernelSpace, extent_of
 from finn.kernels.library import LibraryModule
 from finn.kernels.port import AxiStreamPort
-from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.domains import admit_element
 from finn.platform.capabilities import DspBlock, Platform, Resources
 
@@ -156,7 +155,7 @@ class PwPolyKernel(KernelSpace):
             return reject("pwpolyf-target", "the polynomial's DSPFP32 chain requires DSP58")
         return True
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "the pwpolyf module's resources are not characterised")
 

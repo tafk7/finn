@@ -58,7 +58,6 @@ from finn.kernels.base import KernelSpace, extent_of
 from finn.kernels.library import LibraryModule
 from finn.kernels.port import AxiStreamPort, axis
 from finn.kernels.transport import AxisSpelling
-from finn.kernels.utilization import RESOURCES_SEMANTICS
 from finn.kernels.values.domains import Integer
 from finn.platform.capabilities import Platform, Resources
 
@@ -268,7 +267,7 @@ class PoolKernel(KernelSpace):
         """An ordinary integer: ``std::max`` over ``ap_int`` or ``ap_uint`` lanes."""
         return ELEMENTS.check(self.input_tensor.element.dtype)
 
-    @view(semantics=RESOURCES_SEMANTICS)
+    @view
     def resource_use(self) -> Resources | Rejected:
         return reject("kernel-resources", "the pooling module's resources are not characterised")
 
