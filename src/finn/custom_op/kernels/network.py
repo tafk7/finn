@@ -27,11 +27,21 @@ binds a partition in the shell of the model's target (``in_shell``).
   graph's, ``edge_tensor``, at the graph's rank; a parameter channel's, the tensor and
   contents its kernel states for it, ``Stated``); and the target's platform. Only the
   selection's ONNX inputs and outputs are boundaries, named by the shell's convention
-  ``s_axis_<i>`` and ``m_axis_<j>``. A channel has one consumer, so a tensor read more
-  than once is refused by name before anything is declared (``tensor-fan-out``): read by
-  two of the nodes (an edge, or a parameter both own), or read by one and at an output
-  boundary too (a graph output, or read outside the nodes). Fan-out waits for a channel
-  that forks. A node and a tensor, or two nodes, of one name are refused (``name-shared``):
+  ``s_axis_<i>`` and ``m_axis_<j>``. An edge of a slice (a selection short of every
+  KernelOp) whose node beyond it is a KernelOp is no boundary: that node is a **frozen
+  neighbour**, and the edge channel's side there is its port's side at its stored
+  choices, as a fact (``Side.neighbour``: an upstream neighbour's stream, label and word
+  width, a downstream one's stream and label), the edge channel the slice's member. Only
+  an accepted value is a fact: a neighbour whose stored choices or kernel are refused, or
+  whose side is not known at them, is refused by name (``neighbour-unaccepted``); another
+  neighbour is another design space of the slice. An edge at a graph input or output, or
+  at a node that is no KernelOp, stays a boundary. A channel has one consumer, so a
+  tensor read more than once is refused by name before anything is declared
+  (``tensor-fan-out``): read by two of the nodes (an edge, or a parameter both own), or
+  read by one and at an output boundary too (a graph output, or read outside the nodes);
+  and at a frozen neighbour, read by anything else beside the channel's two sides, as the
+  whole partition reads it. Fan-out waits for a channel that forks. A node and a tensor,
+  or two nodes, of one name are refused (``name-shared``):
   a member is named once, as the choices log ``kernel_choices.json`` names it; and so is
   what the composer refuses (``PartitionRefused``: its findings, as a ``KernelOpError``);
 - **its order**: the channels are declared input boundary channels, the other channels,
@@ -75,8 +85,8 @@ own (its shell member, ``finn.kernels.budgets``); the shell's resources over a p
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
-from typing import TYPE_CHECKING, TypeVar
+from collections.abc import Callable, Collection, Iterable, Mapping
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from onnx import NodeProto
 from qonnx.core.metadata import MetadataError
@@ -92,8 +102,9 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import edge_tensor, initializer, reading
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN
 from finn.core.reporting.findings import Finding, FindingKind
-from finn.core.space import Available, Space, inspection
+from finn.core.space import Available, Rejected, Space, Unresolved, inspection
 from finn.custom_op.kernels.base import KernelOp, kernel_op, typed
+from finn.dataflow.streams import Stream
 from finn.kernels.artifacts.module import ProducerIdentity
 from finn.kernels.channels import Channel
 from finn.kernels.composer import (
@@ -141,10 +152,13 @@ def stale_text(key: str, found: Iterable[Finding]) -> str:
 # -- reading the graph --------------------------------------------------------------------
 
 
-def _boundary(model: ModelWrapper, nodes: list[NodeProto], owned: set[str]) -> dict[str, str]:
+def _boundary(
+    model: ModelWrapper, nodes: list[NodeProto], owned: set[str], frozen: Collection[str]
+) -> dict[str, str]:
     """The port of each boundary tensor, inputs then outputs, in node order: an input
     no node produces (and not a parameter: owned, or an initializer the op reads as a
-    fact) is ``s_axis_<i>``; an output read outside ``nodes`` is ``m_axis_<j>``."""
+    fact) is ``s_axis_<i>``; an output read outside ``nodes`` is ``m_axis_<j>``; a tensor
+    at a frozen neighbour (``frozen``) is neither."""
     produced = {tensor for node in nodes for tensor in node.output}
     inside = {id(node) for node in nodes}
     used_outside = {
@@ -153,9 +167,17 @@ def _boundary(model: ModelWrapper, nodes: list[NodeProto], owned: set[str]) -> d
     inputs = [
         tensor
         for tensor in dict.fromkeys(t for node in nodes for t in node.input)
-        if tensor not in produced and tensor not in owned and initializer(model, tensor) is None
+        if tensor not in produced
+        and tensor not in owned
+        and tensor not in frozen
+        and initializer(model, tensor) is None
     ]
-    outputs = [tensor for node in nodes for tensor in node.output if tensor in used_outside]
+    outputs = [
+        tensor
+        for node in nodes
+        for tensor in node.output
+        if tensor in used_outside and tensor not in frozen
+    ]
     ports = {tensor: f"s_axis_{index}" for index, tensor in enumerate(inputs)}
     return ports | {tensor: f"m_axis_{index}" for index, tensor in enumerate(outputs)}
 
@@ -186,6 +208,115 @@ def _fan_out(
         details = (("tensor", tensor),)
         found.append(Finding(FindingKind.REJECTION, "tensor-fan-out", "fan_out", message, details))
     return found
+
+
+def _beyond(
+    model: ModelWrapper, nodes: list[NodeProto], owned: set[str]
+) -> tuple[dict[str, tuple[str, NodeProto]], dict[str, Finding]]:
+    """Each tensor at the selection's edge whose node beyond it is a KernelOp, in node
+    order: the side that node is on, ``producer`` (an input it produces) or ``consumer``
+    (an output it alone reads), and the node; and each such tensor that something else
+    reads too (a node on either side, or the graph's outputs), refused as the whole
+    partition refuses its fan-out (``tensor-fan-out``). A tensor at a graph input or
+    output, or at a node that is no KernelOp, is none: it stays a boundary."""
+    inside = {id(node) for node in nodes}
+    produced = {tensor for node in nodes for tensor in node.output}
+    graph_outputs = {output.name for output in model.graph.output}
+
+    def readers(tensor: str, within: bool) -> list[NodeProto]:
+        return [
+            node
+            for node in model.graph.node
+            if (id(node) in inside) == within and tensor in node.input
+        ]
+
+    frozen: dict[str, tuple[str, NodeProto]] = {}
+    fanned: dict[str, Finding] = {}
+    edges = [
+        (tensor, "producer")
+        for tensor in dict.fromkeys(t for node in nodes for t in node.input)
+        if tensor not in produced and tensor not in owned and initializer(model, tensor) is None
+    ]
+    edges += [(tensor, "consumer") for node in nodes for tensor in node.output]
+    for tensor, side in edges:
+        outside = readers(tensor, within=False)
+        if side == "producer":
+            found = model.find_producer(tensor)
+            beyond = None if found is None or found.domain != KERNEL_OPS_DOMAIN else found
+            others = outside
+        else:
+            kernels = [node for node in outside if node.domain == KERNEL_OPS_DOMAIN]
+            beyond = kernels[0] if kernels else None
+            others = [node for node in outside if node is not beyond]
+        if beyond is None:
+            continue
+        within = readers(tensor, within=True)
+        alone = len(within) == (1 if side == "producer" else 0)
+        if alone and not others and tensor not in graph_outputs:
+            frozen[tensor] = (side, beyond)
+            continue
+        names = [node.name for node in (*within, *outside)]
+        output = " and is a graph output" if tensor in graph_outputs else ""
+        fanned[tensor] = Finding(
+            FindingKind.REJECTION,
+            "tensor-fan-out",
+            "fan_out",
+            f"{tensor} is read by {', '.join(names)}{output}",
+            (("tensor", tensor),),
+        )
+    return frozen, fanned
+
+
+def _neighbour(model: ModelWrapper, tensor: str, side: str, node: NodeProto) -> Side:
+    """The side a frozen neighbour, KernelOp ``node`` beyond the selection on ``side`` of
+    ``tensor``, gives the edge channel, as a fact: its port's ``<p>_side`` at its stored
+    choices (``KernelOp.point``; its facts alone, where it stores none), as a frozen
+    neighbour's (``Side.neighbour``: an upstream one's stream, label and word width, a
+    downstream one's stream and label), its label below the node's name. Only an
+    accepted value is a fact: refused (``neighbour-unaccepted``, naming the neighbour, its
+    port and why) where its stored choices are refused, its kernel is refused, or its side
+    is not known there (it waits on an open choice, or is refused)."""
+    op = kernel_op(model, node)
+    port = (
+        op.outputs[list(node.output).index(tensor)]
+        if side == "producer"
+        else op.ports[list(node.input).index(tensor)]
+    )
+    named = "" if port is None else op.wiring[port].contract.removesuffix("_contract")
+
+    def unaccepted(why: str, causes: Iterable[Finding] = ()) -> KernelOpError:
+        message = (
+            f"{tensor}: its frozen neighbour {node.name} ({op.op_type}), at its port "
+            f"{named or '(none)'}, gives no accepted value: {why}"
+        )
+        details = (("tensor", tensor), ("node", node.name), ("port", named))
+        finding = Finding(
+            FindingKind.REJECTION, "neighbour-unaccepted", tensor, message, details, tuple(causes)
+        )
+        return KernelOpError(message, findings=(finding,))
+
+    if port is None:
+        raise unaccepted("it reads the tensor as an argument, at no port")
+    try:
+        point = op.point()
+    except KernelOpError as error:
+        raise unaccepted("its stored choices are refused", error.findings) from error
+    validity = inspection.validity(point)
+    if isinstance(validity.result, Rejected):
+        raise unaccepted("its kernel is refused", validity.result.findings)
+    answer = point.query(getattr(type(point), f"{named}_side"))
+    if not isinstance(answer, Available) or not isinstance(answer.value, Side):
+        why = (
+            "its side waits on an open choice"
+            if isinstance(answer, Unresolved)
+            else (
+                "its side is refused" if isinstance(answer, Rejected) else "its port is not placed"
+            )
+        )
+        raise unaccepted(why, getattr(answer, "findings", ()))
+    found: Side = answer.value
+    stated = Side.neighbour(cast(Stream, found.stream), found.label, found.width)
+    return stated.under(node.name)
 
 
 def _tensors(model: ModelWrapper, nodes: list[NodeProto], owned: list[dict[str, str]]) -> list[str]:
@@ -328,8 +459,15 @@ def _graph(
     (``tensor-fan-out``) or two members share a name (``name-shared``)."""
     ops = [kernel_op(model, node) for node in nodes]
     owned = [op.owned() for op in ops]
-    ports = _boundary(model, nodes, {tensor for tensors in owned for tensor in tensors.values()})
-    fanned = _fan_out(model, nodes, owned, ports)
+    parameters = {tensor for tensors in owned for tensor in tensors.values()}
+    beyond, crossed = _beyond(model, nodes, parameters)
+    ports = _boundary(model, nodes, parameters, beyond)
+    fanned = [
+        each
+        for each in _fan_out(model, nodes, owned, ports)
+        if dict(each.details)["tensor"] not in crossed
+    ]
+    fanned += crossed.values()
     if fanned:
         raise KernelOpError(
             f"{name}: a channel has one consumer, and fan-out is not designed yet (a channel "
@@ -355,6 +493,8 @@ def _graph(
             if port in held:
                 facts[tensor]["tensor"] = Stated(node.name, str(wiring.carried))
                 facts[tensor]["contents"] = Stated(node.name, str(wiring.stored))
+    for tensor, (side, node) in beyond.items():
+        sides[tensor][side] = _neighbour(model, tensor, side, node)
     channels: dict[str, ChannelDeclaration] = {}
     for tensor in tensors:
         given = facts[tensor]

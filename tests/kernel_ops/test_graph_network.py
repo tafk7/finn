@@ -207,13 +207,14 @@ def test_a_partition_has_ports_for_its_onnx_inputs_and_outputs_only() -> None:
 
 def test_any_selection_of_nodes_is_a_network() -> None:
     """A slice of a model's KernelOps binds as the whole does: its boundary its ONNX
-    inputs and outputs, an edge it cuts a port (no second-partition refusal)."""
+    inputs and outputs (no second-partition refusal). An edge it cuts at a KernelOp is no
+    port: that node is a frozen neighbour (``test_frozen_neighbour``)."""
     model = kernel_model()
     front = network(model, model.graph.node[:2], name="front")
     assert front.kernels == ("first", "activate")
-    assert front.boundary == (("x", "s_axis_0"), ("levels", "m_axis_0"))
+    assert front.boundary == (("x", "s_axis_0"),)
     alone = network(model, model.graph.node[1:2], name="alone")
-    assert alone.boundary == (("hidden", "s_axis_0"), ("levels", "m_axis_0"))
+    assert alone.boundary == ()
     assert not alone.whole and not front.stale
 
 
