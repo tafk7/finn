@@ -244,12 +244,22 @@ def test_a_stream_reading_its_sibling_directly_fails() -> None:
 
 def test_a_stream_reading_a_formal_bound_to_its_sibling_s_value_fails() -> None:
     neighbour = Given(tensor=TENSOR, sequence=SEQUENCE)
+
+    def sequence_of(stream: Stream) -> BeatSequence:
+        return stream.sequence
+
+    # A derived value of the sibling's stream carries the sequence a's formal is bound to.
+    sibling_sequence = derived(stream=neighbour.x_stream)(sequence_of)
     whole = composite(
         "bound",
-        {"b": neighbour, "a": Given(tensor=TENSOR, sequence=neighbour.x_stream.sequence)},
+        {
+            "b": neighbour,
+            "sibling_sequence": sibling_sequence,
+            "a": Given(tensor=TENSOR, sequence=sibling_sequence),
+        },
     )
     scopes = line_scopes(whole)
     _, failures = check(scopes, infer(scopes))
     assert failures, "a's stream reads its sibling through its formal"
     assert all(failure.startswith("a.x_stream: a.x_stream -> a.sequence") for failure in failures)
-    assert any("b.x_stream" in failure for failure in failures), failures
+    assert any(failure.endswith("a.sequence -> sibling_sequence") for failure in failures), failures
