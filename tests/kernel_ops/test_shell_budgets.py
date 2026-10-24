@@ -46,6 +46,7 @@ from support.top_pins import bus_counts_of_abi
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import write_target
 from finn.core.graph.errors import KernelOpError
+from finn.core.search import Refused
 from finn.core.space import Available, inspection
 from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network, in_shell, row_facts
@@ -67,7 +68,7 @@ from finn.kernels.artifacts.module import Abi, BusExport, Fragment, Leaf
 from finn.kernels.artifacts.top import module_abi
 from finn.kernels.budgets import SHELL, counts
 from finn.kernels.composer import Facts, Port, channel, member_name
-from finn.kernels.explore import Refused, Seam
+from finn.kernels.explore import Seam
 from finn.kernels.partition import Partition
 from finn.kernels.sides import Side
 from finn.kernels.thresholding import ThresholdingAxiKernel

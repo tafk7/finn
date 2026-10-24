@@ -24,6 +24,7 @@ from support.helpers import (
     placed,
 )
 
+from finn.core.search import dotted
 from finn.core.space import Available, Rejected, design_space
 from finn.dataflow.tensor import ScalarEncoding
 from finn.dataflow.traversal import BeatSequence, Repetition, tile, vector_major
@@ -31,7 +32,6 @@ from finn.harness.toolchain import finnlib_root
 from finn.kernels.artifacts.build import emit_module
 from finn.kernels.artifacts.contributions import ContributionError, GeneratedData
 from finn.kernels.channels import OUTPUT_ADAPTER_LABEL, SOURCE_LABEL
-from finn.kernels.explore import dotted
 from finn.kernels.library import library_module
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.values.semantics import IntegerTensorValue

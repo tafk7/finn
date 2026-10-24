@@ -41,6 +41,7 @@ def test_every_row_is_checked_by_a_tree() -> None:
     ("name", "layer"),
     [
         ("finn.core.space.declarations", "space"),
+        ("finn.core.search.seam", "search"),
         ("finn.core.reporting.findings", "reporting"),
         ("finn.kernels.artifacts.module.Leaf", "kernels.artifacts"),
         ("finn.kernels.dotp", "kernels"),

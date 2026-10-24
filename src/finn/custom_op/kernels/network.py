@@ -115,6 +115,7 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.graph.facts import edge_tensor, initializer, reading
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.search import Key, dotted
 from finn.core.space import Available, Rejected, Space, Unresolved, inspection
 from finn.custom_op.kernels.base import KernelOp, kernel_op, typed
 from finn.dataflow.streams import Stream
@@ -123,13 +124,11 @@ from finn.kernels.base import PortContract
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.composer import (
     ChannelDeclaration,
-    Key,
     PartitionDeclaration,
     PartitionRefused,
     Port,
     Stated,
 )
-from finn.kernels.explore import dotted
 from finn.kernels.movers import MoverOffer
 from finn.kernels.partition import Partition, partition
 from finn.kernels.sides import Side

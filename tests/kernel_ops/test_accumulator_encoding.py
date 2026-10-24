@@ -40,11 +40,11 @@ from support.xsim import requires_xsim
 
 from finn.core.onnx_exec import execute_onnx
 from finn.core.rtlsim_bench import pack_lanes, stream_through
+from finn.core.search import Hold, Ranked
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network
 from finn.dataflow.tensor import ScalarEncoding
-from finn.kernels.explore import Hold, Ranked
 from finn.kernels.matmul import column_range
 from finn.kernels.values.domains import range_dtype
 from finn.platform.resolve import resolve_target

@@ -111,6 +111,7 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.search import Hold, Key, dotted
 from finn.core.space import Available
 from finn.custom_op.kernels.base import why
 from finn.custom_op.kernels.network import persist, stale_text
@@ -120,19 +121,16 @@ from finn.custom_op.kernels.shell import (
     in_shell,
     shell_resources,
 )
-from finn.kernels.composer import Key
 from finn.kernels.explore import (
     FIFOS_BY_MODEL,
     FIFOS_NOT_CHECKED,
     Bottleneck,
     Cost,
-    Explorer,
     FifoCheck,
-    Hold,
+    KernelExplorer,
     Seam,
     SizeFifos,
     TargetThroughput,
-    dotted,
 )
 from finn.kernels.fifo import FifoKernel
 from finn.kernels.movers import MEMORY_LATENCY, MoverContract
@@ -335,7 +333,7 @@ def _by_owner(values: Mapping[Key, object]) -> dict[str, dict[str, object]]:
 
 
 def _fifos(
-    strategy: Explorer | None, entry: Mapping[str, Any] | None, placed: Sequence[str]
+    strategy: KernelExplorer | None, entry: Mapping[str, Any] | None, placed: Sequence[str]
 ) -> str:
     """Whether this exploration sized the FIFOs, said so that a design without sizing does
     not read as sized: by ``size_fifos`` (the channels it sized, the FIFOs placed), or not,
@@ -454,7 +452,7 @@ def _held_values(
     return values
 
 
-def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None) -> Explored:
+def explore_kernel_choices(model: ModelWrapper, strategy: KernelExplorer | None = None) -> Explored:
     """The KernelOps of a partition's body, ``model``, explored by ``strategy`` (None:
     nothing changed, only checked and reported) and every value persisted, on its network
     in the shell of the model's target, the body's holds kept and recorded; see the module
@@ -589,7 +587,7 @@ def explore_kernel_choices(model: ModelWrapper, strategy: Explorer | None = None
     return Explored(network, cost, explored, (*found, *checked, *over_part))
 
 
-def explore_partition(parent: ModelWrapper, strategy: Explorer) -> Explored:
+def explore_partition(parent: ModelWrapper, strategy: KernelExplorer) -> Explored:
     """The partition of the build's parent graph ``parent`` explored by ``strategy``:
     its body opened through the partition node (``partition_body``), explored
     (``explore_kernel_choices``) and saved in its file. The parent graph is unchanged;
@@ -632,7 +630,7 @@ class ExploreKernelChoices(Transformation):
     network in the shell of the model's target, the body's holds kept and recorded;
     ``explored`` holds the result (``explore_kernel_choices``)."""
 
-    def __init__(self, strategy: Explorer | None = None) -> None:
+    def __init__(self, strategy: KernelExplorer | None = None) -> None:
         super().__init__()
         self.strategy = strategy
         self.explored: Explored | None = None

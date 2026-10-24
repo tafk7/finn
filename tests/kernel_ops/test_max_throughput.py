@@ -37,11 +37,11 @@ from support.tfc import ULTRA96
 
 from finn.core.graph.annotations.platform import write_target
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.search import Hold
 from finn.custom_op.kernels.shell import verify_partition
 from finn.kernels.explore import (
     Defaults,
-    Explorer,
-    Hold,
+    KernelExplorer,
     MaxThroughput,
     SizeFifos,
     TargetThroughput,
@@ -56,13 +56,13 @@ ULTRA96_IP = resolve_target(part=ULTRA96.part, period_ns=ULTRA96.platform.period
 SHELLS = {"ip": ULTRA96_IP, "pynq": ULTRA96}
 
 
-def within(lut: float) -> list[Explorer]:
+def within(lut: float) -> list[KernelExplorer]:
     """The search within ``lut`` of the part's LUTs, then FIFO sizing."""
     return [MaxThroughput({"lut": lut}), SizeFifos()]
 
 
 def explore_each(
-    model: ModelWrapper, strategies: list[Explorer]
+    model: ModelWrapper, strategies: list[KernelExplorer]
 ) -> tuple[dict[str, Any], tuple[Finding, ...]]:
     """``model`` explored by each of ``strategies`` in turn, an exploration each, as a
     build's strategy steps run them: the last exploration's report, with each one's
@@ -72,7 +72,9 @@ def explore_each(
     return report, tuple(finding for each in results for finding in each.findings)
 
 
-def explored(model: ModelWrapper, target: Target, strategies: list[Explorer]) -> dict[str, Any]:
+def explored(
+    model: ModelWrapper, target: Target, strategies: list[KernelExplorer]
+) -> dict[str, Any]:
     """A copy of ``model`` explored for ``target`` by each of ``strategies`` in turn
     (``Defaults()`` first: from every choice's default, conversion's and the channel's); the
     report (``explore_each``)."""

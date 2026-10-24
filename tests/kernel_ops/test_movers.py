@@ -58,7 +58,7 @@ from finn.kernels.artifacts.module import module_name
 from finn.kernels.base import KernelSpace
 from finn.kernels.channels import Channel
 from finn.kernels.configure import commit
-from finn.kernels.explore import Explorer, SizeFifos, TargetThroughput
+from finn.kernels.explore import KernelExplorer, SizeFifos, TargetThroughput
 from finn.kernels.fifo_sizing import NotModelled, Pattern, sides
 from finn.kernels.movers import (
     DIVISIBLE,
@@ -436,7 +436,7 @@ def explored(
     (``strategies``)."""
     model = ModelWrapper(tfc.model.__deepcopy__())
     write_target(model, target)
-    strategies: list[Explorer] = [TargetThroughput(fps), *([SizeFifos()] if sizing else [])]
+    strategies: list[KernelExplorer] = [TargetThroughput(fps), *([SizeFifos()] if sizing else [])]
     reports = [explore_kernel_choices(model, strategy).report for strategy in strategies]
     return model, {**reports[-1], "strategies": [each["strategy"] for each in reports]}
 

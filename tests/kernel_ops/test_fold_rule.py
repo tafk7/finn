@@ -31,11 +31,12 @@ from support.models import kernel_model
 from support.refusals import refused
 
 from finn.core.graph.annotations.platform import read_target
+from finn.core.search import Accepted, ExploreError, Hold, Refused
 from finn.core.space import Decision, Space, derived, inspection
 from finn.custom_op.kernels.network import persist
 from finn.custom_op.kernels.shell import in_shell
 from finn.kernels.composer import Facts, PartitionDeclaration, Port, Stated, channel
-from finn.kernels.explore import Accepted, ExploreError, Hold, Refused, Seam, TargetCycles
+from finn.kernels.explore import Seam, TargetCycles
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.partition import Partition, partition
 from finn.kernels.sides import Side

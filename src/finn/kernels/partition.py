@@ -54,6 +54,7 @@ from types import MappingProxyType
 from typing import Any, Self, TypeVar, overload
 
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.search import Key, Trial, dotted
 from finn.core.space import (
     Available,
     BrokenRule,
@@ -77,10 +78,9 @@ from finn.kernels.artifacts.module import Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose as top
 from finn.kernels.base import KernelSpace, PortContract, merged
 from finn.kernels.channels import Channel, Neighbours, OuterHops, outer_hops
-from finn.kernels.composer import Composed, Key, Names, PartitionDeclaration, Port, compose
+from finn.kernels.composer import Composed, Names, PartitionDeclaration, Port, compose
 from finn.kernels.control import Control
 from finn.kernels.control import presented as presented_buses
-from finn.kernels.explore import Trial, dotted
 from finn.kernels.movers import MoverOffer
 from finn.kernels.policies import Defaulted, Owner, Unstated, defaulted
 from finn.kernels.sides import Side, SideKind
@@ -435,7 +435,7 @@ class Partition:
         """Every choice of each member (of ``names`` only, where named), by key, with its
         state (``inspection.states``: set, waiting, dormant, open or absent): by member in
         rank order, each member's choices in its flow order (the seam's order,
-        ``finn.kernels.explore.Composition``)."""
+        ``finn.core.search.Composition``)."""
         states = self._states()
         return tuple(
             ((name, key), self._state(name, state))

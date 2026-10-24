@@ -55,15 +55,15 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import design_digest
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.search import Key, dotted
 from finn.core.space import Available, Inapplicable, QueryResult, Rejected, inspection
 from finn.custom_op.kernels.network import PARTITION, PRODUCER, _network, persist, stale_text
 from finn.kernels.artifacts.module import Composed
 from finn.kernels.base import Timed
 from finn.kernels.budgets import SHELL, counts
 from finn.kernels.channels import Channel
-from finn.kernels.composer import Key
 from finn.kernels.configure import refusal
-from finn.kernels.explore import FifoCheck, Seam, dotted
+from finn.kernels.explore import FifoCheck, Seam
 from finn.kernels.movers import MoverContract
 from finn.kernels.partition import Partition, _together
 from finn.kernels.policies import Required, policy

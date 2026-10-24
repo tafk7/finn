@@ -28,13 +28,12 @@ from pathlib import Path
 
 from qonnx.core.modelwrapper import ModelWrapper
 
+from finn.core.search import Hold, Ranked
 from finn.custom_op.kernels.shell import in_shell
 from finn.kernels.explore import (
     Defaults,
-    Explorer,
-    Hold,
+    KernelExplorer,
     MaxThroughput,
-    Ranked,
     SizeFifos,
     TargetThroughput,
 )
@@ -48,7 +47,7 @@ PINS: Mapping[str, Mapping[str, object]] = {
 }
 """The holds of ``pinned_then_target``, by node and key."""
 
-SEQUENCES: Mapping[str, Callable[[], list[Explorer]]] = {
+SEQUENCES: Mapping[str, Callable[[], list[KernelExplorer]]] = {
     "ranked": lambda: [Ranked(LANES)],
     "target_throughput": lambda: [TargetThroughput(1_000_000)],
     "target_throughput_then_size_fifos": lambda: [TargetThroughput(1_000_000), SizeFifos()],

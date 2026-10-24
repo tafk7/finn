@@ -102,6 +102,7 @@ import numpy as np
 
 from finn.core.rtlsim_bench import WordsDiffer, materialize, stream_through
 from finn.core.rtlsim_pacing import FREE, STALLED
+from finn.core.search import Key, dotted
 from finn.core.space import (
     Available,
     Derived,
@@ -131,9 +132,8 @@ from finn.kernels.artifacts.module import Composed, Leaf
 from finn.kernels.artifacts.rtl import Declined, extract
 from finn.kernels.base import KernelSpace
 from finn.kernels.channels import Channel
-from finn.kernels.composer import Facts, Key, Port, channel
+from finn.kernels.composer import Facts, Port, channel
 from finn.kernels.configure import chosen, describe
-from finn.kernels.explore import dotted
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.partition import Partition
 from finn.kernels.policies import Alone, FirstValid, Policy, defaulted

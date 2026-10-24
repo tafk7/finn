@@ -98,10 +98,11 @@ from finn.core.graph.partition import KERNEL_OPS_DOMAIN, design_digest, partitio
 from finn.core.onnx_exec import execute_onnx
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import FINDING, RECORDS, write_report
+from finn.core.search import Hold, Ranked
 from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.channels import Channel, Neighbours
-from finn.kernels.explore import Hold, Ranked, TargetThroughput
+from finn.kernels.explore import TargetThroughput
 from finn.kernels.fifo_sizing import Sized
 from finn.platform.refusal import TargetRefused
 from finn.platform.request import TargetRequest

@@ -41,11 +41,11 @@ from qonnx.core.modelwrapper import ModelWrapper
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN
 from finn.core.reporting.findings import Refusal
+from finn.core.search import Accepted, Key, Refused
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import persist
 from finn.custom_op.kernels.shell import in_shell
-from finn.kernels.composer import Key
-from finn.kernels.explore import Accepted, Refused, Seam
+from finn.kernels.explore import Seam
 
 
 def configured(model: ModelWrapper, choices: Mapping[str, Mapping[str, object]]) -> ModelWrapper:

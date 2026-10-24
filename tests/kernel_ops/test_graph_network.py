@@ -44,12 +44,13 @@ from finn.core.graph.errors import KernelOpError
 from finn.core.onnx_exec import execute_onnx
 from finn.core.reporting.findings import FindingKind
 from finn.core.rtlsim_bench import pack_lanes, stream_through
+from finn.core.search import Ranked, dotted
 from finn.core.space import Available, inspection
 from finn.custom_op.kernels import shell
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
 from finn.kernels.channels import Channel
-from finn.kernels.explore import Ranked, Seam, SizeFifos, dotted
+from finn.kernels.explore import Seam, SizeFifos
 from finn.kernels.policies import ranked
 from finn.kernels.utilization import BLOCK_FIRST_BITS
 from finn.toolchain.launcher import host_toolchain

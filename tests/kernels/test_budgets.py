@@ -25,6 +25,7 @@ import pytest
 from support import chain
 from support.helpers import by_hand, choose, keyed
 
+from finn.core.search import Refused
 from finn.core.space import Available, Decision, Param, Unresolved, derived, inspection
 from finn.kernels.artifacts.abi import Bus, Endpoint, Member, StandardProtocol
 from finn.kernels.artifacts.module import RegisterMap
@@ -32,7 +33,7 @@ from finn.kernels.base import KernelSpace
 from finn.kernels.budgets import SHELL, ShellBudgets, counts
 from finn.kernels.composer import Facts
 from finn.kernels.control import ControlBus
-from finn.kernels.explore import Refused, Seam
+from finn.kernels.explore import Seam
 from finn.kernels.matmul import MatMulKernel
 from finn.kernels.partition import Partition
 

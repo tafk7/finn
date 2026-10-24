@@ -37,12 +37,13 @@ from finn.core.onnx_exec import RanBy, execute_onnx
 from finn.core.rtlsim_bench import pack_lanes, stream_through
 from finn.core.rtlsim_exec import XSim
 from finn.core.rtlsim_pacing import FREE, STALLED
+from finn.core.search import Ranked, Refused
 from finn.core.space import Available, inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import PRODUCER
 from finn.custom_op.kernels.shell import configured_network, in_shell
 from finn.kernels.budgets import SHELL, counts
-from finn.kernels.explore import Ranked, Refused, Seam
+from finn.kernels.explore import Seam
 from finn.toolchain.launcher import host_toolchain
 from finn.transformation.kernels import ExploreKernelChoices, PackagePartition
 from finn.transformation.kernels.package import ElaboratePartition, boundary_facts

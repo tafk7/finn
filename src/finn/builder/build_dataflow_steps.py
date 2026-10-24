@@ -68,7 +68,7 @@ from finn.kernels.explore import (
     FIFOS_BY_MODEL,
     DebugPlaceholder,
     Defaults,
-    Explorer,
+    KernelExplorer,
     MaxThroughput,
     SizeFifos,
     TargetThroughput,
@@ -246,7 +246,7 @@ def step_convert_to_hw(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWr
 
 
 def _explore(
-    model: ModelWrapper, cfg: DataflowBuildConfig, step: str, strategy: Explorer
+    model: ModelWrapper, cfg: DataflowBuildConfig, step: str, strategy: KernelExplorer
 ) -> Explored:
     """Explore the partition by ``strategy``, the graph's holds kept, and save it; write the
     step's report, report/<step>.json, log its summary and note each limitation found as

@@ -21,16 +21,10 @@ from support.helpers import FULL_DSP48E2, Lanes
 from support.refusals import refused
 
 from finn.core.graph.errors import KernelOpError
+from finn.core.search import Choice, ExploreError, Ranked, RankPolicy, dotted
 from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network
-from finn.kernels.explore import (
-    Choice,
-    DebugPlaceholder,
-    ExploreError,
-    Ranked,
-    RankPolicy,
-    dotted,
-)
+from finn.kernels.explore import DebugPlaceholder
 from finn.platform.target import Target
 from finn.transformation.kernels import (
     ExploreKernelChoices,

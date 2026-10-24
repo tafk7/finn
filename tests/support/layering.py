@@ -6,14 +6,16 @@
 ```text
 finn.core.reporting  <-  finn.core.space, finn.toolchain, and every layer above them that
                          states a finding or records a run
-finn.core.space <- finn.kernels <- finn.platform <- finn.core.graph <- finn.custom_op.kernels
-finn.dataflow   <-                                                  <- finn.transformation.kernels
-                                                                       <- finn.shells
-                                                                    <- the XSim testbench
-                                                                    <- the executors
-                                                                    <- the partition node
-                                                                    <- finn.harness
-                                                                    <- the flow (all other finn)
+finn.core.space <- finn.core.search <- finn.kernels <- finn.platform <- finn.core.graph
+finn.dataflow                       <-
+finn.core.graph <- finn.custom_op.kernels
+                <- finn.transformation.kernels
+                   <- finn.shells
+                <- the XSim testbench
+                <- the executors
+                <- the partition node
+                <- finn.harness
+                <- the flow (all other finn)
 finn.core.graph.partition,           <-  finn.core.graph, finn.custom_op.kernels,
 finn.core.graph.annotations.outputs,     finn.transformation.kernels, the executors, the
 finn.core.graph.annotations.choices      partition node, finn.harness, finn.shells, the flow
@@ -34,7 +36,9 @@ finn.platform.capabilities  <-  finn.kernels, and every row above them
 Each row imports every row to its left. What a run says (finn.core.reporting: its
 findings and the refusals that carry them, its log and its manifest) sits below the
 engine, the standard library only, and every row that states a finding or records a run
-imports it: the toolchain logs its tool runs there. The platform's capabilities
+imports it: the toolchain logs its tool runs there. The search's generic half
+(finn.core.search: the seam, its fold rule, the strategies that need nothing but the seam)
+sits on the engine alone, below the kernels, which supply its hook. The platform's capabilities
 (finn.platform.capabilities: what a target gives kernels, plain data) sit beside the
 engine and the values, below the kernels; the rest of finn.platform, the registry with
 the build's target, sits above them. FINN's view of the ONNX model (finn.core.graph:
@@ -98,12 +102,13 @@ class Layer:
     also: tuple[str, ...] = ()
 
 
-# The kernel stack: the engine, the values, the module build values, the platform's
-# capabilities, the kernels. The engine and the values are independent: the kernels are
-# the first layer to use both.
+# The kernel stack: the engine, the search's generic half, the values, the module build
+# values, the platform's capabilities, the kernels. The engine and the values are
+# independent: the kernels are the first layer to use both.
 _KERNEL_STACK = (
     "reporting",
     "space",
+    "search",
     "dataflow",
     "kernels.artifacts",
     "platform.capabilities",
@@ -116,6 +121,11 @@ LAYERS: tuple[Layer, ...] = (
     Layer("reporting", ("finn.core.reporting",), (), (), "tests/core/reporting"),
     # The generic Space engine: the standard library only.
     Layer("space", ("finn.core.space",), ("reporting",), (), "tests/core/space"),
+    # The search's generic half: the seam over a composition of named members, its fold
+    # rule, a strategy's run, held choices, and the strategies that need nothing but the
+    # seam. The engine and the findings only: what it cannot know it asks of the hook the
+    # kernels supply.
+    Layer("search", ("finn.core.search",), ("reporting", "space"), (), "tests/core/search"),
     # Canonical logical values: QONNX's datatypes and their ranges (a tensor's range is
     # part of its datatype fact, qonnx.core.ranges) and numpy, no engine; the findings
     # their refusals carry.
@@ -145,7 +155,14 @@ LAYERS: tuple[Layer, ...] = (
     Layer(
         "kernels",
         ("finn.kernels",),
-        ("reporting", "space", "dataflow", "kernels.artifacts", "platform.capabilities"),
+        (
+            "reporting",
+            "space",
+            "search",
+            "dataflow",
+            "kernels.artifacts",
+            "platform.capabilities",
+        ),
         ("qonnx.core.datatype", "qonnx.core.ranges", "numpy", "pyslang"),
         "tests/kernels",
         also=("finn.resources",),
@@ -460,6 +477,13 @@ LAYERS: tuple[Layer, ...] = (
         ),
         ("pytest", "_typeshed"),
         "tests/core/space",
+    ),
+    Layer(
+        "tests.core.search",
+        ("core.search",),
+        ("reporting", "space", "search", "tests.layering"),
+        ("pytest",),
+        "tests/core/search",
     ),
     Layer(
         "tests.dataflow",

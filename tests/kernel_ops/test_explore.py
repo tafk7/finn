@@ -38,21 +38,12 @@ from finn.core.graph.annotations.platform import read_target, write_target
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import FindingKind
+from finn.core.search import Accepted, ExploreError, Hold, Ranked
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network
 from finn.custom_op.kernels.shell import configured_network, verify_partition
-from finn.kernels.explore import (
-    Accepted,
-    DebugPlaceholder,
-    Defaults,
-    ExploreError,
-    Hold,
-    Ranked,
-    Seam,
-    SizeFifos,
-    TargetThroughput,
-)
+from finn.kernels.explore import DebugPlaceholder, Defaults, Seam, SizeFifos, TargetThroughput
 from finn.kernels.partition import Partition
 from finn.platform.capabilities import Resources
 from finn.platform.resolve import resolve_target

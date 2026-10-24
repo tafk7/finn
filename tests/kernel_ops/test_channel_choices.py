@@ -38,11 +38,12 @@ from finn.core.graph.annotations.channel import (
 )
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, partition_body
+from finn.core.search import ExploreError, Hold, Ranked
 from finn.core.space import inspection
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
 from finn.kernels.channels import Channel
-from finn.kernels.explore import Defaults, ExploreError, Hold, Ranked
+from finn.kernels.explore import Defaults
 from finn.transformation.kernels import (
     InferKernelTensors,
     explore_kernel_choices,

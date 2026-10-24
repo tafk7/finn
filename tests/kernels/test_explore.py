@@ -37,27 +37,21 @@ from support.refusals import refused
 
 import finn.kernels.explore as explore_module
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.core.search import Accepted, ExploreError, Hold, Ranked, Refused, dotted, explore
 from finn.core.space import inspection
 from finn.dataflow.tensor import ScalarEncoding, Tensor
 from finn.kernels import composer
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.explore import (
-    Accepted,
     Bottleneck,
     DebugPlaceholder,
     Defaults,
-    ExploreError,
-    Hold,
     MaxThroughput,
-    Ranked,
-    Refused,
     Seam,
     SizeFifos,
     Stated,
     TargetCycles,
     TargetThroughput,
-    dotted,
-    explore,
 )
 from finn.kernels.matmul import KnownWeights, MatMulKernel
 from finn.kernels.partition import Partition

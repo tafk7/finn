@@ -28,24 +28,13 @@ import finn.kernels.fifo_sizing as fifo_sizing
 from finn import resources
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.rtlsim_bench import simulate as simulate_rtl
+from finn.core.search import Accepted, ExploreError, Hold, Refused, dotted, explore
 from finn.harness.toolchain import finnlib_root
 from finn.kernels import input_generator
 from finn.kernels.artifacts.rtl import evaluate
 from finn.kernels.channels import Channel, Neighbours
 from finn.kernels.composer import Port, channel
-from finn.kernels.explore import (
-    Accepted,
-    Bottleneck,
-    ExploreError,
-    FifoCheck,
-    Hold,
-    Refused,
-    Seam,
-    SizeFifos,
-    TargetCycles,
-    dotted,
-    explore,
-)
+from finn.kernels.explore import Bottleneck, FifoCheck, Seam, SizeFifos, TargetCycles
 from finn.kernels.fifo import least_depth_holding
 from finn.kernels.fifo_sizing import (
     FIFO_LATENCY,
