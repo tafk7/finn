@@ -3,7 +3,8 @@
 
 """The graph metadata FINN writes and reads, one module per namespace of qonnx's typed
 metadata (``qonnx.core.metadata``): ``platform`` (``finn.platform``, the build target),
-``channel`` (``finn.channel``, a channel's choices), ``choices`` (``finn.choices``, a
-partition body's pins and objective) and ``outputs`` (``finn.outputs``, what a build made
-of a partition).
+``boundary`` (``finn.boundary``, what the build states of a partition's boundary, by
+tensor), ``channel`` (``finn.channel``, a channel's choices), ``choices``
+(``finn.choices``, a partition body's pins and objective) and ``outputs``
+(``finn.outputs``, what a build made of a partition).
 """

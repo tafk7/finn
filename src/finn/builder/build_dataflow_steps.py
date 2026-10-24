@@ -21,6 +21,7 @@ that do its work.
 """
 
 import logging
+import math
 from pathlib import Path
 
 from onnx import helper
@@ -61,7 +62,7 @@ from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import note, reported, write_report
-from finn.custom_op.kernels.network import stale_text
+from finn.custom_op.kernels.network import partition_ports, stale_text
 from finn.custom_op.kernels.shell import verify_partition
 from finn.kernels.explore import (
     FIFOS_BY_MODEL,
@@ -72,6 +73,7 @@ from finn.kernels.explore import (
     SizeFifos,
     TargetThroughput,
 )
+from finn.kernels.sides import BeatTimes, Outside
 from finn.platform.resolve import refuse_drift
 from finn.platform.shells import VIVADO_BLOCK_DESIGN, shell_row
 from finn.shells.pynq.deploy import MakePynqDeployment
@@ -330,6 +332,63 @@ def step_placeholder_choices(model: ModelWrapper, cfg: DataflowBuildConfig) -> M
     return model
 
 
+def _stated_beats(port: str, tensor: str, outside: Outside, elements: int) -> str | None:
+    """Why a statement's beat times (``BeatTimes``, which states its lanes and passes) do
+    not time the beats its lanes and passes make of ``tensor``'s ``elements`` a frame at
+    ``port``; None where they do, or where its pace is steady (expanded at any beats)."""
+    pace = outside.pace
+    if not isinstance(pace, BeatTimes):
+        return None
+    lanes, passes = outside.lanes or 1, outside.passes or 1
+    times = len(pace.times)
+    stated = (
+        f"the build's statement ({lanes} lanes a beat, {passes} pass a frame, {times} beat "
+        f"times over {pace.span} cycles)"
+    )
+    if elements % lanes:
+        return (
+            f"{port}: {stated} states lanes that do not divide {tensor}'s {elements} "
+            "elements, so its beat times time no beats"
+        )
+    beats = elements // lanes * passes
+    if times == beats:
+        return None
+    return (
+        f"{port}: {stated} times {times} beats a frame, and {tensor}'s {elements} elements "
+        f"at its lanes and passes are {beats} beats"
+    )
+
+
+def _boundary(model: ModelWrapper, cfg: DataflowBuildConfig) -> dict[str, Outside]:
+    """What the build states of the partition's boundary (``boundary``), each port
+    resolved to the tensor it carries (``partition_ports``): the statements by tensor. A
+    port the partition does not have (``boundary-port-unknown``, listing its ports) and
+    beat times that do not time the port's beats (``boundary-pace-beats``) are refused
+    together, each at its port, as a ConfigurationRefused."""
+    if not cfg.boundary:
+        return {}
+    ports = partition_ports(model)
+    tensors = {port: tensor for tensor, port in ports.items()}
+    found: list[Finding] = []
+    statements: dict[str, Outside] = {}
+    for port, statement in cfg.boundary.items():
+        place = f"configuration.boundary.{port}"
+        if port not in tensors:
+            listed = ", ".join(f"{each} ({tensor})" for tensor, each in ports.items())
+            message = f"the partition has no port {port}; its ports are {listed}"
+            found.append(config_finding("boundary-port-unknown", message, place))
+            continue
+        tensor, outside = tensors[port], statement.outside()
+        elements = math.prod(model.get_tensor_shape(tensor) or ())
+        why = _stated_beats(port, tensor, outside, elements)
+        if why is not None:
+            found.append(config_finding("boundary-pace-beats", why, place))
+        statements[tensor] = outside
+    if found:
+        raise ConfigurationRefused(found)
+    return statements
+
+
 def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Cut the KernelOps into one StreamingDataflowPartition, leaving the nodes before
     and after it on the host; the build's model is the parent graph from here on. The
@@ -342,8 +401,13 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
     body never had set at conversion is set by its KernelOp's policies
     (``choice-converted-late``), one no value could be set for is left open, noted
     (``choice-no-valid-value``), and one a first valid policy set in listed order, its
-    ranking not read, is noted (``choice-order-unknown``)."""
-    cut = CutKernelPartition(Path(cfg.output_dir) / "partition")
+    ranking not read, is noted (``choice-order-unknown``). What the build states of the
+    boundary (``boundary``, by port) is resolved here to the tensor each port carries and
+    written on the body (``finn.boundary``) before the channels are made: a port the
+    partition does not have is refused (``boundary-port-unknown``), and so are beat times
+    that do not time the beats the statement's lanes and passes make of the port's tensor
+    (``boundary-pace-beats``), each at its port."""
+    cut = CutKernelPartition(Path(cfg.output_dir) / "partition", _boundary(model, cfg))
     model = model.transform(cut)
     for key, found in cut.dropped.items():
         message = (

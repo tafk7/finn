@@ -14,7 +14,12 @@ on its boundary (``movers``, each a ``finn.kernels.movers.MoverOffer``; none by 
 a fact its caller gives: a shell's row offers them, and ``finn.custom_op.kernels.shell``
 binds a partition in the shell of the model's target (``in_shell``). A mover offered states
 each boundary side it is offered on (``MoverOffer.states``: row-major, one pass a frame);
-where none is, the side is unstated.
+where none is, the build states the side its statement for the side's tensor
+(``finn.core.graph.annotations.boundary``, ``finn.boundary``: the build's ``boundary``, by
+port, which the cut writes by tensor), and where it states none the side is unstated. A
+build statement on a boundary offered a mover is refused by name
+(``boundary-stated-twice``): the build refuses it before its first step, so only a model
+annotated by hand reaches this.
 
 **The declaration** (``declaration``):
 
@@ -26,7 +31,8 @@ where none is, the side is unstated.
   consumer's side, an output on the producer's) or, where no port of the selection is on
   it, the channel's source (a parameter channel, whose kernel states its value) or the
   boundary (``Side.boundary``: its AXIS port, offered the movers given and stated by the
-  mover offered, unstated where none is); its tensor (the graph's, ``edge_tensor``, at
+  mover offered, or else by the build's statement for its tensor, unstated where neither
+  is); its tensor (the graph's, ``edge_tensor``, at
   the graph's rank; a parameter channel's, the tensor and contents its kernel states for
   it, ``Stated``); and the target's platform. Only the
   selection's ONNX inputs and outputs are boundaries, named by the shell's convention
@@ -97,6 +103,7 @@ from typing import TYPE_CHECKING, TypeVar, cast
 from onnx import NodeProto
 from qonnx.core.metadata import MetadataError
 
+from finn.core.graph.annotations.boundary import read_boundary
 from finn.core.graph.annotations.channel import (
     CHANNEL,
     CHANNEL_KEYS,
@@ -187,6 +194,15 @@ def _boundary(
     ]
     ports = {tensor: f"s_axis_{index}" for index, tensor in enumerate(inputs)}
     return ports | {tensor: f"m_axis_{index}" for index, tensor in enumerate(outputs)}
+
+
+def partition_ports(model: ModelWrapper) -> dict[str, str]:
+    """The port of each boundary tensor of the partition of every KernelOp of ``model``,
+    inputs then outputs (``s_axis_<i>``, ``m_axis_<j>``; the module docstring): the ports the
+    cut's partition has, read before the cut or on its body alike."""
+    nodes = [node for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN]
+    owned = {tensor for node in nodes for tensor in kernel_op(model, node).owned().values()}
+    return _boundary(model, nodes, owned, ())
 
 
 def _fan_out(
@@ -496,9 +512,22 @@ def _graph(
     whole = all(id(node) in inside for node in model.graph.node if node.domain == KERNEL_OPS_DOMAIN)
     stored, stray = _stored(model, nodes, ops, tensors, whole)
     platform = read_target(model).platform
+    built = read_boundary(model)
     # A row offers each kind of mover once, and the channel places the one kind there is:
-    # its statement is each boundary side's; none offered, the side is unstated.
-    outside = movers[0].states() if movers else None
+    # its statement is each boundary side's; none offered, the build's for the side's
+    # tensor where it states one, else the side is unstated.
+    offered = movers[0].states() if movers else None
+    twice = [tensor for tensor in ports if tensor in built] if movers else []
+    if twice:
+        named = ", ".join(f"{ports[tensor]} ({tensor})" for tensor in twice)
+        raise KernelOpError.refused(
+            "boundary-stated-twice",
+            name,
+            f"{name}: the model's boundary statements state {named}, and the boundary is "
+            f"offered an {movers[0].kind} mover, which states each side it is offered on: "
+            "a build statement would be a second source",
+            tensor=twice[0],
+        )
     sides: dict[str, dict[str, Port | Side]] = {tensor: {} for tensor in tensors}
     facts: dict[str, dict[str, object]] = {tensor: {} for tensor in tensors}
     readers: dict[str, str] = {}
@@ -537,6 +566,7 @@ def _graph(
                     "input or output of a partition crosses its boundary",
                     tensor=tensor,
                 )
+            outside = offered if movers else built.get(tensor)
             ends[each] = Side.boundary(ports[tensor], movers, outside)
         channels[tensor] = ChannelDeclaration(ends["producer"], ends["consumer"], given)
 
@@ -734,6 +764,7 @@ __all__ = [
     "Partition",
     "declaration",
     "network",
+    "partition_ports",
     "persist",
     "persist_kernel",
     "stale_text",

@@ -19,6 +19,7 @@ import onnx
 import pytest
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
+from support.models import kernel_model
 from support.refusals import refused
 from support.tfc import PREPROCESSING, ULTRA96, io_settings
 
@@ -45,6 +46,7 @@ from finn.builder.build_dataflow_steps import (
     default_steps,
     step_add_pre_post_processing,
     step_build_bitfile,
+    step_create_dataflow_partition,
     step_deployment_package,
     step_make_driver,
 )
@@ -573,6 +575,47 @@ def test_a_build_statement_is_the_ip_shell_s_and_an_empty_one_states_nothing_on_
     onnx.save(helper.make_model(helper.make_graph([], "empty", [], [])), source)
     cfg.steps, cfg.enable_build_pdb_debug = [step_nothing], False
     assert build_dataflow_cfg(str(source), cfg) == 0
+
+
+def test_the_cut_refuses_a_port_the_partition_does_not_have_and_beat_times_its_port_does_not_beat(
+    tmp_path: Path,
+) -> None:
+    """The cut is the first step that knows the partition's ports: a statement of a port it
+    does not have is refused there, listing its ports; so are beat times of another count
+    than the beats the statement's lanes and passes make of the port's tensor (the Chain's
+    y: twelve elements, three beats at four lanes), and lanes that divide none. Each at its
+    port, together, before anything is cut."""
+    beats = {"lanes": 4, "passes": 1, "pace": {"times": [0, 1], "span": 4}}
+    cfg = stating(tmp_path, "ip", {"s_axis_1": {"pace": {"every": 1}}, "m_axis_0": beats})
+    with pytest.raises(ConfigurationRefused) as refused:
+        step_create_dataflow_partition(kernel_model(), cfg)
+    assert [(each.code, each.owner, each.message) for each in refused.value.findings] == [
+        (
+            "boundary-port-unknown",
+            "configuration.boundary.s_axis_1",
+            "the partition has no port s_axis_1; its ports are s_axis_0 (x), m_axis_0 (y)",
+        ),
+        (
+            "boundary-pace-beats",
+            "configuration.boundary.m_axis_0",
+            "m_axis_0: the build's statement (4 lanes a beat, 1 pass a frame, 2 beat times "
+            "over 4 cycles) times 2 beats a frame, and y's 12 elements at its lanes and "
+            "passes are 3 beats",
+        ),
+    ]
+    assert not (tmp_path / "output" / "partition").exists()
+    undivided = {"lanes": 5, "passes": 1, "pace": {"times": [0, 1], "span": 4}}
+    with pytest.raises(ConfigurationRefused) as refused:
+        step_create_dataflow_partition(
+            kernel_model(), stating(tmp_path, "ip", {"s_axis_0": undivided})
+        )
+    (finding,) = refused.value.findings
+    assert (finding.code, finding.message) == (
+        "boundary-pace-beats",
+        "s_axis_0: the build's statement (5 lanes a beat, 1 pass a frame, 2 beat times over "
+        "4 cycles) states lanes that do not divide x's 12 elements, so its beat times time "
+        "no beats",
+    )
 
 
 def test_an_output_is_a_step_so_generate_outputs_is_an_unknown_setting() -> None:
