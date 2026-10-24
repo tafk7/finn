@@ -9,8 +9,19 @@ channel's tensor is a fact. A side on the wrong role, and channels whose facts r
 other, are the composer's to refuse (``tests/kernels/test_composer.py``).
 """
 
+from math import ceil
+from typing import Any
+
 from qonnx.core.datatype import DataType
-from support.helpers import FULL_DSP48E2, built, by_hand, choose, module_of, with_direct_transports
+from support.helpers import (
+    FULL_DSP48E2,
+    built,
+    by_hand,
+    choose,
+    module_of,
+    with_adapter_memories,
+    with_direct_transports,
+)
 
 from finn.core.space import (
     Available,
@@ -18,19 +29,30 @@ from finn.core.space import (
     Space,
     Unresolved,
     derived,
+    design_space,
     inspection,
     view,
 )
 from finn.dataflow.streams import Stream
 from finn.dataflow.tensor import ScalarEncoding, Tensor
-from finn.dataflow.traversal import BeatSequence, LevelEnd, vector_major
+from finn.dataflow.traversal import (
+    BeatSequence,
+    LevelEnd,
+    Loop,
+    Traversal,
+    regrouped,
+    tile,
+    vector_major,
+)
 from finn.kernels.artifacts.abi import Endpoint
 from finn.kernels.base import KernelSpace, PortContract
-from finn.kernels.channels import Channel, boundary_contract
+from finn.kernels.channels import Channel, boundary_contract, stated_by, stated_form
 from finn.kernels.composer import Facts, Port, channel
+from finn.kernels.configure import commit
 from finn.kernels.memstream import MemStreamKernel
+from finn.kernels.movers import IODMA_HLS, iodma_hls
 from finn.kernels.partition import Partition
-from finn.kernels.sides import Side
+from finn.kernels.sides import BUILD, ROW_MAJOR, Outside, Side, Steady
 from finn.kernels.transport import AxisBeat, StreamContract
 from finn.kernels.values.semantics import IntegerTensorValue
 
@@ -236,3 +258,206 @@ def test_an_adapter_under_a_refused_guard_is_one_piece():
             ("channel-users", "sides"),
             ("guard-refused", selector),
         }
+
+
+# -- a stated boundary -------------------------------------------------------------------------
+
+INT3 = ScalarEncoding(DataType["INT3"])
+MATRIX = Tensor((4, 6), INT3)
+ROWS = vector_major((4, 6), 3)
+"""Row-major, three lanes a beat: eight beats a pass."""
+COLUMNS = Traversal.over((4, 6), ((1, 2, 3), (0, 4, 1)), ((1, 3, 1),))
+"""The same three lanes a beat, the two column folds outer and the rows inner."""
+STEADY = Steady(1)
+
+
+def stated(**fields: Any) -> Outside:
+    """The build's statement of ``fields``, a beat a cycle."""
+    return Outside(BUILD, pace=STEADY, **fields)
+
+
+def reader(form: Traversal) -> Side:
+    """An input port reading ``MATRIX`` in ``form``."""
+    return Side.kernel(Stream(INT3, BeatSequence(form)), "reader.x")
+
+
+def writer(form: Traversal) -> Side:
+    """An output port writing ``MATRIX`` in ``form``, its word its lanes padded to bytes."""
+    return Side.kernel(Stream(INT3, BeatSequence(form)), "writer.y", ceil(3 * form.lanes / 8) * 8)
+
+
+def edge(producer: Side, consumer: Side) -> Any:
+    """A channel of ``MATRIX`` alone between ``producer`` and ``consumer``."""
+    return design_space(
+        Channel(tensor=MATRIX, producer=producer, consumer=consumer, platform=FULL_DSP48E2)
+    )
+
+
+def with_direct(point: Any) -> Any:
+    """``point``'s transport direct, its adapter's memory (where it places one) first valid."""
+    return with_adapter_memories(commit(point, {"transport": "direct"}))
+
+
+def findings(found: object) -> list[tuple[str, str]]:
+    assert isinstance(found, Rejected)
+    return [(item.code, item.message) for item in found.findings]
+
+
+def test_a_stated_form_is_the_presented_one_in_the_stated_order_lanes_and_passes():
+    """Each pass in the stated order at the stated lanes, the stated passes a frame; what
+    is left None as presented; nothing stated beyond it, the presented form itself."""
+    twice = COLUMNS.repeated(2)
+    six = Traversal((4, 6), (Loop(4, 6),), (Loop(6, 1),))  # row-major, six lanes: a row a beat
+    assert stated_form("s_axis_0", stated(order=ROW_MAJOR, passes=1, lanes=6), twice) == six
+    assert stated_form("s_axis_0", stated(order=ROW_MAJOR), twice) == ROWS.repeated(2)
+    assert stated_form("s_axis_0", stated(passes=1), twice) == COLUMNS
+    assert stated_form("s_axis_0", stated(lanes=6), COLUMNS) == regrouped(COLUMNS, 6)
+    assert stated_form("s_axis_0", stated(), twice) is twice
+
+
+def test_a_stated_input_s_lanes_place_a_vpc_before_the_transport_and_widen_the_port():
+    """Six lanes stated where the reader takes three: the edge presents a row a beat, its
+    AXIS word the stated one's (18 bits, padded to 24), and a width step (``vpc``) is
+    placed before the transport. Unstated, the edge presents the reader's three lanes."""
+    unstated = edge(Side.boundary("s_axis_0"), reader(ROWS))
+    assert unstated.boundary.form == ROWS and unstated.boundary.transport.data_width == 16
+    assert not unstated.output_adapting
+    wide = edge(Side.boundary("s_axis_0", outside=stated(lanes=6)), reader(ROWS))
+    assert (wide.boundary.form.lanes, wide.boundary.form.beats) == (6, 4)
+    assert wide.boundary.transport.data_width == 24
+    assert wide.boundary_bus == (wide.boundary.transport.axis_bus(),)
+    assert wide.steps.describe() == "width_conversion" and wide.output_adapting
+    assert [stage.kind for stage in wide.output_adapter.realization] == ["vpc"]
+    assert wide.input_chain == "none"
+
+
+def test_a_stated_output_s_lanes_place_a_vpc_before_the_transport_and_widen_the_port():
+    leaving = edge(writer(vector_major((4, 6), 2)), Side.boundary("m_axis_0"))
+    assert leaving.boundary.transport.data_width == 8 and not leaving.output_adapting
+    wide = edge(writer(vector_major((4, 6), 2)), Side.boundary("m_axis_0", outside=stated(lanes=4)))
+    assert (wide.boundary.form.lanes, wide.boundary.transport.data_width) == (4, 16)
+    assert wide.boundary.transport.endpoint is Endpoint.INITIATOR
+    assert [stage.kind for stage in wide.output_adapter.realization] == ["vpc"]
+    assert wide.input_chain == "none"
+    assert inspection.validity(with_direct(wide)).status == "valid"
+
+
+def test_a_stated_one_pass_input_is_replayed_by_an_input_gen_its_buffer_the_pass():
+    """A reader taking the matrix three times a frame (a streamed weight read once per
+    row of its activations): unstated, the edge presents the three passes; stated
+    row-major and one pass, it presents one, and an ``input_gen`` after the transport
+    replays it."""
+    thrice = ROWS.repeated(3)
+    unstated = edge(Side.boundary("s_axis_0"), reader(thrice))
+    assert unstated.boundary.form == thrice and unstated.input_chain == "none"
+    once = edge(
+        Side.boundary("s_axis_0", outside=stated(order=ROW_MAJOR, passes=1)), reader(thrice)
+    )
+    assert once.boundary.form == ROWS and once.boundary.form.beats == 8
+    assert not once.output_adapting and once.input_chain == "input_gen"
+    assert once.adapter.frame_bits == 4 * 6 * 3  # the pass it holds
+    assert inspection.validity(with_direct(once)).status == "valid"
+
+
+def test_a_stated_row_major_side_is_reordered_by_an_input_gen():
+    """A reader taking the column folds outer: stated row-major, the edge presents the
+    rows, and an ``input_gen`` reorders them; the same for an output stated row-major whose
+    writer presents the column folds. Unstated, each edge presents its port's order."""
+    entering = edge(Side.boundary("s_axis_0", outside=stated(order=ROW_MAJOR)), reader(COLUMNS))
+    assert entering.boundary.form == ROWS and entering.input_chain == "input_gen"
+    assert edge(Side.boundary("s_axis_0"), reader(COLUMNS)).boundary.form == COLUMNS
+    leaving = edge(writer(COLUMNS), Side.boundary("m_axis_0", outside=stated(order=ROW_MAJOR)))
+    assert leaving.boundary.form == ROWS and leaving.input_chain == "input_gen"
+    assert edge(writer(COLUMNS), Side.boundary("m_axis_0")).input_chain == "none"
+    assert inspection.validity(with_direct(entering)).status == "valid"
+
+
+def test_a_stated_side_nothing_bridges_is_refused_by_channel_steps():
+    """A reader taking 2 x 3 tiles, stated row-major: the edge's six lanes span a row,
+    the reader's two rows, and no chain regroups them (``channel-steps``, its message
+    naming what states the side before the steps' own reason). Unstated, the edge
+    presents the tiles."""
+    tiles = tile(4, 6, 2, 3)
+    assert edge(Side.boundary("s_axis_0"), reader(tiles)).input_chain == "none"
+    refused = edge(Side.boundary("s_axis_0", outside=stated(order=ROW_MAJOR)), reader(tiles))
+    assert findings(refused.query(Channel.steps)) == [
+        (
+            "channel-steps",
+            "the boundary s_axis_0, stated by the build (row-major): no adapter can join the "
+            "streams: the same positions under another lane axis",
+        )
+    ]
+    assert inspection.validity(refused).status == "refused"
+
+
+def test_an_interior_channel_s_channel_steps_names_no_statement():
+    """Between two kernels' ports, the same rows written and tiles read: refused by
+    ``channel-steps`` in the steps' words alone, as before a boundary could be stated;
+    only a stated boundary side names what states it (``stated_by``)."""
+    rows, tiles = writer(vector_major((4, 6), 6)), reader(tile(4, 6, 2, 3))
+    refused = edge(rows, tiles)
+    assert findings(refused.query(Channel.steps)) == [
+        (
+            "channel-steps",
+            "no adapter can join the streams: the same positions under another lane axis",
+        )
+    ]
+    assert stated_by(rows, tiles) == stated_by(Side.boundary("s_axis_0"), tiles) == ""
+    mover = Outside(IODMA_HLS, ROW_MAJOR, 1)
+    offered = Side.boundary("s_axis_1", (iodma_hls(128),), mover)
+    assert stated_by(offered, tiles) == (
+        "the boundary s_axis_1, stated by the iodma_hls mover (row-major, one pass a frame): "
+    )
+    leaving = Side.boundary("m_axis_0", outside=stated(lanes=4))
+    assert (
+        stated_by(rows, leaving) == "the boundary m_axis_0, stated by the build (4 lanes a beat): "
+    )
+    assert stated_by(rows, Side.boundary("m_axis_0", outside=stated())) == (
+        "the boundary m_axis_0, stated by the build: "
+    )
+
+
+def test_stated_lanes_that_divide_no_pass_are_refused_by_channel_boundary():
+    refused = edge(Side.boundary("s_axis_0", outside=stated(lanes=5)), reader(ROWS))
+    assert findings(refused.query(Channel.sides)) == [
+        (
+            "channel-boundary",
+            "s_axis_0: the build statement's 5 lanes a beat do not divide the pass's 24 "
+            "elements (a pass of [4, 6])",
+        )
+    ]
+
+
+def test_stated_lanes_a_tiled_order_cannot_regroup_to_are_refused_by_channel_boundary():
+    """Lanes stated alone (the order as presented) that divide the pass's 24 elements, over
+    a reader taking 2 x 3 tiles: the presented order cannot be regrouped to them, its own
+    message under the same code; over the rows, the same lanes regroup."""
+    for lanes in (2, 4, 8):
+        refused = edge(
+            Side.boundary("s_axis_0", outside=stated(lanes=lanes)), reader(tile(4, 6, 2, 3))
+        )
+        assert findings(refused.query(Channel.sides)) == [
+            (
+                "channel-boundary",
+                f"s_axis_0: the presented order of a pass of [4, 6] cannot be regrouped to "
+                f"{lanes} lanes a beat, as the build statement states",
+            )
+        ]
+        rows = edge(Side.boundary("s_axis_0", outside=stated(lanes=lanes)), reader(ROWS))
+        assert rows.boundary.form.lanes == lanes
+
+
+def test_a_statement_of_nothing_the_inside_does_not_present_answers_as_unstated():
+    """A statement of a pace alone presents what the unstated edge presents: the same
+    port, the same steps, the same adapters, on either side."""
+    for producer, consumer, port in (
+        (None, reader(ROWS.repeated(3)), "s_axis_0"),
+        (None, reader(COLUMNS), "s_axis_0"),
+        (writer(COLUMNS), None, "m_axis_0"),
+    ):
+        answers = []
+        for outside in (None, stated()):
+            side = Side.boundary(port, outside=outside)
+            point = edge(producer or side, consumer or side)
+            answers.append((point.boundary, point.steps, point.input_chain, point.output_adapting))
+        assert answers[0] == answers[1]

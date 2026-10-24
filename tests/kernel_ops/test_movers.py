@@ -5,7 +5,8 @@
 
 A partition's network in its shell (``in_shell``) reads its target's shell row
 (``finn.platform.shells``), whose offer places an ``IODMA_hls`` mover on each free side that
-meets the host: placed by the channel where the shell offers one, no choice, so nothing
+meets the host, and states that side (row-major, one pass a frame), which the edge channel
+joins to its reader: placed by the channel where the shell offers one, no choice, so nothing
 persists it; binding no RTL, so the module is the ``ip`` shell's; its cycles a frame
 the channel's, so an exploration's bottleneck can name it, and FIFO sizing reads
 both boundaries through it; its resources by its widths are the shell's, which
@@ -24,9 +25,18 @@ from typing import Any
 import pytest
 from qonnx.core.datatype import DataType
 from qonnx.core.modelwrapper import ModelWrapper
+from support.configure import configured
+from support.helpers import FULL_DSP48E2, with_adapter_memories
 from support.helpers import built as module_built
-from support.models import TARGET, configure_partition, kernel_model
+from support.models import (
+    ROW_MAJOR_W2,
+    TARGET,
+    choose_memories,
+    configure_partition,
+    kernel_model,
+)
 from support.tfc import ULTRA96
+from support.xsim import requires_xsim
 
 import finn.custom_op.kernels.shell as shell
 from finn.core.graph.annotations.platform import read_target, write_target
@@ -40,11 +50,14 @@ from finn.custom_op.kernels.shell import (
     in_shell,
     shell_resources,
 )
-from finn.dataflow.tensor import ScalarEncoding
-from finn.dataflow.traversal import Traversal, tile, vector_major
-from finn.kernels.artifacts.abi import Endpoint
+from finn.dataflow.streams import Stream
+from finn.dataflow.tensor import ScalarEncoding, Tensor
+from finn.dataflow.traversal import BeatSequence, Traversal, tile, vector_major
+from finn.harness.ops import check_parity
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.base import KernelSpace
+from finn.kernels.channels import Channel
+from finn.kernels.configure import commit
 from finn.kernels.explore import Explorer, SizeFifos, TargetThroughput
 from finn.kernels.fifo_sizing import NotModelled, Pattern, sides
 from finn.kernels.movers import (
@@ -53,14 +66,13 @@ from finn.kernels.movers import (
     LCM,
     MEMORY_LATENCY,
     NO_CONVERTER,
-    IodmaMover,
     MoverContract,
     MoverOffer,
     converter_kind,
     iodma_hls,
     iodma_hls_resources,
 )
-from finn.kernels.transport import AxisBeat, StreamContract
+from finn.kernels.sides import ROW_MAJOR, ROW_MAJOR_HOST, Outside, Side
 from finn.kernels.utilization import total
 from finn.platform.capabilities import Resources
 from finn.platform.resolve import resolve_target
@@ -71,6 +83,7 @@ from finn.transformation.kernels import (
     kernel_choices_config,
 )
 from finn.transformation.kernels.cut import CutKernelPartition, MakeCutChoices
+from finn.util.draws import boundary_inputs
 
 # -- a mover's arithmetic -----------------------------------------------------------------
 
@@ -119,6 +132,19 @@ def test_the_iodma_offer_states_its_measured_call_constants() -> None:
         iodma_hls(64, frames_per_call=0)
 
 
+def test_the_iodma_offer_states_each_pass_row_major_once_a_frame_and_no_word() -> None:
+    """What the mover states of the side it is offered on (``MoverOffer.states``), by
+    value: each pass row-major and one pass a frame, as the host's buffer holds the
+    tensor; no lanes (the edge keeps the inside's word, which the mover converts to its
+    memory port itself) and no pace (its contract's at that word). Its cap bounds its
+    memory port, not the stream: two caps state the same."""
+    stated = iodma_hls(128).states()
+    assert stated == Outside(IODMA_HLS, order=ROW_MAJOR, passes=1)
+    assert (stated.source, stated.order, stated.passes) == (IODMA_HLS, ROW_MAJOR, 1)
+    assert (stated.lanes, stated.pace, stated.layout) == (None, None, ROW_MAJOR_HOST)
+    assert iodma_hls(64, frames_per_call=16).states() == stated
+
+
 def test_an_iodma_places_its_converters_as_its_hls_source_does() -> None:
     assert converter_kind(128, 128) == NO_CONVERTER
     assert converter_kind(128, 32) == converter_kind(64, 128) == DIVISIBLE
@@ -147,47 +173,66 @@ def test_an_iodma_states_its_resources_by_its_widths() -> None:
         iodma_hls_resources(direction="both", intf_width=64, stream_width=8)
 
 
-def free_side(form: Traversal) -> StreamContract:
-    """An input's free side presenting UINT8 lanes in ``form``."""
-    beat = AxisBeat("s_axis_0", DataType["UINT8"], form.lanes, endpoint=Endpoint.TARGET)
-    element = ScalarEncoding(DataType["UINT8"])
-    return StreamContract(beat.native(clock="ap_clk", reset="ap_rst_n"), element, form)
+UINT8 = ScalarEncoding(DataType["UINT8"])
 
 
-def test_an_iodma_refuses_a_free_side_that_is_not_row_major() -> None:
-    """An IODMA moves a flat buffer in order, which the driver fills row-major: a free side
-    in another order (a (4, 6) matrix in 2 x 3 tiles) is refused by name, a row-major
-    one in any lanes valid."""
-    offers = (iodma_hls(128),)
+def iodma_edge(form: Traversal) -> Any:
+    """An input's edge channel, alone, whose boundary side the ``IODMA_hls`` offer at a
+    128-bit port states (``MoverOffer.states``) and whose reader takes UINT8 lanes in
+    ``form``."""
+    offer = iodma_hls(128)
+    reader = Side.kernel(Stream(UINT8, BeatSequence(form)), "reader.x")
+    return design_space(
+        Channel(
+            tensor=Tensor(form.shape, UINT8),
+            producer=Side.boundary("s_axis_0", (offer,), offer.states()),
+            consumer=reader,
+            platform=FULL_DSP48E2,
+        )
+    )
+
+
+def valid(point: Any) -> bool:
+    """Whether ``point``, its transport direct and its adapter's memory first valid, is."""
+    chosen = with_adapter_memories(commit(point, {"transport": "direct"}))
+    return bool(inspection.validity(chosen).status == "valid")
+
+
+def test_an_iodma_s_side_read_again_or_reordered_is_joined_by_an_input_gen_at_the_edge() -> None:
+    """The mover moves one row-major pass a frame (its statement). A reader taking the pass
+    row-major, in any lanes, takes it as moved: nothing is placed. A reader taking it
+    three times a frame (a streamed weight, once per row) or in another order (the column
+    folds outer) is joined by an ``input_gen`` after the transport, its buffer the pass;
+    the mover moves the one pass, 8 beats, not 24."""
     for form in (vector_major((4, 6), 3), vector_major((1, 784), 4), tile(4, 6, 1, 6)):
-        valid = inspection.validity(design_space(IodmaMover(offers=offers, side=free_side(form))))
-        assert valid.status == "valid"
-    tiled = design_space(IodmaMover(offers=offers, side=free_side(tile(4, 6, 2, 3))))
-    refused = inspection.validity(tiled).result
-    assert isinstance(refused, Rejected)
-    ((code, message),) = [(finding.code, finding.message) for finding in refused.findings]
-    assert code == "mover-order"
-    assert message == (
-        "s_axis_0: an iodma_hls mover moves a row-major buffer, and this free side presents "
-        "4 beats of 6 lanes of [4, 6] in another order"
-    )
+        moved = iodma_edge(form)
+        assert moved.boundary.form == form and moved.input_chain == "none" and valid(moved)
+    rows = vector_major((4, 6), 3)
+    columns = Traversal.over((4, 6), ((1, 2, 3), (0, 4, 1)), ((1, 3, 1),))
+    for form in (rows.repeated(3), columns):
+        joined = iodma_edge(form)
+        assert joined.boundary.form == rows and joined.input_chain == "input_gen"
+        assert joined.adapter.frame_bits == 4 * 6 * 8 and valid(joined)
+        assert (joined.mover_contract.beats, joined.mover_contract.tdata) == (8, 24)
 
 
-def test_an_iodma_refuses_a_free_side_that_repeats_its_pass() -> None:
-    """An IODMA moves one pass of the host's buffer a frame: a free side presenting it
-    three times (a streamed weight, once per row) is refused by name, row-major or not,
-    until repetition by the host or the mover is designed (SZ11 (f))."""
-    offers = (iodma_hls(128),)
-    repeated = free_side(vector_major((4, 6), 3).repeated(3))
-    refused = inspection.validity(design_space(IodmaMover(offers=offers, side=repeated))).result
-    assert isinstance(refused, Rejected)
-    ((code, message),) = [(finding.code, finding.message) for finding in refused.findings]
-    assert code == "mover-repetition"
-    assert message == (
-        "s_axis_0: an iodma_hls mover moves one pass of a [4, 6] buffer a frame, and this "
-        "free side presents it 3 times a frame (repetition by the host or the mover is not "
-        "designed yet)"
-    )
+def test_an_iodma_s_side_nothing_joins_is_refused_by_channel_steps_naming_the_mover() -> None:
+    """A reader taking the pass in 2 x 3 tiles: the mover's row-major side at the reader's
+    six lanes spans a row where the reader's spans two, and no chain of modules regroups
+    them. The edge channel refuses it by its own code, naming the mover's statement; the
+    mover states no rule of its own."""
+    refused = iodma_edge(tile(4, 6, 2, 3))
+    found = refused.query(Channel.steps)
+    assert isinstance(found, Rejected)
+    assert [(finding.code, finding.message) for finding in found.findings] == [
+        (
+            "channel-steps",
+            "the boundary s_axis_0, stated by the iodma_hls mover (row-major, one pass a "
+            "frame): no adapter can join the streams: the same positions under another "
+            "lane axis",
+        )
+    ]
+    assert inspection.validity(refused).status == "refused"
 
 
 # -- on the Chain --------------------------------------------------------------------------
@@ -250,6 +295,19 @@ def test_an_offer_places_a_mover_on_each_free_side() -> None:
     # The mover's cycles are the channel's, beside its stages': y has none of its own.
     assert bound.member("y").cycles == y.cycles == 6 + 4
     assert bound.member("x").cycles == max(12, x.cycles)
+
+
+def test_each_boundary_side_is_stated_by_the_mover_its_shell_offers() -> None:
+    """In the Zynq shell each boundary side of the Chain carries its mover's statement, as
+    the graph declares it; on ip, offered none, each is unstated. The Chain presents each
+    pass row-major once a frame at its free sides, so stated it presents what it presents
+    on ip."""
+    bound = cut_network()
+    x, y = bound.member("x"), bound.member("y")
+    assert x.producer.outside == y.consumer.outside == iodma_hls(128).states()
+    ip = chain_network(TARGET)
+    assert ip.member("x").producer.outside is None and ip.member("y").consumer.outside is None
+    assert x.boundary == ip.member("x").boundary and y.boundary == ip.member("y").boundary
 
 
 def test_the_shell_s_resources_are_its_partition_s_its_movers_and_its_static_region_s() -> None:
@@ -343,6 +401,24 @@ def test_sizing_reads_a_free_side_its_mover_paces() -> None:
     chain = chain_network(TARGET)
     with pytest.raises(NotModelled, match="a boundary: not modelled"):
         sides(chain.member("x"), chain.neighbours("x"))
+
+
+@requires_xsim
+def test_a_pass_its_mover_moves_once_replayed_at_the_edge_computes_what_onnx_computes(
+    tmp_path: Path,
+) -> None:
+    """The Chain, its w2 streamed and read row-major (``ROW_MAJOR_W2``) once per row of x,
+    three times a frame, in the Zynq shell: the mover states w2's side one row-major pass
+    a frame, and the edge channel's ``input_gen`` replays it after the transport. The
+    partition, cut as a build cuts it, streamed at its free sides as they present (w2
+    once, 4 beats), computes what its KernelOps compute (``check_parity``)."""
+    model = kernel_model(second_weights=False)
+    configured(model, {"second": ROW_MAJOR_W2})
+    write_target(model, ULTRA96)
+    model = model.transform(MakeCutChoices())
+    w2 = choose_memories(model).member("w2")
+    assert (w2.input_chain, w2.boundary.form.beats) == ("input_gen", 4)
+    check_parity(model, tmp_path, inputs=boundary_inputs(model, 4), label="replayed")
 
 
 # -- on TFC_W2A2 ---------------------------------------------------------------------------

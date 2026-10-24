@@ -19,6 +19,12 @@ policies, reported (``late``); a choice no value can be set for is left open and
 (``unset``); a choice a first valid policy set in listed order, its ranking not read, is
 reported (``fallbacks``). A required choice (a FIFO's depth) stays open for a strategy.
 
+What the build states of the partition's boundary (``boundary``: each statement, a
+``finn.kernels.sides.Outside`` of the build's, by the tensor of the port it states) is
+written on the body (``finn.boundary``, ``write_boundary``) before its choices are made, so
+the boundary channels are made as stated; a tensor no port of the partition carries is
+refused (``boundary-port-unknown``), naming the partition's ports.
+
 Channel choices may be stored only in a partition's body. A model with host nodes that
 stores some is refused (a build fixes them in a step after the cut, with ``Hold``); a
 model of KernelOps only keeps them, moved into the body, and the parent's copy is cleared.
@@ -27,6 +33,7 @@ model of KernelOps only keeps them, moved into the body, and the parent's copy i
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 from onnx import NodeProto, helper
@@ -35,12 +42,14 @@ from qonnx.custom_op.registry import getCustomOp
 from qonnx.transformation.base import Transformation
 from qonnx.transformation.create_generic_partitions import PartitionFromLambda
 
+from finn.core.graph.annotations.boundary import write_boundary
 from finn.core.graph.annotations.channel import CHANNEL, clear_channel_choices, refuse_outside_body
 from finn.core.graph.errors import KernelOpError
 from finn.core.graph.partition import KERNEL_OPS_DOMAIN, PARTITION_DOMAIN, PARTITION_OP
 from finn.core.reporting.findings import Finding
-from finn.custom_op.kernels.network import PARTITION
+from finn.custom_op.kernels.network import PARTITION, partition_ports
 from finn.custom_op.kernels.shell import make_cut_choices
+from finn.kernels.sides import Outside
 from finn.transformation.kernels.convert import between_kernel_ops
 
 #: The partition PartitionFromLambda puts the KernelOps in; every other node stays on
@@ -77,14 +86,17 @@ class MakeCutChoices(Transformation):
 
 class CutKernelPartition(Transformation):
     """Cut the model's KernelOps into the partition ``PARTITION``, its body saved in
-    ``directory`` with its channels' choices made (see the module docstring). Refuses a
+    ``directory`` with what the build states of its boundary (``boundary``, by tensor;
+    none by default) and its channels' choices made (see the module docstring). Refuses a
     model that holds a partition already or no KernelOps, one with host nodes between
-    KernelOps or storing channel choices, and one with a host node named ``PARTITION``.
-    ``dropped``, ``late``, ``unset`` and ``fallbacks``: as ``MakeCutChoices``'."""
+    KernelOps or storing channel choices, one with a host node named ``PARTITION``, and a
+    statement on a tensor no port of the partition carries. ``dropped``, ``late``,
+    ``unset`` and ``fallbacks``: as ``MakeCutChoices``'."""
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, boundary: Mapping[str, Outside] | None = None) -> None:
         super().__init__()
         self.directory = Path(directory)
+        self.boundary = dict(boundary or {})
         self.dropped: dict[str, tuple[Finding, ...]] = {}
         self.late: dict[str, tuple[Finding, ...]] = {}
         self.unset: dict[str, tuple[Finding, ...]] = {}
@@ -120,6 +132,17 @@ class CutKernelPartition(Transformation):
                 f"a host node is named {PARTITION!r}, the partition's name",
                 node=PARTITION,
             )
+        ports = partition_ports(model)
+        unknown = [tensor for tensor in self.boundary if tensor not in ports]
+        if unknown:
+            raise KernelOpError.refused(
+                "boundary-port-unknown",
+                CutKernelPartition.__name__,
+                f"{', '.join(unknown)}: no port of the partition carries it, so the build "
+                "states nothing there; its ports are "
+                + ", ".join(f"{port} ({tensor})" for tensor, port in ports.items()),
+                tensor=unknown[0],
+            )
         self.directory.mkdir(parents=True, exist_ok=True)
         cut = Path(tempfile.mkdtemp(prefix="cut_", dir=self.directory))
         partitioning = PartitionFromLambda(  # type: ignore[no-untyped-call]
@@ -140,6 +163,7 @@ class CutKernelPartition(Transformation):
         op = getCustomOp(node)
         cut_file = Path(str(op.get_nodeattr("model")))
         body = ModelWrapper(str(cut_file))
+        write_boundary(body, self.boundary)
         made = make_cut_choices(body)
         self.dropped, self.late, self.unset = dict(made.stale), dict(made.late), dict(made.unset)
         self.fallbacks = dict(made.fallbacks)

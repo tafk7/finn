@@ -19,6 +19,7 @@ import onnx
 import pytest
 from onnx import TensorProto, helper
 from qonnx.core.modelwrapper import ModelWrapper
+from support.models import kernel_model
 from support.refusals import refused
 from support.tfc import PREPROCESSING, ULTRA96, io_settings
 
@@ -30,7 +31,11 @@ from finn.builder.build_dataflow import (
     read_build_config,
 )
 from finn.builder.build_dataflow_checks import configuration_findings
-from finn.builder.build_dataflow_config import ConfigurationRefused, DataflowBuildConfig
+from finn.builder.build_dataflow_config import (
+    ConfigurationRefused,
+    DataflowBuildConfig,
+    PortStatement,
+)
 from finn.builder.build_dataflow_manifest import MANIFEST_FILE
 from finn.builder.build_dataflow_steps import (
     DEFAULT_LIST,
@@ -41,12 +46,14 @@ from finn.builder.build_dataflow_steps import (
     default_steps,
     step_add_pre_post_processing,
     step_build_bitfile,
+    step_create_dataflow_partition,
     step_deployment_package,
     step_make_driver,
 )
 from finn.core.graph.annotations.platform import read_target
 from finn.core.graph.partition import partition_body
 from finn.core.reporting.findings import Finding, FindingKind
+from finn.kernels.sides import BUILD, ROW_MAJOR, BeatTimes, Outside, Steady
 from finn.platform.request import TargetRequest
 from finn.platform.resolve import resolve_target
 from finn.toolchain.launcher import Selection, Toolchain
@@ -212,6 +219,111 @@ def test_json_without_a_required_field_or_not_an_object_is_refused(
     (finding,) = refusal.value.findings
     assert (finding.code, finding.owner) == ("configuration-invalid", where)
     assert finding.message.startswith(refused)
+
+
+#: A statement of each port of a partition of one input and one output: the input's pace a
+#: beat every other cycle, all else as presented; the output row-major at four lanes, one
+#: pass, three beats timed over twelve cycles.
+BOUNDARY = {
+    "s_axis_0": {"pace": {"every": 2}},
+    "m_axis_0": {
+        "order": "row_major",
+        "passes": 1,
+        "lanes": 4,
+        "pace": {"times": [0, 3, 6], "span": 12},
+    },
+}
+
+
+def test_the_boundary_is_stated_by_port_and_holds_through_json_its_pace_as_given() -> None:
+    """Each port's statement decodes to a ``PortStatement``, its pace the shorthand or the
+    beat times as given; a port, an order, passes or lanes left out are as the partition
+    presents them; a build states none by default."""
+    assert DataflowBuildConfig.from_json(json.dumps(STATED)).boundary == {}
+    cfg = DataflowBuildConfig.from_json(json.dumps({**STATED, "boundary": BOUNDARY}))
+    assert cfg.boundary == {
+        "s_axis_0": PortStatement(pace=Steady(2)),
+        "m_axis_0": PortStatement(
+            order="row_major", passes=1, lanes=4, pace=BeatTimes((0, 3, 6), 12)
+        ),
+    }
+    assert cfg.boundary["s_axis_0"].outside() == Outside(BUILD, pace=Steady(2))
+    assert cfg.boundary["m_axis_0"].outside() == Outside(
+        BUILD, ROW_MAJOR, 1, 4, BeatTimes((0, 3, 6), 12)
+    )
+    written = cfg.to_json()
+    assert DataflowBuildConfig.from_json(written) == cfg
+    assert json.loads(written)["boundary"] == {
+        "s_axis_0": {"order": None, "passes": None, "lanes": None, "pace": {"every": 2}},
+        "m_axis_0": BOUNDARY["m_axis_0"],
+    }
+
+
+@pytest.mark.parametrize(
+    "statement, place, refused",
+    [
+        (
+            {"order": "column_major", "pace": {"every": 2}},
+            "",
+            "the outside states a row_major order, not 'column_major'",
+        ),
+        ({"passes": 2, "pace": {"every": 2}}, "", "the outside states one pass a frame, not 2"),
+        (
+            {"lanes": 0, "pace": {"every": 2}},
+            "",
+            "the outside states one lane a beat or more, not 0",
+        ),
+        ({"lanes": 4}, "", "no pace, which PortStatement requires"),
+        ({"pace": {"every": 0}}, ".pace", "a steady beat comes every cycle or more, not every 0"),
+        (
+            {"lanes": 1, "passes": 1, "pace": {"times": [0, 2, 1], "span": 4}},
+            ".pace",
+            "a pace's beat times start at cycle 0 or later, one beat a cycle",
+        ),
+        (
+            {"lanes": 1, "passes": 1, "pace": {"times": [0, 4], "span": 4}},
+            ".pace",
+            "a pace's beat times lie within its span: a beat at 4 of 4",
+        ),
+        (
+            {"pace": {"times": [0, 1], "span": 2}},
+            "",
+            "a pace of beat times states the lanes a beat and the passes a frame it times",
+        ),
+        (
+            {"lanes": 2, "pace": {"times": [0, 1], "span": 2}},
+            "",
+            "a pace of beat times states the lanes a beat and the passes a frame it times",
+        ),
+        ({"pace": {"often": 2}}, ".pace", "Steady | BeatTimes, not {'often': 2}"),
+        ({"width": 8, "pace": {"every": 2}}, "", "keys PortStatement does not declare: ['width']"),
+    ],
+    ids=[
+        "an order other than row-major",
+        "two passes",
+        "no lane",
+        "no pace",
+        "a steady beat every 0 cycles",
+        "beat times out of order",
+        "a beat beyond the span",
+        "beat times without lanes or passes",
+        "beat times without passes",
+        "a pace of neither form",
+        "a key a statement does not declare",
+    ],
+)
+def test_a_port_statement_not_well_formed_is_refused_at_decoding_naming_its_port(
+    statement: dict[str, Any], place: str, refused: str
+) -> None:
+    stated = {**STATED, "boundary": {"m_axis_0": BOUNDARY["m_axis_0"], "s_axis_0": statement}}
+    with pytest.raises(ConfigurationRefused) as refusal:
+        DataflowBuildConfig.from_json(json.dumps(stated))
+    (finding,) = refusal.value.findings
+    assert (finding.code, finding.owner) == (
+        "configuration-invalid",
+        f"configuration.boundary.s_axis_0{place}",
+    )
+    assert finding.message == refused
 
 
 def test_a_setting_named_as_a_field_is_refused() -> None:
@@ -412,6 +524,115 @@ def test_a_build_for_a_board_that_requires_no_release_never_asks_vivado(
         "intermediate_models",
         "report",
     ]
+
+
+def stating(tmp_path: Path, shell: str, boundary: dict[str, Any]) -> DataflowBuildConfig:
+    """A build for Ultra96 on ``shell`` that states ``boundary`` (in JSON), its output in
+    ``tmp_path``, its toolchain one without tools."""
+    target = {"period_ns": 5.0, "board": "Ultra96", "shell": shell}
+    stated = {**STATED, "target": target, "boundary": boundary}
+    cfg = DataflowBuildConfig.from_json(json.dumps(stated))
+    cfg.output_dir = str(tmp_path / "output")
+    cfg.prepared_toolchain = Toolchain(Selection(), {"PATH": str(tmp_path)})
+    return cfg
+
+
+def test_a_build_statement_on_a_shell_offering_a_mover_is_refused_before_the_first_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Zynq shell's row offers an IODMA mover on every boundary port, which states each
+    port it moves: a build's statement there would be a second source, refused from the
+    row and the statement alone, at each port, before the model is read."""
+    monkeypatch.setattr(Toolchain, "probe", never)
+    cfg = stating(tmp_path, "pynq", BOUNDARY)
+    with pytest.raises(ConfigurationRefused) as refused:
+        build_dataflow_cfg(str(tmp_path / "absent.onnx"), cfg)
+    findings = refused.value.findings
+    assert [(finding.code, finding.owner) for finding in findings] == [
+        ("boundary-stated-twice", "configuration.boundary.s_axis_0"),
+        ("boundary-stated-twice", "configuration.boundary.m_axis_0"),
+    ]
+    assert findings[1].message == (
+        "the 'pynq' shell's row offers an iodma_hls mover on every boundary port, which "
+        "states m_axis_0 (row-major, one pass a frame, its pace the mover's): a build "
+        "statement would be a second source; state no boundary on this shell"
+    )
+    manifest = json.loads((tmp_path / "output" / MANIFEST_FILE).read_text())
+    assert manifest["outcome"]["status"] == "refused" and manifest["steps"] == []
+    assert manifest["identity"]["model"] is None
+
+
+def test_a_build_statement_is_the_ip_shell_s_and_an_empty_one_states_nothing_on_pynq(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On ``ip``, whose row offers no mover, the build's statements stand. On ``pynq`` an
+    empty ``boundary`` states nothing, and the build runs."""
+    monkeypatch.setattr(Toolchain, "probe", never)
+    assert [finding.code for finding in checked(stating(tmp_path, "ip", BOUNDARY))] == []
+    cfg = stating(tmp_path, "pynq", {})
+    assert cfg.boundary == {} and checked(cfg) == []
+    source = tmp_path / "model.onnx"
+    onnx.save(helper.make_model(helper.make_graph([], "empty", [], [])), source)
+    cfg.steps, cfg.enable_build_pdb_debug = [step_nothing], False
+    assert build_dataflow_cfg(str(source), cfg) == 0
+
+
+def test_the_cut_refuses_a_port_the_partition_does_not_have_and_beat_times_its_port_does_not_beat(
+    tmp_path: Path,
+) -> None:
+    """The cut is the first step that knows the partition's ports: a statement of a port it
+    does not have is refused there, listing its ports; so are beat times of another count
+    than the beats the statement's lanes and passes make of the port's tensor (the Chain's
+    y: twelve elements, three beats at four lanes). Each at its port, together, before
+    anything is cut."""
+    beats = {"lanes": 4, "passes": 1, "pace": {"times": [0, 1], "span": 4}}
+    cfg = stating(tmp_path, "ip", {"s_axis_1": {"pace": {"every": 1}}, "m_axis_0": beats})
+    with pytest.raises(ConfigurationRefused) as refused:
+        step_create_dataflow_partition(kernel_model(), cfg)
+    assert [(each.code, each.owner, each.message) for each in refused.value.findings] == [
+        (
+            "boundary-port-unknown",
+            "configuration.boundary.s_axis_1",
+            "the partition has no port s_axis_1; its ports are s_axis_0 (x), m_axis_0 (y)",
+        ),
+        (
+            "boundary-pace-beats",
+            "configuration.boundary.m_axis_0",
+            "m_axis_0: the build's statement (4 lanes a beat, 1 pass a frame, 2 beat times "
+            "over 4 cycles) times 2 beats a frame, and y's 12 elements at its lanes and "
+            "passes are 3 beats",
+        ),
+    ]
+    assert not (tmp_path / "output" / "partition").exists()
+
+
+def test_the_cut_refuses_stated_lanes_that_divide_none_of_the_port_s_elements_whatever_its_pace(
+    tmp_path: Path,
+) -> None:
+    """Lanes that do not divide the port's tensor (the Chain's x and y: twelve elements,
+    five lanes) present it at no folding, so the cut refuses them at their port, whatever
+    the pace: a steady beat, which states no beats, as beat times. Before anything is cut,
+    rather than at every folding's edge channel."""
+    steady = {"lanes": 5, "pace": {"every": 2}}
+    timed = {"lanes": 5, "passes": 1, "pace": {"times": [0, 1], "span": 4}}
+    cfg = stating(tmp_path, "ip", {"s_axis_0": steady, "m_axis_0": timed})
+    with pytest.raises(ConfigurationRefused) as refused:
+        step_create_dataflow_partition(kernel_model(), cfg)
+    assert [(each.code, each.owner, each.message) for each in refused.value.findings] == [
+        (
+            "boundary-lanes",
+            "configuration.boundary.s_axis_0",
+            "s_axis_0: the build's statement states 5 lanes a beat, which do not divide x's "
+            "12 elements",
+        ),
+        (
+            "boundary-lanes",
+            "configuration.boundary.m_axis_0",
+            "m_axis_0: the build's statement states 5 lanes a beat, which do not divide y's "
+            "12 elements",
+        ),
+    ]
+    assert not (tmp_path / "output" / "partition").exists()
 
 
 def test_an_output_is_a_step_so_generate_outputs_is_an_unknown_setting() -> None:

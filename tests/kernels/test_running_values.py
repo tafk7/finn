@@ -257,8 +257,8 @@ def made() -> dict[str, tuple[object, ...]]:
         # The Chain gives its MatMuls no form (the default): two equal ones made here.
         "Form": (Form.DENSE, Form.DEPTHWISE, Form.DENSE),
         "Side": (
-            Side.boundary("s_axis_0", (iodma_hls(64),)),
-            Side.boundary("s_axis_0", (iodma_hls(64),)),
+            Side.boundary("s_axis_0", (iodma_hls(64),), iodma_hls(64).states()),
+            Side.boundary("s_axis_0", (iodma_hls(64),), iodma_hls(64).states()),
             Side.source(),
             Side.neighbour(Stream(eight.element, in_order(eight)), "a.y", 8),
         ),
