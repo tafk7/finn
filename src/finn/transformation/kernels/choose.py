@@ -599,17 +599,19 @@ def explore_kernel_choices(
         **movers,
         "seconds": round(time.perf_counter() - started, 3),
     }
+    held = _by_owner(seam.held)
+    record = {
+        # The design the record describes is the persisted body's, known only once it is
+        # persisted; the body as it stands stands in for it here, as a digest of the same
+        # form, so that the record is checked whole before anything is written.
+        "design": design_digest(model),
+        "held": {owner: sorted(held[owner]) for owner in sorted(held)},
+        "objective_fps": objective,
+    }
+    OUTPUT_SEARCH.encode(record)
     # The last two writes: the values, then the record that says whose they are.
     persist(model, network)
-    held = _by_owner(seam.held)
-    model.set(
-        OUTPUT_SEARCH,
-        {
-            "design": design_digest(model),
-            "held": {owner: sorted(held[owner]) for owner in sorted(held)},
-            "objective_fps": objective,
-        },
-    )
+    model.set(OUTPUT_SEARCH, {**record, "design": design_digest(model)})
     return Explored(network, cost, explored, (*found, *over_part))
 
 

@@ -1038,6 +1038,12 @@ class TargetThroughput(TargetCycles):
     strategy = "target_throughput"
 
     def __init__(self, fps: float, *, relax: bool = True) -> None:
+        if isinstance(fps, bool):
+            raise ExploreError(
+                "throughput-invalid",
+                self.strategy,
+                f"a throughput of {fps} is a truth value, not a number of frames a second",
+            )
         if fps <= 0:
             raise ExploreError(
                 "throughput-invalid",

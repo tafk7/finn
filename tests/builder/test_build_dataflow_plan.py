@@ -701,6 +701,7 @@ def test_an_unknown_or_two_key_entry_is_refused_at_the_plan(
     [
         ({"target_throughput": {"fps": 0}}, "throughput-invalid", "a throughput of 0.0"),
         ({"target_throughput": {"fps": -5}}, "throughput-invalid", "a throughput of -5.0"),
+        ({"target_throughput": {"fps": True}}, "throughput-invalid", "a truth value"),
         ({"max_throughput": {"within": {}}}, "budget-invalid", "needs a budget"),
         ({"max_throughput": {"within": {"gates": 0.5}}}, "budget-invalid", "no resource is named"),
         ({"max_throughput": {"within": {"lut": 0}}}, "budget-invalid", "a fraction of 0"),

@@ -106,7 +106,7 @@ from finn.core.graph.partition import (
 from finn.core.onnx_exec import execute_onnx
 from finn.core.reporting.findings import Finding, FindingKind
 from finn.core.reporting.manifest import FINDING, RECORDS
-from finn.core.search import Hold, Ranked
+from finn.core.search import ExploreError, Hold, Ranked
 from finn.custom_op.kernels.shell import configured_network
 from finn.kernels.artifacts.module import module_name
 from finn.kernels.channels import Channel, Neighbours
@@ -700,6 +700,22 @@ def test_an_exception_in_an_entry_writes_nothing(tmp_path: Path) -> None:
     entries: Any = [TargetThroughputEntry(TargetThroughputOptions(CHAIN_FPS)), BreaksEntry()]
     with pytest.raises(RuntimeError, match="the strategy broke"):
         step_explore(parent, cfg, strategies=entries)
+    assert Path(body_file).read_bytes() == before
+    assert not (Path(cfg.output_dir) / "report" / "step_explore.json").exists()
+    _, body, _ = partition_body(parent)
+    assert search_record(body) == ("none", None)
+
+
+def test_a_throughput_that_is_a_truth_value_writes_nothing(tmp_path: Path) -> None:
+    """A Python caller's ``TargetThroughput(True)`` (an entry or a strategy) is refused as
+    ``throughput-invalid`` before any search: the body's file is byte for byte as it was, no
+    report is written and the body has no search's record."""
+    cfg = chain_build(tmp_path, [])
+    parent = run_steps(kernel_model(), replace(cfg, steps=["step_create_dataflow_partition"]))
+    _, body, body_file = partition_body(parent)
+    before = Path(body_file).read_bytes()
+    with refused("throughput-invalid", error=ExploreError, owner="target_throughput"):
+        step_explore(parent, cfg, strategies=[TargetThroughputEntry(TargetThroughputOptions(True))])
     assert Path(body_file).read_bytes() == before
     assert not (Path(cfg.output_dir) / "report" / "step_explore.json").exists()
     _, body, _ = partition_body(parent)

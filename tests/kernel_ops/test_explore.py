@@ -23,6 +23,7 @@ from typing import Any
 
 import pytest
 from qonnx.core.datatype import DataType
+from qonnx.core.metadata import MetadataError
 from qonnx.core.modelwrapper import ModelWrapper
 from support.configure import configured, write_raw
 from support.explore_models import choices, kernel_model
@@ -779,6 +780,35 @@ def test_a_held_key_moved_outside_the_seam_is_refused() -> None:
         message="held to 1, but the network has 2",
     ):
         explore_kernel_choices(model, [Hold({"first": {"pe": 1}}), MovesFirst()])
+    assert model.model.SerializeToString() == before
+    assert search_record(model) == ("none", None)
+
+
+def test_a_throughput_that_is_a_truth_value_is_refused_and_nothing_is_written() -> None:
+    """``True`` is no number of frames a second: ``TargetThroughput`` refuses it
+    (``throughput-invalid``) as it refuses a throughput of none, so no search runs and the
+    body is as it was, with no search's record. A list with the strategy never starts."""
+    model = cut_model()
+    before = model.model.SerializeToString()
+    for fps in (True, False):
+        with refused("throughput-invalid", error=ExploreError, owner="target_throughput"):
+            explore_kernel_choices(model, [TargetThroughput(fps)])
+    assert model.model.SerializeToString() == before
+    assert search_record(model) == ("none", None)
+
+
+def test_a_record_that_fails_its_check_after_the_search_writes_nothing() -> None:
+    """The record is built and checked before the values are persisted, so a record that
+    cannot be written refuses the step with the body untouched. The input is patched here:
+    the strategy's ``fps`` is set to ``True`` after its construction (past the strategy's own
+    refusal), which the search accepts (it computes a budget from it) and the record's check
+    does not (``objective_fps`` is a positive number or null)."""
+    model = cut_model()
+    before = model.model.SerializeToString()
+    strategy = TargetThroughput(1_000_000_000 // (5 * 6))
+    strategy.fps = True  # type: ignore[assignment]
+    with pytest.raises(MetadataError, match="cannot store"):
+        explore_kernel_choices(model, [strategy])
     assert model.model.SerializeToString() == before
     assert search_record(model) == ("none", None)
 
