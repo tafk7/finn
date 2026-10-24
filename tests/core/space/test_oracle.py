@@ -83,7 +83,7 @@ BOUNDARY: list[tuple[compare.Request, forms.Form]] = [
                     "kind": "blocker",
                     "code": "decision-unassigned",
                     "owner": "enabled",
-                    "message": "decision requires a commitment",
+                    "message": "no choice has set this decision",
                     "details": [],
                     "causes": [],
                 }

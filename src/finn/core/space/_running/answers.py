@@ -130,7 +130,7 @@ def _unassigned(node: Address) -> Unresolved:
                 FindingKind.BLOCKER,
                 "decision-unassigned",
                 node.owner,
-                "decision requires a commitment",
+                "no choice has set this decision",
             ),
         )
     )

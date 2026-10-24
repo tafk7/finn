@@ -31,7 +31,7 @@ from finn.core.space.results import (
 )
 
 
-def blocker(owner: str, message: str = "decision requires a commitment") -> Finding:
+def blocker(owner: str, message: str = "no choice has set this decision") -> Finding:
     return Finding(FindingKind.BLOCKER, "decision-unassigned", owner, message)
 
 
@@ -53,7 +53,7 @@ def test_merged_findings_keeps_each_identical_finding_once_and_every_distinct_on
                         FindingKind.BLOCKER,
                         "decision-unassigned",
                         "kitchen.finish",
-                        "decision requires a commitment",
+                        "no choice has set this decision",
                     ),
                 )
             ),
