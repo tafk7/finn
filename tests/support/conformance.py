@@ -13,7 +13,7 @@ each sample it
    statement), its one side the kernel's port (``Port("kernel", "<port>")``), its other
    the boundary's AXIS port of its name. It commits the sample's factors and the pinned
    ``choices``, then the kernel's other open choices by their policies (``Placed``, on
-   the kernel alone, as conversion sets them) and every channel's by the cut's policies,
+   the kernel alone, as conversion sets them) and every channel's by the channel's policies,
    as the cut sets them (its transport and its input adapter's memory; the chain its
    steps pick).
    The module is named ``finn_<kernel>conformance``;
@@ -132,7 +132,6 @@ from finn.kernels.base import KernelSpace
 from finn.kernels.channels import Channel
 from finn.kernels.composer import Facts, Key, Port, channel
 from finn.kernels.configure import chosen, describe
-from finn.kernels.cut import CHANNEL_POLICIES
 from finn.kernels.explore import dotted
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.partition import Partition
@@ -277,11 +276,11 @@ def _possible(point: Any, key: Key) -> tuple[object, ...]:
 class Placed:
     """What places a kernel alone in these tests, as the owner of its policies
     (``finn.kernels.policies``): a memory's style first valid in its kernel's ranking, as
-    the cut states a channel stage's (``CHANNEL_POLICIES``), and a transpose's pages
+    a channel states a stage's (``Channel.policies``), and a transpose's pages
     likewise; every other choice first valid, as no KernelOp states otherwise."""
 
     policies: ClassVar[Mapping[object, Policy]] = {
-        **CHANNEL_POLICIES,
+        **Channel.policies,
         TransposeKernel.ram_style: FirstValid(order=TransposeKernel.ram_preference),
     }
 
@@ -586,7 +585,7 @@ def place(
     values: Mapping[str, np.ndarray] | None = None,
 ) -> Any:
     """The sample's design, every kernel choice it leaves open in play set by its policy
-    (``_defaulted``), then every channel's by the cut's policies, as the cut sets them
+    (``_defaulted``), then every channel's by the channel's policies, as the cut sets them
     (``with_channel_defaults``: its adapter chain, the chain's memories); the adapter
     sample's first input fed by a memory.
 

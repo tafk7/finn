@@ -8,7 +8,7 @@ replay after a fact change, the report as a log of the exploration.
 On the Chain as a model (MatMul ``first``, Thresholding ``activate``, MatMul
 ``second``; three rows of four) for Ultra96 without a shell: as conversion leaves it, its
 channels' choices not made (a body no cut created, ``kernel_model``), or as the cut leaves
-it (``cut_model``: ``MakeCutChoices``, each channel's choices by the cut's policies);
+it (``cut_model``: ``MakeCutChoices``, each channel's choices by the channel's policies);
 and an INT8 MatMul retargeted from Ultra96 to a VCK190.
 """
 
@@ -80,7 +80,7 @@ def seam_of(model: ModelWrapper) -> tuple[Seam, Partition]:
 
 def cut_model() -> ModelWrapper:
     """The Chain as the cut leaves it: ``kernel_model`` with each channel's choices made
-    by the cut's policies (``MakeCutChoices``, what the cut does to a body made by
+    by the channel's policies (``MakeCutChoices``, what the cut does to a body made by
     hand)."""
     return kernel_model().transform(MakeCutChoices())
 
@@ -234,7 +234,7 @@ def test_exploring_with_no_strategy_sets_nothing_and_every_value_is_saved() -> N
     explored = explore_kernel_choices(model)
     report = explored.report
     saved = choices(model)
-    # Conversion's and the cut's: the least folding, the adder tree, each memory in the
+    # Conversion's and the channel's: the least folding, the adder tree, each memory in the
     # explicit style its size orders first (the Chain's, all small: LUTRAM; never auto,
     # last), every transport direct (no size_fifos: nothing sized).
     assert saved["first"]["pe"] == saved["first"]["simd"] == 1
@@ -387,7 +387,7 @@ def test_a_memory_saved_or_pinned_auto_is_kept_and_stated_as_vivado_s(tmp_path: 
 def test_a_strategy_changes_what_it_decides_and_the_defaults_start_over() -> None:
     """Explored again, a saved value is replaced where a strategy decides it (no choice
     is closed once saved), and kept where none does; ``Defaults`` resets every value not
-    held to conversion's policies and the cut's policies'."""
+    held to conversion's policies and the channel's policies'."""
     model = cut_model()
     explore_kernel_choices(model, Ranked(Lanes(2)))
     assert choices(model)["first"]["pe"] == 2
@@ -398,7 +398,7 @@ def test_a_strategy_changes_what_it_decides_and_the_defaults_start_over() -> Non
     assert choices(compressor)["first"]["simd"] == 4
     assert choices(compressor)["second"]["compute.packed.reducer"] == "compressor"
     assert resumed.report["choices"]["second"]["compute.packed.reducer"]["by"] == "saved"
-    # The defaults: every value back at conversion's and the cut's (the levels' output
+    # The defaults: every value back at conversion's and the channel's (the levels' output
     # adapter, brought into play by the fold, reopened and out of play again).
     explore_kernel_choices(compressor, Defaults())
     assert choices(compressor) == choices(cut_model())

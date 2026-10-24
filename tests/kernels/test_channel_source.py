@@ -9,7 +9,7 @@ gives it its weights: the weight channel carries what MatMul states for it, its
 its ``source`` applies (``memstream``, its one candidate) and stores them; unknown weights
 leave the channel without a source, and it is the boundary ``in1_V``. The channel's sides
 are MatMul's ports, known once its folding is: its choices are set after the kernel's, by
-the cut's policies (``with_channel_defaults``) or by name. These tests cover the source,
+the channel's policies (``with_channel_defaults``) or by name. These tests cover the source,
 laziness, the memory's own choices, their replay on another partition, the platform's
 capabilities, the invariant that a channel with a value has its source as its only
 producer, and the weight channel's FIFO.
@@ -105,7 +105,7 @@ def configured(point, *, style=None, pe=2, simd=2):
             "w.source.pumped_memory": False,
         }
     # The activation channel's adapter is forced by the folding; its memory, and every
-    # other channel choice left open, the cut's policies'.
+    # other channel choice left open, the channel's policies'.
     return with_channel_defaults(choose(folded(point, pe=pe, simd=simd), choices))
 
 
@@ -225,7 +225,7 @@ def test_the_channel_owns_its_source_and_its_choices():
 
 
 def test_the_stored_memory_takes_its_choices_with_its_channel_and_refuses_bad_weights():
-    # The memory's choices are set, first valid, by the cut's policies
+    # The memory's choices are set, first valid, by the channel's policies
     # (``with_channel_defaults``): LUTRAM for a table of 64 bits, unpumped.
     built_with = configured(base(weights=WEIGHTS))
     assert built_with.chosen(("w",)) == {
@@ -298,7 +298,7 @@ def test_the_cores_do_not_wait_on_the_source():
             "matmul.compute.packed.reducer": "tree",
         },
     )
-    # Its channels' choices set by the cut's policies (the weight channel's memory's among
+    # Its channels' choices set by the channel's policies (the weight channel's memory's among
     # them), the module is complete.
     point = with_channel_defaults(point)
     assert isinstance(module_of(point, "matmul"), Available)

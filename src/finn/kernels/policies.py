@@ -17,12 +17,12 @@ the cut):
   FIFO's depth).
 
 **Who states them** (``Owner``): the owner of a design space, never the engine and never
-the kernel. A KernelOp states its kernel's (``KernelOp.policies``), the cut a channel's
-(``finn.kernels.cut``). A policy is keyed by a class-level reference to a Decision
+the kernel. A KernelOp states its kernel's (``KernelOp.policies``), the channel its own
+(``Channel.policies``). A policy is keyed by a class-level reference to a Decision
 (``MemStreamKernel.ram_style``) and applies to every placement of that class below the
 owner's root. A choice it does not list is first valid, in listed order. ``stated`` checks
-the mapping where it is made (a KernelOp's when its class is made, the cut's when its
-module is imported): each key a Decision of a class the root reaches
+the mapping where it is made (a KernelOp's when its class is made, the channel's when its
+class is made): each key a Decision of a class the root reaches
 (``default-policy-undeclared``), each value a policy (``default-policy-invalid``), a fixed
 value of the Decision's type and in its domain where that can be known without facts
 (``default-policy-value``), an order a view of the Decision's class
@@ -121,15 +121,15 @@ FIRST_VALID = FirstValid()
 
 class Owner(Protocol):
     """What states a design space's policies: a KernelOp class, for its kernel's choices,
-    or the cut (``finn.kernels.cut.Cut``), for a channel's. ``policies`` maps class-level
-    Decision references to policies (``stated``)."""
+    or the channel class (``finn.kernels.channels.Channel``), for a channel's. ``policies``
+    maps class-level Decision references to policies (``stated``)."""
 
     @property
     def policies(self) -> Mapping[object, Policy]: ...
 
 
 class Unstated:
-    """The owner of a design space no KernelOp or cut places (a network built by hand): it
+    """The owner of a design space no KernelOp places (a network built by hand): it
     states no policy, so every choice is first valid, in listed order."""
 
     policies: ClassVar[Mapping[object, Policy]] = MappingProxyType({})

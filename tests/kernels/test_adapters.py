@@ -233,7 +233,7 @@ def test_a_stream_admitting_no_adapter_refuses_its_steps():
     assert isinstance(refused, Rejected)
     refusals = [finding for finding in refused.findings if finding.code == "channel-plan"]
     assert refusals and "width_conversion" in refusals[0].message
-    # Its adapter Decision does not apply, and the cut's policies leave a channel refused on
+    # Its adapter Decision does not apply, and the channel's policies leave a channel refused on
     # its own facts as it is: its transport stays open.
     assert not point.member("x").adapting
     assert ("x", "transport") in point.undecided()

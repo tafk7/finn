@@ -3,9 +3,10 @@
 
 """A partition's policies applied once (``Partition.defaulted``), on the Chain
 (``support.chain``): one pass over the partition's design space in its flow order, each
-choice's policy read from its member's owner (a kernel's its KernelOp, a channel's the
-cut's); a member refused on its own skipped whole; a choice no value can be set for left
-open, reported, the pass going on; a pass over some of the members only.
+choice's policy read from its member's owner (a kernel's its KernelOp, a channel's its
+channel class's, ``Channel.policies``); a member refused on its own skipped whole; a
+choice no value can be set for left open, reported, the pass going on; a pass over some of
+the members only.
 
 What the order of the pass decides, and a member's refusal read when the pass reaches
 the member's first choice, are pinned on toy Spaces where it shows
@@ -21,6 +22,7 @@ from typing import Any, ClassVar
 from support import chain
 from support.helpers import FULL_DSP48E2, keyed
 
+from finn.kernels.channels import Channel
 from finn.kernels.composer import ChannelDeclaration, Facts, PartitionDeclaration, Port, channel
 from finn.kernels.dotp import PackedDotpKernel
 from finn.kernels.matmul import MatMulKernel
@@ -83,6 +85,15 @@ def test_the_pass_sets_every_member_by_its_owner_s_policy_once() -> None:
     assert chosen[("first", "compute")] == "packed"
     assert {chosen[(name, "transport")] for name in ("x", "w1", "hidden", "levels")} == {"direct"}
     assert chosen[("activate", "pe")] == chain.PE  # a stored choice is kept
+
+
+def test_a_channel_s_owner_is_the_channel_class() -> None:
+    """A channel's policies are its class's (``Channel.policies``): whichever the partition,
+    its owner is ``Channel``, where a kernel's is the owner it was given."""
+    fixing = owner_of({})
+    held = chained({"first": fixing})
+    assert {held.owner(name) for name in held.channels} == {Channel}
+    assert held.owner("first") is fixing
 
 
 def test_a_kernel_class_bound_by_two_owners_takes_each_owner_s_policies_at_its_own_node() -> None:

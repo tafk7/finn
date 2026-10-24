@@ -174,7 +174,7 @@ def test_the_export_of_the_choices_round_trips_through_configured() -> None:
     """The export names nodes and tensors in graph order: ``configured`` sets what the
     export holds (a node's, and a channel's on its tensor), as ``Hold`` reads it back
     (test_explore). Each node holds every choice its policies set from conversion on, a
-    choice with one possible value too, and each channel every choice the cut's policies
+    choice with one possible value too, and each channel every choice the channel's policies
     set, as the cut sets them; the round trip starts from nodes holding none, as a
     graph FINN did not write holds them. A choice put out of play is kept: ``ram_style``
     auto leaves ``block_stages`` dormant, stored as conversion set it."""

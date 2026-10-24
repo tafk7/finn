@@ -202,7 +202,7 @@ def chain_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None
 
 def cut_network(target: Target = ULTRA96, *, model: ModelWrapper | None = None) -> InShell:
     """The Chain's network in the shell of ``target``, its channels' choices made there as
-    the cut makes them (``MakeCutChoices``: the cut's policies; the movers the shell
+    the cut makes them (``MakeCutChoices``: the channel's policies; the movers the shell
     offers are placed, no choice)."""
     model = kernel_model() if model is None else model
     write_target(model, target)

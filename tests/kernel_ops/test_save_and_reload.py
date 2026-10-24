@@ -60,7 +60,7 @@ WEIGHT_SOURCE: dict[str, object] = {
     "source.pumped_memory": False,
     "transport": "direct",
 }
-"""The weights' channel's choices, as a set-up and the cut's policies make them."""
+"""The weights' channel's choices, as a set-up and the channel's policies make them."""
 VERSAL = Target(part="a part with UltraRAM it initializes", platform=FULL_DSP58, shell="ip")
 """A target with UltraRAM, on which a MatMul's ``compute`` has two possible values."""
 

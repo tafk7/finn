@@ -361,7 +361,7 @@ def choose_memories(model: ModelWrapper) -> InShell:
 
 def configure_partition(model: ModelWrapper) -> InShell:
     """The partition's network in its shell, the choices it leaves open set as the cut sets
-    them (``make_cut_choices``: the cut's policies; the movers a shell it was retargeted
+    them (``make_cut_choices``: the channel's policies; the movers a shell it was retargeted
     to offers are placed, no choice), its open adapter memories chosen
     (``choose_memories``), and the partition verified as the build verifies it before
     emission (``support.packaging.verified``), so that it packages."""

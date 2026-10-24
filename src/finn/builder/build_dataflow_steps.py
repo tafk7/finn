@@ -305,7 +305,7 @@ def step_size_fifos(
     producer within its idle time, plus ``fifo_margin`` words. A held channel is kept.
     ``fifo_ram_style`` commits a memory style with each FIFO's depth; with None the FIFO
     keeps its held style, else its earlier one, else takes ``auto`` (FinnLib's own choice by
-    depth and width, the cut's policy's first valid), and its depth is sized for that style.
+    depth and width, the channel's policy's first valid), and its depth is sized for that style.
     Writes report/step_size_fifos.json."""
     strategy = SizeFifos(margin=fifo_margin, ram_style=fifo_ram_style)
     _explore(model, cfg, "step_size_fifos", strategy)
@@ -315,7 +315,7 @@ def step_size_fifos(
 def step_default_choices(model: ModelWrapper, cfg: DataflowBuildConfig) -> ModelWrapper:
     """Set every choice of the partition that is not held back to its default, so a
     resumed build starts over: each by its policy, a kernel's its KernelOp's, a channel's
-    the cut's; a FIFO's depth is left open. Writes
+    its own; a FIFO's depth is left open. Writes
     report/step_default_choices.json."""
     _explore(model, cfg, "step_default_choices", Defaults())
     return model
@@ -334,10 +334,10 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
     """Cut the KernelOps into one StreamingDataflowPartition, leaving the nodes before
     and after it on the host; the build's model is the parent graph from here on. The
     partition is named ``partition``: its node, its body (partition/partition.onnx), its
-    IP and its block-design instance. Each channel's choices are created here (the cut's
+    IP and its block-design instance. Each channel's choices are created here (the channel's
     policies), and each KernelOp's checked again in context: one made stale by an edit
     since conversion is dropped (a kernel's left open for a strategy, a channel's set again
-    by the cut's policies), noted as a limitation
+    by the channel's policies), noted as a limitation
     (``choice-stale``, owned by the choice, the kernel's findings its causes); one the
     body never had set at conversion is set by its KernelOp's policies
     (``choice-converted-late``), one no value could be set for is left open, noted
@@ -348,7 +348,7 @@ def step_create_dataflow_partition(model: ModelWrapper, cfg: DataflowBuildConfig
     for key, found in cut.dropped.items():
         message = (
             "dropped as stale at the cut (a kernel's left open for a strategy, a channel's "
-            f"set again by the cut's policies): {stale_text(key, found)}"
+            f"set again by the channel's policies): {stale_text(key, found)}"
         )
         note(Finding(FindingKind.LIMITATION, "choice-stale", key, message, causes=found))
     for found in (*cut.late.values(), *cut.fallbacks.values(), *cut.unset.values()):

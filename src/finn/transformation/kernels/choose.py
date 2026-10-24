@@ -44,7 +44,7 @@ and nothing fills a value in but a strategy):
   where the prior value is refused (``by_policy``), those it left open (``unset``), what
   the fold rule did for the strategy's changes (``finn.kernels.explore.Seam.set``): the
   stored channel choices the seam cleared, each standing in the way of a change, with why
-  (``cleared``), and the channel choices it set by the cut's policy, cleared or brought
+  (``cleared``), and the channel choices it set by the channel's policy, cleared or brought
   into play by a change, with their values (``settled``), a ``Hold``'s held keys, attempts
   and time; every value by its owner (a node or a tensor, by graph name, and the key
   there, as the log ``report/kernel_choices.json`` names it), with who set it (``saved``:

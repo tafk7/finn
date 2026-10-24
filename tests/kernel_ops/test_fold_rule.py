@@ -4,7 +4,7 @@
 """The seam's fold rule (``finn.kernels.explore.Seam.set``) on a partition's one design
 space: a change refused where a stored channel choice stands in its way is made again
 with it cleared, as one change, and the seam then sets each channel choice the change
-cleared or brought into play by the cut's policy, the strategy's; a held one standing in
+cleared or brought into play by the channel's policy, the strategy's; a held one standing in
 the way refuses the change (``held``); a kernel's stored choice standing in the way
 refuses it, naming it, where clearing the channel's choices does not make it accepted.
 
@@ -135,7 +135,7 @@ def test_a_change_a_stored_channel_choice_stands_in_the_way_of_is_made_with_it_c
     """Taking the UltraRAM away, asked as it is, makes the FIFO's rule that UltraRAM needs
     the platform's newly false, its stored style standing in the way: the change is
     refused naming it. Through the seam, it is made again with the style cleared, and the
-    cut's policy sets the style again (first valid: ``auto``), each named as the
+    channel's policy sets the style again (first valid: ``auto``), each named as the
     strategy's (``Accepted.cleared``, ``settled``); the FIFO's depth, not in the way,
     stays stored. A strategy's run reports the same (``Run.cleared``, ``settled``)."""
     network = boarded(ULTRA)
@@ -212,7 +212,7 @@ def test_a_kernel_choice_beside_a_cleared_channel_choice_refuses_nothing() -> No
     """A FIFO deeper than block RAM addresses, in ``auto`` (UltraRAM here): taking the
     UltraRAM away makes its storage's rule false, its depth and style standing in the way
     beside the kernels' choices its word reads. The channel's cleared, the rule reads an
-    open choice, open, not false: the change is accepted, the style set again by the cut's
+    open choice, open, not false: the change is accepted, the style set again by the channel's
     policy and the depth, required, left open for ``SizeFifos``."""
     network = boarded(
         {**ULTRA, "transport.fifo.depth": DEEP, "transport.fifo.buffer.ram_style": "auto"}
@@ -259,7 +259,7 @@ def test_a_choice_cleared_twice_in_a_run_is_reported_by_its_first_clearing() -> 
     assert run.settled == {STYLE: "auto"}
 
 
-#: A strategy's own order of the FIFO's styles, other than the cut's (``auto`` first).
+#: A strategy's own order of the FIFO's styles, other than the channel's (``auto`` first).
 PREFERRED = ("distributed", "block", "auto", "ultra")
 
 
@@ -269,7 +269,7 @@ def test_a_cleared_choice_the_running_strategy_sets_as_it_finds_it_is_left_to_it
     (``ultra``); a later change of its search takes the UltraRAM away, and the style,
     standing in its way, is cleared. The fold rule leaves it open for the strategy's loop
     (cleared, not settled), which sets it again by the strategy's own order
-    (``distributed``), not by the cut's (``auto``).
+    (``distributed``), not by the channel's (``auto``).
 
     ``Ranked`` itself does not reach this on FINN's channels: its loop sets every kernel
     choice before any channel's (a partition's members are ranked kernels first, and no
@@ -306,7 +306,7 @@ def test_a_choice_the_restore_brings_into_play_is_set_by_the_fold_rule_not_left_
     ``Ranked``'s) leaves a choice a change brings into play to its loop only while its
     search runs. The restore after it has no loop left: the folding the search left open
     is given back (one lane a side), which brings the input's adapter memory into play,
-    and the fold rule sets it by the cut's policy (``distributed``) as the restore's change
+    and the fold rule sets it by the channel's policy (``distributed``) as the restore's change
     is accepted, as for a strategy that decides nothing. (Neither of FINN's strategies
     reaches this: ``Defaults`` restores nothing, and ``Ranked``'s restore touches only
     what its search left open, the choices only a membership rule restricts.)"""
@@ -332,7 +332,7 @@ def test_a_choice_the_restore_brings_into_play_is_set_by_the_fold_rule_not_left_
 
 def test_a_fifo_newly_in_play_leaves_its_depth_open_and_its_style_set_by_policy() -> None:
     """A change that places the hidden channel's FIFO brings its choices into play: the
-    seam sets its style by the cut's policy (``auto``) and leaves its depth, required,
+    seam sets its style by the channel's policy (``auto``) and leaves its depth, required,
     open for ``SizeFifos``; nothing is cleared."""
     network = boarded()
     done = Seam(FULL_DSP48E2).set(network, keyed({"hidden.transport": "fifo"}))
@@ -347,7 +347,7 @@ def test_a_channel_choice_a_fold_brings_into_play_is_set_by_the_fold_rule_the_st
     """On the Chain's graph, the first MatMul at four lanes a side needs no adapter on its
     input, so the input's adapter memory is not in play (nor stored). A target of 48
     cycles folds it to one lane: the input starts adapting, and its adapter's memory
-    comes into play. The fold rule sets it by the cut's policy as the fold is accepted;
+    comes into play. The fold rule sets it by the channel's policy as the fold is accepted;
     the strategy's run names it (``Run.settled``), and the exploration's report names it
     (``settled``) and gives it to the strategy (``by``)."""
     model = kernel_model()

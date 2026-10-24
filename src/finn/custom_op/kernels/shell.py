@@ -31,8 +31,8 @@ check too, ``Seam.check_fifos``), and records the design it verified on the body
 (packaging, the shell's integration, the testbench) compares it (``refuse_unverified``),
 and refuses a design never verified or changed since. Simulation and elaboration only
 bind. The cut makes a body's channel choices (``make_cut_choices``) on its partition in
-its shell, which alone holds both sides of a boundary channel, by the cut's policies
-(``finn.kernels.cut``: ``CHANNEL_POLICIES``), and writes them with ``persist``.
+its shell, which alone holds both sides of a boundary channel, by the channel's policies
+(``Channel.policies``), and writes them with ``persist``.
 """
 
 from __future__ import annotations
@@ -445,7 +445,7 @@ def refuse_unverified(model: ModelWrapper, label: str) -> None:
 class CutChoices:
     """What the cut did to a body's choices (``make_cut_choices``), by dotted key: the
     stored choices the bind dropped as stale, each a value outside its domain, with the
-    kernel's findings (``stale``: left open, for the cut's policies (a channel's) or a
+    kernel's findings (``stale``: left open, for the channel's policies (a channel's) or a
     strategy (a kernel's) to set, and emission refuses one left open until one does); the
     kernel choices it set by their KernelOps' policies, left open by a body that never went
     through conversion (``late``: one ``choice-converted-late`` finding each, naming the
@@ -484,7 +484,7 @@ def make_cut_choices(model: ModelWrapper) -> CutChoices:
        did not drop, set by its KernelOp's policies: a body never converted for it (one
        made by hand), reported (``CutChoices.late``);
     2. each channel's open choices in play that are not required, those the bind dropped
-       among them, set by the cut's policies (a channel created here has both its sides
+       among them, set by the channel's policies (a channel created here has both its sides
        only in the partition). A required choice (a FIFO's depth) stays open for a
        strategy.
 

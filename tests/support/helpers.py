@@ -14,7 +14,7 @@ the composer's class): its kernels by name, each its class and facts
 or a ``Side`` given as a value (the boundary's AXIS port, ``Side.boundary("in0_V")``, or a
 valued channel's source, ``Side.source()``), each fact a value or what a kernel states for
 it (``Stated``). Nothing sets a channel's choice a change brings into play: a test sets
-them as the cut does, by the cut's policies (``with_channel_defaults``), or names them. A
+them as the cut does, by the channel's policies (``with_channel_defaults``), or names them. A
 test names a choice as ``member.key`` (``matmul.pe``, ``w.transport``): ``keyed`` makes it
 the partition's pair, ``choose`` commits a batch. ``placed_dotp`` places a dot-product core
 between three boundary channels. ``matmul_network`` places a MatMul (``matmul``) on ``x``
@@ -66,6 +66,7 @@ from finn.dataflow.traversal import BeatSequence, Loop, Traversal, vector_major
 from finn.kernels.artifacts.abi import Pin
 from finn.kernels.artifacts.module import Composed, Held, Leaf, ProducerIdentity
 from finn.kernels.base import CYCLES, KernelSpace
+from finn.kernels.channels import Channel
 from finn.kernels.composer import (
     ChannelDeclaration,
     Facts,
@@ -76,7 +77,6 @@ from finn.kernels.composer import (
     channel,
 )
 from finn.kernels.configure import chosen, commit, describe
-from finn.kernels.cut import Cut
 from finn.kernels.declaration import KernelDeclaration, ModuleOrder, Product
 from finn.kernels.eltwise import EltwiseKernel
 from finn.kernels.explore import Choice, Defaults, Seam, dotted
@@ -661,12 +661,12 @@ def _committed(subject: P, choices: Mapping[str, object]) -> P:
 def _first_valid(point: Space, key: str | inspection.DecisionInfo[object]) -> object:
     """The first value of ``point``'s channel choice ``key`` (or the Decision a
     composition's ``decision`` gives) that setting alone accepts, in its policy's order (the
-    cut's, ``finn.kernels.policies.ranked``), as its first valid policy takes it."""
+    channel's, ``finn.kernels.policies.ranked``), as its first valid policy takes it."""
     if isinstance(key, str):
         key = next(item for item in inspection.decisions(point) if item.key == key)
     info = cast(Any, key)
     (found,) = inspection.viable(point, [info.reference])
-    items, fallback = ranked(point, Cut, info, found.values or ())
+    items, fallback = ranked(point, Channel, info, found.values or ())
     assert fallback is None, f"{key}: {fallback}"
     first = next((item for item in items if isinstance(item, inspection.Possible)), None)
     assert first is not None, f"{key} has no possible value: {found}"
@@ -676,7 +676,7 @@ def _first_valid(point: Space, key: str | inspection.DecisionInfo[object]) -> ob
 def with_adapter_memories(subject: P, ram_style: str | None = None) -> P:
     """Each open adapter memory (a channel's one style for its input adapter's input_gen
     stages) takes ``ram_style``, or where None its first valid value (an explicit style, by
-    the most bits one of those buffers holds: its channel's ranking), as the cut's first
+    the most bits one of those buffers holds: its channel's ranking), as the channel's first
     valid policy takes it, on a partition or a point. A channel's input adapter is picked by
     its steps."""
     styles = _undecided(subject, ADAPTER_RAM_STYLES)
@@ -699,7 +699,7 @@ def with_defaults(network: N) -> N:
     """``network`` with every open choice in play that is not required set as conversion
     and the cut set them (``Defaults``, through a seam of its own holding every stored
     choice, so that only the open ones are set): each by its policy, a kernel's (none
-    stated: a partition built by hand has no KernelOp) first valid, a channel's the cut's;
+    stated: a partition built by hand has no KernelOp) first valid, a channel's its own;
     a FIFO's depth left open. The set-up of a test that explores a partition that never
     went through a graph."""
     seam = Seam()
@@ -709,7 +709,7 @@ def with_defaults(network: N) -> N:
 
 def with_channel_defaults(network: N) -> N:
     """``network`` with each channel's open choices in play that are not required set as
-    the cut sets them, by the cut's policies, on the partition's design space, in the one
+    the cut sets them, by the channel's policies, on the partition's design space, in the one
     pass over its root in the root's flow order (``Partition.defaulted``, restricted to the
     channels: first valid, where setting it is accepted; a FIFO's depth stays open), as
     ``make_cut_choices`` sets a graph's: for a partition built by hand, which no cut made. A

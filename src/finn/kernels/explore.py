@@ -18,13 +18,13 @@ network uses as far as it is stated. The engine decides validity; an explorer on
 proposes and prefers.
 
 Nothing fills a value in after conversion but a strategy: a choice is set by its policy
-(``finn.kernels.policies``: a kernel's its KernelOp's, at conversion; a channel's the
-cut's, ``finn.kernels.cut``), and from then on only by what a strategy sets. **The fold
+(``finn.kernels.policies``: a kernel's its KernelOp's, at conversion; a channel's its
+own, ``Channel.policies``, at the cut), and from then on only by what a strategy sets. **The fold
 rule** (``set``, for every strategy): a change that reaches a channel (a fold changes its
 kernel's streams, and with them the channel's rules) and is refused where stored channel
 choices stand in its way is made again with those choices cleared, as one change; the
 seam then sets, on the design space that change reaches, each channel choice it cleared
-or brought into play by the cut's policy, first valid (not one the running strategy
+or brought into play by the channel's policy, first valid (not one the running strategy
 decides itself: one it reopened, or one it sets as it finds it, ``Ranked``'s and
 ``Defaults``', which a change clears or brings into play while its search runs: left open
 for its loop, it is set again by the strategy's own policy). Each is the strategy's, named
@@ -66,7 +66,7 @@ The strategies, each an objective and its constraints searched through the seam:
   of the least depth that keeps each producer within its idle time, proposed in
   one batch, at the stored folding: it runs after the strategies that fold;
 - ``Defaults()`` (``defaults``): every choice not held back to the value its policy
-  gives, a kernel's its KernelOp's and a channel's the cut's;
+  gives, a kernel's its KernelOp's and a channel's its own (``Channel.policies``);
 - ``DebugPlaceholder()`` (``placeholder``, for debugging): every open required choice
   at its first possible value, ``DEBUG: set by placeholder``; one known by membership
   only (a FIFO's depth) is refused, by name;
@@ -172,7 +172,7 @@ class Composition(Protocol):
     ``states``, ``decisions`` and ``undecided`` answer by member in rank order, each
     member's choices in its flow order: the seam's order, in which ``Ranked``, ``Defaults``
     and ``DebugPlaceholder`` set choices (a partition's own flow order interleaves its
-    members, each channel after the kernels it joins; the cut reads that one)."""
+    members, each channel after the kernels it joins; the cut's pass reads that one)."""
 
     @property
     def members(self) -> tuple[str, ...]: ...
@@ -285,7 +285,7 @@ class Accepted(Generic[S]):
     seam did for it by the fold rule, the strategy's: each stored channel choice it cleared,
     one standing in the way of the change as asked, with the findings of the rules it stood
     in the way of (``cleared``); each channel choice the change cleared or brought into
-    play that it set by the cut's policy, with its value (``settled``); and each of those it
+    play that it set by the channel's policy, with its value (``settled``); and each of those it
     left open, with why (``unsettled``: a required one, a FIFO's depth, which ``SizeFifos``
     sizes; or one no value can be set for)."""
 
@@ -412,7 +412,7 @@ class Run:
     standing in the way of a change, that does not hold there the value it held before its
     first clearing in the run, with the findings of the rules it first stood in the way of
     (``cleared``: a key cleared twice is reported by its first clearing); and each channel
-    choice the seam set by the cut's policy, cleared or brought into play by a change, that
+    choice the seam set by the channel's policy, cleared or brought into play by a change, that
     holds the value it set there (``settled``). A key a later change of the run names is the
     change's, in neither."""
 
@@ -527,7 +527,7 @@ class Seam:
         self.fallbacks: dict[Key, Finding] = {}
         # What the fold rule did in the changes this seam accepted since a run began, a key
         # a later change named taken out: each channel choice it cleared, with its value
-        # before and why, and each it set by the cut's policy, with the value it set. What a
+        # before and why, and each it set by the channel's policy, with the value it set. What a
         # run reports (``Run.cleared``, ``Run.settled``).
         self._cleared: dict[Key, tuple[object, tuple[Finding, ...]]] = {}
         self._settled: dict[Key, object] = {}
@@ -616,8 +616,8 @@ class Seam:
 
         Accepted, the seam sets on the network reached each channel choice the change
         cleared or brought into play (not one the running strategy decides itself; one its
-        search sets as it finds it, while it runs, is left open for its loop) by the cut's policy
-        (``_settle``): first valid, in its
+        search sets as it finds it, while it runs, is left open for its loop) by the
+        channel's policy (``_settle``): first valid, in its
         listed order or ranking, a value taken where setting it is accepted (no rule newly
         false); a required one (a FIFO's depth) is left open for ``SizeFifos``. A stored
         FIFO's depth not standing in the way stays stored. A change that would put a held
@@ -665,7 +665,7 @@ class Seam:
         ``_loops``) or brought into play (open in play here, not in ``before``; not one the
         running strategy decides itself: one it reopened, or, while its search runs, one of
         the policies it sets as it finds them, ``Seam.run``'s ``decides``: ``_decided``) set
-        by its policy, the cut's
+        by its policy, the channel's
         (``policy``): one at a time, in the seam's order, each value first valid,
         taken where setting it alone is accepted (no rule newly false), until none is left
         that was not tried (a value set may bring another into play: a FIFO's choices under
@@ -818,7 +818,7 @@ class Seam:
         value, all as one batch: one open (in play, or waiting on its presence). Where the
         batch is refused, each is given back alone, ranked: a prior value refused there is
         replaced by the choice's policy (``by_policy``: its KernelOp's for a kernel's
-        choice, the cut's for a channel's), or, where its
+        choice, the channel's own for a channel's), or, where its
         policy sets nothing (a required choice) or no value can be set, it is left open,
         with why (``unset``). A choice not in play (its scope absent) is not given back.
         Then each open choice in play that is not required, never in ``prior``, and nested
@@ -885,7 +885,7 @@ class Seam:
 
     def policy(self, network: Composition, key: Key) -> Policy:
         """Choice ``key``'s policy (``finn.kernels.policies.policy``), under its member's
-        owner (``Composition.owner``): a kernel's its KernelOp's, a channel's the cut's;
+        owner (``Composition.owner``): a kernel's its KernelOp's, a channel's its own;
         fixed, first valid, or required."""
         return policy_of(network.owner(key[0]), _info(network, key))
 
@@ -1259,7 +1259,7 @@ def _folding(seam: Seam, network: Composition) -> list[Key]:
     channel's choices are not a fold's: a transport, or a FIFO's choice under it, is
     ``SizeFifos``'; the others (its memories' styles, its source's pumping) stay as stored,
     and where a fold is refused with one standing in its way, the fold rule (``Seam.set``)
-    clears it and sets it again by the cut's policy, in the same step, the strategy's. Its
+    clears it and sets it again by the channel's policy, in the same step, the strategy's. Its
     source, its output adapter and its mover are placed, and its input adapter picked by
     its steps, not chosen."""
     channels = set(network.channels)
@@ -1425,7 +1425,7 @@ class Defaults:
     """Every choice not held back to its default (``defaults``): reopened, then each
     open choice in play that is not required set by its policy, ranked
     (``finn.kernels.policies``: fixed or first valid): a kernel's its KernelOp's, a
-    channel's the cut's. Written first, it starts an exploration over from
+    channel's its own. Written first, it starts an exploration over from
     the values conversion and the cut give, the holds kept; a required choice (a FIFO's
     depth) is left open for a strategy. ``report`` names what it set (``set``) and what
     no value could be set for (``unset``)."""
@@ -2407,7 +2407,7 @@ class SizeFifos:
     the FIFO case with its depth (the least DEPTH whose storage holds the least words
     plus ``margin``, in the storage of the style the FIFO is built in), the style
     committed with the depth: ``ram_style`` where named; with ``None``, the default, its
-    held value (kept, not committed), else its earlier value, else the cut's policy's,
+    held value (kept, not committed), else its earlier value, else the channel's policy's,
     first valid, ``auto`` (FinnLib's own selection by depth and width) (``_style``). A channel
     the model does not read (a
     boundary without a mover, a memory source) is direct, with why. Where the seam refuses
@@ -2525,7 +2525,7 @@ class SizeFifos:
 
     def _style(self, seam: Seam, transport: _Transport, prior: Mapping[Key, object]) -> str:
         """The style ``transport``'s FIFO is built in, which its depth is sized for: the
-        one named; else its held value, else its earlier value, else the cut's policy's,
+        one named; else its held value, else its earlier value, else the channel's policy's,
         first valid, the first a FIFO's style lists, ``auto``. A held value is the hold's, not
         committed here (a ``Hold`` or the graph's held choices may state ``None``, which the
         change then refuses): ``None`` is sized as ``auto``."""
@@ -2561,7 +2561,7 @@ class SizeFifos:
         return [transport for transport in found if transport is not None]
 
 
-#: The cut's policy's style for a FIFO a strategy places: the first its domain lists,
+#: The channel's policy's style for a FIFO a strategy places: the first its domain lists,
 #: FinnLib's own selection by depth and width.
 _FIFO_STYLE = "auto"
 

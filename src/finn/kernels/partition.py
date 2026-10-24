@@ -19,7 +19,7 @@ outside its domain over the facts (or a key that is no choice) is dropped as sta
 why (``Partition.dropped``, and ``Partition.stale`` by dotted key). A stored set that
 breaks a rule binds, and the partition reads refused: the member's validity names the
 rule. Nothing is filled in: a choice a change brings into play is open until a policy or
-a strategy sets it (the cut's policies at the cut, the seam's fold rule after it).
+a strategy sets it (the channel's policies at the cut, the seam's fold rule after it).
 
 **Its module** (``module``): its members' netlists, each under its node (its member name),
 in its module's instance order (``order``, the declaration's by default), a channel's with
@@ -61,11 +61,10 @@ from finn.kernels.artifacts.module import Composed as Module
 from finn.kernels.artifacts.module import Fragment, ProducerIdentity
 from finn.kernels.artifacts.top import compose as top
 from finn.kernels.base import BOUNDARY, NETLIST, RESOURCES, PortContract, merged
-from finn.kernels.channels import Neighbours, OuterHops, outer_hops
+from finn.kernels.channels import Channel, Neighbours, OuterHops, outer_hops
 from finn.kernels.composer import Composed, Key, Names, PartitionDeclaration, Port, compose
 from finn.kernels.control import CONTROL, Control
 from finn.kernels.control import presented as presented_buses
-from finn.kernels.cut import Cut
 from finn.kernels.explore import Trial, dotted
 from finn.kernels.movers import MoverOffer
 from finn.kernels.policies import Defaulted, Owner, Unstated, defaulted
@@ -279,10 +278,10 @@ class Partition:
 
     def owner(self, name: str) -> Owner:
         """The owner of member ``name``'s policies (``finn.kernels.policies.policy``): a
-        channel's the cut (``finn.kernels.cut.Cut``), a kernel's its KernelOp class, or
+        channel's its channel class (``Channel``), a kernel's its KernelOp class, or
         ``Unstated`` where it was given none."""
         if name in self._sides:
-            return Cut
+            return Channel
         if name not in self._composed.names.members:
             raise ValueError(f"{name} is no member of the partition")
         return self._owners.get(name, Unstated)

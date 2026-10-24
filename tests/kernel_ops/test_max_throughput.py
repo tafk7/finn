@@ -74,7 +74,7 @@ def explore_each(
 
 def explored(model: ModelWrapper, target: Target, strategies: list[Explorer]) -> dict[str, Any]:
     """A copy of ``model`` explored for ``target`` by each of ``strategies`` in turn
-    (``Defaults()`` first: from every choice's default, conversion's and the cut's); the
+    (``Defaults()`` first: from every choice's default, conversion's and the channel's); the
     report (``explore_each``)."""
     model = ModelWrapper(model.model.__deepcopy__())
     write_target(model, target)

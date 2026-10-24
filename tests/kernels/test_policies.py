@@ -5,7 +5,7 @@
 a ranking view's), or required; stated by the owner of a design space, never by the engine
 or the kernel, keyed by class-level Decision references, checked where it is stated
 (``stated``), read through one reader (``policy``) and applied once, in the flow order
-(``defaulted``). The cut's own (``finn.kernels.cut``) are a channel's."""
+(``defaulted``). A channel's are its own (``Channel.policies``)."""
 
 from __future__ import annotations
 
@@ -32,7 +32,6 @@ from finn.core.space import (
     view,
 )
 from finn.kernels.channels import Channel, ChannelFifo
-from finn.kernels.cut import CHANNEL_POLICIES, Cut
 from finn.kernels.input_generator import InputGeneratorKernel
 from finn.kernels.memstream import MemStreamKernel
 from finn.kernels.policies import (
@@ -203,7 +202,7 @@ def test_a_choice_already_set_is_kept() -> None:
 
 
 def test_a_choice_named_kept_is_left_open() -> None:
-    """``kept`` names open choices the caller leaves open (the cut's policies keep a choice
+    """``kept`` names open choices the caller leaves open (the channel's policies keep a choice
     a change cleared): every other one takes its policy."""
     point = done(applied(design_space(Toy(width=2)), TOY, kept={"style"}))
     assert states(point)["style"] == inspection.Open()
@@ -566,17 +565,17 @@ def test_policies_are_checked_where_they_are_stated(
         stated("Owner", Toy, policies)
 
 
-def test_the_cut_states_a_channel_s_policies() -> None:
+def test_a_channel_states_its_own_policies() -> None:
     """A FIFO's depth required, a memory's style first valid in its ranking (a source's,
     its kernel's; the input adapter's one style, the channel's), and every other channel
     choice first valid, in listed order; checked against ``Channel`` when the module is
     imported."""
-    assert dict(CHANNEL_POLICIES) == {
+    assert dict(Channel.policies) == {
         ChannelFifo.depth: Required(),
         MemStreamKernel.ram_style: FirstValid(order=MemStreamKernel.ram_preference),
         Channel.adapter_ram_style: FirstValid(order=Channel.adapter_ram_preference),
     }
-    found = {item.key: policy(Cut, item) for item in inspection.decisions(Channel)}
+    found = {item.key: policy(Channel, item) for item in inspection.decisions(Channel)}
     assert {key for key, each in found.items() if each == Required()} == {"transport.fifo.depth"}
     ranked_keys = {
         key
@@ -590,8 +589,9 @@ def test_no_kernel_states_a_policy_but_a_ranking_it_reads_out() -> None:
     """A kernel holds hardware knowledge only: the memories' rankings are views (a domain
     ranks nothing; an input generator's style is given, and its channel ranks it), and a
     kernel has no policies of its own."""
-    for kernel in (MemStreamKernel, TransposeKernel, Channel):
+    for kernel in (MemStreamKernel, TransposeKernel):
         assert not hasattr(kernel, "defaults") and not hasattr(kernel, "policies")
+    assert not hasattr(Channel, "defaults")
     for ranking in (
         MemStreamKernel.ram_preference,
         TransposeKernel.ram_preference,

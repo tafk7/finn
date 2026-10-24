@@ -4,7 +4,7 @@
 """``configured``: choices set on a model the way the compiler sets them (``support.configure``).
 
 The kernels' and the channels' values are set through the seam as a strategy sets them, in
-one batch, each channel's other choices then by the cut's policies (on a partition's
+one batch, each channel's other choices then by the channel's policies (on a partition's
 body, as the cut sets them), and persisted (``persist``). What the seam refuses is refused
 by its code: the seam's own, or the engine's (a value outside its domain, a rule broken).
 Nothing is forced: a set-up names each choice it needs, a core with its folding.
@@ -79,7 +79,7 @@ def test_a_kernels_choices_are_set_and_persisted_on_its_node() -> None:
 
 def test_a_channels_choices_are_set_with_its_kernels_in_one_batch() -> None:
     """The weight channel's contracts wait on the MatMul's folding: both are one batch, as a
-    strategy's is, the channel's other choices set by the cut's policies, and the
+    strategy's is, the channel's other choices set by the channel's policies, and the
     choices persist on the node and on the tensor."""
     model = matmul_model()
     configured(
@@ -289,7 +289,7 @@ def test_a_memory_the_device_cannot_build_is_refused() -> None:
 
 def test_a_channel_choice_on_a_graph_with_host_nodes_is_refused() -> None:
     """Channel choices are a partition's body's only; a kernel's choices are set. Named,
-    one is refused, and so is every channel the change binds, which the cut's policies
+    one is refused, and so is every channel the change binds, which the channel's policies
     give its choices as it binds it (x and y)."""
     model = hosted(matmul_model())
     configured(model, {"first": FOLDED})

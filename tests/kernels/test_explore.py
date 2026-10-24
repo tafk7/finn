@@ -217,7 +217,7 @@ def test_a_batch_commits_a_selector_and_a_choice_nested_under_it_together() -> N
     explorer, base = seam()
     batch = keyed({"hidden.transport": "fifo", "hidden.transport.fifo.depth": 16})
     outcome = explorer.set(base, batch)
-    # The FIFO's style, brought into play by the change, is set by the cut's policy (the
+    # The FIFO's style, brought into play by the change, is set by the channel's policy (the
     # fold rule: first valid, ``auto``), the strategy's, named.
     assert isinstance(outcome, Accepted) and not outcome.cleared
     assert outcome.settled == keyed({"hidden.transport.fifo.buffer.ram_style": "auto"})
@@ -269,7 +269,7 @@ def test_a_fifo_depth_is_known_by_membership_and_proposed_through_a_change() -> 
     assert isinstance(small, Refused)
     assert "domain-membership" in [finding.code for finding in small.why[depth.key]]
     # Its style is a choice of its own, brought into play with it: the fold rule sets it by
-    # the cut's policy (first valid, ``auto``) and leaves the depth, required, open.
+    # the channel's policy (first valid, ``auto``) and leaves the depth, required, open.
     style = ("levels", "transport.fifo.buffer.ram_style")
     assert fifo.settled == {style: "auto"} and list(fifo.unsettled) == [depth.key]
     assert dotted(style) not in offered(explorer, fifo.network)

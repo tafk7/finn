@@ -27,8 +27,8 @@ CHANNEL = Namespace("finn.channel", version=1, follow=True)
 """Where a channel's choices are stored: metadata on the tensor the channel carries
 (``finn.channel/<key>``), one key per decision of ``Channel`` (``CHANNEL_KEYS``). Only a
 partition's body holds them: the cut moves them there and clears the parent's copy.
-Each is set at the cut to its first valid value (the cut's policies,
-``finn.kernels.cut``); a required one (a FIFO's depth) stays unset until a strategy sets it. A
+Each is set at the cut to its first valid value (the channel's policies,
+``Channel.policies``); a required one (a FIFO's depth) stays unset until a strategy sets it. A
 tensor with a key ``Channel`` does not declare, or another version of the namespace, is
 refused by name."""
 

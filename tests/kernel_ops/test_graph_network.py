@@ -49,7 +49,6 @@ from finn.custom_op.kernels import shell
 from finn.custom_op.kernels.base import kernel_op
 from finn.custom_op.kernels.network import network, persist
 from finn.kernels.channels import Channel
-from finn.kernels.cut import Cut
 from finn.kernels.explore import Ranked, Seam, SizeFifos, dotted
 from finn.kernels.policies import ranked
 from finn.kernels.utilization import BLOCK_FIRST_BITS
@@ -160,7 +159,7 @@ def test_a_lifted_initializers_source_choices_are_out_of_play_in_the_partition()
     model = model.transform(InferKernelTensors())
     streamed = kernel_op(model, model.graph.node[0])
     # The node replays its own choices only: the weight edge's are the partition's, its
-    # source's memory's (the cut's policies' beside the one set).
+    # source's memory's (the channel's policies' beside the one set).
     source = {
         "source.ram_style": "block",
         "source.pumped_memory": False,
@@ -393,7 +392,7 @@ def test_a_member_s_ranking_view_orders_its_choice_inside_the_partition() -> Non
     ((_, listed),) = bound.viable([key])
     assert listed.values is not None
     assert [each.value for each in listed.values] == ["distributed", "block", "ultra", "auto"]
-    order, fallback = ranked(bound.member("w"), Cut, info, listed.values)
+    order, fallback = ranked(bound.member("w"), Channel, info, listed.values)
     assert fallback is None
     assert [each.value for each in order] == ["block", "distributed", "ultra", "auto"]
     (offered,) = Seam().choices(bound, keys=[key])
