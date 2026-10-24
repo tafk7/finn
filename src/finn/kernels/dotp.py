@@ -56,7 +56,6 @@ from typing import TYPE_CHECKING, ClassVar, cast
 from qonnx.core.ranges import TensorRange
 
 from finn.core.space import (
-    Constraint,
     Decision,
     Param,
     Rejected,
@@ -66,6 +65,7 @@ from finn.core.space import (
     required,
     view,
 )
+from finn.core.space.declarations import Constraint
 from finn.dataflow.datatypes import (
     DatatypeError,
     QONNXDataType,

@@ -65,11 +65,11 @@ from finn.core.space import (
     RequestError,
     Space,
     Unresolved,
-    View,
     bind,
     inspection,
     reject,
 )
+from finn.core.space.declarations import View
 from finn.kernels.artifacts import ArtifactError
 from finn.kernels.artifacts.abi import Bus, Endpoint
 from finn.kernels.artifacts.module import Composed as Module

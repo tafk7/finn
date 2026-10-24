@@ -33,7 +33,6 @@ from finn.core.space import (
     Decision,
     Param,
     Rejected,
-    View,
     constraint,
     derived,
     reject,
@@ -275,7 +274,7 @@ class FifoKernel(KernelSpace):
         return found
 
     # The storage, the product its holder reads; its rule reads the value.
-    storage = View(planned_storage)
+    storage = view(planned_storage)
 
     @constraint
     def capacity_supported(self) -> bool | Rejected:

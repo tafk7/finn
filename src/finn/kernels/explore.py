@@ -100,9 +100,9 @@ from finn.core.space import (
     Rejected,
     Space,
     Unresolved,
-    View,
     inspection,
 )
+from finn.core.space.declarations import View
 from finn.kernels.base import KernelSpace, Timed
 from finn.kernels.channels import ChannelFifo, Neighbours
 from finn.kernels.composer import Key

@@ -17,7 +17,7 @@ a special form is no value type, and a dataclass leaving a field out of ``==``
 (``compare=False``) is refused as one. ``ValueSemantics`` holds a check: its type token (what
 compatibility compares), its name and its recognizer. It is the engine's record of a
 member's check, not a spelling an author writes: a view's check is its annotation (or, for
-``View(source)``, its source's).
+``view(source)``, its source's).
 
 **The canonical form** (``canonical``) is what a value becomes where it enters a design
 space: a fact, a choice, a formal's default, a literal bound at placement, a

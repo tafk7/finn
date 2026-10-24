@@ -92,7 +92,6 @@ from finn.core.space import (
     Param,
     Rejected,
     Select,
-    View,
     constraint,
     derived,
     design_space,
@@ -627,7 +626,7 @@ class Channel(KernelSpace):
         return found
 
     mover = IodmaMover(when=offered, offers=offers, side=free_side)
-    mover_contract = View(mover.contract)
+    mover_contract = view(mover.contract)
 
     @derived
     def placed_mover(self) -> tuple[MoverContract, ...]:
@@ -701,7 +700,7 @@ class Channel(KernelSpace):
     output_adapter = OUTPUT_ADAPTER(
         when=output_adapting, tensor=tensor, steps=output_steps, platform=platform
     )
-    output_adapter_stages = View(output_adapter.stages)
+    output_adapter_stages = view(output_adapter.stages)
 
     @derived
     def arriving(self) -> BeatSequence:
@@ -754,7 +753,7 @@ class Channel(KernelSpace):
         platform=platform,
         ram_style=adapter_ram_style,
     )
-    adapter_stages = View(adapter.stages)  # type: ignore[union-attr]
+    adapter_stages = view(adapter.stages)  # type: ignore[union-attr]
 
     @view(when=adapter_placed)
     def adapter_ram_preference(self) -> tuple[str, ...]:
@@ -910,7 +909,7 @@ class Channel(KernelSpace):
     # The boundary channel's mover, as its contract (``MoverContract``): one, or none
     # without a mover. The shell's budget check counts their AXI-Lite buses, and it sums
     # their resources and counts their memory ports.
-    mover_contracts = View(placed_mover)
+    mover_contracts = view(placed_mover)
 
 
 # The channel's policies (``finn.kernels.policies``), as a KernelOp states its kernel's:

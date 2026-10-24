@@ -39,13 +39,13 @@ from math import ceil, inf
 from typing import Any
 
 from finn.core.space import (
-    Constraint,
     Domain,
     Rejected,
     constraint,
     domain,
     reject,
 )
+from finn.core.space.declarations import Constraint
 from finn.platform.capabilities import Fabric, Platform, Resources
 
 CHARACTERISED = "xczu3eg-sbva484-1-i, Vivado 2025.2, out of context at 5 ns"

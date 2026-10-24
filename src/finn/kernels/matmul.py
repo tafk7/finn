@@ -108,11 +108,11 @@ from finn.core.space import (
     Param,
     Rejected,
     Select,
-    View,
     constraint,
     derived,
     divisors_of,
     reject,
+    view,
 )
 from finn.dataflow.datatypes import (
     QONNXDataType,
@@ -446,8 +446,8 @@ class MatMulKernel(KernelSpace):
         return self._tensor((self.datapath_k, self.n), self.weights_type)
 
     # The products its holder reads; ``carried`` reads the values they present.
-    activation_tensor = View(required_activations)
-    weight_tensor = View(required_weights)
+    activation_tensor = view(required_activations)
+    weight_tensor = view(required_weights)
 
     @derived
     def leading(self) -> tuple[int, ...]:
@@ -471,7 +471,7 @@ class MatMulKernel(KernelSpace):
         return self._tensor((*self.leading, self.n), self.result_type, TensorRange(least, greatest))
 
     # The product its holder reads; inference reads the value it presents.
-    y_tensor = View(result_tensor)
+    y_tensor = view(result_tensor)
 
     @derived(when=stored)
     def stored_weights(self) -> IntegerTensorValue:
@@ -504,8 +504,8 @@ class MatMulKernel(KernelSpace):
     # What the weight channel's source stores and what it carries, the products its
     # holder reads; its network (``Fact(member, "carried_weights")``) and the cores read
     # the values.
-    w_stored = View(stored_weights, when=stored)
-    w_carried = View(carried_weights)
+    w_stored = view(stored_weights, when=stored)
+    w_carried = view(carried_weights)
 
     @constraint
     def carried(self) -> bool | Rejected:

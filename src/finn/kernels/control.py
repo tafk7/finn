@@ -49,7 +49,6 @@ from finn.core.space import (
     DefinitionError,
     Rejected,
     Space,
-    View,
     derived,
     reject,
     view,
@@ -169,7 +168,7 @@ class ControlBus(KernelDeclaration):
             f"{name}_presented": derived(presented_),
             f"{name}_control": control,
             "declares_bus": derived(declares_),
-            "bus_control": View(control),
+            "bus_control": view(control),
         }
 
     def reads(self, name: str, product: Product) -> tuple[str, ...]:

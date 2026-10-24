@@ -74,10 +74,10 @@ from finn.core.space import (
     Param,
     Rejected,
     Space,
-    View,
     constraint,
     derived,
     reject,
+    view,
 )
 from finn.dataflow.tensor import ScalarEncoding
 from finn.kernels.artifacts.abi import Endpoint
@@ -312,7 +312,7 @@ class IodmaMover(Timed):
         return contract.cycles
 
     # Cost, not validity: read apart from its constraints.
-    cycles = View(frame_cycles)
+    cycles = view(frame_cycles)
 
 
 MOVERS: dict[str, type[Space] | Space] = {IODMA_HLS: IodmaMover}
