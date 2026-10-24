@@ -107,6 +107,16 @@ def test_const_is_gone_and_a_class_body_cannot_declare_one() -> None:
     assert design_space(Constant()).limit == 1
 
 
+def test_the_declaration_classes_are_not_on_the_public_surface() -> None:
+    """``view``, ``derived`` and ``constraint`` are the one spelling of each; the classes they
+    build are the engine's, in the module that declares them."""
+    for name in ("View", "Derived", "Constraint"):
+        assert not hasattr(space, name)
+        assert name not in space.__all__
+        assert hasattr(declarations, name)
+    assert {"view", "derived", "constraint"} <= set(space.__all__)
+
+
 def test_arithmetic_on_a_reference_is_refused_by_name() -> None:
     with refused("reference-expression", error=DefinitionError, message="derived value") as caught:
 
