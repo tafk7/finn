@@ -58,16 +58,17 @@ held (``kernel-pins``). The base binds its indices' extents from its ports' read
 tensors (``extents``), from which it states schedules (``bound_schedule``) and shapes
 (``spanned``).
 
-**The definition checks**, when a class is made: its ``id`` (``kernel-id-invalid``); a
-declaration lowering to a member the class declares itself (``declaration-member-taken``);
-at most one library module (``library-module-repeated``) and one control bus
-(``control-bus-repeated``); constant sources provide the module
-(``library-module-unprovided``). A class leaving a ``required()`` member unmet is a base of
-kernels (the dot-product cores'), not placed, and the checks below pass it by. A kernel
-with a module states a stream port (``module-ports-unplaced``) and its ``resource_use``
-(``module-resources-unstated``), and places no kernel (``module-places-kernels``). A kernel
-stating a stream port binds a module (``port-unbound``): a port's pins are its module's,
-and a kernel with children presents its children's ports (``served``).
+**The definition checks**, when a class is made: at most one control bus
+(``control-bus-repeated``, before any declaration is lowered); a declaration lowering to a
+member the class declares itself (``declaration-member-taken``); its ``id``
+(``kernel-id-invalid``); at most one library module (``library-module-repeated``); constant
+sources provide the module (``library-module-unprovided``). A class leaving a ``required()``
+member unmet is a base of kernels (the dot-product cores'), not placed, and the checks below
+pass it by. A kernel with a module states a stream port (``module-ports-unplaced``) and its
+``resource_use`` (``module-resources-unstated``), and places no kernel
+(``module-places-kernels``). A kernel stating a stream port binds a module
+(``port-unbound``): a port's pins are its module's, and a kernel with children presents its
+children's ports (``served``).
 
 Every constraint of a kernel and of its present members counts toward its validity
 (``inspection.validity``). A kernel states one contract per stream port: a view
@@ -361,6 +362,21 @@ class KernelSpace(Timed):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
+        # Counted before lowering: each bus lowers to the same members, which would collide
+        # first and hide the refusal.
+        buses = [
+            name
+            for name, declaration in declarations(cls, KernelSpace).items()
+            if isinstance(declaration, ControlBus)
+        ]
+        if len(buses) > 1:
+            raise DefinitionError.broken(
+                "control-bus-repeated",
+                "KernelSpace",
+                f"{cls.__qualname__} declares the control buses {buses}: a kernel presents "
+                "one at most",
+                declaration=cls.__qualname__,
+            )
         _lower(cls)
         if type(cls.id) is not str or not cls.id:
             raise DefinitionError.broken(
@@ -381,15 +397,6 @@ class KernelSpace(Timed):
                 "KernelSpace",
                 f"{cls.__qualname__} binds the library modules {[name for name, _ in modules]}: "
                 "a kernel binds one at most",
-                declaration=cls.__qualname__,
-            )
-        buses = [name for name, declaration in found.items() if isinstance(declaration, ControlBus)]
-        if len(buses) > 1:
-            raise DefinitionError.broken(
-                "control-bus-repeated",
-                "KernelSpace",
-                f"{cls.__qualname__} declares the control buses {buses}: a kernel presents "
-                "one at most",
                 declaration=cls.__qualname__,
             )
         if buses:

@@ -221,6 +221,31 @@ def test_a_kernel_presents_one_control_bus_at_most() -> None:
             other = ControlBus(Controlled.config_bus)
 
 
+def test_two_control_buses_in_one_body_are_refused_as_repeated_before_lowering() -> None:
+    """Counted before any declaration is lowered: each bus lowers to ``declares_bus`` and
+    ``bus_control``, so lowering first would answer ``declaration-member-taken`` for the
+    second and hide the refusal. (A second bus from a subclass is the case above.)"""
+    with refused("control-bus-repeated", error=DefinitionError, message="Both declares"):
+
+        class Both(Probe):
+            id = "test.probe.both"
+            writable: bool = Param(default=False)
+            control: str | None = Param(default=None)
+
+            @derived
+            def config_bus(self) -> Bus:
+                return BUS
+
+            @view
+            def register_map(self) -> RegisterMap:
+                return RegisterMap(((0, 7),))
+
+            first = ControlBus(config_bus, presented=writable, port=control, registers=register_map)
+            second = ControlBus(
+                config_bus, presented=writable, port=control, registers=register_map
+            )
+
+
 def test_a_control_bus_it_may_present_names_its_port_and_registers() -> None:
     with refused("control-bus-unaddressed", error=DefinitionError):
 
