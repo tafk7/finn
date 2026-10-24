@@ -222,8 +222,8 @@ class Choice:
     space_type: type[Space] | None
     cases: tuple[object, ...] | None
     ordered: bool
-    refused: Mapping[object, Refused] = field(default_factory=dict)
-    policy: object = None
+    refused: Mapping[object, Refused]
+    policy: object
     fallback: Finding | None = None
 
 

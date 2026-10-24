@@ -41,7 +41,7 @@ def offer(key: str, cases: tuple[object, ...]) -> Choice:
     """An open choice with ``cases``, as the seam offers it (``key``: its owner and the
     key there, joined)."""
     owner, _, below = key.partition(".")
-    return Choice((owner, below), None, cases, False)
+    return Choice((owner, below), None, cases, False, {}, None)
 
 
 class Recording:
@@ -74,9 +74,9 @@ class Last:
 
 def test_the_test_policy_folds_to_its_lanes_or_the_largest_factor() -> None:
     policy = Lanes(4)
-    fold = Choice(("first", "pe"), None, (1, 2, 4, 8), True)
+    fold = Choice(("first", "pe"), None, (1, 2, 4, 8), True, {}, None)
     assert list(policy.rank(fold)) == [4, 8, 2, 1]
-    odd = Choice(("x", "simd"), None, (1, 3), True)
+    odd = Choice(("x", "simd"), None, (1, 3), True, {}, None)
     assert list(policy.rank(odd)) == [3, 1] and list(Lanes().rank(odd)) == [1, 3]
     memory = offer("w.source.ram_style", ("block", "auto"))
     assert list(policy.rank(memory)) == ["block", "auto"]
